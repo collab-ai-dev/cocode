@@ -1,0 +1,10 @@
+---
+source: app/tui/src/presentation/add_directory.test.rs
+expression: body_only(&s)
+---
+Enter a directory path to add for this session:
+  > /nope▏
+
+Enter to add, Esc to cancel. · /permissions to manage
+
+  Cannot add directory `/nope`: not a directory

@@ -1,0 +1,16 @@
+---
+source: app/tui/src/presentation/transcript.test.rs
+expression: "render_transcript_text(&app_state, &state, 84, 12)"
+---
+┌ Transcript ──────────────────────────────────────────────────────────────────────┐
+│    expanded-line-1993                                                            │
+│    expanded-line-1994                                                            │
+│    expanded-line-1995                                                            │
+│    expanded-line-1996                                                            │
+│    expanded-line-1997                                                            │
+│    expanded-line-1998                                                            │
+│    … +2 lines                                                                    │
+│                                                                                  │
+│ctrl+o toggle · ↑/↓ scroll · PgUp/PgDn page · Home/End jump                       │
+│Tab select · Enter expand/collapse · Esc/q quit                                   │
+└──────────────────────────────────────────────────────────────────────────────────┘

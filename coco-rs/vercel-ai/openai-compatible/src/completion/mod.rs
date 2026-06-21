@@ -1,0 +1,8 @@
+pub mod convert_completion_usage;
+pub mod convert_to_completion_prompt;
+pub mod map_finish_reason;
+pub mod openai_compatible_completion_api;
+pub mod openai_compatible_completion_language_model;
+pub mod openai_compatible_completion_options;
+
+pub use openai_compatible_completion_language_model::OpenAICompatibleCompletionLanguageModel;

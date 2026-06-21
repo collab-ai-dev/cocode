@@ -1,0 +1,21 @@
+---
+source: app/tui/src/presentation/request.test.rs
+assertion_line: 882
+expression: body
+---
+Allow this operation?
+
+Command:
+  $ rm -rf /tmp/cache
+
+Directory: /repo
+
+⚠ Deletes cached files
+
+Actions:
+▸ 1/y · Yes, approve once ◂
+  2/n · No, deny
+↑/↓ Navigate  Enter Select  1-2 or Y/N shortcuts
+
+Risk: HIGH — data loss
+This removes the build cache directory.

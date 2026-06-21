@@ -1,0 +1,31 @@
+[package]
+name = "coco-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-types.workspace = true
+coco-error.workspace = true
+coco-messages.workspace = true
+coco-config.workspace = true
+coco-paths.workspace = true
+coco-git.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+fs2.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true

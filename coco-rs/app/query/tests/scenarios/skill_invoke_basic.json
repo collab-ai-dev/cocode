@@ -1,0 +1,30 @@
+{
+  "name": "skill_invoke_basic",
+  "description": "Model invokes the commit skill via Skill tool",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Skill",
+          "input": {
+            "skill": "commit"
+          }
+        }
+      ]
+    },
+    {
+      "text": "The commit skill has been invoked. Changes committed."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "commit",
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "min_event_counts": {
+      "ToolUseEnd": 1
+    }
+  }
+}

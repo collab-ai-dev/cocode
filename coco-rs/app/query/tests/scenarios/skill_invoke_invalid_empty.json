@@ -1,0 +1,27 @@
+{
+  "name": "skill_invoke_invalid_empty",
+  "description": "Model calls Skill with empty name; tool returns error, model recovers",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Skill",
+          "input": {
+            "skill": ""
+          }
+        }
+      ]
+    },
+    {
+      "text": "The skill invocation failed. I'll use the tools directly instead."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "failed",
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

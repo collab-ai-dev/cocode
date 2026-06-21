@@ -1,0 +1,68 @@
+[package]
+name = "coco-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LSP client for coco-rs with AI-friendly symbol resolution"
+
+[lib]
+name = "coco_lsp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lsp-tui"
+path = "src/tui/main.rs"
+required-features = ["tui"]
+
+[features]
+default = []
+tui = ["dep:ratatui", "dep:crossterm", "dep:clap", "dep:anyhow", "dep:tracing-subscriber", "dep:tracing-appender"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "rt", "rt-multi-thread", "fs", "macros"] }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# LSP protocol types
+lsp-types.workspace = true
+
+# Error handling
+coco-error = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Binary detection
+which.workspace = true
+
+# Text diffing for incremental sync
+similar = { workspace = true }
+
+# Date/time formatting
+chrono = { workspace = true, features = ["serde"] }
+
+# Internal dependencies
+coco-utils-common = { workspace = true }
+coco-file-watch = { workspace = true }
+notify = { workspace = true }
+
+# TUI dependencies (optional, for lsp-tui binary)
+ratatui = { workspace = true, optional = true }
+crossterm = { workspace = true, optional = true }
+clap = { workspace = true, features = ["derive"], optional = true }
+anyhow = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"], optional = true }
+tracing-appender = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = { workspace = true }
+pretty_assertions = { workspace = true }

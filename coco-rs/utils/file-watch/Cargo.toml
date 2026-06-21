@@ -1,0 +1,18 @@
+[package]
+name = "coco-file-watch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+notify = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

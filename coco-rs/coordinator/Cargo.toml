@@ -1,0 +1,74 @@
+[package]
+name = "coco-coordinator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# Spawn lifecycle for the agent-team subsystem: runner, runner-loop,
+# mailbox IPC, team file, terminal pane backends, agent identity /
+# discovery / reconnect, and the AgentHandle implementation that the
+# tool layer invokes.
+#
+# Pure-logic rules and templates (definition catalog, prompt rendering,
+# tool-filter planning, fork pure logic, transcript filter,
+# coordinator_mode prompt) live in `core/subagent`. This crate is the
+# orchestration layer that consumes those rules and owns the tokio /
+# AppState / file-lock / process-spawn machinery.
+
+[dependencies]
+# NOTE: `coco-state` is intentionally absent from this dep list — adding it
+# would create a cycle (`app/state` re-exports moved modules from this
+# crate). When the runner moves over in PR #3 step 6, coordinator will
+# define a trait abstraction (`CoordinatorAppState`) that `app/state`
+# implements, keeping the dep one-directional.
+coco-types.workspace = true
+coco-config.workspace = true
+coco-subagent.workspace = true
+coco-tool-runtime.workspace = true
+coco-permissions.workspace = true
+coco-tasks.workspace = true
+coco-hooks.workspace = true
+coco-memory.workspace = true
+# `coco-context` provides the canonical `build_system_prompt` assembler
+# (env block + AGENT_NOTES + CLAUDE.md discovery + memory section).
+# Subagent spawn (PR 2.1) routes Fresh/Resume modes through it instead
+# of inlining naive `def.system_prompt + memory_block` concatenation.
+coco-context.workspace = true
+coco-git.workspace = true
+# Used by `agent_handle::teammate_engine` to micro-compact a teammate's
+# message history when it crosses the auto-compact threshold. Without
+# this, the runner_loop's sliding-window safety valve is the only
+# bound — TS uses full LLM `compactConversation` here; micro-compact
+# is the no-LLM stopgap until the full LLM path lands (needs an
+# ApiClient threaded through the bridge).
+coco-compact.workspace = true
+coco-messages.workspace = true
+# Operational error types in this crate (see `worktree::WorktreeError`)
+# go through `snafu` + `coco-error::ErrorExt` per the project root
+# `CLAUDE.md` "Error Handling" rule. `thiserror` stays for legacy /
+# diagnostic enums that haven't been migrated yet.
+coco-error.workspace = true
+snafu.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "process", "time", "rt"] }
+arc-swap.workspace = true
+tokio-util = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+dirs.workspace = true
+chrono.workspace = true
+fs2.workspace = true
+tracing.workspace = true
+shlex.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile.workspace = true
+pretty_assertions.workspace = true

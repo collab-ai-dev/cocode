@@ -1,0 +1,63 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero hero--compact">
+  <div>
+    <p class="kicker">Project scope</p>
+    <h1>{{ title }}</h1>
+    <p class="subtitle">{{ instance.cwd }}</p>
+  </div>
+  <a class="button button--ghost" href="/">Dashboard</a>
+</section>
+
+<section class="metric-grid" aria-label="Project summary">
+  <div class="metric">
+    <span class="metric__label">Sessions</span>
+    <strong>{{ sessions.len() }}</strong>
+  </div>
+  <div class="metric">
+    <span class="metric__label">Messages</span>
+    <strong>{{ total_messages }}</strong>
+  </div>
+  <div class="metric">
+    <span class="metric__label">Tokens</span>
+    <strong>{{ total_tokens }}</strong>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel__header">
+    <div>
+      <p class="kicker">{{ instance.instance_id }}</p>
+      <h2>Sessions</h2>
+    </div>
+    <a class="button button--ghost" href="/v1/instances/{{ instance.instance_id }}/sessions">JSON API</a>
+  </div>
+  <div class="table-shell">
+    <table>
+      <thead>
+        <tr>
+          <th>Session</th>
+          <th>Title / prompt</th>
+          <th>Messages</th>
+          <th>Tokens</th>
+          <th>Model</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for session in sessions %}
+        <tr>
+          <td><a class="mono-link" href="/i/{{ session.instance_id }}/s/{{ session.session_id }}">{{ session.session_id }}</a></td>
+          <td class="title-cell">{{ session.title }}</td>
+          <td><span class="count-pill">{{ session.message_count }}</span></td>
+          <td>{{ session.total_tokens }}</td>
+          <td class="model-cell">{{ session.model }}</td>
+          <td class="timestamp">{{ session.last_event_ts }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

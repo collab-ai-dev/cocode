@@ -1,0 +1,13 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCO v0.1.0                                                           
+ │●│ │●│  opus-4  *  auto                                                       
+ ╰─╯ ╰─╯                                                                        
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+❯                                       ✓ Operation completed                   
+─────────────────────────────────────── ✗ Something went wrong                 ─
+ opus-4 * auto | ↑0 ↓0 · cache 0/0% | ctx -- | →0 ←0                            
+ ⏯ ask mode on · shift+tab to cycle

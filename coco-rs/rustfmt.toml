@@ -1,0 +1,4 @@
+edition = "2024"
+# The "unstable feature" warning printed on stable can be safely ignored;
+# rustfmt still honors this setting when grouping imports.
+imports_granularity = "Item"

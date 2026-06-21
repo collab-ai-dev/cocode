@@ -1,0 +1,18 @@
+[package]
+name = "coco-llm-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Forward to `vercel-ai-provider/schema` so consumers of the DTO seam
+# can opt in to JsonSchema derives. `coco-types/schema` activates this
+# transitively (see `common/types/Cargo.toml`).
+schema = ["vercel-ai-provider/schema"]
+
+[dependencies]
+vercel-ai-provider.workspace = true

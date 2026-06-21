@@ -1,0 +1,31 @@
+{
+  "name": "tool_error_read_missing",
+  "description": "Read a non-existent file; engine should not crash, model recovers",
+  "workspace": {},
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/does_not_exist.txt" }
+        }
+      ]
+    },
+    {
+      "text": "The file does not exist. Let me create it instead."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "does not exist",
+    "files": {
+      "does_not_exist.txt": { "exists": false }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "min_event_counts": {
+      "TurnStarted": 1,
+      "TurnEnded": 1
+    }
+  }
+}

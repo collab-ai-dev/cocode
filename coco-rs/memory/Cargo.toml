@@ -1,0 +1,49 @@
+[package]
+name = "coco-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-config.workspace = true
+coco-error.workspace = true
+coco-types.workspace = true
+coco-tool-runtime.workspace = true
+coco-frontmatter.workspace = true
+coco-git.workspace = true
+coco-paths.workspace = true
+coco-otel.workspace = true
+coco-secret-redact.workspace = true
+coco-file-watch.workspace = true
+coco-shell-parser.workspace = true
+coco-utils-json-repair.workspace = true
+arc-swap.workspace = true
+async-trait.workspace = true
+
+tokio = { workspace = true, features = ["rt", "sync", "time", "fs", "macros"] }
+tokio-util = { workspace = true }
+chrono = { workspace = true }
+notify = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+sha2 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+filetime.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+walkdir.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
+async-trait.workspace = true
+coco-llm-types.workspace = true
+regex = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time", "fs", "macros", "rt-multi-thread"] }

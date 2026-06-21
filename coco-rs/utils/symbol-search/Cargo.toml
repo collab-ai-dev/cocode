@@ -1,0 +1,32 @@
+[package]
+name = "coco-symbol-search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "coco_symbol_search"
+path = "src/lib.rs"
+
+[dependencies]
+coco-file-ignore = { workspace = true }
+coco-utils-common = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "time"] }
+notify = { workspace = true }
+tracing = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-tags.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-java.workspace = true
+tree-sitter-typescript.workspace = true
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

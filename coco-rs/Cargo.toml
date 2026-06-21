@@ -1,0 +1,618 @@
+[workspace]
+default-members = ["app/cli"]
+members = [
+    # ─── common/ (5) ───
+    "common/error",
+    "common/stack-trace-macro",
+    "common/otel",
+    "common/types",
+    "common/config",
+    "common/config-reload",
+    "common/model-card",
+    "common/llm-types",
+
+    # ─── utils/ (26) ── 24 from cocode-rs + 2 new ───
+    "utils/absolute-path",
+    "utils/async-utils",
+    "utils/cache",
+    "utils/cargo-bin",
+    "utils/coco-cron",
+    "utils/coco-paths",
+    "utils/common",
+    "utils/cursor",
+    "utils/file-encoding",
+    "utils/file-ignore",
+    "utils/file-search",
+    "utils/file-watch",
+    "utils/frontmatter",
+    "utils/git",
+    "utils/image",
+    "utils/json-repair",
+    "utils/json-to-toml",
+    "utils/keyring-store",
+    "utils/pty",
+    "utils/readiness",
+    "utils/rustls-provider",
+    "utils/secret-redact",
+    "utils/shell-discovery",
+    "utils/shell-parser",
+    "utils/sleep-inhibitor",
+    "utils/stdio-to-uds",
+    "utils/stream-parser",
+    "utils/string",
+    "utils/symbol-search",
+
+    # ─── tests/ (2) ── shared integration-test scaffolding + live API runner ───
+    "tests/harness",
+    "tests/live",
+
+    # ─── vercel-ai/ (9) ───
+    "vercel-ai/provider",
+    "vercel-ai/provider-utils",
+    "vercel-ai/ai",
+    "vercel-ai/openai",
+    "vercel-ai/openai-compatible",
+    "vercel-ai/google",
+    "vercel-ai/google-codeassist",
+    "vercel-ai/anthropic",
+    "vercel-ai/bytedance",
+
+    # ─── services/ (9) ───
+    "services/inference",
+    "services/mcp",
+    "services/mcp-skills",
+    "services/mcp-types",
+    "services/rmcp-client",
+    "services/lsp",
+    "services/compact",
+    "services/provider-auth",
+    "services/wire-dump",
+
+    # ─── core/ (7) ───
+    "core/messages",
+    "core/context",
+    "core/permissions",
+    "core/tool-runtime",
+    "core/tools",
+    "core/system-reminder",
+    "core/subagent",
+
+    # ─── exec/ (5) ───
+    "exec/shell",
+    "exec/sandbox",
+    "exec/process-hardening",
+    "exec/exec-server",
+    "exec/apply-patch",
+
+    # ─── root modules (9) ───
+    "commands",
+    "skills",
+    "hooks",
+    "tasks",
+    "memory",
+    "plugins",
+    "keybindings",
+    "coordinator",
+    "output-styles",
+
+    # ─── app/ (5) ───
+    "app/query",
+    "app/state",
+    "app/session",
+    "app/tui",
+    "app/cli",
+
+    # ─── hub (3) ───
+    "hub/protocol",
+    "hub/connector",
+    "hub/server",
+
+    # ─── standalone (2) ───
+    "bridge",
+    "retrieval",
+
+    # ─── ui (3) ── pure presentational primitives, depended on by app/tui ───
+    "tui-ui",
+    "tui-markdown",
+    "tui-mermaid",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# Internal - common
+coco-error = { path = "common/error" }
+coco-stack-trace-macro = { path = "common/stack-trace-macro" }
+coco-otel = { path = "common/otel" }
+coco-types = { path = "common/types" }
+coco-config = { path = "common/config" }
+coco-config-reload = { path = "common/config-reload" }
+coco-model-card = { path = "common/model-card" }
+coco-llm-types = { path = "common/llm-types" }
+
+# Internal - utilities
+coco-file-encoding = { path = "utils/file-encoding" }
+coco-async-utils = { path = "utils/async-utils" }
+coco-keyring-store = { path = "utils/keyring-store" }
+coco-file-ignore = { path = "utils/file-ignore" }
+coco-file-search = { path = "utils/file-search" }
+coco-file-watch = { path = "utils/file-watch" }
+coco-symbol-search = { path = "utils/symbol-search" }
+coco-git = { path = "utils/git" }
+coco-cron = { path = "utils/coco-cron" }
+coco-paths = { path = "utils/coco-paths" }
+coco-utils-absolute-path = { path = "utils/absolute-path" }
+coco-utils-cache = { path = "utils/cache" }
+coco-utils-cargo-bin = { path = "utils/cargo-bin" }
+coco-utils-common = { path = "utils/common" }
+coco-utils-image = { path = "utils/image" }
+coco-utils-json-repair = { path = "utils/json-repair" }
+coco-utils-json-to-toml = { path = "utils/json-to-toml" }
+coco-utils-pty = { path = "utils/pty" }
+coco-utils-readiness = { path = "utils/readiness" }
+coco-utils-string = { path = "utils/string" }
+coco-stdio-to-uds = { path = "utils/stdio-to-uds" }
+coco-shell-discovery = { path = "utils/shell-discovery" }
+coco-shell-parser = { path = "utils/shell-parser" }
+coco-utils-rustls-provider = { path = "utils/rustls-provider" }
+coco-utils-stream-parser = { path = "utils/stream-parser" }
+coco-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
+coco-secret-redact = { path = "utils/secret-redact" }
+coco-frontmatter = { path = "utils/frontmatter" }
+coco-cursor = { path = "utils/cursor" }
+
+# Internal - Vercel AI SDK
+vercel-ai-provider = { path = "vercel-ai/provider" }
+vercel-ai-provider-utils = { path = "vercel-ai/provider-utils" }
+vercel-ai = { path = "vercel-ai/ai" }
+vercel-ai-openai = { path = "vercel-ai/openai" }
+vercel-ai-openai-compatible = { path = "vercel-ai/openai-compatible" }
+vercel-ai-google = { path = "vercel-ai/google" }
+vercel-ai-google-codeassist = { path = "vercel-ai/google-codeassist" }
+vercel-ai-anthropic = { path = "vercel-ai/anthropic" }
+vercel-ai-bytedance = { path = "vercel-ai/bytedance" }
+
+# Internal - services
+coco-inference = { path = "services/inference" }
+coco-provider-auth = { path = "services/provider-auth" }
+coco-mcp = { path = "services/mcp" }
+coco-mcp-skills = { path = "services/mcp-skills" }
+coco-mcp-types = { path = "services/mcp-types" }
+coco-rmcp-client = { path = "services/rmcp-client" }
+coco-lsp = { path = "services/lsp" }
+coco-compact = { path = "services/compact" }
+coco-wire-dump = { path = "services/wire-dump" }
+coco-test-harness = { path = "tests/harness" }
+
+# Internal - core
+coco-messages = { path = "core/messages" }
+coco-context = { path = "core/context" }
+coco-permissions = { path = "core/permissions" }
+coco-tool-runtime = { path = "core/tool-runtime" }
+coco-tools = { path = "core/tools" }
+coco-system-reminder = { path = "core/system-reminder" }
+coco-subagent = { path = "core/subagent" }
+
+# Internal - exec
+coco-shell = { path = "exec/shell" }
+coco-sandbox = { path = "exec/sandbox" }
+coco-process-hardening = { path = "exec/process-hardening" }
+coco-exec-server = { path = "exec/exec-server" }
+coco-apply-patch = { path = "exec/apply-patch" }
+
+# Internal - root modules
+coco-commands = { path = "commands" }
+coco-skills = { path = "skills" }
+coco-hooks = { path = "hooks" }
+coco-tasks = { path = "tasks" }
+coco-memory = { path = "memory" }
+coco-plugins = { path = "plugins" }
+coco-keybindings = { path = "keybindings" }
+coco-coordinator = { path = "coordinator" }
+coco-output-styles = { path = "output-styles" }
+
+# Internal - app
+coco-query = { path = "app/query" }
+coco-state = { path = "app/state" }
+coco-session = { path = "app/session" }
+coco-tui = { path = "app/tui" }
+coco-cli = { path = "app/cli" }
+
+# Internal - hub
+coco-hub-protocol = { path = "hub/protocol" }
+coco-hub-connector = { path = "hub/connector" }
+coco-hub-server = { path = "hub/server" }
+
+# Internal - standalone
+coco-bridge = { path = "bridge" }
+coco-retrieval = { path = "retrieval" }
+
+# Internal - ui
+coco-tui-ui = { path = "tui-ui" }
+coco-tui-markdown = { path = "tui-markdown" }
+coco-tui-mermaid = { path = "tui-mermaid" }
+
+# External (only those actually used by existing crates)
+anyhow = "1"
+arc-swap = "1.7"
+assert_cmd = "2"
+assert_matches = "1.5.0"
+askama = "0.12"
+async-trait = "0.1.89"
+base64 = "0.22.1"
+bytes = "1.10.1"
+chrono = { version = "0.4.42", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+dotenvy = "0.15.7"
+eventsource-stream = "0.2.3"
+form_urlencoded = "1"
+futures = { version = "0.3", default-features = false }
+globset = "0.4"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.16"
+html2text = "0.14"
+http = "1.3.1"
+humantime-serde = "1"
+ignore = "0.4.23"
+image = { version = "^0.25.9", default-features = false }
+mime_guess = "2.0.5"
+jsonc-parser = { version = "0.24", features = ["serde", "cst"] }
+jsonschema = { version = "0.46", default-features = false }
+llm_json = "1.0.3"
+keyring = "3"
+lazy_static = "1"
+libc = "0.2"
+# Optional global allocator for release builds — tuned for a long-running TUI /
+# server process. Unprefixed so the `malloc_conf` startup symbol applies. Only
+# linked when the `jemalloc` feature is enabled on the `coco` binary (not on
+# Windows, where jemalloc-sys does not build). See app/cli/src/main.rs.
+tikv-jemallocator = { version = "0.6", features = ["unprefixed_malloc_on_supported_platforms"] }
+# `event` feature gates `rustix::event::poll`, used for the bounded OSC 11
+# terminal-background read (`auto` theme). Pinned to the version crossterm
+# already resolves so no extra crate version enters the tree.
+rustix = { version = "1", features = ["event"] }
+log = "0.4"
+lru = "0.16.3"
+minijinja = "2"
+nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
+notify = "8"
+once_cell = "1.20.2"
+opentelemetry = "0.31.0"
+opentelemetry-appender-tracing = "0.31.0"
+opentelemetry-otlp = "0.31.0"
+opentelemetry-semantic-conventions = "0.31.0"
+opentelemetry_sdk = "0.31.0"
+path-absolutize = "3.1.1"
+pdf-extract = "0.9"
+portable-pty = "0.9.0"
+pretty_assertions = "1.4.1"
+rand = "0.9"
+fs2 = "0.4"
+regex = "1.12.2"
+regex-lite = "0.1.8"
+reqwest = "0.12"
+rustls = { version = "0.23", features = ["ring"] }
+schemars = { version = "1.2", features = ["uuid1"] }
+serde = "1"
+serde_json = "1"
+serde_path_to_error = "0.1"
+shlex = "1"
+serde_yml = "0.0.12"
+similar = "2"
+snafu = "0.8"
+sse-stream = "0.2.1"
+streaming-iterator = "0.1"
+strum = { version = "0.27", features = ["derive"] }
+sha1 = "0.10.6"
+tempfile = "3.23.0"
+thiserror = "2.0.17"
+time = "0.3"
+tokio = "1"
+tokio-stream = "0.1.18"
+tree-sitter = "0.25"
+tree-sitter-bash = "0.25"
+tonic = "0.12"
+tokio-util = "0.7"
+toml = "0.9.5"
+tracing = "0.1.43"
+tracing-opentelemetry = "0.32.0"
+tracing-subscriber = "0.3.22"
+ts-rs = "11"
+uuid = "1"
+walkdir = "2.5.0"
+wiremock = "0.6"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+uds_windows = "1"
+
+# External - MCP related
+axum = { version = "0.8", default-features = false }
+dirs = "6"
+oauth2 = "5"
+rmcp = { version = "1.7.0", default-features = false }
+serial_test = "3"
+sha2 = "0.10"
+tiny_http = "0.12"
+url = "2"
+urlencoding = "2"
+webbrowser = "1"
+which = "7"
+arboard = "3"
+
+# External - retrieval / TUI related
+async-stream = "0.3"
+crossbeam-channel = "0.5"
+crossterm = "0.29"
+derive_more = "2"
+dunce = "1.0.4"
+insta = "1"
+itertools = "0.14"
+# Workspace uses crossterm 0.29; matches ratatui-crossterm's default feature so
+# the dep tree stays single-version. Ratatui features are enabled by ROI:
+# scrolling-regions for the native scrollback substrate, widget-ref for
+# composable presentation surfaces, and rendered-line-info for measurement.
+# unstable-backend-writer stays off until we need direct writer_mut access.
+ratatui = { version = "0.30", features = [
+    "scrolling-regions",
+    "unstable-rendered-line-info",
+    "unstable-widget-ref",
+] }
+ratatui-macros = "0.7"
+# Markdown rendering (coco-tui-markdown): pulldown-cmark for parsing, syntect for
+# grammar-accurate code highlighting. syntect is pure-Rust (regex-fancy, no onig
+# C-dep) and ships the bundled syntax set; its .tmTheme themes are dropped — coco's
+# own Theme palette governs colors via a scope→UiStyles mapping.
+pulldown-cmark = { version = "0.13.4", default-features = false }
+syntect = { version = "5", default-features = false, features = [
+    "parsing",
+    "default-syntaxes",
+    "regex-fancy",
+] }
+# Extra syntect grammars (TypeScript/TSX, TOML, Dockerfile, Terraform, …) —
+# the stock default set lacks them. `syntect-fancy` matches our pure-Rust
+# regex-fancy syntect above (NOT `syntect-default-onig`: engine-specific
+# dumps must match the linked regex engine or grammars fail to load).
+two-face = { version = "0.5", default-features = false, features = [
+    "syntect-fancy",
+] }
+# Mermaid layout engine (coco-tui-mermaid). `default-features = false` drops the
+# `cli` (clap) and `png` (resvg/usvg/tiny-skia) features — we consume only the
+# pure-Rust parse + geometric-layout core and project it to Unicode box-drawing
+# cells (no rasterization, no terminal graphics protocol). Pinned by rev for a
+# reproducible build (single-maintainer upstream); gated off by default.
+mermaid-rs-renderer = { git = "https://github.com/1jehuang/mermaid-rs-renderer.git", rev = "01e8304ffc670f04dd4a047595cfb8ea9c854ae7", default-features = false }
+textwrap = "0.16"
+tokio-test = "0.4"
+tracing-appender = "0.2"
+tree-sitter-highlight = "0.25"
+unicode-normalization = "0.1"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+vt100 = "0.15"
+
+# i18n
+rust-i18n = "3"
+
+# External - LSP
+lsp-types = "0.95"
+
+# External - retrieval engine
+bm25 = { version = "2.3", features = ["parallelism"] }
+fastembed = "4"
+notify-debouncer-mini = "0.7"
+petgraph = "0.8"
+rust-stemmers = "1.2"
+text-splitter = { version = "0.28", features = ["code", "tiktoken-rs"] }
+tiktoken-rs = "0.7"
+tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-tags = "0.25"
+tree-sitter-typescript = "0.23"
+
+# External - storage / SQLite
+rusqlite = { version = "0.32", features = ["bundled"] }
+sqlite-vec = "0.1"
+zerocopy = { version = "0.7", features = ["derive"] }
+
+# External - proc macros
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "parsing"] }
+
+# External - misc
+filetime = "0.2"
+hex = "0.4"
+hmac = "0.12"
+mime = "0.3"
+pathdiff = "0.2"
+rustc_version_runtime = "0.3"
+
+# External - platform-specific
+core-foundation = "0.9"
+seccompiler = "0.5"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_Power",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
+filedescriptor = "0.8.3"
+shared_library = "0.1.9"
+winapi = { version = "0.3.9", features = [
+    "handleapi",
+    "minwinbase",
+    "processthreadsapi",
+    "synchapi",
+    "winbase",
+    "wincon",
+    "winerror",
+    "winnt",
+] }
+
+[workspace.lints]
+rust = {}
+
+[workspace.lints.clippy]
+expect_used = "deny"
+identity_op = "deny"
+manual_clamp = "deny"
+manual_filter = "deny"
+manual_find = "deny"
+manual_flatten = "deny"
+manual_map = "deny"
+manual_memcpy = "deny"
+manual_non_exhaustive = "deny"
+manual_ok_or = "deny"
+manual_range_contains = "deny"
+manual_retain = "deny"
+manual_strip = "deny"
+manual_try_fold = "deny"
+manual_unwrap_or = "deny"
+needless_borrow = "deny"
+needless_borrowed_reference = "deny"
+needless_collect = "deny"
+needless_late_init = "deny"
+needless_option_as_deref = "deny"
+needless_question_mark = "deny"
+needless_update = "deny"
+redundant_clone = "deny"
+redundant_closure = "deny"
+redundant_closure_for_method_calls = "deny"
+redundant_static_lifetimes = "deny"
+trivially_copy_pass_by_ref = "deny"
+uninlined_format_args = "deny"
+unnecessary_filter_map = "deny"
+unnecessary_lazy_evaluations = "deny"
+unnecessary_sort_by = "deny"
+unnecessary_to_owned = "deny"
+unwrap_used = "deny"
+
+[workspace.metadata.cargo-shear]
+ignored = ["coco-utils-readiness"]
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.dev.package."*"]
+opt-level = 1
+
+# Keep the hot, rarely-recompiled third-party runtime crates optimized even in
+# dev/test builds. Syntax highlighting (syntect + its regex engines), image
+# decode, and font shaping are 10-40x slower at low opt levels, which reads as
+# TUI input lag while scrolling highlighted / image-heavy transcripts. These are
+# stable deps that almost never rebuild, so opt-level=3 is a one-time cost reused
+# across every iterative rebuild of our own crates — it does NOT slow those down.
+[profile.dev.package.syntect]
+opt-level = 3
+[profile.dev.package.onig]
+opt-level = 3
+[profile.dev.package.fancy-regex]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.two-face]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.fontdb]
+opt-level = 3
+[profile.dev.package.ttf-parser]
+opt-level = 3
+
+# Search / text / decode compute primitives: SIMD scanning (memchr backs
+# serde_json, regex, bstr, ignore, nucleo), the regex stack, the fuzzy
+# file-search matcher, unicode layout tables, and the pure-Rust DEFLATE backend.
+# All hot at runtime, all stable third-party leaves.
+[profile.dev.package.memchr]
+opt-level = 3
+[profile.dev.package.aho-corasick]
+opt-level = 3
+[profile.dev.package.regex]
+opt-level = 3
+[profile.dev.package.nucleo]
+opt-level = 3
+[profile.dev.package.nucleo-matcher]
+opt-level = 3
+[profile.dev.package.unicode-width]
+opt-level = 3
+[profile.dev.package.unicode-segmentation]
+opt-level = 3
+[profile.dev.package.unicode-linebreak]
+opt-level = 3
+[profile.dev.package.bstr]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+# Same set for the test profile (its deps otherwise default to opt-level=0,
+# making highlight/render-exercising tests sluggish).
+[profile.test.package.syntect]
+opt-level = 3
+[profile.test.package.onig]
+opt-level = 3
+[profile.test.package.fancy-regex]
+opt-level = 3
+[profile.test.package.regex-automata]
+opt-level = 3
+[profile.test.package.two-face]
+opt-level = 3
+[profile.test.package.image]
+opt-level = 3
+[profile.test.package.png]
+opt-level = 3
+[profile.test.package.zune-jpeg]
+opt-level = 3
+[profile.test.package.fontdb]
+opt-level = 3
+[profile.test.package.ttf-parser]
+opt-level = 3
+[profile.test.package.memchr]
+opt-level = 3
+[profile.test.package.aho-corasick]
+opt-level = 3
+[profile.test.package.regex]
+opt-level = 3
+[profile.test.package.nucleo]
+opt-level = 3
+[profile.test.package.nucleo-matcher]
+opt-level = 3
+[profile.test.package.unicode-width]
+opt-level = 3
+[profile.test.package.unicode-segmentation]
+opt-level = 3
+[profile.test.package.unicode-linebreak]
+opt-level = 3
+[profile.test.package.bstr]
+opt-level = 3
+[profile.test.package.flate2]
+opt-level = 3
+[profile.test.package.miniz_oxide]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+split-debuginfo = "off"
+strip = "symbols"
+codegen-units = 1
+
+[profile.ci]
+inherits = "dev"
+strip = true
+debug = false
+
+[profile.ci-test]
+debug = 1
+inherits = "test"
+opt-level = 0

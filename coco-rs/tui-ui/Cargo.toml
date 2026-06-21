@@ -1,0 +1,47 @@
+[package]
+name = "coco-tui-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Exposes `#[cfg(test)]` helpers (MockClock, visible_history_rows,
+# force_due_for_test, …) to *other* crates' tests (deps aren't built in test
+# cfg). app/tui enables this in its [dev-dependencies].
+testing = []
+
+[dependencies]
+ratatui.workspace = true
+crossterm.workspace = true
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
+tracing.workspace = true
+# Clipboard (copy_to_clipboard + OSC 52 + arboard + WSL PowerShell fallback).
+base64.workspace = true
+# Clipboard image capture spawns subprocesses (xclip/wl-paste/osascript).
+tokio = { workspace = true, features = ["process", "fs"] }
+
+# Unavailable on Android; see clipboard_copy.rs for the cfg gating.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+vt100.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+criterion = { workspace = true }
+# Dev-only: the render bench drives the real markdown renderer to generate
+# representative `Vec<Line>` input. A dev-dependency keeps the production seam
+# clean (the seam guard exempts `[dev-dependencies]` only) and the cycle is
+# permitted (coco-tui-markdown depends on coco-tui-ui in turn).
+coco-tui-markdown.workspace = true
+
+[[bench]]
+name = "render"
+harness = false

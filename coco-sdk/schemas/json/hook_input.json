@@ -1,0 +1,1761 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HookInput",
+  "description": "Generic hook input \u2014 unified envelope for every hook event.\n\nInternally tagged on `hook_event_name` (PascalCase wire literal,\nmatching `HookEventType`). The tag field is supplied by serde from\nthe variant identity, so inner structs do NOT carry a redundant\n`hook_event_name` field. Wire shape:\n\n```json\n{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s\",\"tool_name\":\"Read\",...}\n```\n\nCompared with `untagged`, this representation:\n - lets schemars emit a discriminated `oneOf` with `const` on the\n   tag field, which downstream codegen (Pydantic discriminated\n   unions) consumes natively;\n - replaces serde's try-each-variant deserialize loop with O(1)\n   dispatch on the tag value.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/PreToolUseInput"
+    },
+    {
+      "$ref": "#/$defs/PostToolUseInput"
+    },
+    {
+      "$ref": "#/$defs/PostToolUseFailureInput"
+    },
+    {
+      "$ref": "#/$defs/SessionStartInput"
+    },
+    {
+      "$ref": "#/$defs/SessionEndInput"
+    },
+    {
+      "$ref": "#/$defs/SetupInput"
+    },
+    {
+      "$ref": "#/$defs/StopInput"
+    },
+    {
+      "$ref": "#/$defs/StopFailureInput"
+    },
+    {
+      "$ref": "#/$defs/PreCompactInput"
+    },
+    {
+      "$ref": "#/$defs/PostCompactInput"
+    },
+    {
+      "$ref": "#/$defs/SubagentStartInput"
+    },
+    {
+      "$ref": "#/$defs/SubagentStopInput"
+    },
+    {
+      "$ref": "#/$defs/UserPromptSubmitInput"
+    },
+    {
+      "$ref": "#/$defs/PermissionRequestInput"
+    },
+    {
+      "$ref": "#/$defs/PermissionDeniedInput"
+    },
+    {
+      "$ref": "#/$defs/NotificationInput"
+    },
+    {
+      "$ref": "#/$defs/ElicitationInput"
+    },
+    {
+      "$ref": "#/$defs/ElicitationResultInput"
+    },
+    {
+      "$ref": "#/$defs/FileChangedInput"
+    },
+    {
+      "$ref": "#/$defs/ConfigChangeInput"
+    },
+    {
+      "$ref": "#/$defs/InstructionsLoadedInput"
+    },
+    {
+      "$ref": "#/$defs/CwdChangedInput"
+    },
+    {
+      "$ref": "#/$defs/WorktreeCreateInput"
+    },
+    {
+      "$ref": "#/$defs/WorktreeRemoveInput"
+    },
+    {
+      "$ref": "#/$defs/TaskCreatedInput"
+    },
+    {
+      "$ref": "#/$defs/TaskCompletedInput"
+    },
+    {
+      "$ref": "#/$defs/TeammateIdleInput"
+    }
+  ],
+  "$defs": {
+    "CompactTrigger": {
+      "description": "Pre/PostCompact `trigger`: `manual` or `auto`.",
+      "type": "string",
+      "enum": [
+        "manual",
+        "auto"
+      ]
+    },
+    "ConfigChangeInput": {
+      "description": "Input for ConfigChange hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "file_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ConfigChangeSource"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "ConfigChange"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "source"
+      ]
+    },
+    "ConfigChangeSource": {
+      "description": "ConfigChange `source`: `user_settings`, `project_settings`, `local_settings`, `policy_settings`, or `skills`.",
+      "type": "string",
+      "enum": [
+        "user_settings",
+        "project_settings",
+        "local_settings",
+        "policy_settings",
+        "skills"
+      ]
+    },
+    "CwdChangedInput": {
+      "description": "Input for CwdChanged hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "new_cwd": {
+          "type": "string"
+        },
+        "old_cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "CwdChanged"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "old_cwd",
+        "new_cwd"
+      ]
+    },
+    "ElicitationAction": {
+      "description": "Elicitation user action. TS:\n`z.enum(['accept', 'decline', 'cancel'])`.",
+      "type": "string",
+      "enum": [
+        "accept",
+        "decline",
+        "cancel"
+      ]
+    },
+    "ElicitationInput": {
+      "description": "Input for Elicitation hooks.\n\nFields: `{mcp_server_name, message, mode?, url?, elicitation_id?, requested_schema?}`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "elicitation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mcp_server_name": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ElicitationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_schema": true,
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "Elicitation"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "mcp_server_name",
+        "message"
+      ]
+    },
+    "ElicitationMode": {
+      "description": "Elicitation `mode`: `form` or `url`.",
+      "type": "string",
+      "enum": [
+        "form",
+        "url"
+      ]
+    },
+    "ElicitationResultInput": {
+      "description": "Input for ElicitationResult hooks.\n\nFields: `{mcp_server_name, elicitation_id?, mode?, action, content?}`.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ElicitationAction"
+        },
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content": true,
+        "cwd": {
+          "type": "string"
+        },
+        "elicitation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mcp_server_name": {
+          "type": "string"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ElicitationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "ElicitationResult"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "mcp_server_name",
+        "action"
+      ]
+    },
+    "ExitReason": {
+      "description": "SessionEnd `reason`: `clear`, `resume`, `logout`, `prompt_input_exit`, `other`, or `bypass_permissions_disabled`.",
+      "type": "string",
+      "enum": [
+        "clear",
+        "resume",
+        "logout",
+        "prompt_input_exit",
+        "other",
+        "bypass_permissions_disabled"
+      ]
+    },
+    "FileChangeEvent": {
+      "description": "FileChanged `event`: `change`, `add`, or `unlink`.",
+      "type": "string",
+      "enum": [
+        "change",
+        "add",
+        "unlink"
+      ]
+    },
+    "FileChangedInput": {
+      "description": "Input for FileChanged hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "event": {
+          "$ref": "#/$defs/FileChangeEvent"
+        },
+        "file_path": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "FileChanged"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "file_path",
+        "event"
+      ]
+    },
+    "InstructionsLoadReason": {
+      "description": "InstructionsLoaded `load_reason`: `session_start`, `nested_traversal`, `path_glob_match`, `include`, or `compact`.",
+      "type": "string",
+      "enum": [
+        "session_start",
+        "nested_traversal",
+        "path_glob_match",
+        "include",
+        "compact"
+      ]
+    },
+    "InstructionsLoadedInput": {
+      "description": "Input for InstructionsLoaded hooks.\n\nFields: `{file_path, memory_type, load_reason, globs?, trigger_file_path?, parent_file_path?}`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "file_path": {
+          "type": "string"
+        },
+        "globs": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "load_reason": {
+          "$ref": "#/$defs/InstructionsLoadReason"
+        },
+        "memory_type": {
+          "$ref": "#/$defs/MemoryType"
+        },
+        "parent_file_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "trigger_file_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "InstructionsLoaded"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "file_path",
+        "memory_type",
+        "load_reason"
+      ]
+    },
+    "MemoryType": {
+      "description": "InstructionsLoaded `memory_type`: `User`, `Project`, `Local`, or `Managed`.",
+      "type": "string",
+      "enum": [
+        "User",
+        "Project",
+        "Local",
+        "Managed"
+      ]
+    },
+    "NotificationInput": {
+      "description": "Input for Notification hooks.\n\nFields: `{message, title?, notification_type}`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "notification_type": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "Notification"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "message",
+        "notification_type"
+      ]
+    },
+    "PermissionDeniedInput": {
+      "description": "Input for PermissionDenied hooks.\n\nFields: `{tool_name, tool_input, tool_use_id, reason}`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "tool_input": true,
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_use_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "PermissionDenied"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "tool_name",
+        "tool_input",
+        "tool_use_id",
+        "reason"
+      ]
+    },
+    "PermissionRequestInput": {
+      "description": "Input for PermissionRequest hooks.\n\nFields: `{tool_name, tool_input, permission_suggestions?}` \u2014 note that\n`tool_use_id` is NOT included on this event.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_suggestions": {
+          "description": "Suggested permission updates from upstream classifiers."
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "tool_input": true,
+        "tool_name": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "PermissionRequest"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "tool_name",
+        "tool_input"
+      ]
+    },
+    "PostCompactInput": {
+      "description": "Input for PostCompact hooks.\n\nFields: `{trigger: enum('manual','auto'), compact_summary: string}`. Both\nfields are required.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "compact_summary": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "trigger": {
+          "$ref": "#/$defs/CompactTrigger"
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "PostCompact"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "trigger",
+        "compact_summary"
+      ]
+    },
+    "PostToolUseFailureInput": {
+      "description": "Input for PostToolUseFailure hooks.\n\nFields: `{tool_name, tool_input, tool_use_id, error, is_interrupt?}`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "is_interrupt": {
+          "description": "`true` when the tool call was aborted because the user\ninterrupted the turn.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "tool_input": true,
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_use_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "PostToolUseFailure"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "tool_name",
+        "tool_input",
+        "tool_use_id",
+        "error"
+      ]
+    },
+    "PostToolUseInput": {
+      "description": "Input for PostToolUse hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "tool_input": true,
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_response": true,
+        "tool_use_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "PostToolUse"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "tool_name",
+        "tool_input",
+        "tool_response",
+        "tool_use_id"
+      ]
+    },
+    "PreCompactInput": {
+      "description": "Input for PreCompact hooks.\n\nFields: `{trigger: enum('manual','auto'), custom_instructions: string | null}`.\n`custom_instructions` is **nullable, not optional** \u2014 the field is\nalways present on the wire, with `null` indicating no instructions.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "custom_instructions": {
+          "description": "`None` serializes to JSON `null`; the field is intentionally\nNOT skip_serializing_if so it always appears on the wire.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "trigger": {
+          "$ref": "#/$defs/CompactTrigger"
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "PreCompact"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "trigger"
+      ]
+    },
+    "PreToolUseInput": {
+      "description": "Input for PreToolUse hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "tool_input": true,
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_use_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "PreToolUse"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "tool_name",
+        "tool_input",
+        "tool_use_id"
+      ]
+    },
+    "SessionEndInput": {
+      "description": "Input for SessionEnd hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/ExitReason"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "SessionEnd"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "reason"
+      ]
+    },
+    "SessionStartInput": {
+      "description": "Input for SessionStart hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SessionStartSource"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "SessionStart"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "source"
+      ]
+    },
+    "SessionStartSource": {
+      "description": "SessionStart `source`: `startup | resume | clear | compact`.",
+      "type": "string",
+      "enum": [
+        "startup",
+        "resume",
+        "clear",
+        "compact"
+      ]
+    },
+    "SetupInput": {
+      "description": "Input for Setup hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "trigger": {
+          "$ref": "#/$defs/SetupTrigger"
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "Setup"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "trigger"
+      ]
+    },
+    "SetupTrigger": {
+      "description": "Setup `trigger`: `init` or `maintenance`.",
+      "type": "string",
+      "enum": [
+        "init",
+        "maintenance"
+      ]
+    },
+    "StopFailureInput": {
+      "description": "Input for StopFailure hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "error_details": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_assistant_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "StopFailure"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "error"
+      ]
+    },
+    "StopInput": {
+      "description": "Input for Stop hooks.\n\nFields: `{stop_hook_active, last_assistant_message?}`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "last_assistant_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "stop_hook_active": {
+          "description": "`true` when the Stop hook is firing recursively (a previous\nStop hook blocked, the loop continued, and Stop is firing\nagain). Hooks should typically pass through to avoid infinite\nloops.",
+          "type": "boolean"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "Stop"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "stop_hook_active"
+      ]
+    },
+    "SubagentStartInput": {
+      "description": "Input for SubagentStart hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "agent_type": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "SubagentStart"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "agent_type",
+        "agent_id"
+      ]
+    },
+    "SubagentStopInput": {
+      "description": "Input for SubagentStop hooks.\n\nFields: `{stop_hook_active, agent_id, agent_transcript_path, agent_type, last_assistant_message?}`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "agent_transcript_path": {
+          "description": "Path to the subagent's transcript file. Empty string when the\nsubagent is not persisting one.",
+          "type": "string"
+        },
+        "agent_type": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "last_assistant_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "stop_hook_active": {
+          "type": "boolean"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "SubagentStop"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "stop_hook_active",
+        "agent_type",
+        "agent_id",
+        "agent_transcript_path"
+      ]
+    },
+    "TaskCompletedInput": {
+      "description": "Input for TaskCompleted hooks.\n\nFields: `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "task_description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "task_subject": {
+          "type": "string"
+        },
+        "team_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "teammate_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "TaskCompleted"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "task_id",
+        "task_subject"
+      ]
+    },
+    "TaskCreatedInput": {
+      "description": "Input for TaskCreated hooks.\n\nFields: `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "task_description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "task_subject": {
+          "type": "string"
+        },
+        "team_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "teammate_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "TaskCreated"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "task_id",
+        "task_subject"
+      ]
+    },
+    "TeammateIdleInput": {
+      "description": "Input for TeammateIdle hooks.\n\nFields: `{teammate_name, team_name}`.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "team_name": {
+          "type": "string"
+        },
+        "teammate_name": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "TeammateIdle"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "teammate_name",
+        "team_name"
+      ]
+    },
+    "UserPromptSubmitInput": {
+      "description": "Input for UserPromptSubmit hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "UserPromptSubmit"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "prompt"
+      ]
+    },
+    "WorktreeCreateInput": {
+      "description": "Input for WorktreeCreate hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "WorktreeCreate"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "name"
+      ]
+    },
+    "WorktreeRemoveInput": {
+      "description": "Input for WorktreeRemove hooks.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "description": "Subagent identifier \u2014 present only when the hook fires from\nwithin a subagent (e.g. a tool called by an `AgentTool` worker).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_type": {
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "permission_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "transcript_path": {
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "type": "string",
+          "default": ""
+        },
+        "worktree_path": {
+          "type": "string"
+        },
+        "hook_event_name": {
+          "type": "string",
+          "const": "WorktreeRemove"
+        }
+      },
+      "required": [
+        "hook_event_name",
+        "session_id",
+        "cwd",
+        "worktree_path"
+      ]
+    }
+  }
+}

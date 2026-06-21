@@ -1,0 +1,15 @@
+pub mod bash_oversize_truncation;
+pub mod compact;
+pub mod cross_protocol;
+pub mod hook_posttooluse_injects;
+pub mod max_turns_one;
+pub mod mid_turn_injection;
+pub mod one_shot;
+pub mod parallel_reads;
+pub mod reminders;
+pub mod streaming_deltas;
+pub mod system_prompt_override;
+pub mod tool_chain;
+pub mod tool_error_recovery;
+pub mod tool_use_completed_carries_name;
+pub mod usage_consistency;

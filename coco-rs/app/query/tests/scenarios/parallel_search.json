@@ -1,0 +1,39 @@
+{
+  "name": "parallel_search",
+  "description": "Run Glob and Grep in parallel (both read-only, concurrency-safe)",
+  "workspace": {
+    "main.rs": "fn main() {\n    println!(\"hello\");\n}\n",
+    "lib.rs": "pub fn greet() -> String {\n    \"hello\".to_string()\n}\n",
+    "README.md": "# Project\n"
+  },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Glob",
+          "input": { "pattern": "*.rs", "path": "{{workspace}}" }
+        },
+        {
+          "tool": "Grep",
+          "input": {
+            "pattern": "hello",
+            "path": "{{workspace}}",
+            "output_mode": "files_with_matches"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Found 2 Rust files, both contain hello."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "hello",
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "event_counts": {
+      "ToolUseEnd": 2
+    }
+  }
+}

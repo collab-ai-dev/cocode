@@ -1,0 +1,17 @@
+---
+source: app/tui/src/presentation/permissions_editor.test.rs
+expression: body_only(&state)
+---
+[Allow]   Ask    Deny    Workspace 
+
+Where should this be saved?
+
+  ○ Project settings (local)
+      .coco/settings.local.json — gitignored, this machine only
+▸ ◉ Project settings
+      .coco/settings.json — shared with your team
+  ○ User settings
+      ~/.coco/settings.json — applies to all your projects
+
+
+↑/↓ choose destination · Enter save · Esc back

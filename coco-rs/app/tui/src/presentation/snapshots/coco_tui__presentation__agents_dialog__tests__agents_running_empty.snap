@@ -1,0 +1,8 @@
+---
+source: app/tui/src/presentation/agents_dialog.test.rs
+expression: "body_only(&state, &[])"
+---
+[Running]   Library 
+No subagents are currently running.
+
+←/→ to switch · ↑/↓ to navigate · Enter to select · Esc to close

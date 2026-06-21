@@ -1,0 +1,32 @@
+[package]
+name = "vercel-ai-openai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OpenAI provider for Vercel AI SDK in Rust"
+
+[dependencies]
+vercel-ai-provider.workspace = true
+vercel-ai-provider-utils.workspace = true
+async-trait = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream", "multipart"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+bytes = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+pretty_assertions = { workspace = true }
+wiremock = { workspace = true }
+
+[lints]
+workspace = true

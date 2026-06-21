@@ -1,0 +1,3238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TuiOnlyEvent",
+  "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n\n23 variants (20 from design §4.1 + 3 coco-rs extensions).",
+  "oneOf": [
+    {
+      "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.resolution_detail` so the tool's\n`execute()` can branch on the choice. TS parity:\n`ExitPlanModePermissionRequest.tsx:691-704` option grid.\n\n`original_input` carries the raw tool input so the TUI can derive\npath-scoped read permission updates for classic \"always allow\"\napprovals.",
+      "type": "object",
+      "properties": {
+        "choices": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/PermissionAskChoice"
+          }
+        },
+        "cwd": {
+          "description": "Tool execution cwd used to resolve relative paths in\n`original_input` for scoped permission grants.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionRequestDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "display_input": {
+          "$ref": "#/$defs/PermissionDisplayInput"
+        },
+        "original_input": true,
+        "permission_suggestions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionUpdate"
+          }
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "show_always_allow": {
+          "description": "Whether the UI may offer an \"always allow\" action. False\nwhen managed policy restricts local/session rule changes.",
+          "type": "boolean",
+          "default": false
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "approval_required"
+        },
+        "worker_badge": {
+          "description": "Identity badge of the requesting cross-process teammate, if\nany — rendered in the prompt so the leader sees who is asking.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkerBadge"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "tool_name",
+        "description",
+        "display_input"
+      ]
+    },
+    {
+      "description": "AskUserQuestion overlay needed. `input` carries the full tool\ninput dict (the `questions[]` array, etc.) verbatim so the TUI\nrenders the rich multi-question UI (multiSelect, preview, notes)\nmatching TS `AskUserQuestionPermissionRequest.tsx`. The TUI\nechoes the answer payload back via `UserCommand::ApprovalResponse`\nwith `updated_input = Some({...input, answers, annotations})`.",
+      "type": "object",
+      "properties": {
+        "input": true,
+        "request_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "question_asked"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "input"
+      ]
+    },
+    {
+      "description": "MCP elicitation overlay needed.",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "schema": true,
+        "server": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "elicitation_requested"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "server",
+        "schema"
+      ]
+    },
+    {
+      "description": "Sandbox approval overlay needed.",
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "sandbox_approval_required"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "operation"
+      ]
+    },
+    {
+      "description": "Lazily-fetched permission risk explanation is ready for the prompt\n`request_id`. `explanation` is `None` when the fetch failed or the\nexplainer is disabled (the panel then shows \"unavailable\"). Produced\nafter the user toggles the Ctrl+E explainer panel. TS:\n`generatePermissionExplanation` (`permissionExplainer.ts`).",
+      "type": "object",
+      "properties": {
+        "explanation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionExplanation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "permission_explanation_ready"
+        }
+      },
+      "required": [
+        "type",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Plugin picker data loaded.",
+      "type": "object",
+      "properties": {
+        "plugins": {
+          "type": "array",
+          "items": true
+        },
+        "type": {
+          "type": "string",
+          "const": "plugin_data_ready"
+        }
+      },
+      "required": [
+        "type",
+        "plugins"
+      ]
+    },
+    {
+      "description": "Output style picker data loaded.",
+      "type": "object",
+      "properties": {
+        "styles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "output_styles_ready"
+        }
+      },
+      "required": [
+        "type",
+        "styles"
+      ]
+    },
+    {
+      "description": "Slash-command catalogue changed — sent after the seed at session\nstart AND whenever `/reload-plugins` swaps the active\n`CommandRegistry`. The TUI overwrites\n`state.session.available_commands` with this list so the `/`\nautocomplete popup and command palette stay in sync. TS parity:\nthe TS popup re-queries `getCommands()` inline; coco-rs pushes\nthe snapshot because the registry lives in the CLI process.",
+      "type": "object",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SlashCommandInfo"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "available_commands_refreshed"
+        }
+      },
+      "required": [
+        "type",
+        "commands"
+      ]
+    },
+    {
+      "description": "Queued command was removed from the engine queue and is ready to\nrestore into the composer for editing.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueuedCommandEditImage"
+          }
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "queued_command_edit_ready"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "prompt"
+      ]
+    },
+    {
+      "description": "Editable queued commands were removed from the engine queue and\ncombined with the current composer draft.",
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueuedCommandEditImage"
+          }
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "queued_commands_edit_ready"
+        }
+      },
+      "required": [
+        "type",
+        "ids",
+        "prompt",
+        "cursor"
+      ]
+    },
+    {
+      "description": "The requested queued command could not be restored.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "queued_command_edit_unavailable"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "reason"
+      ]
+    },
+    {
+      "description": "Open the resume picker inside the running TUI session.\n\nTS parity: `/resume` with no args opens the saved-chat picker;\n`/resume <id-or-name>` bypasses this and resumes directly.",
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SdkSessionSummary"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "open_session_browser"
+        }
+      },
+      "required": [
+        "type",
+        "sessions"
+      ]
+    },
+    {
+      "description": "Rewind picker per-row metadata, emitted once on picker mount.\n\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) — the\npicker renders \"⚠ No code restore\" for that row.\n`metadata == Some { file_paths: [], .. }` means the snapshot\nexists but nothing changed — picker renders \"No code changes\".\n\nBundled here so the bounded TUI command channel does not drop individual\nrow events on transcripts with many user messages.",
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RewindRowMetadata"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "rewind_row_metadata_ready"
+        }
+      },
+      "required": [
+        "type",
+        "rows"
+      ]
+    },
+    {
+      "description": "Rewind restore-preview diff stats for the selected message,\nemitted after the user confirms a checkpoint pick. `stats ==\nNone` means `fileHistoryCanRestore(...)` was false — the\noption screen suppresses code-restore choices and shows the\nconversation-only path.",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "stats": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RewindDiffStatsPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "const": "rewind_restore_preview_ready"
+        }
+      },
+      "required": [
+        "type",
+        "message_id"
+      ]
+    },
+    {
+      "description": "Compaction circuit breaker opened.",
+      "type": "object",
+      "properties": {
+        "failures": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "const": "compaction_circuit_breaker_open"
+        }
+      },
+      "required": [
+        "type",
+        "failures"
+      ]
+    },
+    {
+      "description": "Micro-compaction applied notification.",
+      "type": "object",
+      "properties": {
+        "removed": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "const": "micro_compaction_applied"
+        }
+      },
+      "required": [
+        "type",
+        "removed"
+      ]
+    },
+    {
+      "description": "Session memory compaction applied notification.",
+      "type": "object",
+      "properties": {
+        "summary_tokens": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "const": "session_memory_compact_applied"
+        }
+      },
+      "required": [
+        "type",
+        "summary_tokens"
+      ]
+    },
+    {
+      "description": "Speculative execution rolled back.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "speculative_rolled_back"
+        }
+      },
+      "required": [
+        "type",
+        "reason"
+      ]
+    },
+    {
+      "description": "Memory extraction started.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "session_memory_extraction_started"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Memory extraction completed.",
+      "type": "object",
+      "properties": {
+        "extracted": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "const": "session_memory_extraction_completed"
+        }
+      },
+      "required": [
+        "type",
+        "extracted"
+      ]
+    },
+    {
+      "description": "Memory extraction failed.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "session_memory_extraction_failed"
+        }
+      },
+      "required": [
+        "type",
+        "error"
+      ]
+    },
+    {
+      "description": "Cron job disabled by circuit breaker.",
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "cron_job_disabled"
+        }
+      },
+      "required": [
+        "type",
+        "job_id",
+        "reason"
+      ]
+    },
+    {
+      "description": "Missed cron job fires.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "const": "cron_jobs_missed"
+        }
+      },
+      "required": [
+        "type",
+        "count"
+      ]
+    },
+    {
+      "description": "Streaming tool input delta (typing effect).\n\nA tool call's arguments have started streaming (the model began\nemitting the input JSON). Carries the `call_id` and tool `name` so the\nTUI can create a pre-queue \"streaming\" row in the activity strip — the\n`call_id` matches the later [`AgentStreamEvent::ToolUseQueued`], which\nupgrades the same row with the finalized input once parsing completes.\n\nEmitted by the engine from `StreamEvent::ToolCallStart`. Like\n[`Self::ToolCallDelta`] it is UI-only: the SDK sees the complete input\nat `ToolUseQueued` and does not need the streaming preamble.",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_call_stream_start"
+        }
+      },
+      "required": [
+        "type",
+        "call_id",
+        "name"
+      ]
+    },
+    {
+      "description": "Partial tool-call input JSON fragment, for the live \"typing\" preview in\nthe activity strip. The TUI appends the delta to\n`ToolExecution.streaming_input` and re-derives the primary-argument\npreview (the command for `Bash`, the path for `Read`, …) so the row\nshows arguments filling in before the call is queued.\n\nEmitted by the engine from `StreamEvent::ToolCallDelta` (a different,\ninference-internal type). Kept in `TuiOnlyEvent` rather than\n`AgentStreamEvent` per `event-system-design.md` §3.3: the partial JSON\nserves a purely UI display purpose — `ToolUseQueued` already contains\nthe complete, re-assembled input, so SDK consumers need not handle the\nfragments.",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "delta": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_call_delta"
+        }
+      },
+      "required": [
+        "type",
+        "call_id",
+        "delta"
+      ]
+    },
+    {
+      "description": "Tool progress update (progress bar).",
+      "type": "object",
+      "properties": {
+        "data": true,
+        "tool_use_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_progress"
+        }
+      },
+      "required": [
+        "type",
+        "tool_use_id",
+        "data"
+      ]
+    },
+    {
+      "description": "Whether a streaming Enter can submit-interrupt the current turn.",
+      "type": "object",
+      "properties": {
+        "interruptible": {
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_interruptibility_changed"
+        }
+      },
+      "required": [
+        "type",
+        "interruptible"
+      ]
+    },
+    {
+      "description": "Tool execution aborted notification.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/ToolAbortReasonPayload"
+        },
+        "tool_use_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_execution_aborted"
+        }
+      },
+      "required": [
+        "type",
+        "tool_use_id",
+        "reason"
+      ]
+    },
+    {
+      "description": "Rewind completed — TUI truncates messages and restores input state.\ncoco-rs extension: UI-only because it carries TUI-specific identifiers\nfor message truncation and input repopulation. Out-of-band from the\ndesign's `rewind/completed` ServerNotification which carries protocol\nmetadata only.",
+      "type": "object",
+      "properties": {
+        "files_changed": {
+          "description": "Number of files restored (0 if conversation-only).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "target_message_id": {
+          "description": "UUID of the target user message. Empty = code-only rewind.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "rewind_completed"
+        }
+      },
+      "required": [
+        "type",
+        "target_message_id",
+        "files_changed"
+      ]
+    },
+    {
+      "description": "Local slash-command produced a `CommandResult::Text` (or\n`Compact { display_text }`). Surfaced as a system-role chat message\nso it reads inline with the transcript. `text` is the pre-rendered\nbody — never translated, since it carries the handler's actual\noutput (often command-specific status / git output / prompt\npreview).",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Raw argument string the user typed (e.g. `sonnet` for\n`/model sonnet`). Threaded into the model-visible echo\n(`❯ /name args`) so the model sees the full invocation, matching\nTS `formatCommandInput(command, args)`. Empty for argless commands.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "slash_command_result"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "args",
+        "text"
+      ]
+    },
+    {
+      "description": "Open the full-color `/context` usage surface. Carries the analyzed\nreport (the TUI cannot reach the engine to compute it). Replaces the\nformer markdown-in-transcript output and the removed `Ctrl+W` overlay.",
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ContextUsageResult"
+        },
+        "type": {
+          "type": "string",
+          "const": "open_context_usage"
+        }
+      },
+      "required": [
+        "type",
+        "result"
+      ]
+    },
+    {
+      "description": "Dispatcher-side breadcrumb for slash commands the runtime couldn't\nfully execute (missing handler, handler error, empty Prompt body,\ndialog wiring pending). The TUI translates `kind` via the i18n\ncatalog before rendering.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Argument string the user typed after the command, used to render the\n`❯ /name args` echo alongside the status. Empty when none was given.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SlashCommandStatusKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "slash_command_status"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "args",
+        "kind"
+      ]
+    },
+    {
+      "description": "Tell the TUI to open the rewind picker overlay.\n\nEmitted by the slash-command dispatcher when `/rewind` resolves\nthrough the generic `DialogSpec` mapping. The TUI consumes the\ncurrent transcript cells to build the bare picker; preselected\nrewind remains an internal UI command path.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_rewind_picker"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Tell the TUI to open the `/memory` file-picker overlay. The slash\ndispatcher pre-builds entries via\n`coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries`\nand carries them through here so the TUI doesn't recompute paths.\nOn selection the TUI sends an `OpenMemoryFile` command to the CLI\nbridge; the bridge creates the file (`mode wx` semantics), opens\n`$VISUAL || $EDITOR`, and reports the result back as a transcript\nvisible event. On cancel the TUI emits \"Cancelled memory editing\".\nTS parity: `commands/memory/memory.tsx`.",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryDialogEntry"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "open_memory_dialog"
+        }
+      },
+      "required": [
+        "type",
+        "entries"
+      ]
+    },
+    {
+      "description": "`/copy [N]` slash command — the TUI walks its transcript, picks\nthe Nth-latest assistant message, and either directly copies it\n(when there are no code blocks or `copy_full_response` is on) or\nopens the [`ModalState::CopyPicker`] surface. The CLI runner\nemits this through `dispatch_slash_command`'s `/copy` intercept;\nonly the TUI has the transcript in a render-ready shape.\nTS parity: `commands/copy/copy.tsx`.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Raw arg string after `/copy`; empty when the user typed\n`/copy` with no argument. The TUI parses it as `usize` and\nsurfaces a usage toast on invalid input.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "copy_command_requested"
+        }
+      },
+      "required": [
+        "type",
+        "args"
+      ]
+    },
+    {
+      "description": "`/memory` editor launch completed successfully.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Path of the file passed to the editor.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "memory_file_opened"
+        }
+      },
+      "required": [
+        "type",
+        "path"
+      ]
+    },
+    {
+      "description": "`/memory` editor launch failed before a process was started.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "User-visible failure summary.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Path of the file the user selected.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "memory_file_open_failed"
+        }
+      },
+      "required": [
+        "type",
+        "path",
+        "error"
+      ]
+    },
+    {
+      "description": "Plan editor launch completed successfully.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Path of the session plan file passed to the editor.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "plan_file_opened"
+        }
+      },
+      "required": [
+        "type",
+        "path"
+      ]
+    },
+    {
+      "description": "Plan editor launch failed before a process was started.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "User-visible failure summary.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Path of the session plan file.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "plan_file_open_failed"
+        }
+      },
+      "required": [
+        "type",
+        "path",
+        "error"
+      ]
+    },
+    {
+      "description": "Request the foreground TUI to leave raw mode / alt-screen before\nthe CLI runner starts an interactive editor process.",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "description": "Opaque request id echoed back by the TUI once terminal modes\nare ready for the external editor.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "external_editor_prepare"
+        }
+      },
+      "required": [
+        "type",
+        "request_id"
+      ]
+    },
+    {
+      "description": "External prompt editor completed.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "Edited prompt content read back from the temp file.",
+          "type": "string"
+        },
+        "modified": {
+          "description": "Whether the edited content differs from the initial content.",
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string",
+          "const": "prompt_editor_completed"
+        }
+      },
+      "required": [
+        "type",
+        "content",
+        "modified"
+      ]
+    },
+    {
+      "description": "External prompt editor failed before content could be read back.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "User-visible failure summary.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "prompt_editor_failed"
+        }
+      },
+      "required": [
+        "type",
+        "error"
+      ]
+    },
+    {
+      "description": "Result of a prompt-mode `!`-prefixed bash submission. The TUI\nfolds this into a `MessageContent::BashOutput` chat message\nkeyed by the same `user_message_id` as the matching\n`BashInput`. Emitted by the CLI bridge after running the\ncommand via `coco_shell::ShellExecutor`. TS parity:\n`LocalShellTask` completion.",
+      "type": "object",
+      "properties": {
+        "exit_code": {
+          "description": "Process exit code; non-zero shades the output red.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "output": {
+          "description": "Merged stdout + stderr, already truncated to a reasonable\ndisplay size by the bridge.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "bash_command_completed"
+        },
+        "user_message_id": {
+          "description": "Shared id of the bash input/output pair so rewind groups them.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "user_message_id",
+        "output",
+        "exit_code"
+      ]
+    },
+    {
+      "description": "Tell the TUI to open the provider-grouped model picker. Emitted\nwhen the slash dispatcher resolves `/model` with no args (typed\n`/model` from input bar). The TUI consumes the current\n`state.session.model` to mark the \"current\" entry.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_model_picker"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Tell the TUI to open the tabbed settings panel. Emitted when the slash\ndispatcher resolves `/config` with no args (TS `/config` local-jsx\npanel). Reuses the same overlay as the `Ctrl+,` keybind.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_settings"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Tell the TUI to open the standalone theme picker. Emitted when the\nslash dispatcher resolves `/theme` with no args. The TUI builds the\nchoice list from its live `ThemeRuntimeState`.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_theme_picker"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Tell the TUI to open the `/skills` read-only overlay. The slash\ndispatcher pre-builds the entry list + per-group subtitles so\nthe TUI doesn't recompute paths or token estimates.\n\nTS parity: `commands/skills/skills.tsx` → `<SkillsMenu>`. Dialog\nis read-only — Esc to close; selection has no side effects.",
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/SkillsDialogPayload"
+        },
+        "type": {
+          "type": "string",
+          "const": "open_skills_dialog"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "description": "`/plugin` overlay — opens the tabbed installed / marketplace / errors\nmanager. The payload is a CLI-built snapshot because the TUI cannot\nreach plugin loader state directly.",
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/PluginDialogPayload"
+        },
+        "type": {
+          "type": "string",
+          "const": "open_plugin_dialog"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "description": "`/agents` overlay — opens the 2-tab `<AgentsDialog>` with the\nLibrary entries pre-grouped. The Running tab is sourced\ndirectly from `SessionState.subagents` on the TUI side.",
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/AgentsDialogPayload"
+        },
+        "type": {
+          "type": "string",
+          "const": "open_agents_dialog"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "description": "`/permissions` overlay — opens the tabbed rule editor\n(Allow / Ask / Deny / Workspace). The payload is a CLI-built\nsnapshot of every file-backed rule + additional directory, since\nthe TUI cannot reach the settings stores directly. Re-emitted\nafter each edit so the open overlay refreshes in place. TS parity:\n`commands/permissions/permissions.tsx` → `<PermissionRuleList>`.",
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/PermissionsEditorPayload"
+        },
+        "type": {
+          "type": "string",
+          "const": "open_permissions_editor"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "description": "Open the interactive `/add-dir` overlay (no-argument form). The TUI\nshows a directory-path text input; confirm re-dispatches\n`/add-dir <path>` to reuse the validated session-add path. TS parity:\n`commands/add-dir/add-dir.tsx` → `<AddWorkspaceDirectory>`.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_add_directory"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Open the interactive `/export` format picker (no-argument form). The\nTUI shows the Markdown/JSON/Text chooser; confirm re-dispatches\n`/export <format>`, which the CLI runner renders from the live\n`MessageHistory` and writes to disk. (coco-specific: TS's\n`<ExportDialog>` instead offers clipboard-vs-file for a single plain-text\nformat; coco picks among Markdown/JSON/Text and writes to a file.)",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_export"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Notify the TUI that a `/skills` dialog Enter has finished\npersisting (or failed). TUI renders the localized\n`Updated N / No changes / Failed: …` toast — keeping all\nuser-visible text generation on the UI side.",
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/SkillOverridesSaveResult"
+        },
+        "type": {
+          "type": "string",
+          "const": "skill_overrides_saved"
+        }
+      },
+      "required": [
+        "type",
+        "result"
+      ]
+    }
+  ],
+  "$defs": {
+    "AgentColorName": {
+      "description": "TS `AgentColorName`. Validated set; unknown values are dropped at parse\ntime with a warning so the runtime never sees an invalid color.",
+      "type": "string",
+      "enum": [
+        "red",
+        "blue",
+        "green",
+        "yellow",
+        "purple",
+        "orange",
+        "pink",
+        "cyan"
+      ]
+    },
+    "AgentSource": {
+      "description": "Where an agent definition came from. Drives precedence when the same\n`agent_type` is defined in multiple places: later source wins.",
+      "oneOf": [
+        {
+          "description": "Bundled built-in agents.",
+          "type": "string",
+          "const": "built-in"
+        },
+        {
+          "description": "Plugin contribution.",
+          "type": "string",
+          "const": "plugin"
+        },
+        {
+          "description": "User-level agents (`~/.coco/agents/*.md`).",
+          "type": "string",
+          "const": "userSettings"
+        },
+        {
+          "description": "Project-level agents (`<project>/.coco/agents/*.md`).",
+          "type": "string",
+          "const": "projectSettings"
+        },
+        {
+          "description": "JSON/CLI flag supplied agents.",
+          "type": "string",
+          "const": "flagSettings"
+        },
+        {
+          "description": "Managed/policy agents (highest priority).",
+          "type": "string",
+          "const": "policySettings"
+        }
+      ]
+    },
+    "AgentsDialogEntry": {
+      "description": "One row in the `/agents` Library tab.",
+      "type": "object",
+      "properties": {
+        "color": {
+          "description": "Optional badge color from frontmatter.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentColorName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "`whenToUse` description (single line). Empty when frontmatter\nomitted it — the renderer falls back to a placeholder.",
+          "type": "string"
+        },
+        "is_overridden": {
+          "description": "`true` when this `agent_type` is shadowed by a higher-priority\nsource (still loadable, but the active resolution picks the\noverride). TS: `is_overridden` flag in `loadAgentsDir.ts`.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Canonical `agent_type` identifier.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Which source loaded this entry.",
+          "$ref": "#/$defs/AgentSource"
+        },
+        "source_path": {
+          "description": "Absolute markdown source path. `None` for built-in / plugin /\nin-memory entries that aren't editable via `$EDITOR`. Drives\nthe Library tab's `Enter` (edit) and `d` (delete) actions.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "source"
+      ]
+    },
+    "AgentsDialogPayload": {
+      "description": "Payload for [`TuiOnlyEvent::OpenAgentsDialog`]. Built by the\n`/agents` slash handler with everything the 2-tab dialog needs\n(Running tab reads `SessionState.subagents` directly, so the\npayload only carries Library data).\n\nTS parity: bundled-only `cli_unpack_pretty/decls/functions/bW4.js`\n(Library tab). The open-source `<AgentsMenu>` exposes the same\nper-row data but routes through a different state machine.",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "description": "All visible agents, source-grouped at dialog-build time so the\nTUI doesn't recompute precedence. Order: User → Project →\nLocal → Managed → Plugin → Flag → Built-in. Empty groups are\nomitted.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentsDialogEntry"
+          }
+        }
+      },
+      "required": [
+        "entries"
+      ]
+    },
+    "AttachmentTypeBreakdown": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "tokens"
+      ]
+    },
+    "CommandArgumentKind": {
+      "description": "Typed command argument shape used by UI completion and submit semantics.",
+      "oneOf": [
+        {
+          "description": "Command takes no argument and may execute immediately after selection.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Command accepts arbitrary text; UI shows a hint but no typed completion.",
+          "type": "string",
+          "const": "free_text"
+        },
+        {
+          "description": "Command expects a file path.",
+          "type": "string",
+          "const": "file_path"
+        },
+        {
+          "description": "Command expects a directory path.",
+          "type": "string",
+          "const": "directory_path"
+        },
+        {
+          "description": "Command expects a saved session id.",
+          "type": "string",
+          "const": "session_id"
+        }
+      ]
+    },
+    "CommandSource": {
+      "description": "How a command was loaded.\n\nPayload-carrying variants (`Plugin { name }`, `Mcp { server_name }`)\nensure source and attribution can never disagree. This replaces the\nolder `loaded_from + plugin_name` dual-field layout, which allowed\nnonsensical states (e.g. `loaded_from = Builtin` paired with\n`plugin_name = Some(...)`).",
+      "oneOf": [
+        {
+          "description": "Hardcoded built-in slash command (e.g. `/help`, `/clear`).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "builtin"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Compiled-in bundled skill.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bundled"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "User-scope on-disk skill (`~/.coco/skills/`).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "user"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Project-scope on-disk skill (`.coco/skills/`).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "project"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Enterprise/policy-managed skill.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "managed"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "On-disk skill directory (general SKILL.md catch-all).",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "skills"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Deprecated legacy flat-`.md` path. Not used by project skill discovery.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "commands_deprecated"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Plugin-provided skill or command. Carries the contributing\nplugin's manifest name so the UI can render\n`(plugin-name) text` annotations without a parallel field.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "plugin"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "description": "MCP-server-provided skill. Carries the originating server name\nso `/skills` can list contributing servers without a parallel\nlookup table.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "mcp"
+            },
+            "server_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "server_name"
+          ]
+        }
+      ]
+    },
+    "CommandTypeTag": {
+      "description": "Tag-only projection of [`CommandType`]. Implements [`Copy`] so the\nUI snapshot ([`SlashCommandInfo`]) and the autocomplete ranker can\npass it around without cloning.",
+      "oneOf": [
+        {
+          "description": "Expands into a model prompt.",
+          "type": "string",
+          "const": "prompt"
+        },
+        {
+          "description": "Executes locally and returns text.",
+          "type": "string",
+          "const": "local"
+        },
+        {
+          "description": "Opens a TUI overlay.",
+          "type": "string",
+          "const": "local_overlay"
+        }
+      ]
+    },
+    "ContextAgent": {
+      "type": "object",
+      "properties": {
+        "agent_type": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "agent_type",
+        "source",
+        "tokens"
+      ]
+    },
+    "ContextCategoryKind": {
+      "description": "Closed set of context-window usage categories. Each renderer maps the\nkind to its own label + color; the wire carries the typed kind so the\nvocabulary cannot drift across SDK / TUI / cross-language codegens.",
+      "type": "string",
+      "enum": [
+        "system_prompt",
+        "tools",
+        "mcp_tools",
+        "agents",
+        "memory_files",
+        "skills",
+        "messages",
+        "free"
+      ]
+    },
+    "ContextMcpTool": {
+      "type": "object",
+      "properties": {
+        "is_loaded": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "server_name",
+        "tokens",
+        "is_loaded"
+      ]
+    },
+    "ContextMemoryFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "path",
+        "source",
+        "tokens"
+      ]
+    },
+    "ContextSkill": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "tokens"
+      ]
+    },
+    "ContextSuggestion": {
+      "description": "An actionable suggestion shown under the `/context` view.",
+      "type": "object",
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "savings_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "severity": {
+          "$ref": "#/$defs/SuggestionSeverity"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "severity",
+        "title",
+        "detail"
+      ]
+    },
+    "ContextUsageCategory": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Typed category identity — the renderer derives label + color from it.",
+          "$ref": "#/$defs/ContextCategoryKind"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "kind",
+        "tokens"
+      ]
+    },
+    "ContextUsageResult": {
+      "description": "Response to `ClientRequest::ContextUsage`.\nMatches TS `SDKControlGetContextUsageResponseSchema` (controlSchemas.ts:205-306).\nSimplified subset — TS includes a rich breakdown grid that's UI-specific.",
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextAgent"
+          }
+        },
+        "auto_compact_threshold": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "categories": {
+          "description": "Categorized breakdown (system prompt, tools, history, etc.).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextUsageCategory"
+          }
+        },
+        "is_auto_compact_enabled": {
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "mcp_tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextMcpTool"
+          }
+        },
+        "memory_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextMemoryFile"
+          }
+        },
+        "message_breakdown": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageBreakdown"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "percentage": {
+          "type": "number",
+          "format": "double"
+        },
+        "raw_max_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextSkill"
+          }
+        },
+        "suggestions": {
+          "description": "Actionable guidance (near-capacity, large tool results, …). Computed\nfrom the breakdown so SDK + TUI render the same suggestions.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextSuggestion"
+          }
+        },
+        "total_tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "total_tokens",
+        "max_tokens",
+        "raw_max_tokens",
+        "percentage",
+        "model",
+        "categories",
+        "is_auto_compact_enabled"
+      ]
+    },
+    "ExitPlanModeAllowedPrompt": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "prompt"
+      ]
+    },
+    "ExitPlanModeOutcome": {
+      "description": "First-class outcome of an `ExitPlanMode` tool call.",
+      "oneOf": [
+        {
+          "description": "A concrete implementation plan was produced and approved for execution.",
+          "type": "string",
+          "const": "implementation_plan"
+        },
+        {
+          "description": "Plan mode ended for a request that does not have implementation work.",
+          "type": "string",
+          "const": "no_implementation_plan"
+        }
+      ]
+    },
+    "MemoryDialogEntry": {
+      "description": "One row in the `/memory` file-picker overlay. Built by the slash\ndispatcher and shipped to the TUI via [`TuiOnlyEvent::OpenMemoryDialog`].",
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "Display label shown in the picker row.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Filesystem path of the memory file (also the editor target).",
+          "type": "string"
+        },
+        "row_kind": {
+          "description": "Row semantics for rendering and selection behavior.",
+          "$ref": "#/$defs/MemoryDialogRowKind",
+          "default": {
+            "exists": false,
+            "kind": "file",
+            "read_only": false
+          }
+        },
+        "scope": {
+          "description": "Scope tag (drives ordering and color hint).",
+          "$ref": "#/$defs/MemoryDialogScope"
+        }
+      },
+      "required": [
+        "path",
+        "label",
+        "scope"
+      ]
+    },
+    "MemoryDialogRowKind": {
+      "description": "Semantic row kind for the `/memory` picker.",
+      "oneOf": [
+        {
+          "description": "Editable memory file.",
+          "type": "object",
+          "properties": {
+            "exists": {
+              "description": "Whether the file already exists at event construction time.",
+              "type": "boolean",
+              "default": false
+            },
+            "kind": {
+              "type": "string",
+              "const": "file"
+            },
+            "read_only": {
+              "description": "Whether the row should be treated as read-only by future UIs.",
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Folder grouping row for future memory directory surfaces.",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "description": "Whether the folder is currently enabled.",
+              "type": "boolean",
+              "default": false
+            },
+            "kind": {
+              "type": "string",
+              "const": "folder"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Toggle row for future auto-memory settings.",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "description": "Current toggle state.",
+              "type": "boolean",
+              "default": false
+            },
+            "kind": {
+              "type": "string",
+              "const": "toggle"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "MemoryDialogScope": {
+      "description": "Scope tag for a memory file picker entry. Mirrors\n`coco_commands::MemoryScope` — kept in `coco-types` so the TUI can\nconsume the event without depending on `coco-commands`.",
+      "oneOf": [
+        {
+          "description": "Enterprise / managed (typically read-only for the user).",
+          "type": "string",
+          "const": "managed"
+        },
+        {
+          "description": "User-global (`~/.coco/CLAUDE.md` or `~/CLAUDE.md`).",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "Project (`./CLAUDE.md`).",
+          "type": "string",
+          "const": "project"
+        },
+        {
+          "description": "Project-local (`./CLAUDE.local.md`, gitignored).",
+          "type": "string",
+          "const": "project_local"
+        },
+        {
+          "description": "`<dir>/.coco/CLAUDE.md` — project-config-dir convention.",
+          "type": "string",
+          "const": "project_config"
+        },
+        {
+          "description": "Subdirectory CLAUDE.md (auto-loaded under cwd).",
+          "type": "string",
+          "const": "subdir"
+        },
+        {
+          "description": "File loaded transitively via `@-import` from a parent memory file.",
+          "type": "string",
+          "const": "imported"
+        },
+        {
+          "description": "Auto-memory directory entry (`<memdir>/`).",
+          "type": "string",
+          "const": "auto_mem_folder"
+        },
+        {
+          "description": "Team memory directory entry (`<memdir>/team/`).",
+          "type": "string",
+          "const": "team_mem_folder"
+        },
+        {
+          "description": "Per-agent memory directory entry.",
+          "type": "string",
+          "const": "agent_mem_folder"
+        }
+      ]
+    },
+    "MessageBreakdown": {
+      "type": "object",
+      "properties": {
+        "assistant_message_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "attachment_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "attachments_by_type": {
+          "description": "Per-attachment-kind token totals, sorted tokens-desc.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AttachmentTypeBreakdown"
+          }
+        },
+        "tool_call_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tool_calls_by_type": {
+          "description": "Per-tool token attribution (calls + results), sorted total-desc.\nDrives the large-tool-result / read-bloat suggestions.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolTypeBreakdown"
+          }
+        },
+        "tool_result_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "user_message_tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "tool_call_tokens",
+        "tool_result_tokens",
+        "attachment_tokens",
+        "assistant_message_tokens",
+        "user_message_tokens"
+      ]
+    },
+    "PermissionAskChoice": {
+      "description": "One option in a multi-choice permission dialog.\n\nUsed by `ToolCheckResult::Ask.choices` and surfaced on the wire via\n`PermissionDecision::Ask.choices`. The TUI renders one row per\nchoice; the picked `value` is echoed back so the tool's `execute()`\ncan branch on the user's selection.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Optional one-line explanation rendered under the label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "Short row label shown to the user.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-default-keep-context\"`,\n`\"yes-accept-edits-clear-context\"`, `\"no\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ]
+    },
+    "PermissionBehavior": {
+      "description": "Permission behavior for a rule.",
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ]
+    },
+    "PermissionDisplayInput": {
+      "description": "Bounded, UI-ready permission input display.\n\nThis is separate from the raw tool input because approval UIs should\nconsume sanitized display data while keeping `original_input` only for\nupdated-input response construction and permission-rule derivation.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "command"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "json"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "text"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "empty"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "PermissionExplanation": {
+      "description": "Human-readable explanation of a permission decision.",
+      "type": "object",
+      "properties": {
+        "explanation": {
+          "type": "string"
+        },
+        "reasoning": {
+          "type": "string"
+        },
+        "risk": {
+          "type": "string"
+        },
+        "risk_level": {
+          "$ref": "#/$defs/RiskLevel"
+        }
+      },
+      "required": [
+        "risk_level",
+        "explanation",
+        "reasoning",
+        "risk"
+      ]
+    },
+    "PermissionMode": {
+      "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at\n`coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits',\n'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the\ndrifting variants accept legacy snake_case input so old session\ntranscripts deserialize cleanly.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "default",
+            "plan",
+            "bypassPermissions",
+            "dontAsk",
+            "acceptEdits"
+          ]
+        },
+        {
+          "description": "Feature-gated auto mode.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Internal: escalate to parent agent.",
+          "type": "string",
+          "const": "bubble"
+        }
+      ]
+    },
+    "PermissionRequestDetail": {
+      "description": "Tool-specific payload for permission UIs.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "allowed_prompts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ExitPlanModeAllowedPrompt"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "exit_plan_mode"
+            },
+            "outcome": {
+              "$ref": "#/$defs/ExitPlanModeOutcome"
+            },
+            "plan": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "plan_file_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "outcome"
+          ]
+        }
+      ]
+    },
+    "PermissionRule": {
+      "description": "A single permission rule.",
+      "type": "object",
+      "properties": {
+        "behavior": {
+          "$ref": "#/$defs/PermissionBehavior"
+        },
+        "source": {
+          "$ref": "#/$defs/PermissionRuleSource"
+        },
+        "value": {
+          "$ref": "#/$defs/PermissionRuleValue"
+        }
+      },
+      "required": [
+        "source",
+        "behavior",
+        "value"
+      ]
+    },
+    "PermissionRuleSource": {
+      "description": "Source of a permission rule (ordered by priority: Session is most specific).",
+      "type": "string",
+      "enum": [
+        "user_settings",
+        "project_settings",
+        "local_settings",
+        "flag_settings",
+        "policy_settings",
+        "cli_arg",
+        "command",
+        "session"
+      ]
+    },
+    "PermissionRuleValue": {
+      "description": "Permission rule value — tool_pattern is a glob/wildcard expression.\nExamples: \"Read\", \"Bash(git *)\", \"mcp__slack__*\", \"*\"",
+      "type": "object",
+      "properties": {
+        "rule_content": {
+          "description": "Command pattern within tool (e.g. \"git *\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_pattern": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_pattern"
+      ]
+    },
+    "PermissionUpdate": {
+      "description": "A permission update action.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "add_rules"
+            }
+          },
+          "required": [
+            "type",
+            "rules",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "replace_rules"
+            }
+          },
+          "required": [
+            "type",
+            "rules",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_rules"
+            }
+          },
+          "required": [
+            "type",
+            "rules",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_mode"
+            }
+          },
+          "required": [
+            "type",
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "directories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "add_directories"
+            }
+          },
+          "required": [
+            "type",
+            "directories",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "directories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_directories"
+            }
+          },
+          "required": [
+            "type",
+            "directories",
+            "destination"
+          ]
+        }
+      ]
+    },
+    "PermissionUpdateDestination": {
+      "description": "Destination for persisting permission updates.\n\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to\ndisk; in-memory destinations (`Session`/`CliArg`/`Command`) live only\nfor the running session. TS parity: same split as\n`persistPermissionUpdates` in `PermissionUpdate.ts`.\n\n`Command` is reserved for rules contributed by an invoked command or\nskill's frontmatter (`allowed-tools:`). TS parity:\n`alwaysAllowRules.command` populated by `SkillTool` /\n`createGetAppStateWithAllowedTools`.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user_settings",
+            "project_settings",
+            "local_settings",
+            "session",
+            "cli_arg"
+          ]
+        },
+        {
+          "description": "Rules contributed by a command/skill frontmatter `allowed-tools`.\nIn-memory only; cleared on session end.",
+          "type": "string",
+          "const": "command"
+        }
+      ]
+    },
+    "PermissionsEditorDir": {
+      "description": "One additional-working-directory row in the Workspace tab.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "description": "Source layer that contributed the directory (drives the inline\nsource label and the read-only gate for policy entries).",
+          "$ref": "#/$defs/PermissionRuleSource"
+        }
+      },
+      "required": [
+        "path",
+        "source"
+      ]
+    },
+    "PermissionsEditorPayload": {
+      "description": "Payload for [`TuiOnlyEvent::OpenPermissionsEditor`]. Built by the\n`/permissions` slash handler (CLI side) with everything the tabbed\nrule editor needs: every file-backed rule keyed by behavior + source,\nevery additional working directory, and the current working directory.\n\nThe TUI cannot read the settings stores itself, so the CLI snapshots\nthem here and re-emits this payload after each persisted edit (the\nopen overlay refreshes in place, mirroring `OpenAgentsDialog`).\n\nTS parity: data backing `<PermissionRuleList>` —\n`getPermissionRules()` + `getAdditionalWorkingDirectories()`.",
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "description": "Current working directory — rendered read-only at the top of the\nWorkspace tab (TS \"Original working directory\").",
+          "type": "string"
+        },
+        "directories": {
+          "description": "Additional working directories configured in settings, each\ntagged with the source layer that contributed it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionsEditorDir"
+          }
+        },
+        "managed_only": {
+          "description": "`true` when managed policy sets `allowManagedPermissionRulesOnly`.\nThe editor renders every rule read-only and blocks add / delete.",
+          "type": "boolean"
+        },
+        "rules": {
+          "description": "Every file-backed rule (allow / ask / deny) across the user,\nproject, local, and policy settings layers. The TUI partitions\nthem by behavior into the Allow / Ask / Deny tabs.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionsEditorRule"
+          }
+        }
+      },
+      "required": [
+        "rules",
+        "directories",
+        "cwd"
+      ]
+    },
+    "PermissionsEditorRule": {
+      "description": "One rule row in the `/permissions` editor. Carries the structured\n`(tool_pattern, rule_content)` so the TUI can both render the rule\nstring and reconstruct a `PermissionRuleValue` for removal — display\nshaping (and i18n) stays TUI-side.",
+      "type": "object",
+      "properties": {
+        "behavior": {
+          "$ref": "#/$defs/PermissionBehavior"
+        },
+        "rule_content": {
+          "description": "Optional in-tool content pattern — e.g. `\"git *\"` for `Bash(git *)`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/PermissionRuleSource"
+        },
+        "tool_pattern": {
+          "description": "Tool the rule targets — e.g. `\"Bash\"`, `\"Read\"`, `\"mcp__slack__*\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "behavior",
+        "source",
+        "tool_pattern"
+      ]
+    },
+    "PluginDialogAction": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "plugin_args": {
+          "description": "Slash command args after `/plugin`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "plugin_args"
+      ]
+    },
+    "PluginDialogErrorRow": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "plugin_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "message"
+      ]
+    },
+    "PluginDialogInstalledRow": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogAction"
+          }
+        },
+        "blocked_by_policy": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "mcp_servers": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogMcpServerRow"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogOptionRow"
+          }
+        },
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "source",
+        "path",
+        "enabled",
+        "blocked_by_policy"
+      ]
+    },
+    "PluginDialogMarketplaceRow": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogAction"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "official": {
+          "type": "boolean"
+        },
+        "plugin_count": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "official",
+        "plugin_count"
+      ]
+    },
+    "PluginDialogMcpServerRow": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogAction"
+          }
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "needs_config": {
+          "type": "boolean"
+        },
+        "tools": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogMcpToolRow"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "display_name",
+        "enabled",
+        "needs_config"
+      ]
+    },
+    "PluginDialogMcpToolRow": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "PluginDialogOptionRow": {
+      "type": "object",
+      "properties": {
+        "current_value": true,
+        "description": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "value_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "description",
+        "value_type",
+        "required"
+      ]
+    },
+    "PluginDialogPayload": {
+      "description": "Payload for [`TuiOnlyEvent::OpenPluginDialog`].",
+      "type": "object",
+      "properties": {
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginDialogErrorRow"
+          }
+        },
+        "installed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginDialogInstalledRow"
+          }
+        },
+        "marketplaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginDialogMarketplaceRow"
+          }
+        }
+      },
+      "required": [
+        "installed",
+        "marketplaces",
+        "errors"
+      ]
+    },
+    "QueuedCommandEditImage": {
+      "description": "Image payload paired with a queued command edit restore.",
+      "type": "object",
+      "properties": {
+        "data_base64": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "data_base64"
+      ]
+    },
+    "RewindDiffStatsPayload": {
+      "description": "Diff stats payload shared by per-row metadata and the selected\nrestore preview event. `file_paths.is_empty()` means \"snapshot\nexists but nothing changed\".\n\n`file_paths` matches `DiffStats.filesChanged: string[]` and is used by the\nconfirm screen to assemble single / two / many-file labels.\n\n# Two semantics, one wire type\n\n`insertions` / `deletions` interpretation depends on which event\ncarries this payload:\n\n- [`TuiOnlyEvent::RewindRowMetadataReady`] — **forward-time**.\n  `insertions` = lines added between two adjacent user-message\n  checkpoints. Computed via [`FileHistoryState::get_diff_stats_between`]\n  to mirror TS `computeDiffStatsBetweenMessages`\n  (`MessageSelector.tsx:722-765`), which counts `+` lines from\n  `structuredPatch`.\n- [`TuiOnlyEvent::RewindRestorePreviewReady`] — **rewind-direction**.\n  `insertions` = lines that rewind would add back; `deletions` =\n  lines that rewind would remove. Computed via\n  [`FileHistoryState::get_diff_stats`] to mirror TS\n  `computeDiffStatsForFile` (`fileHistory.ts:705`)'s\n  `diffLines(originalContent, backupContent)` direction.\n\nTS itself returns the same `DiffStats` shape from both call sites\nand lets context disambiguate — Rust matches that contract.",
+      "type": "object",
+      "properties": {
+        "deletions": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "file_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "insertions": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "insertions",
+        "deletions",
+        "file_paths"
+      ]
+    },
+    "RewindRowMetadata": {
+      "description": "Per-row metadata for a single rewind picker row.\n`metadata == None` corresponds to `canRestore = false` (no\nsnapshot — picker shows \"⚠ No code restore\").",
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RewindDiffStatsPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message_id"
+      ]
+    },
+    "RiskLevel": {
+      "description": "Risk level for permission explanations.",
+      "type": "string",
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH"
+      ]
+    },
+    "SdkSessionSummary": {
+      "description": "Minimal session metadata returned by `session/list` and `session/read`.",
+      "type": "object",
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "message_count": {
+          "type": "integer",
+          "format": "int32",
+          "default": 0
+        },
+        "model": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_tokens": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "model",
+        "cwd",
+        "created_at"
+      ]
+    },
+    "SkillLock": {
+      "description": "A non-overridable lock on a skill row in the `/skills` dialog.\nCarries both the originating tier ([`Self::source`]) and the\nforced 4-state value ([`Self::forced_value`]) so downstream\nrenderers don't need to re-derive the value from per-tier maps.\n\nTS mirror: `oT5` returns `{ value, source }` —\n`cli_inner_pretty.js:476885-476893`.",
+      "type": "object",
+      "properties": {
+        "forced_value": {
+          "$ref": "#/$defs/SkillOverrideState"
+        },
+        "source": {
+          "$ref": "#/$defs/SkillLockSource"
+        }
+      },
+      "required": [
+        "source",
+        "forced_value"
+      ]
+    },
+    "SkillLockSource": {
+      "description": "Which precedence layer originated a non-overridable lock on a\nskill's `skill_overrides` state. Mirrors the four `lock.source`\nvalues returned by TS `oT5` (`cli_inner_pretty.js:476885-476893`).\n\nIn precedence order (highest first): [`Self::Policy`] →\n[`Self::Flag`] → [`Self::Author`] → [`Self::Plugin`]. A lock means\nthe `/skills` dialog renders `🔒 <label>` for the row and refuses\nto cycle it (Space is a no-op).",
+      "oneOf": [
+        {
+          "description": "`policySettings.skill_overrides[name]` — enterprise-managed.",
+          "type": "string",
+          "const": "policy"
+        },
+        {
+          "description": "`flagSettings.skill_overrides[name]` — `--settings <path>`\ninvocation override.",
+          "type": "string",
+          "const": "flag"
+        },
+        {
+          "description": "Skill frontmatter `disable-model-invocation: true` — author\nforced to `user-invocable-only`.",
+          "type": "string",
+          "const": "author"
+        },
+        {
+          "description": "`skill.source == Plugin` — plugin-contributed skills are\nforced to `on` (manage via `/plugin` instead).",
+          "type": "string",
+          "const": "plugin"
+        }
+      ]
+    },
+    "SkillOverrideState": {
+      "description": "Per-skill override state stored under `skill_overrides` in any\nsettings tier. Drives the `/skills` 4-state editor ladder.\n\nWire format is kebab-case (`\"on\"`, `\"name-only\"`,\n`\"user-invocable-only\"`, `\"off\"`) — JSON settings files round-trip\nwithout translation.",
+      "oneOf": [
+        {
+          "description": "Default — full description in model listing, both user `/` and\nmodel Skill-tool invocation allowed.",
+          "type": "string",
+          "const": "on"
+        },
+        {
+          "description": "Name-only listing (model sees `- name` without description);\n**model can still invoke**. Saves description tokens.",
+          "type": "string",
+          "const": "name-only"
+        },
+        {
+          "description": "Hidden from model listing; Skill tool rejects model invocation\n**unless** the user typed `/<name>` in the current turn. Slash\ndispatcher still works.",
+          "type": "string",
+          "const": "user-invocable-only"
+        },
+        {
+          "description": "Fully disabled — hidden from listing AND `/` autocomplete;\nSkill tool rejects every invocation attempt.",
+          "type": "string",
+          "const": "off"
+        }
+      ]
+    },
+    "SkillOverridesSaveErrorKind": {
+      "description": "Categorical save-failure source. Mirrors the\n[`coco_config::SettingsWriteError`] variants + a runtime tier\nfor \"settings hot-reload was disabled at session start so we\ncan't republish\".",
+      "oneOf": [
+        {
+          "description": "Filesystem I/O failed.",
+          "type": "string",
+          "const": "io"
+        },
+        {
+          "description": "Settings JSON parse / serialize failed.",
+          "type": "string",
+          "const": "parse"
+        },
+        {
+          "description": "`RuntimeConfig` rebuild failed after the write.",
+          "type": "string",
+          "const": "rebuild"
+        },
+        {
+          "description": "Hot-reload publisher is absent (one-shot build path).",
+          "type": "string",
+          "const": "no_publisher"
+        }
+      ]
+    },
+    "SkillOverridesSaveResult": {
+      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after `SettingsWriter::write_local`.\n\nCarries **no display data** — TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
+      "oneOf": [
+        {
+          "description": "Write succeeded.",
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "ok"
+            }
+          },
+          "required": [
+            "outcome"
+          ]
+        },
+        {
+          "description": "Write failed at some step. `kind` lets the TUI pick toast\nseverity / wording; `message` is the underlying error's\ndisplay text for inclusion in the toast body.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/SkillOverridesSaveErrorKind"
+            },
+            "message": {
+              "type": "string"
+            },
+            "outcome": {
+              "type": "string",
+              "const": "err"
+            }
+          },
+          "required": [
+            "outcome",
+            "kind",
+            "message"
+          ]
+        }
+      ]
+    },
+    "SkillsDialogEntry": {
+      "description": "One row in the `/skills` dialog. Every field is required so the dialog\nnever has to fabricate defaults for `baseline` / `lock` / etc.",
+      "type": "object",
+      "properties": {
+        "baseline": {
+          "description": "Project-or-user settings resolution, **without** local /\npolicy / flag layers. TS `aT5`. The dialog falls back here\nwhen the user reverts a local override (the save path\nwrites `Value::Null` so the local key is deleted and the\nbaseline resurfaces).",
+          "$ref": "#/$defs/SkillOverrideState"
+        },
+        "current_local": {
+          "description": "What is stored in `<cwd>/.coco/settings.local.json`'s\n`skill_overrides[name]` _right now_. `None` ⇒ key absent.\nDrives the dialog's diff-against-baseline save algorithm.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillOverrideState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "One-line description from the skill frontmatter. The 2.1.142\nfilter (`/` search) matches name + description + source\nlabel, so the dialog needs the description on the wire even\nthough it isn't shown on every row.",
+          "type": "string"
+        },
+        "frontmatter_bytes": {
+          "description": "Byte length of the frontmatter the token column derives from.\nThe dialog computes `frontmatter_bytes / bytes_per_token` per\nrow. Source: `coco_skills::estimate_skill_frontmatter_bytes`.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "lock": {
+          "description": "Optional lock — present when this row's state is forced by\na higher-precedence layer. Set by\n`resolve_skill_override_lock` (`oT5` mirror). When set, the\ndialog renders `🔒 <label>` and no-ops on Space.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillLock"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "description": "Canonical skill name — what `/<name>` invokes.",
+          "type": "string"
+        },
+        "plugin_name": {
+          "description": "Plugin name shown inline when `source == Plugin`. None\notherwise. TS: `skill.pluginInfo?.pluginManifest.name`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Source group this entry belongs to. Drives the source label\nrendered inline + the implicit alphabetical group when the\ndefault sort is active.",
+          "$ref": "#/$defs/SkillsDialogSource"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "description",
+        "frontmatter_bytes",
+        "baseline"
+      ]
+    },
+    "SkillsDialogPayload": {
+      "description": "Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the\n`/skills` slash handler so the TUI doesn't recompute paths, token\nestimates, or grouping.\n\nTS parity: 2.1.142 `uJ4` (`cli_inner_pretty.js:476909`) — a flat\neditable list with 4-state override cycling, source labels\ninline, and lock annotations for policy/flag/author/plugin-locked\nrows. The 2.1.88 grouped read-only `SkillsMenu` has been retired.",
+      "type": "object",
+      "properties": {
+        "bytes_per_token": {
+          "description": "Bytes per token for the current main-role model. The TUI\ndivides [`SkillsDialogEntry::frontmatter_bytes`] by this to\nrender the `~N tok` column. Set to 4 when the host cannot\nresolve a more accurate value — `bytes/token ≈ 4` is the\nEnglish-text rule-of-thumb fallback.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "entries": {
+          "description": "All visible skills, in arbitrary order. The renderer\napplies its own sort (source-string lex + name; or token-\ndescending when the user pressed `t`). Total count is\n`entries.len()` (drives the subtitle `{N} skills`).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillsDialogEntry"
+          }
+        }
+      },
+      "required": [
+        "entries",
+        "bytes_per_token"
+      ]
+    },
+    "SkillsDialogSource": {
+      "description": "Source group for a skill dialog entry. Collapsed from\n`SettingSource | 'plugin' | 'mcp'` to a closed enum so the wire shape is statically typed.\n\nThe dialog normalises `bundled`/`builtin` → display label `\"built-in\"`; the\ndialog filter matches against that lowercased label.",
+      "oneOf": [
+        {
+          "description": "Compiled-in bundled skill catalog. TS `bundled` / `builtin`\ncollapsed to a single label (display: `built-in`).",
+          "type": "string",
+          "const": "built_in"
+        },
+        {
+          "description": "`<cwd>/.coco/skills/` — project skills.",
+          "type": "string",
+          "const": "project"
+        },
+        {
+          "description": "`~/.coco/skills/` — TS `userSettings`.",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "Managed enterprise dir — TS `policySettings`.",
+          "type": "string",
+          "const": "policy"
+        },
+        {
+          "description": "Skills contributed by a loaded plugin.",
+          "type": "string",
+          "const": "plugin"
+        },
+        {
+          "description": "Skills published by a connected MCP server.",
+          "type": "string",
+          "const": "mcp"
+        }
+      ]
+    },
+    "SlashCommandInfo": {
+      "description": "UI-facing projection of a slash command. The TUI receives a `Vec` of\nthese at startup (and again after `/reload-plugins`) so the\nautocomplete popup and command palette can render and rank without\nreaching into [`CommandBase`] every time.\n\nLives in `coco-types` (rather than `coco-tui`) so it can travel on a\n[`crate::TuiOnlyEvent`] variant — events are the only path between\nthe agent driver and the TUI, and event payload types must be\nfoundation-layer.",
+      "type": "object",
+      "properties": {
+        "aliases": {
+          "description": "Alternate names that also match this command. Searched by the\nranker so `/cls` finds `/clear` when `cls` is an alias.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "argument_hint": {
+          "description": "Hint string rendered next to the description when the command\ntakes arguments (e.g. `\"<file>\"` for `/add-dir`). Mirrors\n[`CommandBase::argument_hint`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "argument_kind": {
+          "description": "Typed argument shape. Drives argument completion and whether Enter\nexecutes immediately after accepting a slash suggestion.",
+          "$ref": "#/$defs/CommandArgumentKind",
+          "default": "none"
+        },
+        "description": {
+          "description": "Short description shown dimmed in the popup. `None` when the\nsource command registered without one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "Execution kind. The empty-query ranker treats only\n[`CommandTypeTag::Prompt`] entries as skills eligible for the\n\"recently used\" section — builtin local commands always sit in\nthe builtin bucket (`cmd.type === 'prompt'` filtering).\n\nDerived from the source [`CommandType`] via\n[`CommandType::tag`] at snapshot time; the projection is\ncentralised there so the enum can't drift.",
+          "$ref": "#/$defs/CommandTypeTag",
+          "default": "local"
+        },
+        "name": {
+          "description": "Canonical command name without the leading `/`.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Where this command came from. Drives empty-query source grouping\nin the `/` popup and the `(user)` / `(project)` / `(plugin)`\nsuffix on descriptions (`formatDescriptionWithSource`, empty-input\ngrouping in `generateCommandSuggestions`). Plugin / MCP attribution\nrides on the `Plugin { name }` / `Mcp { server_name }` variants.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommandSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage_score": {
+          "description": "Recency-decayed usage score precomputed at snapshot time.\nHigher means \"used more recently and/or more often\". TS parity:\n`getSkillUsageScore` in `utils/suggestions/skillUsageTracking.ts`\n— same 7-day half-life with a 0.1 recency floor.\n\nEmbedded in the snapshot so the TUI ranker never touches disk\non the hot popup path. Updated naturally at the existing\nsnapshot-refresh moments (session start, `/reload-plugins`).\nIntra-session staleness is acceptable — the rank only governs\nwhich skills float to the top of the empty-query view; users\npick by name regardless.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "SlashCommandStatusKind": {
+      "description": "Categorization of a `SlashCommandStatus` payload. Each variant maps to\na `slash.status.*` key in the TUI locale catalog.\n\nWire format intentionally tagged so SDK clients can render their own\nlocalized strings instead of consuming the TUI's English fallback.",
+      "oneOf": [
+        {
+          "description": "Registered command has no `handler` — typically a plugin\ncontribution stub that wasn't bridged.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "no_handler"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Handler returned `Err`. `error` is the formatted error message.",
+          "type": "object",
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "failed"
+            }
+          },
+          "required": [
+            "kind",
+            "error"
+          ]
+        },
+        {
+          "description": "Handler returned `CommandResult::Prompt` with no text parts.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "empty_prompt"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "Handler returned `CommandResult::OpenDialog`, but coco-rs has not\nyet bound this dialog kind to a TUI overlay. `dialog_kind` is a\nhuman-readable label like \"memory file selector\".",
+          "type": "object",
+          "properties": {
+            "dialog_kind": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "dialog_pending"
+            }
+          },
+          "required": [
+            "kind",
+            "dialog_kind"
+          ]
+        },
+        {
+          "description": "`/permissions allow` invoked with no tool name. Dispatcher-side\nusage hint — the TUI translates via `slash.permissions.usage_allow`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "permissions_usage_allow"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "`/permissions deny` invoked with no tool name. Dispatcher-side\nusage hint — the TUI translates via `slash.permissions.usage_deny`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "permissions_usage_deny"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "SuggestionSeverity": {
+      "description": "Severity of a context suggestion. `Warning` sorts before `Info`.",
+      "type": "string",
+      "enum": [
+        "warning",
+        "info"
+      ]
+    },
+    "ToolAbortReasonPayload": {
+      "description": "Structured reason for a tool abort notification.",
+      "oneOf": [
+        {
+          "description": "The whole turn was aborted.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "turn"
+            },
+            "reason": {
+              "$ref": "#/$defs/TurnAbortReason"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ]
+        },
+        {
+          "description": "The tool itself was aborted independently of the turn.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "self_abort"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message"
+          ]
+        },
+        {
+          "description": "A sibling shell tool failed and aborted this parallel tool.",
+          "type": "object",
+          "properties": {
+            "failed_tool": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "sibling_error"
+            }
+          },
+          "required": [
+            "kind",
+            "failed_tool"
+          ]
+        }
+      ]
+    },
+    "ToolTypeBreakdown": {
+      "type": "object",
+      "properties": {
+        "call_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "name": {
+          "type": "string"
+        },
+        "result_tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "call_tokens",
+        "result_tokens"
+      ]
+    },
+    "TurnAbortReason": {
+      "description": "Why a turn was aborted. Lets consumers distinguish user cancel,\nsubmit interrupt, permission abort, and system pre-emption.",
+      "oneOf": [
+        {
+          "description": "User-initiated cancel (Ctrl+C in the TUI, `control/interrupt`\nin the SDK). The only reason that may trigger auto-restore.",
+          "type": "string",
+          "const": "user_cancel"
+        },
+        {
+          "description": "Streaming submit interruption: the user submitted new input while\nall running tools were cancel-interruptible.",
+          "type": "string",
+          "const": "submit_interrupt"
+        },
+        {
+          "description": "System pre-empted the in-flight turn so another session-level\noperation can run (Clear / Compact / Rewind / Shutdown / new\nSubmitInput). Auto-restore is suppressed — the user did not\nrequest a rewind.",
+          "type": "string",
+          "const": "system_preempt"
+        },
+        {
+          "description": "Permission flow aborted the turn instead of returning a normal\nmodel-visible denial.",
+          "type": "string",
+          "const": "permission_abort"
+        },
+        {
+          "description": "Turn moved to the background.",
+          "type": "string",
+          "const": "background"
+        }
+      ]
+    },
+    "WorkerBadge": {
+      "description": "Identity badge for a teammate whose tool needs the leader's approval.\nSurfaced in the leader's permission prompt so a human reviewing a\ncross-process worker's request can see WHO is asking. The `color` is\nthe worker's assigned per-teammate palette color (a coco-rs\nimprovement over TS's hardcoded `cyan`); text-surface renderers show\nthe name and carry the color for styled / SDK consumers.",
+      "type": "object",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/AgentColorName"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "color"
+      ]
+    }
+  }
+}

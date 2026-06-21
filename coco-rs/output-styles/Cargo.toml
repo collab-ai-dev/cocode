@@ -1,0 +1,22 @@
+[package]
+name = "coco-output-styles"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-error.workspace = true
+coco-frontmatter.workspace = true
+coco-plugins.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tracing.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

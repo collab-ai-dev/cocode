@@ -1,0 +1,38 @@
+{
+  "name": "large_parallel_batch",
+  "description": "Read 4 files in parallel in a single turn",
+  "workspace": {
+    "one.txt": "File one",
+    "two.txt": "File two",
+    "three.txt": "File three",
+    "four.txt": "File four"
+  },
+  "turns": [
+    {
+      "tool_calls": [
+        { "tool": "Read", "input": { "file_path": "{{workspace}}/one.txt" } },
+        { "tool": "Read", "input": { "file_path": "{{workspace}}/two.txt" } },
+        { "tool": "Read", "input": { "file_path": "{{workspace}}/three.txt" } },
+        { "tool": "Read", "input": { "file_path": "{{workspace}}/four.txt" } }
+      ]
+    },
+    {
+      "text": "Read all four files in parallel."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "four files",
+    "files": {
+      "one.txt": { "exists": true, "equals": "File one" },
+      "two.txt": { "exists": true, "equals": "File two" },
+      "three.txt": { "exists": true, "equals": "File three" },
+      "four.txt": { "exists": true, "equals": "File four" }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "event_counts": {
+      "ToolUseEnd": 4
+    }
+  }
+}

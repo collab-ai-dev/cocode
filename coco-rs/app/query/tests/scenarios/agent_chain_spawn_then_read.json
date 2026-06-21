@@ -1,0 +1,58 @@
+{
+  "name": "agent_chain_spawn_then_read",
+  "description": "Agent spawns, writes results to file, parent reads the file",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Find all TODO comments in the codebase",
+            "description": "Find TODOs"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/todos.md",
+            "content": "# TODO List\n\n- [ ] Fix bug in parser\n- [ ] Add tests for edge cases\n- [ ] Update documentation\n"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Read",
+          "input": {
+            "file_path": "{{workspace}}/todos.md"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Found 3 TODOs. Results saved and verified in todos.md."
+    }
+  ],
+  "expect": {
+    "turns": 4,
+    "response_contains": "TODOs",
+    "not_cancelled": true,
+    "files": {
+      "todos.md": {
+        "exists": true,
+        "contains_all": ["Fix bug", "Add tests", "Update documentation"],
+        "line_count": 5
+      }
+    },
+    "event_counts": {
+      "ToolUseEnd": 3
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "agent_structured_message",
+  "description": "Send structured shutdown request and plan approval via SendMessage",
+  "workspace": {},
+  "config": { "tools": "extended", "max_turns": 5 },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "TeamCreate",
+          "input": {
+            "team_name": "structured-test"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Start working on the task",
+            "name": "worker",
+            "team_name": "structured-test"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Sending shutdown request to worker.",
+      "tool_calls": [
+        {
+          "tool": "SendMessage",
+          "input": {
+            "to": "worker",
+            "summary": "Shutdown",
+            "message": {
+              "type": "shutdown_request",
+              "reason": "Task completed, shutting down"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "text": "Worker received shutdown request."
+    }
+  ],
+  "expect": {
+    "turns": 4,
+    "not_cancelled": true,
+    "event_counts": {
+      "ToolUseEnd": 3
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "agent_spawn_plan_mode",
+  "description": "Spawn an agent with plan mode requiring approval before implementation",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Design a plan for the refactoring, then wait for approval",
+            "description": "Plan refactoring",
+            "subagent_type": "Plan",
+            "mode": "plan"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Plan agent created in plan mode. It will produce a plan for approval."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "not_cancelled": true,
+    "min_event_counts": {
+      "ToolUseEnd": 1
+    }
+  }
+}

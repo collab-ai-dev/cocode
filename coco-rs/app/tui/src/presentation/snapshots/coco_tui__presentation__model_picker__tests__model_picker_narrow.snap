@@ -1,0 +1,23 @@
+---
+source: app/tui/src/presentation/model_picker.test.rs
+expression: "render_snapshot(50, 20, &overlay)"
+---
+                                                  
+ ┌ /model — Select Main model ──────────────────┐ 
+ │Role:  ▸Main◂   Fast    Plan    Explore    Rev│ 
+ │                                              │ 
+ │Filter (type to narrow)...                    │ 
+ │                                              │ 
+ │Anthropic                                     │ 
+ │  ❯ Claude Sonnet 4.6 · 200K · thinking  [curr│ 
+ │    Claude Haiku · 200K                       │ 
+ │                                              │ 
+ │Google                                        │ 
+ │    Gemini 2.5 Pro · 200K                     │ 
+ │                                              │ 
+ │OpenAI                                        │ 
+ │                                              │ 
+ │Thinking:  ▸auto◂   medium    high            │ 
+ │                                              │ 
+ │↑/↓ Model  ←/→ Effort  Tab Role  Enter Confirm│ 
+ └──────────────────────────────────────────────┘

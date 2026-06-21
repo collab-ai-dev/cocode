@@ -1,0 +1,26 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCO v0.1.0                                                                           
+ │●│ │●│  opus-4  *  auto                                                                       
+ ╰─╯ ╰─╯                                                                                        
+                                                                                                
+❯ bash ls                                                                                       
+                                                                                                
+⏺ Thinking · 1.3s · 15 reasoning tok · F2 to collapse                                           
+  The user wants me to run `ls` in the current working directory.                               
+  I should call the Bash tool and then summarize the result.                                    
+                                                                                                
+● Bash(ls)                                                                                      
+  └ app                                                                                         
+    bridge                                                                                      
+    common                                                                                      
+    utils                                                                                       
+    vercel-ai                                                                                   
+                                                                                                
+────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                               
+────────────────────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto | ↑0 ↓0 · cache 0/0% | ctx -- | →1 ←2 · tool 1                                   
+ ⏯ ask mode on · shift+tab to cycle

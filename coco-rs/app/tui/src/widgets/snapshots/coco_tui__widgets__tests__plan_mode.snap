@@ -1,0 +1,15 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCO v0.1.0                                                           
+ │●│ │●│  opus-4  *  auto                                                       
+ ╰─╯ ╰─╯                                                                        
+                                                                                
+❯ Plan the implementation                                                       
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+❯                                                                               
+────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto | ↑0 ↓0 · cache 0/0% | ctx -- | →1 ←0                            
+ ⏸ plan mode on · shift+tab to cycle

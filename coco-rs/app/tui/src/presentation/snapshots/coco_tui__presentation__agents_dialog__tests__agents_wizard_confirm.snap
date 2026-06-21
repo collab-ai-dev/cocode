@@ -1,0 +1,15 @@
+---
+source: app/tui/src/presentation/agents_dialog.test.rs
+expression: "body_only(&state, &[])"
+---
+ Running   [Library]
+Step 4 of 4 — Confirm
+
+Review and press Enter to create:
+
+  Name        my-agent
+  Description Handles XYZ.
+  Source      Project (./.claude/agents/)
+
+
+Enter advance · Esc back · ←/→/Home/End move caret · ↑/↓ on source

@@ -1,0 +1,16 @@
+---
+source: app/tui/src/presentation/transcript.test.rs
+expression: "render_transcript_text(&app_state, &state, 96, 12)"
+---
+┌ Transcript ──────────────────────────────────────────────────────────────────────────────────┐
+│> bash ls                                                                                     │
+│                                                                                              │
+│▶ ⏺ Thinking · 1.3s · 15 reasoning tok · F2 to expand                                         │
+│  The user wants me to run `ls` in the current working directory.                             │
+│  I should call the Bash tool and then summarize the result.                                  │
+│                                                                                              │
+│⏺ I'll list the current directory.                                                            │
+│                                                                                              │
+│ctrl+o toggle · ↑/↓ scroll · PgUp/PgDn page · Home/End jump                                   │
+│Tab select · Enter expand/collapse · Esc/q quit                                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘

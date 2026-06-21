@@ -1,0 +1,97 @@
+[package]
+name = "coco-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "coco"
+path = "src/main.rs"
+
+[features]
+# Use jemalloc (tuned for a long-running process) as the global allocator.
+# Opt-in: off for normal `cargo build`/`cargo run` (keeps dev builds fast and
+# avoids the jemalloc C build on Windows), enabled in release/distribution
+# builds. Tuning lives in src/main.rs (`malloc_conf`).
+jemalloc = ["dep:tikv-jemallocator"]
+
+[dependencies]
+coco-types.workspace = true
+coco-llm-types.workspace = true
+coco-error.workspace = true
+coco-bridge.workspace = true
+coco-sandbox.workspace = true
+coco-commands.workspace = true
+coco-config.workspace = true
+coco-config-reload.workspace = true
+coco-hooks.workspace = true
+coco-session.workspace = true
+coco-inference.workspace = true
+coco-provider-auth.workspace = true
+coco-compact.workspace = true
+coco-memory.workspace = true
+coco-shell.workspace = true
+coco-tool-runtime.workspace = true
+coco-tools.workspace = true
+coco-query.workspace = true
+coco-system-reminder.workspace = true
+coco-cron.workspace = true
+coco-messages.workspace = true
+coco-context.workspace = true
+coco-mcp.workspace = true
+coco-mcp-skills.workspace = true
+coco-lsp.workspace = true
+coco-permissions.workspace = true
+coco-plugins.workspace = true
+coco-skills.workspace = true
+coco-output-styles.workspace = true
+coco-coordinator.workspace = true
+coco-tasks.workspace = true
+coco-state.workspace = true
+coco-git.workspace = true
+coco-paths.workspace = true
+coco-subagent.workspace = true
+coco-tui.workspace = true
+coco-keybindings = { workspace = true, features = ["loader"] }
+coco-otel.workspace = true
+coco-model-card.workspace = true
+coco-file-watch.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+base64.workspace = true
+libc.workspace = true
+
+dirs.workspace = true
+chrono.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tokio = { workspace = true, features = ["full"] }
+async-trait.workspace = true
+thiserror.workspace = true
+tokio-util.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+shlex.workspace = true
+
+# jemalloc-sys does not build on Windows (no MSVC support), so the allocator
+# dep is target-gated. The `jemalloc` feature still resolves on Windows — it
+# just links nothing there, and the global_allocator in main.rs is cfg-guarded
+# `not(windows)` to match.
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+tikv-jemallocator = { workspace = true, optional = true }
+
+[build-dependencies]
+# Used by build.rs only, to stamp the build timestamp into `coco --version`.
+chrono = { workspace = true }
+
+[dev-dependencies]
+coco-frontmatter.workspace = true
+coco-utils-cargo-bin.workspace = true
+coco-utils-pty.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true
+wiremock.workspace = true

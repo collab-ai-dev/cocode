@@ -1,0 +1,60 @@
+{
+  "name": "skill_then_file_chain",
+  "description": "Invoke skill, then do file operations based on skill result",
+  "workspace": {
+    "src/main.rs": "fn main() {\n    println!(\"hello\");\n}\n"
+  },
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Skill",
+          "input": {
+            "skill": "review-pr",
+            "args": "456"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/src/main.rs" }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Edit",
+          "input": {
+            "file_path": "{{workspace}}/src/main.rs",
+            "old_string": "hello",
+            "new_string": "hello world"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Review complete. Applied the suggested fix."
+    }
+  ],
+  "expect": {
+    "turns": 4,
+    "response_contains": "fix",
+    "files": {
+      "src/main.rs": {
+        "exists": true,
+        "contains": "hello world",
+        "not_contains": "\"hello\""
+      }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "event_counts": {
+      "ToolUseEnd": 3
+    }
+  }
+}

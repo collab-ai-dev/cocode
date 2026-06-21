@@ -1,0 +1,27 @@
+{
+  "name": "agent_spawn_invalid_prompt",
+  "description": "Model calls Agent with empty prompt; tool returns error, model recovers",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": ""
+          }
+        }
+      ]
+    },
+    {
+      "text": "The agent spawn failed because no prompt was provided. I'll proceed manually."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "failed",
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

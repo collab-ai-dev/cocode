@@ -1,0 +1,27 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCO v0.1.0                                                           
+ │●│ │●│  opus-4  *  auto                                                       
+ ╰─╯ ╰─╯  /repo                                                                 
+                                                                                
+❯ read utils/foo/bar.rs                                                         
+                                                                                
+● Read(utils/foo/bar.rs · lines 1-3)                                            
+  └ 1  fn foo() {}                                                              
+    2                                                                           
+    3  // done                                                                  
+                                                                                
+◆ memory · utils/foo/CLAUDE.md                                                  
+                                                                                
+  └ Read utils/foo/bar.rs (3 lines)                                             
+                                                                                
+⏺ Here is the file.                                                             
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+❯                                                                               
+────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto | ↑0 ↓0 · cache 0/0% | ctx -- | →1 ←2 · tool 1                   
+ ⏯ ask mode on · shift+tab to cycle                                             
+ repo

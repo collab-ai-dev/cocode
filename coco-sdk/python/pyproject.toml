@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "coco-sdk"
+version = "0.1.0"
+description = "Python SDK for coco — programmatic access to the multi-provider LLM CLI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = [
+    "anyio>=4.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coco_sdk"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# Skip the intentionally-skipped pre-Phase-2 protocol tests (they
+# expect generator output that doesn't exist yet) — they print their
+# own skip reasons but pytest still collects them, which is fine.
+markers = [
+    "e2e: end-to-end tests that spawn the real `coco sdk` subprocess (skip without DEEPSEEK_API_KEY)",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+]

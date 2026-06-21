@@ -1,0 +1,13 @@
+coco-rs/target/
+coco-rs/.coco/
+coco-sdk/python/.venv/
+coco-sdk/python/.pytest_cache/
+**/__pycache__/
+*.pyc
+node_modules/
+dist/
+*.tgz
+.coco/
+.claude/scheduled_tasks.lock
+.env*
+!.env.example

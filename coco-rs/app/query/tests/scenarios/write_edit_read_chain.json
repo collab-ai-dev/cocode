@@ -1,0 +1,54 @@
+{
+  "name": "write_edit_read_chain",
+  "description": "Write a file, edit it, then read it back to verify",
+  "workspace": {},
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/chain.txt",
+            "content": "original content here"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Edit",
+          "input": {
+            "file_path": "{{workspace}}/chain.txt",
+            "old_string": "original",
+            "new_string": "modified"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/chain.txt" }
+        }
+      ]
+    },
+    {
+      "text": "File was written, edited, and verified successfully."
+    }
+  ],
+  "expect": {
+    "turns": 4,
+    "response_contains": "verified",
+    "files": {
+      "chain.txt": {
+        "exists": true,
+        "equals": "modified content here",
+        "not_contains": "original"
+      }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

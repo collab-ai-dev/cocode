@@ -1,0 +1,24 @@
+{
+  "name": "bash_echo",
+  "description": "Execute a simple echo command via Bash tool",
+  "workspace": {},
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Bash",
+          "input": { "command": "echo hello_from_e2e" }
+        }
+      ]
+    },
+    {
+      "text": "Command executed successfully. Output: hello_from_e2e"
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "hello_from_e2e",
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

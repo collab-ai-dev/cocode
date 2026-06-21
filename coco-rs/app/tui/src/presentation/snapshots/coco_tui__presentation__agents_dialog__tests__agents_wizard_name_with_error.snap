@@ -1,0 +1,14 @@
+---
+source: app/tui/src/presentation/agents_dialog.test.rs
+expression: "body_only(&state, &[])"
+---
+ Running   [Library]
+Step 1 of 4 — Name
+
+Agent identifier (kebab-case or PascalCase):
+  > 3plan▏
+
+Letters, digits, '-', '_'. Used as the markdown filename stem.
+  Name must start with a letter.
+
+Enter advance · Esc back · ←/→/Home/End move caret · ↑/↓ on source

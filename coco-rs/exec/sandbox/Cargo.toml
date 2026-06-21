@@ -1,0 +1,36 @@
+[package]
+name = "coco-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+coco-config.workspace = true
+coco-error.workspace = true
+coco-types.workspace = true
+coco-utils-string.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+globset.workspace = true
+walkdir.workspace = true
+rand = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tempfile.workspace = true
+tracing.workspace = true
+snafu.workspace = true
+anyhow.workspace = true
+tokio = { workspace = true, features = ["sync", "process", "io-util", "rt", "net", "macros", "time"] }
+tokio-util.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+seccompiler.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "net", "io-util"] }
+tokio-util.workspace = true
+
+[lints]
+workspace = true

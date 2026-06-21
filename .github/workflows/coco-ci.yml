@@ -1,0 +1,195 @@
+# PR-time functional CI for coco-rs (the active implementation).
+#
+# Mirrors the local `just` gates so what every contributor runs by hand
+# (`just quick-check` + `just pre-commit`) is now machine-enforced on PRs:
+#   lint   — fmt-check + vercel-ai/tui-ui seam guards + error-policy + full clippy
+#   test   — cargo nextest over the whole workspace
+#   sdk-py — Rust<->Python codegen drift check + the Python SDK suite
+#
+# A single `coco-results` gatherer is the one job to mark "required" in
+# branch protection, so the matrix shape can change without touching the
+# protection rule. A changed-paths filter skips the whole set for PRs that
+# don't touch coco-rs/**.
+#
+# NOTE: coco-rs/.cargo/config.toml hardcodes `rustc-wrapper = "sccache"`
+# and forces `mold` as the Linux linker, so every cargo job installs both
+# or the build breaks.
+name: coco-ci
+
+on:
+  pull_request: {}
+  workflow_dispatch:
+
+# Cargo's libgit2 transport is flaky on nested-submodule git deps; prefer
+# the system git CLI. sccache is the compiled-in rustc wrapper — enable its
+# GitHub Actions cache backend so compilation is cached across runs.
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RUSTC_WRAPPER: "sccache"
+  SCCACHE_GHA_ENABLED: "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --- Detect whether coco-rs (or this workflow) changed ----------------------
+  changed:
+    name: Detect changed areas
+    runs-on: ubuntu-24.04
+    outputs:
+      coco: ${{ steps.detect.outputs.coco }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Detect changed paths
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA='${{ github.event.pull_request.base.sha }}'
+            HEAD_SHA='${{ github.event.pull_request.head.sha }}'
+            mapfile -t files < <(git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")
+          else
+            files=("coco-rs/force")
+          fi
+          coco=false
+          for f in "${files[@]}"; do
+            [[ $f == coco-rs/* || $f == .github/workflows/coco-ci.yml ]] && coco=true
+          done
+          echo "coco=$coco" >> "$GITHUB_OUTPUT"
+          echo "coco changed: $coco"
+
+  # --- Lint: fmt + seam guards + error-policy + full clippy -------------------
+  lint:
+    name: Lint (fmt / seam / clippy)
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.coco == 'true' }}
+    defaults:
+      run:
+        working-directory: coco-rs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: coco-rs
+          cache-targets: "false"
+          cache-on-failure: "true"
+      - name: just fmt-check
+        run: just fmt-check
+      - name: just check-seam
+        run: just check-seam
+      - name: just check-error-policy
+        run: just check-error-policy
+      - name: just clippy (full workspace)
+        run: just clippy
+
+  # --- Test: full-workspace nextest -------------------------------------------
+  test:
+    name: Test (nextest workspace)
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.coco == 'true' }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: coco-rs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # mold = forced Linux linker; ripgrep = spawned by the file-search
+      # discover_files test (it shells out to `rg`).
+      - name: Install mold + ripgrep
+        run: sudo apt-get update && sudo apt-get install -y mold ripgrep
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,nextest
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: coco-rs
+          cache-targets: "false"
+          cache-on-failure: "true"
+      # Live provider tests (coco-tests-live) self-skip without API keys via
+      # `require_live!`, so the workspace run stays network-free in CI.
+      - name: just test
+        run: just test
+
+  # --- SDK: codegen drift + Python suite --------------------------------------
+  sdk-py:
+    name: SDK (codegen + python)
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.coco == 'true' }}
+    defaults:
+      run:
+        working-directory: coco-rs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: coco-rs
+          cache-targets: "false"
+          cache-on-failure: "true"
+      - name: just sdk-py-check (codegen drift)
+        run: just sdk-py-check
+      # E2E SDK tests self-skip without DEEPSEEK_API_KEY; unit tests run.
+      - name: just sdk-py-test
+        run: just sdk-py-test
+
+  # --- Required gatherer: mark THIS as the required status --------------------
+  coco-results:
+    name: coco CI results (required)
+    needs: [changed, lint, test, sdk-py]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Summarize
+        shell: bash
+        env:
+          COCO_CHANGED: ${{ needs.changed.outputs.coco }}
+          LINT: ${{ needs.lint.result }}
+          TEST: ${{ needs.test.result }}
+          SDK: ${{ needs.sdk-py.result }}
+        run: |
+          set -euo pipefail
+          echo "lint   : $LINT"
+          echo "test   : $TEST"
+          echo "sdk-py : $SDK"
+          if [[ "$COCO_CHANGED" != "true" ]]; then
+            echo "No coco-rs changes -> CI not required."
+            exit 0
+          fi
+          [[ "$LINT" == "success" ]] || { echo "lint failed"; exit 1; }
+          [[ "$TEST" == "success" ]] || { echo "test failed"; exit 1; }
+          [[ "$SDK" == "success" ]]  || { echo "sdk-py failed"; exit 1; }
+          echo "All coco-rs gates passed."

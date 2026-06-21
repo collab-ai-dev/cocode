@@ -1,0 +1,15 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCO v0.1.0                                                                               
+ │●│ │●│  deepseek/deepseek-v4-flash  *  auto                                                       
+ ╰─╯ ╰─╯                                                                                            
+                                                                                                    
+⏺ ready                                                                                             
+                                                                                                    
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                                   
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ deepseek/deepseek-v4-flash * auto | ↑12.3K ↓16.5K · cache 10.7K/87.0% | ctx 14% | →0 ←1            
+ ⏯ ask mode on · shift+tab to cycle
