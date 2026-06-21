@@ -1,0 +1,15 @@
+---
+source: app/tui/src/presentation/permissions_editor.test.rs
+expression: body_only(&state)
+---
+[Allow]   Ask    Deny    Workspace 
+
+Delete this rule?
+
+  Bash(git *)
+
+    Yes
+  ▸ No
+
+
+←/→ choose · Enter confirm · Esc cancel

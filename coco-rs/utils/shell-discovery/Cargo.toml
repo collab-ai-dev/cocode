@@ -1,0 +1,18 @@
+[package]
+name = "coco-shell-discovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shell binary discovery: PowerShell (cross-platform), Git Bash (Windows), Windows path → POSIX conversion"
+
+[dependencies]
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+which.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

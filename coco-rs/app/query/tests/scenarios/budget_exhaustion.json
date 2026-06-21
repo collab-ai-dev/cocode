@@ -1,0 +1,35 @@
+{
+  "name": "budget_exhaustion",
+  "description": "Token budget runs out after first turn; engine stops early",
+  "prompt": "do many things",
+  "workspace": {},
+  "config": {
+    "max_tokens": 50
+  },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Bash",
+          "input": { "command": "echo step1" }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Bash",
+          "input": { "command": "echo step2" }
+        }
+      ]
+    },
+    {
+      "text": "This should never be reached."
+    }
+  ],
+  "expect": {
+    "turns": 1,
+    "budget_exhausted": true,
+    "not_cancelled": true
+  }
+}

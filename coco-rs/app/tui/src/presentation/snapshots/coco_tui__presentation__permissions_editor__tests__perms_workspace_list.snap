@@ -1,0 +1,14 @@
+---
+source: app/tui/src/presentation/permissions_editor.test.rs
+expression: body_only(&state)
+---
+ Allow    Ask    Deny   [Workspace]
+
+Directories accessible in addition to the project root.
+
+▸ + Add directory…
+  /work  ·  cwd  ·  read-only
+  /srv/data  ·  project
+
+
+←/→ switch tab · ↑/↓ select · Enter choose · Esc close

@@ -1,0 +1,26 @@
+---
+source: app/tui/src/presentation/model_picker.test.rs
+expression: "render_snapshot(90, 24, &overlay)"
+---
+                                                                                          
+                                                                                          
+                                                                                          
+              ┌ /model — Select Main model ─────────────────────────────────┐             
+              │Role:  ▸Main◂   Fast    Plan    Explore    Review    Hook    │             
+              │                                                             │             
+              │Filter (type to narrow)...                                   │             
+              │                                                             │             
+              │Anthropic                                                    │             
+              │  ❯ Claude Sonnet 4.6 · 200K · thinking  [current]           │             
+              │    Claude Haiku · 200K                                      │             
+              │                                                             │             
+              │Google                                                       │             
+              │    Gemini 2.5 Pro · 200K                                    │             
+              │                                                             │             
+              │OpenAI                                                       │             
+              │    GPT-5.4 · 200K · unavailable · thinking                  │             
+              │                                                             │             
+              │Thinking:  ▸auto◂   medium    high                           │             
+              │                                                             │             
+              │↑/↓ Model  ←/→ Effort  Tab Role  Enter Confirm  Esc Cancel   │             
+              └─────────────────────────────────────────────────────────────┘

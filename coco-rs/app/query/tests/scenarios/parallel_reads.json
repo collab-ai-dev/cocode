@@ -1,0 +1,35 @@
+{
+  "name": "parallel_reads",
+  "description": "Read two files in parallel using multi-tool call",
+  "workspace": {
+    "a.txt": "Content of file A",
+    "b.txt": "Content of file B"
+  },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/a.txt" }
+        },
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/b.txt" }
+        }
+      ]
+    },
+    {
+      "text": "I read both files. File A and File B are present."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "both files",
+    "files": {
+      "a.txt": { "exists": true, "equals": "Content of file A" },
+      "b.txt": { "exists": true, "equals": "Content of file B" }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

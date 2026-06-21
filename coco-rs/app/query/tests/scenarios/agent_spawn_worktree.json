@@ -1,0 +1,34 @@
+{
+  "name": "agent_spawn_worktree",
+  "description": "Spawn agent with worktree isolation for safe file modifications",
+  "workspace": {
+    "src/lib.rs": "pub fn add(a: i32, b: i32) -> i32 { a + b }"
+  },
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "text": "I'll use an isolated worktree agent to refactor safely.",
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Refactor the add function to support multiple arguments",
+            "description": "Refactor add fn",
+            "isolation": "worktree"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Worktree agent completed the refactoring in isolation."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "Worktree",
+    "not_cancelled": true,
+    "event_counts": {
+      "ToolUseEnd": 1
+    }
+  }
+}

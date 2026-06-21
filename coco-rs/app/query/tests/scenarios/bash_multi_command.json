@@ -1,0 +1,38 @@
+{
+  "name": "bash_multi_command",
+  "description": "Run chained shell commands and create a file via Bash, then verify with Read",
+  "workspace": {},
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Bash",
+          "input": { "command": "mkdir -p {{workspace}}/output && echo 'generated' > {{workspace}}/output/result.txt" }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/output/result.txt" }
+        }
+      ]
+    },
+    {
+      "text": "Created output directory and verified result.txt."
+    }
+  ],
+  "expect": {
+    "turns": 3,
+    "response_contains": "result.txt",
+    "files": {
+      "output/result.txt": {
+        "exists": true,
+        "contains": "generated"
+      }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

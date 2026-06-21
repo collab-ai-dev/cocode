@@ -1,0 +1,31 @@
+{
+  "name": "skill_invoke_with_args",
+  "description": "Model invokes a skill with arguments",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Skill",
+          "input": {
+            "skill": "review-pr",
+            "args": "123"
+          }
+        }
+      ]
+    },
+    {
+      "text": "PR #123 has been reviewed."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "reviewed",
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "min_event_counts": {
+      "ToolUseEnd": 1
+    }
+  }
+}

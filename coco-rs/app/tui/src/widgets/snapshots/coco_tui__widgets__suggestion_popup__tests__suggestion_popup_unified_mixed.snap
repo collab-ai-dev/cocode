@@ -1,0 +1,8 @@
+---
+source: app/tui/src/widgets/suggestion_popup.test.rs
+expression: "render_popup(&items, 0, 60, 6)"
+---
+▸ * Plan (agent)     Software architect agent               
+  * Explore (agent)  Fast read-only search                  
+  + src/lib.rs                                              
+  + docs/

@@ -1,0 +1,40 @@
+[package]
+name = "coco-hub-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "coco_hub_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "coco-hub-server"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+askama.workspace = true
+async-trait.workspace = true
+axum = { workspace = true, features = ["http1", "json", "query", "tokio"] }
+chrono.workspace = true
+clap = { workspace = true, features = ["derive"] }
+coco-config.workspace = true
+coco-error.workspace = true
+coco-hub-protocol.workspace = true
+coco-session.workspace = true
+coco-secret-redact.workspace = true
+coco-types.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "net", "rt-multi-thread", "signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+coco-paths.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,16 @@
+---
+source: app/tui/src/presentation/transcript.test.rs
+expression: "render_transcript_text(&app_state, &state, 84, 12)"
+---
+┌ Transcript ──────────────────────────────────────────────────────────────────────┐
+│> summarize status                                                                │
+│                                                                                  │
+│⏺ Working through the transcript pager changes.                                   │
+│▌                                                                                 │
+│                                                                                  │
+│                                                                                  │
+│                                                                                  │
+│                                                                                  │
+│ctrl+o toggle · ↑/↓ scroll · PgUp/PgDn page · Home/End jump                       │
+│Tab select · Enter expand/collapse · Esc/q quit                                   │
+└──────────────────────────────────────────────────────────────────────────────────┘

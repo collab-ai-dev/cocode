@@ -1,0 +1,76 @@
+{% for event in events %}
+<article
+  class="event {{ event.kind_class }}{% if event.default_open %} event--attention{% endif %}"
+  data-msg-type="{{ event.msg_type }}"
+  data-lane="{{ event.lane }}"
+  data-tool="{{ event.tool_name }}"
+  data-search="{{ event.searchable }}"
+  data-search-text="{{ event.search_text }}"
+>
+  <div class="event__rail">
+    <span></span>
+  </div>
+  <div class="event__body">
+    <header>
+      <div class="event__heading">
+        <span class="seq">#{{ event.seq }}</span>
+        <strong>{{ event.action }}</strong>
+        <span class="event__type">{{ event.msg_type }}</span>
+      </div>
+      <time>{{ event.ts }}</time>
+    </header>
+    {% if event.display_text.len() > 0 %}
+    <section class="event__rendered">
+      {% if event.display_mode == "markdown" %}
+      <div class="markdown-view" data-render-markdown>
+        <template class="render-source">{{ event.display_text }}</template>
+        <p class="event__preview">{{ event.preview }}</p>
+      </div>
+      {% else %}
+      <pre class="event-code"><code class="language-{{ event.display_language }}">{{ event.display_text }}</code></pre>
+      {% endif %}
+    </section>
+    {% else %}
+    <p class="event__preview">{{ event.preview }}</p>
+    {% endif %}
+    <div class="event__meta">
+      <span>{{ event.role }}</span>
+      <span>{{ event.lane }}</span>
+      <span>{{ event.title }}</span>
+      {% if event.tool_name.len() > 0 %}
+      <span>tool {{ event.tool_name }}</span>
+      {% endif %}
+      {% if event.call_id.len() > 0 %}
+      <span>call {{ event.call_id }}</span>
+      {% endif %}
+    </div>
+    {% if event.files.len() > 0 %}
+    <ul class="file-list">
+      {% for file in event.files %}
+      <li>{{ file }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if event.searchable.len() > 0 %}
+    <details class="event__fold search-surface">
+      <summary>Search surface</summary>
+      <p>{{ event.searchable }}</p>
+    </details>
+    {% endif %}
+    {% if event.default_open %}
+    <details class="event__raw" open>
+    {% else %}
+    <details class="event__raw">
+    {% endif %}
+      <summary>Raw JSON</summary>
+      <pre><code class="language-json">{{ event.json }}</code></pre>
+    </details>
+  </div>
+</article>
+{% endfor %}
+{% if events.len() == 0 %}
+<div class="empty-state">
+  <strong>No timeline rows</strong>
+  <p>Adjust the time range, kind, or message type filter.</p>
+</div>
+{% endif %}

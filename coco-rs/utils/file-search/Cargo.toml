@@ -1,0 +1,28 @@
+[package]
+name = "coco-file-search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "coco-file-search"
+path = "src/main.rs"
+
+[lib]
+name = "coco_file_search"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+coco-file-ignore = { workspace = true }
+crossbeam-channel = { workspace = true }
+ignore = { workspace = true }
+nucleo = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full", "sync", "time", "process"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

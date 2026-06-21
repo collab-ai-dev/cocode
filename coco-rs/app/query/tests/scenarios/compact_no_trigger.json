@@ -1,0 +1,27 @@
+{
+  "name": "compact_no_trigger",
+  "description": "Short conversation stays under compact threshold — no CompactionTriggered event",
+  "prompt": "read a file",
+  "workspace": {
+    "hello.txt": "Hello world"
+  },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/hello.txt" }
+        }
+      ]
+    },
+    {
+      "text": "The file contains: Hello world"
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "response_contains": "Hello world"
+  }
+}

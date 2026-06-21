@@ -1,0 +1,19 @@
+[package]
+name = "coco-utils-image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
+coco-utils-cache = { workspace = true }
+mime_guess = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }

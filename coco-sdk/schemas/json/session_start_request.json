@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SessionStartParams",
+  "description": "Params for `session/start`.",
+  "type": "object",
+  "properties": {
+    "append_system_prompt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cwd": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "initial_prompt": {
+      "description": "Optional initial user prompt to run immediately after start.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "max_budget_usd": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    },
+    "max_turns": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "permission_mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "system_prompt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "PermissionMode": {
+      "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at\n`coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits',\n'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the\ndrifting variants accept legacy snake_case input so old session\ntranscripts deserialize cleanly.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "default",
+            "plan",
+            "bypassPermissions",
+            "dontAsk",
+            "acceptEdits"
+          ]
+        },
+        {
+          "description": "Feature-gated auto mode.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Internal: escalate to parent agent.",
+          "type": "string",
+          "const": "bubble"
+        }
+      ]
+    }
+  }
+}

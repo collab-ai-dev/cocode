@@ -1,0 +1,21 @@
+---
+source: app/tui/src/widgets/transcript_modal.test.rs
+assertion_line: 82
+expression: "render_to_text(&app_state, &transcript, 60, 16)"
+---
+┌ Transcript ──────────────────────────────────────────────┐
+│> Please grep the repo                                    │
+│                                                          │
+│⏺ Searching now.                                          │
+│                                                          │
+│● Grep(fn main)                                           │
+│  └ src/main.rs:1:fn main() {                             │
+│                                                          │
+│# notice: Build finished                                  │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│ctrl+o toggle · ↑/↓ scroll · PgUp/PgDn page · Home/End jum│
+│Tab select · Enter expand/collapse · Esc/q quit           │
+└──────────────────────────────────────────────────────────┘

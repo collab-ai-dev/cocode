@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Repo-tracked git pre-commit hook for the coco-rs workspace.
+#
+# Activate with (run from repo root):
+#   git config core.hooksPath coco-rs/scripts/git-hooks
+#
+# What this enforces (in order, fast checks first):
+#   1. vercel-ai seam guard — no direct vercel_ai_provider:: imports
+#      outside services/inference; no V4-suffixed type names leaking.
+#   2. cargo clippy on lib code — blocks on `^warning:` AND errors.
+#      Workspace baseline is zero warnings (2026-04-29).
+#   3. cargo clippy on tests — same policy.
+#
+# Steps 2/3 are skipped when the staged diff touches no coco-rs Rust
+# source or Cargo manifest, since clippy on a clean cache is ~30s and
+# pure-doc commits don't need it. The seam guard always runs (sub-second).
+#
+# This is the belt-and-braces complement to .claude/scripts/rust-quality-check.sh.
+# That hook runs at "Claude stops"; this one runs at every `git commit`,
+# catching anything that bypassed the agent (manual edits, --no-edit,
+# rebase squashes, etc.).
+
+# NOTE: deliberately *not* `set -e`. We capture cargo's exit code
+# explicitly into LIB_RC / TEST_RC; with errexit on, the assignment
+# `LIB_OUTPUT=$(cargo clippy ...)` can short-circuit before `$?` is
+# read when cargo errors out, depending on bash version. `set -u` and
+# pipefail are still useful, just not errexit.
+set -uo pipefail
+
+# Resolve to coco-rs/ workspace root regardless of where git invoked us from.
+# scripts/git-hooks/pre-commit → coco-rs/ root is two levels up.
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+cd "$script_dir/../.." || exit 1
+
+# Step 1: vercel-ai seam guard (always runs — sub-second).
+./scripts/check-vercel-ai-seam.sh || exit $?
+
+# Decide whether to run clippy. Look at the *staged* diff; the working
+# tree may carry uncommitted noise unrelated to this commit.
+staged=$(git diff --cached --name-only --diff-filter=ACMRT \
+            | grep -E '^coco-rs/.*(\.rs|/Cargo\.toml)$' || true)
+if [ -z "$staged" ]; then
+  exit 0
+fi
+
+# Ensure cargo/rustup are on PATH (shells launched by GUI git tools may
+# not source the user's profile).
+[ -f "/usr/local/cargo/env" ] && . "/usr/local/cargo/env"
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+
+# `CARGO_TARGET_DIR` is intentionally NOT set: cargo defaults to the
+# workspace-relative `target/`, so each git worktree already has its own
+# isolated build directory. The previous `/tmp/cargo-target-<md5>` shim
+# was a macOS-Podman virtiofs FD-limit workaround that broke when one
+# worktree adopted a different ad-hoc path (`/tmp/coco-test-target`),
+# causing build-lock contention across worktrees that should have been
+# independent. If virtiofs FD limits become an issue again, set the env
+# var per-shell, not in tracked scripts.
+
+echo "pre-commit: running clippy gate on coco-rs..." >&2
+
+# Resolve repo root (../../.. from this script's location: scripts/git-hooks/pre-commit).
+REPO_ROOT="$(cd "$script_dir/../../.." && pwd)"
+
+# Clippy via shared script. `--incremental --staged` lints
+# {staged crates ∪ reverse-dep closure}; falls back to full workspace clippy
+# when Cargo.toml/Cargo.lock/toolchain change or affected ≥ 70%.
+CLIPPY_OUTPUT=$(bash "$REPO_ROOT/.claude/scripts/clippy.sh" --incremental --staged 2>&1)
+CLIPPY_RC=$?
+if [ $CLIPPY_RC -ne 0 ]; then
+  echo "pre-commit: clippy warnings/errors — fix before committing:" >&2
+  echo "$CLIPPY_OUTPUT" >&2
+  exit 1
+fi
+
+echo "pre-commit: clippy gate passed." >&2

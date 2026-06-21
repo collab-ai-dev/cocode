@@ -1,0 +1,20 @@
+[package]
+name = "coco-tui-mermaid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Shared presentational types (UiStyles palette). Depends UP on the lean
+# primitive crate, like coco-tui-markdown.
+coco-tui-ui.workspace = true
+ratatui.workspace = true
+unicode-width.workspace = true
+# Pure-Rust parse + geometric layout (no resvg/usvg/png; see workspace dep).
+mermaid-rs-renderer.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

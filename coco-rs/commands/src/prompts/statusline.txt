@@ -1,0 +1,14 @@
+Configure my Coco status line.
+
+Use the Agent tool with subagent_type "statusline-setup" and the prompt:
+{{ARGS_OR_DEFAULT}}
+
+If no arguments were provided, default the prompt to:
+"Configure my statusLine from my shell PS1 configuration"
+
+The subagent should:
+1. Detect the user's shell (`echo $SHELL`) and read the relevant rc file (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`).
+2. Extract the PS1 / prompt definition.
+3. Translate it into the equivalent statusLine config under `~/.coco/settings.json` (key: `statusLine`).
+4. Use the runtime JSON fields Coco actually provides: `session_id`, `model.{id,display_name,provider}`, `workspace.{current_dir,project_dir,added_dirs}`, `version`, `output_style.name`, `cost.*`, `context_window.{used,total,percent}`, `exceeds_200k_tokens`, `permission_mode`, `lsp.active`, and `mcp.connected_servers`.
+5. Echo the resulting JSON snippet for confirmation.

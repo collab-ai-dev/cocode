@@ -1,0 +1,62 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero hero--dashboard">
+  <div>
+    <p class="kicker">{{ page_kicker }}</p>
+    <h1>{{ title }}</h1>
+    <p class="subtitle">{{ subtitle }}</p>
+  </div>
+  <div class="source-strip">
+    <span>memory base</span>
+    <code>{{ source }}</code>
+  </div>
+</section>
+
+<section class="metric-grid" aria-label="Hub summary">
+  <div class="metric">
+    <span class="metric__label">Projects</span>
+    <strong>{{ instances.len() }}</strong>
+  </div>
+  <div class="metric">
+    <span class="metric__label">Sessions</span>
+    <strong>{{ total_sessions }}</strong>
+  </div>
+  <div class="metric metric--quiet">
+    <span class="metric__label">Mode</span>
+    <strong>Read-only</strong>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel__header">
+    <div>
+      <p class="kicker">Recent activity</p>
+      <h2>Transcript Projects</h2>
+    </div>
+    <a class="button button--ghost" href="/v1/instances">JSON API</a>
+  </div>
+  <div class="table-shell">
+    <table>
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th>Cwd</th>
+          <th>Sessions</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for instance in instances %}
+        <tr>
+          <td><a class="mono-link" href="/i/{{ instance.instance_id }}">{{ instance.instance_id }}</a></td>
+          <td class="path-cell">{{ instance.cwd }}</td>
+          <td><span class="count-pill">{{ instance.session_count }}</span></td>
+          <td class="timestamp">{{ instance.last_seen_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

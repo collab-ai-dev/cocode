@@ -1,0 +1,29 @@
+[package]
+name = "coco-keybindings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Enable `crossterm::KeyEvent` → `KeyCombo` adapter (TUI uses this).
+crossterm = ["dep:crossterm"]
+# Enable async user-config loader + hot reload (depends on tokio +
+# coco-file-watch). The TUI/CLI bootstrap enables this.
+loader = ["dep:tokio", "dep:coco-file-watch", "dep:coco-utils-common"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+# Tracing is unconditional — the resolver, validator, and loader all
+# log via `tracing::*`. The workspace policy is that leaf libs may
+# emit logs but never install a subscriber (`common/otel/CLAUDE.md`).
+tracing.workspace = true
+crossterm = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["fs", "rt", "sync", "macros"] }
+coco-file-watch = { workspace = true, optional = true }
+coco-utils-common = { workspace = true, optional = true }

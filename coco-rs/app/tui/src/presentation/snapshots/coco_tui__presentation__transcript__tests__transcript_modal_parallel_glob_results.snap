@@ -1,0 +1,19 @@
+---
+source: app/tui/src/presentation/transcript.test.rs
+assertion_line: 534
+expression: "render_transcript_text(&app_state, &state, 84, 14)"
+---
+┌ Transcript ──────────────────────────────────────────────────────────────────────┐
+│  ‖ 2 in parallel · Glob ×2                                                       │
+│                                                                                  │
+│● Glob(**/*.rs)                                                                   │
+│  └ src/lib.rs                                                                    │
+│    src/main.rs                                                                   │
+│                                                                                  │
+│● Glob(**/*.md)                                                                   │
+│  └ README.md                                                                     │
+│    AGENTS.md                                                                     │
+│                                                                                  │
+│ctrl+o toggle · ↑/↓ scroll · PgUp/PgDn page · Home/End jump                       │
+│Tab select · Enter expand/collapse · Esc/q quit                                   │
+└──────────────────────────────────────────────────────────────────────────────────┘

@@ -1,0 +1,11 @@
+Run the session insights workflow to surface usage patterns, costs, and notable activity.
+
+Steps:
+
+1. **Inspect session metadata** — read `~/.coco/sessions/<current>.json` (or the active in-memory session record): turn count, duration, models used, cost breakdown.
+2. **Aggregate tool usage** — group tool calls by name, sum invocations, average latency, error rate.
+3. **Review file activity** — list files Read/Edited/Written this session with edit counts. Flag files modified without later being verified.
+4. **Highlight cost drivers** — top 3 single-turn costs, biggest model in use, any cache-miss spikes.
+5. **Surface actionable next steps** — TODOs added, open tasks not completed, hooks that fired but didn't gate.
+
+Output a single Markdown report with sections: Summary, Tools, Files, Costs, Action Items.

@@ -1,0 +1,36 @@
+mod auth_status;
+mod error;
+mod logging_client_handler;
+mod mcp_auth_status;
+mod oauth;
+mod perform_oauth_login;
+mod program_resolver;
+mod rmcp_client;
+mod utils;
+
+pub use error::Result;
+pub(crate) use error::ResultExt;
+pub use error::RmcpClientError;
+
+pub use auth_status::determine_streamable_http_auth_status;
+pub use auth_status::supports_oauth_login;
+pub use mcp_auth_status::McpAuthStatus;
+pub use oauth::OAuthAccessTokenSave;
+pub use oauth::OAuthCredentialsStoreMode;
+pub use oauth::StoredOAuthTokens;
+pub use oauth::WrappedOAuthTokenResponse;
+pub use oauth::delete_oauth_tokens;
+pub use oauth::has_valid_oauth_tokens;
+pub(crate) use oauth::load_oauth_tokens;
+pub use oauth::save_oauth_access_token;
+pub use oauth::save_oauth_tokens;
+pub use perform_oauth_login::OauthLoginHandle;
+pub use perform_oauth_login::perform_oauth_login;
+pub use perform_oauth_login::perform_oauth_login_return_url;
+pub use rmcp::model::ElicitationAction;
+pub use rmcp_client::Elicitation;
+pub use rmcp_client::ElicitationResponse;
+pub use rmcp_client::ListToolsWithConnectorIdResult;
+pub use rmcp_client::RmcpClient;
+pub use rmcp_client::SendElicitation;
+pub use rmcp_client::ToolWithConnectorId;

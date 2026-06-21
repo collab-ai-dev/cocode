@@ -1,0 +1,49 @@
+{
+  "name": "agent_spawn_then_file_ops",
+  "description": "Model spawns agent, then writes a summary file based on agent result",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Analyze the project structure and identify key modules",
+            "description": "Architecture analysis"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/analysis.md",
+            "content": "# Architecture Analysis\n\nBased on the agent's findings:\n- 3 core modules\n- 5 utility crates\n"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Analysis complete and written to analysis.md."
+    }
+  ],
+  "expect": {
+    "turns": 3,
+    "response_contains": "analysis.md",
+    "files": {
+      "analysis.md": {
+        "exists": true,
+        "contains": "Architecture Analysis",
+        "contains_all": ["core modules", "utility crates"]
+      }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "event_counts": {
+      "ToolUseEnd": 2
+    }
+  }
+}

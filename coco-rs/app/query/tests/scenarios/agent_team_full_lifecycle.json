@@ -1,0 +1,104 @@
+{
+  "name": "agent_team_full_lifecycle",
+  "description": "Full team lifecycle: create → spawn teammates → coordinate → delete",
+  "workspace": {
+    "src/main.rs": "fn main() {}"
+  },
+  "config": { "tools": "extended", "max_turns": 8 },
+  "turns": [
+    {
+      "text": "Creating a team for this refactoring task.",
+      "tool_calls": [
+        {
+          "tool": "TeamCreate",
+          "input": {
+            "team_name": "refactor-team",
+            "description": "Team for safe refactoring",
+            "agent_type": "team-lead"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Spawning a researcher to analyze the code.",
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Analyze src/main.rs and identify refactoring opportunities",
+            "description": "Code analysis",
+            "name": "researcher",
+            "team_name": "refactor-team"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Spawning a writer to implement changes.",
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Implement the refactoring changes identified by the researcher",
+            "description": "Implement changes",
+            "name": "writer",
+            "team_name": "refactor-team"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Coordinating the teammates.",
+      "tool_calls": [
+        {
+          "tool": "SendMessage",
+          "input": {
+            "to": "researcher",
+            "summary": "Status check",
+            "message": "Report your findings so far"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Writing final summary.",
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/refactoring-report.md",
+            "content": "# Refactoring Report\n\nTeam: refactor-team\nMembers: researcher, writer\nStatus: Analysis complete, changes pending\n"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Cleaning up the team.",
+      "tool_calls": [
+        {
+          "tool": "TeamDelete",
+          "input": {
+            "name": "refactor-team"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Refactoring team lifecycle completed successfully."
+    }
+  ],
+  "expect": {
+    "turns": 7,
+    "response_contains": "lifecycle",
+    "not_cancelled": true,
+    "files": {
+      "refactoring-report.md": {
+        "exists": true,
+        "contains_all": ["refactor-team", "researcher", "writer"]
+      }
+    },
+    "event_counts": {
+      "ToolUseEnd": 6
+    }
+  }
+}

@@ -1,0 +1,17 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCO v0.1.0                                                           
+ │●│ │●│  opus-4  *  auto                                                       
+ ╰─╯ ╰─╯                                                                        
+                                                                                
+❯ Hello, how are you?                                                           
+                                                                                
+⏺ I'm doing well! How can I help you today?                                     
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+❯                                                                               
+────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto | ↑0 ↓0 · cache 0/0% | ctx -- | →1 ←1                            
+ ⏯ ask mode on · shift+tab to cycle

@@ -1,0 +1,13 @@
+---
+source: app/tui/src/presentation/agents_dialog.test.rs
+expression: "body_only(&state, &[])"
+---
+ Running   [Library]
+Step 2 of 4 — Description
+
+When should the model invoke this agent?
+  > Handles XYZ.▏
+
+Single sentence. Maps to the agent's `whenToUse` frontmatter.
+
+Enter advance · Esc back · ←/→/Home/End move caret · ↑/↓ on source

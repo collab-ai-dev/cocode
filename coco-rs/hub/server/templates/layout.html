@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/static/prism-tomorrow.min.css">
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="/static/htmx.min.js" defer></script>
+    <script src="/static/marked.umd.js" defer></script>
+    <script src="/static/purify.min.js" defer></script>
+    <script src="/static/prism.min.js" defer data-manual></script>
+    <script src="/static/prism-json.min.js" defer></script>
+    <script src="/static/prism-bash.min.js" defer></script>
+    <script src="/static/prism-diff.min.js" defer></script>
+    <script src="/static/prism-markdown.min.js" defer></script>
+    <script src="/static/prism-rust.min.js" defer></script>
+    <script src="/static/prism-typescript.min.js" defer></script>
+    <script src="/static/prism-python.min.js" defer></script>
+    <script src="/static/prism-go.min.js" defer></script>
+    <script src="/static/prism-sql.min.js" defer></script>
+    <script src="/static/prism-toml.min.js" defer></script>
+    <script src="/static/prism-yaml.min.js" defer></script>
+    <script src="/static/flowbite.min.js" defer></script>
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-frame">
+      <nav class="topbar" aria-label="Primary navigation">
+        <a class="brand" href="/">
+          <span class="brand__mark"></span>
+          <span>Event Hub</span>
+        </a>
+        <div class="topbar__links">
+          <a href="/i">Instances</a>
+          <a href="/v1/protocol">Protocol</a>
+          <a href="/healthz">Health</a>
+        </div>
+      </nav>
+      <main>
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </body>
+</html>

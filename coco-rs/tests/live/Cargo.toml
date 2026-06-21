@@ -1,0 +1,91 @@
+[package]
+name = "coco-tests-live"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints.clippy]
+unwrap_used = "allow"  # test-only crate, unwrap/expect is fine
+
+# No library — this crate exists solely to host integration tests under
+# `tests/`. Each `tests/<target>.rs` becomes its own test binary.
+
+# `sdk_server_stdio` runs a real `SdkServer` on stdio for the Python
+# coco-sdk e2e suite to attach to. `harness = false` keeps libtest from
+# wrapping stdout (`running 1 test`, etc.), which would corrupt the
+# NDJSON stream the SDK client parses. See the test file's module doc
+# for invocation.
+[[test]]
+name = "sdk_server_stdio"
+path = "tests/sdk_server_stdio.rs"
+harness = false
+
+[dev-dependencies]
+# SDK suite (sdk_deepseek): provider construction + vercel-ai calls.
+# vercel-ai-* types reach this crate exclusively through coco_inference's
+# re-export seam (services/inference/src/lib.rs) — no direct vercel-ai
+# deps allowed outside that crate.
+coco-config.workspace = true
+coco-inference.workspace = true
+coco-types.workspace = true
+coco-llm-types.workspace = true
+
+# CLI suite (cli_deepseek): full QueryEngine agent loop with tools + compaction.
+coco-query.workspace = true
+coco-tools.workspace = true
+coco-tool-runtime.workspace = true
+coco-messages.workspace = true
+coco-context.workspace = true
+coco-permissions.workspace = true
+coco-hooks.workspace = true
+coco-coordinator.workspace = true
+
+# coco-cli suite (coco_cli_deepseek): full `coco -p` headless path,
+# including system-prompt assembly, fallback chain, permission resolution,
+# CLAUDE.md discovery — the user's actual entry point.
+coco-cli.workspace = true
+# Needed by both SDK and TUI harnesses to construct
+# `SessionRuntimeBuildOpts.agent_search_paths` /
+# `builtin_agent_catalog` — added when the runtime started owning the
+# per-session agent definition store.
+coco-subagent.workspace = true
+clap = { workspace = true }
+
+# sdk_server_deepseek suite: drives the real SdkServer with InMemoryTransport
+# against live DeepSeek; needs the SessionRuntime building blocks main.rs's
+# `run_sdk_mode` wires (SessionManager, CommandRegistry).
+coco-commands.workspace = true
+coco-session.workspace = true
+coco-skills.workspace = true
+
+# tui_mock suite: drives the in-process TUI state machine + render with a
+# scripted (no-API-key) ScriptedModel and a curated tool/hook setup.
+coco-tui = { workspace = true, features = ["testing"] }
+async-trait.workspace = true
+crossterm.workspace = true
+
+anyhow.workspace = true
+dotenvy.workspace = true
+futures = { workspace = true }
+# multimodal_image suite: build real PNG/JPEG/WebP fixtures end-to-end so
+# the ReadTool → message → normalize pipeline is exercised on actual
+# image bytes, not synthetic strings. Keeping the encoder choice small
+# (jpeg/png/webp) matches `utils/image`.
+image = { workspace = true, features = ["jpeg", "png", "webp"] }
+pretty_assertions.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+# http_seam_tool_loop suite: a wiremock SSE server stands in for the real
+# Anthropic endpoint so the agent loop exercises the genuine
+# provider/codec/stream path offline. NOT a vercel-ai crate — the seam
+# guard only forbids `vercel-ai*` deps here; the real provider is built
+# through `coco_inference::model_factory` (the approved seam).
+wiremock.workspace = true
+tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
+# process_restart_resume suite: locate the built `coco` binary to spawn it
+# as a real subprocess (skips cleanly when the binary isn't built).
+coco-utils-cargo-bin.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }

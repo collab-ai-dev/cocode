@@ -1,0 +1,21 @@
+[package]
+name = "coco-mcp-skills"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-mcp.workspace = true
+coco-skills.workspace = true
+coco-types.workspace = true
+coco-error.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+serde_json.workspace = true

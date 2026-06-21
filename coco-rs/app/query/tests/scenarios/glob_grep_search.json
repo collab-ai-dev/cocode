@@ -1,0 +1,48 @@
+{
+  "name": "glob_grep_search",
+  "description": "Use Glob to find Rust files, then Grep to search for a function",
+  "workspace": {
+    "foo.rs": "fn hello() {}\nfn unused() {}\n",
+    "bar.rs": "fn world() {}\n",
+    "readme.md": "# Hello\n"
+  },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Glob",
+          "input": {
+            "pattern": "*.rs",
+            "path": "{{workspace}}"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Grep",
+          "input": {
+            "pattern": "hello",
+            "path": "{{workspace}}",
+            "output_mode": "files_with_matches"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Found 2 Rust files. The function hello() is in foo.rs."
+    }
+  ],
+  "expect": {
+    "turns": 3,
+    "response_contains": "foo.rs",
+    "files": {
+      "foo.rs": { "exists": true },
+      "bar.rs": { "exists": true },
+      "readme.md": { "exists": true }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

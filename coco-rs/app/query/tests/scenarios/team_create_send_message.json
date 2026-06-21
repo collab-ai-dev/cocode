@@ -1,0 +1,52 @@
+{
+  "name": "team_create_send_message",
+  "description": "Create a team, then send a message to an agent within it",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "TeamCreate",
+          "input": {
+            "name": "analysis-team"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Join the analysis team and start exploring",
+            "description": "Team explorer"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "SendMessage",
+          "input": {
+            "to": "explorer@analysis-team",
+            "content": "Focus on the core/ directory first"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Team created with explorer agent. Directed focus to core/."
+    }
+  ],
+  "expect": {
+    "turns": 4,
+    "response_contains": "Team",
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "event_counts": {
+      "ToolUseEnd": 3
+    }
+  }
+}

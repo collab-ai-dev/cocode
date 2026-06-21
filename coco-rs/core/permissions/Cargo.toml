@@ -1,0 +1,39 @@
+[package]
+name = "coco-permissions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-types.workspace = true
+coco-error.workspace = true
+coco-messages.workspace = true
+coco-config.workspace = true
+# Pure split/strip shell primitives for Bash rule decomposition
+# (split_compound_command, strip_safe_wrappers, strip_all_env_vars,
+# strip_output_redirections). Legal Core→Exec edge; no cycle —
+# coco-shell depends on neither coco-permissions nor coco-tool-runtime.
+coco-shell.workspace = true
+coco-paths.workspace = true
+# DenialTracker lives in `coco-tool-runtime` because it is per-
+# `ToolUseContext` runtime state (fork-isolated when
+# `local_denial_tracking` is set). The auto-mode classifier here
+# operates on the same type to honor fork isolation. TS parity:
+# `permissions.ts:553-558` reads `context.localDenialTracking ??
+# appState.denialTracking ?? createDenialTrackingState()`.
+coco-tool-runtime.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+regex.workspace = true
+globset.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }

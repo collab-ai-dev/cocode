@@ -1,0 +1,30 @@
+{
+  "name": "agent_spawn_with_model",
+  "description": "Spawn Explore agent using static role-based routing",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Quick scan of project structure",
+            "description": "Quick scan",
+            "subagent_type": "Explore"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Quick scan completed using the Explore agent."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "not_cancelled": true,
+    "min_event_counts": {
+      "ToolUseEnd": 1
+    }
+  }
+}

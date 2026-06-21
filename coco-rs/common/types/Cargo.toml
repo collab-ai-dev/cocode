@@ -1,0 +1,31 @@
+[package]
+name = "coco-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Enable JSON Schema generation for the protocol types. Gated so the schemars
+# transitive deps (dyn-clone, etc.) don't ship in normal builds. Activates
+# `coco-llm-types/schema` so JsonSchema reaches the embedded vercel-ai DTOs
+# (LlmMessage, content parts, …).
+schema = ["dep:schemars", "coco-llm-types/schema"]
+
+[dependencies]
+coco-llm-types.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+uuid = { workspace = true, features = ["v4", "serde"] }
+strum = { workspace = true, features = ["derive"] }
+schemars = { workspace = true, optional = true }
+# `AppStateReadHandle` wraps `Arc<tokio::sync::RwLock<ToolAppState>>`.
+# The shared store + async read path lives on the tool-facing `ctx`
+# surface, so tokio's sync primitives are a direct dependency.
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+pretty_assertions.workspace = true

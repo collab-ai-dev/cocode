@@ -1,0 +1,19 @@
+[package]
+name = "coco-test-harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints.clippy]
+unwrap_used = "allow"  # test-only crate, unwrap/expect is fine
+
+[dependencies]
+coco-types.workspace = true
+coco-llm-types.workspace = true
+coco-messages.workspace = true
+coco-compact.workspace = true
+coco-inference.workspace = true
+
+serde_json.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+tokio = { workspace = true, features = ["sync"] }

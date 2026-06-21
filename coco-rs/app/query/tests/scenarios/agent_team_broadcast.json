@@ -1,0 +1,64 @@
+{
+  "name": "agent_team_broadcast",
+  "description": "Create team, spawn teammates, broadcast message to all",
+  "workspace": {},
+  "config": { "tools": "extended", "max_turns": 6 },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "TeamCreate",
+          "input": {
+            "team_name": "broadcast-team"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Stand by for instructions",
+            "name": "alpha",
+            "team_name": "broadcast-team"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Stand by for instructions",
+            "name": "beta",
+            "team_name": "broadcast-team"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "SendMessage",
+          "input": {
+            "to": "*",
+            "summary": "Priority update",
+            "message": "All agents: shift focus to security review"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Broadcast sent to all teammates."
+    }
+  ],
+  "expect": {
+    "turns": 5,
+    "not_cancelled": true,
+    "event_counts": {
+      "ToolUseEnd": 4
+    }
+  }
+}

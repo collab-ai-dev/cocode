@@ -1,0 +1,21 @@
+[package]
+name = "coco-config-reload"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-config.workspace = true
+coco-error.workspace = true
+coco-file-watch.workspace = true
+
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tracing.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

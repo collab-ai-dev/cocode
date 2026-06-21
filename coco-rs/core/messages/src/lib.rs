@@ -1,0 +1,90 @@
+//! Message creation, normalization, history, cost tracking, lookups.
+
+pub mod command_tags;
+pub mod content_kind;
+pub mod cost;
+pub mod creation;
+pub mod history;
+pub mod lookups;
+pub mod normalize;
+pub mod pipeline;
+pub mod predicates;
+pub mod token_estimation;
+pub mod wrapping;
+
+// Message-family types live in `coco-types` (the wire-protocol crate
+// owns its payload shapes). Re-export at this crate root so the
+// established `coco_messages::Message` import path keeps working for
+// the operations layer that does normalization / history.
+pub use coco_types::messages::*;
+
+pub use command_tags::COMMAND_ARGS_TAG;
+pub use command_tags::COMMAND_MESSAGE_TAG;
+pub use command_tags::COMMAND_NAME_TAG;
+pub use command_tags::LOCAL_COMMAND_STDERR_TAG;
+pub use command_tags::LOCAL_COMMAND_STDOUT_TAG;
+pub use command_tags::NO_CONTENT_MESSAGE;
+pub use command_tags::build_context_usage_messages;
+pub use command_tags::build_slash_command_error_messages;
+pub use command_tags::build_slash_command_messages;
+pub use command_tags::extract_tag;
+pub use command_tags::format_command_input;
+pub use command_tags::format_local_command_stderr;
+pub use command_tags::format_local_command_stdout;
+pub use command_tags::is_command_input;
+pub use command_tags::is_local_command_output;
+pub use content_kind::ContentKind;
+pub use content_kind::IMAGE_MAX_TOKEN_SIZE;
+pub use content_kind::classify_assistant;
+pub use content_kind::classify_tool_result;
+pub use content_kind::classify_user;
+pub use content_kind::estimate_part;
+pub use cost::CostTracker;
+pub use cost::calculate_cost_usd;
+pub use cost::format_cost;
+pub use cost::format_session_cost;
+pub use cost::get_model_pricing;
+pub use creation::CANCEL_MESSAGE;
+pub use creation::INTERRUPT_MESSAGE;
+pub use creation::INTERRUPT_MESSAGE_FOR_TOOL_USE;
+pub use creation::create_api_error_message;
+pub use creation::create_assistant_error_message;
+pub use creation::create_assistant_message;
+pub use creation::create_compact_boundary_message;
+pub use creation::create_error_tool_result;
+pub use creation::create_info_message;
+pub use creation::create_meta_message;
+pub use creation::create_permission_denied_message;
+pub use creation::create_plan_implementation_message;
+pub use creation::create_progress_message;
+pub use creation::create_tool_result_message;
+pub use creation::create_tool_result_message_with_parts;
+pub use creation::create_user_interruption_message;
+pub use creation::create_user_interruption_system_message;
+pub use creation::create_user_message;
+pub use creation::create_user_message_with_parts;
+pub use creation::create_user_message_with_parts_and_uuid;
+pub use creation::create_user_message_with_uuid;
+pub use history::LastUsageMarker;
+pub use history::MessageHistory;
+pub use lookups::MessageLookups;
+pub use lookups::build_message_lookups;
+pub use normalize::EXIT_PLAN_MODE_INJECTED_PLAN_FIELD;
+pub use normalize::EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD;
+pub use normalize::ImageSizeError;
+pub use normalize::ensure_user_first;
+pub use normalize::merge_consecutive_assistant_messages;
+pub use normalize::merge_consecutive_user_messages;
+pub use normalize::normalize_messages_for_api;
+pub use normalize::strip_images_from_messages;
+pub use normalize::strip_signature_blocks;
+pub use normalize::to_llm_prompt;
+pub use normalize::validate_images_for_api;
+pub use predicates::count_tool_calls_in_last_assistant_turn;
+pub use predicates::messages_after_compact_boundary;
+pub use token_estimation::estimate_message_tokens;
+pub use token_estimation::estimate_text_tokens;
+pub use token_estimation::estimate_tokens_for_messages;
+pub use token_estimation::estimate_tokens_for_messages_conservative;
+pub use token_estimation::estimate_tool_result_message_tokens;
+pub use token_estimation::is_over_threshold;
