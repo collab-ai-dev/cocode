@@ -14,31 +14,10 @@ env:
 jobs:
   cargo-deny:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./codex-rs
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-
-      - name: Run cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@82eb9f621fbc699dd0918f3ea06864c14cc84246 # v2
-        with:
-          rust-version: 1.95.0
-          manifest-path: ./codex-rs/Cargo.toml
-
-  # coco-rs is the active tree but had no PR-time security scan. Run the RUSTSEC
-  # advisory check against its own deny.toml (which carries its ignore list).
-  # Scoped to `check advisories` to fill the security gap without coupling CI to
-  # coco-rs's license/bans config; broaden to `check` once those are validated.
-  cargo-deny-coco:
-    runs-on: ubuntu-latest
+    env:
+      # Bypass the repo rustc-wrapper script inside the cargo-deny Docker action;
+      # advisories do not need compiler caching.
+      CARGO_BUILD_RUSTC_WRAPPER: ""
     defaults:
       run:
         working-directory: ./coco-rs
@@ -52,7 +31,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
 
-      - name: Run cargo-deny (advisories)
+      - name: Run cargo-deny
         uses: EmbarkStudios/cargo-deny-action@82eb9f621fbc699dd0918f3ea06864c14cc84246 # v2
         with:
           rust-version: 1.95.0

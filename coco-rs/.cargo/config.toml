@@ -1,5 +1,5 @@
 [build]
-rustc-wrapper = "sccache"
+rustc-wrapper = "scripts/rustc-wrapper.sh"
 
 [env]
 SCCACHE_CACHE_SIZE = "40G"
