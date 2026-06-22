@@ -1,20 +1,73 @@
-//! Minimal shim providing the filesystem abstraction that `coco-apply-patch`
-//! consumes from codex-rs. Only the `ExecutorFileSystem` trait and a
-//! `LocalFileSystem` implementation backed by `tokio::fs` are exposed.
-//!
-//! Codex's `codex-exec-server` additionally exposes process-execution RPC
-//! and sandbox-policy-aware variants; those are intentionally not ported
-//! here because coco-rs has its own sandbox stack and the other surface area
-//! is not required by apply-patch.
-
+mod client;
+mod client_api;
+mod client_transport;
+mod connection;
+mod environment;
+mod file_read;
 mod file_system;
+mod jsonrpc_lite;
 mod local_file_system;
+mod local_process;
+mod process;
+mod process_id;
+mod protocol;
+mod regular_file;
+mod remote_file_system;
+mod remote_process;
+mod rpc;
+mod runtime_paths;
+mod server;
 
+pub use client::ExecServerClient;
+pub use client::ExecServerError;
+pub use client::http_client::HttpResponseBodyStream;
+pub use client::http_client::ReqwestHttpClient;
+pub use client_api::ExecServerClientConnectOptions;
+pub use client_api::HttpClient;
+pub use client_api::RemoteExecServerConnectArgs;
+pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
+pub use environment::Environment;
+pub use environment::EnvironmentManager;
+pub use environment::LOCAL_ENVIRONMENT_ID;
+pub use environment::REMOTE_ENVIRONMENT_ID;
 pub use file_system::CopyOptions;
 pub use file_system::CreateDirectoryOptions;
 pub use file_system::ExecutorFileSystem;
+pub use file_system::ExecutorFileSystemFuture;
+pub use file_system::FILE_READ_CHUNK_SIZE;
 pub use file_system::FileMetadata;
+pub use file_system::FileSystemReadStream;
 pub use file_system::FileSystemResult;
+pub use file_system::FileSystemSandboxContext;
 pub use file_system::ReadDirectoryEntry;
 pub use file_system::RemoveOptions;
 pub use local_file_system::LOCAL_FS;
+pub use local_file_system::LocalFileSystem;
+pub use process::ExecBackend;
+pub use process::ExecBackendFuture;
+pub use process::ExecProcess;
+pub use process::ExecProcessEvent;
+pub use process::ExecProcessEventReceiver;
+pub use process::ExecProcessFuture;
+pub use process::StartedExecProcess;
+pub use process_id::ProcessId;
+pub use protocol::ByteChunk;
+pub use protocol::EnvironmentInfo;
+pub use protocol::ExecEnvPolicy;
+pub use protocol::ExecOutputStream;
+pub use protocol::ExecParams;
+pub use protocol::HttpHeader;
+pub use protocol::HttpRequestParams;
+pub use protocol::HttpRequestResponse;
+pub use protocol::InitializeResponse;
+pub use protocol::ProcessOutputChunk;
+pub use protocol::ProcessSignal;
+pub use protocol::ReadResponse;
+pub use protocol::ShellEnvironmentPolicyInherit;
+pub use protocol::ShellInfo;
+pub use protocol::WriteResponse;
+pub use protocol::WriteStatus;
+pub use runtime_paths::ExecServerRuntimePaths;
+pub use server::DEFAULT_LISTEN_URL;
+pub use server::ExecServerListenUrlParseError;
+pub use server::run_main;

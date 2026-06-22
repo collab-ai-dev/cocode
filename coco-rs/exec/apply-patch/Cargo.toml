@@ -18,6 +18,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 coco-exec-server = { workspace = true }
+coco-utils-path-uri = { workspace = true }
 coco-utils-absolute-path = { workspace = true }
 similar = { workspace = true }
 thiserror = { workspace = true }

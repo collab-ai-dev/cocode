@@ -414,6 +414,14 @@ pub enum Commands {
         subcmd: Option<String>,
     },
 
+    /// Run a local exec-server over WebSocket or stdio.
+    #[command(name = "exec-server")]
+    ExecServer {
+        /// Listen URL: `ws://IP:PORT` or `stdio`.
+        #[arg(long, default_value = coco_exec_server::DEFAULT_LISTEN_URL)]
+        listen: String,
+    },
+
     /// Run a long-running background supervisor (daemon mode).
     Daemon,
 

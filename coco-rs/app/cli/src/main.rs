@@ -209,6 +209,16 @@ async fn main() -> Result<()> {
                 }
                 return Ok(());
             }
+            Commands::ExecServer { listen } => {
+                let runtime_paths = coco_exec_server::ExecServerRuntimePaths::new(
+                    std::env::current_exe()?,
+                    /*coco_linux_sandbox_exe*/ None,
+                )?;
+                coco_exec_server::run_main(listen, runtime_paths)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error))?;
+                return Ok(());
+            }
             Commands::Daemon => {
                 println!("Starting daemon supervisor...");
                 println!("Daemon mode is not yet fully implemented.");
