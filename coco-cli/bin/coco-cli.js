@@ -13,9 +13,9 @@ const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 
 const PLATFORM_PACKAGE_BY_TARGET = {
-  "x86_64-unknown-linux-musl": "@coco-rs/coco-cli-linux-x64",
-  "aarch64-unknown-linux-musl": "@coco-rs/coco-cli-linux-arm64",
-  "aarch64-apple-darwin": "@coco-rs/coco-cli-darwin-arm64",
+  "x86_64-unknown-linux-musl": "@coco-cli/coco-cli-linux-x64",
+  "aarch64-unknown-linux-musl": "@coco-cli/coco-cli-linux-arm64",
+  "aarch64-apple-darwin": "@coco-cli/coco-cli-darwin-arm64",
 };
 
 const { platform, arch } = process;
@@ -73,8 +73,8 @@ try {
     const packageManager = detectPackageManager();
     const updateCommand =
       packageManager === "bun"
-        ? "bun install -g @coco-rs/coco-cli@latest"
-        : "npm install -g @coco-rs/coco-cli@latest";
+        ? "bun install -g @coco-cli/coco-cli@latest"
+        : "npm install -g @coco-cli/coco-cli@latest";
     throw new Error(
       `Missing optional dependency ${platformPackage}. Reinstall Coco: ${updateCommand}`,
     );
@@ -85,8 +85,8 @@ if (!vendorRoot) {
   const packageManager = detectPackageManager();
   const updateCommand =
     packageManager === "bun"
-      ? "bun install -g @coco-rs/coco-cli@latest"
-      : "npm install -g @coco-rs/coco-cli@latest";
+      ? "bun install -g @coco-cli/coco-cli@latest"
+      : "npm install -g @coco-cli/coco-cli@latest";
   throw new Error(
     `Missing optional dependency ${platformPackage}. Reinstall Coco: ${updateCommand}`,
   );

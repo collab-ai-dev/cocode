@@ -295,7 +295,7 @@ rand = "0.9"
 fs2 = "0.4"
 regex = "1.12.2"
 regex-lite = "0.1.8"
-reqwest = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rustls = { version = "0.23", features = ["ring"] }
 schemars = { version = "1.2", features = ["uuid1"] }
 serde = "1"

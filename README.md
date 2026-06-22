@@ -34,11 +34,32 @@ cd coco-rs
 just coco --models.main deepseek-openai/deepseek-v4-flash
 ```
 
-After installing the npm package, use the `coco-cli` entrypoint:
+Install the published npm package:
 
 ```bash
-npm install -g @coco-rs/coco-cli
+npm install -g @coco-cli/coco-cli
+coco-cli --version
 coco-cli --help
+```
+
+Package page:
+
+https://www.npmjs.com/package/@coco-cli/coco-cli
+
+The npm package installs a small JavaScript launcher plus the native `coco`
+binary for your platform. Supported published builds are Linux x64, Linux
+arm64, and macOS Apple Silicon.
+
+Upgrade to the latest published version:
+
+```bash
+npm install -g @coco-cli/coco-cli@latest
+```
+
+Uninstall:
+
+```bash
+npm uninstall -g @coco-cli/coco-cli
 ```
 
 ## Configuration Files
@@ -58,7 +79,9 @@ recommended shape is to keep provider and model catalogs in
 active model selection and user preferences.
 
 Do not commit real API keys. Prefer `env_key`, which points coco at an
-environment variable.
+environment variable. For a local-only workstation config, providers also
+accept `api_key` directly in `~/.coco/providers.json`; if both are present,
+the environment variable wins.
 
 ## Model Selection
 
@@ -91,6 +114,73 @@ Common model roles:
 | `hook_agent` | Agent invoked by hooks |
 | `memory` | Memory-related calls |
 | `subagent` | Generic spawned subagent |
+
+Only `models.main` is required. If `fast`, `plan`, `explore`, `review`,
+`hook_agent`, `memory`, or `subagent` is not configured, coco defaults that
+role to the resolved `main` model, including its fallback chain and fallback
+policy.
+
+`settings.json` accepts JSONC-style comments, so a fully annotated model-role
+configuration can look like this:
+
+```jsonc
+{
+  "diagnostics": {
+    // "all" is useful while debugging provider wire format. Remove this block
+    // for normal usage if you do not want verbose request/response dumps.
+    "wire_dump": "all"
+  },
+  "models": {
+    // Required. Every unconfigured role below falls back to this role.
+    "main": {
+      "primary": "deepseek-openai/deepseek-v4-flash",
+      "fallbacks": [
+        "deepseek-openai/deepseek-v4-pro"
+      ],
+      "policy": {
+        "exhausted_retry": {
+          "max_cycles": 2,
+          "initial_backoff_secs": 2,
+          "max_backoff_secs": 30
+        },
+        "recovery": {
+          "initial_backoff_secs": 60,
+          "max_backoff_secs": 1800,
+          "max_attempts": 10
+        }
+      }
+    },
+
+    // Optional. Fast helper calls such as title generation.
+    // Remove this key to use models.main.
+    "fast": "deepseek-openai/deepseek-v4-flash",
+
+    // Optional. Plan mode.
+    // Remove this key to use models.main.
+    "plan": "deepseek-openai/deepseek-v4-flash",
+
+    // Optional. Exploratory background/subtask work.
+    // Remove this key to use models.main.
+    "explore": "deepseek-openai/deepseek-v4-flash",
+
+    // Optional. Review-oriented subtask work.
+    // Remove this key to use models.main.
+    "review": "deepseek-openai/deepseek-v4-flash",
+
+    // Optional. Hook-triggered agent calls.
+    // Remove this key to use models.main.
+    "hook_agent": "deepseek-openai/deepseek-v4-flash",
+
+    // Optional. Memory extraction and memory-related model calls.
+    // Remove this key to use models.main.
+    "memory": "deepseek-openai/deepseek-v4-flash",
+
+    // Optional. Generic spawned subagents from agent/skill dispatch.
+    // Remove this key to use models.main.
+    "subagent": "deepseek-openai/deepseek-v4-flash"
+  }
+}
+```
 
 Fallback chains can be configured with a nested object:
 
@@ -148,15 +238,45 @@ deepseek-openai/deepseek-v4-flash
 export DEEPSEEK_API_KEY="sk-..."
 ```
 
+To keep it across new shells, add it to your shell profile:
+
+```bash
+echo 'export DEEPSEEK_API_KEY="sk-..."' >> ~/.bashrc
+source ~/.bashrc
+```
+
 2. Create or update `~/.coco/settings.json`:
+
+```bash
+mkdir -p ~/.coco
+cat > ~/.coco/settings.json <<'JSON'
+{
+  "diagnostics": {
+    "wire_dump": "all"
+  },
+  "models": {
+    "main": "deepseek-openai/deepseek-v4-flash"
+  }
+}
+JSON
+```
+
+The same file should look like this:
 
 ```json
 {
+  "diagnostics": {
+    "wire_dump": "all"
+  },
   "models": {
     "main": "deepseek-openai/deepseek-v4-flash"
   }
 }
 ```
+
+`wire_dump = "all"` writes provider request/response wire dumps for debugging.
+Remove the `diagnostics` block for normal daily use if you do not need verbose
+logs.
 
 3. Start coco:
 
@@ -180,8 +300,8 @@ The local reference setup under `/root/.coco` uses this split:
 - `providers.json` defines the `deepseek-openai` provider.
 - `models.json` contains a `deepseek-v4-flash` model entry.
 
-The example below follows that split while intentionally avoiding plaintext
-`api_key`; it uses `env_key = "DEEPSEEK_API_KEY"` instead.
+The example below follows that split with an environment variable. This is the
+recommended shape for checked-in or shared configs.
 
 Create `~/.coco/providers.json`:
 
@@ -200,12 +320,52 @@ Create `~/.coco/providers.json`:
 }
 ```
 
-Keep `~/.coco/settings.json` focused on model selection:
+For a local-only machine config, you can put the DeepSeek key directly in
+`~/.coco/providers.json`. Keep this file private and do not commit it:
 
 ```json
 {
+  "deepseek-openai": {
+    "api": "openai_compat",
+    "env_key": "DEEPSEEK_API_KEY",
+    "api_key": "sk-...",
+    "base_url": "https://api.deepseek.com/v1",
+    "wire_api": "chat",
+    "models": {
+      "deepseek-v4-flash": {},
+      "deepseek-v4-pro": {}
+    }
+  }
+}
+```
+
+If `DEEPSEEK_API_KEY` is exported in the environment, it overrides the
+`api_key` value from the file. Unset the environment variable when you want to
+force coco to use the file value:
+
+```bash
+unset DEEPSEEK_API_KEY
+```
+
+Keep `~/.coco/settings.json` focused on model selection:
+
+```jsonc
+{
+  "diagnostics": {
+    "wire_dump": "all"
+  },
   "models": {
-    "main": "deepseek-openai/deepseek-v4-flash"
+    // Required. Other roles can be omitted; they fall back to main.
+    "main": "deepseek-openai/deepseek-v4-flash",
+
+    // Optional examples. Delete any role you do not need to customize.
+    "fast": "deepseek-openai/deepseek-v4-flash",
+    "plan": "deepseek-openai/deepseek-v4-flash",
+    "explore": "deepseek-openai/deepseek-v4-flash",
+    "review": "deepseek-openai/deepseek-v4-flash",
+    "hook_agent": "deepseek-openai/deepseek-v4-flash",
+    "memory": "deepseek-openai/deepseek-v4-flash",
+    "subagent": "deepseek-openai/deepseek-v4-flash"
   }
 }
 ```
@@ -311,9 +471,17 @@ deepseek-openai/deepseek-v4-flash
 deepseek-openai/deepseek-v4-pro
 ```
 
-**Avoid plaintext `api_key` in config files**
+**Plaintext `api_key` in config files**
 
-`providers.json` supports an `api_key` field, but prefer:
+`providers.json` supports an `api_key` field for local-only configs:
+
+```json
+{
+  "api_key": "sk-..."
+}
+```
+
+For shared configs, prefer:
 
 ```json
 {
@@ -322,7 +490,8 @@ deepseek-openai/deepseek-v4-pro
 ```
 
 That keeps secrets in the environment or your secret manager instead of in
-dotfiles or git.
+dotfiles or git. If both `env_key` and `api_key` are set, the environment
+variable wins.
 
 ## Repository Layout
 

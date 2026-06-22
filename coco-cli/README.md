@@ -1,4 +1,4 @@
-# @coco-rs/coco-cli
+# @coco-cli/coco-cli
 
 npm distribution for the `coco` Rust binary built from
 [`coco-rs/`](../coco-rs).
@@ -6,7 +6,7 @@ npm distribution for the `coco` Rust binary built from
 After install:
 
 ```bash
-npm install -g @coco-rs/coco-cli
+npm install -g @coco-cli/coco-cli
 coco-cli --help
 ```
 
@@ -14,9 +14,9 @@ coco-cli --help
 
 | OS / arch          | npm package                       | target triple                  |
 | ------------------ | --------------------------------- | ------------------------------ |
-| Linux x86_64       | `@coco-rs/coco-cli-linux-x64`     | `x86_64-unknown-linux-musl`    |
-| Linux aarch64      | `@coco-rs/coco-cli-linux-arm64`   | `aarch64-unknown-linux-musl`   |
-| macOS Apple Silicon| `@coco-rs/coco-cli-darwin-arm64`  | `aarch64-apple-darwin`         |
+| Linux x86_64       | `@coco-cli/coco-cli-linux-x64`    | `x86_64-unknown-linux-musl`    |
+| Linux aarch64      | `@coco-cli/coco-cli-linux-arm64`  | `aarch64-unknown-linux-musl`   |
+| macOS Apple Silicon| `@coco-cli/coco-cli-darwin-arm64` | `aarch64-apple-darwin`         |
 
 Windows and macOS Intel are not supported. The `coco` binary is shipped
 standalone — it does not depend on `ripgrep` or any other separately
@@ -25,17 +25,17 @@ installed CLI.
 ## Architecture
 
 ```
-@coco-rs/coco-cli                  meta package, bin/coco-cli.js launcher
-  ├── @coco-rs/coco-cli-linux-x64    vendor/x86_64-unknown-linux-musl/coco/coco
-  ├── @coco-rs/coco-cli-linux-arm64  vendor/aarch64-unknown-linux-musl/coco/coco
-  └── @coco-rs/coco-cli-darwin-arm64 vendor/aarch64-apple-darwin/coco/coco
+@coco-cli/coco-cli                  meta package, bin/coco-cli.js launcher
+  ├── @coco-cli/coco-cli-linux-x64    vendor/x86_64-unknown-linux-musl/coco/coco
+  ├── @coco-cli/coco-cli-linux-arm64  vendor/aarch64-unknown-linux-musl/coco/coco
+  └── @coco-cli/coco-cli-darwin-arm64 vendor/aarch64-apple-darwin/coco/coco
 ```
 
-All four tarballs publish under the **same** npm name `@coco-rs/coco-cli`,
+All four tarballs publish under the **same** npm name `@coco-cli/coco-cli`,
 disambiguated by version (`0.1.0` for the meta package, `0.1.0-linux-x64`
 etc. for platform packages). The meta package's `optionalDependencies` use
 the `npm:` alias syntax to map local names back to the right version, so
-only one organization scope (`@coco-rs`) needs to be registered.
+only one organization scope (`@coco-cli`) needs to be registered.
 
 ## Release flow
 
@@ -68,13 +68,13 @@ without a workflow).
    ```bash
    for tarball in dist/npm/coco-cli-npm-linux-*-0.1.0.tgz \
                   dist/npm/coco-cli-npm-darwin-*-0.1.0.tgz; do
-     npm publish "$tarball" --access public
+     npm publish "$tarball" --access public --tag platform
    done
    npm publish dist/npm/coco-cli-npm-0.1.0.tgz --access public
    ```
 5. Verify:
    ```bash
-   npm install -g @coco-rs/coco-cli@0.1.0
+   npm install -g @coco-cli/coco-cli@0.1.0
    coco-cli --version
    ```
 
@@ -115,7 +115,7 @@ make smoke         # runs node bin/coco-cli.js --version
 ```
 
 The launcher's local fallback (`coco-cli/vendor/<triple>/coco/coco`) is
-hit only when no `@coco-rs/coco-cli-*` package is resolvable via
+hit only when no `@coco-cli/coco-cli-*` package is resolvable via
 `require.resolve` — i.e. exactly the dev case.
 
 ### Inspect a packed tarball
@@ -151,7 +151,7 @@ coco-cli/
 
 ## Troubleshooting
 
-**`Missing optional dependency @coco-rs/coco-cli-<platform>`**
+**`Missing optional dependency @coco-cli/coco-cli-<platform>`**
 The platform package for the user's OS/arch was not installed. Either it
 hasn't been published yet for this version, or the install ran with
 `--no-optional`/`--omit=optional`. Reinstall without those flags.
