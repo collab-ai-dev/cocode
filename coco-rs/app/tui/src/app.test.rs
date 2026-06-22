@@ -4,10 +4,126 @@ use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
 use coco_types::TuiOnlyEvent;
+use crossterm::event::Event;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
+use crossterm::event::KeyEventState;
+use crossterm::event::KeyModifiers;
 
 use super::DEFERRED_CORE_EVENT_LIMIT;
 use super::DeferredCoreEvent;
+use super::convert_crossterm_event;
 use super::defer_core_event;
+use crate::events::TuiEvent;
+
+fn key(code: KeyCode, modifiers: KeyModifiers, kind: KeyEventKind) -> KeyEvent {
+    KeyEvent {
+        code,
+        modifiers,
+        kind,
+        state: KeyEventState::NONE,
+    }
+}
+
+fn converts_to_key_event(key_event: KeyEvent) -> bool {
+    matches!(
+        convert_crossterm_event(Event::Key(key_event)),
+        Some(TuiEvent::Key(_))
+    )
+}
+
+#[test]
+fn crossterm_filter_accepts_key_press() {
+    assert!(converts_to_key_event(key(
+        KeyCode::Left,
+        KeyModifiers::NONE,
+        KeyEventKind::Press,
+    )));
+}
+
+#[test]
+fn crossterm_filter_accepts_navigation_repeats() {
+    assert!(converts_to_key_event(key(
+        KeyCode::Left,
+        KeyModifiers::NONE,
+        KeyEventKind::Repeat,
+    )));
+    assert!(converts_to_key_event(key(
+        KeyCode::Right,
+        KeyModifiers::NONE,
+        KeyEventKind::Repeat,
+    )));
+}
+
+#[test]
+fn crossterm_filter_rejects_key_release() {
+    assert!(
+        convert_crossterm_event(Event::Key(key(
+            KeyCode::Left,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        )))
+        .is_none()
+    );
+}
+
+#[test]
+fn crossterm_filter_rejects_exit_chord_repeats() {
+    assert!(
+        convert_crossterm_event(Event::Key(key(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Repeat,
+        )))
+        .is_none()
+    );
+    assert!(
+        convert_crossterm_event(Event::Key(key(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Repeat,
+        )))
+        .is_none()
+    );
+}
+
+#[test]
+fn crossterm_filter_rejects_one_shot_action_repeats() {
+    assert!(
+        convert_crossterm_event(Event::Key(key(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        )))
+        .is_none()
+    );
+    assert!(
+        convert_crossterm_event(Event::Key(key(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        )))
+        .is_none()
+    );
+}
+
+#[test]
+fn crossterm_filter_accepts_plain_character_repeat_only() {
+    assert!(converts_to_key_event(key(
+        KeyCode::Char('a'),
+        KeyModifiers::NONE,
+        KeyEventKind::Repeat,
+    )));
+    assert!(
+        convert_crossterm_event(Event::Key(key(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Repeat,
+        )))
+        .is_none()
+    );
+}
 
 fn lossy_text(n: usize) -> CoreEvent {
     CoreEvent::Stream(AgentStreamEvent::TextDelta {
