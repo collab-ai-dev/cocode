@@ -397,29 +397,22 @@ pub(crate) fn live_permissions(
     }
 }
 
-/// Construct a [`ThinkingLevel`] for an effort, threading the model's
-/// declared `supported_thinking_levels` budget when one is registered.
-/// Falls back to a budget-less level (`budget_tokens: None`) so the
-/// inference layer's provider-specific conversion picks defaults.
-///
-/// Lookup is L0-only (`builtin_models_partial`) — same source the TUI
-/// picker uses today. Users registering a model in
-/// `~/.coco/models.json` without declaring `supported_thinking_levels`
-/// get a budget-less wire entry, which is the same behaviour as before
-/// this override layer landed.
-fn thinking_level_for_effort_from(model_id: &str, effort: ReasoningEffort) -> ThinkingLevel {
-    if let Some(level) = coco_config::builtin_models_partial()
-        .get(model_id)
-        .and_then(|info| info.supported_thinking_levels.as_ref())
-        .and_then(|levels| levels.iter().find(|l| l.effort == effort))
-    {
-        return level.clone();
-    }
-    ThinkingLevel {
+/// Construct a [`ThinkingLevel`] for an effort, threading the current
+/// model's declared `supported_thinking_levels` budget/options when
+/// available. Falls back to a budget-less level so provider-specific
+/// conversion can pick defaults for models without metadata.
+fn thinking_level_for_effort_from(
+    model_info: Option<&coco_config::ModelInfo>,
+    effort: ReasoningEffort,
+) -> ThinkingLevel {
+    let requested = ThinkingLevel {
         effort,
         budget_tokens: None,
         options: std::collections::HashMap::new(),
-    }
+    };
+    model_info
+        .map(|info| info.resolve_thinking_level(&requested))
+        .unwrap_or(requested)
 }
 
 /// In-memory binding for a single [`ModelRole`] that overrides the
@@ -2012,6 +2005,11 @@ impl SessionRuntime {
             self.model_runtimes
                 .rebind_role_primary(role, spec)
                 .map_err(anyhow::Error::from)?;
+            let model_info = self
+                .runtime_config
+                .model_registry
+                .resolve(&ov.spec.provider, &ov.spec.model_id)
+                .map(|resolved| resolved.info.clone());
             // Store the override only after the registry accepted the
             // replacement runtime.
             {
@@ -2021,7 +2019,7 @@ impl SessionRuntime {
             self.update_engine_config(move |cfg| {
                 cfg.model_id = model_id;
                 cfg.thinking_level =
-                    effort.map(|e| thinking_level_for_effort_from(&cfg.model_id, e));
+                    effort.map(|e| thinking_level_for_effort_from(model_info.as_ref(), e));
             })
             .await;
             return Ok(());
@@ -2046,6 +2044,13 @@ impl SessionRuntime {
     /// `RoleOverride`.
     pub async fn apply_role_effort(&self, role: ModelRole, effort: Option<ReasoningEffort>) {
         let spec_for_seed = self.runtime_config.model_roles.get(role).cloned();
+        let effective_spec = self
+            .role_overrides
+            .read()
+            .await
+            .get(&role)
+            .map(|ov| ov.spec.clone())
+            .or_else(|| spec_for_seed.clone());
         let mut overrides = self.role_overrides.write().await;
         match overrides.get_mut(&role) {
             Some(existing) => existing.effort = effort,
@@ -2057,9 +2062,15 @@ impl SessionRuntime {
         }
         drop(overrides);
         if role == ModelRole::Main {
+            let model_info = effective_spec.as_ref().and_then(|spec| {
+                self.runtime_config
+                    .model_registry
+                    .resolve(&spec.provider, &spec.model_id)
+                    .map(|resolved| resolved.info.clone())
+            });
             self.update_engine_config(|cfg| {
                 cfg.thinking_level =
-                    effort.map(|e| thinking_level_for_effort_from(&cfg.model_id, e));
+                    effort.map(|e| thinking_level_for_effort_from(model_info.as_ref(), e));
             })
             .await;
         }

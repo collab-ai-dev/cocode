@@ -77,12 +77,6 @@ const CATEGORIES: &[Category] = &[
                 usage: "/model [model]",
             },
             CommandEntry {
-                name: "effort",
-                aliases: &[],
-                description: "Set reasoning effort level",
-                usage: "/effort [low|medium|high]",
-            },
-            CommandEntry {
                 name: "permissions",
                 aliases: &["perms", "allowed-tools"],
                 description: "Manage allow & deny tool permission rules",

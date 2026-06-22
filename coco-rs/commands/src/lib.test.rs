@@ -93,7 +93,8 @@ fn test_register_builtins() {
     //   see commands/CLAUDE.md "Deliberately Not Ported".
     // - /login + /logout are registered (multi-provider OAuth subscriptions);
     //   the interactive flow is handled in app/cli::tui_runner.
-    assert_eq!(registry.len(), 21);
+    // - /effort is not registered; live thinking effort uses Ctrl+T/model picker.
+    assert_eq!(registry.len(), 20);
     assert!(registry.get("help").is_some());
     assert!(registry.get("clear").is_some());
     assert!(registry.get("compact").is_some());
@@ -201,6 +202,6 @@ fn test_all_builtins_are_visible() {
     register_builtins(&mut registry);
 
     // All built-in commands should be visible (not hidden). Count tracks
-    // register_builtins (21 incl. /login + /logout — see test_register_builtins).
-    assert_eq!(registry.visible().len(), 21);
+    // register_builtins (20 incl. /login + /logout — see test_register_builtins).
+    assert_eq!(registry.visible().len(), 20);
 }

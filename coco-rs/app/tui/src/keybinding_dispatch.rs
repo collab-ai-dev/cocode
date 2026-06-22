@@ -38,7 +38,7 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         AppInterrupt => TuiCommand::Interrupt,
         AppExit => TuiCommand::RequestExit,
         AppRedraw => TuiCommand::ClearScreen,
-        // `app:toggleTodos` (Ctrl+T) — cycle the right-rail expanded
+        // `app:toggleTodos` (Ctrl+Y) — cycle the right-rail expanded
         // view between None / Tasks / (Teammates if running).
         // `update::handle_command` does the cycle math.
         AppToggleTodos => TuiCommand::ToggleExpandedTasksView,

@@ -287,7 +287,7 @@ pub async fn handle_command(
             // `supported_efforts`. This honors per-model declarations
             // (DeepSeek's 4-state ladder is different from Anthropic's
             // 4-budget ladder is different from OpenAI's 5-level
-            // ladder) — Ctrl+T is no longer a hardcoded ordering.
+            // ladder) — Ctrl+T is not a hardcoded ordering.
             let supported: Vec<coco_types::ReasoningEffort> = state
                 .session
                 .model_catalog

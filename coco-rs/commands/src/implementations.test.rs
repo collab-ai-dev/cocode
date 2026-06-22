@@ -10,12 +10,11 @@ fn test_register_extended_builtins() {
 
     // Verify we registered a reasonable number of extended commands.
     // Count drifts as commands move between layers; the floor only
-    // catches whole-block regressions. Floor lowered to 43 after `/theme`
-    // migrated to `register_ts_parity_handlers` (CommandHandler opening the
-    // standalone picker on no args).
+    // catches whole-block regressions. Floor lowered to 42 after `/effort`
+    // moved to the live Ctrl+T thinking-effort cycle.
     assert!(
-        registry.len() >= 43,
-        "Expected at least 43 extended commands, got {}",
+        registry.len() >= 42,
+        "Expected at least 42 extended commands, got {}",
         registry.len()
     );
 }
@@ -106,7 +105,6 @@ fn test_all_name_constants_are_valid() {
         names::VERSION,
         names::CONFIG,
         names::MODEL,
-        names::EFFORT,
         names::PERMISSIONS,
         names::THEME,
         names::COLOR,

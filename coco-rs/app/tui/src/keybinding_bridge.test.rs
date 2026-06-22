@@ -527,9 +527,9 @@ fn test_ctrl_shift_o_toggles_teammate_preview() {
 
 /// End-to-end A7a regression guard: `ctrl+shift+t` resolves through the
 /// rebindable `app:toggleTeamRoster` action to `OpenTeamRoster` when a teammate
-/// is present. Before A7a the roster picker had NO reachable key — `ctrl+t` was
-/// claimed by `app:toggleTodos` and the hardcoded fallback was dead. Without a
-/// teammate the key is an inert no-op (not a global shadow).
+/// is present. Before A7a the roster picker had NO reachable key because the
+/// global view-cycle binding shadowed the hardcoded fallback. Without a teammate
+/// the key is an inert no-op (not a global shadow).
 #[test]
 fn test_ctrl_shift_t_opens_team_roster_when_teammate_present() {
     let mut state = AppState::new();
@@ -724,23 +724,20 @@ fn test_prompt_n_denies() {
 }
 
 #[test]
-fn test_ctrl_t_cycles_view_in_chat_context() {
-    // Ctrl+T binds globally to `app:toggleTodos` (view cycle:
-    // Chat → Tasks → Subagents). The previous Chat-context shadow that
-    // routed Ctrl+T to `ChatCycleThinking` has moved to Ctrl+Y.
+fn test_ctrl_y_cycles_view_in_chat_context() {
+    // Ctrl+Y binds globally to `app:toggleTodos` (view cycle:
+    // Chat → Tasks → Subagents).
     let state = AppState::new();
-    let cmd = map_key(&state, ctrl(KeyCode::Char('t')));
+    let cmd = map_key(&state, ctrl(KeyCode::Char('y')));
     assert!(matches!(cmd, Some(TuiCommand::ToggleExpandedTasksView)));
 }
 
 #[test]
-fn test_ctrl_y_cycles_thinking_level_in_chat_context() {
-    // In Chat context Ctrl+Y cycles the Main role's thinking effort through
-    // the active model's `supported_thinking_levels`. Displaces the readline
-    // `yank` default; the legacy `input:yank` cascade only applies in
-    // non-Chat contexts.
+fn test_ctrl_t_cycles_thinking_level_in_chat_context() {
+    // In Chat context Ctrl+T cycles the Main role's thinking effort through
+    // the active model's `supported_thinking_levels`.
     let state = AppState::new();
-    let cmd = map_key(&state, ctrl(KeyCode::Char('y')));
+    let cmd = map_key(&state, ctrl(KeyCode::Char('t')));
     assert!(matches!(cmd, Some(TuiCommand::CycleThinkingLevel)));
 }
 

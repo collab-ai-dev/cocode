@@ -11,5 +11,5 @@ expression: output
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯                                                                                                   
 ────────────────────────────────────────────────────────────────────────────────────────────────────
- deepseek/deepseek-v4-flash * auto | ↑12.3K ↓16.5K · cache 10.7K/87.0% | ctx 14% | →0 ←1            
+ deepseek/deepseek-v4-flash * auto * ctrl+t to cycle | ↑12.3K ↓16.5K · cache 10.7K/87.0% | ctx 14% |
  ⏯ ask mode on · shift+tab to cycle

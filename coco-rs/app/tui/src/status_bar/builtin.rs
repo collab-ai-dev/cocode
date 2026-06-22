@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 
+use coco_keybindings::KeybindingAction;
 use coco_types::ModelRole;
 use coco_types::PermissionMode;
 
 use crate::i18n::t;
+use crate::keybinding_bridge::KeybindingContext as TuiContext;
 use crate::presentation::context_usage::render_context_usage;
 use crate::state::AppState;
 use crate::state::FocusTarget;
@@ -84,6 +86,14 @@ fn model_and_usage_line(state: &AppState) -> Vec<StatusSpan> {
         state.session.thinking_effort.to_string(),
         StatusTone::Dim,
     ));
+    if let Some(hint) = state
+        .ui
+        .kb_handle
+        .display_for(&KeybindingAction::ChatCycleThinking, TuiContext::Chat)
+    {
+        spans.push(StatusSpan::new(" * ", StatusTone::Dim));
+        spans.push(StatusSpan::new(format!("{hint} to cycle"), StatusTone::Dim));
+    }
 
     if let Some(hint) = state.ui.kb_handle.pending_display() {
         separator(&mut spans);

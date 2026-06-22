@@ -75,10 +75,10 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("ctrl+c", KeybindingAction::AppInterrupt),
                 ("ctrl+d", KeybindingAction::AppExit),
                 ("ctrl+l", KeybindingAction::AppRedraw),
-                ("ctrl+t", KeybindingAction::AppToggleTodos),
+                ("ctrl+y", KeybindingAction::AppToggleTodos),
                 ("ctrl+o", KeybindingAction::AppToggleTranscript),
                 ("ctrl+shift+o", KeybindingAction::AppToggleTeammatePreview),
-                // coco-rs-only affordance. Sibling of `ctrl+t`; only active
+                // coco-rs-only affordance. Sibling of `ctrl+y`; only active
                 // when the session has teammates (gated in dispatch).
                 ("ctrl+shift+t", KeybindingAction::AppToggleTeamRoster),
                 ("ctrl+r", KeybindingAction::HistorySearch),
@@ -111,15 +111,12 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 // unless users opt into "Option as Meta". F2 avoids
                 // readline editing keys and does not insert text.
                 ("f2", KeybindingAction::ChatThinkingToggle),
-                // coco-rs extension: Ctrl+Y in the Chat context cycles
+                // coco-rs extension: Ctrl+T in the Chat context cycles
                 // the Main role's thinking effort
                 // forward through the active model's
-                // `supported_thinking_levels`. Ctrl+T is reserved for the
-                // global `app:toggleTodos` view cycle (Chat → Tasks →
-                // Subagents), which now wins from every context — the
-                // input-edit `Ctrl+Y → yank` fallback only applies in
-                // non-Chat contexts via the legacy cascade.
-                ("ctrl+y", KeybindingAction::ChatCycleThinking),
+                // `supported_thinking_levels`. Ctrl+Y is the global
+                // `app:toggleTodos` view cycle (Chat → Tasks → Subagents).
+                ("ctrl+t", KeybindingAction::ChatCycleThinking),
                 ("enter", KeybindingAction::ChatSubmit),
                 ("up", KeybindingAction::HistoryPrevious),
                 ("down", KeybindingAction::HistoryNext),

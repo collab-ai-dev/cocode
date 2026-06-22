@@ -8,10 +8,13 @@ use coco_config::RuntimeOverrides;
 use coco_config::Settings;
 use coco_config::SettingsWithSource;
 use coco_types::ProviderModelSelection;
+use coco_types::ReasoningEffort;
+use coco_types::ThinkingLevel;
 use tempfile::TempDir;
 
 use super::SessionRuntime;
 use super::SessionRuntimeBuildOpts;
+use super::thinking_level_for_effort_from;
 use crate::Cli;
 
 async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
@@ -66,6 +69,22 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
     })
     .await
     .expect("build SessionRuntime")
+}
+
+#[test]
+fn thinking_level_for_effort_uses_current_model_metadata() {
+    let model = coco_config::ModelInfo {
+        supported_thinking_levels: Some(vec![ThinkingLevel::with_budget(
+            ReasoningEffort::High,
+            32_000,
+        )]),
+        ..Default::default()
+    };
+
+    let level = thinking_level_for_effort_from(Some(&model), ReasoningEffort::High);
+
+    assert_eq!(level.effort, ReasoningEffort::High);
+    assert_eq!(level.budget_tokens, Some(32_000));
 }
 
 #[tokio::test]

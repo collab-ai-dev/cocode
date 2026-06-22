@@ -524,7 +524,7 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             lines.push(ActivityLine {
                 spans: vec![
                     ActivitySpan::raw("      "),
-                    ActivitySpan::tone("↓ manage · Ctrl+T → Subagents", ActivityTone::Dim),
+                    ActivitySpan::tone("↓ manage · Ctrl+Y → Subagents", ActivityTone::Dim),
                 ],
             });
         }

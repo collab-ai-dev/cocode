@@ -70,9 +70,7 @@ pub enum KeybindingAction {
     /// coco-rs extension: cycle the Main role's thinking effort forward
     /// through the current model's
     /// `supported_thinking_levels`, wrapping at the end. Bound to
-    /// `ctrl+t` in Chat context (shadowing the global `app:toggleTodos`
-    /// while the user is at the input); `app:toggleTodos` remains
-    /// reachable from non-Chat contexts.
+    /// `ctrl+t` in Chat context.
     ChatCycleThinking,
     ChatSubmit,
     ChatNewline,

@@ -1262,12 +1262,6 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         ),
         ("model", "Switch the current model", &[], model_handler),
         (
-            "effort",
-            "Set reasoning effort level (low/medium/high)",
-            &[],
-            effort_handler,
-        ),
-        (
             "permissions",
             "Review and modify permission rules",
             &["perms"],
@@ -1367,7 +1361,6 @@ fn help_handler(_args: &str) -> String {
      /compact - Compact context\n\
      /config - View/modify configuration\n\
      /model - Switch model\n\
-     /effort - Set reasoning effort\n\
      /permissions - Manage permissions\n\
      /status - Session status\n\
      /cost - Token usage and cost\n\
@@ -1431,14 +1424,6 @@ fn model_handler(args: &str) -> String {
             .to_string()
     } else {
         format!("Switching to model: {args}")
-    }
-}
-
-fn effort_handler(args: &str) -> String {
-    match args.trim() {
-        "low" | "medium" | "high" => format!("Reasoning effort set to: {args}"),
-        "" => "Current effort: medium\nOptions: low, medium, high".to_string(),
-        _ => format!("Unknown effort level: {args}. Use low, medium, or high."),
     }
 }
 
