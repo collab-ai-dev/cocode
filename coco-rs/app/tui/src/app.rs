@@ -12,7 +12,10 @@ use coco_file_search::SharedFileIndex;
 use coco_file_search::create_shared_index;
 use crossterm::event::Event;
 use crossterm::event::EventStream;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 use tokio_stream::StreamExt;
@@ -705,36 +708,7 @@ impl App {
 
     /// Convert a crossterm event to a TuiEvent.
     fn convert_crossterm_event(&self, event: Event) -> Option<TuiEvent> {
-        match event {
-            Event::Key(key) => {
-                // Only handle key press events (not release/repeat) for cross-platform
-                if key.kind != KeyEventKind::Press {
-                    return None;
-                }
-                // Intercept Ctrl+Z before keybinding dispatch so the
-                // user can never accidentally remap process suspend.
-                // Raw mode would otherwise eat the keystroke silently.
-                // On non-Unix it falls through as a normal Key event
-                // (no SIGTSTP semantics anyway).
-                #[cfg(unix)]
-                if key.code == crossterm::event::KeyCode::Char('z')
-                    && key.modifiers == crossterm::event::KeyModifiers::CONTROL
-                {
-                    return Some(TuiEvent::Suspend);
-                }
-                Some(TuiEvent::Key(key))
-            }
-            // We never call EnableMouseCapture, so crossterm shouldn't deliver
-            // Event::Mouse in practice — drop it defensively if it ever arrives.
-            Event::Mouse(_) => None,
-            Event::Resize(w, h) => Some(TuiEvent::Resize {
-                width: w,
-                height: h,
-            }),
-            Event::FocusGained => Some(TuiEvent::FocusChanged { focused: true }),
-            Event::FocusLost => Some(TuiEvent::FocusChanged { focused: false }),
-            Event::Paste(text) => Some(TuiEvent::Paste(text)),
-        }
+        convert_crossterm_event(event)
     }
 
     /// Handle a TUI event, returning true if redraw needed.
@@ -1240,6 +1214,82 @@ fn coalesce_lossy_deferred_event(buffer: &mut VecDeque<CoreEvent>, event: &CoreE
             })
         }
         _ => false,
+    }
+}
+
+fn convert_crossterm_event(event: Event) -> Option<TuiEvent> {
+    match event {
+        Event::Key(key) => {
+            if !should_accept_key_event(&key) {
+                return None;
+            }
+            // Intercept Ctrl+Z before keybinding dispatch so the
+            // user can never accidentally remap process suspend.
+            // Raw mode would otherwise eat the keystroke silently.
+            // On non-Unix it falls through as a normal Key event
+            // (no SIGTSTP semantics anyway).
+            #[cfg(unix)]
+            if key.code == KeyCode::Char('z') && key.modifiers == KeyModifiers::CONTROL {
+                return Some(TuiEvent::Suspend);
+            }
+            Some(TuiEvent::Key(key))
+        }
+        // We never call EnableMouseCapture, so crossterm shouldn't deliver
+        // Event::Mouse in practice — drop it defensively if it ever arrives.
+        Event::Mouse(_) => None,
+        Event::Resize(w, h) => Some(TuiEvent::Resize {
+            width: w,
+            height: h,
+        }),
+        Event::FocusGained => Some(TuiEvent::FocusChanged { focused: true }),
+        Event::FocusLost => Some(TuiEvent::FocusChanged { focused: false }),
+        Event::Paste(text) => Some(TuiEvent::Paste(text)),
+    }
+}
+
+fn should_accept_key_event(key: &KeyEvent) -> bool {
+    match key.kind {
+        KeyEventKind::Press => true,
+        KeyEventKind::Repeat => is_repeat_safe_key(key),
+        KeyEventKind::Release => false,
+    }
+}
+
+fn is_repeat_safe_key(key: &KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Up
+        | KeyCode::Down
+        | KeyCode::Home
+        | KeyCode::End
+        | KeyCode::PageUp
+        | KeyCode::PageDown
+        | KeyCode::Backspace
+        | KeyCode::Delete => true,
+        KeyCode::Char(_) => !key.modifiers.intersects(
+            KeyModifiers::CONTROL
+                | KeyModifiers::ALT
+                | KeyModifiers::SUPER
+                | KeyModifiers::HYPER
+                | KeyModifiers::META,
+        ),
+        KeyCode::BackTab
+        | KeyCode::Enter
+        | KeyCode::Esc
+        | KeyCode::F(_)
+        | KeyCode::Insert
+        | KeyCode::CapsLock
+        | KeyCode::ScrollLock
+        | KeyCode::NumLock
+        | KeyCode::PrintScreen
+        | KeyCode::Pause
+        | KeyCode::Menu
+        | KeyCode::KeypadBegin
+        | KeyCode::Media(_)
+        | KeyCode::Modifier(_)
+        | KeyCode::Null
+        | KeyCode::Tab => false,
     }
 }
 

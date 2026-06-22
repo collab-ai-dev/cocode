@@ -5,8 +5,10 @@
 //! default `chat:insertNewline` binding can never fire. Pushing
 //! `DISAMBIGUATE_ESCAPE_CODES | REPORT_EVENT_TYPES | REPORT_ALTERNATE_KEYS`
 //! makes modified keys distinguishable on kitty-capable terminals; terminals
-//! without support ignore the sequence. The run loop already filters
-//! `KeyEventKind::Press`, so `REPORT_EVENT_TYPES` cannot double-fire keys.
+//! without support ignore the sequence. The run loop accepts
+//! `KeyEventKind::Press` plus safe `Repeat` events for editing/navigation keys
+//! and ignores `Release`, so `REPORT_EVENT_TYPES` cannot double-fire one-shot
+//! actions.
 //!
 //! Teardown has two strengths (ported from codex-rs `keyboard_modes.rs`):
 //! a stack-respecting pop for suspend/resume, and a hard `CSI < u` reset on

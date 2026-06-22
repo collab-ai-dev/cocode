@@ -2,7 +2,7 @@
 source: app/tui/src/widgets/mod.test.rs
 expression: output
 ---
- ╭─╮ ╭─╮  COCODE v0.1.0                                                         
+ ╭─╮ ╭─╮  COCODE v0.1.1                                                         
  │●│ │●│  sonnet-4-6  *  auto                                                   
  ╰─╯ ╰─╯                                                                        
                                                                                 
