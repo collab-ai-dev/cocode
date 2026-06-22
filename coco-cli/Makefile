@@ -1,4 +1,4 @@
-# Quick-release helpers for @coco-rs/coco-cli.
+# Quick-release helpers for @coco-cli/coco-cli.
 # Run from the coco-cli/ directory.
 #
 # Usage:
@@ -103,7 +103,7 @@ publish:
 	          $(DIST_DIR)/coco-cli-npm-darwin-arm64-$(VERSION).tgz; do \
 	  if [ -f "$$f" ]; then \
 	    echo "+ npm publish $$f"; \
-	    npm publish "$$f" --access public; \
+	    npm publish "$$f" --access public --tag platform; \
 	  fi; \
 	done
 	@meta=$(DIST_DIR)/coco-cli-npm-$(VERSION).tgz; \

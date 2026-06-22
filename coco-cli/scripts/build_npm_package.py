@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and optionally package the @coco-rs/coco-cli npm module."""
+"""Stage and optionally package the @coco-cli/coco-cli npm module."""
 
 import argparse
 import json
@@ -11,27 +11,27 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 COCO_CLI_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = COCO_CLI_ROOT.parent
-COCO_NPM_NAME = "@coco-rs/coco-cli"
+COCO_NPM_NAME = "@coco-cli/coco-cli"
 
 # `npm_name` is the local optional-dependency alias consumed by `bin/coco-cli.js`.
-# The underlying package published to npm is always `@coco-rs/coco-cli`.
+# The underlying package published to npm is always `@coco-cli/coco-cli`.
 COCO_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
     "coco-cli-linux-x64": {
-        "npm_name": "@coco-rs/coco-cli-linux-x64",
+        "npm_name": "@coco-cli/coco-cli-linux-x64",
         "npm_tag": "linux-x64",
         "target_triple": "x86_64-unknown-linux-musl",
         "os": "linux",
         "cpu": "x64",
     },
     "coco-cli-linux-arm64": {
-        "npm_name": "@coco-rs/coco-cli-linux-arm64",
+        "npm_name": "@coco-cli/coco-cli-linux-arm64",
         "npm_tag": "linux-arm64",
         "target_triple": "aarch64-unknown-linux-musl",
         "os": "linux",
         "cpu": "arm64",
     },
     "coco-cli-darwin-arm64": {
-        "npm_name": "@coco-rs/coco-cli-darwin-arm64",
+        "npm_name": "@coco-cli/coco-cli-darwin-arm64",
         "npm_tag": "darwin-arm64",
         "target_triple": "aarch64-apple-darwin",
         "os": "darwin",
