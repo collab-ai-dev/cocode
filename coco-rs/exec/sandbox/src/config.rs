@@ -69,7 +69,7 @@ impl From<SandboxMode> for EnforcementLevel {
 
 /// A writable root directory with read-only subpath protections.
 ///
-/// Certain subpaths (e.g., `.git`, `.coco`) remain read-only even when
+/// Certain subpaths (e.g., `.git`, the project config dir) remain read-only even when
 /// the parent directory is writable. This prevents the agent from modifying
 /// version control or configuration state within otherwise writable projects.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -193,7 +193,7 @@ fn resolve_git_pointer(git_file: &Path) -> Option<PathBuf> {
 fn default_readonly_subpaths() -> Vec<String> {
     vec![
         ".git".to_string(),
-        ".coco".to_string(),
+        coco_utils_common::COCO_CONFIG_DIR_NAME.to_string(),
         ".agents".to_string(),
     ]
 }

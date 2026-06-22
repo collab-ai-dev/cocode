@@ -159,7 +159,9 @@ async fn serve(args: Args) -> Result<()> {
     let command_registry = Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry)));
 
     let skill_manager = coco_skills::SkillManager::new();
-    skill_manager.load_from_dirs(&[cwd.join(".coco").join("skills")]);
+    skill_manager.load_from_dirs(&[cwd
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("skills")]);
     let skill_manager = Arc::new(skill_manager);
 
     let session_runtime = SessionRuntime::build(SessionRuntimeBuildOpts {

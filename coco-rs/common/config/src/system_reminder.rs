@@ -185,7 +185,7 @@ pub struct AttachmentSettings {
     // ── Reminder-native silent attachments (Part 1) ──
     /// Already-read-file dedup marker (TS `already_read_file`, `normalizeAttachmentForAPI` → `[]`).
     /// Zero API tokens; metadata (file paths) retained for UI / transcript.
-    /// Mirrors cocode-rs `AlreadyReadFile`. On by default.
+    /// Mirrors the reference `AlreadyReadFile` shape. On by default.
     pub already_read_file: bool,
     /// Edited-image-file marker (TS `edited_image_file`, `normalizeAttachmentForAPI` → `[]`).
     /// Silent — image diffs aren't text; UI surfaces the path. On by default.

@@ -16,7 +16,7 @@ use coco_types::ServerNotification;
 use tokio::sync::mpsc;
 
 /// Default plugin scopes watched in every session:
-/// - `<cwd>/.coco/plugins` — project scope
+/// - `project config dir/plugins` — project scope
 /// - `<config_home>/plugins` — user scope (recursive)
 /// - `<config_home>/plugins/installed_plugins.json` — ledger file
 ///   (already covered by the recursive watch above but listed for
@@ -24,7 +24,8 @@ use tokio::sync::mpsc;
 ///   [`coco_file_watch::FileWatcher::try_watch`]).
 pub fn default_watch_paths(cwd: &Path, config_home: &Path) -> Vec<PathBuf> {
     vec![
-        cwd.join(".coco").join("plugins"),
+        cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("plugins"),
         config_home.join("plugins"),
     ]
 }

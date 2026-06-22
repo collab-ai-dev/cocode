@@ -355,7 +355,7 @@ impl InstallCountsCache {
 ///   install-counts-cache.json
 /// ```
 pub struct MarketplaceManager {
-    /// Root plugins directory (e.g. `~/.coco/plugins/`).
+    /// Root plugins directory (e.g. `config home/plugins/`).
     plugins_dir: PathBuf,
     /// In-memory cache of loaded marketplace manifests.
     marketplace_cache: HashMap<String, PluginMarketplace>,

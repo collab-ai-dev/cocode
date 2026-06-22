@@ -151,7 +151,7 @@ pub struct UiState {
     /// Keybinding resolver + warnings + display platform. Cheap to clone
     /// (`Arc` internally). Defaults to a from-defaults handle; the
     /// CLI bootstrap (`tui_runner`) replaces it with a watcher-backed
-    /// handle so `~/.coco/keybindings.json` customizations + hot reload
+    /// handle so `config home/keybindings.json` customizations + hot reload
     /// take effect.
     ///
     /// Lives in state (not a process-wide global) so each test gets

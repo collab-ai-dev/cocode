@@ -50,8 +50,8 @@ impl Aggregated {
 /// Aggregate every source into a single catalog, applying priority.
 ///
 /// `dir_groups` is a slice of pre-loaded directory groups, each tagged
-/// with its `OutputStyleSource`. The CLI walks `~/.coco/output-styles`
-/// (user), the project tree (`<cwd>/.coco/output-styles` plus any
+/// with its `OutputStyleSource`. The CLI walks `config home/output-styles`
+/// (user), the project tree (`project config dir/output-styles` plus any
 /// ancestors up to the git root), and the managed/policy directory,
 /// passing each as a separate group.
 ///

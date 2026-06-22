@@ -4,7 +4,20 @@
 use coco_types::ToolName;
 
 pub fn prompt() -> String {
-    TEMPLATE.replace("__ASK_USER_QUESTION__", ToolName::AskUserQuestion.as_str())
+    let session_memory_path = format!("~/{}/", coco_utils_common::COCO_CONFIG_DIR_NAME);
+    let project_skill_path = format!(
+        "{}/skills/<name>/SKILL.md",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    );
+    let user_skill_path = format!(
+        "~/{}/skills/<name>/SKILL.md",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    );
+    TEMPLATE
+        .replace("__ASK_USER_QUESTION__", ToolName::AskUserQuestion.as_str())
+        .replace("__SESSION_MEMORY_PATH__", &session_memory_path)
+        .replace("__PROJECT_SKILL_PATH__", &project_skill_path)
+        .replace("__USER_SKILL_PATH__", &user_skill_path)
 }
 
 const TEMPLATE: &str = r#"# Skillify
@@ -13,7 +26,7 @@ You are capturing this session's repeatable process as a reusable skill.
 
 ## Your Session Context
 
-Review your session memory summary if available — read it from your session memory under `~/.coco/`. Keep this brief.
+Review your session memory summary if available — read it from your session memory under `__SESSION_MEMORY_PATH__`. Keep this brief.
 
 Review the user's messages in THIS conversation. You already have them in context. Pay attention to how they steered the process, to help capture their detailed preferences in the skill.
 
@@ -47,8 +60,8 @@ You will use the __ASK_USER_QUESTION__ to understand what the user wants to auto
 - If you think the skill will require arguments, suggest arguments based on what you observed. Make sure you understand what someone would need to provide.
 - If it's not clear, ask if this skill should run inline (in the current conversation) or forked (as a sub-agent with its own context). Forked is better for self-contained tasks that don't need mid-process user input; inline is better when the user wants to steer mid-process.
 - Ask where the skill should be saved. Suggest a default based on context (repo-specific workflows → repo, cross-repo personal workflows → user). Options:
-  - **This repo** (`.coco/skills/<name>/SKILL.md`) — for workflows specific to this project
-  - **Personal** (`~/.coco/skills/<name>/SKILL.md`) — follows you across all repos
+  - **This repo** (`__PROJECT_SKILL_PATH__`) — for workflows specific to this project
+  - **Personal** (`__USER_SKILL_PATH__`) — follows you across all repos
 
 **Round 3: Breaking down each step**
 For each major step, if it's not glaringly obvious, ask:

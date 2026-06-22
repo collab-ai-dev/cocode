@@ -17,7 +17,7 @@
 //! 5. `SandboxSettings.filesystem.{allow_write, deny_write, deny_read}` paths
 //!    are resolved (`~/x` → home, relative → settings_root) and folded in
 //! 6. CWD + Claude temp dir always writable (mirrors TS line 225)
-//! 7. Settings.json + `.coco/skills` always denied write
+//! 7. Settings.json + `project config dir/skills` always denied write
 //! 8. Worktree main-repo path added as writable when in a worktree (TS line 286)
 
 use std::collections::HashSet;
@@ -65,7 +65,7 @@ pub struct AdapterInputs<'a> {
     pub additional_directories: &'a [PathBuf],
     /// Claude's per-session temp dir (used by Shell.ts CWD tracking).
     pub coco_temp_dir: &'a Path,
-    /// Path to the project's `~/.coco/settings.json` analogue (used to deny
+    /// Path to the project's `config home/settings.json` analogue (used to deny
     /// writes that would let the agent edit its own permissions).
     pub settings_files: &'a [PathBuf],
     /// Worktree main-repo `.git` path when `current_cwd` is a git worktree.
@@ -255,7 +255,7 @@ fn collect_writable_roots(
     paths.into_iter().map(WritableRoot::new).collect()
 }
 
-/// Collect deny-write paths from settings.json files, `.coco/skills`,
+/// Collect deny-write paths from settings.json files, `project config dir/skills`,
 /// permission rule denies, and settings filesystem section.
 fn collect_deny_write_paths(
     inputs: &AdapterInputs<'_>,
@@ -268,14 +268,34 @@ fn collect_deny_write_paths(
 
     // Settings file in current cwd if different from original.
     if inputs.current_cwd != inputs.original_cwd {
-        paths.push(inputs.current_cwd.join(".coco").join("settings.json"));
-        paths.push(inputs.current_cwd.join(".coco").join("settings.local.json"));
+        paths.push(
+            inputs
+                .current_cwd
+                .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("settings.json"),
+        );
+        paths.push(
+            inputs
+                .current_cwd
+                .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("settings.local.json"),
+        );
     }
 
     // Project skills in original + current cwd.
-    paths.push(inputs.original_cwd.join(".coco").join("skills"));
+    paths.push(
+        inputs
+            .original_cwd
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+    );
     if inputs.current_cwd != inputs.original_cwd {
-        paths.push(inputs.current_cwd.join(".coco").join("skills"));
+        paths.push(
+            inputs
+                .current_cwd
+                .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("skills"),
+        );
     }
 
     // Permission rule deny paths: Edit(/foo) → deny.

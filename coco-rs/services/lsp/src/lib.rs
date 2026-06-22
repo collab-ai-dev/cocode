@@ -88,11 +88,11 @@ pub use coco_utils_common::find_coco_home;
 /// Create an `LspServerManager` with standard configuration.
 ///
 /// This is a convenience function that loads config from the standard locations
-/// (`~/.coco/lsp_servers.json` and `.coco/lsp_servers.json`) and creates
+/// (`config home/lsp_servers.json` and `project config dir/lsp_servers.json`) and creates
 /// the manager with a fresh diagnostics store.
 ///
 /// # Arguments
-/// * `coco_home` - Cocode home directory for user-level config lookup.
+/// * `coco_home` - Config home directory for user-level config lookup.
 /// * `cwd` - Working directory for the LSP servers. Used for project-local config
 ///   and as the workspace root.
 ///

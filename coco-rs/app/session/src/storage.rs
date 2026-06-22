@@ -1,7 +1,7 @@
 //! Session transcript persistence via JSONL rollout format.
 //!
 //! JSONL append-only transcript at
-//! `~/.coco/projects/{sanitized_cwd}/{session_id}.jsonl`.
+//! `config home/projects/{sanitized_cwd}/{session_id}.jsonl`.
 //!
 //! Each line is a self-contained JSON entry: transcript messages
 //! (user/assistant/system), metadata entries (custom-title, tag,
@@ -73,7 +73,7 @@ pub struct TranscriptUsage {
 
 /// A transcript message entry (user, assistant, system, attachment).
 ///
-/// **Wire format is Rust-native snake_case JSON.** Coco-rs deliberately
+/// **Wire format is Rust-native snake_case JSON.** This storage deliberately
 /// does NOT match the original claude-code byte layout — the file content
 /// is semantically equivalent (same UUIDs, same timestamps, same
 /// `tool_use_id`-keyed records, same chain semantics, same metadata

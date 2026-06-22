@@ -5,7 +5,10 @@ use std::path::PathBuf;
 
 fn paths() -> ProjectPaths {
     ProjectPaths::new(
-        PathBuf::from("/home/u/.coco"),
+        PathBuf::from(format!(
+            "/home/u/{}",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
+        )),
         std::path::Path::new("/Users/foo/proj"),
     )
 }
@@ -14,7 +17,10 @@ fn paths() -> ProjectPaths {
 fn daily_log_path_matches_ts_layout() {
     assert_eq!(
         daily_log_path(&paths(), 2026, 5, 16),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/memory/logs/2026/05/2026-05-16.md"),
+        PathBuf::from(format!(
+            "/home/u/{}/projects/-Users-foo-proj/memory/logs/2026/05/2026-05-16.md",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
+        )),
     );
 }
 

@@ -58,7 +58,7 @@ struct ServerInfo {
 pub struct LspServerManager {
     /// Configuration (RwLock for runtime reload support)
     config: tokio::sync::RwLock<LspServersConfig>,
-    /// Cocode home directory for config reload
+    /// Config home directory for config reload
     coco_home: Option<PathBuf>,
     /// Project root for config reload
     project_root: Option<PathBuf>,

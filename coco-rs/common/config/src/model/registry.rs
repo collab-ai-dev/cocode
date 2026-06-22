@@ -3,7 +3,7 @@
 //! Built once per `RuntimeConfig` snapshot. Three-layer merge:
 //!
 //!   L0  builtin_models_partial()                     (compile-time, see `crate::builtin`)
-//!   L1  ~/.coco/models.json                           (per-machine catalog)
+//!   L1  config home/models.json                           (per-machine catalog)
 //!   L2  providers.<name>.models.<id>                  (per-(provider, model) entry)
 //!
 //! The result is `Arc<ResolvedModel>` so that downstream consumers
@@ -42,7 +42,7 @@ pub struct ResolvedModel {
 /// 2. **Lazy synth** — `models.json` (`user_catalog`) ⊕ `builtin`,
 ///    merged into a fresh `ResolvedModel` with empty
 ///    `provider_model: ProviderModelOverride::default()`. This is the
-///    path that lets users put model metadata in `~/.coco/models.json`
+///    path that lets users put model metadata in `config home/models.json`
 ///    without mirroring the entry into every provider's `models` map.
 ///
 /// Returns `None` only when `model_id` appears in NEITHER catalog.
@@ -120,7 +120,7 @@ impl ModelRegistry {
 /// `models.json` overlay. The compiled-in builtin catalog is merged
 /// underneath both.
 ///
-/// `coco_home` is the `~/.coco/` directory; `base_instructions_file`
+/// `coco_home` is the `config home/` directory; `base_instructions_file`
 /// values resolve relative to it. Reading the file is propagated as
 /// `ConfigError::BaseInstructionsRead` rather than swallowed.
 pub fn build_model_registry(
@@ -136,7 +136,7 @@ pub fn build_model_registry(
             // L0: builtin partial (cached `&'static`; clone is per-pair).
             let mut acc = builtin.get(model_id).cloned().unwrap_or_default();
 
-            // L1: user catalog ~/.coco/models.json.
+            // L1: user catalog config home/models.json.
             if let Some(user_info) = user_catalog.get(model_id) {
                 acc.merge_from(user_info);
             }

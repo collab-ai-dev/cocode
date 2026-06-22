@@ -1,6 +1,6 @@
 //! `/stats` — show session statistics: count, duration, git changes, cwd.
 //!
-//! Reads session files from `~/.coco/sessions/`, inspects the most recent
+//! Reads session files from `config home/sessions/`, inspects the most recent
 //! file's creation time, counts all sessions, runs `git status --porcelain`
 //! to count file changes, and reports the current working directory.
 

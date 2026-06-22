@@ -71,7 +71,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
             "gpt-5-4",
             PartialModelInfo {
                 display_name: Some("GPT-5.4".into()),
-                base_instructions: Some(GPT_5_4.into()),
+                base_instructions: Some(super::render_instruction_template(GPT_5_4)),
                 context_window: Some(PositiveTokens::new(272_000)),
                 max_output_tokens: Some(PositiveTokens::new(12_288)),
                 capabilities: Some(vec![
@@ -96,7 +96,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
             "gpt-5-5",
             PartialModelInfo {
                 display_name: Some("GPT-5.5".into()),
-                base_instructions: Some(GPT_5_5.into()),
+                base_instructions: Some(super::render_instruction_template(GPT_5_5)),
                 context_window: Some(PositiveTokens::new(272_000)),
                 max_output_tokens: Some(PositiveTokens::new(12_288)),
                 capabilities: Some(vec![
@@ -121,7 +121,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
             "gpt-5-3-codex",
             PartialModelInfo {
                 display_name: Some("GPT-5.3 Codex".into()),
-                base_instructions: Some(GPT_5_3_CODEX.into()),
+                base_instructions: Some(super::render_instruction_template(GPT_5_3_CODEX)),
                 context_window: Some(PositiveTokens::new(272_000)),
                 max_output_tokens: Some(PositiveTokens::new(12_288)),
                 capabilities: Some(vec![

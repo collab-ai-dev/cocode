@@ -7,8 +7,8 @@ use super::*;
 /// Create a temp dir with a settings file containing permission rules.
 fn setup_temp_settings(rules_json: &str) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("create temp dir");
-    let coco_dir = dir.path().join(".coco");
-    std::fs::create_dir_all(&coco_dir).expect("create .coco dir");
+    let coco_dir = dir.path().join(coco_utils_common::COCO_CONFIG_DIR_NAME);
+    std::fs::create_dir_all(&coco_dir).expect("create config dir");
     let settings_path = coco_dir.join("settings.json");
     let mut f = std::fs::File::create(&settings_path).expect("create settings file");
     f.write_all(rules_json.as_bytes()).expect("write settings");

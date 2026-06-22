@@ -194,7 +194,7 @@ pub struct TeamAllowedPath {
     pub added_at: i64,
 }
 
-/// On-disk team file (persisted as JSON at ~/.coco/teams/{name}/config.json).
+/// On-disk team file (persisted as JSON at config home/teams/{name}/config.json).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamFile {

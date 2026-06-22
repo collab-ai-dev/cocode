@@ -1,6 +1,13 @@
 use super::*;
 use serde_json::json;
 
+fn config_home() -> std::path::PathBuf {
+    std::path::PathBuf::from(format!(
+        "/home/user/{}",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    ))
+}
+
 #[test]
 fn test_generate_word_slug_format() {
     let slug = generate_word_slug();
@@ -50,9 +57,9 @@ fn test_set_plan_slug() {
 
 #[test]
 fn test_resolve_plans_directory_default() {
-    let config = PathBuf::from("/home/user/.coco");
+    let config = config_home();
     let result = resolve_plans_directory(&config, None, None);
-    assert_eq!(result, PathBuf::from("/home/user/.coco/plans"));
+    assert_eq!(result, config_home().join("plans"));
 }
 
 #[test]
@@ -62,7 +69,7 @@ fn test_resolve_plans_directory_with_setting() {
     let plans_sub = project.join("my-plans");
     std::fs::create_dir_all(&plans_sub).unwrap();
 
-    let config = PathBuf::from("/home/user/.coco");
+    let config = config_home();
     let result = resolve_plans_directory(&config, Some(project), Some("my-plans"));
     assert!(result.ends_with("my-plans"));
 }
@@ -73,10 +80,10 @@ fn resolve_plans_directory_rejects_parent_escape() {
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let config = PathBuf::from("/home/user/.coco");
+    let config = config_home();
     let result = resolve_plans_directory(&config, Some(&project), Some("../outside"));
 
-    assert_eq!(result, PathBuf::from("/home/user/.coco/plans"));
+    assert_eq!(result, config_home().join("plans"));
 }
 
 #[test]
@@ -86,14 +93,14 @@ fn resolve_plans_directory_rejects_absolute_outside_project() {
     let outside = dir.path().join("outside-plans");
     std::fs::create_dir_all(&project).unwrap();
 
-    let config = PathBuf::from("/home/user/.coco");
+    let config = config_home();
     let result = resolve_plans_directory(
         &config,
         Some(&project),
         Some(outside.to_str().expect("utf-8 temp path")),
     );
 
-    assert_eq!(result, PathBuf::from("/home/user/.coco/plans"));
+    assert_eq!(result, config_home().join("plans"));
 }
 
 #[test]
@@ -102,7 +109,7 @@ fn resolve_plans_directory_allows_nonexistent_normalized_inside_project() {
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let config = PathBuf::from("/home/user/.coco");
+    let config = config_home();
     let result = resolve_plans_directory(&config, Some(&project), Some("nested/../plans"));
 
     assert_eq!(result, project.canonicalize().unwrap().join("plans"));

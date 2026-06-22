@@ -56,13 +56,13 @@ pub struct SkillOverrideTiers {
     pub policy: BTreeMap<String, SkillOverrideState>,
     /// CLI-flag override lock layer. TS `flagSettings`.
     pub flag: BTreeMap<String, SkillOverrideState>,
-    /// Project shared `.coco/settings.json`. Editable baseline
+    /// Project shared `project config dir/settings.json`. Editable baseline
     /// (used by the dialog's diff-against-baseline save).
     pub project: BTreeMap<String, SkillOverrideState>,
-    /// User-global `~/.coco/settings.json` or `~/.claude/settings.json`.
+    /// User-global `config home/settings.json` or `~/.claude/settings.json`.
     /// Editable baseline fallback.
     pub user: BTreeMap<String, SkillOverrideState>,
-    /// Project-local `.coco/settings.local.json` — the dialog's
+    /// Project-local `project config dir/settings.local.json` — the dialog's
     /// write destination. Highest-precedence among editable layers.
     pub local: BTreeMap<String, SkillOverrideState>,
 }

@@ -15,7 +15,7 @@
 //!    leaves the seam (`Vec::new()` placeholder).
 //! 2. **Phase 2** — split dirs via [`directories_to_process`].
 //! 3. **Phase 3** — for each `nested_dir`, load
-//!    `{CLAUDE,AGENTS}.md`, `.coco/CLAUDE.md`, `{CLAUDE,AGENTS}.local.md`,
+//!    `{CLAUDE,AGENTS}.md`, `project config dir/CLAUDE.md`, `{CLAUDE,AGENTS}.local.md`,
 //!    and (Phase 4) all matching rules.
 //! 4. **Phase 4** — for each `cwd_level_dir`, load only matching
 //!    conditional rules.
@@ -60,7 +60,7 @@ pub struct LoadedMemoryEntry {
 /// - `nested_dirs`: directories strictly between `cwd` (exclusive) and
 ///   the file's parent (inclusive), filtered to `startsWith(cwd)`.
 ///   Order: `cwd`-side → file-side. Each dir gets a full memory load
-///   (CLAUDE.md, .coco/CLAUDE.md, local, rules — both unconditional
+///   (CLAUDE.md, project config dir/CLAUDE.md, local, rules — both unconditional
 ///   and matching conditional).
 /// - `cwd_level_dirs`: filesystem root → `cwd` inclusive. Order:
 ///   root → `cwd`. Each dir contributes only conditional rules
@@ -140,14 +140,14 @@ pub fn traverse_for_file(
 
     let (nested_dirs, cwd_level_dirs) = directories_to_process(file, cwd);
 
-    // Phase 3: per-nested-dir CLAUDE.md / AGENTS.md / .coco/CLAUDE.md /
-    // local + .coco/rules/**/*.md (unconditional + matching conditional).
+    // Phase 3: per-nested-dir CLAUDE.md / AGENTS.md / project config dir/CLAUDE.md /
+    // local + project config dir/rules/**/*.md (unconditional + matching conditional).
     for dir in &nested_dirs {
         load_nested_dir(dir, file, cwd, &mut out, loaded);
     }
 
     // Phase 4: cwd-level conditional rules. For dirs from filesystem
-    // root → CWD inclusive, only conditional `.coco/rules/**/*.md`
+    // root → CWD inclusive, only conditional `project config dir/rules/**/*.md`
     // matching the trigger file are loaded — unconditional rules in
     // those dirs were already loaded eagerly at session start.
     //
@@ -183,8 +183,10 @@ fn load_nested_dir(
         push_loaded(path, MemoryFileSource::Project, cwd, out, loaded);
     }
 
-    // <dir>/.coco/CLAUDE.md (config-dir path).
-    let dot_coco = dir.join(".coco").join("CLAUDE.md");
+    // <dir>/project config dir/CLAUDE.md (config-dir path).
+    let dot_coco = dir
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("CLAUDE.md");
     if dot_coco.exists() {
         push_loaded(dot_coco, MemoryFileSource::ProjectConfig, cwd, out, loaded);
     }
@@ -194,10 +196,12 @@ fn load_nested_dir(
         push_loaded(path, MemoryFileSource::Local, cwd, out, loaded);
     }
 
-    // <dir>/.coco/rules/**/*.md — both unconditional (descendants of CWD
+    // <dir>/project config dir/rules/**/*.md — both unconditional (descendants of CWD
     // weren't covered by the eager phase) and conditional matching the
     // trigger file.
-    let rules_dir = dir.join(".coco").join("rules");
+    let rules_dir = dir
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("rules");
     if !rules_dir.exists() {
         return;
     }
@@ -286,7 +290,7 @@ fn loaded_entry(path: PathBuf, content: String, source: MemoryFileSource) -> Loa
 }
 
 /// Phase 1: load managed (`/etc/coco/rules/**/*.md`) and user
-/// (`~/.coco/rules/**/*.md`) conditional rules whose `paths:` glob
+/// (`config home/rules/**/*.md`) conditional rules whose `paths:` glob
 /// matches `file`.
 ///
 /// Glob base for managed/user rules is the original CWD.
@@ -301,9 +305,11 @@ fn phase1_managed_user_conditional_rules(file: &Path) -> Vec<LoadedMemoryEntry> 
         out.push(rule_to_entry(rule, MemoryFileSource::Project));
     }
 
-    // User: ~/.coco/rules.
+    // User: config home/rules.
     if let Some(home) = std::env::var("HOME").ok().map(std::path::PathBuf::from) {
-        let user_dir = home.join(".coco").join("rules");
+        let user_dir = home
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("rules");
         let user_conditional = collect_rule_files(&user_dir, true);
         for rule in filter_rules_matching(user_conditional, file, &cwd) {
             out.push(rule_to_entry(rule, MemoryFileSource::UserGlobal));
@@ -320,7 +326,9 @@ fn load_cwd_level_conditional_rules(
     out: &mut Vec<LoadedMemoryEntry>,
     loaded: &mut HashSet<PathBuf>,
 ) {
-    let rules_dir = dir.join(".coco").join("rules");
+    let rules_dir = dir
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("rules");
     if !rules_dir.exists() {
         return;
     }

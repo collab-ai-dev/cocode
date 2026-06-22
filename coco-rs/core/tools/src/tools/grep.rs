@@ -94,7 +94,7 @@ A powerful search tool built on ripgrep
 ";
 
 // ---------------------------------------------------------------------------
-// Structured match data (from cocode-rs ContextAwareSink pattern)
+// Structured match data (from the context-aware sink pattern)
 // ---------------------------------------------------------------------------
 
 /// A single entry from grep search: a match line, context line, or group break.

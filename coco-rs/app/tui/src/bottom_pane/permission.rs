@@ -256,7 +256,7 @@ pub(crate) async fn deny_permission(
 /// both applies the update to the live `engine_config` via
 /// `coco_permissions::apply_permission_updates` (so subsequent same-tool
 /// calls in the session don't re-prompt) and persists it to
-/// `.coco/settings.local.json` via `SettingsPermissionStore::persist_update`
+/// `project config dir/settings.local.json` via `SettingsPermissionStore::persist_update`
 /// (so the grant survives restart). `LocalSettings` is the gitignored,
 /// per-developer file — a reflexive "don't ask again" must never silently
 /// edit team-shared (`ProjectSettings`) or global (`UserSettings`) config.

@@ -1,13 +1,21 @@
 //! `/keybindings-help` — customize keyboard shortcuts. Mirrors claude-code's keybindings.ts.
-//! Reference tables are static snapshots of coco's keybindings crate; a live generator is deferred.
+//! Reference tables are static snapshots of the keybindings crate; a live generator is deferred.
 
-pub const PROMPT: &str = r#"# Keybindings Skill
+pub fn prompt() -> String {
+    let keybindings_path = format!(
+        "~/{}/keybindings.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    );
+    TEMPLATE.replace("__KEYBINDINGS_PATH__", &keybindings_path)
+}
 
-Create or modify `~/.coco/keybindings.json` to customize keyboard shortcuts.
+const TEMPLATE: &str = r#"# Keybindings Skill
+
+Create or modify `__KEYBINDINGS_PATH__` to customize keyboard shortcuts.
 
 ## CRITICAL: Read Before Write
 
-**Always read `~/.coco/keybindings.json` first** (it may not exist yet). Merge changes with existing bindings — never replace the entire file.
+**Always read `__KEYBINDINGS_PATH__` first** (it may not exist yet). Merge changes with existing bindings — never replace the entire file.
 
 - Use **Edit** tool for modifications to existing files
 - Use **Write** tool only if the file does not exist yet
@@ -98,7 +106,7 @@ To change the external editor shortcut from `ctrl+g` to `ctrl+e`:
 
 ## Validation
 
-After editing `~/.coco/keybindings.json`, re-read the file and confirm:
+After editing `__KEYBINDINGS_PATH__`, re-read the file and confirm:
 
 - It is valid JSON (a top-level object with a `bindings` array).
 - Each block's `context` is one of the recognized contexts (see the Available Contexts table below).

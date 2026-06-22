@@ -19,7 +19,7 @@
 //!
 //! ## Logging
 //!
-//! Logs are written to `~/.coco/log/retrieval.log` by default.
+//! Logs are written to `config home/log/retrieval.log` by default.
 //! Use `-v` flags to control verbosity in CLI mode.
 
 use std::fs::OpenOptions;
@@ -77,7 +77,7 @@ struct Cli {
     #[arg(default_value = ".")]
     workdir: PathBuf,
 
-    /// Path to config file (default: {workdir}/.coco/retrieval.toml or ~/.coco/retrieval.toml)
+    /// Path to config file (default: {workdir}/project config dir/retrieval.toml or config home/retrieval.toml)
     #[arg(short, long)]
     config: Option<PathBuf>,
 
@@ -289,9 +289,17 @@ fn get_not_enabled_message(workdir: &Path, config_path: Option<&PathBuf>) -> Str
     if config_path.is_some() {
         "Retrieval not enabled. Set 'enabled = true' in your config file.".to_string()
     } else {
+        let project_path = workdir
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("retrieval.toml");
+        let user_path = format!(
+            "~/{}/retrieval.toml",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
+        );
         format!(
-            "Retrieval not enabled. Create config at {}/.coco/retrieval.toml or ~/.coco/retrieval.toml",
-            workdir.display()
+            "Retrieval not enabled. Create config at {} or {}",
+            project_path.display(),
+            user_path
         )
     }
 }
@@ -436,10 +444,10 @@ fn print_not_enabled(workdir: &Path, config_path: Option<&PathBuf>) {
     if config_path.is_some() {
         println!("Set 'enabled = true' in your config file.");
     } else {
-        println!(
-            "Create a config file at: {}/.coco/retrieval.toml",
-            workdir.display()
-        );
+        let project_path = workdir
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("retrieval.toml");
+        println!("Create a config file at: {}", project_path.display());
         println!("\nExample config:");
         println!("[retrieval]");
         println!("enabled = true");
@@ -491,10 +499,14 @@ async fn run_repl(
     if let Some(path) = config_path {
         println!("Config: {}", path.display());
     } else {
-        println!(
-            "Config: {}/.coco/retrieval.toml (or ~/.coco/retrieval.toml)",
-            workdir.display()
+        let project_path = workdir
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("retrieval.toml");
+        let user_path = format!(
+            "~/{}/retrieval.toml",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
         );
+        println!("Config: {} (or {})", project_path.display(), user_path);
     }
     println!("Data: {}", config.data_dir.display());
     println!(

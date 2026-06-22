@@ -97,7 +97,7 @@ pub enum InferenceError {
     /// Model spec references a provider not registered in `RuntimeConfig`.
     #[snafu(display(
         "model spec references unknown provider `{provider}`; \
-         add it to ~/.coco/providers.json or settings.providers"
+         add it to the provider catalog or settings.providers"
     ))]
     UnknownProvider {
         provider: String,

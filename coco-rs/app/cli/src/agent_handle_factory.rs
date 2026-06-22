@@ -145,7 +145,7 @@ pub async fn build_agent_team_wiring(
 
     // Install the agent worktree manager so `AgentTool` spawns with
     // `isolation: "worktree"` get a real git worktree under the main repo's
-    // `.coco/worktrees/agent-<slug>` (cwd_override + cleanup-on-success).
+    // `project config dir/worktrees/agent-<slug>` (cwd_override + cleanup-on-success).
     // Without this install, `worktree_manager()` stays `None` and every such
     // spawn fails fast with "no AgentWorktreeManager is configured".
     //
@@ -216,7 +216,7 @@ pub async fn build_agent_team_wiring(
                 // read its own `self.config.*` for those settings — so
                 // subagent compact / sandbox / web / shell / memory /
                 // plan-mode / system-reminder / tool config silently
-                // ignored the user's `~/.coco/settings.json`.
+                // ignored the user's `config home/settings.json`.
                 //
                 // Subagents inherit the parent's config tree.
                 // Overwrite those fields here from the live RuntimeConfig
@@ -432,7 +432,7 @@ async fn install_coco_guide_context_builder(
 }
 
 /// Walk every known agent type's snapshot dir under
-/// `<cwd>/.coco/agent-memory-snapshots/` and apply the appropriate
+/// `project config dir/agent-memory-snapshots/` and apply the appropriate
 /// `SnapshotAction` for each (User / Project / Local) scope. Errors
 /// are logged + swallowed — a snapshot sync failure must not gate
 /// session startup.
@@ -440,7 +440,7 @@ async fn sync_agent_memory_snapshots(_runtime: &Arc<SessionRuntime>, cwd: &str) 
     let cwd_path = std::path::PathBuf::from(cwd);
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
     let snapshots_root = cwd_path
-        .join(".coco")
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
         .join(coco_memory::agent_memory_snapshot::SNAPSHOT_BASE);
 
     let entries = match std::fs::read_dir(&snapshots_root) {

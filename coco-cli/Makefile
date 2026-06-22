@@ -1,4 +1,4 @@
-# Quick-release helpers for @coco-cli/coco-cli.
+# Quick-release helpers for @cocode/cocode-cli.
 # Run from the coco-cli/ directory.
 #
 # Usage:

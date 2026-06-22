@@ -1,9 +1,24 @@
 //! `/update-config` — configure settings via settings.json. Mirrors claude-code's updateConfig.ts.
 //! Deferred: the live `## Full Settings JSON Schema` dump (needs schemars on Settings) is omitted.
 
-pub const PROMPT: &str = r#"# Update Config Skill
+pub fn prompt() -> String {
+    let config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;
+    let user_settings = format!("~/{config_dir}/settings.json");
+    let project_settings = format!("{config_dir}/settings.json");
+    let local_settings = format!("{config_dir}/settings.local.json");
+    let bash_log = format!("~/{config_dir}/bash-log.txt");
+    TEMPLATE
+        .replace("__PRODUCT__", coco_config::constants::PRODUCT_NAME)
+        .replace("__CONFIG_DIR__", config_dir)
+        .replace("__USER_SETTINGS__", &user_settings)
+        .replace("__PROJECT_SETTINGS__", &project_settings)
+        .replace("__LOCAL_SETTINGS__", &local_settings)
+        .replace("__BASH_LOG__", &bash_log)
+}
 
-Modify CoCo configuration by updating settings.json files.
+const TEMPLATE: &str = r#"# Update Config Skill
+
+Modify __PRODUCT__ configuration by updating settings.json files.
 
 ## When Hooks Are Required (Not Memory)
 
@@ -65,7 +80,7 @@ When adding to permission arrays or hook arrays, **merge with existing**, don't 
   "permissions": {
     "allow": [
       "Bash(git:*)",      // existing
-      "Edit(.coco)",      // existing
+      "Edit(__CONFIG_DIR__)",      // existing
       "Bash(npm:*)"       // new
     ]
   }
@@ -78,9 +93,9 @@ Choose the appropriate file based on scope:
 
 | File | Scope | Git | Use For |
 |------|-------|-----|---------|
-| `~/.coco/settings.json` | Global | N/A | Personal preferences for all projects |
-| `.coco/settings.json` | Project | Commit | Team-wide hooks, permissions, plugins |
-| `.coco/settings.local.json` | Project | Gitignore | Personal overrides for this project |
+| `__USER_SETTINGS__` | Global | N/A | Personal preferences for all projects |
+| `__PROJECT_SETTINGS__` | Project | Commit | Team-wide hooks, permissions, plugins |
+| `__LOCAL_SETTINGS__` | Project | Gitignore | Personal overrides for this project |
 
 Settings load in order: user → project → local (later overrides earlier).
 
@@ -90,7 +105,7 @@ Settings load in order: user → project → local (later overrides earlier).
 ```json
 {
   "permissions": {
-    "allow": ["Bash(npm:*)", "Edit(.coco)", "Read"],
+    "allow": ["Bash(npm:*)", "Edit(__CONFIG_DIR__)", "Read"],
     "deny": ["Bash(rm -rf:*)"],
     "ask": ["Write(/etc/*)"],
     "defaultMode": "default" | "plan" | "acceptEdits" | "dontAsk",
@@ -164,7 +179,7 @@ Plugin syntax: `plugin-name@source` where source is a configured marketplace nam
 
 ## Hooks Configuration
 
-Hooks run commands at specific points in CoCo's lifecycle.
+Hooks run commands at specific points in __PRODUCT__'s lifecycle.
 
 ### Hook Structure
 ```json
@@ -196,7 +211,7 @@ Hooks run commands at specific points in CoCo's lifecycle.
 | PostToolUse | Tool name | Run after successful tool |
 | PostToolUseFailure | Tool name | Run after tool fails |
 | Notification | Notification type | Run on notifications |
-| Stop | - | Run when CoCo stops (including clear, resume, compact) |
+| Stop | - | Run when __PRODUCT__ stops (including clear, resume, compact) |
 | PreCompact | "manual"/"auto" | Before compaction |
 | PostCompact | "manual"/"auto" | After compaction (receives summary) |
 | UserPromptSubmit | - | When user submits |
@@ -290,7 +305,7 @@ Hooks can return JSON to control behavior:
       "matcher": "Bash",
       "hooks": [{
         "type": "command",
-        "command": "jq -r '.tool_input.command' >> ~/.coco/bash-log.txt"
+        "command": "jq -r '.tool_input.command' >> __BASH_LOG__"
       }]
     }]
   }
@@ -339,7 +354,7 @@ Given an event, matcher, target file, and desired behavior, follow this flow. Ea
 
    Check exit code AND side effect (file actually formatted, test actually ran). If it fails you get a real error — fix (wrong package manager? tool not installed? jq path wrong?) and retest. Once it works, wrap with `2>/dev/null || true` (unless the user wants a blocking check).
 
-4. **Write the JSON.** Merge into the target file (schema shape in the "Hook Structure" section above). If this creates `.coco/settings.local.json` for the first time, add it to .gitignore — the Write tool doesn't auto-gitignore it.
+4. **Write the JSON.** Merge into the target file (schema shape in the "Hook Structure" section above). If this creates `__LOCAL_SETTINGS__` for the first time, add it to .gitignore — the Write tool doesn't auto-gitignore it.
 
 5. **Validate syntax + schema in one shot:**
 
@@ -349,11 +364,11 @@ Given an event, matcher, target file, and desired behavior, follow this flow. Ea
 
 6. **Prove the hook fires** — only for `Pre|PostToolUse` on a matcher you can trigger in-turn (`Write|Edit` via Edit, `Bash` via Bash). `Stop`/`UserPromptSubmit`/`SessionStart` fire outside this turn — skip to step 7.
 
-   For a **formatter** on `PostToolUse`/`Write|Edit`: introduce a detectable violation via Edit (two consecutive blank lines, bad indentation, missing semicolon — something this formatter corrects; NOT trailing whitespace, Edit strips that before writing), re-read, confirm the hook **fixed** it. For **anything else**: temporarily prefix the command in settings.json with `echo "$(date) hook fired" >> /tmp/coco-hook-check.txt; `, trigger the matching tool (Edit for `Write|Edit`, a harmless `true` for `Bash`), read the sentinel file.
+   For a **formatter** on `PostToolUse`/`Write|Edit`: introduce a detectable violation via Edit (two consecutive blank lines, bad indentation, missing semicolon — something this formatter corrects; NOT trailing whitespace, Edit strips that before writing), re-read, confirm the hook **fixed** it. For **anything else**: temporarily prefix the command in settings.json with `echo "$(date) hook fired" >> /tmp/hook-check.txt; `, trigger the matching tool (Edit for `Write|Edit`, a harmless `true` for `Bash`), read the sentinel file.
 
    **Always clean up** — revert the violation, strip the sentinel prefix — whether the proof passed or failed.
 
-   **If proof fails but pipe-test passed and `jq -e` passed**: the settings watcher isn't watching `.coco/` — it only watches directories that had a settings file when this session started. The hook is written correctly. Tell the user to open `/hooks` once (reloads config) or restart — you can't do this yourself; `/hooks` is a user UI menu and opening it ends this turn.
+   **If proof fails but pipe-test passed and `jq -e` passed**: the settings watcher isn't watching the project config directory — it only watches directories that had a settings file when this session started. The hook is written correctly. Tell the user to open `/hooks` once (reloads config) or restart — you can't do this yourself; `/hooks` is a user UI menu and opening it ends this turn.
 
 7. **Handoff.** Tell the user the hook is live (or needs `/hooks`/restart per the watcher caveat). Point them at `/hooks` to review, edit, or disable it later. The UI only shows "Ran N hooks" if a hook errors or is slow — silent success is invisible by design.
 
@@ -361,10 +376,10 @@ Given an event, matcher, target file, and desired behavior, follow this flow. Ea
 
 ### Adding a Hook
 
-User: "Format my code after CoCo writes it"
+User: "Format my code after __PRODUCT__ writes it"
 
 1. **Clarify**: Which formatter? (prettier, gofmt, etc.)
-2. **Read**: `.coco/settings.json` (or create if missing)
+2. **Read**: `__PROJECT_SETTINGS__` (or create if missing)
 3. **Merge**: Add to existing hooks, don't replace
 4. **Result**:
 ```json
@@ -410,10 +425,10 @@ User: "Set DEBUG=true"
 ## Troubleshooting Hooks
 
 If a hook isn't running:
-1. **Check the settings file** - Read ~/.coco/settings.json or .coco/settings.json
+1. **Check the settings file** - Read `__USER_SETTINGS__` or `__PROJECT_SETTINGS__`
 2. **Verify JSON syntax** - Invalid JSON silently fails
 3. **Check the matcher** - Does it match the tool name? (e.g., "Bash", "Write", "Edit")
 4. **Check hook type** - Is it "command", "prompt", or "agent"?
 5. **Test the command** - Run the hook command manually to see if it works
-6. **Use --debug** - Run `coco --debug` to see hook execution logs
+6. **Use debug mode** - Run the CLI in debug mode to see hook execution logs
 "#;

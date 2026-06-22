@@ -77,7 +77,7 @@ impl Default for RetrievalConfig {
 }
 
 fn default_data_dir() -> PathBuf {
-    PathBuf::from(".coco").join("retrieval")
+    PathBuf::from(coco_utils_common::COCO_CONFIG_DIR_NAME).join("retrieval")
 }
 
 /// Indexing configuration.
@@ -1042,21 +1042,18 @@ impl RewriteRules {
 impl RetrievalConfig {
     /// Load configuration from config files.
     ///
-    /// Search order (first found wins):
-    /// 1. `{workdir}/.coco/retrieval.toml` (project-level)
-    /// 2. `{coco_home}/retrieval.toml` (global)
-    /// 3. Default (disabled)
+    /// Search order is project-level, user-level, then default.
     pub fn load(
         workdir: &std::path::Path,
         coco_home: &std::path::Path,
     ) -> crate::error::Result<Self> {
-        // Project-level config
-        let project_config = workdir.join(".coco/retrieval.toml");
+        let project_config = workdir
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("retrieval.toml");
         if project_config.exists() {
             return Self::from_file(&project_config);
         }
 
-        // Global config
         let global_config = coco_home.join("retrieval.toml");
         if global_config.exists() {
             return Self::from_file(&global_config);

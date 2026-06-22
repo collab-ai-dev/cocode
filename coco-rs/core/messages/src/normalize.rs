@@ -442,7 +442,7 @@ pub fn normalize_messages_for_api(messages: &[std::sync::Arc<Message>]) -> Vec<L
     // tool_result for every assistant tool_use that lacks a matching
     // tool_result. Without this, a single race / panic / discard miss
     // produces the provider error `unexpected tool_use_id` and the next
-    // turn fails. Coco-rs's existing cancel/discard paths
+    // turn fails. The existing cancel/discard paths
     // (`permission_controller.rs:237-258`, `executor.rs:286-306`) cover
     // the common cases; this is the fail-safe last line.
     synthesize_missing_tool_results(&mut result);

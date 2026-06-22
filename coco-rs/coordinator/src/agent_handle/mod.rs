@@ -71,7 +71,7 @@ pub struct SwarmAgentHandle {
     /// `None` ⇒ worktree-isolation requests fail fast. The CLI resolves
     /// the canonical git root at bootstrap and installs this so subagents
     /// spawned with worktree isolation always land in
-    /// `.coco/worktrees/agent-<slug>` under the main repo.
+    /// `project config dir/worktrees/agent-<slug>` under the main repo.
     worktree_manager: Option<Arc<crate::worktree::AgentWorktreeManager>>,
     /// Drives the 2-stage handoff safety classifier. `None` ⇒ classifier
     /// is a no-op (fail-open, matches TS).

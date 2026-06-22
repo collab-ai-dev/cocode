@@ -89,7 +89,7 @@ pub fn resolve_skill_override_lock(
 ///
 /// **Excludes** local / policy / flag tiers by design. The baseline
 /// answers "if I delete this skill's key from
-/// `.coco/settings.local.json`, what value resurfaces?" Local
+/// `project config dir/settings.local.json`, what value resurfaces?" Local
 /// itself is the layer being edited; policy / flag are locks
 /// surfaced separately via [`resolve_skill_override_lock`].
 pub fn resolve_skill_baseline(name: &str, tiers: &SkillOverrideTiers) -> SkillOverrideState {

@@ -327,7 +327,7 @@ impl SideQueryResponse {
 /// session's last turn and a post-turn fork's first request to share
 /// the parent's prompt cache.
 ///
-/// **Coco-rs scope**: this is the cross-layer DTO. The slot itself
+/// **Runtime scope**: this is the cross-layer DTO. The slot itself
 /// lives on `coco_query::QueryEngine` (`last_cache_safe_params:
 /// Arc<RwLock<Option<CacheSafeParams>>>`) populated in
 /// `finalize_turn_post_tools`. Cleared on `/clear`. Post-turn fork

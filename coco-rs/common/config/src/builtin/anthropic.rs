@@ -42,7 +42,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
             "claude-sonnet-4-6",
             PartialModelInfo {
                 display_name: Some("Claude Sonnet 4.6".into()),
-                base_instructions: Some(super::DEFAULT_BASE_INSTRUCTIONS.into()),
+                base_instructions: Some(super::default_base_instructions()),
                 context_window: Some(PositiveTokens::new(1_000_000)),
                 max_output_tokens: Some(PositiveTokens::new(64_000)),
                 capabilities: Some(vec![
@@ -75,7 +75,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
             "claude-opus-4-7",
             PartialModelInfo {
                 display_name: Some("Claude Opus 4.7".into()),
-                base_instructions: Some(super::DEFAULT_BASE_INSTRUCTIONS.into()),
+                base_instructions: Some(super::default_base_instructions()),
                 context_window: Some(PositiveTokens::new(200_000)),
                 max_output_tokens: Some(PositiveTokens::new(64_000)),
                 capabilities: Some(vec![
@@ -110,7 +110,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
             "claude-haiku-4-5",
             PartialModelInfo {
                 display_name: Some("Claude Haiku 4.5".into()),
-                base_instructions: Some(super::DEFAULT_BASE_INSTRUCTIONS.into()),
+                base_instructions: Some(super::default_base_instructions()),
                 context_window: Some(PositiveTokens::new(200_000)),
                 max_output_tokens: Some(PositiveTokens::new(8_192)),
                 // Haiku's server-side cache_read drops are noise, not real

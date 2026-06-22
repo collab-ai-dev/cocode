@@ -51,7 +51,7 @@ use std::path::PathBuf;
 pub fn get_plugin_dirs(config_dir: &Path, project_dir: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
-    // User-level plugins: ~/.coco/plugins/
+    // User-level plugins: config home/plugins/
     let user_plugins = config_dir.join("plugins");
     if user_plugins.is_dir()
         && let Ok(entries) = std::fs::read_dir(&user_plugins)
@@ -63,8 +63,10 @@ pub fn get_plugin_dirs(config_dir: &Path, project_dir: &Path) -> Vec<PathBuf> {
         }
     }
 
-    // Project-level plugins: .coco/plugins/
-    let project_plugins = project_dir.join(".coco").join("plugins");
+    // Project-level plugins: project config dir/plugins/
+    let project_plugins = project_dir
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("plugins");
     if project_plugins.is_dir()
         && let Ok(entries) = std::fs::read_dir(&project_plugins)
     {

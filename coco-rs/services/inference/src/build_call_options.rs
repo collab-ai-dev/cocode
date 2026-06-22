@@ -2,7 +2,7 @@
 //! `LanguageModelV4CallOptions` per turn.
 //!
 //! This is the **single ProviderOptions write site** in the entire
-//! Coco codebase. Every other place reads `ModelInfo.extra_body`. The
+//! codebase. Every other place reads `ModelInfo.extra_body`. The
 //! function:
 //!
 //! 1. Wires typed sampling fields (`temperature`, `top_p`, `top_k`,

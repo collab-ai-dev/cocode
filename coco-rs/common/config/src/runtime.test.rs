@@ -25,7 +25,7 @@ fn settings_with(settings: Settings) -> SettingsWithSource {
 }
 
 /// Build a `RuntimeConfig` with isolated catalog paths so tests don't
-/// pick up a stray `~/.coco/providers.json` (or `settings.json`,
+/// pick up a stray `config home/providers.json` (or `settings.json`,
 /// `models.json`, managed-settings) on the developer's host. The
 /// `TempDir` is dropped after `build_runtime_config_with` returns —
 /// the resolved `RuntimeConfig` doesn't retain any path references,

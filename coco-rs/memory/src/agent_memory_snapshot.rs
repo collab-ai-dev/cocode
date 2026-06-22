@@ -2,7 +2,7 @@
 //!
 //! Project teams can ship a baseline `MEMORY.md` (and any other `.md`
 //! files) for an agent type by committing them under
-//! `<cwd>/.coco/agent-memory-snapshots/<agentType>/` plus a
+//! `project config dir/agent-memory-snapshots/<agentType>/` plus a
 //! `snapshot.json` carrying `{updatedAt: ISO8601}`. At session bootstrap
 //! the agent-loader compares the snapshot timestamp against
 //! `<scope>/agent-memory/<agentType>/.snapshot-synced.json` and:
@@ -24,7 +24,7 @@ use serde::Serialize;
 
 use crate::agent_memory::agent_memory_dir;
 
-/// Subdirectory under `<cwd>/.coco/` where project snapshots live.
+/// Subdirectory under `project config dir/` where project snapshots live.
 pub const SNAPSHOT_BASE: &str = "agent-memory-snapshots";
 
 const SNAPSHOT_JSON: &str = "snapshot.json";
@@ -67,7 +67,7 @@ use coco_paths::sanitize_agent_type_for_path;
 
 /// Snapshot directory for a given agent type.
 pub fn snapshot_dir_for_agent(agent_type: &str, cwd: &Path) -> PathBuf {
-    cwd.join(".coco")
+    cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
         .join(SNAPSHOT_BASE)
         .join(sanitize_agent_type_for_path(agent_type))
 }

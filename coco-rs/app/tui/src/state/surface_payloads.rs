@@ -238,7 +238,7 @@ pub struct CostWarningPromptState {
 /// Model picker state — provider-grouped list of `(provider, model_id)`
 /// candidates plus an inline thinking-effort selector. Tab cycles the
 /// target role (Main / Fast / Plan / …); the confirm path persists
-/// to that role's slot in `~/.coco.json::model_roles`.
+/// to that role's slot in `the global config file::model_roles`.
 #[derive(Debug, Clone)]
 pub struct ModelPickerState {
     /// Which role we're configuring. Defaults to `Main` when launched
@@ -606,7 +606,7 @@ pub struct PlanApprovalPromptState {
     pub request_id: String,
     /// Teammate agent name (who sent the request).
     pub from: String,
-    /// Optional plan-file path on disk (.coco/plans/...). `None` when
+    /// Optional plan-file path on disk (project config dir/plans/...). `None` when
     /// the request embeds the content inline instead.
     pub plan_file_path: Option<String>,
     /// The plan text itself (rendered markdown) — always present so the

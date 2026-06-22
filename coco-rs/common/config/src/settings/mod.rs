@@ -105,7 +105,7 @@ pub struct Settings {
     /// LSP tool-layer knobs. Resolved into `RuntimeConfig.lsp`
     /// (`LspConfig`); the file-size gate ships today, future fields
     /// (per-server overrides, prewarm policy) land in the same slot.
-    /// Server roster lives in `~/.coco/lsp_servers.json` per the
+    /// Server roster lives in `config home/lsp_servers.json` per the
     /// established `coco-lsp` design — not here.
     #[serde(default)]
     pub lsp: PartialLspSettings,
@@ -176,7 +176,7 @@ pub struct Settings {
     pub copy_full_response: bool,
     /// Claude-compatible command-backed status line. `statusLine` is
     /// the canonical on-disk key; `status_line` is accepted for users
-    /// who prefer snake_case in Coco settings.
+    /// who prefer snake_case in settings.
     #[serde(
         default,
         rename = "statusLine",
@@ -276,7 +276,7 @@ pub struct Settings {
 
 /// Managed `strictPluginOnlyCustomization` policy. Locks customization
 /// surfaces (skills/agents/hooks/mcp) to plugin-only sources — user-level
-/// (`~/.coco/*`) and project-level (`.claude/*`) loaders are skipped for the
+/// (`config home/*`) and project-level (`.claude/*`) loaders are skipped for the
 /// locked surfaces. Managed (policy) and plugin sources always load.
 ///
 /// `true` locks all surfaces; an array locks only the listed surfaces;
@@ -709,7 +709,7 @@ pub(super) fn reject_unsupported_settings_keys(value: &serde_json::Value) -> cra
 }
 
 /// Load and merge settings using the default user / managed paths
-/// (`~/.coco/settings.json` and the platform-managed file). Loads every
+/// (`config home/settings.json` and the platform-managed file). Loads every
 /// source — callers that need `--setting-sources` filtering go through
 /// [`load_settings_with`] with an explicit enabled set.
 pub fn load_settings(
@@ -739,7 +739,7 @@ fn all_setting_sources() -> HashSet<SettingSource> {
 
 /// Load and merge settings with explicit user / managed paths.
 /// Tests pass TempDir-rooted paths to isolate from the developer's
-/// real `~/.coco/`.
+/// real `config home/`.
 ///
 /// `enabled` is the `--setting-sources`-resolved set. User/Project/Local
 /// layers are skipped when their source is absent from the set; Flag and
@@ -749,8 +749,8 @@ fn all_setting_sources() -> HashSet<SettingSource> {
 /// Merge order (later overrides earlier):
 ///   1. Plugin base
 ///   2. User global (`user_path`)
-///   3. Project shared (`{cwd}/.coco/settings.json`)
-///   4. Project local (`{cwd}/.coco/settings.local.json`)
+///   3. Project shared (`project config dir/settings.json`)
+///   4. Project local (`project config dir/settings.local.json`)
 ///   5. Flag (`--settings file`)
 ///   6. Policy (`managed_path`)
 pub fn load_settings_with(

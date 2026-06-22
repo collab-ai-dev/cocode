@@ -22,7 +22,7 @@
 //!
 //! Reads the standard `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT_ID` env
 //! vars (vendor convention, like `vercel-ai-google` reading
-//! `GOOGLE_GENERATIVE_AI_API_KEY`) as an onboarding shortcut. Coco-free.
+//! `GOOGLE_GENERATIVE_AI_API_KEY`) as an onboarding shortcut. Runtime-free.
 
 pub mod auth;
 pub mod code_assist_types;

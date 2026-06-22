@@ -1,6 +1,6 @@
 //! Zai vendor catalog — `zai` provider only. Users declare models
-//! against this provider via `~/.coco/providers.json` or
-//! `~/.coco/models.json`.
+//! against this provider via `config home/providers.json` or
+//! `config home/models.json`.
 
 use coco_types::ProviderApi;
 

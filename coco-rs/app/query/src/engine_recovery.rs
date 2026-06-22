@@ -563,7 +563,7 @@ impl QueryEngine {
     ///    when the previous turn was already the escalate retry
     ///    (transition match) or when the model didn't opt in. To
     ///    disable escalation entirely for a model, leave
-    ///    `max_output_tokens_escalate` unset in `~/.coco/models.json`;
+    ///    `max_output_tokens_escalate` unset in `config home/models.json`;
     ///    to cap output to a fixed value, edit `max_output_tokens` for
     ///    that model — this is the multi-LLM-friendly single source
     ///    of truth, **not** a global env override.
@@ -609,7 +609,7 @@ impl QueryEngine {
         // would be a single-Anthropic-defaults regression in a
         // multi-LLM SDK. The per-model `ModelInfo.max_output_tokens` /
         // `max_output_tokens_escalate` pair IS the cap surface — to
-        // pin output, edit `~/.coco/models.json`.
+        // pin output, edit `config home/models.json`.
         let already_escalated = matches!(
             turn_state.transition,
             Some(ContinueReason::MaxOutputTokensEscalate)

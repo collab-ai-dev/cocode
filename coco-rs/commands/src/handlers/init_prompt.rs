@@ -17,25 +17,34 @@ use crate::PromptPart;
 const NEW_INIT_PROMPT: &str = include_str!("../prompts/init_new.txt");
 const OLD_INIT_PROMPT: &str = include_str!("../prompts/init_old.txt");
 
+fn render_prompt_template(template: &str) -> String {
+    template
+        .replace("{{PRODUCT_NAME}}", coco_config::constants::PRODUCT_NAME)
+        .replace(
+            "{{CONFIG_DIR_NAME}}",
+            coco_utils_common::COCO_CONFIG_DIR_NAME,
+        )
+}
+
 pub struct InitPromptHandler {
     pub user_type: UserType,
     pub features: Features,
     /// Project root, used by `maybe_mark_project_onboarding_complete` to
-    /// flip the onboarding-completed flag in `~/.coco.json` when the
+    /// flip the onboarding-completed flag in the global config file when the
     /// project already has a `CLAUDE.md`. `None` falls back to the
     /// process cwd at invocation time.
     pub project_root: Option<PathBuf>,
 }
 
 impl InitPromptHandler {
-    pub fn select_prompt(&self) -> &'static str {
+    pub fn select_prompt(&self) -> String {
         let new_init_env = std::env::var("COCO_NEW_INIT")
             .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
             .unwrap_or(false);
         if self.features.enabled(Feature::NewInit) && (self.user_type.is_ant() || new_init_env) {
-            NEW_INIT_PROMPT
+            render_prompt_template(NEW_INIT_PROMPT)
         } else {
-            OLD_INIT_PROMPT
+            render_prompt_template(OLD_INIT_PROMPT)
         }
     }
 }
@@ -43,7 +52,7 @@ impl InitPromptHandler {
 #[async_trait]
 impl CommandHandler for InitPromptHandler {
     async fn execute_command(&self, _args: &str) -> crate::Result<CommandResult> {
-        // The flag short-circuits future invocations; in coco-rs
+        // The flag short-circuits future invocations; in this runtime
         // the call is opportunistic — failures are swallowed by the
         // helper itself.
         let cwd = self
@@ -56,9 +65,7 @@ impl CommandHandler for InitPromptHandler {
         let body = self.select_prompt();
         Ok(CommandResult::Prompt {
             progress_message: "analyzing your codebase".into(),
-            parts: vec![PromptPart::Text {
-                text: body.to_string(),
-            }],
+            parts: vec![PromptPart::Text { text: body }],
         })
     }
 

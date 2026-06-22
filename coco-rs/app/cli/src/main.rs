@@ -167,13 +167,17 @@ async fn main() -> Result<()> {
             }
             Commands::Init => {
                 let cwd = std::env::current_dir()?;
-                let coco_dir = cwd.join(".coco");
+                let coco_dir = cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME);
                 std::fs::create_dir_all(&coco_dir)?;
                 let settings = coco_dir.join("settings.json");
                 if !settings.exists() {
                     std::fs::write(&settings, "{}\n")?;
                 }
-                println!("Initialized .coco/ directory at {}", cwd.display());
+                println!(
+                    "Initialized {}/ directory at {}",
+                    coco_utils_common::COCO_CONFIG_DIR_NAME,
+                    cwd.display()
+                );
                 return Ok(());
             }
             Commands::Review { target } => {

@@ -153,7 +153,7 @@ pub(super) async fn handle_set_thinking(
 
 /// `control/stopTask` — cooperative cancellation of a specific task.
 ///
-/// Coco-rs's in-process background task registry isn't threaded through
+/// The in-process background task registry isn't threaded through
 /// the SDK server yet, so this is structurally equivalent to
 /// `turn/interrupt`: we cancel any in-flight turn so the runner unwinds.
 /// The `task_id` is logged for later correlation once the task manager

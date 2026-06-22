@@ -1,5 +1,33 @@
 use super::*;
 
+fn project_config_path(child: &str) -> String {
+    format!(
+        "/project/{}/{}",
+        coco_utils_common::COCO_CONFIG_DIR_NAME,
+        child
+    )
+}
+
+fn home_config_path(child: &str) -> String {
+    format!(
+        "/home/u/{}/{}",
+        coco_utils_common::COCO_CONFIG_DIR_NAME,
+        child
+    )
+}
+
+fn titlecase_config_dir_name() -> String {
+    let name = coco_utils_common::COCO_CONFIG_DIR_NAME;
+    let Some(rest) = name.strip_prefix('.') else {
+        return name.to_string();
+    };
+    let mut chars = rest.chars();
+    let Some(first) = chars.next() else {
+        return name.to_string();
+    };
+    format!(".{}{}", first.to_ascii_uppercase(), chars.as_str())
+}
+
 // ── contains_path_traversal ──
 
 #[test]
@@ -41,32 +69,36 @@ fn test_dangerous_directories() {
 
 #[test]
 fn test_coco_worktrees_allowed() {
-    assert!(!is_dangerous_file_path(
-        "/project/.coco/worktrees/feature/src/main.rs"
-    ));
-    assert!(!is_dangerous_file_path(
-        "/project/.coco/worktrees/feat/lib/util.rs"
-    ));
+    assert!(!is_dangerous_file_path(&project_config_path(
+        "worktrees/feature/src/main.rs"
+    )));
+    assert!(!is_dangerous_file_path(&project_config_path(
+        "worktrees/feat/lib/util.rs"
+    )));
 }
 
 #[test]
 fn test_nested_coco_under_worktree_still_dangerous() {
-    // P12b: the `.coco/worktrees` exemption is component-anchored, so a
-    // SECOND nested `.coco` (a settings file inside the worktree) is still
-    // blocked even though an earlier `.coco/worktrees/` segment exists.
-    assert!(is_dangerous_file_path(
-        "/project/.coco/worktrees/feature/.coco/settings.json"
-    ));
+    // P12b: the `project config dir/worktrees` exemption is component-anchored, so a
+    // SECOND nested the project config dir (a settings file inside the worktree) is still
+    // blocked even though an earlier `project config dir/worktrees/` segment exists.
+    assert!(is_dangerous_file_path(&format!(
+        "{}/{}",
+        project_config_path("worktrees/feature"),
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    )));
 }
 
 #[test]
 fn test_worktrees_not_under_coco_not_exempt() {
-    // `.coco` followed by `config` (not `worktrees`) blocks.
-    assert!(is_dangerous_file_path(
-        "/project/.coco/config/worktrees/x.rs"
-    ));
-    // Plain `.coco` segment still blocks.
-    assert!(is_dangerous_file_path("/project/.coco/settings.json"));
+    // the project config dir followed by `config` (not `worktrees`) blocks.
+    assert!(is_dangerous_file_path(&project_config_path(
+        "config/worktrees/x.rs"
+    )));
+    // Plain the project config dir segment still blocks.
+    assert!(is_dangerous_file_path(&project_config_path(
+        "settings.json"
+    )));
 }
 
 #[test]
@@ -86,17 +118,26 @@ fn test_unc_paths_blocked() {
 
 #[test]
 fn test_coco_config_detected() {
-    assert!(is_coco_config_path("/project/.coco/settings.json"));
-    assert!(is_coco_config_path("/project/.coco/settings.local.json"));
-    assert!(is_coco_config_path("/project/.coco/skills/foo/SKILL.md"));
-    assert!(is_coco_config_path("/project/.coco/agents/reviewer.md"));
-    assert!(is_coco_config_path("/project/.coco/commands/foo.md"));
-    assert!(is_coco_config_path("/project/.Coco/Settings.json"));
+    assert!(is_coco_config_path(&project_config_path("settings.json")));
+    assert!(is_coco_config_path(&project_config_path(
+        "settings.local.json"
+    )));
+    assert!(is_coco_config_path(&project_config_path(
+        "skills/foo/SKILL.md"
+    )));
+    assert!(is_coco_config_path(&project_config_path(
+        "agents/reviewer.md"
+    )));
+    assert!(is_coco_config_path(&project_config_path("commands/foo.md")));
+    assert!(is_coco_config_path(&format!(
+        "/project/{}/Settings.json",
+        titlecase_config_dir_name()
+    )));
 }
 
 #[test]
 fn test_legacy_claude_paths_are_not_coco_config() {
-    // coco serves all config from `.coco/`; legacy `.claude/` paths are NOT
+    // coco serves all config from `project config dir/`; legacy `.claude/` paths are NOT
     // coco config paths. (Writes under `.claude/` are still gated by the
     // dangerous-directory check, just not by the config-edit gate.)
     assert!(!is_coco_config_path("/project/.claude/settings.json"));
@@ -106,19 +147,23 @@ fn test_legacy_claude_paths_are_not_coco_config() {
 
 #[test]
 fn test_coco_commands_is_config_path() {
-    // `.coco/commands/` counts as a config path requiring approval — commands,
-    // agents, skills, and settings under `.coco/` are all treated alike.
-    assert!(is_coco_config_path("/project/.coco/commands/foo.md"));
-    assert!(is_coco_config_path("/project/.coco/agents/reviewer.md"));
-    assert!(is_coco_config_path("/project/.coco/settings.json"));
-    assert!(is_coco_config_path("/project/.coco/skills/foo/SKILL.md"));
+    // `project config dir/commands/` counts as a config path requiring approval — commands,
+    // agents, skills, and settings under `project config dir/` are all treated alike.
+    assert!(is_coco_config_path(&project_config_path("commands/foo.md")));
+    assert!(is_coco_config_path(&project_config_path(
+        "agents/reviewer.md"
+    )));
+    assert!(is_coco_config_path(&project_config_path("settings.json")));
+    assert!(is_coco_config_path(&project_config_path(
+        "skills/foo/SKILL.md"
+    )));
     assert!(!is_coco_config_path("/project/src/config.json"));
 }
 
 #[test]
 fn test_check_path_safety_blocks_coco_commands() {
     assert!(matches!(
-        check_path_safety_for_auto_edit("/project/.coco/commands/run.md"),
+        check_path_safety_for_auto_edit(&project_config_path("commands/run.md")),
         PathSafetyResult::Blocked {
             classifier_approvable: true,
             ..
@@ -219,7 +264,7 @@ fn test_dangerous_file_classifier_approvable() {
 #[test]
 fn test_coco_config_classifier_approvable() {
     assert!(matches!(
-        check_path_safety_for_auto_edit("/project/.coco/settings.json"),
+        check_path_safety_for_auto_edit(&project_config_path("settings.json")),
         PathSafetyResult::Blocked {
             classifier_approvable: true,
             ..
@@ -485,27 +530,27 @@ fn test_dangerous_removal_windows_drive() {
 #[test]
 fn test_editable_plan_files() {
     // Plan-file writes are keyed on the resolved session plan file (cocohome
-    // by default), NOT a `.coco/plans` substring. The session file and its
+    // by default), NOT a `project config dir/plans` substring. The session file and its
     // `-agent-*` variant are allowed; a different slug and a non-`.md` are not.
-    let plan = std::path::PathBuf::from("/home/u/.coco/plans/typed-conjuring-fox.md");
+    let plan = std::path::PathBuf::from(home_config_path("plans/typed-conjuring-fox.md"));
     let ctx = InternalPathContext {
         cwd: "/project",
         session_plan_file: Some(&plan),
     };
     assert!(is_editable_internal_path(
-        "/home/u/.coco/plans/typed-conjuring-fox.md",
+        &home_config_path("plans/typed-conjuring-fox.md"),
         &ctx
     ));
     assert!(is_editable_internal_path(
-        "/home/u/.coco/plans/typed-conjuring-fox-agent-7.md",
+        &home_config_path("plans/typed-conjuring-fox-agent-7.md"),
         &ctx
     ));
     assert!(!is_editable_internal_path(
-        "/home/u/.coco/plans/some-other-slug.md",
+        &home_config_path("plans/some-other-slug.md"),
         &ctx
     ));
     assert!(!is_editable_internal_path(
-        "/home/u/.coco/plans/typed-conjuring-fox.txt",
+        &home_config_path("plans/typed-conjuring-fox.txt"),
         &ctx
     ));
 
@@ -515,7 +560,7 @@ fn test_editable_plan_files() {
         session_plan_file: None,
     };
     assert!(!is_editable_internal_path(
-        "/home/u/.coco/plans/typed-conjuring-fox.md",
+        &home_config_path("plans/typed-conjuring-fox.md"),
         &none_ctx
     ));
 }
@@ -524,13 +569,13 @@ fn test_editable_plan_files() {
 fn test_editable_plan_file_traversal_blocked() {
     // A `..` escape that string-prefixes the slug must NOT slip through:
     // resolve_path collapses the traversal before the prefix check.
-    let plan = std::path::PathBuf::from("/home/u/.coco/plans/typed-conjuring-fox.md");
+    let plan = std::path::PathBuf::from(home_config_path("plans/typed-conjuring-fox.md"));
     let ctx = InternalPathContext {
         cwd: "/project",
         session_plan_file: Some(&plan),
     };
     assert!(!is_editable_internal_path(
-        "/home/u/.coco/plans/typed-conjuring-fox/../../../etc/passwd.md",
+        &home_config_path("plans/typed-conjuring-fox/../../../etc/passwd.md"),
         &ctx
     ));
 }
@@ -539,17 +584,17 @@ fn test_editable_plan_file_traversal_blocked() {
 
 #[test]
 fn test_readable_plan_files() {
-    let plan = std::path::PathBuf::from("/home/u/.coco/plans/design-slug.md");
+    let plan = std::path::PathBuf::from(home_config_path("plans/design-slug.md"));
     let ctx = InternalPathContext {
         cwd: "/project",
         session_plan_file: Some(&plan),
     };
     assert!(is_readable_internal_path(
-        "/home/u/.coco/plans/design-slug.md",
+        &home_config_path("plans/design-slug.md"),
         &ctx
     ));
     assert!(!is_readable_internal_path(
-        "/home/u/.coco/plans/unrelated.md",
+        &home_config_path("plans/unrelated.md"),
         &ctx
     ));
 }
@@ -558,13 +603,16 @@ fn test_readable_plan_files() {
 
 #[test]
 fn test_agent_config_dirs_are_dangerous() {
-    // Coco guards its own config home plus the claude/codex dirs it reads for
-    // compat. `.coco/worktrees/` is the one structural exemption.
-    assert!(is_dangerous_file_path("/project/.coco/settings.json"));
+    // The runtime guards its own config home plus the claude/codex dirs it reads for
+    // compat. `project config dir/worktrees/` is the one structural exemption.
+    assert!(is_dangerous_file_path(&project_config_path(
+        "settings.json"
+    )));
     assert!(is_dangerous_file_path("/project/.codex/config.toml"));
     assert!(is_dangerous_file_path("/project/.claude/settings.json"));
-    assert!(!is_dangerous_file_path(
-        "/repo/.coco/worktrees/agent-x/src/main.rs"
-    ));
+    assert!(!is_dangerous_file_path(&format!(
+        "/repo/{}/worktrees/agent-x/src/main.rs",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    )));
     assert!(!is_dangerous_file_path("/project/src/main.rs"));
 }

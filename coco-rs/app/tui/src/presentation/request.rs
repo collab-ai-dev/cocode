@@ -204,9 +204,15 @@ pub(crate) fn exit_plan_prompt_lines(
             format!(
                 "{}{}",
                 if has_plan {
-                    t!("dialog.plan_ready_prompt")
+                    t!(
+                        "dialog.plan_ready_prompt",
+                        product = coco_config::constants::PRODUCT_NAME
+                    )
                 } else {
-                    t!("dialog.no_plan_ready_prompt")
+                    t!(
+                        "dialog.no_plan_ready_prompt",
+                        product = coco_config::constants::PRODUCT_NAME
+                    )
                 },
                 worker_suffix
             ),

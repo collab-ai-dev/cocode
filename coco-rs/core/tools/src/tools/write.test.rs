@@ -59,7 +59,7 @@ async fn test_write_check_permissions_accept_edits_allows_cwd_path() {
 #[tokio::test]
 async fn test_write_check_permissions_plan_mode_allows_session_plan_file() {
     // Regression: in Plan mode, writing the session's own plan file
-    // (cocohome `~/.coco/plans/<slug>.md`) must auto-allow, not prompt. The
+    // (cocohome `config home/plans/<slug>.md`) must auto-allow, not prompt. The
     // exemption flows ctx.session_plan_file → is_editable_internal_path.
     let plans = tempfile::tempdir().unwrap();
     let plan_file = plans.path().join("typed-conjuring-fox.md");
@@ -605,7 +605,7 @@ async fn test_write_new_file_is_utf8() {
 // ── R7-T14: team-memory secret guard tests ──
 //
 // `checkTeamMemSecrets(filePath, content)` is called before writing —
-// if the path is in `.coco/memory/team/` AND the content has
+// if the path is in `project config dir/memory/team/` AND the content has
 // secret-shaped tokens, the write is rejected. Implemented via
 // `crate::check_team_mem_secret`. These tests cover the path predicate
 // and the secret detector.
@@ -613,8 +613,12 @@ async fn test_write_new_file_is_utf8() {
 #[tokio::test]
 async fn test_write_rejects_secret_in_team_memory_path() {
     let dir = tempfile::tempdir().unwrap();
-    // Reconstruct a `.coco/memory/team/` ancestry under the temp dir.
-    let team_dir = dir.path().join(".coco").join("memory").join("team");
+    // Reconstruct a `project config dir/memory/team/` ancestry under the temp dir.
+    let team_dir = dir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("memory")
+        .join("team");
     std::fs::create_dir_all(&team_dir).unwrap();
     let file = team_dir.join("personal.md");
 
@@ -670,7 +674,11 @@ async fn test_write_allows_secret_outside_team_memory_path() {
 #[tokio::test]
 async fn test_write_allows_clean_content_in_team_memory_path() {
     let dir = tempfile::tempdir().unwrap();
-    let team_dir = dir.path().join(".coco").join("memory").join("team");
+    let team_dir = dir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("memory")
+        .join("team");
     std::fs::create_dir_all(&team_dir).unwrap();
     let file = team_dir.join("safe.md");
 

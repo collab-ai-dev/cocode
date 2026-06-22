@@ -39,7 +39,7 @@ pub use error::CoordinatorError;
 pub use error::Result;
 
 pub mod agent_handle;
-/// File-based teammate inboxes (`~/.coco/teams/{team}/inboxes/{agent}.json`)
+/// File-based teammate inboxes (`config home/teams/{team}/inboxes/{agent}.json`)
 /// + structured protocol message envelopes.
 pub mod mailbox;
 /// Pane-backend trait + tmux / iTerm2 / in-process / it2-setup impls.
@@ -59,7 +59,7 @@ pub mod runner_loop_mailbox_permission;
 pub mod runner_loop_notify;
 /// Plan-approval mailbox waiter. P1 split from `runner_loop`.
 pub mod runner_loop_wait;
-/// Team file r/w (`~/.coco/teams/{team}/team.json`).
+/// Team file r/w (`config home/teams/{team}/team.json`).
 pub mod team_file;
 /// `BackendType` + cross-cutting team / teammate / standalone-agent
 /// types shared between the coordinator and AppState consumers.

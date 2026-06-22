@@ -87,7 +87,7 @@ pub(super) async fn handle_config_read(ctx: &HandlerContext) -> HandlerResult {
 /// are navigated as nested JSON objects (intermediate objects are
 /// created as needed).
 ///
-/// Scope defaults to `"user"` (`~/.coco/settings.json`) if not
+/// Scope defaults to `"user"` (`config home/settings.json`) if not
 /// specified. Valid scopes: `"user"`, `"project"`, `"local"`.
 ///
 /// Errors:

@@ -58,16 +58,21 @@ fn split_first(s: &str) -> (&str, &str) {
 }
 
 fn usage_text() -> String {
-    "Usage:\n\
+    let user_config = format!(
+        "~/{}/lsp_servers.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    );
+    format!(
+        "Usage:\n\
      /lsp                    Show LSP server status\n\
      /lsp install <id>       Install a builtin server's binary\n\
      /lsp enable <id>        Re-enable a disabled server\n\
      /lsp disable <id>       Disable without removing from config\n\
-     /lsp add <id>           Add a builtin to user config (~/.coco/lsp_servers.json)\n\
+     /lsp add <id>           Add a builtin to user config ({user_config})\n\
      /lsp remove <id>        Remove from user config\n\
      \n\
      Builtin server IDs: rust-analyzer, gopls, pyright, typescript-language-server"
-        .to_string()
+    )
 }
 
 /// Resolve user-level and project-level config directories. Matches the
@@ -75,7 +80,9 @@ fn usage_text() -> String {
 /// touch the same file the loader reads.
 fn resolve_dirs() -> (Option<PathBuf>, Option<PathBuf>) {
     let user = coco_lsp::find_coco_home();
-    let project = std::env::current_dir().ok().map(|p| p.join(".coco"));
+    let project = std::env::current_dir()
+        .ok()
+        .map(|p| p.join(coco_utils_common::COCO_CONFIG_DIR_NAME));
     (Some(user), project)
 }
 
@@ -166,9 +173,17 @@ async fn list_servers() -> crate::Result<String> {
     out.push_str("  /lsp enable|disable <id>\n");
     out.push_str("  /lsp add|remove <id>   (edit user config; restart to apply)\n");
     out.push_str("\nEnable in settings: features.lsp = true.\n");
-    out.push_str(
-        "Config files: ~/.coco/lsp_servers.json (user), .coco/lsp_servers.json (project).",
+    let user_config = format!(
+        "~/{}/lsp_servers.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
     );
+    let project_config = format!(
+        "{}/lsp_servers.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    );
+    out.push_str(&format!(
+        "Config files: {user_config} (user), {project_config} (project)."
+    ));
     Ok(out)
 }
 
@@ -304,7 +319,7 @@ async fn add_server_to_config(server_id: &str) -> crate::Result<String> {
     }
     let (user_dir, _) = resolve_dirs();
     let Some(dir) = user_dir else {
-        return Ok("Cannot resolve user config dir (~/.coco)".to_string());
+        return Ok("Cannot resolve user config dir".to_string());
     };
     if let Err(err) = std::fs::create_dir_all(&dir) {
         return Ok(format!("Failed to create {}: {err}", dir.display()));

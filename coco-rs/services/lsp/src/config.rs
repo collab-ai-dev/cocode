@@ -283,7 +283,7 @@ pub const LSP_SERVERS_CONFIG_FILE: &str = "lsp_servers.json";
 
 impl LspServersConfig {
     /// Load LSP config from standard locations
-    /// Priority: project .coco/ > user {coco_home}/
+    /// Priority: project project config dir/ > user {coco_home}/
     ///
     /// # Arguments
     /// * `codex_home` - Codex home directory (respects `CODEX_HOME` env var)
@@ -300,9 +300,11 @@ impl LspServersConfig {
             }
         }
 
-        // 2. Try project-level config (.coco/lsp_servers.json)
+        // 2. Try project-level config (project config dir/lsp_servers.json)
         if let Some(root) = project_root {
-            let project_path = root.join(".coco").join(LSP_SERVERS_CONFIG_FILE);
+            let project_path = root
+                .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join(LSP_SERVERS_CONFIG_FILE);
             if let Ok(project_config) = Self::from_file(&project_path) {
                 debug!("Loaded project LSP config from: {}", project_path.display());
                 config.merge(project_config); // Project overrides user
@@ -557,9 +559,9 @@ impl LspServersConfig {
 /// Configuration level for a server
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigLevel {
-    /// User-level config (~/.coco/lsp_servers.json)
+    /// User-level config (config home/lsp_servers.json)
     User,
-    /// Project-level config (.coco/lsp_servers.json)
+    /// Project-level config (project config dir/lsp_servers.json)
     Project,
 }
 

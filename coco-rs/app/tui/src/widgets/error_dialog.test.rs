@@ -8,7 +8,7 @@ fn format_includes_category_and_retryable_hint() {
     let body = format_error_body("boom", Some("network"), true);
     assert_eq!(
         body,
-        "boom\n\nCategory: network\nRetryable — coco will retry automatically where possible.\n\nPress Esc to dismiss."
+        "boom\n\nCategory: network\nRetryable — the app will retry automatically where possible.\n\nPress Esc to dismiss."
     );
 }
 

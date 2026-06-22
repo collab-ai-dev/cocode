@@ -1,6 +1,6 @@
 //! On-disk I/O for teammate mailboxes.
 //!
-//! Inbox layout: `~/.coco/teams/{team_name}/inboxes/{agent_name}.json`.
+//! Inbox layout: `config home/teams/{team_name}/inboxes/{agent_name}.json`.
 //! Each file is a JSON array of [`TeammateMessage`]. Concurrent writes
 //! are serialised by the advisory lock helpers in
 //! [`super::lock::with_inbox_lock`].

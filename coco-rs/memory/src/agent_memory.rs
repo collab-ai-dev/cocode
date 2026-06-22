@@ -8,13 +8,13 @@
 //! Resolution by scope:
 //! - `User`     → `<config_home>/agent-memory/<sanitized_type>/`
 //!   (User-scope follows `COCO_CONFIG_HOME` so multi-tenant /
-//!   containerised setups where `~/.coco` is unwritable or wrong work
+//!   containerised setups where the config home is unwritable or wrong work
 //!   correctly. **coco-rs uses the configured path rather than hardcoding `~/.claude`.**)
-//! - `Project`  → `<cwd>/.coco/agent-memory/<sanitized_type>/`
-//!   (Per-project state — version-controllable. `.coco` literal is
+//! - `Project`  → `project config dir/agent-memory/<sanitized_type>/`
+//!   (Per-project state — version-controllable. the project config dir literal is
 //!   intentional: project state shouldn't follow user's config_home
 //!   override.)
-//! - `Local`    → `<cwd>/.coco/agent-memory-local/<sanitized_type>/`
+//! - `Local`    → `project config dir/agent-memory-local/<sanitized_type>/`
 //!   (Per-project + per-machine — gitignored.)
 //!
 //! Sanitization: replaces `:` (used by plugin-namespaced types like
@@ -29,9 +29,9 @@ use coco_types::MemoryScope;
 /// Resolve the per-agent memory directory for the given (type, scope).
 ///
 /// `cwd` is the project root. `config_home` is the user's coco config
-/// home (typically `~/.coco`, overridable via `COCO_CONFIG_HOME`);
+/// home (typically the config home, overridable via `COCO_CONFIG_HOME`);
 /// only the `User` scope uses it — Project and Local are per-project
-/// and hardcode `.coco` so they don't follow the config-home override
+/// and hardcode the project config dir so they don't follow the config-home override
 /// (per-repo state must not relocate when `COCO_CONFIG_HOME` changes).
 pub fn agent_memory_dir(
     agent_type: &str,
@@ -42,8 +42,14 @@ pub fn agent_memory_dir(
     let dir_name = sanitize_agent_type_for_path(agent_type);
     match scope {
         MemoryScope::User => config_home.join("agent-memory").join(dir_name),
-        MemoryScope::Project => cwd.join(".coco").join("agent-memory").join(dir_name),
-        MemoryScope::Local => cwd.join(".coco").join("agent-memory-local").join(dir_name),
+        MemoryScope::Project => cwd
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("agent-memory")
+            .join(dir_name),
+        MemoryScope::Local => cwd
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("agent-memory-local")
+            .join(dir_name),
     }
 }
 

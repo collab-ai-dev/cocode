@@ -226,7 +226,7 @@ async fn advance_to_confirm(
 #[tokio::test]
 async fn wizard_full_path_emits_create_agent() {
     // Use isolated tempdirs so the test never touches the real
-    // workspace tree (no `.coco/agents/` pollution).
+    // workspace tree (no `project config dir/agents/` pollution).
     let cwd_tmp = tempfile::tempdir().expect("cwd tempdir");
     let cfg_tmp = tempfile::tempdir().expect("config_home tempdir");
 

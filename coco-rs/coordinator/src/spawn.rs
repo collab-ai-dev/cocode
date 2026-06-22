@@ -60,11 +60,11 @@ pub fn build_teammate_command(config: &TeammateSpawnConfig) -> String {
 ///    child can boot without env), but env duplication keeps tools
 ///    that read `COCO_*` directly (e.g. `crate::identity::*`)
 ///    coherent without depending on the CLI parser.
-/// 2. **Coco runtime config** — `ANTHROPIC_BASE_URL`, `COCO_CONFIG_DIR`,
+/// 2. **Runtime config** — `ANTHROPIC_BASE_URL`, `COCO_CONFIG_DIR`,
 ///    `COCO_REMOTE`, `COCO_REMOTE_MEMORY_DIR`, plus the Feature gate.
 /// 3. **Third-party (non-COCO) passthroughs** — AWS / Google credentials,
 ///    HTTP proxy, TLS bundle paths. These keep their upstream names by
-///    convention; coco doesn't shadow them.
+///    convention; the runtime doesn't shadow them.
 pub fn build_inherited_env_vars(config: &TeammateSpawnConfig) -> String {
     let mut vars = Vec::new();
 
@@ -80,13 +80,13 @@ pub fn build_inherited_env_vars(config: &TeammateSpawnConfig) -> String {
         vars.push(format!("{PLAN_MODE_REQUIRED_ENV_VAR}=1"));
     }
 
-    // ── 2. Coco runtime + feature gates ──
+    // ── 2. Runtime + feature gates ──
     //
     // `COCO_FEATURE_AGENT_TEAMS=1` makes the child's `Features::resolve()`
     // pick up the gate even when settings.json doesn't enable it.
     vars.push("COCO_FEATURE_AGENT_TEAMS=1".to_string());
     // Bedrock / Vertex / Foundry routing vars are intentionally
-    // omitted — coco-rs configures providers via `~/.coco.json`, not
+    // omitted — coco-rs configures providers via the global config file, not
     // env. Add specific keys back here only if a provider crate
     // grows env-driven runtime knobs.
     for var in &[

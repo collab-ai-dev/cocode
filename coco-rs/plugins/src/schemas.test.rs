@@ -260,7 +260,10 @@ fn test_installed_plugins_file_v2_roundtrip() {
         vec![PluginInstallationEntry {
             scope: PluginScope::User,
             project_path: None,
-            install_path: "/home/user/.coco/plugins/cache/mkt/test/1.0.0".to_string(),
+            install_path: format!(
+                "/home/user/{}/plugins/cache/mkt/test/1.0.0",
+                coco_utils_common::COCO_CONFIG_DIR_NAME
+            ),
             version: Some("1.0.0".to_string()),
             installed_at: Some("2024-01-15T10:30:00Z".to_string()),
             last_updated: None,

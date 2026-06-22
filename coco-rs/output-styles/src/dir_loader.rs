@@ -10,7 +10,7 @@
 //! logs a warning and ignores the value.
 //!
 //! The (dir, source) pair is threaded in from the caller — paths are resolved
-//! at the CLI bootstrap layer where `~/.coco/`, the project tree, and
+//! at the CLI bootstrap layer where `config home/`, the project tree, and
 //! managed/policy locations are known.
 
 use std::path::Path;
@@ -30,8 +30,8 @@ use crate::error::OutputStylesError;
 /// parse errors are logged at `warn` level and the offending file is skipped.
 ///
 /// `source` is attached to each loaded style and drives priority during
-/// aggregation. Use [`OutputStyleSource::UserSettings`] for `~/.coco`,
-/// [`OutputStyleSource::ProjectSettings`] for `<cwd>/.coco/...`, and
+/// aggregation. Use [`OutputStyleSource::UserSettings`] for the config home,
+/// [`OutputStyleSource::ProjectSettings`] for `project config dir/...`, and
 /// [`OutputStyleSource::PolicySettings`] for the managed location.
 pub fn load_dir_styles(dir: &Path, source: OutputStyleSource) -> Vec<OutputStyleConfig> {
     load_dir_styles_with_identity(dir, source)

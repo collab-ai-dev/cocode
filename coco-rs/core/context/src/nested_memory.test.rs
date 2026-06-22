@@ -18,7 +18,11 @@ fn entries_in<'a>(
 ) -> Vec<&'a LoadedMemoryEntry> {
     entries
         .iter()
-        .filter(|e| e.path.parent() == Some(dir) || e.path.starts_with(dir.join(".coco")))
+        .filter(|e| {
+            e.path.parent() == Some(dir)
+                || e.path
+                    .starts_with(dir.join(coco_utils_common::COCO_CONFIG_DIR_NAME))
+        })
         .collect()
 }
 
@@ -220,7 +224,7 @@ fn traverse_loads_dot_coco_config() {
     let root = tempdir().unwrap();
     let proj = root.path().join("proj");
     let sub = proj.join("sub");
-    let cfg = sub.join(".coco");
+    let cfg = sub.join(coco_utils_common::COCO_CONFIG_DIR_NAME);
     fs::create_dir_all(&cfg).unwrap();
     fs::write(cfg.join("CLAUDE.md"), "config").unwrap();
     let trigger = sub.join("f.rs");
@@ -233,7 +237,8 @@ fn traverse_loads_dot_coco_config() {
         .find(|e| e.source == MemoryFileSource::ProjectConfig);
     assert!(
         cfg_entry.is_some(),
-        "expected ProjectConfig for sub/.coco/CLAUDE.md"
+        "expected ProjectConfig for sub/{}/CLAUDE.md",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
     );
 }
 

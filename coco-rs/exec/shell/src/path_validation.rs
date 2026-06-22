@@ -2,27 +2,34 @@
 //!
 //! Checks file paths in commands for dangerous targets (/, /etc, /usr, etc.)
 
-/// Dangerous filesystem paths that always require approval for rm/rmdir.
-const DANGEROUS_REMOVAL_PATHS: &[&str] = &[
-    "/",
-    "/etc",
-    "/usr",
-    "/lib",
-    "/lib64",
-    "/bin",
-    "/sbin",
-    "/boot",
-    "/dev",
-    "/proc",
-    "/sys",
-    "/var",
-    "/tmp",
-    "/root",
-    "/home",
-    "~",
-    "~/.claude",
-    "~/.coco",
-];
+fn dangerous_removal_paths() -> Vec<String> {
+    [
+        "/",
+        "/etc",
+        "/usr",
+        "/lib",
+        "/lib64",
+        "/bin",
+        "/sbin",
+        "/boot",
+        "/dev",
+        "/proc",
+        "/sys",
+        "/var",
+        "/tmp",
+        "/root",
+        "/home",
+        "~",
+        "~/.claude",
+    ]
+    .into_iter()
+    .map(String::from)
+    .chain(std::iter::once(format!(
+        "~/{}",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    )))
+    .collect()
+}
 
 /// Check if a file path is dangerous for a destructive operation.
 ///
@@ -30,8 +37,8 @@ const DANGEROUS_REMOVAL_PATHS: &[&str] = &[
 pub fn check_dangerous_path(_command: &str, path: &str, cwd: &str) -> Option<String> {
     let resolved = resolve_path(path, cwd);
 
-    for &dangerous in DANGEROUS_REMOVAL_PATHS {
-        let expanded = expand_home(dangerous);
+    for dangerous in dangerous_removal_paths() {
+        let expanded = expand_home(&dangerous);
         // Only flag if the resolved path IS the dangerous directory itself
         // (not a deep descendant within it, which is usually safe)
         if resolved == expanded {

@@ -230,7 +230,8 @@ fn generate_seatbelt_profile(
         );
         let _ = writeln!(
             profile,
-            "(allow file-write* (subpath \"{escaped}/.coco/debug\"))"
+            "(allow file-write* (subpath \"{escaped}/{}/debug\"))",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
         );
     }
     profile.push('\n');

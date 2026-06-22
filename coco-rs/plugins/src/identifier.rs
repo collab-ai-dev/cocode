@@ -96,9 +96,9 @@ impl<'de> Deserialize<'de> for PluginId {
 pub enum PluginScope {
     /// Local development via `--plugin-dir`.
     Local = 0,
-    /// `<cwd>/.coco/plugins/`.
+    /// `project config dir/plugins/`.
     Project = 1,
-    /// `~/.coco/plugins/`.
+    /// `config home/plugins/`.
     User = 2,
     /// Enterprise/policy-managed plugins. Cannot be disabled by users.
     Managed = 3,

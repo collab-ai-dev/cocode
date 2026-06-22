@@ -24,7 +24,7 @@
 //! # Canonical git root
 //!
 //! Agent worktrees always land in the **canonical** repo's
-//! `.coco/worktrees/` dir, even when spawned from inside a session
+//! `project config dir/worktrees/` dir, even when spawned from inside a session
 //! worktree. The canonical root is resolved via
 //! [`AgentWorktreeManager::canonical_git_root`] at manager construction
 //! so subagent worktrees never nest.
@@ -205,7 +205,7 @@ pub struct AgentWorktreeConfig {
 /// Constructed once per session from a resolved canonical git root.
 /// All `create_for` and `cleanup_if_unchanged` calls operate against
 /// that root — nested spawns from inside a session worktree still
-/// land their worktrees in the main repo's `.coco/worktrees/`.
+/// land their worktrees in the main repo's `project config dir/worktrees/`.
 pub struct AgentWorktreeManager {
     canonical_git_root: PathBuf,
     config: AgentWorktreeConfig,
@@ -282,7 +282,7 @@ impl AgentWorktreeManager {
     /// Validated here to reject path separators + shell metacharacters.
     ///
     /// Side effects (post-creation setup):
-    /// - Copy `.coco/settings.local.json` into the worktree.
+    /// - Copy `project config dir/settings.local.json` into the worktree.
     /// - Configure `core.hooksPath` to point at the main repo's hooks
     ///   (so husky / custom hooks resolve correctly).
     pub fn create_for(&self, slug: &str) -> Result<AgentWorktreeSession, WorktreeError> {
@@ -290,7 +290,7 @@ impl AgentWorktreeManager {
 
         let worktree_path = self
             .canonical_git_root
-            .join(".coco")
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
             .join("worktrees")
             .join(slug);
         let branch = format!("claude/{slug}");
@@ -360,7 +360,7 @@ impl AgentWorktreeManager {
 
     /// Sweep stale agent worktrees — background-safe cleanup.
     ///
-    /// Scans `.coco/worktrees/agent-*` under the canonical root
+    /// Scans `project config dir/worktrees/agent-*` under the canonical root
     /// and removes directories whose last-modified time is older
     /// than `older_than`. Used for cases where a prior session
     /// crashed before `cleanup_if_unchanged` could run (parent
@@ -375,7 +375,10 @@ impl AgentWorktreeManager {
     /// This is a best-effort cleanup; all errors are swallowed so
     /// a stuck worktree doesn't block session startup.
     pub fn cleanup_stale(&self, older_than: std::time::Duration) -> usize {
-        let worktrees_dir = self.canonical_git_root.join(".coco").join("worktrees");
+        let worktrees_dir = self
+            .canonical_git_root
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("worktrees");
         let entries = match std::fs::read_dir(&worktrees_dir) {
             Ok(e) => e,
             Err(_) => return 0, // dir doesn't exist — nothing to sweep.
@@ -583,15 +586,19 @@ fn git_stdout(cwd: &Path, args: &[&str]) -> Result<String, WorktreeError> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Copies `.coco/settings.local.json` from the main repo into the worktree
+/// Copies `project config dir/settings.local.json` from the main repo into the worktree
 /// so child agents inherit local settings (auth tokens, per-project
 /// preferences).
 fn copy_settings_local(repo_root: &Path, worktree_path: &Path) -> Result<(), WorktreeError> {
-    let src = repo_root.join(".coco").join("settings.local.json");
+    let src = repo_root
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("settings.local.json");
     if !src.exists() {
         return Ok(()); // no local settings to propagate — no-op.
     }
-    let dst = worktree_path.join(".coco").join("settings.local.json");
+    let dst = worktree_path
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("settings.local.json");
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }

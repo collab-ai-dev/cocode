@@ -30,11 +30,11 @@ fn parse_known_actions_round_trip() {
         "scroll:pageUp",
         "selection:copy",
         "messageActions:enter",
-        // coco-rs-only team-roster open action (A7a) — must round-trip so it
-        // loads from `~/.coco/keybindings.json`.
+        // Local team-roster open action (A7a) — must round-trip so it
+        // loads from `config home/keybindings.json`.
         "app:toggleTeamRoster",
-        // coco-rs extensions folded from the old TUI cascade (tui-v2) — each
-        // must round-trip so a `~/.coco/keybindings.json` override loads.
+        // Local extensions folded from the old TUI cascade (tui-v2) — each
+        // must round-trip so a `config home/keybindings.json` override loads.
         "app:forceQuit",
         "app:help",
         "app:commandPalette",

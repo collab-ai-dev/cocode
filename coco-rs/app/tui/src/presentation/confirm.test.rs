@@ -9,6 +9,11 @@ use crate::state::PluginHintState;
 use crate::state::TaskDetailState;
 use crate::theme::Theme;
 use coco_tui_ui::style::UiStyles;
+use coco_utils_common::COCO_CONFIG_DIR_NAME;
+
+fn project_config_path(child: &str) -> String {
+    format!("{COCO_CONFIG_DIR_NAME}/{child}")
+}
 
 #[test]
 fn cost_warning_content_formats_cents() {
@@ -107,7 +112,7 @@ fn plan_approval_content_truncates_long_preview_and_marks_focus() {
     let mut state = PlanApprovalPromptState::new(
         "req-1".to_string(),
         "planner".to_string(),
-        Some(".coco/plans/demo.md".to_string()),
+        Some(project_config_path("plans/demo.md")),
         (0..20)
             .map(|i| format!("step {i}"))
             .collect::<Vec<_>>()
@@ -119,7 +124,10 @@ fn plan_approval_content_truncates_long_preview_and_marks_focus() {
 
     assert_eq!(title, " Plan approval — from planner ");
     assert_eq!(border, theme.plan_mode);
-    assert!(body.contains("Plan file: .coco/plans/demo.md"));
+    assert!(body.contains(&format!(
+        "Plan file: {}",
+        project_config_path("plans/demo.md")
+    )));
     assert!(body.contains("step 17"));
     assert!(!body.contains("step 18"));
     assert!(body.contains("plan truncated"));

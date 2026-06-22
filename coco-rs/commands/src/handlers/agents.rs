@@ -6,7 +6,7 @@
 //!
 //! Backed by the `coco-subagent` catalog: built-ins from
 //! [`coco_subagent::BuiltinAgentCatalog::interactive`] plus markdown agents
-//! discovered under `~/.coco/agents` (user) and `<cwd>/.coco/agents`
+//! discovered under `config home/agents` (user) and `project config dir/agents`
 //! (project). Source precedence is applied by the store; we only render
 //! the snapshot here.
 //!
@@ -131,10 +131,13 @@ fn render(args: &str, paths: AgentSearchPaths) -> crate::Result<String> {
 
 fn render_list(snapshot: &coco_subagent::AgentCatalogSnapshot) -> String {
     if snapshot.active_count() == 0 {
-        return "No agents found.\n\
-                Place markdown agent definitions in ~/.coco/agents (user) \
-                or .coco/agents (project)."
-            .to_string();
+        let user_path = format!("~/{}/agents", coco_utils_common::COCO_CONFIG_DIR_NAME);
+        let project_path = format!("{}/agents", coco_utils_common::COCO_CONFIG_DIR_NAME);
+        return format!(
+            "No agents found.\n\
+                Place markdown agent definitions in {user_path} (user) \
+                or {project_path} (project)."
+        );
     }
 
     let mut out = format!("{} agent(s):\n\n", snapshot.active_count());
@@ -296,9 +299,7 @@ fn render_validate(report: &coco_subagent::AgentLoadReport) -> String {
     out
 }
 
-/// Standard slash-command agent search paths: `~/.coco/agents` (user) plus
-/// `<cwd>/.coco/agents` (project). Mirrors the CLI helper of the same
-/// shape — kept here so the handler stays self-contained.
+/// Standard slash-command agent search paths.
 fn standard_search_paths(config_home: &Path, cwd: &Path) -> AgentSearchPaths {
     let plugins = coco_plugins::load_enabled_plugins(config_home, cwd);
     let plugin_dirs = coco_plugins::plugin_agent_dirs(&plugins)
@@ -312,7 +313,10 @@ fn standard_search_paths(config_home: &Path, cwd: &Path) -> AgentSearchPaths {
         .collect();
     AgentSearchPaths {
         user_dir: Some(config_home.join("agents")),
-        project_dirs: vec![cwd.join(".coco").join("agents")],
+        project_dirs: vec![
+            cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("agents"),
+        ],
         flag_dirs: Vec::new(),
         policy_dirs: Vec::new(),
         plugin_dirs,

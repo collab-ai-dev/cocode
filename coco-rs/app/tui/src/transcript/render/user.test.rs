@@ -7,6 +7,7 @@ use coco_messages::UserMessage;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 use coco_tui_ui::theme::Theme;
+use coco_utils_common::COCO_CONFIG_DIR_NAME;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -50,8 +51,10 @@ fn flatten(lines: &[ratatui::text::Line<'static>]) -> String {
 
 #[test]
 fn plan_implementation_origin_renders_compact_chip_not_wall() {
-    let plan = "Implement the following plan:\n\n# Trip\n- Day 1\n- Day 2\n\nPlan file path: /Users/x/.coco/plans/keen-knitting-lagoon.md";
-    let lines = render_user(&user_cell(plan, Some(MessageOrigin::PlanImplementation)));
+    let plan = format!(
+        "Implement the following plan:\n\n# Trip\n- Day 1\n- Day 2\n\nPlan file path: /Users/x/{COCO_CONFIG_DIR_NAME}/plans/keen-knitting-lagoon.md"
+    );
+    let lines = render_user(&user_cell(&plan, Some(MessageOrigin::PlanImplementation)));
 
     // One compact chip — NOT a multi-line `❯` echo of the whole plan.
     assert_eq!(lines.len(), 1);

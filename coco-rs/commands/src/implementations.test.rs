@@ -182,16 +182,20 @@ fn test_plan_handler_subcommands() {
 
 #[test]
 fn statusline_prompt_describes_coco_runtime_fields() {
-    assert!(STATUSLINE_PROMPT.contains("Configure my Coco status line."));
-    assert!(STATUSLINE_PROMPT.contains("~/.coco/settings.json"));
-    assert!(STATUSLINE_PROMPT.contains("model.{id,display_name,provider}"));
-    assert!(STATUSLINE_PROMPT.contains("context_window.{used,total,percent}"));
-    assert!(STATUSLINE_PROMPT.contains("mcp.connected_servers"));
-    assert!(!STATUSLINE_PROMPT.contains("~/.claude"));
-    assert!(!STATUSLINE_PROMPT.contains("session_name"));
-    assert!(!STATUSLINE_PROMPT.contains("transcript_path"));
-    assert!(!STATUSLINE_PROMPT.contains("rate_limits"));
-    assert!(!STATUSLINE_PROMPT.contains("worktree"));
+    let prompt = statusline_prompt();
+    assert!(prompt.contains(coco_config::constants::PRODUCT_NAME));
+    assert!(prompt.contains(&format!(
+        "~/{}/settings.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    )));
+    assert!(prompt.contains("model.{id,display_name,provider}"));
+    assert!(prompt.contains("context_window.{used,total,percent}"));
+    assert!(prompt.contains("mcp.connected_servers"));
+    assert!(!prompt.contains("~/.claude"));
+    assert!(!prompt.contains("session_name"));
+    assert!(!prompt.contains("transcript_path"));
+    assert!(!prompt.contains("rate_limits"));
+    assert!(!prompt.contains("worktree"));
 }
 
 #[tokio::test]
@@ -252,7 +256,8 @@ fn test_sandbox_handler() {
 #[test]
 fn test_version_handler() {
     let output = version_handler("");
-    assert!(output.starts_with("cocode v"));
+    let expected_prefix = format!("{} v", coco_config::constants::PRODUCT_NAME);
+    assert!(output.starts_with(&expected_prefix));
 }
 
 // /vim is now an async handler; behavior covered by handlers::vim::tests.
@@ -382,7 +387,7 @@ async fn test_model_handler_known() {
     use crate::CommandHandler;
     use crate::CommandResult;
     // Sandbox the settings write so this test doesn't pollute the
-    // developer's real `~/.coco/settings.json`.
+    // developer's real `config home/settings.json`.
     let tmp = tempfile::tempdir().unwrap();
     let prev = std::env::var_os("COCO_CONFIG_DIR");
     unsafe {

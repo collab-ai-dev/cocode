@@ -30,10 +30,10 @@ use crate::snapshot::AgentCatalogSnapshot;
 /// surface a typed error rather than silently picking a wrong path.
 ///
 /// `config_home` is normally `coco_config::global_config::config_home()`
-/// (i.e. `~/.coco/`), `cwd` is the active worktree root.
+/// (i.e. `config home/`), `cwd` is the active worktree root.
 ///
-/// coco-rs serves user agents from `~/.coco/agents/` and project agents
-/// from `<cwd>/.coco/agents/`, keeping all config uniformly under `.coco/`.
+/// coco-rs serves user agents from `config home/agents/` and project agents
+/// from `project config dir/agents/`, keeping all config uniformly under `project config dir/`.
 pub fn resolve_writable_agent_dir(
     source: AgentSource,
     config_home: &Path,
@@ -41,7 +41,10 @@ pub fn resolve_writable_agent_dir(
 ) -> Option<PathBuf> {
     match source {
         AgentSource::UserSettings => Some(config_home.join("agents")),
-        AgentSource::ProjectSettings => Some(cwd.join(".coco").join("agents")),
+        AgentSource::ProjectSettings => Some(
+            cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("agents"),
+        ),
         AgentSource::BuiltIn
         | AgentSource::Plugin
         | AgentSource::FlagSettings

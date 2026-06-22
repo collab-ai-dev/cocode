@@ -266,7 +266,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             permission_bridge: Some(session_permission_bridge),
             command_registry: command_registry.clone(),
             skill_manager: skill_manager.clone(),
-            // Load `~/.coco/agents` + `<cwd>/.coco/agents` and surface
+            // Load `config home/agents` + `project config dir/agents` and surface
             // them in AgentTool's per-turn dynamic prompt listing.
             // Worktree fallback is applied inside
             // `standard_agent_search_paths`.
@@ -402,7 +402,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         coco_config::global_config::config_home(),
     );
 
-    // Cron tick driver — fires scheduled tasks (.coco/scheduled_tasks.json +
+    // Cron tick driver — fires scheduled tasks (project config dir/scheduled_tasks.json +
     // session tasks) into the command queue. TUI-only: headless/SDK have no
     // queue-drain pump. Self-terminates on session shutdown; held as a guard.
     let _cron_tick_guard = coco_cli::cron_tick::spawn(runtime.clone());
@@ -621,7 +621,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // Seed `model_catalog` and `model_by_role` from the resolved
     // `ModelRegistry`. The TUI picker and Ctrl+T cycle both consult
     // these — using the registry view (rather than the L0-only
-    // `builtin_models_partial`) means L1 `~/.coco/models.json` entries
+    // `builtin_models_partial`) means L1 `config home/models.json` entries
     // and L2 `providers.<n>.models.<id>` overrides are visible.
     {
         let mut catalog = build_model_catalog(&runtime.runtime_config);
@@ -687,7 +687,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             .add_toast(coco_tui::state::ui::Toast::warning(msg));
     }
 
-    // Boot the TUI theme stack from ~/.coco/theme.json. This is TUI-local
+    // Boot the TUI theme stack from config home/theme.json. This is TUI-local
     // config, separate from RuntimeConfig, so user palette edits can hot-reload
     // without rebuilding the agent runtime.
     let _theme_watcher_guard = {
@@ -4535,11 +4535,15 @@ async fn dispatch_permissions_mutation(
                     .deny_rules
                     .remove(&PermissionRuleSource::Session);
             }
-            "Session permission rules reset. Custom session allow/deny entries were cleared; \
-             built-in read-only tools remain allowed by the active permission mode. File-based rules \
-             (.coco/settings.json, ~/.coco/settings.json) are unchanged — \
-             edit those files directly to modify persistent rules."
-                .to_string()
+            {
+                let config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;
+                format!(
+                    "Session permission rules reset. Custom session allow/deny entries were cleared; \
+                     built-in read-only tools remain allowed by the active permission mode. File-based rules \
+                     ({config_dir}/settings.json, ~/{config_dir}/settings.json) are unchanged — \
+                     edit those files directly to modify persistent rules."
+                )
+            }
         }
     };
     emit_slash_text(event_tx, "permissions", args, &confirmation).await;
@@ -5312,7 +5316,7 @@ fn spawn_auto_title_task(runtime: Arc<crate::session_runtime::SessionRuntime>, p
 }
 
 /// Persist a `skill_overrides` JSON patch to
-/// `<cwd>/.coco/settings.local.json`, refresh the in-process
+/// `project config dir/settings.local.json`, refresh the in-process
 /// registry, and notify the TUI so the dialog's toast + `/`
 /// autocomplete pick up the change.
 ///
@@ -5324,7 +5328,7 @@ fn spawn_auto_title_task(runtime: Arc<crate::session_runtime::SessionRuntime>, p
 ///
 /// Steps:
 ///
-/// - Atomic write to `.coco/settings.local.json` via
+/// - Atomic write to `project config dir/settings.local.json` via
 ///   [`coco_config::LocalSettingsWriter::write_local`] — the writer
 ///   also republishes `RuntimeConfig` synchronously so the next
 ///   agent turn reads the new tiers.
@@ -6360,7 +6364,7 @@ fn provider_display_label(provider: &str) -> String {
 /// fields).
 ///
 /// **No file write.** Users who want the binding to survive across
-/// sessions edit `~/.coco.json::model_roles.<role>.primary` themselves.
+/// sessions edit `the global config file::model_roles.<role>.primary` themselves.
 /// The picker is for fast experimentation, not persistence.
 ///
 /// Non-Main roles take effect on the next turn that drives that role.

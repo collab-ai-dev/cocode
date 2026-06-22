@@ -1,6 +1,11 @@
 use super::*;
 use coco_subagent::definition_store::AgentSearchPaths;
+use coco_utils_common::COCO_CONFIG_DIR_NAME;
 use std::path::PathBuf;
+
+fn config_path(root: &str, child: &str) -> String {
+    format!("{root}/{COCO_CONFIG_DIR_NAME}/{child}")
+}
 
 fn empty_paths() -> AgentSearchPaths {
     AgentSearchPaths {
@@ -59,16 +64,18 @@ fn paths_lists_built_in_first() {
 
 #[test]
 fn paths_includes_configured_dirs() {
+    let user_agents = config_path("/home/u", "agents");
+    let project_agents = config_path("/proj", "agents");
     let paths = AgentSearchPaths {
-        user_dir: Some(PathBuf::from("/home/u/.coco/agents")),
-        project_dirs: vec![PathBuf::from("/proj/.coco/agents")],
+        user_dir: Some(PathBuf::from(&user_agents)),
+        project_dirs: vec![PathBuf::from(&project_agents)],
         flag_dirs: Vec::<PathBuf>::new(),
         policy_dirs: Vec::<PathBuf>::new(),
         plugin_dirs: Vec::new(),
     };
     let out = render("paths", paths).unwrap();
-    assert!(out.contains("/home/u/.coco/agents"));
-    assert!(out.contains("/proj/.coco/agents"));
+    assert!(out.contains(&user_agents));
+    assert!(out.contains(&project_agents));
 }
 
 #[test]

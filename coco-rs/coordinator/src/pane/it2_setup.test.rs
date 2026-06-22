@@ -43,5 +43,8 @@ async fn test_detect_python_package_manager_no_panic() {
 #[test]
 fn test_it2_setup_state_path() {
     let path = it2_setup_state_path();
-    assert!(path.to_string_lossy().contains(".coco"));
+    assert!(
+        path.to_string_lossy()
+            .contains(coco_utils_common::COCO_CONFIG_DIR_NAME)
+    );
 }

@@ -20,6 +20,7 @@ coco-secret-redact.workspace = true
 coco-file-watch.workspace = true
 coco-shell-parser.workspace = true
 coco-utils-json-repair.workspace = true
+coco-utils-common.workspace = true
 arc-swap.workspace = true
 async-trait.workspace = true
 

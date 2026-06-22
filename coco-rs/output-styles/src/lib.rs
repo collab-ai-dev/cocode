@@ -1,7 +1,7 @@
 //! Output style catalog, loaders, and resolution.
 //!
 //! Built-in styles (`default` / `Explanatory` / `Learning`), project + user
-//! `.coco/output-styles/*.md` discovery, plugin-sourced styles, system-prompt
+//! `project config dir/output-styles/*.md` discovery, plugin-sourced styles, system-prompt
 //! injection, and per-turn reminder generation.
 //!
 //! ## Architecture

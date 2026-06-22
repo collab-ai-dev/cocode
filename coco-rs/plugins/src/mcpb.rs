@@ -78,7 +78,7 @@ pub struct McpbLoadResult {
 /// Load and extract an MCPB bundle.
 ///
 /// `archive_bytes` are the raw ZIP bytes. `cache_root` is where the bundle
-/// will be extracted (e.g. `~/.coco/plugins/mcpb-cache/`). `user_config` is
+/// will be extracted (e.g. `config home/plugins/mcpb-cache/`). `user_config` is
 /// the values the user has already provided for `config_schema` keys.
 pub fn load_mcpb(
     source_url: &str,

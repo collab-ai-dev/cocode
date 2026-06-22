@@ -29,7 +29,7 @@ pub struct SettingsWatcher {
 
 impl SettingsWatcher {
     /// Create a watcher using the default `CatalogPaths` (the
-    /// developer's `~/.coco/`).
+    /// developer's `config home/`).
     pub fn new(cwd: &Path) -> Self {
         Self::with_catalogs(cwd, &crate::runtime::CatalogPaths::default())
     }
@@ -37,7 +37,7 @@ impl SettingsWatcher {
     /// Create a watcher with explicit user / managed / catalog
     /// paths. Tests pass a TempDir-rooted `CatalogPaths` so the watch
     /// list reflects the isolated filesystem state, not the
-    /// developer's real `~/.coco/`.
+    /// developer's real `config home/`.
     pub fn with_catalogs(cwd: &Path, catalogs: &crate::runtime::CatalogPaths) -> Self {
         let watched_paths = vec![
             (

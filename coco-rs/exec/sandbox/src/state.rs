@@ -818,7 +818,7 @@ impl SandboxState {
     ///
     /// Used when the agent enters a new worktree or workspace that needs
     /// write access. The writable root uses default read-only subpath
-    /// protections (.git, .coco, .agents).
+    /// protections (.git, project config dir, .agents).
     ///
     /// Uses `std::sync::RwLock::write()` (blocking). The lock is held briefly
     /// so this is safe to call from async contexts, but avoid calling while

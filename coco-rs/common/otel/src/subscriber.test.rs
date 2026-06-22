@@ -111,15 +111,16 @@ fn resolve_log_path_uses_explicit_when_set() {
 
 #[test]
 fn resolve_log_path_default_uses_dir_and_prefix() {
+    let log_dir = PathBuf::from(format!(
+        "/home/u/{}/logs",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    ));
     let o = SubscriberOpts {
-        default_log_dir: PathBuf::from("/home/u/.coco/logs"),
+        default_log_dir: log_dir.clone(),
         default_file_prefix: "session".to_string(),
         ..opts(Mode::Headless)
     };
-    assert_eq!(
-        resolve_log_path(&o),
-        PathBuf::from("/home/u/.coco/logs/session.log")
-    );
+    assert_eq!(resolve_log_path(&o), log_dir.join("session.log"));
 }
 
 #[test]

@@ -116,7 +116,7 @@ pub struct RuntimeConfig {
 /// Resolved on-disk paths for settings + catalog files. Threaded
 /// through `RuntimeConfigBuilder` so tests can isolate filesystem
 /// reads via `tempfile::TempDir`. Production `Default` resolves to
-/// the user's `~/.coco/` via `global_config`.
+/// the user's `config home/` via `global_config`.
 ///
 /// Every path the resolver and reloader read is overridable here —
 /// including user-level `settings.json` and the platform-managed
@@ -210,7 +210,7 @@ impl RuntimeConfigBuilder {
     }
 
     /// Override the catalog paths. Tests pass a `TempDir`-rooted
-    /// `CatalogPaths` to isolate from the developer's `~/.coco/`.
+    /// `CatalogPaths` to isolate from the developer's `config home/`.
     pub fn with_catalog_paths(mut self, catalogs: CatalogPaths) -> Self {
         self.catalogs = catalogs;
         self
@@ -284,7 +284,7 @@ pub fn parse_enabled_setting_sources(
 }
 
 /// Build a runtime using the default `CatalogPaths` (the developer's
-/// `~/.coco/`). Test callers should prefer
+/// `config home/`). Test callers should prefer
 /// `build_runtime_config_with` and pass a TempDir-rooted `CatalogPaths`
 /// to avoid filesystem pollution.
 pub fn build_runtime_config(
@@ -473,7 +473,7 @@ fn resolve_providers(
         providers.insert(provider.name.clone(), provider);
     }
 
-    // L1: ~/.coco/providers.json (shared catalog)
+    // L1: config home/providers.json (shared catalog)
     let file_catalog = load_providers_catalog(&catalogs.providers)?;
     apply_partial_layer(&mut providers, &file_catalog)?;
 

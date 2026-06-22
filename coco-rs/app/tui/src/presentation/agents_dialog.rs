@@ -23,6 +23,14 @@ use crate::state::WizardSource;
 use crate::state::WizardTextField;
 use coco_tui_ui::style::UiStyles;
 
+fn config_path(child: &str) -> String {
+    format!("{}/{}", coco_utils_common::COCO_CONFIG_DIR_NAME, child)
+}
+
+fn user_config_path(child: &str) -> String {
+    format!("~/{}", config_path(child))
+}
+
 /// Caret glyph rendered between the text-before-cursor and text-
 /// after-cursor halves of an active input field. Static, not
 /// blinking — ratatui doesn't redraw on its own without animation
@@ -162,7 +170,12 @@ fn render_running_tab(
 
 fn render_library_tab(s: &AgentsDialogState) -> String {
     if s.library.is_empty() {
-        return t!("dialog.agents_library_empty").to_string();
+        return t!(
+            "dialog.agents_library_empty",
+            user_path = user_config_path("agents").as_str(),
+            project_path = config_path("agents").as_str(),
+        )
+        .to_string();
     }
     let mut out = String::new();
     for (i, row) in s.library.iter().enumerate() {
@@ -255,10 +268,19 @@ fn render_create_wizard(w: &CreateWizardState) -> String {
             out.push_str(&t!("dialog.agents_create_source_prompt"));
             out.push('\n');
             let sources = [
-                (WizardSource::User, t!("dialog.agents_create_source_user")),
+                (
+                    WizardSource::User,
+                    t!(
+                        "dialog.agents_create_source_user",
+                        path = user_config_path("agents").as_str(),
+                    ),
+                ),
                 (
                     WizardSource::Project,
-                    t!("dialog.agents_create_source_project"),
+                    t!(
+                        "dialog.agents_create_source_project",
+                        path = config_path("agents").as_str(),
+                    ),
                 ),
             ];
             for (source, label) in &sources {
@@ -273,8 +295,14 @@ fn render_create_wizard(w: &CreateWizardState) -> String {
             out.push_str(&t!("dialog.agents_create_confirm_prompt"));
             out.push_str("\n\n");
             let source_label = match w.source {
-                WizardSource::User => t!("dialog.agents_create_source_user_short"),
-                WizardSource::Project => t!("dialog.agents_create_source_project_short"),
+                WizardSource::User => t!(
+                    "dialog.agents_create_source_user_short",
+                    path = user_config_path("agents").as_str(),
+                ),
+                WizardSource::Project => t!(
+                    "dialog.agents_create_source_project_short",
+                    path = config_path("agents").as_str(),
+                ),
             };
             out.push_str(&t!(
                 "dialog.agents_create_confirm_name",

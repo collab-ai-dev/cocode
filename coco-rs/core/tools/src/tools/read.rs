@@ -552,7 +552,7 @@ impl Tool for ReadTool {
         )
         .await;
         // Fire-and-forget skill discovery: walk up to the cwd boundary and
-        // queue any `.coco/skills/` ancestor dirs for the app/query layer to
+        // queue any `project config dir/skills/` ancestor dirs for the app/query layer to
         // load; also queue the file path for conditional-skill activation.
         crate::track_skill_triggers(ctx, path).await;
         // Every successful Read pushes the path into

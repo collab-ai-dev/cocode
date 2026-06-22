@@ -1,7 +1,7 @@
 //! Plugin version calculation per source type.
 //!
 //! Each source kind gets a deterministic version string used to compute the
-//! versioned cache path `~/.coco/plugins/<name>/<version>/`.
+//! versioned cache path `config home/plugins/<name>/<version>/`.
 
 use sha2::Digest;
 use sha2::Sha256;

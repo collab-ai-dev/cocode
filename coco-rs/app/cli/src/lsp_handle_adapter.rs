@@ -97,7 +97,7 @@ impl LspManagerAdapter {
 
     /// Re-read `lsp_servers.json` from disk **and** re-prewarm.
     /// Intended for the future settings-watcher hook (`SettingsWatcher`
-    /// detects a `.coco/lsp_servers.json` change) or a manual `/lsp
+    /// detects a `project config dir/lsp_servers.json` change) or a manual `/lsp
     /// reload` slash command. Idempotent: a cached client survives the
     /// prewarm cache-check; only new entries spawn. Plugin-contributed
     /// servers (dropped by the disk reload) are re-merged.

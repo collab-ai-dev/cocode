@@ -107,7 +107,7 @@ impl TeamRosterStore {
         }
         // Leader-session dedup is the in-memory `active_team` check above
         // (one team per leader, mirroring TS `appState.teamContext`). We do NOT
-        // scan `~/.coco/teams/` by `lead_session_id`: a disk scan reads every
+        // scan `config home/teams/` by `lead_session_id`: a disk scan reads every
         // *other* live `coco` process's team files (and races their create /
         // delete), coupling independent sessions for no benefit — a session
         // owns exactly one process, whose `active_team` is the authority.

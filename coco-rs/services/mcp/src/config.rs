@@ -50,23 +50,19 @@ impl McpConfigLoader {
             &mut configs_by_name,
         );
 
-        // 5. Project scope: .coco/mcp.json
-        load_mcp_json(
-            &cwd.join(".coco/mcp.json"),
-            ConfigScope::Project,
-            &mut configs_by_name,
-        );
+        let project_mcp = cwd
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("mcp.json");
+        load_mcp_json(&project_mcp, ConfigScope::Project, &mut configs_by_name);
 
-        // 6. User scope: ~/.coco/mcp.json (config_home)
+        // 6. User scope
         let user_mcp = config_home.join("mcp.json");
         load_mcp_json(&user_mcp, ConfigScope::User, &mut configs_by_name);
 
-        // 7. Local scope: .coco.local/mcp.json (gitignored per-project)
-        load_mcp_json(
-            &cwd.join(".coco.local/mcp.json"),
-            ConfigScope::Local,
-            &mut configs_by_name,
-        );
+        // 7. Local scope
+        let local_dir = format!("{}.local", coco_utils_common::COCO_CONFIG_DIR_NAME);
+        let local_mcp = cwd.join(local_dir).join("mcp.json");
+        load_mcp_json(&local_mcp, ConfigScope::Local, &mut configs_by_name);
 
         configs_by_name.into_values().collect()
     }
@@ -93,10 +89,7 @@ impl McpConfigLoader {
         }
     }
 
-    /// Resolve the config home directory (~/.coco/ or `COCO_CONFIG_DIR`).
-    ///
-    /// Delegates to `coco_config::global_config::config_home` so MCP and
-    /// the rest of the config surface always agree on the same path.
+    /// Resolve the config home directory.
     pub fn config_home() -> PathBuf {
         coco_config::global_config::config_home()
     }

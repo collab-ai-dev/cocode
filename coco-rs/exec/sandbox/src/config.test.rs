@@ -73,7 +73,10 @@ fn test_enforcement_level_from_protocol() {
 #[test]
 fn test_writable_root_default_subpaths() {
     let root = WritableRoot::new("/home/user/project");
-    assert_eq!(root.readonly_subpaths, vec![".git", ".coco", ".agents"]);
+    assert_eq!(
+        root.readonly_subpaths,
+        vec![".git", coco_utils_common::COCO_CONFIG_DIR_NAME, ".agents"]
+    );
 }
 
 #[test]
@@ -84,8 +87,14 @@ fn test_writable_root_is_writable() {
     // .git subpath is read-only
     assert!(!root.is_writable(Path::new("/home/user/project/.git/config")));
     assert!(!root.is_writable(Path::new("/home/user/project/.git")));
-    // .coco subpath is read-only
-    assert!(!root.is_writable(Path::new("/home/user/project/.coco/config.json")));
+    // project config dir subpath is read-only
+    assert!(
+        !root.is_writable(
+            &Path::new("/home/user/project")
+                .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("config.json")
+        )
+    );
     // .agents subpath is read-only
     assert!(!root.is_writable(Path::new("/home/user/project/.agents/skills")));
     // Paths outside root are not writable
@@ -98,7 +107,10 @@ fn test_writable_root_resolved_readonly_subpaths() {
     let resolved = root.resolved_readonly_subpaths();
     assert_eq!(resolved.len(), 3);
     assert_eq!(resolved[0], Path::new("/home/user/project/.git"));
-    assert_eq!(resolved[1], Path::new("/home/user/project/.coco"));
+    assert_eq!(
+        resolved[1],
+        Path::new("/home/user/project").join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+    );
     assert_eq!(resolved[2], Path::new("/home/user/project/.agents"));
 }
 
@@ -130,7 +142,10 @@ fn test_writable_root_serde_default_subpaths() {
     // JSON without readonly_subpaths should use defaults
     let json = r#"{"path":"/tmp/work"}"#;
     let parsed: WritableRoot = serde_json::from_str(json).expect("parse");
-    assert_eq!(parsed.readonly_subpaths, vec![".git", ".coco", ".agents"]);
+    assert_eq!(
+        parsed.readonly_subpaths,
+        vec![".git", coco_utils_common::COCO_CONFIG_DIR_NAME, ".agents"]
+    );
 }
 
 // ==========================================================================
@@ -202,7 +217,10 @@ fn test_writable_root_detects_git_pointer_file() {
     let wr = WritableRoot::new(root);
     // Should contain default subpaths plus the resolved gitdir
     assert!(wr.readonly_subpaths.contains(&".git".to_string()));
-    assert!(wr.readonly_subpaths.contains(&".coco".to_string()));
+    assert!(
+        wr.readonly_subpaths
+            .contains(&coco_utils_common::COCO_CONFIG_DIR_NAME.to_string())
+    );
     let gitdir_rel = gitdir
         .strip_prefix(root)
         .expect("strip")

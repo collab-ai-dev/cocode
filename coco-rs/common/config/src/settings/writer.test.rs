@@ -62,7 +62,10 @@ fn read_or_default_returns_empty_object_on_empty_file() {
 #[test]
 fn atomic_write_creates_parent_dir() {
     let dir = TempDir::new().unwrap();
-    let nested = dir.path().join(".coco").join("settings.local.json");
+    let nested = dir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("settings.local.json");
     atomic_write(&nested, &json!({ "skill_overrides": { "foo": "off" } })).unwrap();
     let body = fs::read_to_string(&nested).unwrap();
     assert!(body.contains("skill_overrides"));

@@ -784,7 +784,7 @@ pub(crate) fn nested_memory_chip_path(
 }
 
 /// Display form of a path: relative to `cwd` when it lives under the working
-/// directory, else the absolute path unchanged (e.g. `~/.coco/CLAUDE.md`).
+/// directory, else the absolute path unchanged (e.g. `config home/CLAUDE.md`).
 pub(crate) fn relativize_path(path: &str, cwd: Option<&str>) -> String {
     if let Some(cwd) = cwd.filter(|c| !c.is_empty())
         && let Some(rest) = path

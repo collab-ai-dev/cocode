@@ -68,7 +68,7 @@ pub enum KeymapBinding {
     /// from code comments stay grep-friendly. Not user-rebindable.
     Verb { id: &'static str },
     /// App-level configurable action; resolver-driven. User can rebind
-    /// via `~/.coco/keybindings.json`.
+    /// via `config home/keybindings.json`.
     Action {
         #[serde(serialize_with = "serialize_action")]
         action: KeybindingAction,

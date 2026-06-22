@@ -7,7 +7,7 @@ use std::pin::Pin;
 
 /// Async handler for `/clear`.
 ///
-/// Checks `~/.coco/sessions/` to provide context on preserved history,
+/// Checks `config home/sessions/` to provide context on preserved history,
 /// then returns a message describing the clear operation.
 pub fn handler(
     _args: String,

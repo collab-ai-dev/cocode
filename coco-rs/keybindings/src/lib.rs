@@ -3,7 +3,7 @@
 //! Two complementary representations:
 //!
 //! * [`KeybindingsConfig`] / [`KeybindingBlock`] — the JSON shape from
-//!   `~/.coco/keybindings.json`. Used by the loader and template generator.
+//!   `config home/keybindings.json`. Used by the loader and template generator.
 //! * [`Keybinding`] (parsed) — the resolver's working unit: a typed
 //!   `(KeyChord, Option<KeybindingAction>, KeybindingContext)` triple.
 //!

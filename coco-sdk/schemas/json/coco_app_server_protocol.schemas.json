@@ -72,12 +72,12 @@
         },
         {
           "const": "userSettings",
-          "description": "User-level agents (`~/.coco/agents/*.md`).",
+          "description": "User-level agents (`config home/agents/*.md`).",
           "type": "string"
         },
         {
           "const": "projectSettings",
-          "description": "Project-level agents (`<project>/.coco/agents/*.md`).",
+          "description": "Project-level agents (`<project>/project config dir/agents/*.md`).",
           "type": "string"
         },
         {
@@ -1789,7 +1789,7 @@
           "type": "object"
         },
         {
-          "description": "User-scope on-disk skill (`~/.coco/skills/`).",
+          "description": "User-scope on-disk skill (`config home/skills/`).",
           "properties": {
             "kind": {
               "const": "user",
@@ -1802,7 +1802,7 @@
           "type": "object"
         },
         {
-          "description": "Project-scope on-disk skill (`.coco/skills/`).",
+          "description": "Project-scope on-disk skill (`project config dir/skills/`).",
           "properties": {
             "kind": {
               "const": "project",
@@ -3757,12 +3757,12 @@
       "properties": {
         "_cocoRsProtocolVersion": {
           "default": "",
-          "description": "Protocol version the coco-rs server speaks.",
+          "description": "Protocol version the server speaks.",
           "type": "string"
         },
         "_cocoRsVersion": {
           "default": "",
-          "description": "coco-rs binary version.",
+          "description": "Binary version.",
           "type": "string"
         },
         "account": {
@@ -4293,7 +4293,7 @@
       "type": "object"
     },
     "McpConnectionStatus": {
-      "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`:\n`'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`.\n`Disconnected` is a coco-rs extension used when the connection manager\nhas no record of a named server.",
+      "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`:\n`'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`.\n`Disconnected` is a local extension used when the connection manager\nhas no record of a named server.",
       "oneOf": [
         {
           "enum": [
@@ -4307,7 +4307,7 @@
         },
         {
           "const": "disconnected",
-          "description": "coco-rs extension: server name unknown to the connection manager.",
+          "description": "Local extension: server name unknown to the connection manager.",
           "type": "string"
         }
       ]
@@ -4645,7 +4645,7 @@
         },
         {
           "const": "user",
-          "description": "User-global (`~/.coco/CLAUDE.md` or `~/CLAUDE.md`).",
+          "description": "User-global (`config home/CLAUDE.md` or `~/CLAUDE.md`).",
           "type": "string"
         },
         {
@@ -4660,7 +4660,7 @@
         },
         {
           "const": "project_config",
-          "description": "`<dir>/.coco/CLAUDE.md` \u2014 project-config-dir convention.",
+          "description": "`<dir>/project config dir/CLAUDE.md` \u2014 project-config-dir convention.",
           "type": "string"
         },
         {
@@ -4695,7 +4695,7 @@
       "oneOf": [
         {
           "const": "user",
-          "description": "User-global memory (~/.coco/MEMORY.md).",
+          "description": "User-global memory (config home/MEMORY.md).",
           "type": "string"
         },
         {
@@ -8772,7 +8772,7 @@
           "type": "object"
         },
         "num_api_calls": {
-          "description": "coco-rs extension: num_api_calls for observability (not in TS).",
+          "description": "Local extension: num_api_calls for observability (not in TS).",
           "format": "int32",
           "type": [
             "integer",
@@ -8992,7 +8992,7 @@
           "type": "array"
         },
         "protocol_version": {
-          "description": "coco-rs extension: protocol version negotiation.",
+          "description": "Local extension: protocol version negotiation.",
           "type": "string"
         },
         "provider": {
@@ -9642,7 +9642,7 @@
               "type": "null"
             }
           ],
-          "description": "What is stored in `<cwd>/.coco/settings.local.json`'s\n`skill_overrides[name]` _right now_. `None` \u21d2 key absent.\nDrives the dialog's diff-against-baseline save algorithm."
+          "description": "What is stored in `project config dir/settings.local.json`'s\n`skill_overrides[name]` _right now_. `None` \u21d2 key absent.\nDrives the dialog's diff-against-baseline save algorithm."
         },
         "description": {
           "description": "One-line description from the skill frontmatter. The 2.1.142\nfilter (`/` search) matches name + description + source\nlabel, so the dialog needs the description on the wire even\nthough it isn't shown on every row.",
@@ -9721,12 +9721,12 @@
         },
         {
           "const": "project",
-          "description": "`<cwd>/.coco/skills/` \u2014 project skills.",
+          "description": "`project config dir/skills/` \u2014 project skills.",
           "type": "string"
         },
         {
           "const": "user",
-          "description": "`~/.coco/skills/` \u2014 TS `userSettings`.",
+          "description": "`config home/skills/` \u2014 TS `userSettings`.",
           "type": "string"
         },
         {
@@ -12169,7 +12169,7 @@
       "type": "object"
     },
     "TuiOnlyEvent": {
-      "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n\n23 variants (20 from design \u00a74.1 + 3 coco-rs extensions).",
+      "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n\n23 variants (20 from design \u00a74.1 + 3 local extensions).",
       "oneOf": [
         {
           "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.resolution_detail` so the tool's\n`execute()` can branch on the choice. TS parity:\n`ExitPlanModePermissionRequest.tsx:691-704` option grid.\n\n`original_input` carries the raw tool input so the TUI can derive\npath-scoped read permission updates for classic \"always allow\"\napprovals.",
@@ -12378,7 +12378,7 @@
           "type": "object"
         },
         {
-          "description": "Slash-command catalogue changed \u2014 sent after the seed at session\nstart AND whenever `/reload-plugins` swaps the active\n`CommandRegistry`. The TUI overwrites\n`state.session.available_commands` with this list so the `/`\nautocomplete popup and command palette stay in sync. TS parity:\nthe TS popup re-queries `getCommands()` inline; coco-rs pushes\nthe snapshot because the registry lives in the CLI process.",
+          "description": "Slash-command catalogue changed \u2014 sent after the seed at session\nstart AND whenever `/reload-plugins` swaps the active\n`CommandRegistry`. The TUI overwrites\n`state.session.available_commands` with this list so the `/`\nautocomplete popup and command palette stay in sync. TS parity:\nthe TS popup re-queries `getCommands()` inline; this implementation pushes\nthe snapshot because the registry lives in the CLI process.",
           "properties": {
             "commands": {
               "items": {
@@ -12806,7 +12806,7 @@
           "type": "object"
         },
         {
-          "description": "Rewind completed \u2014 TUI truncates messages and restores input state.\ncoco-rs extension: UI-only because it carries TUI-specific identifiers\nfor message truncation and input repopulation. Out-of-band from the\ndesign's `rewind/completed` ServerNotification which carries protocol\nmetadata only.",
+          "description": "Rewind completed \u2014 TUI truncates messages and restores input state.\nLocal extension: UI-only because it carries TUI-specific identifiers\nfor message truncation and input repopulation. Out-of-band from the\ndesign's `rewind/completed` ServerNotification which carries protocol\nmetadata only.",
           "properties": {
             "files_changed": {
               "description": "Number of files restored (0 if conversation-only).",
@@ -13492,7 +13492,7 @@
         },
         {
           "const": "stop_sequence",
-          "description": "Stop sequence matched. Coco-rs refinement of the spec's\n`Stop` bucket \u2014 provider raw is `stop_sequence` /\n`\"stop-sequence\"`.",
+          "description": "Stop sequence matched. Runtime refinement of the spec's\n`Stop` bucket \u2014 provider raw is `stop_sequence` /\n`\"stop-sequence\"`.",
           "type": "string"
         },
         {
@@ -13507,7 +13507,7 @@
         },
         {
           "const": "model_context_window_exceeded",
-          "description": "Context-window limit hit. Coco-rs refinement of the\n`MaxTokens` bucket \u2014 provider raw is\n`model_context_window_exceeded`. Recovery path is shared with\n`MaxTokens`; the variant exists so the user-facing wording\ncan distinguish \"context window\" vs \"output token maximum\".\nWire string keeps the Anthropic-original\n`model_context_window_exceeded` form so transcripts that\ncaptured the raw value round-trip via the typed enum.",
+          "description": "Context-window limit hit. Runtime refinement of the\n`MaxTokens` bucket \u2014 provider raw is\n`model_context_window_exceeded`. Recovery path is shared with\n`MaxTokens`; the variant exists so the user-facing wording\ncan distinguish \"context window\" vs \"output token maximum\".\nWire string keeps the Anthropic-original\n`model_context_window_exceeded` form so transcripts that\ncaptured the raw value round-trip via the typed enum.",
           "type": "string"
         },
         {

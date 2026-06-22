@@ -213,7 +213,7 @@ impl FileHistorySnapshotSink for TranscriptFileHistorySink {
 /// Map a coco-config-reload [`TrackedKind`] to the `ConfigChangeSource`
 /// wire string consumed by the `ConfigChange` hook. Catalog files
 /// (`providers.json`, `models.json`) live alongside the user settings
-/// in `~/.coco/`, so they share the `user_settings` source.
+/// in `config home/`, so they share the `user_settings` source.
 /// `flag_settings` falls back to `user_settings` since there is no
 /// flag-settings hook source variant.
 fn config_change_source_for_kind(
@@ -513,7 +513,7 @@ pub struct SessionRuntime {
     ///
     /// **Not persisted.** Model-role changes via the TUI are session-local;
     /// users who want a binding to survive across sessions edit
-    /// `~/.coco.json::model_roles.<role>.primary` themselves.
+    /// `the global config file::model_roles.<role>.primary` themselves.
     ///
     /// Cleared on `Drop` (i.e. session end) via the natural `Arc`
     /// lifecycle. `/clear` keeps overrides — the conversation reset is
@@ -1439,7 +1439,8 @@ impl SessionRuntime {
             // Disk-backed so `durable` cron tasks survive restarts;
             // session tasks stay in-memory. The cron tick driver shares this store.
             schedule_store: Arc::new(coco_tool_runtime::DiskBackedScheduleStore::new(
-                cwd.join(".coco").join("scheduled_tasks.json"),
+                cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                    .join("scheduled_tasks.json"),
             )),
             model_runtimes,
             side_query,
@@ -1986,7 +1987,7 @@ impl SessionRuntime {
 
     /// Install (or replace) an in-memory override for `role`. The
     /// override layers above `runtime_config.model_roles` and is NOT
-    /// persisted to `~/.coco.json` — re-bind on every session via the
+    /// persisted to the global config file — re-bind on every session via the
     /// picker, or edit settings to make the change durable.
     ///
     /// For `role == Main` this also rewrites
@@ -3862,7 +3863,7 @@ pub(crate) async fn build_sandbox_state(
     let sourced_fs_allow_read = runtime_config.settings.sourced_filesystem_allow_read();
 
     // Deny writes to every settings source so a sandboxed command can't edit
-    // its own permission rules (or disable the sandbox), plus the `.coco/`
+    // its own permission rules (or disable the sandbox), plus the `project config dir/`
     // command/agent definitions.
     let settings_files = sandbox_settings_deny_paths(&settings_root);
 
@@ -3955,7 +3956,9 @@ pub(crate) fn sandbox_settings_deny_paths(settings_root: &std::path::Path) -> Ve
         global_config::local_settings_path(settings_root),
         managed.clone(),
         global_config::global_config_path(),
-        settings_root.join(".coco").join("agents"),
+        settings_root
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("agents"),
     ];
     // Managed drop-in directory (`managed-settings.d`) next to the managed
     // settings file — deny the whole drop-in dir, not just the .json.

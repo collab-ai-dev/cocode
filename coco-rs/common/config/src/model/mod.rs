@@ -50,7 +50,7 @@ pub struct ModelInfo {
     /// model — recovery goes straight to the multi-turn resume-nudge
     /// (Phase-2). `Some(N)` where `N > max_output_tokens` enables a
     /// one-shot Phase-1 retry with `N` as the per-call cap. User opts
-    /// in per model via `~/.coco/models.json`. Provider-agnostic.
+    /// in per model via `config home/models.json`. Provider-agnostic.
     pub max_output_tokens_escalate: Option<PositiveTokens>,
     pub timeout_secs: Option<i64>,
 

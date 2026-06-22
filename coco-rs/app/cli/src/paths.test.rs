@@ -8,17 +8,34 @@ fn project_output_style_dirs_walk_from_cwd_to_git_root() {
     let repo = temp.path().join("repo");
     let nested = repo.join("app").join("crate");
     std::fs::create_dir_all(repo.join(".git")).unwrap();
-    std::fs::create_dir_all(nested.join(".coco").join("output-styles")).unwrap();
-    std::fs::create_dir_all(repo.join(".coco").join("output-styles")).unwrap();
-    std::fs::create_dir_all(temp.path().join(".coco").join("output-styles")).unwrap();
+    std::fs::create_dir_all(
+        nested
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("output-styles"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(
+        repo.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("output-styles"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(
+        temp.path()
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("output-styles"),
+    )
+    .unwrap();
 
     let dirs = project_output_style_dirs(&nested);
 
     assert_eq!(
         dirs,
         vec![
-            nested.join(".coco").join("output-styles"),
-            repo.join(".coco").join("output-styles"),
+            nested
+                .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("output-styles"),
+            repo.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("output-styles"),
         ]
     );
 }
@@ -30,9 +47,19 @@ fn project_output_style_dirs_only_returns_existing_dirs() {
     let nested = repo.join("src");
     std::fs::create_dir_all(repo.join(".git")).unwrap();
     std::fs::create_dir_all(&nested).unwrap();
-    std::fs::create_dir_all(repo.join(".coco").join("output-styles")).unwrap();
+    std::fs::create_dir_all(
+        repo.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("output-styles"),
+    )
+    .unwrap();
 
     let dirs = project_output_style_dirs(&nested);
 
-    assert_eq!(dirs, vec![repo.join(".coco").join("output-styles")]);
+    assert_eq!(
+        dirs,
+        vec![
+            repo.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("output-styles")
+        ]
+    );
 }

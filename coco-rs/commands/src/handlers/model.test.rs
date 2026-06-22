@@ -69,7 +69,7 @@ fn test_builtin_summary_sorted_by_provider() {
 
 /// Run `f` with `COCO_CONFIG_DIR` pointed at a fresh tempdir so the
 /// settings-write side effect of `/model <name>` doesn't touch the
-/// developer's real `~/.coco/settings.json`.
+/// developer's real `config home/settings.json`.
 async fn with_tmp_config_dir<F, Fut, T>(f: F) -> T
 where
     F: FnOnce() -> Fut,

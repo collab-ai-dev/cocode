@@ -11,7 +11,7 @@ members = [
     "common/model-card",
     "common/llm-types",
 
-    # ─── utils/ (26) ── 24 from cocode-rs + 2 new ───
+    # ─── utils/ (26) ── 24 existing + 2 new ───
     "utils/absolute-path",
     "utils/async-utils",
     "utils/cache",

@@ -1,4 +1,4 @@
-//! `/keybindings` — write template + open ~/.coco/keybindings.json in $EDITOR.
+//! `/keybindings` — write template + open config home/keybindings.json in $EDITOR.
 //!
 //! Writes a template (with `wx` exclusive-create) so existing customizations
 //! are never clobbered, then opens the file in the user's editor. Uses a
@@ -96,7 +96,8 @@ fn default_editor() -> String {
 }
 
 fn keybindings_path(home: &Path) -> PathBuf {
-    home.join(".coco").join("keybindings.json")
+    home.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("keybindings.json")
 }
 
 #[cfg(test)]

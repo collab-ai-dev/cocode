@@ -202,7 +202,7 @@ impl CommandState {
 /// state machine. Defaults to `false` — typing then inserts characters
 /// directly and Esc routes to the standard Cancel flow, matching what a
 /// non-vim user expects. The `/vim` slash command persists user intent
-/// to `~/.coco/state/editor_mode`; wiring that file back into this flag
+/// to `config home/state/editor_mode`; wiring that file back into this flag
 /// at TUI startup is tracked separately.
 #[derive(Debug, Clone, Default)]
 pub struct VimRuntime {

@@ -27,8 +27,8 @@
 //! referenced by any existing union/struct), add it to
 //! `ENTRY_POINTS` instead of sprinkling individual lines elsewhere.
 //!
-//! TS reference: cocode-rs `app-server-protocol/src/export.rs` (454 lines).
-//! coco-rs is shorter because the merger replaces the per-variant list.
+//! TS reference: `app-server-protocol/src/export.rs` (454 lines).
+//! This implementation is shorter because the merger replaces the per-variant list.
 
 #[cfg(not(feature = "schema"))]
 fn main() {

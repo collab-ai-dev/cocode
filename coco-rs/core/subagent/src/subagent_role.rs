@@ -9,7 +9,7 @@
 //!    - `GeneralPurpose` / `StatusLine` / `CocoGuide` → `ModelRole::Subagent`
 //! 3. Custom agent (no built-in mapping) → `ModelRole::Subagent`
 //!
-//! coco-rs adds role routing so `~/.coco/config.json` can map a role to
+//! coco-rs adds role routing so `config home/config.json` can map a role to
 //! whichever (provider, model) is currently best, and `.md` agents declare
 //! a role rather than a concrete model.
 //!

@@ -348,7 +348,7 @@ pub(crate) fn resolve_skill_load_gates_with_add_dirs(
     let project_enabled = enabled.contains(&SettingSource::Project);
 
     // `--add-dir` plus settings `permissions.additionalDirectories`, resolved
-    // to `.coco/skills` roots in `build_session_skill_manager`.
+    // to `project config dir/skills` roots in `build_session_skill_manager`.
     let mut additional_dirs = cli_add_dirs.to_vec();
     for dir in &runtime_config
         .settings
@@ -519,7 +519,7 @@ pub async fn install_session_late_binds(
 /// config-driven init the user asked for). Builds (or reuses) the
 /// `McpConnectionManager`, registers config-file servers
 /// (`McpConfigLoader::load` — `.mcp.json`, `.claude/mcp.json`,
-/// `~/.coco/mcp.json`, managed / enterprise, local) plus plugin-contributed
+/// `config home/mcp.json`, managed / enterprise, local) plus plugin-contributed
 /// servers, attaches the manager + an `McpManagerAdapter` handle to the runtime,
 /// then connects every registered server in the background (concurrent,
 /// per-server error-isolated) and registers each connected server's tools into

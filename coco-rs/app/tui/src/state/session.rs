@@ -46,13 +46,13 @@ impl ProviderStatus {
 
 /// One (provider, model) entry in the TUI's session-frozen model
 /// directory. Seeded from `RuntimeConfig.model_registry` (L0 builtin +
-/// L1 `~/.coco/models.json` + L2 per-provider overrides) at session
+/// L1 `config home/models.json` + L2 per-provider overrides) at session
 /// start; the picker and `Ctrl+T` thinking cycle both consult this
 /// snapshot.
 ///
 /// The data is intentionally frozen for the session lifetime — model
 /// metadata is a runtime-config concern, not a per-turn one. If the
-/// user edits `~/.coco/models.json` mid-session they need to restart
+/// user edits `config home/models.json` mid-session they need to restart
 /// to see the new entries (matches the rest of the runtime_config
 /// snapshot policy).
 #[derive(Debug, Clone)]

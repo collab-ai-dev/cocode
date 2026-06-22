@@ -5,7 +5,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 /// Per-user global config. Separate from Settings.
-/// Stored at `~/.coco.json` (or `$COCO_CONFIG_DIR/global.json` when set).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GlobalConfig {
@@ -78,22 +77,11 @@ pub struct CompanionConfig {
 }
 
 /// Get the config home directory.
-///
-/// Respects `COCO_CONFIG_DIR` env var, defaults to `~/.coco`. Delegates to
-/// `coco_utils_common::find_coco_home` so MCP and every other consumer
-/// agree on one implementation (empty-string filtering, cross-platform
-/// `dirs::home_dir()` fallback, last-resort cwd fallback).
 pub fn config_home() -> PathBuf {
     coco_utils_common::find_coco_home()
 }
 
 /// Get the global config file path.
-///
-/// Priority:
-/// 1. If `COCO_CONFIG_DIR` is set, put `global.json` inside that dir so
-///    the whole coco workspace (settings + global state + sessions)
-///    moves as a unit. Useful for sandboxed / per-project setups.
-/// 2. Otherwise, fall back to `~/.coco.json`, a sibling of `~/.coco/`.
 pub fn global_config_path() -> PathBuf {
     if let Some(custom) =
         std::env::var_os(coco_utils_common::COCO_CONFIG_DIR_ENV).filter(|s| !s.is_empty())
@@ -102,7 +90,7 @@ pub fn global_config_path() -> PathBuf {
     }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".coco.json")
+        .join(format!("{}.json", coco_utils_common::COCO_CONFIG_DIR_NAME))
 }
 
 /// Load global config from disk.
@@ -146,29 +134,29 @@ pub fn user_settings_path() -> PathBuf {
     config_home().join("settings.json")
 }
 
-/// Path to `~/.coco/providers.json` — provider catalog sibling of
-/// `settings.json`. See `docs/coco-rs/multi-provider-plan.md` §4.
+/// Get the provider catalog path.
 pub fn providers_catalog_path() -> PathBuf {
     config_home().join("providers.json")
 }
 
-/// Path to `~/.coco/models.json` — provider-agnostic ModelInfo
-/// catalog sibling of `settings.json`.
+/// Get the provider-agnostic model catalog path.
 pub fn models_catalog_path() -> PathBuf {
     config_home().join("models.json")
 }
 
-/// Get the project settings path (`<cwd>/.coco/settings.json`, checked in).
+/// Get the project settings path.
 pub fn project_settings_path(cwd: &Path) -> PathBuf {
-    cwd.join(".coco/settings.json")
+    cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("settings.json")
 }
 
-/// Get the local (gitignored) settings path (`<cwd>/.coco/settings.local.json`).
+/// Get the local settings path.
 pub fn local_settings_path(cwd: &Path) -> PathBuf {
-    cwd.join(".coco/settings.local.json")
+    cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("settings.local.json")
 }
 
-/// Set `key` to `value` in `~/.coco/settings.json`.
+/// Set `key` to `value` in user settings.
 ///
 /// Creates the file and parent directory as needed. Used by slash-command
 /// handlers that need to persist a single setting without round-tripping
@@ -248,15 +236,24 @@ pub fn maybe_mark_project_onboarding_complete(cwd: &Path) {
 pub fn managed_settings_path() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from("/Library/Application Support/CoCo/managed-settings.json")
+        PathBuf::from(format!(
+            "/Library/Application Support/{}/managed-settings.json",
+            crate::constants::PRODUCT_NAME
+        ))
     }
     #[cfg(target_os = "linux")]
     {
-        PathBuf::from("/etc/coco/managed-settings.json")
+        PathBuf::from(format!(
+            "/etc/{}/managed-settings.json",
+            crate::constants::PRODUCT_NAME
+        ))
     }
     #[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
     {
-        PathBuf::from(r"C:\Program Files\CoCo\managed-settings.json")
+        PathBuf::from(format!(
+            r"C:\Program Files\{}\managed-settings.json",
+            crate::constants::PRODUCT_NAME
+        ))
     }
 }
 

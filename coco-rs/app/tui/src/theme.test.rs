@@ -193,7 +193,7 @@ fn test_global_theme_setting_maps_auto_and_named() {
     use super::config::theme_setting_from_global;
 
     // `GlobalConfig.theme` ("auto" / a named theme) maps into the TUI's
-    // ThemeSetting so `~/.coco.json` drives the theme when no `theme.json`.
+    // ThemeSetting so the global config file drives the theme when no `theme.json`.
     assert_eq!(theme_setting_from_global("auto"), Some(ThemeSetting::Auto));
     assert_eq!(
         theme_setting_from_global("  AUTO "),

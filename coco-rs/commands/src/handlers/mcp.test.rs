@@ -49,13 +49,13 @@ async fn test_load_servers_from_file() {
 #[tokio::test]
 async fn test_add_and_remove_server() {
     let tmp = tempfile::tempdir().unwrap();
-    let settings_dir = tmp.path().join(".coco");
+    let settings_dir = tmp.path().join(coco_utils_common::COCO_CONFIG_DIR_NAME);
     tokio::fs::create_dir_all(&settings_dir).await.unwrap();
     let settings_path = settings_dir.join("settings.json");
     tokio::fs::write(&settings_path, "{}").await.unwrap();
 
     // We need to work in the temp dir context for relative paths
-    // Since handlers use relative ".coco/settings.json", we test the
+    // Since handlers use relative "project config dir/settings.json", we test the
     // load function directly instead
     let mut parsed: serde_json::Value = serde_json::json!({});
     parsed["mcpServers"] = serde_json::json!({});

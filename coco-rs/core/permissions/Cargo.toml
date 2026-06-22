@@ -25,6 +25,7 @@ coco-paths.workspace = true
 # `permissions.ts:553-558` reads `context.localDenialTracking ??
 # appState.denialTracking ?? createDenialTrackingState()`.
 coco-tool-runtime.workspace = true
+coco-utils-common.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

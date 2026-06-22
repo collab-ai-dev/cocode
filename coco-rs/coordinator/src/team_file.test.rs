@@ -97,7 +97,7 @@ fn test_team_file_serde_new_fields() {
 fn test_list_team_names_empty() {
     // Won't find any teams in a temp dir, but validates no panic
     let names = list_team_names();
-    // May or may not be empty depending on whether ~/.coco/teams/ exists
+    // May or may not be empty depending on whether config home/teams/ exists
     let _ = names;
 }
 

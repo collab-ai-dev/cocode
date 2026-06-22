@@ -36,7 +36,7 @@ fn test_subagent_type_aliases_canonicalize_on_input() {
         SubagentType::from_str("statusline_setup").unwrap(),
         SubagentType::StatusLine
     );
-    // Coco-rs canonical name + snake_case alias.
+    // Canonical name + snake_case alias.
     assert_eq!(
         SubagentType::from_str("coco-guide").unwrap(),
         SubagentType::CocoGuide
@@ -266,7 +266,10 @@ fn test_agent_definition_serde_roundtrip() {
         description: Some("Explores the codebase".into()),
         source: AgentSource::ProjectSettings,
         filename: Some("researcher.md".into()),
-        base_dir: Some(".coco/agents".into()),
+        base_dir: Some(format!(
+            "{}/agents",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
+        )),
         system_prompt: Some("You are a code researcher.".into()),
         effort: Some(crate::ReasoningEffort::High),
         use_exact_tools: true,

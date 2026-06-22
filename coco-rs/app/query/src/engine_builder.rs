@@ -501,7 +501,7 @@ impl QueryEngine {
     }
 
     /// Install the session-memory text snapshot. Callers (CLI/TUI/SDK)
-    /// load `~/.coco/<session>/session-memory/summary.md` at startup
+    /// load `config home/<session>/session-memory/summary.md` at startup
     /// and refresh it after every extraction. Empty string ≡ no SM
     /// available, the SM-first compact path becomes a pass-through.
     pub fn with_session_memory_text(self, text: String) -> Self {

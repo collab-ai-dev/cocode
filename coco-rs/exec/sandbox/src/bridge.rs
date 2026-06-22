@@ -10,7 +10,7 @@
 //! installed) preserves the original error.
 //!
 //! TS parity: Claude Code's sandbox surfaces a "Allow this write?" /
-//! "Allow this network call?" prompt. Coco-rs keeps the underlying
+//! "Allow this network call?" prompt. This crate keeps the underlying
 //! deny semantics deterministic — the bridge is opt-in and lives at
 //! a clearly-labelled seam, so the threat model stays auditable.
 //!

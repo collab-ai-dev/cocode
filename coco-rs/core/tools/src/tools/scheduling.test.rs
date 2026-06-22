@@ -192,7 +192,10 @@ fn cron_create_render_recurring_durable() {
     );
     assert!(text.contains("(every Monday at 09:00)"), "got: {text}");
     assert!(
-        text.contains("persisted to .coco/scheduled_tasks.json"),
+        text.contains(&format!(
+            "persisted to {}/scheduled_tasks.json",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
+        )),
         "got: {text}"
     );
     assert!(text.contains("Auto-expires after 7 days"), "got: {text}");

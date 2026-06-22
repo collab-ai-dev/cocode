@@ -144,9 +144,13 @@ pub fn build_missed_notification(missed: &[&CronTask]) -> String {
     } else {
         (" was", "It has", "this prompt", "it")
     };
+    let schedule_path = format!(
+        "{}/scheduled_tasks.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    );
     let header = format!(
         "The following one-shot scheduled task{were} missed while Claude was not running. \
-         {they} already been removed from .coco/scheduled_tasks.json.\n\n\
+         {they} already been removed from {schedule_path}.\n\n\
          Do NOT execute {these} yet. First use the AskUserQuestion tool to ask whether to run \
          {them} now. Only execute if the user confirms."
     );

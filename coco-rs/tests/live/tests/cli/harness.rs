@@ -92,7 +92,7 @@ pub struct SessionConfig {
     /// Files to drop into the workdir before the engine starts. Each
     /// entry is `(relative_path, content)`. Parent dirs are created.
     /// Used by tests that need pre-populated `CLAUDE.md`,
-    /// `.coco/skills/<name>/SKILL.md`, or custom slash commands.
+    /// `project config dir/skills/<name>/SKILL.md`, or custom slash commands.
     pub pre_workdir_files: Vec<(PathBuf, String)>,
     /// Hook registry to install on the engine. `None` means no hooks
     /// (the production default for `coco -p`). Tests targeting

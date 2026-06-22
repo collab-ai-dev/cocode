@@ -3,7 +3,7 @@
 //! Input is `setting` (required) plus `value` (optional; omit to read).
 //! Mutating sets currently emit an instructional message instead of writing
 //! config — the authoritative path is the CLI `config` subcommand or direct
-//! edits to `~/.coco/config.json`.
+//! edits to `config home/config.json`.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;

@@ -11,7 +11,7 @@ fn sanitize_replaces_non_alnum_with_dash() {
 #[test]
 fn sanitize_matches_observed_ts_slug_on_this_machine() {
     // The literal directory observed at
-    // `~/.coco/projects/-Users-linyuzhi-codespace-myagent-codex/`.
+    // `config home/projects/-Users-linyuzhi-codespace-myagent-codex/`.
     // Our slug for the same cwd MUST be identical — this is the bug
     // the legacy `memory::sanitize_project_path` introduced.
     assert_eq!(

@@ -26,9 +26,9 @@ pub enum CommandSource {
     Builtin,
     /// Compiled-in bundled skill.
     Bundled,
-    /// User-scope on-disk skill (`~/.coco/skills/`).
+    /// User-scope on-disk skill (`config home/skills/`).
     User,
-    /// Project-scope on-disk skill (`.coco/skills/`).
+    /// Project-scope on-disk skill (`project config dir/skills/`).
     Project,
     /// Enterprise/policy-managed skill.
     Managed,

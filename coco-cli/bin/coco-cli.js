@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Unified entry point for the Coco CLI.
+// Unified npm launcher.
 
 import { spawn } from "node:child_process";
 import { existsSync } from "fs";
@@ -12,10 +12,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 
+const PRODUCT_NAME = "cocode";
+const PACKAGE_SCOPE = "@cocode";
+const PACKAGE_BASENAME = "cocode-cli";
+const PACKAGE_NAME = `${PACKAGE_SCOPE}/${PACKAGE_BASENAME}`;
+
 const PLATFORM_PACKAGE_BY_TARGET = {
-  "x86_64-unknown-linux-musl": "@coco-cli/coco-cli-linux-x64",
-  "aarch64-unknown-linux-musl": "@coco-cli/coco-cli-linux-arm64",
-  "aarch64-apple-darwin": "@coco-cli/coco-cli-darwin-arm64",
+  "x86_64-unknown-linux-musl": `${PACKAGE_NAME}-linux-x64`,
+  "aarch64-unknown-linux-musl": `${PACKAGE_NAME}-linux-arm64`,
+  "aarch64-apple-darwin": `${PACKAGE_NAME}-darwin-arm64`,
 };
 
 const { platform, arch } = process;
@@ -70,26 +75,12 @@ try {
   if (existsSync(localBinaryPath)) {
     vendorRoot = localVendorRoot;
   } else {
-    const packageManager = detectPackageManager();
-    const updateCommand =
-      packageManager === "bun"
-        ? "bun install -g @coco-cli/coco-cli@latest"
-        : "npm install -g @coco-cli/coco-cli@latest";
-    throw new Error(
-      `Missing optional dependency ${platformPackage}. Reinstall Coco: ${updateCommand}`,
-    );
+    throw new Error(missingDependencyMessage(platformPackage));
   }
 }
 
 if (!vendorRoot) {
-  const packageManager = detectPackageManager();
-  const updateCommand =
-    packageManager === "bun"
-      ? "bun install -g @coco-cli/coco-cli@latest"
-      : "npm install -g @coco-cli/coco-cli@latest";
-  throw new Error(
-    `Missing optional dependency ${platformPackage}. Reinstall Coco: ${updateCommand}`,
-  );
+  throw new Error(missingDependencyMessage(platformPackage));
 }
 
 const archRoot = path.join(vendorRoot, targetTriple);
@@ -102,7 +93,7 @@ const binaryPath = path.join(archRoot, "coco", cocoBinaryName);
 // receives a fatal signal, both processes exit in a predictable manner.
 
 /**
- * Use heuristics to detect the package manager that was used to install Coco
+ * Use heuristics to detect the package manager that was used to install this package
  * in order to give the user a hint about how to update it.
  */
 function detectPackageManager() {
@@ -124,6 +115,17 @@ function detectPackageManager() {
   }
 
   return userAgent ? "npm" : null;
+}
+
+function installCommand(packageManager) {
+  return packageManager === "bun"
+    ? `bun install -g ${PACKAGE_NAME}@latest`
+    : `npm install -g ${PACKAGE_NAME}@latest`;
+}
+
+function missingDependencyMessage(platformPackage) {
+  const packageManager = detectPackageManager();
+  return `Missing optional dependency ${platformPackage}. Reinstall ${PRODUCT_NAME}: ${installCommand(packageManager)}`;
 }
 
 const env = { ...process.env };

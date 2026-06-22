@@ -60,6 +60,13 @@ fn now_epoch_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn scheduled_tasks_path() -> String {
+    format!(
+        "{}/scheduled_tasks.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    )
+}
+
 /// Typed input for [`CronCreateTool`].
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct CronCreateInput {
@@ -79,8 +86,7 @@ pub struct CronCreateInput {
     /// requests with pinned minute/hour/dom/month.
     #[serde(default = "default_true")]
     pub recurring: bool,
-    /// true = persist to .coco/scheduled_tasks.json and survive
-    /// restarts. false (default) = in-memory only, dies when this Claude
+    /// true = persist and survive restarts. false (default) = in-memory only, dies when this Claude
     /// session ends. Use true only when the user asks the task to
     /// survive across sessions.
     #[serde(default)]
@@ -129,9 +135,11 @@ impl Tool for CronCreateTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::AgentTriggers)
     }
-    /// Always exposes the durable path via `.coco/scheduled_tasks.json`.
     fn description(&self, _input: &CronCreateInput, _options: &DescriptionOptions) -> String {
-        "Schedule a prompt to run at a future time — either recurring on a cron schedule, or once at a specific time. Pass durable: true to persist to .coco/scheduled_tasks.json; otherwise session-only.".into()
+        format!(
+            "Schedule a prompt to run at a future time — either recurring on a cron schedule, or once at a specific time. Pass durable: true to persist to {}; otherwise session-only.",
+            scheduled_tasks_path()
+        )
     }
     fn should_defer(&self) -> bool {
         true
@@ -144,6 +152,7 @@ impl Tool for CronCreateTool {
     /// def from `prompt()`, not `description()` (`engine_prompt.rs`), so
     /// this is what the model actually reads.
     async fn prompt(&self, _options: &PromptOptions) -> String {
+        let task_path = scheduled_tasks_path();
         format!(
             "Schedule a prompt to be enqueued at a future time. Use for both recurring schedules and one-shot reminders.\n\
 \n\
@@ -172,11 +181,11 @@ Only use minute 0 or 30 when the user names that exact time and clearly means it
 \n\
 ## Durability\n\
 \n\
-By default (durable: false) the job lives only in this Claude session — nothing is written to disk, and the job is gone when Claude exits. Pass durable: true to write to .coco/scheduled_tasks.json so the job survives restarts. Only use durable: true when the user explicitly asks for the task to persist (\"keep doing this every day\", \"set this up permanently\"). Most \"remind me in 5 minutes\" / \"check back in an hour\" requests should stay session-only.\n\
+By default (durable: false) the job lives only in this Claude session — nothing is written to disk, and the job is gone when Claude exits. Pass durable: true to write to {task_path} so the job survives restarts. Only use durable: true when the user explicitly asks for the task to persist (\"keep doing this every day\", \"set this up permanently\"). Most \"remind me in 5 minutes\" / \"check back in an hour\" requests should stay session-only.\n\
 \n\
 ## Runtime behavior\n\
 \n\
-Jobs only fire while the REPL is idle (not mid-query). Durable jobs persist to .coco/scheduled_tasks.json and survive session restarts — on next launch they resume automatically. One-shot durable tasks that were missed while the REPL was closed are surfaced for catch-up. Session-only jobs die with the process. The scheduler adds a small deterministic jitter on top of whatever you pick: recurring tasks fire up to 10% of their period late (max 15 min); one-shot tasks landing on :00 or :30 fire up to 90 s early. Picking an off-minute is still the bigger lever.\n\
+Jobs only fire while the REPL is idle (not mid-query). Durable jobs persist to {task_path} and survive session restarts — on next launch they resume automatically. One-shot durable tasks that were missed while the REPL was closed are surfaced for catch-up. Session-only jobs die with the process. The scheduler adds a small deterministic jitter on top of whatever you pick: recurring tasks fire up to 10% of their period late (max 15 min); one-shot tasks landing on :00 or :30 fire up to 90 s early. Picking an off-minute is still the bigger lever.\n\
 \n\
 Recurring tasks auto-expire after {DEFAULT_MAX_AGE_DAYS} days — they fire one final time, then are deleted. This bounds session lifetime. Tell the user about the {DEFAULT_MAX_AGE_DAYS}-day limit when scheduling recurring jobs.\n\
 \n\
@@ -188,13 +197,10 @@ Returns a job ID you can pass to CronDelete."
     fn render_for_model(&self, out: &CronCreateOutput) -> Vec<ToolResultContentPart> {
         let id = &out.id;
         let schedule = &out.human_schedule;
-        // The scheduler (coco_cli::cron_tick) fires the prompt on schedule in
-        // the interactive session; durable=true also persists to
-        // .coco/scheduled_tasks.json so a later session picks it up.
         let where_str = if out.durable {
-            "persisted to .coco/scheduled_tasks.json"
+            format!("persisted to {}", scheduled_tasks_path())
         } else {
-            "session-only (not written to disk)"
+            "session-only (not written to disk)".to_string()
         };
         let text = if out.recurring {
             format!(
@@ -271,9 +277,8 @@ Returns a job ID you can pass to CronDelete."
             });
         }
 
-        // Persist via the store: durable → disk (.coco/scheduled_tasks.json),
-        // else session-only. The scheduler tick (coco_cli::cron_tick) picks it
-        // up and fires the prompt.
+        // Persist via the store: durable writes to disk, else session-only.
+        // The scheduler tick picks it up and fires the prompt.
         match ctx
             .schedules
             .add_cron_task(
@@ -370,7 +375,10 @@ impl Tool for CronDeleteTool {
     }
 
     async fn prompt(&self, _options: &PromptOptions) -> String {
-        "Cancel a cron job previously scheduled with CronCreate. Removes it from .coco/scheduled_tasks.json (durable jobs) or the in-memory session store (session-only jobs).".into()
+        format!(
+            "Cancel a cron job previously scheduled with CronCreate. Removes it from {} (durable jobs) or the in-memory session store (session-only jobs).",
+            scheduled_tasks_path()
+        )
     }
 
     fn render_for_model(&self, out: &CronDeleteOutput) -> Vec<ToolResultContentPart> {
@@ -472,7 +480,10 @@ impl Tool for CronListTool {
     }
 
     async fn prompt(&self, _options: &PromptOptions) -> String {
-        "List all cron jobs scheduled via CronCreate, both durable (.coco/scheduled_tasks.json) and session-only.".into()
+        format!(
+            "List all cron jobs scheduled via CronCreate, both durable ({}) and session-only.",
+            scheduled_tasks_path()
+        )
     }
     fn is_read_only(&self, _input: &CronListInput) -> bool {
         true

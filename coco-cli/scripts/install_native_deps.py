@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Coco native binaries (Rust CLI)."""
+"""Install native binaries for the npm package."""
 
 import argparse
 from contextlib import contextmanager
@@ -18,6 +18,7 @@ COCO_CLI_ROOT = SCRIPT_DIR.parent
 # Optional: set to a known-good Actions run URL so callers can omit --workflow-url.
 DEFAULT_WORKFLOW_URL = ""
 GITHUB_REPO = "coco-collab-dev/coco"
+PRODUCT_NAME = "cocode"
 VENDOR_DIR_NAME = "vendor"
 BINARY_TARGETS = (
     "x86_64-unknown-linux-musl",
@@ -80,7 +81,7 @@ def _gha_group(title: str):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Install native Coco binaries.")
+    parser = argparse.ArgumentParser(description=f"Install native {PRODUCT_NAME} binaries.")
     parser.add_argument(
         "--workflow-url",
         help=(

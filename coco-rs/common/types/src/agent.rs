@@ -18,7 +18,7 @@ use crate::ReasoningEffort;
 /// (`general-purpose`, `statusline-setup`, `verification`, `coco-guide`)
 /// stay lowercase. See `subagent-refactor-plan.md` § "Naming decision".
 ///
-/// **Coco-rs rename**: TS `claude-code-guide` is renamed to `coco-guide`
+/// TS `claude-code-guide` is renamed to `coco-guide`
 /// to match the project identity. Per project policy (no backward-compat
 /// shims) the TS string is not accepted as an alias — only `coco-guide`
 /// (and its `coco_guide` underscore form) parses.
@@ -156,10 +156,10 @@ pub enum AgentSource {
     /// Plugin contribution.
     #[serde(rename = "plugin")]
     Plugin,
-    /// User-level agents (`~/.coco/agents/*.md`).
+    /// User-level agents (`config home/agents/*.md`).
     #[serde(rename = "userSettings")]
     UserSettings,
-    /// Project-level agents (`<project>/.coco/agents/*.md`).
+    /// Project-level agents (`<project>/project config dir/agents/*.md`).
     #[serde(rename = "projectSettings")]
     ProjectSettings,
     /// JSON/CLI flag supplied agents.
@@ -374,7 +374,7 @@ impl AgentMcpServerSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryScope {
-    /// User-global memory (~/.coco/MEMORY.md).
+    /// User-global memory (config home/MEMORY.md).
     User,
     /// Project-scoped memory (project root MEMORY.md).
     #[default]
@@ -595,7 +595,7 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
 
-    /// Source directory (e.g. `<project>/.coco/agents`), for diagnostics.
+    /// Source directory (e.g. `<project>/project config dir/agents`), for diagnostics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_dir: Option<String>,
 
@@ -639,7 +639,7 @@ pub struct AgentDefinition {
     /// resolver uses this role as the source of truth — overriding the
     /// default `subagent_type → ModelRole` mapping. Lets a custom `.md`
     /// agent declare e.g. `model_role: explore` to ride on the user's
-    /// `~/.coco/config.json` Explore role mapping rather than the
+    /// `config home/config.json` Explore role mapping rather than the
     /// generic Subagent role.
     ///
     /// No TS equivalent — TS historically used model alias strings

@@ -85,8 +85,9 @@ impl CommandHandler for PluginHandler {
 async fn list_plugins() -> crate::Result<String> {
     let mut plugins = Vec::new();
 
-    // Scan project plugins
-    scan_plugin_dir(Path::new(".coco/plugins"), "project", &mut plugins).await;
+    let project_plugins_dir =
+        PathBuf::from(coco_utils_common::COCO_CONFIG_DIR_NAME).join("plugins");
+    scan_plugin_dir(&project_plugins_dir, "project", &mut plugins).await;
 
     // Scan user plugins
     scan_plugin_dir(&resolve_plugins_dir(), "user", &mut plugins).await;
@@ -96,8 +97,14 @@ async fn list_plugins() -> crate::Result<String> {
     if plugins.is_empty() {
         out.push_str("No plugins installed.\n\n");
         out.push_str("Plugin directories:\n");
-        out.push_str("  .coco/plugins/         (project-level)\n");
-        out.push_str("  ~/.coco/plugins/       (user-level)\n\n");
+        out.push_str(&format!(
+            "  {}/plugins/         (project-level)\n",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
+        ));
+        out.push_str(&format!(
+            "  ~/{}/plugins/       (user-level)\n\n",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
+        ));
         out.push_str("Each plugin is a directory containing a PLUGIN.toml manifest.\n\n");
         out.push_str("A plugin can provide:\n");
         out.push_str("  - Skills (slash commands)\n");
@@ -317,7 +324,9 @@ async fn uninstall_plugin(target: &str) -> crate::Result<String> {
         None => (target.to_string(), None),
     };
 
-    let project_dir = PathBuf::from(".coco/plugins").join(&name);
+    let project_dir = PathBuf::from(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("plugins")
+        .join(&name);
     let user_dir = Some(resolve_plugins_dir().join(&name));
 
     let removed_path = if tokio::fs::metadata(&project_dir).await.is_ok() {
@@ -379,7 +388,9 @@ async fn uninstall_plugin(target: &str) -> crate::Result<String> {
 
 /// Show detailed information about a specific plugin.
 async fn plugin_info(name: &str) -> crate::Result<String> {
-    let project_dir = PathBuf::from(".coco/plugins").join(name);
+    let project_dir = PathBuf::from(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("plugins")
+        .join(name);
     let user_dir = Some(resolve_plugins_dir().join(name));
 
     let plugin_dir = if tokio::fs::metadata(&project_dir).await.is_ok() {
@@ -790,13 +801,6 @@ async fn marketplace_remove(name: &str) -> crate::Result<String> {
 }
 
 /// Resolve the user plugins directory path.
-///
-/// MUST share the config root with the `coco plugin` CLI subcommand
-/// (`bin_handlers/plugin.rs` → `global_config::config_home().join("plugins")`).
-/// The slash handlers previously hardcoded `~/.coco/plugins`, which (a)
-/// ignored `$COCO_CONFIG_DIR` and (b) split-brained against the CLI's
-/// `~/.coco/plugins`: a marketplace added via `/plugin` was invisible to
-/// `coco plugin install` and vice-versa.
 fn resolve_plugins_dir() -> PathBuf {
     coco_config::global_config::config_home().join("plugins")
 }

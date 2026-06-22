@@ -17,7 +17,7 @@ coco-messages.workspace = true
 coco-config.workspace = true
 # Cron parsing + reachability for the schedule store (read-time validation).
 coco-cron.workspace = true
-# Disk-backed schedule store round-trips .coco/scheduled_tasks.json.
+# Disk-backed schedule store round-trips the project config schedule file.
 coco-file-encoding.workspace = true
 coco-context.workspace = true
 coco-sandbox.workspace = true
@@ -33,6 +33,7 @@ coco-subagent.workspace = true
 coco-system-reminder.workspace = true
 coco-wire-dump.workspace = true
 coco-utils-json-repair.workspace = true
+coco-utils-common.workspace = true
 coco-utils-string.workspace = true
 
 serde = { workspace = true, features = ["derive", "rc"] }

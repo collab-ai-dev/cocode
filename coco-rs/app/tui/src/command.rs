@@ -200,8 +200,8 @@ pub enum UserCommand {
     },
     /// Finalize the `/agents` Library inline create wizard. The CLI
     /// bridge:
-    ///   1. resolves the target directory (`~/.coco/agents` or
-    ///      `<cwd>/.coco/agents`),
+    ///   1. resolves the target directory (`config home/agents` or
+    ///      `project config dir/agents`),
     ///   2. writes a markdown template with the wizard
     ///      inputs in the frontmatter,
     ///   3. dispatches the existing `$EDITOR` flow on the new file so
@@ -283,7 +283,7 @@ pub enum UserCommand {
     /// Execute a skill by name.
     ExecuteSkill { name: String, args: Option<String> },
     /// Persist a `skill_overrides` patch to
-    /// `<cwd>/.coco/settings.local.json` and republish
+    /// `project config dir/settings.local.json` and republish
     /// `RuntimeConfig`. Emitted by the `/skills` dialog's Enter
     /// handler when the diff actually changes disk state.
     ///

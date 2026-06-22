@@ -1,4 +1,4 @@
-//! Generate the user-facing template for `~/.coco/keybindings.json`.
+//! Generate the user-facing template for `config home/keybindings.json`.
 //!
 //! Derives the template from the live default-bindings table and filters out
 //! [`crate::reserved::NON_REBINDABLE`] entries so users don't see (and
@@ -9,7 +9,7 @@ use crate::defaults::default_blocks;
 use crate::reserved::NON_REBINDABLE;
 use crate::reserved::normalize_key_for_comparison;
 
-/// Generate the template content for `~/.coco/keybindings.json`.
+/// Generate the template content for `config home/keybindings.json`.
 ///
 /// The result is a JSON object with `$schema`, `$docs`, and a
 /// `bindings` array. Always ends with a trailing newline (Unix

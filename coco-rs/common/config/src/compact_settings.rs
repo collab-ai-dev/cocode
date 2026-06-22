@@ -1,6 +1,6 @@
 //! Compaction settings layer.
 //!
-//! Bridges `~/.coco/settings.json` and `COCO_COMPACT_*` env vars into a
+//! Bridges `config home/settings.json` and `COCO_COMPACT_*` env vars into a
 //! single `CompactConfig` that `coco_compact` consumes through plain
 //! struct references — the crate itself reads no env at runtime.
 //!

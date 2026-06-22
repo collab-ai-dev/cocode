@@ -410,15 +410,15 @@ impl Tool for EditTool {
             }
             crate::tools::edit_utils::apply_edit_to_file(&content, old_string, new_string, true)
         } else if count == 0 {
-            // Matching fallback order (coco-rs extension):
+            // Matching fallback order (local extension):
             //   1. Quote-normalized match — handles the common case
             //      where the file uses curly quotes (""'') but the model
             //      emitted straight quotes ("'). When the match hits via
             //      quote normalization, `preserve_quote_style` re-applies
             //      the file's curly style to `new_string` so the round-trip
             //      doesn't silently downgrade.
-            //   2. Whitespace-normalized match — coco-rs extension from
-            //      cocode-rs. Not in upstream but useful for Python/YAML where
+            //   2. Whitespace-normalized match — local extension. Not in
+            //      upstream but useful for Python/YAML where
             //      the model may emit slightly different indentation.
             //      Preserved because it's backwards-compatible with
             //      existing tests.
@@ -481,7 +481,7 @@ impl Tool for EditTool {
 
         crate::record_file_edit(ctx, path, new_content).await;
         // Skill auto-discovery + conditional-skill activation — when an
-        // edit touches a path under a nested `.coco/skills/` ancestor or
+        // edit touches a path under a nested `project config dir/skills/` ancestor or
         // matches a `paths`-gated skill, the next batch boundary picks
         // both up.
         crate::track_skill_triggers(ctx, path).await;

@@ -11,9 +11,9 @@ use std::path::PathBuf;
 pub enum MemoryType {
     /// Managed by the system.
     Managed,
-    /// User-level (~/.coco/memory/).
+    /// User-level memory.
     User,
-    /// Project-level (.coco/memory/).
+    /// Project-level memory.
     Project,
     /// Local (gitignored) memory.
     Local,
@@ -45,8 +45,9 @@ pub struct MemoryFileInfo {
 pub fn get_memory_files(cwd: &Path) -> Vec<MemoryFileInfo> {
     let mut files = Vec::new();
 
-    // Project memory: .coco/memory/
-    let project_mem_dir = cwd.join(".coco/memory");
+    let project_mem_dir = cwd
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("memory");
     collect_memory_files(&project_mem_dir, MemoryType::Project, &mut files);
 
     // Auto-memory and team memory live under the per-project facade —
@@ -104,11 +105,14 @@ pub fn is_memory_managed_path(path: &Path, cwd: &Path) -> bool {
     let project_paths =
         coco_paths::ProjectPaths::new(coco_config::global_config::config_home(), cwd);
     let auto_dir = project_paths.memory_dir();
-    let project_mem = cwd.join(".coco/memory");
+    let project_mem = cwd
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("memory");
+    let project_mem_rel = format!("{}/memory", coco_utils_common::COCO_CONFIG_DIR_NAME);
 
     path.starts_with(&auto_dir)
         || path.starts_with(&project_mem)
-        || path.to_string_lossy().contains(".coco/memory")
+        || path.to_string_lossy().contains(&project_mem_rel)
 }
 
 /// Determine the memory type for a given path.
@@ -117,7 +121,10 @@ pub fn classify_memory_path(path: &Path, cwd: &Path) -> Option<MemoryType> {
         coco_paths::ProjectPaths::new(coco_config::global_config::config_home(), cwd);
     let auto_dir = project_paths.memory_dir();
     let team_dir = project_paths.team_memory_dir();
-    let project_mem = cwd.join(".coco/memory");
+    let project_mem = cwd
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("memory");
+    let user_mem_segment = format!("/{}/memory/", coco_utils_common::COCO_CONFIG_DIR_NAME);
 
     if path.starts_with(&team_dir) {
         Some(MemoryType::TeamMem)
@@ -125,7 +132,7 @@ pub fn classify_memory_path(path: &Path, cwd: &Path) -> Option<MemoryType> {
         Some(MemoryType::AutoMem)
     } else if path.starts_with(&project_mem) {
         Some(MemoryType::Project)
-    } else if path.to_string_lossy().contains("/.coco/memory/") {
+    } else if path.to_string_lossy().contains(&user_mem_segment) {
         Some(MemoryType::User)
     } else {
         None

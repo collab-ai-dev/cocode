@@ -1,4 +1,4 @@
-//! `.coco/rules/*.md` discovery + frontmatter `paths` glob matching.
+//! `project config dir/rules/*.md` discovery + frontmatter `paths` glob matching.
 //!
 //! ## Two flavours of rule
 //!
@@ -18,7 +18,7 @@
 //! defined — so the AGENTS.md / case-insensitive divergence in
 //! [`crate::memory_filenames`] does NOT apply here. We accept any
 //! `.md` file (case-insensitively for the extension only) under
-//! `<dir>/.coco/rules/**/*` recursively.
+//! `<dir>/project config dir/rules/**/*` recursively.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -223,7 +223,7 @@ fn read_rule_file(path: &Path) -> Option<RuleFile> {
 /// resolved relative to `base_dir`.
 ///
 /// `base_dir` for Project rules is `dirname(dirname(rules_dir))` — i.e.
-/// the dir hosting the `.coco/rules/` subtree. For Managed/User it's
+/// the dir hosting the `project config dir/rules/` subtree. For Managed/User it's
 /// the original CWD.
 ///
 /// Matching uses [`ignore`] (gitignore semantics).

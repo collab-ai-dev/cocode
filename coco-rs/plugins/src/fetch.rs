@@ -25,7 +25,9 @@ type Result<T> = std::result::Result<T, PluginError>;
 const URL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Package-manager (npm/pip) timeout — heavier than a shallow git clone.
 const PKG_TIMEOUT: Duration = Duration::from_secs(300);
-const USER_AGENT: &str = "CoCo-Plugin-Manager";
+fn user_agent() -> String {
+    format!("{}-Plugin-Manager", coco_config::constants::PRODUCT_NAME)
+}
 
 // ---------------------------------------------------------------------------
 // Marketplace source fetch
@@ -381,7 +383,7 @@ async fn http_get(url: &str, headers: Option<&HashMap<String, String>>) -> Resul
 
     let client = reqwest::Client::builder()
         .timeout(URL_TIMEOUT)
-        .user_agent(USER_AGENT)
+        .user_agent(user_agent())
         .redirect(reqwest::redirect::Policy::none())
         .dns_resolver(std::sync::Arc::new(coco_hooks::ssrf::SsrfGuardedResolver))
         .build()

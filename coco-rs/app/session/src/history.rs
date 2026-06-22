@@ -1,6 +1,6 @@
 //! Prompt history persistence via JSONL.
 //!
-//! JSONL append-only log at `~/.coco/history.jsonl`.
+//! JSONL append-only log at `config home/history.jsonl`.
 //! Entries are project-scoped, session-tagged, newest-first on read.
 
 use serde::Deserialize;
@@ -151,7 +151,7 @@ impl PromptHistory {
 
         // Acquire an OS-level advisory file lock to serialize concurrent
         // PromptHistory writers (multiple coco processes against the
-        // same `~/.coco/history.jsonl`). Pure-Rust via the `fs2`
+        // same `config home/history.jsonl`). Pure-Rust via the `fs2`
         // workspace dep — TS uses `proper-lockfile` with retries;
         // `fs2::FileExt::lock_exclusive` blocks until acquired and
         // releases on drop.

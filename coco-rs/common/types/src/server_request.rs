@@ -194,7 +194,7 @@ pub struct McpStatusResult {
 ///
 /// Matches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`:
 /// `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`.
-/// `Disconnected` is a coco-rs extension used when the connection manager
+/// `Disconnected` is a local extension used when the connection manager
 /// has no record of a named server.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,7 +205,7 @@ pub enum McpConnectionStatus {
     Failed,
     NeedsAuth,
     Disabled,
-    /// coco-rs extension: server name unknown to the connection manager.
+    /// Local extension: server name unknown to the connection manager.
     Disconnected,
 }
 
@@ -420,13 +420,13 @@ pub struct InitializeResult {
     /// Fast-mode feature state if enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast_mode_state: Option<crate::event::FastModeState>,
-    // coco-rs extensions (not in TS). TS parsers accept unknown fields by
+    // Local extensions (not in TS). TS parsers accept unknown fields by
     // default, so these pass through transparently. Prefixed with
     // `_cocoRs` so they're visually distinct from protocol fields.
-    /// Protocol version the coco-rs server speaks.
+    /// Protocol version the server speaks.
     #[serde(default, rename = "_cocoRsProtocolVersion")]
     pub protocol_version: String,
-    /// coco-rs binary version.
+    /// Binary version.
     #[serde(default, rename = "_cocoRsVersion")]
     pub version: String,
 }

@@ -5,12 +5,15 @@ fn test_get_plugin_dirs_includes_both_config_and_project() {
     // The host calls `get_plugin_dirs(config_dir, project_dir)` at
     // startup — the result is the loader's input. Verifies both
     // user-level (`<config_dir>/plugins/*/`) and project-level
-    // (`<project_dir>/.coco/plugins/*/`) directories are surfaced.
+    // (`<project_dir>/project config dir/plugins/*/`) directories are surfaced.
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     let project_dir = tmp.path().join("project");
     let user_plugin = config_dir.join("plugins").join("user-plug");
-    let proj_plugin = project_dir.join(".coco").join("plugins").join("proj-plug");
+    let proj_plugin = project_dir
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("plugins")
+        .join("proj-plug");
     std::fs::create_dir_all(&user_plugin).expect("mkdir user");
     std::fs::create_dir_all(&proj_plugin).expect("mkdir proj");
 

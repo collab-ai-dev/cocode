@@ -8,11 +8,11 @@ use serde::Serialize;
 pub enum SettingSource {
     /// Plugin-contributed base settings (lowest priority).
     Plugin,
-    /// ~/.coco/settings.json (global per machine).
+    /// config home/settings.json (global per machine).
     User,
-    /// .coco/settings.json (shared, checked in).
+    /// project config dir/settings.json (shared, checked in).
     Project,
-    /// .coco/settings.local.json (gitignored).
+    /// project config dir/settings.local.json (gitignored).
     Local,
     /// --settings CLI file or SDK inline.
     Flag,

@@ -125,7 +125,7 @@ fn mcp_connection_status_wire_format_matches_ts() {
         serde_json::to_value(McpConnectionStatus::Disabled).unwrap(),
         "disabled"
     );
-    // coco-rs extension — not in TS.
+    // Local extension — not in TS.
     assert_eq!(
         serde_json::to_value(McpConnectionStatus::Disconnected).unwrap(),
         "disconnected"

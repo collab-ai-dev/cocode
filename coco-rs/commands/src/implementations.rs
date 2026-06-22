@@ -330,7 +330,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         ),
         // /commit and /statusline registered later as Prompt commands.
         // /vim registered as async (handlers::vim::handler) below to persist
-        // editor mode to ~/.coco/state/editor_mode.
+        // editor mode.
         // /keybindings registered as async (handlers::keybindings::handler)
         // below — writes a template if the file is missing then opens $EDITOR.
         // /rewind is registered by register_ts_parity_handlers below — the
@@ -645,19 +645,22 @@ fn builtin_argument_kind(name: &str, fallback: CommandArgumentKind) -> CommandAr
 /// documentation blurb summarizing the same UX, suitable when no per-
 /// session state is available.
 fn plan_handler(args: &str) -> String {
+    let plans_path = format!("~/{}/plans/", coco_utils_common::COCO_CONFIG_DIR_NAME);
     match args.trim() {
-        "" => "Plan mode controls (run from the TUI for full effect):\n\n\
+        "" => format!(
+            "Plan mode controls (run from the TUI for full effect):\n\n\
                • `/plan` — show the current plan file for this session\n\
                • `/plan open` — open the plan file in $EDITOR\n\
                • `/plan <description>` — ask the model to enter plan mode \
                and plan for the given task\n\n\
                In plan mode, the assistant proposes a plan before executing. \
-               Plans are saved under `~/.coco/plans/`."
-            .to_string(),
-        "open" => "Opening plan in $EDITOR — TUI runner handles this; from \
+               Plans are saved under `{plans_path}`."
+        ),
+        "open" => format!(
+            "Opening plan in $EDITOR — TUI runner handles this; from \
                    non-TUI contexts, edit the file directly under \
-                   `~/.coco/plans/`."
-            .to_string(),
+                   `{plans_path}`."
+        ),
         description => {
             format!("Creating plan: {description}\nUse the EnterPlanMode tool to enter plan mode.")
         }
@@ -700,7 +703,7 @@ fn exit_handler(_args: &str) -> String {
 
 fn version_handler(_args: &str) -> String {
     let version = env!("CARGO_PKG_VERSION");
-    format!("cocode v{version}")
+    format!("{} v{version}", coco_config::constants::PRODUCT_NAME)
 }
 
 fn sandbox_handler(args: &str) -> String {
@@ -807,7 +810,7 @@ fn output_style_handler(_args: &str) -> String {
 }
 
 /// Reset aliases treated as "restore the default color".
-/// The TUI intercept (`dispatch_color` in `coco-cli`) carries its own
+/// The TUI intercept carries its own
 /// copy — kept in sync with this list.
 const COLOR_RESET_ALIASES: &[&str] = &["default", "reset", "none", "gray", "grey"];
 
@@ -858,15 +861,20 @@ fn status_extended_handler(_args: &str) -> String {
 fn config_extended_handler(args: &str) -> String {
     let subcommand = args.trim();
     if subcommand.is_empty() {
-        return "Configuration:\n\n\
+        let user_settings = format!(
+            "~/{}/settings.json",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
+        );
+        return format!(
+            "Configuration:\n\n\
                 Use /config <key>           — view current value\n\
                 Use /config <key> <value>   — set value (auto-typed: bool/int/JSON)\n\n\
                 Common keys:\n\
                   theme, effort, output_style, color_mode\n\
                   sandbox.mode, compact.auto.enabled, web_search.enabled\n\
                   features.<name>\n\n\
-                Writes go to ~/.coco/settings.json — effective on next session."
-            .to_string();
+                Writes go to {user_settings} — effective on next session."
+        );
     }
     let path = coco_config::global_config::user_settings_path();
     if let Some((key, value_str)) = subcommand.split_once(' ') {
@@ -1131,7 +1139,8 @@ fn init_handler_async(
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let claude_md_exists = tokio::fs::metadata("CLAUDE.md").await.is_ok();
-        let coco_dir_exists = tokio::fs::metadata(".coco").await.is_ok();
+        let config_dir = std::path::Path::new(coco_utils_common::COCO_CONFIG_DIR_NAME);
+        let config_dir_exists = tokio::fs::metadata(config_dir).await.is_ok();
 
         let mut out = String::from("Initializing project...\n\n");
 
@@ -1146,21 +1155,33 @@ fn init_handler_async(
             out.push_str("No CLAUDE.md found. Will analyze the codebase to create one.\n");
         }
 
-        if coco_dir_exists {
-            out.push_str(".coco/ directory exists.\n");
+        if config_dir_exists {
+            out.push_str(&format!(
+                "{}/ directory exists.\n",
+                coco_utils_common::COCO_CONFIG_DIR_NAME
+            ));
 
             // Check for existing settings
-            if tokio::fs::metadata(".coco/settings.json").await.is_ok() {
+            if tokio::fs::metadata(config_dir.join("settings.json"))
+                .await
+                .is_ok()
+            {
                 out.push_str("  settings.json found.\n");
             }
-            if tokio::fs::metadata(".coco/rules").await.is_ok() {
+            if tokio::fs::metadata(config_dir.join("rules")).await.is_ok() {
                 out.push_str("  rules/ directory found.\n");
             }
         } else {
-            out.push_str(".coco/ directory will be created.\n");
+            out.push_str(&format!(
+                "{}/ directory will be created.\n",
+                coco_utils_common::COCO_CONFIG_DIR_NAME
+            ));
         }
-        if tokio::fs::metadata(".coco/skills").await.is_ok() {
-            out.push_str(".coco/skills directory found.\n");
+        if tokio::fs::metadata(config_dir.join("skills")).await.is_ok() {
+            out.push_str(&format!(
+                "{}/skills directory found.\n",
+                coco_utils_common::COCO_CONFIG_DIR_NAME
+            ));
         }
 
         // Detect build system
@@ -1293,11 +1314,11 @@ fn doctor_handler_async(
             out.push_str("[info] CLAUDE.md: not found (run /init to create)\n");
         }
 
-        // Check .coco directory
-        if tokio::fs::metadata(".coco").await.is_ok() {
-            out.push_str("[ok]   .coco/: found\n");
+        let config_dir_name = coco_utils_common::COCO_CONFIG_DIR_NAME;
+        if tokio::fs::metadata(config_dir_name).await.is_ok() {
+            out.push_str(&format!("[ok]   {config_dir_name}/: found\n"));
         } else {
-            out.push_str("[info] .coco/: not found\n");
+            out.push_str(&format!("[info] {config_dir_name}/: not found\n"));
         }
 
         // Disk space
@@ -1353,7 +1374,24 @@ const PR_COMMENTS_PROMPT: &str = include_str!("prompts/pr_comments.txt");
 const REVIEW_PROMPT: &str = include_str!("prompts/review.txt");
 // /commit-push-pr loads its prompt directly inside
 // handlers::commit_push_pr::PROMPT_TEMPLATE.
-const STATUSLINE_PROMPT: &str = include_str!("prompts/statusline.txt");
+const STATUSLINE_PROMPT_TEMPLATE: &str = include_str!("prompts/statusline.txt");
+
+fn render_prompt_template(template: &str) -> String {
+    template
+        .replace("{{PRODUCT_NAME}}", coco_config::constants::PRODUCT_NAME)
+        .replace(
+            "{{CONFIG_DIR_NAME}}",
+            coco_utils_common::COCO_CONFIG_DIR_NAME,
+        )
+}
+
+fn insights_prompt() -> String {
+    render_prompt_template(INSIGHTS_PROMPT)
+}
+
+fn statusline_prompt() -> String {
+    render_prompt_template(STATUSLINE_PROMPT_TEMPLATE)
+}
 
 /// Register the P1 handlers wired in Round 11.
 ///
@@ -1605,12 +1643,13 @@ pub fn register_ts_parity_handlers(
     );
 
     // /insights
+    let insights_prompt = insights_prompt();
     register_static_prompt(
         registry,
         names::INSIGHTS,
         "Surface session insights, costs, and notable activity",
         "analyzing session activity",
-        INSIGHTS_PROMPT,
+        &insights_prompt,
         handlers::prompt_command::ArgsHandling::AppendUnderTask,
     );
 
@@ -1691,12 +1730,13 @@ pub fn register_ts_parity_handlers(
 
     // /statusline — pushes the args (or default) through the statusline-setup
     // subagent.
+    let statusline_prompt = statusline_prompt();
     register_static_prompt(
         registry,
         names::STATUSLINE,
-        "Set up coco's status line UI",
+        "Set up the status line UI",
         "setting up statusLine",
-        STATUSLINE_PROMPT,
+        &statusline_prompt,
         handlers::prompt_command::ArgsHandling::AppendUnderTask,
     );
 

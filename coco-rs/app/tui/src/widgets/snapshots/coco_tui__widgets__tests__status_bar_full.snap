@@ -2,7 +2,7 @@
 source: app/tui/src/widgets/mod.test.rs
 expression: output
 ---
- ╭─╮ ╭─╮  COCO v0.1.0                                                                               
+ ╭─╮ ╭─╮  COCODE v0.1.0                                                                             
  │●│ │●│  deepseek/deepseek-v4-flash  *  auto                                                       
  ╰─╯ ╰─╯                                                                                            
                                                                                                     

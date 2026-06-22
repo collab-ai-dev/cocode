@@ -2,7 +2,10 @@ use super::*;
 use crate::schedule_store::ScheduleStore;
 
 fn store_in(dir: &std::path::Path) -> DiskBackedScheduleStore {
-    DiskBackedScheduleStore::new(dir.join(".coco").join("scheduled_tasks.json"))
+    DiskBackedScheduleStore::new(
+        dir.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("scheduled_tasks.json"),
+    )
 }
 
 #[tokio::test]
@@ -15,7 +18,10 @@ async fn durable_task_persists_to_disk_without_runtime_fields() {
         .await
         .unwrap();
 
-    let path = tmp.path().join(".coco").join("scheduled_tasks.json");
+    let path = tmp
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("scheduled_tasks.json");
     let raw = std::fs::read_to_string(&path).unwrap();
     assert!(raw.contains("\"prompt\": \"standup\""), "got: {raw}");
     assert!(raw.contains("\"createdAt\""), "camelCase on disk: {raw}");
@@ -43,7 +49,7 @@ async fn session_task_is_memory_only() {
     // Not written to disk.
     assert!(
         !tmp.path()
-            .join(".coco")
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
             .join("scheduled_tasks.json")
             .exists()
     );
@@ -78,7 +84,10 @@ async fn missing_and_corrupt_files_degrade_to_empty() {
     assert!(store.list_all_cron_tasks().await.unwrap().is_empty());
 
     // Corrupt JSON.
-    let path = tmp.path().join(".coco").join("scheduled_tasks.json");
+    let path = tmp
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("scheduled_tasks.json");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "{ not json").unwrap();
     assert!(store.list_all_cron_tasks().await.unwrap().is_empty());
@@ -87,7 +96,10 @@ async fn missing_and_corrupt_files_degrade_to_empty() {
 #[tokio::test]
 async fn invalid_cron_rows_are_dropped_on_read() {
     let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join(".coco").join("scheduled_tasks.json");
+    let path = tmp
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("scheduled_tasks.json");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(
         &path,

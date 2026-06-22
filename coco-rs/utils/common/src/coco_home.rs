@@ -9,13 +9,13 @@ use std::path::PathBuf;
 /// in the dependency graph and cannot reach back up.
 pub const COCO_CONFIG_DIR_ENV: &str = "COCO_CONFIG_DIR";
 
-/// Default coco directory name.
-const DEFAULT_DIR: &str = ".coco";
+/// Default config directory name.
+pub const COCO_CONFIG_DIR_NAME: &str = ".cocode";
 
 /// Resolve the coco home directory.
 ///
-/// Checks `COCO_CONFIG_DIR` env var first, falls back to `~/.coco`.
-/// If no home directory can be determined, falls back to `./.coco`.
+/// Checks `COCO_CONFIG_DIR` env var first, then falls back to the default
+/// config directory under the user's home directory.
 pub fn find_coco_home() -> PathBuf {
     std::env::var(COCO_CONFIG_DIR_ENV)
         .ok()
@@ -24,7 +24,7 @@ pub fn find_coco_home() -> PathBuf {
         .unwrap_or_else(|| {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join(DEFAULT_DIR)
+                .join(COCO_CONFIG_DIR_NAME)
         })
 }
 

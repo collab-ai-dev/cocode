@@ -202,8 +202,12 @@ async fn render_text_with_args() {
 #[test]
 fn test_substitute_skill_env_replaces_dir_and_session() {
     let text = "Assets in ${CLAUDE_SKILL_DIR}; session ${CLAUDE_SESSION_ID}.";
-    let out = substitute_skill_env(text, Some("/home/u/.coco/skills/x"), Some("sess-123"));
-    assert_eq!(out, "Assets in /home/u/.coco/skills/x; session sess-123.");
+    let skill_dir = format!(
+        "/home/u/{}/skills/x",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    );
+    let out = substitute_skill_env(text, Some(&skill_dir), Some("sess-123"));
+    assert_eq!(out, format!("Assets in {skill_dir}; session sess-123."));
 }
 
 #[test]

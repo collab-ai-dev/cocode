@@ -66,7 +66,7 @@ pub(super) fn hook_ctx_for_subagent(
 }
 
 /// Free-function helper for `WorktreeCreate`.
-/// Coco-rs does git creation directly (`AgentWorktreeManager::create_for`),
+/// The runtime does git creation directly (`AgentWorktreeManager::create_for`),
 /// so the hook is observe-only — non-zero exit codes are logged but
 /// don't roll back the worktree.
 pub(super) async fn fire_worktree_create_hook(
@@ -869,7 +869,7 @@ impl SwarmAgentHandle {
                         Ok(s) => {
                             // Fire WorktreeCreate hook so user hooks can
                             // react to per-agent worktree creation.
-                            // Coco-rs always uses git internally — the
+                            // This runtime always uses git internally — the
                             // hook is observe-only.
                             fire_worktree_create_hook(
                                 self.hook_registry().cloned(),
@@ -1060,7 +1060,7 @@ impl SwarmAgentHandle {
         // `/tmp`, which silently routed memory lookups to the wrong
         // User-scope per-agent memory follows `COCO_CONFIG_HOME` (via
         // `global_config::config_home()`), NOT the system home dir.
-        // Multi-tenant / containerised setups where `~/.coco` is
+        // Multi-tenant / containerised setups where the config home is
         // unwritable still get a usable agent-memory dir. Project /
         // Local scopes are per-repo and ignore `config_home`.
         let config_home = coco_config::global_config::config_home();
@@ -1103,10 +1103,16 @@ impl SwarmAgentHandle {
         let coco_guide_context_builder = self.coco_guide_context_builder().cloned();
         let build_fresh_prompt = || -> String {
             let def = request.definition.as_deref();
-            let static_identity = def
+            let default_identity;
+            let static_identity = if let Some(system_prompt) = def
                 .and_then(|d| d.system_prompt.as_deref())
                 .filter(|s| !s.is_empty())
-                .unwrap_or(coco_context::prompt::DEFAULT_AGENT_IDENTITY);
+            {
+                system_prompt
+            } else {
+                default_identity = coco_context::prompt::default_agent_identity();
+                &default_identity
+            };
             // Append the coco-guide dynamic block when this spawn is
             // for the `coco-guide` agent AND a context builder is
             // installed. Owned `String` so the assembler below can

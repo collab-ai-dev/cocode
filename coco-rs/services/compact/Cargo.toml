@@ -25,6 +25,7 @@ tokio = { workspace = true, features = ["sync"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+coco-utils-common.workspace = true
 coco-test-harness.workspace = true
 pretty_assertions.workspace = true
 tempfile.workspace = true
