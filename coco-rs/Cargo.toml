@@ -30,6 +30,7 @@ members = [
     "utils/json-repair",
     "utils/json-to-toml",
     "utils/keyring-store",
+    "utils/path-uri",
     "utils/pty",
     "utils/readiness",
     "utils/rustls-provider",
@@ -138,6 +139,7 @@ coco-llm-types = { path = "common/llm-types" }
 coco-file-encoding = { path = "utils/file-encoding" }
 coco-async-utils = { path = "utils/async-utils" }
 coco-keyring-store = { path = "utils/keyring-store" }
+coco-utils-path-uri = { path = "utils/path-uri" }
 coco-file-ignore = { path = "utils/file-ignore" }
 coco-file-search = { path = "utils/file-search" }
 coco-file-watch = { path = "utils/file-watch" }
@@ -314,6 +316,7 @@ thiserror = "2.0.17"
 time = "0.3"
 tokio = "1"
 tokio-stream = "0.1.18"
+tokio-tungstenite = "0.29"
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
 tonic = "0.12"

@@ -15,6 +15,7 @@ use coco_exec_server::CreateDirectoryOptions;
 use coco_exec_server::ExecutorFileSystem;
 use coco_exec_server::RemoveOptions;
 use coco_utils_absolute_path::AbsolutePathBuf;
+use coco_utils_path_uri::PathUri;
 pub use parser::Hunk;
 pub use parser::ParseError;
 use parser::ParseError::*;
@@ -27,6 +28,10 @@ pub use invocation::maybe_parse_apply_patch_verified;
 pub use standalone_executable::main;
 
 use crate::invocation::ExtractHeredocError;
+
+fn path_uri(path: &AbsolutePathBuf) -> PathUri {
+    PathUri::from_abs_path(path)
+}
 
 /// Detailed instructions for gpt-4.1 on how to use the `apply_patch` tool.
 pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_tool_instructions.md");
@@ -335,23 +340,27 @@ async fn apply_hunks_to_files(
         match hunk {
             Hunk::AddFile { contents, .. } => {
                 if let Some(parent_abs) = path_abs.parent() {
-                    fs.create_directory(&parent_abs, CreateDirectoryOptions { recursive: true })
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Failed to create parent directories for {}",
-                                path_abs.display()
-                            )
-                        })?;
+                    fs.create_directory(
+                        &path_uri(&parent_abs),
+                        CreateDirectoryOptions { recursive: true },
+                        None,
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to create parent directories for {}",
+                            path_abs.display()
+                        )
+                    })?;
                 }
-                fs.write_file(&path_abs, contents.clone().into_bytes())
+                fs.write_file(&path_uri(&path_abs), contents.clone().into_bytes(), None)
                     .await
                     .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
                 added.push(affected_path);
             }
             Hunk::DeleteFile { .. } => {
                 let result: io::Result<()> = async {
-                    let metadata = fs.get_metadata(&path_abs).await?;
+                    let metadata = fs.get_metadata(&path_uri(&path_abs), None).await?;
                     if metadata.is_directory {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
@@ -359,11 +368,12 @@ async fn apply_hunks_to_files(
                         ));
                     }
                     fs.remove(
-                        &path_abs,
+                        &path_uri(&path_abs),
                         RemoveOptions {
                             recursive: false,
                             force: false,
                         },
+                        None,
                     )
                     .await
                 }
@@ -380,8 +390,9 @@ async fn apply_hunks_to_files(
                     let dest_abs = AbsolutePathBuf::resolve_path_against_base(dest, cwd);
                     if let Some(parent_abs) = dest_abs.parent() {
                         fs.create_directory(
-                            &parent_abs,
+                            &path_uri(&parent_abs),
                             CreateDirectoryOptions { recursive: true },
+                            None,
                         )
                         .await
                         .with_context(|| {
@@ -391,11 +402,11 @@ async fn apply_hunks_to_files(
                             )
                         })?;
                     }
-                    fs.write_file(&dest_abs, new_contents.into_bytes())
+                    fs.write_file(&path_uri(&dest_abs), new_contents.into_bytes(), None)
                         .await
                         .with_context(|| format!("Failed to write file {}", dest_abs.display()))?;
                     let result: io::Result<()> = async {
-                        let metadata = fs.get_metadata(&path_abs).await?;
+                        let metadata = fs.get_metadata(&path_uri(&path_abs), None).await?;
                         if metadata.is_directory {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidInput,
@@ -403,11 +414,12 @@ async fn apply_hunks_to_files(
                             ));
                         }
                         fs.remove(
-                            &path_abs,
+                            &path_uri(&path_abs),
                             RemoveOptions {
                                 recursive: false,
                                 force: false,
                             },
+                            None,
                         )
                         .await
                     }
@@ -417,7 +429,7 @@ async fn apply_hunks_to_files(
                     })?;
                     modified.push(affected_path);
                 } else {
-                    fs.write_file(&path_abs, new_contents.into_bytes())
+                    fs.write_file(&path_uri(&path_abs), new_contents.into_bytes(), None)
                         .await
                         .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
                     modified.push(affected_path);
@@ -444,12 +456,15 @@ async fn derive_new_contents_from_chunks(
     chunks: &[UpdateFileChunk],
     fs: &dyn ExecutorFileSystem,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = fs.read_file_text(path_abs).await.map_err(|err| {
-        ApplyPatchError::IoError(IoError {
-            context: format!("Failed to read file to update {}", path_abs.display()),
-            source: err,
-        })
-    })?;
+    let original_contents = fs
+        .read_file_text(&path_uri(path_abs), None)
+        .await
+        .map_err(|err| {
+            ApplyPatchError::IoError(IoError {
+                context: format!("Failed to read file to update {}", path_abs.display()),
+                source: err,
+            })
+        })?;
 
     let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
 

@@ -2,6 +2,7 @@ use core::fmt;
 use std::io;
 #[cfg(unix)]
 use std::os::fd::RawFd;
+use std::process::ExitStatus;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -15,7 +16,39 @@ use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessSignal {
+    Interrupt,
+}
+
+pub(crate) fn unsupported_signal(signal: ProcessSignal) -> io::Error {
+    match signal {
+        ProcessSignal::Interrupt => io::Error::new(
+            io::ErrorKind::Unsupported,
+            "process interrupt is not supported by this process backend",
+        ),
+    }
+}
+
+pub(crate) fn exit_code_from_status(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+
+    -1
+}
+
 pub(crate) trait ChildTerminator: Send + Sync {
+    fn signal(&mut self, signal: ProcessSignal) -> io::Result<()>;
+
     fn kill(&mut self) -> io::Result<()>;
 }
 
@@ -169,6 +202,17 @@ impl ProcessHandle {
                 let _ = killer.kill();
             }
         }
+    }
+
+    pub fn signal(&self, signal: ProcessSignal) -> io::Result<()> {
+        let Ok(mut killer_opt) = self.killer.lock() else {
+            return Ok(());
+        };
+        let Some(killer) = killer_opt.as_mut() else {
+            return Ok(());
+        };
+
+        killer.signal(signal)
     }
 
     /// Attempts to kill the child and abort helper tasks.

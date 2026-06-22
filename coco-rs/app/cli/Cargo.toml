@@ -51,6 +51,7 @@ coco-output-styles.workspace = true
 coco-coordinator.workspace = true
 coco-tasks.workspace = true
 coco-state.workspace = true
+coco-exec-server.workspace = true
 coco-git.workspace = true
 coco-paths.workspace = true
 coco-subagent.workspace = true

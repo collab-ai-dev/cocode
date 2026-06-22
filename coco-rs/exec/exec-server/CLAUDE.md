@@ -1,13 +1,38 @@
 # coco-exec-server
 
-Minimal filesystem abstraction so `coco-apply-patch` can consume the same `ExecutorFileSystem` trait + `LOCAL_FS` static that `codex-rs` uses.
+JSON-RPC exec-server for local and remote execution capabilities.
 
 ## Source
 
-Ported from `codex-rs/exec-server` (NOT from claude-code TS). Only the filesystem subset is ported — the process-execution RPC and sandbox-policy-aware variants from codex-rs are intentionally omitted. coco-rs has its own sandbox stack (`coco-sandbox`); the only current consumer (`coco-apply-patch`) uses the non-sandbox methods exclusively.
+Ported selectively from `codex-rs/exec-server`. Keep the protocol shape close
+where it helps interop, but do not copy upstream subsystems that Coco does not
+own yet.
+
+## Capabilities
+
+- `stdio` and loopback-only `ws://IP:PORT` server transports.
+- JSON-RPC initialize/initialized handshake and detached session resume.
+- Process start/read/write/signal/terminate.
+- Remote-safe filesystem operations through `PathUri`.
+- Buffered and streamed HTTP requests in the selected environment.
+- Local and remote `Environment` capability bundles for exec, filesystem, and
+  HTTP.
+
+## Explicit v1 Exclusions
+
+- Noise relay is not implemented.
+- Environment registry is not implemented.
+- Platform sandbox helpers are not implemented.
+
+Protocol fields for sandbox intent are retained only so callers receive an
+explicit unsupported/invalid-input error. Never silently run a sandboxed process
+or filesystem operation without sandbox enforcement.
 
 ## Key Types
 
-- `ExecutorFileSystem` trait — async, tokio-backed
-- `LocalFileSystem`, `LOCAL_FS` static
-- Companion types: `CreateDirectoryOptions`, `RemoveOptions`, `CopyOptions`, `FileMetadata`, `ReadDirectoryEntry`, `FileSystemResult`
+- `ExecServerClient`, `RemoteExecServerConnectArgs`
+- `ExecBackend`, `ExecProcess`, `StartedExecProcess`
+- `ExecutorFileSystem`, `LocalFileSystem`, `LOCAL_FS`
+- `Environment`, `EnvironmentManager`, `HttpClient`
+- `ExecServerRuntimePaths`
+- `run_main`, `DEFAULT_LISTEN_URL`

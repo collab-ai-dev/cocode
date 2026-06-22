@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 
 use coco_exec_server::ExecutorFileSystem;
 use coco_utils_absolute_path::AbsolutePathBuf;
+use coco_utils_path_uri::PathUri;
 use tree_sitter::Parser;
 use tree_sitter::Query;
 use tree_sitter::QueryCursor;
@@ -18,6 +19,10 @@ use crate::ApplyPatchFileUpdate;
 use crate::IoError;
 use crate::MaybeApplyPatchVerified;
 use crate::parser::Hunk;
+
+fn path_uri(path: &AbsolutePathBuf) -> PathUri {
+    PathUri::from_abs_path(path)
+}
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
 use crate::unified_diff_from_chunks;
@@ -170,7 +175,7 @@ pub async fn maybe_parse_apply_patch_verified(
                         );
                     }
                     Hunk::DeleteFile { .. } => {
-                        let content = match fs.read_file_text(&path).await {
+                        let content = match fs.read_file_text(&path_uri(&path), None).await {
                             Ok(content) => content,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(

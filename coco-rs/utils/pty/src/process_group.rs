@@ -145,20 +145,39 @@ pub fn terminate_process_group(_process_group_id: u32) -> io::Result<bool> {
 }
 
 #[cfg(unix)]
+/// Send SIGINT to a specific process group ID (best-effort).
+pub fn interrupt_process_group(process_group_id: u32) -> io::Result<()> {
+    signal_process_group_id(process_group_id as libc::pid_t, libc::SIGINT)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+/// No-op on non-Unix platforms.
+pub fn interrupt_process_group(_process_group_id: u32) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
 /// Kill a specific process group ID (best-effort).
 pub fn kill_process_group(process_group_id: u32) -> io::Result<()> {
+    signal_process_group_id(process_group_id as libc::pid_t, libc::SIGKILL)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn signal_process_group_id(pgid: libc::pid_t, signal: libc::c_int) -> io::Result<bool> {
     use std::io::ErrorKind;
 
-    let pgid = process_group_id as libc::pid_t;
-    let result = unsafe { libc::killpg(pgid, libc::SIGKILL) };
+    let result = unsafe { libc::killpg(pgid, signal) };
     if result == -1 {
         let err = io::Error::last_os_error();
-        if err.kind() != ErrorKind::NotFound {
-            return Err(err);
+        if err.kind() == ErrorKind::NotFound {
+            return Ok(false);
         }
+        return Err(err);
     }
 
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(not(unix))]

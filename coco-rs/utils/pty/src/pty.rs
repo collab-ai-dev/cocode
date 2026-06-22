@@ -27,8 +27,11 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+#[cfg(unix)]
+use crate::process::exit_code_from_status;
 use crate::process::ChildTerminator;
 use crate::process::ProcessHandle;
+use crate::process::ProcessSignal;
 use crate::process::PtyHandles;
 use crate::process::PtyMasterHandle;
 use crate::process::SpawnedProcess;
@@ -59,6 +62,19 @@ struct PtyChildTerminator {
 }
 
 impl ChildTerminator for PtyChildTerminator {
+    fn signal(&mut self, signal: ProcessSignal) -> std::io::Result<()> {
+        match signal {
+            ProcessSignal::Interrupt => {
+                #[cfg(unix)]
+                if let Some(process_group_id) = self.process_group_id {
+                    return crate::process_group::interrupt_process_group(process_group_id);
+                }
+
+                Err(crate::process::unsupported_signal(signal))
+            }
+        }
+    }
+
     fn kill(&mut self) -> std::io::Result<()> {
         #[cfg(unix)]
         if let Some(process_group_id) = self.process_group_id {
@@ -86,6 +102,14 @@ struct RawPidTerminator {
 
 #[cfg(unix)]
 impl ChildTerminator for RawPidTerminator {
+    fn signal(&mut self, signal: ProcessSignal) -> std::io::Result<()> {
+        match signal {
+            ProcessSignal::Interrupt => {
+                crate::process_group::interrupt_process_group(self.process_group_id)
+            }
+        }
+    }
+
     fn kill(&mut self) -> std::io::Result<()> {
         crate::process_group::kill_process_group(self.process_group_id)
     }
@@ -375,7 +399,16 @@ async fn spawn_process_preserving_fds(
     let wait_exit_code = Arc::clone(&exit_code);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let code = match child.wait() {
-            Ok(status) => status.code().unwrap_or(-1),
+            Ok(status) => {
+                #[cfg(unix)]
+                {
+                    exit_code_from_status(status)
+                }
+                #[cfg(not(unix))]
+                {
+                    status.code().unwrap_or(-1)
+                }
+            }
             Err(_) => -1,
         };
         wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
