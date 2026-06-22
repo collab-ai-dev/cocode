@@ -87,7 +87,7 @@ shlex.workspace = true
 tikv-jemallocator = { workspace = true, optional = true }
 
 [build-dependencies]
-# Used by build.rs only, to stamp the build timestamp into `coco --version`.
+# Used by build.rs only, to stamp the build timestamp into `cocode --version`.
 chrono = { workspace = true }
 
 [dev-dependencies]

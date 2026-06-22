@@ -1,6 +1,6 @@
-# coco
+# cocode
 
-coco is a multi-provider AI coding agent. The main implementation lives in the
+cocode is a multi-provider AI coding agent. The main implementation lives in the
 `coco-rs/` Rust workspace and includes the CLI, TUI, model providers, tool
 runtime, permissions, MCP support, memory, plugins, and SDK protocol.
 
@@ -37,14 +37,14 @@ just coco --models.main deepseek-openai/deepseek-v4-flash
 Install the published npm package:
 
 ```bash
-npm install -g @coco-cli/coco-cli
-coco-cli --version
-coco-cli --help
+npm install -g @cocode-cli/cocode-cli
+cocode-cli --version
+cocode-cli --help
 ```
 
 Package page:
 
-https://www.npmjs.com/package/@coco-cli/coco-cli
+https://www.npmjs.com/package/@cocode-cli/cocode-cli
 
 The npm package installs a small JavaScript launcher plus the native `coco`
 binary for your platform. Supported published builds are Linux x64, Linux
@@ -53,34 +53,34 @@ arm64, and macOS Apple Silicon.
 Upgrade to the latest published version:
 
 ```bash
-npm install -g @coco-cli/coco-cli@latest
+npm install -g @cocode-cli/cocode-cli@latest
 ```
 
 Uninstall:
 
 ```bash
-npm uninstall -g @coco-cli/coco-cli
+npm uninstall -g @cocode-cli/cocode-cli
 ```
 
 ## Configuration Files
 
-coco reads user configuration from `~/.coco/` by default. The most important
+cocode reads user configuration from `~/.cocode/` by default. The most important
 files are:
 
 | File | Purpose |
 | --- | --- |
-| `~/.coco/settings.json` | Runtime settings: selected models, TUI, permissions, diagnostics, tools |
-| `~/.coco/providers.json` | Provider catalog: API type, auth env var, base URL, model list |
-| `~/.coco/models.json` | Model catalog or overrides: context window, output limits, capabilities |
+| `~/.cocode/settings.json` | Runtime settings: selected models, TUI, permissions, diagnostics, tools |
+| `~/.cocode/providers.json` | Provider catalog: API type, auth env var, base URL, model list |
+| `~/.cocode/models.json` | Model catalog or overrides: context window, output limits, capabilities |
 
 Provider configuration can be written inline in `settings.json`, but the
 recommended shape is to keep provider and model catalogs in
 `providers.json` / `models.json`, then keep `settings.json` focused on the
 active model selection and user preferences.
 
-Do not commit real API keys. Prefer `env_key`, which points coco at an
+Do not commit real API keys. Prefer `env_key`, which points cocode at an
 environment variable. For a local-only workstation config, providers also
-accept `api_key` directly in `~/.coco/providers.json`; if both are present,
+accept `api_key` directly in `~/.cocode/providers.json`; if both are present,
 the environment variable wins.
 
 ## Model Selection
@@ -116,7 +116,7 @@ Common model roles:
 | `subagent` | Generic spawned subagent |
 
 Only `models.main` is required. If `fast`, `plan`, `explore`, `review`,
-`hook_agent`, `memory`, or `subagent` is not configured, coco defaults that
+`hook_agent`, `memory`, or `subagent` is not configured, cocode defaults that
 role to the resolved `main` model, including its fallback chain and fallback
 policy.
 
@@ -212,12 +212,12 @@ Fallback chains can be configured with a nested object:
 You can also override the main model for one run:
 
 ```bash
-coco-cli --models.main deepseek-openai/deepseek-v4-pro
+cocode-cli --models.main deepseek-openai/deepseek-v4-pro
 ```
 
 ## DeepSeek Configuration
 
-coco includes built-in DeepSeek providers and DeepSeek V4 model metadata:
+cocode includes built-in DeepSeek providers and DeepSeek V4 model metadata:
 
 | Provider | Compatibility layer | Models |
 | --- | --- | --- |
@@ -245,11 +245,11 @@ echo 'export DEEPSEEK_API_KEY="sk-..."' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-2. Create or update `~/.coco/settings.json`:
+2. Create or update `~/.cocode/settings.json`:
 
 ```bash
-mkdir -p ~/.coco
-cat > ~/.coco/settings.json <<'JSON'
+mkdir -p ~/.cocode
+cat > ~/.cocode/settings.json <<'JSON'
 {
   "diagnostics": {
     "wire_dump": "all"
@@ -278,10 +278,10 @@ The same file should look like this:
 Remove the `diagnostics` block for normal daily use if you do not need verbose
 logs.
 
-3. Start coco:
+3. Start cocode:
 
 ```bash
-coco-cli
+cocode-cli
 ```
 
 From source:
@@ -293,7 +293,7 @@ just coco
 
 ### Explicit Provider Catalog
 
-The local reference setup under `/root/.coco` uses this split:
+The local reference setup under `/root/.cocode` uses this split:
 
 - `settings.json` selects the main model:
   `models.main = "deepseek-openai/deepseek-v4-flash"`
@@ -303,7 +303,7 @@ The local reference setup under `/root/.coco` uses this split:
 The example below follows that split with an environment variable. This is the
 recommended shape for checked-in or shared configs.
 
-Create `~/.coco/providers.json`:
+Create `~/.cocode/providers.json`:
 
 ```json
 {
@@ -321,7 +321,7 @@ Create `~/.coco/providers.json`:
 ```
 
 For a local-only machine config, you can put the DeepSeek key directly in
-`~/.coco/providers.json`. Keep this file private and do not commit it:
+`~/.cocode/providers.json`. Keep this file private and do not commit it:
 
 ```json
 {
@@ -341,13 +341,13 @@ For a local-only machine config, you can put the DeepSeek key directly in
 
 If `DEEPSEEK_API_KEY` is exported in the environment, it overrides the
 `api_key` value from the file. Unset the environment variable when you want to
-force coco to use the file value:
+force cocode to use the file value:
 
 ```bash
 unset DEEPSEEK_API_KEY
 ```
 
-Keep `~/.coco/settings.json` focused on model selection:
+Keep `~/.cocode/settings.json` focused on model selection:
 
 ```jsonc
 {
@@ -370,7 +370,7 @@ Keep `~/.coco/settings.json` focused on model selection:
 }
 ```
 
-You usually do not need `~/.coco/models.json` for DeepSeek V4 because coco
+You usually do not need `~/.cocode/models.json` for DeepSeek V4 because cocode
 already includes these model definitions. If you need to add a custom model,
 add metadata like this:
 
@@ -411,19 +411,19 @@ Enable wire dump diagnostics:
 Limit max tokens and max turns for one run:
 
 ```bash
-coco-cli --max-tokens 4096 --max-turns 8
+cocode-cli --max-tokens 4096 --max-turns 8
 ```
 
 Set the working directory:
 
 ```bash
-coco-cli -C /path/to/project
+cocode-cli -C /path/to/project
 ```
 
 Use a separate settings file:
 
 ```bash
-coco-cli --settings /path/to/settings.json
+cocode-cli --settings /path/to/settings.json
 ```
 
 ## Troubleshooting
@@ -461,7 +461,7 @@ If you use `providers.json`, make sure the provider points at that variable:
 A selected model must be one of:
 
 - a built-in model, such as `deepseek-v4-flash`
-- an entry in `~/.coco/models.json`
+- an entry in `~/.cocode/models.json`
 - an entry in `providers.<name>.models`
 
 For built-in DeepSeek V4, check the spelling:

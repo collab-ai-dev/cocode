@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 
 const PRODUCT_NAME = "cocode";
-const PACKAGE_SCOPE = "@cocode";
+const PACKAGE_SCOPE = "@cocode-cli";
 const PACKAGE_BASENAME = "cocode-cli";
 const PACKAGE_NAME = `${PACKAGE_SCOPE}/${PACKAGE_BASENAME}`;
 
