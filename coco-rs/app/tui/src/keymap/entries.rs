@@ -202,7 +202,7 @@ pub const KEYMAP: &[KeymapEntry] = &[
     },
     KeymapEntry {
         id: "global:cycle_view",
-        combo: "Ctrl+T",
+        combo: "Ctrl+Y",
         alternates: &[],
         group: KeymapGroup::GlobalHotkey,
         binding: action(KeybindingAction::AppToggleTodos),
@@ -210,7 +210,7 @@ pub const KEYMAP: &[KeymapEntry] = &[
     },
     KeymapEntry {
         id: "global:cycle_thinking",
-        combo: "Ctrl+Y",
+        combo: "Ctrl+T",
         alternates: &[],
         group: KeymapGroup::GlobalHotkey,
         binding: action(KeybindingAction::ChatCycleThinking),

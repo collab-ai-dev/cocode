@@ -9,5 +9,5 @@ expression: output
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                       ✓ Operation completed                   
 ─────────────────────────────────────── ✗ Something went wrong                 ─
- opus-4 * auto | ↑0 ↓0 · cache 0/0% | ctx -- | →0 ←0                            
+ opus-4 * auto * ctrl+t to cycle | ↑0 ↓0 · cache 0/0% | ctx -- | →0 ←0          
  ⏯ ask mode on · shift+tab to cycle

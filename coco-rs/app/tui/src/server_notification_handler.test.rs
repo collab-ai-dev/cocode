@@ -1039,3 +1039,41 @@ fn test_model_role_changed_folds_into_session_and_role_map() {
         .expect("Fast binding folded into model_by_role");
     assert_eq!(fast.model_id, "claude-haiku-4-5");
 }
+
+#[test]
+fn test_model_role_changed_none_effort_uses_catalog_default() {
+    let mut state = AppState::new();
+    state
+        .session
+        .model_catalog
+        .push(crate::state::ModelCatalogEntry {
+            provider: "anthropic".into(),
+            provider_display: "Anthropic".into(),
+            model_id: "claude-opus-4-8".into(),
+            display_name: "Claude Opus 4.8".into(),
+            context_window: Some(200_000),
+            supported_efforts: vec![
+                coco_types::ReasoningEffort::Medium,
+                coco_types::ReasoningEffort::High,
+            ],
+            default_effort: Some(coco_types::ReasoningEffort::Medium),
+        });
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::ModelRoleChanged(
+            coco_types::ModelRoleChangedParams {
+                role: coco_types::ModelRole::Main,
+                model_id: "claude-opus-4-8".into(),
+                provider: "anthropic".into(),
+                context_window: Some(200_000),
+                effort: None,
+            },
+        )),
+    );
+
+    assert_eq!(
+        state.session.thinking_effort,
+        coco_types::ReasoningEffort::Medium
+    );
+}

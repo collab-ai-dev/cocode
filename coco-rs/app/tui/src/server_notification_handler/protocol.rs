@@ -57,13 +57,19 @@ pub(super) fn handle(
             state.session.output_style = p.output_style;
             state.session.session_usage = None;
             state.session.token_usage = crate::state::session::TokenUsage::default();
-            // Initialise thinking_effort from the model's registered
-            // default so the status bar reflects the starting state
-            // before any Ctrl+T cycle. Falls back to Auto when the
+            // Initialise thinking_effort from the current model's
+            // registered default so the status bar reflects the starting
+            // state before any Ctrl+T cycle. Falls back to Auto when the
             // model has no opinion (the resting state).
-            state.session.thinking_effort = coco_config::builtin_models_partial()
-                .get(&p.model)
-                .and_then(|info| info.default_thinking_level)
+            state.session.thinking_effort = state
+                .session
+                .model_catalog
+                .iter()
+                .find(|entry| {
+                    entry.model_id == p.model
+                        && (p.provider.is_empty() || entry.provider == p.provider)
+                })
+                .and_then(|entry| entry.default_effort)
                 .unwrap_or(coco_types::ReasoningEffort::Auto);
             state.session.model = p.model;
             if !p.provider.is_empty() {
@@ -612,8 +618,14 @@ pub(super) fn handle(
             if p.role == coco_types::ModelRole::Main {
                 state.session.model = p.model_id.clone();
                 state.session.provider = p.provider.clone();
-                state.session.thinking_effort =
-                    p.effort.unwrap_or(coco_types::ReasoningEffort::Auto);
+                let default_effort = state
+                    .session
+                    .model_catalog
+                    .iter()
+                    .find(|entry| entry.provider == p.provider && entry.model_id == p.model_id)
+                    .and_then(|entry| entry.default_effort)
+                    .unwrap_or(coco_types::ReasoningEffort::Auto);
+                state.session.thinking_effort = p.effort.unwrap_or(default_effort);
             }
             true
         }

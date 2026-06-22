@@ -39,7 +39,6 @@ pub mod names {
     // Configuration
     pub const CONFIG: &str = "config";
     pub const MODEL: &str = "model";
-    pub const EFFORT: &str = "effort";
     pub const PERMISSIONS: &str = "permissions";
     pub const THEME: &str = "theme";
     pub const COLOR: &str = "color";
@@ -260,15 +259,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             true,
             LocalOnly,
             Some("<path>"),
-        ),
-        (
-            names::EFFORT,
-            "Set reasoning effort level",
-            &[],
-            effort_extended_handler,
-            true,
-            LocalOnly,
-            Some("[low|medium|high]"),
         ),
         (
             names::CONFIG,
@@ -863,33 +853,6 @@ fn status_extended_handler(_args: &str) -> String {
     // in contexts without a runtime to intercept the sentinel.
     let version = env!("CARGO_PKG_VERSION");
     format!("{STATUS_SENTINEL}\nSession status unavailable in this context (v{version}).")
-}
-
-fn effort_extended_handler(args: &str) -> String {
-    let level = args.trim();
-    if level.is_empty() {
-        return "Reasoning effort levels:\n\
-                  low      — Faster, less thorough\n\
-                  medium   — Balanced (default)\n\
-                  high     — Deeper reasoning, slower\n\
-                  max      — Maximum effort\n\
-                  auto     — Provider-default\n\n\
-                Use /effort <level> to change — persisted to settings.json, effective on next session."
-            .to_string();
-    }
-    if !matches!(level, "low" | "medium" | "high" | "max" | "auto") {
-        return format!("Unknown effort level: {level}. Use low / medium / high / max / auto.");
-    }
-    match coco_config::global_config::write_user_setting(
-        "effort",
-        serde_json::Value::String(level.to_string()),
-    ) {
-        Ok(path) => format!(
-            "Reasoning effort set to `{level}` in {} (effective on next session).",
-            path.display()
-        ),
-        Err(e) => format!("Failed to persist effort: {e}"),
-    }
 }
 
 fn config_extended_handler(args: &str) -> String {

@@ -18,6 +18,7 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
     let mut state = AppState::default();
     state.session.provider = "openai".into();
     state.session.model = "gpt-5.4".into();
+    state.session.thinking_effort = coco_types::ReasoningEffort::High;
     state.session.session_usage = Some(coco_types::SessionUsageSnapshot {
         totals: coco_types::SessionUsageTotals {
             input_tokens: 1_500,
@@ -74,6 +75,7 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
         .collect::<String>();
 
     assert!(text.contains(" openai/gpt-5.4"));
+    assert!(text.contains("high * ctrl+t to cycle"));
     assert!(text.contains("↑1.5K/$0.0042 ↓250/$0.0030"));
     assert!(text.contains("cache 750/50.0%"));
     assert!(!text.contains("F2 to expand"));

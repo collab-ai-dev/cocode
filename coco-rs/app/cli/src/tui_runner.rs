@@ -603,9 +603,17 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // Mirror `SessionStarted`'s thinking-level seed: read the model's
     // registered default so the header's effort dial reflects the real
     // starting state, not the `ReasoningEffort::Auto` fallback.
-    if let Some(default_effort) = coco_config::builtin_models_partial()
-        .get(&model_id)
-        .and_then(|info| info.default_thinking_level)
+    if let Some(default_effort) = runtime
+        .runtime_config
+        .model_roles
+        .get(coco_types::ModelRole::Main)
+        .and_then(|spec| {
+            runtime
+                .runtime_config
+                .model_registry
+                .resolve(&spec.provider, &spec.model_id)
+        })
+        .and_then(|resolved| resolved.info.default_thinking_level)
     {
         app.state_mut().session.thinking_effort = default_effort;
     }
