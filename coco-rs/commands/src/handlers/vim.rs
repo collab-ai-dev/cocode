@@ -1,7 +1,7 @@
 //! `/vim` — persist editor mode (vim ↔ normal).
 //!
 //! Flips editor mode (vim ↔ normal). Persisted via
-//! `~/.coco/state/editor_mode` (single-line text file). The TUI reads
+//! `config home/state/editor_mode` (single-line text file). The TUI reads
 //! this file at startup; absence means "normal".
 
 use std::path::PathBuf;
@@ -51,7 +51,9 @@ fn default_home() -> PathBuf {
 }
 
 fn state_file_path(home: &std::path::Path) -> PathBuf {
-    home.join(".coco").join("state").join("editor_mode")
+    home.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("state")
+        .join("editor_mode")
 }
 
 async fn read_mode(path: &std::path::Path) -> String {

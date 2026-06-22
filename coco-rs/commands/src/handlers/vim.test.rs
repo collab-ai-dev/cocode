@@ -10,7 +10,10 @@ async fn toggle_flips_mode_and_persists() {
         .await
         .unwrap();
     assert!(out1.contains("vim"));
-    let path = home.join(".coco").join("state").join("editor_mode");
+    let path = home
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("state")
+        .join("editor_mode");
     assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), "vim");
 
     // Second toggle goes back to normal.
@@ -29,7 +32,10 @@ async fn explicit_arg_sets_mode() {
     handler_with_home(home.clone(), "vim".to_string())
         .await
         .unwrap();
-    let path = home.join(".coco").join("state").join("editor_mode");
+    let path = home
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("state")
+        .join("editor_mode");
     assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), "vim");
 
     handler_with_home(home.clone(), "normal".to_string())

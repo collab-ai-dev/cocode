@@ -84,7 +84,7 @@ pub enum RetrievalErr {
     #[error("Config file parse error: path={path:?}, cause={cause}")]
     ConfigParseError { path: PathBuf, cause: String },
 
-    #[error("Retrieval is not enabled. Create ~/.coco/retrieval.toml or .coco/retrieval.toml")]
+    #[error("Retrieval is not enabled. Create a retrieval config file")]
     NotEnabled,
 
     /// Index is not ready yet (building or not initialized).

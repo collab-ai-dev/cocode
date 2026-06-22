@@ -12,6 +12,7 @@ coco-config.workspace = true
 coco-sandbox.workspace = true
 coco-shell-parser.workspace = true
 coco-types.workspace = true
+coco-utils-common.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

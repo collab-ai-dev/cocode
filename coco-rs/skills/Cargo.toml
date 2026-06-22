@@ -15,6 +15,7 @@ coco-error.workspace = true
 coco-file-watch.workspace = true
 coco-frontmatter.workspace = true
 coco-system-reminder.workspace = true
+coco-utils-common.workspace = true
 async-trait.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

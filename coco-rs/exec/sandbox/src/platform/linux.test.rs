@@ -131,7 +131,10 @@ fn test_build_bwrap_args_with_writable_roots() {
     // Read-only subpath protection
     assert!(args.contains(&"--ro-bind-try".to_string()));
     assert!(args.iter().any(|a| a.contains(".git")));
-    assert!(args.iter().any(|a| a.contains(".coco")));
+    assert!(
+        args.iter()
+            .any(|a| a.contains(coco_utils_common::COCO_CONFIG_DIR_NAME))
+    );
     assert!(args.iter().any(|a| a.contains(".agents")));
 
     // CWD set to first writable root
@@ -341,7 +344,7 @@ fn test_find_attack_symlinks_nonexistent_subpath() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root_path = dir.path().to_path_buf();
 
-    // Default subpaths (.git, .coco, .agents) don't exist on disk
+    // Default subpaths (.git, project config dir, .agents) don't exist on disk
     let root = WritableRoot::new(&root_path);
     let symlinks = find_attack_symlinks(&root);
     assert!(symlinks.is_empty());

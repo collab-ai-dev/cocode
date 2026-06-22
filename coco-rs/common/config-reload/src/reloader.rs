@@ -163,7 +163,7 @@ impl RuntimeReloader {
     /// **Catalog file appearance.** The watcher subscribes to each
     /// path's *parent directory* non-recursively and filters events
     /// by exact path in `classify`, so a first-time `touch` of
-    /// `~/.coco/providers.json` triggers a rebuild even though the
+    /// `config home/providers.json` triggers a rebuild even though the
     /// file did not exist at watcher-install time.
     pub fn spawn(opts: ReloadOptions) -> Result<Self, coco_error::BoxedError> {
         Handle::try_current().map_err(|_| {

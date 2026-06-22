@@ -1,6 +1,6 @@
 //! MCP authentication status enum.
 //!
-//! Inlined from cocode-protocol to avoid cross-workspace dependency.
+//! Inlined to avoid a cross-workspace dependency.
 
 use std::fmt;
 

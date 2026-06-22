@@ -679,7 +679,7 @@ const _: () = assert!(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartedParams {
     pub session_id: String,
-    /// coco-rs extension: protocol version negotiation.
+    /// Local extension: protocol version negotiation.
     pub protocol_version: String,
     pub cwd: String,
     pub model: String,
@@ -770,7 +770,7 @@ pub struct SessionResultParams {
     pub structured_output: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast_mode_state: Option<FastModeState>,
-    /// coco-rs extension: num_api_calls for observability (not in TS).
+    /// Local extension: num_api_calls for observability (not in TS).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub num_api_calls: Option<i32>,
 }
@@ -1709,7 +1709,7 @@ impl PermissionDisplayInput {
 /// (TUI-only, never sent to SDK) is preserved via consumer dispatch rules
 /// in `StreamAccumulator` and `handle_core_event()`.
 ///
-/// 23 variants (20 from design §4.1 + 3 coco-rs extensions).
+/// 23 variants (20 from design §4.1 + 3 local extensions).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1795,7 +1795,7 @@ pub enum TuiOnlyEvent {
     /// `CommandRegistry`. The TUI overwrites
     /// `state.session.available_commands` with this list so the `/`
     /// autocomplete popup and command palette stay in sync. TS parity:
-    /// the TS popup re-queries `getCommands()` inline; coco-rs pushes
+    /// the TS popup re-queries `getCommands()` inline; this implementation pushes
     /// the snapshot because the registry lives in the CLI process.
     AvailableCommandsRefreshed {
         commands: Vec<crate::SlashCommandInfo>,
@@ -1912,9 +1912,9 @@ pub enum TuiOnlyEvent {
         reason: ToolAbortReasonPayload,
     },
 
-    // === coco-rs extensions (not in the design's 20) ===
+    // === Local extensions (not in the design's 20) ===
     /// Rewind completed — TUI truncates messages and restores input state.
-    /// coco-rs extension: UI-only because it carries TUI-specific identifiers
+    /// Local extension: UI-only because it carries TUI-specific identifiers
     /// for message truncation and input repopulation. Out-of-band from the
     /// design's `rewind/completed` ServerNotification which carries protocol
     /// metadata only.
@@ -2205,13 +2205,13 @@ pub enum MemoryDialogRowKind {
 pub enum MemoryDialogScope {
     /// Enterprise / managed (typically read-only for the user).
     Managed,
-    /// User-global (`~/.coco/CLAUDE.md` or `~/CLAUDE.md`).
+    /// User-global (`config home/CLAUDE.md` or `~/CLAUDE.md`).
     User,
     /// Project (`./CLAUDE.md`).
     Project,
     /// Project-local (`./CLAUDE.local.md`, gitignored).
     ProjectLocal,
-    /// `<dir>/.coco/CLAUDE.md` — project-config-dir convention.
+    /// `<dir>/project config dir/CLAUDE.md` — project-config-dir convention.
     ProjectConfig,
     /// Subdirectory CLAUDE.md (auto-loaded under cwd).
     Subdir,
@@ -2441,7 +2441,7 @@ pub struct SkillsDialogEntry {
     /// The dialog computes `frontmatter_bytes / bytes_per_token` per
     /// row. Source: `coco_skills::estimate_skill_frontmatter_bytes`.
     pub frontmatter_bytes: i64,
-    /// What is stored in `<cwd>/.coco/settings.local.json`'s
+    /// What is stored in `project config dir/settings.local.json`'s
     /// `skill_overrides[name]` _right now_. `None` ⇒ key absent.
     /// Drives the dialog's diff-against-baseline save algorithm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2472,9 +2472,9 @@ pub enum SkillsDialogSource {
     /// Compiled-in bundled skill catalog. TS `bundled` / `builtin`
     /// collapsed to a single label (display: `built-in`).
     BuiltIn,
-    /// `<cwd>/.coco/skills/` — project skills.
+    /// `project config dir/skills/` — project skills.
     Project,
-    /// `~/.coco/skills/` — TS `userSettings`.
+    /// `config home/skills/` — TS `userSettings`.
     User,
     /// Managed enterprise dir — TS `policySettings`.
     Policy,

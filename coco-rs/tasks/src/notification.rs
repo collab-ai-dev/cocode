@@ -10,14 +10,14 @@
 //!
 //! ## Why a dedicated module
 //!
-//! Before this module the XML builder lived in `coco-cli`. That's a
+//! Before this module the XML builder lived in the app layer. That's a
 //! layering smell: the envelope shape is task-domain logic, not
 //! CLI-bootstrap logic. Moving it here lets `TaskManager` (which
 //! owns lifecycle state) call the sink directly — and keeps the
 //! producer + the data shape co-located.
 //!
-//! The trait dependency direction stays clean: `coco-tasks` knows
-//! nothing about `coco-query` / `coco-cli`. The app layer
+//! The trait dependency direction stays clean: this crate knows
+//! nothing about higher-level app crates. The app layer
 //! implements [`NotificationSink`] in terms of its own machinery
 //! (CommandQueue, SDK channels, etc.) and hands an `Arc<dyn
 //! NotificationSink>` down at session bootstrap.

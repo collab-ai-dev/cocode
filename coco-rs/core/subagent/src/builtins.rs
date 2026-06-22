@@ -20,9 +20,9 @@ use coco_types::{
 };
 
 use crate::builtin_prompts::{
-    STATUSLINE_SETUP_SYSTEM_PROMPT, VERIFICATION_CRITICAL_SYSTEM_REMINDER,
-    coco_guide_system_prompt, explore_system_prompt, general_purpose_system_prompt,
-    plan_system_prompt, verification_system_prompt,
+    VERIFICATION_CRITICAL_SYSTEM_REMINDER, coco_guide_system_prompt, explore_system_prompt,
+    general_purpose_system_prompt, plan_system_prompt, statusline_setup_system_prompt,
+    verification_system_prompt,
 };
 
 /// What the SDK / CLI / TUI passes in to choose which optional built-ins
@@ -170,6 +170,9 @@ fn read_only_disallowed() -> Vec<String> {
 }
 
 fn statusline_setup() -> AgentDefinition {
+    let product = coco_config::constants::PRODUCT_NAME;
+    let when_to_use =
+        format!("Use this agent to configure the user's {product} status line setting.");
     AgentDefinition {
         model_role: Some(coco_types::ModelRole::Main),
         color: Some(AgentColorName::Orange),
@@ -177,11 +180,8 @@ fn statusline_setup() -> AgentDefinition {
             ToolName::Read.as_str().into(),
             ToolName::Edit.as_str().into(),
         ]),
-        system_prompt: Some(STATUSLINE_SETUP_SYSTEM_PROMPT.into()),
-        ..base(
-            SubagentType::StatusLine,
-            "Use this agent to configure the user's Coco status line setting.",
-        )
+        system_prompt: Some(statusline_setup_system_prompt()),
+        ..base(SubagentType::StatusLine, &when_to_use)
     }
 }
 
@@ -237,8 +237,8 @@ fn verification() -> AgentDefinition {
 /// in here — they belong on the spawn-time prompt assembler, not on
 /// the static catalog entry.
 ///
-/// **Coco-rs rename**: this agent was originally `claude-code-guide`;
-/// coco-rs owns the identifier as `coco-guide` (see
+/// This agent was originally `claude-code-guide`; this runtime owns the
+/// identifier as `coco-guide` (see
 /// [`coco_types::SubagentType::CocoGuide`]).
 fn coco_guide_with(has_embedded_search_tools: bool) -> AgentDefinition {
     let allowed_tools = if has_embedded_search_tools {

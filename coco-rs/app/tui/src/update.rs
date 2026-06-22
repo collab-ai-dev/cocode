@@ -299,7 +299,7 @@ pub async fn handle_command(
             // No declared support → silent no-op. Common when the
             // active model is registered without a
             // `supported_thinking_levels` entry (e.g. a user-added
-            // model in `~/.coco/models.json` without metadata) or when
+            // model in `config home/models.json` without metadata) or when
             // `state.session.{provider, model}` haven't been seeded
             // yet (pre-bootstrap mock paths).
             if supported.is_empty() {

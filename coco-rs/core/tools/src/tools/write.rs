@@ -303,7 +303,7 @@ impl Tool for WriteTool {
 
         crate::record_file_edit(ctx, path, content.to_string()).await;
         // Skill auto-discovery + conditional-skill activation — when a write
-        // touches a path under a nested `.coco/skills/` ancestor or matches
+        // touches a path under a nested `project config dir/skills/` ancestor or matches
         // a `paths`-gated skill, the next batch boundary picks both up.
         crate::track_skill_triggers(ctx, path).await;
         // Clear delivered diagnostics + notify the language server to

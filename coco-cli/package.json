@@ -1,9 +1,9 @@
 {
-  "name": "@coco-cli/coco-cli",
+  "name": "@cocode/cocode-cli",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "bin": {
-    "coco-cli": "bin/coco-cli.js"
+    "cocode-cli": "bin/coco-cli.js"
   },
   "type": "module",
   "engines": {

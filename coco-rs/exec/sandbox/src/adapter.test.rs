@@ -119,7 +119,10 @@ fn test_build_runtime_config_includes_cwd_as_writable_root() {
 #[test]
 fn test_build_runtime_config_blocks_settings_files() {
     let settings = SandboxSettings::default();
-    let settings_file = PathBuf::from("/proj/.coco/settings.json");
+    let settings_file = PathBuf::from(format!(
+        "/proj/{}/settings.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    ));
     let inputs = empty_inputs(
         &settings,
         Path::new("/proj"),
@@ -127,11 +130,10 @@ fn test_build_runtime_config_blocks_settings_files() {
     );
     let out = build_runtime_config(inputs);
     assert!(out.config.deny_write_paths.contains(&settings_file));
-    assert!(
-        out.config
-            .deny_write_paths
-            .contains(&PathBuf::from("/proj/.coco/skills"))
-    );
+    assert!(out.config.deny_write_paths.contains(&PathBuf::from(format!(
+        "/proj/{}/skills",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    ))));
     assert!(
         !out.config
             .deny_write_paths

@@ -1,7 +1,7 @@
 //! `/hooks` — show or reload configured hook event handlers.
 //!
-//! `/hooks` (no args) reads hook configuration from `.coco/settings.json`
-//! and `~/.coco/settings.json` and displays all hooks grouped by event type.
+//! `/hooks` (no args) reads hook configuration and displays all hooks grouped
+//! by event type.
 //!
 //! `/hooks reload` emits a sentinel that runners parse and dispatch to
 //! [`SessionRuntime::reload_hooks`], which rebuilds the live registry from
@@ -11,6 +11,7 @@
 //! the dialog mutates settings — same effect, different UI surface.
 
 use std::path::Path;
+use std::path::PathBuf;
 use std::pin::Pin;
 
 use crate::implementations::RELOAD_HOOKS_SENTINEL;
@@ -61,22 +62,22 @@ pub fn handler(
 /// Gather and display hooks from all settings sources.
 async fn list_hooks() -> crate::Result<String> {
     let mut hooks = Vec::new();
+    let project_settings = project_settings_path();
+    let project_settings_label = project_settings_label();
+    let user_settings_label = user_settings_label();
 
-    load_hooks_from_file(
-        Path::new(".coco/settings.json"),
-        ".coco/settings.json",
-        &mut hooks,
-    )
-    .await;
+    load_hooks_from_file(&project_settings, &project_settings_label, &mut hooks).await;
 
     let user_settings = coco_config::global_config::user_settings_path();
-    load_hooks_from_file(&user_settings, "~/.coco/settings.json", &mut hooks).await;
+    load_hooks_from_file(&user_settings, &user_settings_label, &mut hooks).await;
 
     let mut out = String::from("## Configured Hooks\n\n");
 
     if hooks.is_empty() {
         out.push_str("No hooks configured.\n\n");
-        out.push_str("Add hooks to .coco/settings.json or ~/.coco/settings.json:\n\n");
+        out.push_str(&format!(
+            "Add hooks to {project_settings_label} or {user_settings_label}:\n\n"
+        ));
         out.push_str("  {\n");
         out.push_str("    \"hooks\": {\n");
         out.push_str("      \"PreToolUse\": [\n");
@@ -143,6 +144,21 @@ async fn list_hooks() -> crate::Result<String> {
     }
 
     Ok(out)
+}
+
+fn project_settings_path() -> PathBuf {
+    PathBuf::from(coco_utils_common::COCO_CONFIG_DIR_NAME).join("settings.json")
+}
+
+fn project_settings_label() -> String {
+    format!("{}/settings.json", coco_utils_common::COCO_CONFIG_DIR_NAME)
+}
+
+fn user_settings_label() -> String {
+    format!(
+        "~/{}/settings.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    )
 }
 
 /// Load hook entries from a JSON settings file.

@@ -18,7 +18,7 @@ pub struct ModelHandler;
 impl CommandHandler for ModelHandler {
     /// No args → open the picker overlay. Args → resolve `args` against
     /// the builtin registry, persist to
-    /// `~/.coco/settings.json::models.main`, and report inline.
+    /// `config home/settings.json::models.main`, and report inline.
     async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
         let requested = args.trim();
         if requested.is_empty() {

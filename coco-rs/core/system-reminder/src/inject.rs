@@ -90,7 +90,7 @@ pub enum InjectedBlock {
 /// API call vs. display-only messages the UI may surface without sending
 /// to the model.
 ///
-/// Mirrors cocode-rs `NormalizedMessages` (reference impl). Callers that
+/// Mirrors the reference `NormalizedMessages` shape. Callers that
 /// only need the API-visible subset can use [`create_injected_messages`];
 /// callers that also want the display-only stream (TUI transcript, log
 /// viewer, telemetry) call [`normalize_injected_messages`].

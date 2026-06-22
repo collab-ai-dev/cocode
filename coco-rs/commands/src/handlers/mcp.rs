@@ -1,10 +1,10 @@
 //! `/mcp` — MCP server management (list, add, remove, enable, disable).
 //!
-//! Reads MCP server configuration from `.coco/settings.json` and
-//! `.mcp.json`, displays status for each server, and supports
-//! enable/disable/add/remove subcommands.
+//! Reads MCP server configuration, displays status for each server, and
+//! supports enable/disable/add/remove subcommands.
 
 use std::path::Path;
+use std::path::PathBuf;
 use std::pin::Pin;
 
 /// A discovered MCP server entry from config files.
@@ -53,31 +53,28 @@ pub fn handler(
 /// List all MCP servers from config files.
 async fn list_mcp_servers() -> crate::Result<String> {
     let mut servers = Vec::new();
+    let project_settings = project_settings_path();
+    let project_settings_label = project_settings_label();
+    let user_settings_label = user_settings_label();
 
-    // Load from .coco/settings.json
-    load_servers_from_file(
-        Path::new(".coco/settings.json"),
-        ".coco/settings.json",
-        &mut servers,
-    )
-    .await;
+    load_servers_from_file(&project_settings, &project_settings_label, &mut servers).await;
 
     // Load from .mcp.json
     load_servers_from_file(Path::new(".mcp.json"), ".mcp.json", &mut servers).await;
 
     // Load from user-level config
     let user_settings = coco_config::global_config::user_settings_path();
-    load_servers_from_file(&user_settings, "~/.coco/settings.json", &mut servers).await;
+    load_servers_from_file(&user_settings, &user_settings_label, &mut servers).await;
 
     let mut out = String::from("## MCP Servers\n\n");
 
     if servers.is_empty() {
         out.push_str("No MCP servers configured.\n\n");
         out.push_str("Configure servers in:\n");
-        out.push_str("  .coco/settings.json  (project-level)\n");
+        out.push_str(&format!("  {project_settings_label}  (project-level)\n"));
         out.push_str("  .mcp.json              (project-level, shared)\n");
-        out.push_str("  ~/.coco/settings.json (user-level)\n\n");
-        out.push_str("Example config in .coco/settings.json:\n");
+        out.push_str(&format!("  {user_settings_label} (user-level)\n\n"));
+        out.push_str(&format!("Example config in {project_settings_label}:\n"));
         out.push_str("  {\n");
         out.push_str("    \"mcpServers\": {\n");
         out.push_str("      \"my-server\": {\n");
@@ -167,26 +164,27 @@ async fn load_servers_from_file(path: &Path, source_label: &str, servers: &mut V
     }
 }
 
-/// Enable or disable a server by updating .coco/settings.json.
+/// Enable or disable a server by updating project settings.
 async fn toggle_server(name: &str, enable: bool) -> crate::Result<String> {
-    let path = Path::new(".coco/settings.json");
+    let path = project_settings_path();
+    let project_settings_label = project_settings_label();
     let action = if enable { "Enabling" } else { "Disabling" };
 
-    let Ok(content) = tokio::fs::read_to_string(path).await else {
+    let Ok(content) = tokio::fs::read_to_string(&path).await else {
         return Ok(format!(
-            "Cannot {action} '{name}': .coco/settings.json not found.\n\
+            "Cannot {action} '{name}': {project_settings_label} not found.\n\
              Create the file with MCP server configuration first."
         ));
     };
 
     let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return Ok("Cannot parse .coco/settings.json".to_string());
+        return Ok(format!("Cannot parse {project_settings_label}"));
     };
 
     let servers = parsed.get_mut("mcpServers").and_then(|v| v.as_object_mut());
 
     let Some(servers) = servers else {
-        return Ok("No MCP servers in .coco/settings.json".to_string());
+        return Ok(format!("No MCP servers in {project_settings_label}"));
     };
 
     if let Some(server_config) = servers.get_mut(name) {
@@ -199,17 +197,17 @@ async fn toggle_server(name: &str, enable: bool) -> crate::Result<String> {
         }
 
         let new_content = serde_json::to_string_pretty(&parsed)?;
-        tokio::fs::write(path, new_content).await?;
+        tokio::fs::write(&path, new_content).await?;
 
         Ok(format!("{action} MCP server: {name}"))
     } else {
         Ok(format!(
-            "MCP server '{name}' not found in .coco/settings.json"
+            "MCP server '{name}' not found in {project_settings_label}"
         ))
     }
 }
 
-/// Add a new MCP server to .coco/settings.json.
+/// Add a new MCP server to project settings.
 async fn add_server(input: &str) -> crate::Result<String> {
     let parts: Vec<&str> = input.splitn(2, ' ').collect();
     if parts.len() < 2 {
@@ -223,13 +221,13 @@ async fn add_server(input: &str) -> crate::Result<String> {
     let command = cmd_parts[0];
     let args: Vec<&str> = cmd_parts[1..].to_vec();
 
-    let path = Path::new(".coco/settings.json");
-    let mut parsed = if let Ok(content) = tokio::fs::read_to_string(path).await {
+    let path = project_settings_path();
+    let project_settings_label = project_settings_label();
+    let mut parsed = if let Ok(content) = tokio::fs::read_to_string(&path).await {
         serde_json::from_str::<serde_json::Value>(&content)
             .unwrap_or_else(|_| serde_json::json!({}))
     } else {
-        // Ensure .coco directory exists
-        tokio::fs::create_dir_all(".coco").await?;
+        tokio::fs::create_dir_all(coco_utils_common::COCO_CONFIG_DIR_NAME).await?;
         serde_json::json!({})
     };
 
@@ -250,26 +248,29 @@ async fn add_server(input: &str) -> crate::Result<String> {
     mcp_servers[name] = server_config;
 
     let new_content = serde_json::to_string_pretty(&parsed)?;
-    tokio::fs::write(path, new_content).await?;
+    tokio::fs::write(&path, new_content).await?;
 
     Ok(format!(
-        "Added MCP server '{name}' to .coco/settings.json\n\
+        "Added MCP server '{name}' to {project_settings_label}\n\
          Command: {command} {}\n\
          Restart the session to connect.",
         args.join(" "),
     ))
 }
 
-/// Remove an MCP server from .coco/settings.json.
+/// Remove an MCP server from project settings.
 async fn remove_server(name: &str) -> crate::Result<String> {
-    let path = Path::new(".coco/settings.json");
+    let path = project_settings_path();
+    let project_settings_label = project_settings_label();
 
-    let Ok(content) = tokio::fs::read_to_string(path).await else {
-        return Ok("Cannot remove: .coco/settings.json not found.".to_string());
+    let Ok(content) = tokio::fs::read_to_string(&path).await else {
+        return Ok(format!(
+            "Cannot remove: {project_settings_label} not found."
+        ));
     };
 
     let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return Ok("Cannot parse .coco/settings.json".to_string());
+        return Ok(format!("Cannot parse {project_settings_label}"));
     };
 
     let removed = parsed
@@ -280,13 +281,28 @@ async fn remove_server(name: &str) -> crate::Result<String> {
     match removed {
         Some(_) => {
             let new_content = serde_json::to_string_pretty(&parsed)?;
-            tokio::fs::write(path, new_content).await?;
+            tokio::fs::write(&path, new_content).await?;
             Ok(format!("Removed MCP server: {name}"))
         }
         None => Ok(format!(
-            "MCP server '{name}' not found in .coco/settings.json"
+            "MCP server '{name}' not found in {project_settings_label}"
         )),
     }
+}
+
+fn project_settings_path() -> PathBuf {
+    PathBuf::from(coco_utils_common::COCO_CONFIG_DIR_NAME).join("settings.json")
+}
+
+fn project_settings_label() -> String {
+    format!("{}/settings.json", coco_utils_common::COCO_CONFIG_DIR_NAME)
+}
+
+fn user_settings_label() -> String {
+    format!(
+        "~/{}/settings.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    )
 }
 
 #[cfg(test)]

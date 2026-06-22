@@ -299,7 +299,7 @@ impl RealTuiHarness {
         } = build_engine_resources(&cli, &runtime_config, &cwd)
             .with_context(|| "build_engine_resources")?;
 
-        // SessionManager — sessions_dir mirrors prod (`~/.coco/sessions`).
+        // SessionManager — sessions_dir mirrors prod (`config home/sessions`).
         // Tests touch the user's home like the existing coco_cli_deepseek
         // suite does; it's a known minor cost vs full prod-fidelity.
         let session_manager = Arc::new(SessionManager::new(coco_cli::paths::sessions_dir()));

@@ -292,7 +292,7 @@ pub enum LspResult {
 
 /// Main application state
 pub struct App {
-    /// Cocode home directory for config lookup
+    /// Config home directory for config lookup
     pub coco_home: PathBuf,
     /// Workspace root directory
     pub workspace: PathBuf,
@@ -532,7 +532,7 @@ impl App {
                 } else if matches!(op, Operation::ConfigureServers) {
                     // Go to ConfigServers view
                     let user_dir = self.coco_home.clone();
-                    let project_dir = self.workspace.join(".coco");
+                    let project_dir = self.workspace.join(coco_utils_common::COCO_CONFIG_DIR_NAME);
                     self.cached_config_servers = self
                         .manager
                         .get_all_servers_for_config(&user_dir, &project_dir)
@@ -789,7 +789,7 @@ impl App {
                 // Refresh server list (reload config from disk first)
                 self.manager.reload_config().await;
                 let user_dir = self.coco_home.clone();
-                let project_dir = self.workspace.join(".coco");
+                let project_dir = self.workspace.join(coco_utils_common::COCO_CONFIG_DIR_NAME);
                 self.cached_config_servers = self
                     .manager
                     .get_all_servers_for_config(&user_dir, &project_dir)
@@ -830,7 +830,9 @@ impl App {
                     if let Some(config_level) = &server.config_level {
                         let config_dir = match config_level {
                             ConfigLevel::User => Some(self.coco_home.clone()),
-                            ConfigLevel::Project => Some(self.workspace.join(".coco")),
+                            ConfigLevel::Project => {
+                                Some(self.workspace.join(coco_utils_common::COCO_CONFIG_DIR_NAME))
+                            }
                         };
 
                         if let Some(dir) = config_dir {
@@ -845,7 +847,9 @@ impl App {
                                     // Reload config and refresh list
                                     self.manager.reload_config().await;
                                     let user_dir = self.coco_home.clone();
-                                    let project_dir = self.workspace.join(".coco");
+                                    let project_dir = self
+                                        .workspace
+                                        .join(coco_utils_common::COCO_CONFIG_DIR_NAME);
                                     self.cached_config_servers = self
                                         .manager
                                         .get_all_servers_for_config(&user_dir, &project_dir)
@@ -872,7 +876,9 @@ impl App {
                     if let Some(config_level) = &server.config_level {
                         let config_dir = match config_level {
                             ConfigLevel::User => Some(self.coco_home.clone()),
-                            ConfigLevel::Project => Some(self.workspace.join(".coco")),
+                            ConfigLevel::Project => {
+                                Some(self.workspace.join(coco_utils_common::COCO_CONFIG_DIR_NAME))
+                            }
                         };
 
                         if let Some(dir) = config_dir {
@@ -886,7 +892,9 @@ impl App {
                                     // Reload config and refresh list
                                     self.manager.reload_config().await;
                                     let user_dir = self.coco_home.clone();
-                                    let project_dir = self.workspace.join(".coco");
+                                    let project_dir = self
+                                        .workspace
+                                        .join(coco_utils_common::COCO_CONFIG_DIR_NAME);
                                     self.cached_config_servers = self
                                         .manager
                                         .get_all_servers_for_config(&user_dir, &project_dir)
@@ -970,7 +978,7 @@ impl App {
                     // Reload config and refresh list
                     self.manager.reload_config().await;
                     let user_dir = self.coco_home.clone();
-                    let project_dir = self.workspace.join(".coco");
+                    let project_dir = self.workspace.join(coco_utils_common::COCO_CONFIG_DIR_NAME);
                     self.cached_config_servers = self
                         .manager
                         .get_all_servers_for_config(&user_dir, &project_dir)
@@ -990,7 +998,7 @@ impl App {
         let config_dir = if self.config_level_selection == 0 {
             Some(self.coco_home.clone())
         } else {
-            Some(self.workspace.join(".coco"))
+            Some(self.workspace.join(coco_utils_common::COCO_CONFIG_DIR_NAME))
         };
 
         if let Some(dir) = config_dir {

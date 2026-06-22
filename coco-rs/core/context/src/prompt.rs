@@ -33,7 +33,12 @@ pub const AGENT_NOTES: &str = include_str!("agent_notes.md");
 /// malformed `.md`). The main agent uses
 /// `DEFAULT_SYSTEM_PROMPT_IDENTITY` from `app/cli/src/headless.rs`,
 /// which is the full base instructions ("You are an interactive agent …").
-pub const DEFAULT_AGENT_IDENTITY: &str = "You are Coco, a CLI coding assistant. Given the user's message, you should use the tools available to complete the task. Complete the task fully—don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings — the caller will relay this to the user, so it only needs the essentials.";
+pub fn default_agent_identity() -> String {
+    let product = coco_config::constants::PRODUCT_NAME;
+    format!(
+        "You are {product}, a CLI coding assistant. Given the user's message, you should use the tools available to complete the task. Complete the task fully—don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings — the caller will relay this to the user, so it only needs the essentials."
+    )
+}
 
 /// A compiled system prompt with cache breakpoints.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

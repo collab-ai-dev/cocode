@@ -18,7 +18,9 @@ use crate::error::Result;
 use crate::error::StoreSnafu;
 use crate::token_cell::TokenSnapshot;
 
-const KEYRING_SERVICE: &str = "Coco Provider Auth";
+fn keyring_service() -> String {
+    format!("{} Provider Auth", coco_config::constants::PRODUCT_NAME)
+}
 
 /// Persisted, provider-scoped credential. `login_epoch` bumps on a fresh login
 /// (not on refresh) so credential *identity* changes are distinguishable from
@@ -115,7 +117,8 @@ impl Default for KeyringBackend {
 
 impl CredentialBackend for KeyringBackend {
     fn load(&self, name: &str) -> Result<Option<StoredCredential>> {
-        let raw = self.store.load(KEYRING_SERVICE, name).map_err(|e| {
+        let service = keyring_service();
+        let raw = self.store.load(&service, name).map_err(|e| {
             StoreSnafu {
                 message: e.message(),
             }
@@ -126,7 +129,8 @@ impl CredentialBackend for KeyringBackend {
 
     fn save(&self, name: &str, cred: &StoredCredential) -> Result<()> {
         let json = encode(cred)?;
-        self.store.save(KEYRING_SERVICE, name, &json).map_err(|e| {
+        let service = keyring_service();
+        self.store.save(&service, name, &json).map_err(|e| {
             StoreSnafu {
                 message: e.message(),
             }
@@ -135,7 +139,8 @@ impl CredentialBackend for KeyringBackend {
     }
 
     fn delete(&self, name: &str) -> Result<bool> {
-        self.store.delete(KEYRING_SERVICE, name).map_err(|e| {
+        let service = keyring_service();
+        self.store.delete(&service, name).map_err(|e| {
             StoreSnafu {
                 message: e.message(),
             }

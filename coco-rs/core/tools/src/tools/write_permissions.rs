@@ -84,7 +84,8 @@ pub(crate) fn check_write_permission_for_paths(
     {
         return ToolCheckResult::Ask {
             message: format!(
-                "Coco requested permissions to {action}, but you haven't granted it yet."
+                "{} requested permissions to {action}, but you haven't granted it yet.",
+                coco_config::constants::PRODUCT_NAME
             ),
             suggestions: vec![],
             choices: None,
@@ -123,7 +124,8 @@ pub(crate) fn check_write_permission_for_paths(
         | PermissionMode::Bubble
         | PermissionMode::AcceptEdits => ToolCheckResult::Ask {
             message: format!(
-                "Coco requested permissions to {action}, but you haven't granted it yet."
+                "{} requested permissions to {action}, but you haven't granted it yet.",
+                coco_config::constants::PRODUCT_NAME
             ),
             suggestions: write_permission_suggestions(paths_to_check, &cwd_str, ctx),
             choices: None,
@@ -131,7 +133,8 @@ pub(crate) fn check_write_permission_for_paths(
         },
         PermissionMode::Plan if !ctx.permission_context.bypass_available => ToolCheckResult::Ask {
             message: format!(
-                "Coco requested permissions to {action}, but you haven't granted it yet."
+                "{} requested permissions to {action}, but you haven't granted it yet.",
+                coco_config::constants::PRODUCT_NAME
             ),
             suggestions: write_permission_suggestions(paths_to_check, &cwd_str, ctx),
             choices: None,

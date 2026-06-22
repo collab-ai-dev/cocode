@@ -40,6 +40,7 @@ pub use builtin::builtin_models_partial;
 pub use builtin::builtin_models_resolved;
 pub use builtin::builtin_provider_partials;
 pub use builtin::builtin_providers;
+pub use builtin::default_base_instructions;
 pub use compact_settings::ApiNativeConfig as CompactApiNativeConfig;
 pub use compact_settings::AutoCompactConfig;
 pub use compact_settings::CompactConfig;

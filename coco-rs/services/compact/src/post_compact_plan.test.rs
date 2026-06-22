@@ -17,7 +17,10 @@ fn returns_none_when_plan_content_empty() {
 
 #[test]
 fn emits_attachment_with_verbatim_template() {
-    let path = PathBuf::from("/home/user/.coco/plans/deploy.md");
+    let path = PathBuf::from(format!(
+        "/home/user/{}/plans/deploy.md",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    ));
     let content = "1. Build the binary\n2. Push to registry";
     let att = create_plan_attachment_if_needed(&path, Some(content)).expect("emits");
     assert_eq!(att.kind, coco_types::AttachmentKind::PlanFileReference);
@@ -33,9 +36,10 @@ fn emits_attachment_with_verbatim_template() {
     assert!(text.starts_with("<system-reminder>"));
     assert!(text.ends_with("</system-reminder>"));
     // All expected template markers are present.
-    assert!(
-        text.contains("A plan file exists from plan mode at: /home/user/.coco/plans/deploy.md")
-    );
+    assert!(text.contains(&format!(
+        "A plan file exists from plan mode at: {}",
+        path.display()
+    )));
     assert!(text.contains("Plan contents:\n\n1. Build the binary\n2. Push to registry"));
     assert!(text.contains(
         "If this plan is relevant to the current work and not already complete, continue working on it."

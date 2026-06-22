@@ -132,7 +132,7 @@ impl std::fmt::Debug for MemoryRuntime {
 }
 
 /// Convenience builder for [`MemoryRuntime`]. Pass it `config_home`
-/// (typically `~/.coco`), the project root, and the agent handle —
+/// (typically the config home), the project root, and the agent handle —
 /// it derives all the directory paths.
 pub struct MemoryRuntimeBuilder {
     pub config_home: PathBuf,

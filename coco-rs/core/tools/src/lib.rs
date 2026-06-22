@@ -311,7 +311,7 @@ pub(crate) fn check_write_root_fence(
     if ctx.allowed_write_roots.is_empty() {
         return None;
     }
-    // Coco-managed internal paths (the session plan file, agent memory) are
+    // Managed internal paths (the session plan file, agent memory) are
     // always writable regardless of the fork write fence — they're the files a
     // plan-mode / memory sub-agent legitimately must write, and they live
     // outside any worktree root. Mirror the exemption the write permission check
@@ -416,7 +416,7 @@ pub(crate) fn check_team_mem_secret(
 ///     `coco_memory::team_paths::is_team_mem_path`. This is the
 ///     authoritative path that handles custom memory dirs
 ///     set via `COCO_REMOTE_MEMORY_DIR` or `COCO_MEMORY_PATH_OVERRIDE`.
-///  2. **Substring fallback** — match `**/.coco/memory/team/**` as
+///  2. **Substring fallback** — match `**/project config dir/memory/team/**` as
 ///     a heuristic for paths whose resolved memory dir doesn't match
 ///     the on-disk path (custom mount points, symlinks, mid-session
 ///     cwd changes, test fixtures under tempdir). False positives on
@@ -432,11 +432,11 @@ fn is_team_memory_path(ctx: &coco_tool_runtime::ToolUseContext, path: &std::path
     if let Some(root) = project_root {
         // The config home is derived from `CocoConfigDir` env or
         // defaulted by the bootstrap layer. We don't have direct access
-        // here, so fall back to `~/.coco` — same default the resolver
+        // here, so fall back to the config home — same default the resolver
         // uses for the layered settings path.
         let config_home = std::env::var_os("HOME")
-            .map(|h| std::path::PathBuf::from(h).join(".coco"))
-            .unwrap_or_else(|| std::path::PathBuf::from(".coco"));
+            .map(|h| std::path::PathBuf::from(h).join(coco_utils_common::COCO_CONFIG_DIR_NAME))
+            .unwrap_or_else(|| std::path::PathBuf::from(coco_utils_common::COCO_CONFIG_DIR_NAME));
         let directories = coco_memory::path::MemoryDir::resolve(
             &config_home,
             &root,
@@ -452,7 +452,7 @@ fn is_team_memory_path(ctx: &coco_tool_runtime::ToolUseContext, path: &std::path
     // Stage 2: substring fallback. Catches paths where the resolved
     // memory dir doesn't match the file's on-disk location (custom
     // mount points, symlinks, mid-session cwd changes, test fixtures).
-    // Any `.coco/.../memory/team/` path is accepted — the secret-detector
+    // Any `project config dir/.../memory/team/` path is accepted — the secret-detector
     // second stage gates false positives.
     let path_str = path.to_string_lossy();
     path_str.contains("/memory/team/") || path_str.contains("\\memory\\team\\")
@@ -480,7 +480,7 @@ pub(crate) async fn track_nested_memory_attachment(
 /// follow-ups:
 ///
 /// 1. **Nested-dir discovery** — walk up the file's ancestry to find
-///    any `.coco/skills/` directories not yet loaded; push them into
+///    any `project config dir/skills/` directories not yet loaded; push them into
 ///    `ctx.dynamic_skill_dir_triggers`.
 /// 2. **Conditional-skill activation** — push the file path itself
 ///    into `ctx.dynamic_skill_path_triggers` so the app/query drain
@@ -509,7 +509,7 @@ pub(crate) async fn track_skill_triggers(ctx: &coco_tool_runtime::ToolUseContext
     }
 
     // (1) Nested-dir discovery walks the file's filesystem ancestry to
-    // find `.coco/skills/` dirs — canonicalization is fine here
+    // find `project config dir/skills/` dirs — canonicalization is fine here
     // because the dir-walk needs the real filesystem layout.
     let canonical = tokio::fs::canonicalize(path)
         .await

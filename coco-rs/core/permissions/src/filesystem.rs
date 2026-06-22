@@ -23,14 +23,14 @@ const DANGEROUS_FILES: &[&str] = &[
 ];
 
 /// Directories whose contents should not be auto-edited.
-///
-/// `.claude` and `.codex` are kept because coco reads those agents' config dirs for compat (see
-/// `is_protected_config`; Codex/AGENTS.md convention); `.coco` is coco's own
-/// config home and must be guarded the same way. Coco-managed
-/// sub-paths the agent legitimately writes (the session plan file, agent memory)
-/// are carved out earlier in the write check via `is_editable_internal_path`,
-/// which runs before this safety gate.
-const DANGEROUS_DIRECTORIES: &[&str] = &[".git", ".vscode", ".idea", ".claude", ".coco", ".codex"];
+const DANGEROUS_DIRECTORIES: &[&str] = &[
+    ".git",
+    ".vscode",
+    ".idea",
+    ".claude",
+    coco_utils_common::COCO_CONFIG_DIR_NAME,
+    ".codex",
+];
 
 /// System directories blocked for all writes.
 const BLOCKED_SYSTEM_DIRS: &[&str] = &[
@@ -66,11 +66,7 @@ pub fn is_dangerous_file_path(path: &str) -> bool {
         }
     }
 
-    // Check if any path component is a dangerous directory. The check
-    // inspects `pathSegments[i + 1]` — so the `.coco/worktrees/` exemption
-    // is anchored at a component boundary, not a position-agnostic substring.
-    // A nested `.coco` deeper in the path (e.g. a settings.json inside a
-    // worktree) is still evaluated and blocked.
+    // Check if any path component is a dangerous directory.
     let segments: Vec<&str> = lower.split(['/', '\\']).collect();
     for i in 0..segments.len() {
         let component = segments[i];
@@ -81,9 +77,9 @@ pub fn is_dangerous_file_path(path: &str) -> bool {
             if component != dangerous_dir {
                 continue;
             }
-            // Structural git-worktree path: skip ONLY this `.coco` segment
-            // when the immediately-following component is `worktrees`.
-            if dangerous_dir == ".coco" && segments.get(i + 1).copied() == Some("worktrees") {
+            if dangerous_dir == coco_utils_common::COCO_CONFIG_DIR_NAME
+                && segments.get(i + 1).copied() == Some("worktrees")
+            {
                 break;
             }
             return true;
@@ -100,19 +96,14 @@ pub fn is_dangerous_file_path(path: &str) -> bool {
 
 /// Check if a path is a coco settings or config file.
 ///
-/// coco serves its config from `.coco/`: project `settings.json` /
-/// `settings.local.json`, `commands/`, `agents/`, and `skills/` all live
-/// under `<cwd>/.coco/`. Editing any of these is treated as a config edit
-/// requiring approval. The match is a path-substring over-approximation —
-/// coco threads no cwd through `check_path_safety_for_auto_edit`, and
-/// over-matching only over-prompts, which is safe for an approval gate.
 pub fn is_coco_config_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/").to_lowercase();
-    normalized.contains("/.coco/settings.json")
-        || normalized.contains("/.coco/settings.local.json")
-        || normalized.contains("/.coco/commands/")
-        || normalized.contains("/.coco/agents/")
-        || normalized.contains("/.coco/skills/")
+    let config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;
+    normalized.contains(&format!("/{config_dir}/settings.json"))
+        || normalized.contains(&format!("/{config_dir}/settings.local.json"))
+        || normalized.contains(&format!("/{config_dir}/commands/"))
+        || normalized.contains(&format!("/{config_dir}/agents/"))
+        || normalized.contains(&format!("/{config_dir}/skills/"))
 }
 
 // ── Suspicious Windows path patterns ──
@@ -605,7 +596,7 @@ pub fn is_editable_internal_path(path: &str, ctx: &InternalPathContext) -> bool 
         return true;
     }
 
-    // Agent memory: ~/.coco/projects/{cwd}/memory/
+    // Agent memory: config home/projects/{cwd}/memory/
     let config_home = coco_config::global_config::config_home()
         .to_string_lossy()
         .to_lowercase();
@@ -637,7 +628,7 @@ pub fn is_readable_internal_path(path: &str, ctx: &InternalPathContext) -> bool 
         .to_string_lossy()
         .to_lowercase();
 
-    // Project dir: ~/.coco/projects/{sanitized-cwd}/ (covers agent memory).
+    // Project dir: config home/projects/{sanitized-cwd}/ (covers agent memory).
     if normalized.starts_with(&format!("{config_home}/projects/")) {
         return true;
     }

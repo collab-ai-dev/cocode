@@ -5,10 +5,10 @@
 //! raw `arguments` / `input_json` string into a `serde_json::Value`
 //! for [`vercel_ai_provider::ToolCallPart`].
 //!
-//! **Coco-rs-specific deviation from upstream `@ai-sdk/provider-utils`:**
+//! **Runtime-specific deviation from upstream `@ai-sdk/provider-utils`:**
 //! exposes aggressive repair (markdown fence stripping, single-quote →
 //! double-quote conversion, trailing-comma fix, Python literal mapping,
-//! truncation completion) because coco-rs targets diverse OpenAI-
+//! truncation completion) because this runtime targets diverse OpenAI-
 //! compatible endpoints (GLM, Doubao, DeepSeek, Groq, xAI, Ollama)
 //! whose tool-call argument strings are messier than first-party
 //! OpenAI / Anthropic output.
@@ -75,8 +75,8 @@ pub fn parse_with_repair(raw: &str) -> Result<(Value, RepairOutcome), String> {
 ///    AND the raw bytes can be echoed back to the LLM if the agent
 ///    loop wants to reflect the malformed input verbatim.
 ///
-/// **Coco-rs deviation**: some adapters substitute `{}` on failure so the
-/// LLM gets a "missing required field" reply on the next turn; coco-rs
+/// **Runtime deviation**: some adapters substitute `{}` on failure so the
+/// LLM gets a "missing required field" reply on the next turn; this crate
 /// keeps the raw string so the validator + telemetry have full signal.
 /// The trade-off favours diagnosability and model-side context: the raw
 /// output is visible to whatever path builds the final

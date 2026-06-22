@@ -34,11 +34,14 @@ async fn handler_lists_bundled_skills() {
 
 #[tokio::test]
 async fn handler_picks_up_project_skill_md() {
-    // Drop a SKILL.md into <cwd>/.coco/skills/foo/, expect /skills list
+    // Drop a SKILL.md into project config dir/skills/foo/, expect /skills list
     // to include it tagged as project source.
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("project");
-    let skill_dir = cwd.join(".coco").join("skills").join("foo");
+    let skill_dir = cwd
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("skills")
+        .join("foo");
     fs::create_dir_all(&skill_dir).unwrap();
     // Layout: frontmatter at the top of the file, no
     // leading `# Name` heading. The skill name is taken from the parent
@@ -125,7 +128,11 @@ async fn paths_lists_bundled_first() {
     .unwrap()
     .unwrap();
     assert!(out.contains("bundled"));
-    assert!(out.contains(".coco/skills") || out.contains(".coco\\skills"));
+    let config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;
+    assert!(
+        out.contains(&format!("{config_dir}/skills"))
+            || out.contains(&format!("{config_dir}\\skills"))
+    );
     assert!(!out.contains(".claude/skills") && !out.contains(".claude\\skills"));
 }
 
@@ -213,7 +220,10 @@ async fn build_dialog_payload_groups_project_skills_under_project() {
     // `User`, collapsing the project/user split in the overlay).
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("project");
-    let skill_dir = cwd.join(".coco").join("skills").join("foo");
+    let skill_dir = cwd
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("skills")
+        .join("foo");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
         skill_dir.join("SKILL.md"),
@@ -257,10 +267,13 @@ async fn build_dialog_payload_groups_project_skills_under_project() {
 
 #[tokio::test]
 async fn build_dialog_payload_loads_coco_skills_dir_too() {
-    // Project discovery is coco-native: `<cwd>/.coco/skills/`.
+    // Project discovery is coco-native: `project config dir/skills/`.
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("project");
-    let coco_skill = cwd.join(".coco").join("skills").join("bar");
+    let coco_skill = cwd
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("skills")
+        .join("bar");
     fs::create_dir_all(&coco_skill).unwrap();
     fs::write(
         coco_skill.join("SKILL.md"),
@@ -292,7 +305,7 @@ async fn build_dialog_payload_loads_coco_skills_dir_too() {
         .collect();
     assert!(
         project_names.contains(&"bar"),
-        "expected `.coco/skills/bar` in payload as Project, got: {project_names:?}"
+        "expected project config skills/bar in payload as Project, got: {project_names:?}"
     );
 }
 

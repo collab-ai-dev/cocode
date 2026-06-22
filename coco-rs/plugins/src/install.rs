@@ -122,7 +122,7 @@ pub(crate) fn parse_install_target(target: &str) -> (String, Option<String>) {
 /// 6. Cache + register each closure member.
 ///
 /// `settings_dir` is the directory containing `settings.json` to update
-/// (typically `~/.coco`). When `None`, the settings write is skipped.
+/// (typically the config home). When `None`, the settings write is skipped.
 pub async fn install_plugin_from_marketplace(
     plugins_dir: &Path,
     settings_dir: Option<&Path>,

@@ -478,11 +478,11 @@ impl QueryEngine {
             coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBackgroundTasksDisable);
         let agent_list_via_attachment =
             coco_config::env::is_env_truthy(coco_config::EnvKey::CocoAgentListInMessages);
-        // 3p builds (the default) keep `ant_build` off — coco-rs ships
+        // 3p builds (the default) keep `ant_build` off — this runtime ships
         // only worktree isolation. The flag is wired here so an internal
         // build can flip it via config without re-rendering callers.
         let ant_build = false;
-        // `has_embedded_search_tools` is host-build dependent. Coco-rs
+        // `has_embedded_search_tools` is host-build dependent. This runtime
         // ships the dedicated `Glob`/`Grep` tools, so the flag stays
         // off — the AgentTool description points at them rather than
         // `find` / `grep` via Bash.

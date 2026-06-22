@@ -298,7 +298,7 @@ fn per_call_exact_match_effort_is_preserved() {
 #[test]
 fn per_call_no_declared_ladder_passes_effort_through() {
     // Model declares no thinking ladder (None) — typical for a custom 3P
-    // model in ~/.coco/models.json. We cannot probe a ceiling, so
+    // model in config home/models.json. We cannot probe a ceiling, so
     // `resolve_thinking_level` trusts the caller and passes the requested
     // effort through verbatim (documented "trust the caller" contract).
     let info = info_with_defaults(BTreeMap::new());

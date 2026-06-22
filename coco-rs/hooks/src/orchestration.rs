@@ -366,7 +366,7 @@ impl SingleHookResult {
 /// user has not yet accepted workspace trust for the current project.
 /// Returns `true` to skip hooks.
 ///
-/// Coco-rs does not yet ship a workspace-trust dialog (see
+/// This crate does not yet ship a workspace-trust dialog (see
 /// `crate-coco-hooks.md` Known Gaps), so the default is "trusted"
 /// unless the caller explicitly opts out via
 /// `OrchestrationContext.workspace_trust_accepted = Some(false)` or
@@ -442,12 +442,14 @@ pub fn build_hook_env_with_plugin(
         if let Some(root) = &ctx.plugin_root {
             env.insert("CLAUDE_PLUGIN_ROOT".to_string(), root.clone());
         }
-        if let Some(id) = &ctx.plugin_id {
-            // Plugin data dir convention: ~/.coco/plugins/<plugin_id>/data
-            if let Ok(home) = std::env::var("HOME") {
-                let data_dir = format!("{home}/.coco/plugins/{id}/data");
-                env.insert("CLAUDE_PLUGIN_DATA".to_string(), data_dir);
-            }
+        if let Some(id) = &ctx.plugin_id
+            && let Ok(home) = std::env::var("HOME")
+        {
+            let data_dir = format!(
+                "{home}/{}/plugins/{id}/data",
+                coco_utils_common::COCO_CONFIG_DIR_NAME
+            );
+            env.insert("CLAUDE_PLUGIN_DATA".to_string(), data_dir);
         }
         for (key, value) in &ctx.plugin_options {
             // Sanitize key to valid env var identifier.

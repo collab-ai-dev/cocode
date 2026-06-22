@@ -9,7 +9,7 @@ Review and press Enter to create:
 
   Name        my-agent
   Description Handles XYZ.
-  Source      Project (./.claude/agents/)
+  Source      Project (.cocode/agents)
 
 
 Enter advance · Esc back · ←/→/Home/End move caret · ↑/↓ on source

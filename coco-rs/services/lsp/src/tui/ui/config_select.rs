@@ -12,7 +12,11 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 
     let user_dir = app.coco_home.display().to_string();
 
-    let project_dir = app.workspace.join(".coco").display().to_string();
+    let project_dir = app
+        .workspace
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .display()
+        .to_string();
 
     let mut lines = Vec::new();
 

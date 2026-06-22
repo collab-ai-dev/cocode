@@ -6,6 +6,7 @@ license.workspace = true
 description = "Shell command parsing and security analysis"
 
 [dependencies]
+coco-utils-common.workspace = true
 once_cell.workspace = true
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }

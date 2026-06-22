@@ -70,14 +70,23 @@ fn test_expand_skill_prompt_unused_positional_cleared() {
 
 // ── Variable substitution tests ──
 
+fn config_path(root: &str, child: &str) -> String {
+    format!(
+        "{root}/{}/{}",
+        coco_utils_common::COCO_CONFIG_DIR_NAME,
+        child
+    )
+}
+
 #[test]
 fn test_expand_skill_prompt_claude_skill_dir() {
+    let skill_dir = config_path("/home/user", "skills/my-skill");
     let result = expand_skill_prompt(
         "Run ${CLAUDE_SKILL_DIR}/helper.sh",
         &ExpandOptions {
             args: "",
             argument_names: &[],
-            skill_dir: Some("/home/user/.coco/skills/my-skill"),
+            skill_dir: Some(&skill_dir),
             session_id: None,
             base_dir: None,
             plugin_root: None,
@@ -85,7 +94,7 @@ fn test_expand_skill_prompt_claude_skill_dir() {
             user_config: None,
         },
     );
-    assert_eq!(result, "Run /home/user/.coco/skills/my-skill/helper.sh");
+    assert_eq!(result, format!("Run {skill_dir}/helper.sh"));
 }
 
 #[test]
@@ -178,6 +187,7 @@ fn test_expand_skill_prompt_indexed_arguments() {
 
 #[test]
 fn test_expand_skill_prompt_base_dir() {
+    let base_dir = config_path("/home/user", "skills/my-skill");
     let result = expand_skill_prompt(
         "Do stuff",
         &ExpandOptions {
@@ -185,15 +195,13 @@ fn test_expand_skill_prompt_base_dir() {
             argument_names: &[],
             skill_dir: None,
             session_id: None,
-            base_dir: Some("/home/user/.coco/skills/my-skill"),
+            base_dir: Some(&base_dir),
             plugin_root: None,
             plugin_data_dir: None,
             user_config: None,
         },
     );
-    assert!(
-        result.starts_with("Base directory for this skill: /home/user/.coco/skills/my-skill\n\n")
-    );
+    assert!(result.starts_with(&format!("Base directory for this skill: {base_dir}\n\n")));
     assert!(result.ends_with("Do stuff"));
 }
 
@@ -228,6 +236,7 @@ fn test_normalize_skill_name() {
 
 #[test]
 fn test_expand_skill_prompt_plugin_root() {
+    let plugin_root = config_path("/home/user", "plugins/cache/mkt/my-plugin");
     let result = expand_skill_prompt(
         "Run ${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh",
         &ExpandOptions {
@@ -236,19 +245,17 @@ fn test_expand_skill_prompt_plugin_root() {
             skill_dir: None,
             session_id: None,
             base_dir: None,
-            plugin_root: Some("/home/user/.coco/plugins/cache/mkt/my-plugin"),
+            plugin_root: Some(&plugin_root),
             plugin_data_dir: None,
             user_config: None,
         },
     );
-    assert_eq!(
-        result,
-        "Run /home/user/.coco/plugins/cache/mkt/my-plugin/scripts/setup.sh"
-    );
+    assert_eq!(result, format!("Run {plugin_root}/scripts/setup.sh"));
 }
 
 #[test]
 fn test_expand_skill_prompt_plugin_data() {
+    let plugin_data_dir = config_path("/home/user", "plugins/data/my-plugin");
     let result = expand_skill_prompt(
         "Save to ${CLAUDE_PLUGIN_DATA}/output.json",
         &ExpandOptions {
@@ -258,14 +265,11 @@ fn test_expand_skill_prompt_plugin_data() {
             session_id: None,
             base_dir: None,
             plugin_root: None,
-            plugin_data_dir: Some("/home/user/.coco/plugins/data/my-plugin"),
+            plugin_data_dir: Some(&plugin_data_dir),
             user_config: None,
         },
     );
-    assert_eq!(
-        result,
-        "Save to /home/user/.coco/plugins/data/my-plugin/output.json"
-    );
+    assert_eq!(result, format!("Save to {plugin_data_dir}/output.json"));
 }
 
 #[test]

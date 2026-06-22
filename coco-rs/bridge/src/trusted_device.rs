@@ -4,7 +4,7 @@
 //! the device's public fingerprint (usually a random UUID from the IDE
 //! side) is recorded so subsequent connections skip the approval prompt.
 //!
-//! Storage format: a JSON file at `~/.coco/trusted-devices.json`
+//! Storage format: a JSON file at `config home/trusted-devices.json`
 //! holding a list of entries `{ device_id, label, added_at, last_seen }`.
 //! This module owns only the data model + serialization; the actual
 //! filesystem I/O is performed by callers via `load_from` / `save_to`.

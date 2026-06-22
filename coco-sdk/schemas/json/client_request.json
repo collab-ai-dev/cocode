@@ -913,7 +913,7 @@
       "description": "Scope for agent memory persistence. Controls where MEMORY.md is stored/read.",
       "oneOf": [
         {
-          "description": "User-global memory (~/.coco/MEMORY.md).",
+          "description": "User-global memory (config home/MEMORY.md).",
           "type": "string",
           "const": "user"
         },

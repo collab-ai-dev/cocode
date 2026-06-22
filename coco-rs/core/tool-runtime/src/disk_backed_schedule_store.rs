@@ -1,6 +1,6 @@
 //! Disk-backed schedule store.
 //!
-//! Durable tasks persist to `<cwd>/.coco/scheduled_tasks.json`; session tasks
+//! Durable tasks persist to `project config dir/scheduled_tasks.json`; session tasks
 //! (`durable = false`) live in memory and die with the process. Reads degrade
 //! gracefully (missing / corrupt file → empty list; tasks with an invalid cron
 //! string are dropped). The runtime-only `durable` / `agent_id` fields are
@@ -26,7 +26,7 @@ struct CronFile {
 }
 
 /// Disk-backed cron store. Construct with the resolved cron-file path
-/// (`<cwd>/.coco/scheduled_tasks.json`).
+/// (`project config dir/scheduled_tasks.json`).
 #[derive(Debug)]
 pub struct DiskBackedScheduleStore {
     cron_file_path: PathBuf,
@@ -65,7 +65,7 @@ impl DiskBackedScheduleStore {
             .collect()
     }
 
-    /// Overwrite the file (creating `.coco/`). `durable` / `agent_id` are
+    /// Overwrite the file (creating `project config dir/`). `durable` / `agent_id` are
     /// serde-skipped, so they never reach disk. Empty list writes `{"tasks":[]}`.
     async fn write_file_tasks(&self, tasks: &[CronTask]) -> Result<(), coco_error::BoxedError> {
         if let Some(parent) = self.cron_file_path.parent() {

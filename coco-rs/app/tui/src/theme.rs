@@ -2,7 +2,7 @@
 //!
 //! The config-free `Theme`/`ThemeName` palette types live in `coco-tui-ui`
 //! (so widgets can consume them without an app dependency). This module owns the
-//! shell-only loader (`settings.json` / `~/.coco/theme.json`) and the file
+//! shell-only loader (`settings.json` / `config home/theme.json`) and the file
 //! watcher, and re-exports the palette types for existing call sites.
 
 pub use coco_tui_ui::theme::Theme;

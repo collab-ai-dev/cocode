@@ -274,10 +274,13 @@ fn build_manager(config_home: &Path, cwd: &Path) -> SkillManager {
 fn render_list(manager: &SkillManager) -> String {
     let mut skills = manager.all();
     if skills.is_empty() {
-        return "No skills found.\n\
-                Place SKILL.md directories in ~/.coco/skills (user) or \
-                <project>/.coco/skills (project)."
-            .to_string();
+        let user_path = format!("~/{}/skills", coco_utils_common::COCO_CONFIG_DIR_NAME);
+        let project_path = format!("{}/skills", coco_utils_common::COCO_CONFIG_DIR_NAME);
+        return format!(
+            "No skills found.\n\
+                Place SKILL.md directories in {user_path} (user) or \
+                <project>/{project_path} (project)."
+        );
     }
     skills.sort_by(|a, b| a.name.cmp(&b.name));
 

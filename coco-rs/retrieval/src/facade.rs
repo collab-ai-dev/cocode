@@ -205,7 +205,7 @@ impl RetrievalFacade {
     /// Get or create a cached facade for the given working directory.
     ///
     /// Loads configuration from retrieval.toml files:
-    /// 1. `{workdir}/.coco/retrieval.toml` (project-level)
+    /// 1. `{workdir}/project config dir/retrieval.toml` (project-level)
     /// 2. `{coco_home}/retrieval.toml` (global)
     ///
     /// Returns `NotEnabled` error if retrieval is not configured/enabled.

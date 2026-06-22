@@ -28,6 +28,7 @@ coco-utils-image.workspace = true
 coco-apply-patch.workspace = true
 coco-exec-server.workspace = true
 coco-utils-absolute-path.workspace = true
+coco-utils-common.workspace = true
 coco-git.workspace = true
 coco-plugins.workspace = true
 

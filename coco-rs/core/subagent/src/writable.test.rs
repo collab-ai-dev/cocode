@@ -4,6 +4,14 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+fn config_path(root: &str, child: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "{root}/{}",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    ))
+    .join(child)
+}
+
 fn def(name: &str, source: AgentSource, color: Option<AgentColorName>) -> AgentDefinition {
     AgentDefinition {
         name: name.into(),
@@ -30,20 +38,20 @@ fn snapshot(defs: Vec<AgentDefinition>) -> AgentCatalogSnapshot {
 fn user_source_resolves_under_config_home() {
     let dir = resolve_writable_agent_dir(
         AgentSource::UserSettings,
-        &PathBuf::from("/home/u/.coco"),
+        &config_path("/home/u", ""),
         &PathBuf::from("/tmp/proj"),
     );
-    assert_eq!(dir, Some(PathBuf::from("/home/u/.coco/agents")));
+    assert_eq!(dir, Some(config_path("/home/u", "agents")));
 }
 
 #[test]
 fn project_source_resolves_under_cwd_coco() {
     let dir = resolve_writable_agent_dir(
         AgentSource::ProjectSettings,
-        &PathBuf::from("/home/u/.coco"),
+        &config_path("/home/u", ""),
         &PathBuf::from("/tmp/proj"),
     );
-    assert_eq!(dir, Some(PathBuf::from("/tmp/proj/.coco/agents")));
+    assert_eq!(dir, Some(config_path("/tmp/proj", "agents")));
 }
 
 #[test]

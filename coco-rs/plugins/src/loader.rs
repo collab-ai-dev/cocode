@@ -76,7 +76,7 @@ pub struct PluginLoadResult {
 
 /// Loads and validates plugins from directories and marketplace entries.
 pub struct PluginLoader {
-    /// Base directory for plugin cache (e.g. `~/.coco/plugins/cache/`).
+    /// Base directory for plugin cache (e.g. `config home/plugins/cache/`).
     plugins_dir: PathBuf,
 }
 
@@ -447,7 +447,7 @@ pub fn qualify_dependency(dep: &str, declaring_plugin_id: &str) -> String {
 const RESERVED_PLUGIN_SUBDIRS: &[&str] = &["cache", "marketplaces", "data", "npm-cache"];
 
 /// True if `dir`'s final component is a reserved infra dir (so the orchestrator
-/// doesn't try to load `~/.coco/plugins/cache` as a plugin).
+/// doesn't try to load `config home/plugins/cache` as a plugin).
 fn is_reserved_plugin_dir(dir: &Path) -> bool {
     dir.file_name()
         .and_then(|n| n.to_str())

@@ -46,14 +46,16 @@ mod verify;
 fn bundled(
     name: &str,
     description: &str,
-    prompt: &str,
+    prompt: impl Into<String>,
     allowed_tools: Vec<&str>,
 ) -> SkillDefinition {
+    let prompt = prompt.into();
+    let content_length = prompt.len() as i64;
     SkillDefinition {
         name: name.to_string(),
         display_name: None,
         description: description.to_string(),
-        prompt: prompt.to_string(),
+        prompt,
         source: SkillSource::Bundled,
         aliases: vec![],
         allowed_tools: Some(allowed_tools.into_iter().map(String::from).collect()),
@@ -72,7 +74,7 @@ fn bundled(
         user_invocable: true,
         disable_model_invocation: false,
         shell: None,
-        content_length: prompt.len() as i64,
+        content_length,
         has_user_specified_description: true,
         progress_message: Some("running".to_string()),
         is_hidden: false,
@@ -99,10 +101,11 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
 
     // /update-config(unconditional)
     {
+        let prompt = update_config::prompt();
         let mut s = bundled(
             "update-config",
             "Configure settings via settings.json",
-            update_config::PROMPT,
+            &prompt,
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Edit.as_str(),
@@ -117,10 +120,11 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
     // /keybindings-help(unconditional)
     // Uses `userInvocable: false` so only the model invokes.
     {
+        let prompt = keybindings::prompt();
         let mut s = bundled(
             "keybindings-help",
             "Customize keyboard shortcuts and keybindings",
-            keybindings::PROMPT,
+            &prompt,
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Edit.as_str(),
@@ -140,7 +144,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "batch",
             "Run a prompt or command on multiple files",
-            &batch::prompt(),
+            batch::prompt(),
             vec![
                 ToolName::Bash.as_str(),
                 ToolName::Read.as_str(),
@@ -173,10 +177,11 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         ));
 
         // /debug(ant-only, disable_model_invocation)
+        let debug_prompt = debug::prompt();
         let mut debug_skill = bundled(
             "debug",
             "Debug your current Claude Code session by reading the session debug log. Includes all event logging",
-            debug::PROMPT,
+            &debug_prompt,
             vec![
                 ToolName::Bash.as_str(),
                 ToolName::Read.as_str(),
@@ -191,7 +196,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut sk = bundled(
             "skillify",
             "Convert a workflow into a reusable skill file",
-            &skillify::prompt(),
+            skillify::prompt(),
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Write.as_str(),
@@ -226,7 +231,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         skills.push(bundled(
             "simplify",
             "Review changed code for reuse, quality, and efficiency, then fix any issues found",
-            &simplify::prompt(),
+            simplify::prompt(),
             vec![
                 ToolName::Bash.as_str(),
                 ToolName::Read.as_str(),
@@ -268,7 +273,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "loop",
             "Run a prompt or slash command on a recurring interval",
-            &loop_skill::prompt(),
+            loop_skill::prompt(),
             vec![
                 ToolName::Bash.as_str(),
                 ToolName::Read.as_str(),
@@ -285,7 +290,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "schedule",
             "Create, update, list, or run scheduled remote agents (triggers) that execute on a cron schedule",
-            &schedule::prompt(),
+            schedule::prompt(),
             vec![
                 ToolName::RemoteTrigger.as_str(),
                 ToolName::AskUserQuestion.as_str(),
@@ -377,7 +382,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "run-skill-generator",
             "Create or refine a SKILL.md file for a custom workflow",
-            run_skill_generator::PROMPT,
+            run_skill_generator::prompt(),
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Write.as_str(),

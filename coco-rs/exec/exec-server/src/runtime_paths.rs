@@ -5,10 +5,10 @@ use coco_utils_absolute_path::AbsolutePathBuf;
 /// Runtime paths needed by exec-server child processes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecServerRuntimePaths {
-    /// Stable path to the Coco executable used to launch hidden helper modes.
+    /// Stable path to the executable used to launch hidden helper modes.
     pub coco_self_exe: AbsolutePathBuf,
     /// Path to the Linux sandbox helper alias used when the platform sandbox
-    /// needs to re-enter Coco by argv0.
+    /// needs to re-enter the executable by argv0.
     pub coco_linux_sandbox_exe: Option<AbsolutePathBuf>,
 }
 
@@ -20,7 +20,10 @@ impl ExecServerRuntimePaths {
         let coco_self_exe = coco_self_exe.ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "Coco executable path is not configured",
+                format!(
+                    "{} executable path is not configured",
+                    coco_config::constants::PRODUCT_NAME
+                ),
             )
         })?;
         Self::new(coco_self_exe, coco_linux_sandbox_exe)

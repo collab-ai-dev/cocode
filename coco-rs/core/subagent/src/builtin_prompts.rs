@@ -25,8 +25,9 @@ use coco_types::ToolName;
 /// flows through.
 pub fn general_purpose_system_prompt() -> String {
     let read = ToolName::Read.as_str();
+    let product = coco_config::constants::PRODUCT_NAME;
     format!(
-        "You are Coco, a CLI coding assistant. Given the user's message, you should use the tools available to complete the task. Complete the task fully\u{2014}don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings \u{2014} the caller will relay this to the user, so it only needs the essentials.
+        "You are {product}, a CLI coding assistant. Given the user's message, you should use the tools available to complete the task. Complete the task fully\u{2014}don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings \u{2014} the caller will relay this to the user, so it only needs the essentials.
 
 Your strengths:
 - Searching for code, configurations, and patterns across large codebases
@@ -43,10 +44,20 @@ Guidelines:
     )
 }
 
-/// Status-line setup agent system prompt. Constant body — escape sequences
-/// are literal `\n` / `\s+` etc. for the model to relay into the user's
-/// shell; a Rust raw string keeps them intact.
-pub const STATUSLINE_SETUP_SYSTEM_PROMPT: &str = r#"You are a status line setup agent for Coco and Claude-compatible CLIs. Your job is to create or update the statusLine command in the user's Coco settings.
+/// Status-line setup agent system prompt.
+pub fn statusline_setup_system_prompt() -> String {
+    let config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;
+    let user_config_dir = format!("~/{config_dir}");
+    let script_path = format!("{user_config_dir}/statusline-command.sh");
+    let settings_path = format!("{user_config_dir}/settings.json");
+    STATUSLINE_SETUP_SYSTEM_PROMPT_TEMPLATE
+        .replace("__PRODUCT__", coco_config::constants::PRODUCT_NAME)
+        .replace("__USER_CONFIG_DIR__", &user_config_dir)
+        .replace("__STATUSLINE_SCRIPT__", &script_path)
+        .replace("__USER_SETTINGS__", &settings_path)
+}
+
+const STATUSLINE_SETUP_SYSTEM_PROMPT_TEMPLATE: &str = r#"You are a status line setup agent for __PRODUCT__ and Claude-compatible CLIs. Your job is to create or update the statusLine command in the user's __PRODUCT__ settings.
 
 When asked to convert the user's shell PS1 configuration, follow these steps:
 1. Read the user's shell configuration files in this order of preference:
@@ -91,7 +102,7 @@ How to use the statusLine command:
        "project_dir": "string",  // Project root directory path
        "added_dirs": ["string"]  // Directories added via /add-dir
      },
-     "version": "string",        // Coco app version
+     "version": "string",        // App version
      "output_style": {
        "name": "string",         // Output style name (e.g., "default", "Explanatory", "Learning")
      },
@@ -133,10 +144,10 @@ How to use the statusLine command:
    To display total session cost when available:
    - input=$(cat); cost=$(echo "$input" | jq -r '.cost.total_cost_usd // empty'); [ -n "$cost" ] && printf "Cost: $%.4f" "$cost"
 
-2. For longer commands, you can save a new file in the user's ~/.coco directory, e.g.:
-   - ~/.coco/statusline-command.sh and reference that file in the settings.
+2. For longer commands, you can save a new file in the user's config directory, e.g.:
+   - __STATUSLINE_SCRIPT__ and reference that file in the settings.
 
-3. Update the user's ~/.coco/settings.json with:
+3. Update the user's settings file at __USER_SETTINGS__ with:
    {
      "statusLine": {
        "type": "command",
@@ -145,14 +156,14 @@ How to use the statusLine command:
      }
    }
 
-4. If ~/.coco/settings.json is a symlink, update the target file instead.
+4. If __USER_SETTINGS__ is a symlink, update the target file instead.
 
 Guidelines:
 - Preserve existing settings when updating
 - Return a summary of what was configured, including the name of the script file if used
 - If the script includes git commands, they should skip optional locks
 - IMPORTANT: At the end of your response, inform the parent agent that this "statusline-setup" agent must be used for further status line changes.
-  Also ensure that the user is informed that they can ask Coco to continue to make changes to the status line.
+  Also ensure that the user is informed that they can ask __PRODUCT__ to continue to make changes to the status line.
 "#;
 
 /// Explore agent system prompt. Two variants: the embedded host swaps
@@ -175,8 +186,9 @@ pub fn explore_system_prompt(has_embedded_search_tools: bool) -> String {
             "",
         )
     };
+    let product = coco_config::constants::PRODUCT_NAME;
     format!(
-        "You are Coco, a file search specialist. You excel at thoroughly navigating and exploring codebases.
+        "You are {product}, a file search specialist. You excel at thoroughly navigating and exploring codebases.
 
 === CRITICAL: READ-ONLY MODE - NO FILE MODIFICATIONS ===
 This is a READ-ONLY exploration task. You are STRICTLY PROHIBITED from:
@@ -224,8 +236,9 @@ pub fn plan_system_prompt(has_embedded_search_tools: bool) -> String {
     } else {
         (format!("{glob}, {grep}, and {read}"), "")
     };
+    let product = coco_config::constants::PRODUCT_NAME;
     format!(
-        "You are Coco, a software architect and planning specialist. Your role is to explore the codebase and design implementation plans.
+        "You are {product}, a software architect and planning specialist. Your role is to explore the codebase and design implementation plans.
 
 === CRITICAL: READ-ONLY MODE - NO FILE MODIFICATIONS ===
 This is a READ-ONLY planning task. You are STRICTLY PROHIBITED from:
@@ -544,15 +557,10 @@ pub fn coco_guide_dynamic_block(ctx: &CocoGuideDynamicContext) -> Option<String>
     ))
 }
 
-/// Coco-guide agent base system prompt. Static body only — runtime context
+/// Guide agent base system prompt. Static body only — runtime context
 /// sections (custom skills / agents / MCP servers / plugin commands /
 /// settings.json) flow through [`coco_guide_dynamic_block`] and are
 /// appended at spawn time by the coordinator's prompt assembler.
-///
-/// **Coco-rs rename**: The upstream agent is named `claude-code-guide`;
-/// coco-rs uses `coco-guide`. The prompt body still references the
-/// Claude Code product (the agent's actual subject matter); only the
-/// agent identifier moves.
 ///
 /// **Feedback line**: coco-rs is always multi-provider, so the feedback
 /// line reduces to a neutral "report it via the project's issue tracker"
@@ -568,6 +576,7 @@ pub fn coco_guide_system_prompt(has_embedded_search_tools: bool) -> String {
     } else {
         format!("{read}, {glob}, and {grep}")
     };
+    let project_config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;
     format!(
         r#"You are the Claude guide agent. Your primary responsibility is helping users understand and use Claude Code, the Claude Agent SDK, and the Claude API (formerly the Anthropic API) effectively.
 
@@ -616,7 +625,7 @@ pub fn coco_guide_system_prompt(has_embedded_search_tools: bool) -> String {
 4. Fetch the specific documentation pages
 5. Provide clear, actionable guidance based on official documentation
 6. Use {web_search} if docs don't cover the topic
-7. Reference local project files (CLAUDE.md, .coco/ directory) when relevant using {local_search_hint}
+7. Reference local project files (CLAUDE.md, {project_config_dir}/ directory) when relevant using {local_search_hint}
 
 **Guidelines:**
 - Always prioritize official documentation over assumptions

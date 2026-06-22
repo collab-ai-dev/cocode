@@ -4,6 +4,7 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+use coco_config::constants::PRODUCT_NAME;
 use coco_types::ModelRole;
 
 use crate::i18n::t;
@@ -13,15 +14,14 @@ use coco_tui_ui::style::UiStyles;
 /// Logo gutter width (9 logo cells + 2-space padding).
 const HEADER_LOGO_WIDTH: u16 = 11;
 
-/// Crate version surfaced in the header bar.
-const COCO_VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(crate) struct HeaderBarView {
     pub(crate) logo_lines: Vec<Line<'static>>,
     pub(crate) info_lines: Vec<Line<'static>>,
 }
 
-/// Header band: 3-row COCO mascot + 3 info rows.
+/// Header band: 3-row mascot + 3 info rows.
 ///
 /// Row 1 shows brand + version, row 2 shows the active main model with the
 /// live thinking-effort dial and fast-mode flag, and row 3 shows cwd + git
@@ -38,13 +38,14 @@ pub(crate) fn header_bar_view(
         Line::from(Span::styled(" ╰─╯ ╰─╯  ", logo_color)),
     ];
 
+    let product_display_name = PRODUCT_NAME.to_ascii_uppercase();
     let mut row1_spans = vec![
-        Span::styled("COCO", Style::default().fg(styles.text()).bold()),
-        Span::raw(" "),
         Span::styled(
-            format!("v{COCO_VERSION}"),
-            Style::default().fg(styles.dim()),
+            product_display_name,
+            Style::default().fg(styles.text()).bold(),
         ),
+        Span::raw(" "),
+        Span::styled(format!("v{VERSION}"), Style::default().fg(styles.dim())),
     ];
     // `pid == 0` is the unset sentinel (tests / pre-bootstrap state); only the
     // real app stamps a live pid in `App::new`. Surfacing it lets concurrent

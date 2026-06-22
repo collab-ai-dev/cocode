@@ -38,7 +38,7 @@ impl OutputStyleManagerBuilder {
         self
     }
 
-    /// User-home output styles dir (`~/.coco/output-styles`).
+    /// User-home output styles dir (`config home/output-styles`).
     pub fn user_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.user_dir = dir;
         self
@@ -46,7 +46,7 @@ impl OutputStyleManagerBuilder {
 
     /// Project-tree output styles dirs, ordered closest-to-cwd first.
     /// The CLI walks from `<cwd>` up to the git root (or home),
-    /// collecting `.coco/output-styles` along the way.
+    /// collecting `project config dir/output-styles` along the way.
     pub fn project_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
         self.project_dirs = dirs;
         self

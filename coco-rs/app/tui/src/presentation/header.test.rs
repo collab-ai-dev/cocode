@@ -14,7 +14,11 @@ fn header_hides_pid_badge_when_unset() {
     let state = AppState::new(); // pid defaults to the `0` sentinel
     let view = header_bar_view(&state, UiStyles::new(&theme), 80);
     let row1 = line_text(&view.info_lines[0]);
-    assert!(row1.starts_with("COCO v"), "row1 = {row1:?}");
+    let product_display_name = coco_config::constants::PRODUCT_NAME.to_ascii_uppercase();
+    assert!(
+        row1.starts_with(&format!("{product_display_name} v")),
+        "row1 = {row1:?}"
+    );
     assert!(!row1.contains("pid"), "pid badge must be hidden at pid 0");
 }
 

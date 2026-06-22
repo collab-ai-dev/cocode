@@ -4,10 +4,22 @@ use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
 
+fn config_home(root: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "{root}/{}",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    ))
+}
+
+fn config_home_ref(root: &str) -> PathBuf {
+    config_home(root)
+}
+
 #[test]
 fn override_path_wins() {
+    let home = config_home_ref("/home/u");
     let dir = MemoryDir::resolve(
-        Path::new("/home/u/.coco"),
+        home.as_path(),
         Path::new("/work/repo"),
         Some(Path::new("/custom/memory")),
     );
@@ -21,8 +33,9 @@ fn default_layout_outside_git_uses_project_path() {
     // the literal project_root. The slug is whatever
     // `coco_paths::ProjectPaths` produces for that path.
     let temp = tempfile::tempdir().unwrap();
-    let dir = MemoryDir::resolve(Path::new("/home/u/.coco"), temp.path(), None);
-    let project_paths = ProjectPaths::new(PathBuf::from("/home/u/.coco"), temp.path());
+    let home = config_home("/home/u");
+    let dir = MemoryDir::resolve(home.as_path(), temp.path(), None);
+    let project_paths = ProjectPaths::new(home, temp.path());
     assert_eq!(dir.personal, project_paths.memory_dir());
     assert_eq!(dir.team, project_paths.team_memory_dir());
 }
@@ -30,19 +43,19 @@ fn default_layout_outside_git_uses_project_path() {
 #[test]
 fn default_layout_matches_observed_ts_slug_for_known_cwd() {
     // The literal directory observed on this dev machine at
-    // `~/.coco/projects/-Users-linyuzhi-codespace-myagent-codex/`.
+    // `config home/projects/-Users-linyuzhi-codespace-myagent-codex/`.
     // Our slug for the same cwd MUST match — pre-fix, the local
     // `sanitize_project_path` stripped the leading `/` and produced
     // `Users-…` instead of `-Users-…`, silently disagreeing with
     // every other coco-rs instance pointed at the same repo.
     let dir = MemoryDir::resolve(
-        Path::new("/home/u/.coco"),
+        config_home("/home/u").as_path(),
         Path::new("/Users/linyuzhi/codespace/myagent/codex"),
         None,
     );
     assert_eq!(
         dir.personal,
-        PathBuf::from("/home/u/.coco/projects/-Users-linyuzhi-codespace-myagent-codex/memory",),
+        config_home("/home/u").join("projects/-Users-linyuzhi-codespace-myagent-codex/memory"),
     );
 }
 

@@ -28,18 +28,21 @@ pub fn handler(
 }
 
 /// Candidate memory file locations to probe.
-fn memory_candidates(home: Option<PathBuf>) -> Vec<(PathBuf, &'static str)> {
-    let mut candidates: Vec<(PathBuf, &'static str)> = vec![
-        (PathBuf::from("CLAUDE.md"), "CLAUDE.md"),
-        (PathBuf::from("CLAUDE.local.md"), "CLAUDE.local.md"),
+fn memory_candidates(config_home: PathBuf) -> Vec<(PathBuf, String)> {
+    let mut candidates: Vec<(PathBuf, String)> = vec![
+        (PathBuf::from("CLAUDE.md"), "CLAUDE.md".to_string()),
+        (
+            PathBuf::from("CLAUDE.local.md"),
+            "CLAUDE.local.md".to_string(),
+        ),
     ];
 
-    // .coco/rules/*.md — scanned separately; placeholder entry omitted here.
-    // We handle the glob inline in list_memory_files.
+    // Project rules are scanned separately; placeholder entry omitted here.
 
-    if let Some(home) = home {
-        candidates.push((home.join(".coco").join("CLAUDE.md"), "~/.coco/CLAUDE.md"));
-    }
+    candidates.push((
+        config_home.join("CLAUDE.md"),
+        format!("~/{}/CLAUDE.md", coco_utils_common::COCO_CONFIG_DIR_NAME),
+    ));
 
     candidates
 }
@@ -53,18 +56,18 @@ struct MemoryFile {
 
 /// List all memory files with their stats.
 async fn list_memory_files() -> crate::Result<String> {
-    let home = dirs::home_dir();
+    let config_home = coco_config::global_config::config_home();
     let mut files: Vec<MemoryFile> = Vec::new();
 
     // Fixed candidate locations
-    for (path, label) in memory_candidates(home) {
-        if let Some(info) = probe_file(&path, label).await {
+    for (path, label) in memory_candidates(config_home) {
+        if let Some(info) = probe_file(&path, &label).await {
             files.push(info);
         }
     }
 
-    // .coco/rules/*.md — scan directory
-    scan_rules_dir(Path::new(".coco/rules"), &mut files).await;
+    let project_rules_dir = PathBuf::from(coco_utils_common::COCO_CONFIG_DIR_NAME).join("rules");
+    scan_rules_dir(&project_rules_dir, &mut files).await;
 
     let mut out = String::from("## Memory Files\n\n");
 
@@ -73,8 +76,14 @@ async fn list_memory_files() -> crate::Result<String> {
         out.push_str("Checked locations:\n");
         out.push_str("  CLAUDE.md              (project root)\n");
         out.push_str("  CLAUDE.local.md        (personal, gitignored)\n");
-        out.push_str("  .coco/rules/*.md       (project rules)\n");
-        out.push_str("  ~/.coco/CLAUDE.md      (user global)\n");
+        out.push_str(&format!(
+            "  {}/rules/*.md       (project rules)\n",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
+        ));
+        out.push_str(&format!(
+            "  ~/{}/CLAUDE.md      (user global)\n",
+            coco_utils_common::COCO_CONFIG_DIR_NAME
+        ));
     } else {
         out.push_str(&format!(
             "{} memory file{} found:\n\n",
@@ -121,8 +130,7 @@ async fn probe_file(path: &Path, display_path: &str) -> Option<MemoryFile> {
     })
 }
 
-/// Scan `.coco/rules/` for `*.md` files and append any found.
-async fn scan_rules_dir(dir: &Path, files: &mut Vec<MemoryFile>) {
+async fn scan_rules_dir(dir: &std::path::Path, files: &mut Vec<MemoryFile>) {
     let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
         return;
     };
@@ -136,7 +144,7 @@ async fn scan_rules_dir(dir: &Path, files: &mut Vec<MemoryFile>) {
                 .and_then(|n| n.to_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let label = format!(".coco/rules/{name}");
+            let label = format!("{}/rules/{name}", coco_utils_common::COCO_CONFIG_DIR_NAME);
             found.push((label, path));
         }
     }

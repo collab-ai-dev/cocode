@@ -22,7 +22,7 @@ use crate::session_runtime::SessionRuntime;
 use crate::session_runtime::SessionRuntimeBuildOpts;
 
 /// Build a fresh `SessionRuntime` against a tempdir-backed runtime
-/// config so the test runs hermetically (no `~/.coco` reads/writes).
+/// config so the test runs hermetically (no the config home reads/writes).
 async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
     use clap::Parser;
 

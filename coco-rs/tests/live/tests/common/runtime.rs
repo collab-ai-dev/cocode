@@ -31,7 +31,7 @@ const PROVIDER_OVERRIDE_PREFIX: &str = "COCO_LIVE_TEST_";
 /// the registry in `coco_config::builtin_providers()`. Keep this list
 /// short — overrides only exist to point a builtin at an alternate
 /// gateway (TikTok GPT proxy, custom Anthropic mirror, …) without
-/// touching `~/.coco/providers.json`.
+/// touching `config home/providers.json`.
 const OVERRIDABLE_PROVIDERS: &[&str] = &[
     "openai",
     "anthropic",
@@ -81,7 +81,7 @@ struct TestRuntime {
 }
 
 /// Build (or fetch the cached) `RuntimeConfig` whose only providers are
-/// the compile-time builtins. No `~/.coco/providers.json` overlay, no
+/// the compile-time builtins. No `config home/providers.json` overlay, no
 /// `settings.json`, no managed policy file — the catalog paths point at
 /// a fresh tempdir whose files don't exist.
 ///
@@ -101,7 +101,7 @@ pub fn shared_runtime() -> &'static Arc<RuntimeConfig> {
         // `provider_config` / `spec_for`); Main resolution is not
         // exercised, but `build()` still requires a value. Pin a
         // builtin so this passes even when the host has no
-        // `~/.coco/settings.json`.
+        // `config home/settings.json`.
         let overrides = coco_config::RuntimeOverrides {
             model_override: Some(coco_types::ProviderModelSelection {
                 provider: "anthropic".into(),
@@ -126,7 +126,7 @@ pub fn shared_runtime() -> &'static Arc<RuntimeConfig> {
 /// env vars and write it to `path`. Skips when no overrides are set so
 /// the empty-catalog default behavior is preserved.
 ///
-/// The overlay shape is identical to user-authored `~/.coco/providers.json`
+/// The overlay shape is identical to user-authored `config home/providers.json`
 /// — we feed it through the same `apply_partial_layer` path the production
 /// resolver uses, so anything legal there works here.
 fn materialize_provider_overlay(path: &Path) -> Result<()> {

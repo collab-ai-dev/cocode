@@ -124,18 +124,19 @@ fn builtin_gpt_and_gemini_models_have_base_instructions() {
             .base_instructions
             .as_deref()
             .unwrap()
-            .starts_with("You are Coco"),
-        "gpt prompt should carry the unified Coco identity"
+            .starts_with(&format!("You are {}", crate::constants::PRODUCT_NAME)),
+        "gpt prompt should carry the unified product identity"
     );
     assert!(
         builtin["gemini-3.1-pro-preview"]
             .base_instructions
             .as_deref()
             .unwrap()
-            .starts_with(
-                "You are Coco, an interactive CLI agent specializing in software engineering tasks."
-            ),
-        "gemini prompt should carry the unified Coco identity"
+            .starts_with(&format!(
+                "You are {}, an interactive CLI agent specializing in software engineering tasks.",
+                crate::constants::PRODUCT_NAME
+            )),
+        "gemini prompt should carry the unified product identity"
     );
 }
 
@@ -206,7 +207,7 @@ fn every_builtin_model_declares_client_side_tool_search() {
     // universal fallback — every built-in model is validated against
     // it (TS has no analogue: TS only supports the server-side path
     // and blacklists incompatible models). Custom models added via
-    // `~/.coco/models.json` without this capability degrade to
+    // `config home/models.json` without this capability degrade to
     // eager-load (safe default; ToolSearch hidden).
     let builtin = builtin_models_partial();
     for (model_id, info) in builtin.iter() {

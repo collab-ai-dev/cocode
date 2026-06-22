@@ -39,7 +39,7 @@ use crate::Cli;
 
 /// Fallback base instructions used when a resolved `ModelInfo`
 /// declares no `base_instructions` (e.g. Claude built-ins and any
-/// user-added non-builtin model in `~/.coco/providers.json` /
+/// user-added non-builtin model in `config home/providers.json` /
 /// `models.json` that doesn't set `base_instructions[_file]`). Routed
 /// through `coco_config::DEFAULT_BASE_INSTRUCTIONS` so the on-disk
 /// `instructions/default_prompt.md` is the single source of truth.
@@ -324,7 +324,13 @@ pub fn build_system_prompt(
 ) -> String {
     let claude_files = coco_context::discover_memory_files(cwd);
     let env_info = coco_context::get_environment_info(cwd, model_id, include_git_status);
-    let identity = base_instructions.unwrap_or(DEFAULT_SYSTEM_PROMPT_IDENTITY);
+    let default_identity;
+    let identity = if let Some(base_instructions) = base_instructions {
+        base_instructions
+    } else {
+        default_identity = coco_config::default_base_instructions();
+        &default_identity
+    };
     let section = output_style.map(output_style_section);
     coco_context::build_system_prompt(
         identity,

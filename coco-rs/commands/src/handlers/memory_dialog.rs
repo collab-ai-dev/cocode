@@ -2,8 +2,8 @@
 //!
 //! Behavior:
 //! 1. Pre-flight: re-discovers memory files to populate the selector list.
-//! 2. Computes the row list: discovered files + "create `~/.coco/CLAUDE.md`" /
-//!    "create `./CLAUDE.md`" placeholders + auto-memory folder entries.
+//! 2. Computes the row list: discovered files, create placeholders,
+//!    and auto-memory folder entries.
 //! 3. On select: caller (TUI) writes the file (mode `wx` semantics) and
 //!    opens it in `$VISUAL || $EDITOR`.
 //! 4. On cancel: caller emits `Cancelled memory editing` system message.
@@ -45,7 +45,7 @@ pub struct AgentMemoryEntry {
 pub struct MemoryDialogHandler {
     /// Project root (cwd).
     pub project_root: PathBuf,
-    /// User config home (typically `~/.coco`).
+    /// User config home (typically the config home).
     pub user_home: PathBuf,
     /// Optional managed dir (enterprise).
     pub managed_root: Option<PathBuf>,
@@ -96,7 +96,7 @@ impl MemoryDialogHandler {
     /// (2) all discovered memory files via
     ///     [`coco_context::discover_memory_files`] in discovery order,
     /// (3) the two canonical "create me" placeholders for
-    ///     `~/.coco/CLAUDE.md` and `<project>/CLAUDE.md` when
+    ///     `config home/CLAUDE.md` and `<project>/CLAUDE.md` when
     ///     missing,
     /// (4) auto-memory / team-memory / per-agent folder rows when
     ///     auto-memory is enabled.
@@ -111,7 +111,7 @@ impl MemoryDialogHandler {
         let mut out: Vec<MemoryFileEntry> = Vec::new();
 
         // (1) Managed enterprise file. Discovery's
-        // `~/.coco/CLAUDE.md` scope walks user-global, not managed —
+        // `config home/CLAUDE.md` scope walks user-global, not managed —
         // we surface managed as a separate row when its path was
         // wired through.
         if let Some(m) = &self.managed_root {
@@ -259,7 +259,10 @@ fn describe_discovered(
             MemoryScope::Managed,
             format!("Managed policy (read-only): {}", display_path(path)),
         ),
-        MemoryFileSource::UserGlobal => (MemoryScope::User, "Saved in ~/.coco/CLAUDE.md".into()),
+        MemoryFileSource::UserGlobal => (
+            MemoryScope::User,
+            format!("Saved in {}", display_path(path)),
+        ),
         MemoryFileSource::ProjectConfig => (
             MemoryScope::ProjectConfig,
             format!("Saved in {}", display_path(path)),

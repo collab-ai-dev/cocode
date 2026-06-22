@@ -36,7 +36,7 @@
 //!    are not a concern because each process owns exactly one pid file.
 //! 3. [`count_concurrent_sessions`] sweeps stale files (PID not running)
 //!    on every call so a crashed session doesn't inflate the count
-//!    forever. WSL is excluded from the sweep — if `~/.coco/sessions/`
+//!    forever. WSL is excluded from the sweep — if `config home/sessions/`
 //!    is shared with Windows-native coco the WSL probe falsely reports
 //!    "not running" for Windows PIDs.
 
@@ -284,7 +284,7 @@ pub fn is_bg_session() -> bool {
 ///
 /// Sweeps PID files whose processes are no longer running, except on
 /// WSL where the `kill -0` probe can lie about Windows PIDs (silent
-/// data loss in a shared `~/.coco/sessions/` mount). The current
+/// data loss in a shared `config home/sessions/` mount). The current
 /// process is always counted, even if its file hasn't been written yet.
 ///
 /// Returns `0` on any directory-read error (conservative).

@@ -405,7 +405,7 @@ pub enum Commands {
     },
     /// List discovered agent definitions.
     ///
-    /// Walks `~/.coco/agents/` and `.coco/agents/` for markdown frontmatter agent specs.
+    /// Walks `config home/agents/` and `project config dir/agents/` for markdown frontmatter agent specs.
     Agents,
     /// Show auto-mode defaults.
     #[command(name = "auto-mode")]

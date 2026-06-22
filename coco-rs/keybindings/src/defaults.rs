@@ -23,7 +23,7 @@ const IMAGE_PASTE_KEY: &str = "alt+v";
 #[cfg(not(target_os = "windows"))]
 const IMAGE_PASTE_KEY: &str = "ctrl+v";
 
-/// coco-rs extension: the other platform's paste key as a second default
+/// Local extension: the other platform's paste key as a second default
 /// binding, mirroring the old hardcoded cascade which accepted both
 /// `ctrl+v` and `alt+v` everywhere.
 #[cfg(target_os = "windows")]
@@ -82,11 +82,11 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 // when the session has teammates (gated in dispatch).
                 ("ctrl+shift+t", KeybindingAction::AppToggleTeamRoster),
                 ("ctrl+r", KeybindingAction::HistorySearch),
-                // coco-rs doesn't gate on QUICK_SEARCH (the surfaces are
+                // The local defaults don't gate on QUICK_SEARCH (the surfaces are
                 // part of the base TUI), so these ship unconditionally.
                 ("ctrl+shift+f", KeybindingAction::AppGlobalSearch),
                 ("ctrl+shift+p", KeybindingAction::AppQuickOpen),
-                // coco-rs extensions — folded from the old hardcoded TUI
+                // Local extensions — folded from the old hardcoded TUI
                 // cascade so they are user-rebindable. `app:forceQuit`
                 // skips the `app:exit` double-press confirmation;
                 // `app:help` is the F1 entry (the `?` shortcut on an
@@ -111,7 +111,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 // unless users opt into "Option as Meta". F2 avoids
                 // readline editing keys and does not insert text.
                 ("f2", KeybindingAction::ChatThinkingToggle),
-                // coco-rs extension: Ctrl+T in the Chat context cycles
+                // Local extension: Ctrl+T in the Chat context cycles
                 // the Main role's thinking effort
                 // forward through the active model's
                 // `supported_thinking_levels`. Ctrl+Y is the global
@@ -127,7 +127,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("ctrl+g", KeybindingAction::ChatExternalEditor),
                 ("ctrl+s", KeybindingAction::ChatStash),
                 (IMAGE_PASTE_KEY, KeybindingAction::ChatImagePaste),
-                // coco-rs extensions — folded from the old hardcoded TUI
+                // Local extensions — folded from the old hardcoded TUI
                 // cascade so they are user-rebindable.
                 (IMAGE_PASTE_KEY_ALT, KeybindingAction::ChatImagePaste),
                 ("ctrl+f", KeybindingAction::ChatKillAgents),

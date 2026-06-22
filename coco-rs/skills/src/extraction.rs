@@ -1,7 +1,7 @@
 //! Bundled-skill file extraction.
 //!
 //! Extraction pipeline:
-//! 1. Per-process nonce dir (`~/.coco/bundled-skills/<nonce>/<skill>/`).
+//! 1. Per-process nonce dir (`config home/bundled-skills/<nonce>/<skill>/`).
 //! 2. Group files by parent dir; mkdir each subtree once with mode 0o700.
 //! 3. Write each file via `O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW`, mode 0o600.
 //! 4. Path validation rejects `isAbsolute`, segments matching `..` against

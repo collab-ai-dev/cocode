@@ -12,7 +12,7 @@
 //! is present with the wrong type or shape — that's a config error,
 //! not a default to swallow.
 //!
-//! Settings example (`~/.coco/settings.json` or `~/.coco/providers.json`):
+//! Settings example (`config home/settings.json` or `config home/providers.json`):
 //!
 //! ```json
 //! {

@@ -44,7 +44,7 @@ pub trait EmbeddingModelV4: Send + Sync {
 
     /// Get the supported embedding dimensions.
     ///
-    /// Note: This is a coco-rs extension not present in the upstream spec.
+    /// Note: This is a local extension not present in the upstream spec.
     fn supported_dimensions(&self) -> Option<Vec<usize>> {
         None
     }

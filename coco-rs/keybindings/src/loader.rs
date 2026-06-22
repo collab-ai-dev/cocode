@@ -1,9 +1,9 @@
 //! User keybinding configuration loader with hot-reload support.
 //!
-//! Loads `~/.coco/keybindings.json`, merges with [`crate::defaults`], runs
+//! Loads `config home/keybindings.json`, merges with [`crate::defaults`], runs
 //! validation, and emits hot-reload events when the file changes.
 //!
-//! * Path is `~/.coco/keybindings.json` (or `$COCO_CONFIG_DIR/keybindings.json`)
+//! * Path is `config home/keybindings.json` (or `$COCO_CONFIG_DIR/keybindings.json`)
 //!   per the coco-rs config-home rule. Resolution goes through
 //!   [`coco_utils_common::find_coco_home`].
 //! * User customization is always allowed.

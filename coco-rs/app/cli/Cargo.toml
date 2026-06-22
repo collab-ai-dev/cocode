@@ -60,6 +60,7 @@ coco-keybindings = { workspace = true, features = ["loader"] }
 coco-otel.workspace = true
 coco-model-card.workspace = true
 coco-file-watch.workspace = true
+coco-utils-common.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 base64.workspace = true
 libc.workspace = true

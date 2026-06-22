@@ -3,10 +3,10 @@
 //! # Why this exists
 //!
 //! Until the `/skills` editor in PR3, every coco-rs settings write
-//! happened via a manual `vi ~/.coco/settings.json`. The TUI had no
+//! happened via a manual `vi config home/settings.json`. The TUI had no
 //! direct path to persist a user choice — `/model` and `/permissions`
 //! mutated session state only. The 2.1.142 `/skills` dialog needs a
-//! synchronous write to `<cwd>/.coco/settings.local.json` plus an
+//! synchronous write to `project config dir/settings.local.json` plus an
 //! immediate `RuntimeConfig` rebuild so the next agent turn sees the
 //! new state.
 //!
@@ -65,7 +65,7 @@ pub enum SettingsWriteError {
     },
 }
 
-/// Deep-merge `patch` into `<cwd>/.coco/settings.local.json`,
+/// Deep-merge `patch` into `project config dir/settings.local.json`,
 /// then rebuild + publish `RuntimeConfig` so the next agent turn
 /// reads the new value without waiting for the file watcher.
 ///

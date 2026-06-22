@@ -956,7 +956,7 @@ async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
         .parent()
         .ok_or_else(|| crate::ContextError::generic("target path has no parent directory"))?;
     let file_name = path.file_name().and_then(OsStr::to_str).unwrap_or("file");
-    let tmp = parent.join(format!(".{file_name}.coco-tmp-{}", current_time_ms()));
+    let tmp = parent.join(format!(".{file_name}.tmp-{}", current_time_ms()));
     fs::write(&tmp, content).await?;
     match fs::rename(&tmp, path).await {
         Ok(()) => Ok(()),

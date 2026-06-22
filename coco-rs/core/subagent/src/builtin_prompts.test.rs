@@ -17,7 +17,10 @@ use super::*;
 fn general_purpose_prompt_includes_shared_prefix_and_guidelines() {
     // `generalPurposeAgent.ts:3` SHARED_PREFIX text + line 7 guidelines header.
     let p = general_purpose_system_prompt();
-    assert!(p.starts_with("You are Coco, a CLI coding assistant."));
+    assert!(p.starts_with(&format!(
+        "You are {}, a CLI coding assistant.",
+        coco_config::constants::PRODUCT_NAME
+    )));
     assert!(p.contains("Complete the task fully\u{2014}don't gold-plate"));
     assert!(p.contains("Your strengths:"));
     assert!(p.contains("Guidelines:"));
@@ -28,15 +31,19 @@ fn general_purpose_prompt_includes_shared_prefix_and_guidelines() {
 
 #[test]
 fn statusline_setup_prompt_carries_ps1_pattern() {
-    let p = STATUSLINE_SETUP_SYSTEM_PROMPT;
+    let p = statusline_setup_system_prompt();
     // The literal backslashes survive the Rust raw-string (no `\\n`
     // escape collapse).
     assert!(p.contains(r#"/(?:^|\n)\s*(?:export\s+)?PS1\s*=\s*["']([^"']+)["']/m"#));
     assert!(p.contains("\\u → $(whoami)"));
     assert!(p.contains("ANSI color codes"));
-    assert!(p.starts_with("You are a status line setup agent for Coco"));
-    assert!(p.contains("~/.coco/settings.json"));
-    assert!(p.contains("~/.coco/statusline-command.sh"));
+    assert!(p.starts_with(&format!(
+        "You are a status line setup agent for {}",
+        coco_config::constants::PRODUCT_NAME
+    )));
+    let config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;
+    assert!(p.contains(&format!("~/{config_dir}/settings.json")));
+    assert!(p.contains(&format!("~/{config_dir}/statusline-command.sh")));
     assert!(p.contains("\"provider\": \"string\""));
     assert!(p.contains("\"cost\": {"));
     assert!(p.contains("\"context_window\": {"));

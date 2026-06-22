@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use coco_cli::headless::DEFAULT_SYSTEM_PROMPT_IDENTITY;
 use coco_cli::headless::build_system_prompt_for_model;
 use coco_config::CatalogPaths;
 use coco_config::EnvSnapshot;
@@ -46,11 +45,14 @@ fn build_system_prompt_uses_model_instructions_when_present() {
         build_system_prompt_for_model(cwd.path(), &runtime, "openai", "gpt-5-4", None, &[]);
 
     assert!(
-        prompt.starts_with("You are Coco, a coding agent based on GPT-5."),
+        prompt.starts_with(&format!(
+            "You are {}, a coding agent based on GPT-5.",
+            coco_config::constants::PRODUCT_NAME
+        )),
         "shared headless/SDK/TUI prompt builder should use model instructions"
     );
     assert!(prompt.contains("# Personality"));
-    assert!(!prompt.starts_with(DEFAULT_SYSTEM_PROMPT_IDENTITY));
+    assert!(!prompt.starts_with(&coco_config::default_base_instructions()));
 }
 
 #[test]
@@ -68,6 +70,6 @@ fn build_system_prompt_falls_back_when_model_has_no_instructions() {
         &[],
     );
 
-    assert!(prompt.starts_with(DEFAULT_SYSTEM_PROMPT_IDENTITY));
+    assert!(prompt.starts_with(&coco_config::default_base_instructions()));
     assert!(prompt.contains("<env>"));
 }

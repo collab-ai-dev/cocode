@@ -134,7 +134,7 @@ fn on_turn_completed_outcome(state: &mut AppState, p: &coco_types::TurnEndedPara
     // Skips when the terminal is focused to avoid pointless noise.
     if !state.ui.terminal_focused {
         coco_tui_ui::widgets::notification::notify(
-            &t!("notification.app_name"),
+            coco_config::constants::PRODUCT_NAME,
             &t!("notification.turn_complete"),
         );
     }

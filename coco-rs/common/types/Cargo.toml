@@ -28,4 +28,5 @@ schemars = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+coco-utils-common.workspace = true
 pretty_assertions.workspace = true

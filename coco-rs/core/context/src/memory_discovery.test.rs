@@ -82,7 +82,7 @@ fn discovers_agents_local_md() {
 #[test]
 fn discovers_dot_coco_config_dir() {
     let dir = tempfile::tempdir().unwrap();
-    let cfg = dir.path().join(".coco");
+    let cfg = dir.path().join(coco_utils_common::COCO_CONFIG_DIR_NAME);
     std::fs::create_dir_all(&cfg).unwrap();
     std::fs::write(cfg.join("CLAUDE.md"), "config").unwrap();
 
@@ -160,7 +160,10 @@ fn walks_root_to_cwd() {
 #[test]
 fn eager_loads_unconditional_project_rules_not_conditional() {
     let dir = tempfile::tempdir().unwrap();
-    let rules = dir.path().join(".coco").join("rules");
+    let rules = dir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("rules");
     std::fs::create_dir_all(&rules).unwrap();
     // Unconditional rule (no `paths:` frontmatter) — must be in turn-1 prompt.
     std::fs::write(rules.join("style.md"), "Always use tabs.").unwrap();
@@ -174,11 +177,11 @@ fn eager_loads_unconditional_project_rules_not_conditional() {
     let files = discover_memory_files(dir.path());
     assert!(
         files.iter().any(|f| f.content.contains("Always use tabs")),
-        "unconditional .coco/rules must be eager-loaded"
+        "unconditional project config rules must be eager-loaded"
     );
     assert!(
         !files.iter().any(|f| f.content.contains("TS-only rule")),
-        "conditional .coco/rules must NOT be eager-loaded"
+        "conditional project config rules must NOT be eager-loaded"
     );
 }
 
@@ -193,7 +196,10 @@ fn discovery_is_deterministic_across_turns() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("CLAUDE.md"), "root").unwrap();
     std::fs::write(dir.path().join("AGENTS.md"), "agents").unwrap();
-    let rules = dir.path().join(".coco").join("rules");
+    let rules = dir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("rules");
     std::fs::create_dir_all(&rules).unwrap();
     std::fs::write(rules.join("b.md"), "rule b").unwrap();
     std::fs::write(rules.join("a.md"), "rule a").unwrap();
@@ -253,7 +259,7 @@ fn git_init_repo(root: &std::path::Path) {
 
 #[test]
 fn nested_worktree_skips_main_repo_checked_in_but_keeps_local() {
-    // A git worktree nested at <main>/.coco/worktrees/<slug> (coco's agent
+    // A git worktree nested at <main>/project config dir/worktrees/<slug> (coco's agent
     // worktree layout). git checks the branch's tracked memory out into the
     // worktree, so <main>/CLAUDE.md and <wt>/CLAUDE.md hold the SAME content at
     // DISTINCT paths — the canonical-path dedup can't catch it. We must skip
@@ -263,14 +269,19 @@ fn nested_worktree_skips_main_repo_checked_in_but_keeps_local() {
     let main = tmp.path();
     git_init_repo(main);
     std::fs::write(main.join("CLAUDE.md"), "MAIN-ROOT-MEMORY").unwrap();
-    let rules = main.join(".coco").join("rules");
+    let rules = main
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("rules");
     std::fs::create_dir_all(&rules).unwrap();
     std::fs::write(rules.join("style.md"), "TABS-RULE").unwrap();
     git(main, &["add", "."]);
     git(main, &["commit", "-q", "-m", "init"]);
 
     // Nested worktree (checks out CLAUDE.md + the rule into <wt>).
-    let wt = main.join(".coco").join("worktrees").join("wt");
+    let wt = main
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("worktrees")
+        .join("wt");
     git(main, &["worktree", "add", "-q", wt.to_str().unwrap()]);
 
     // Gitignored local file — only in the main repo, never in the worktree.

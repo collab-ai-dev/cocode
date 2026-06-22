@@ -2,6 +2,17 @@ use std::path::PathBuf;
 
 use super::*;
 
+fn config_home(root: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "{root}/{}",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    ))
+}
+
+fn config_path(root: &str, child: &str) -> PathBuf {
+    config_home(root).join(child)
+}
+
 fn test_skill(name: &str, description: &str, prompt: &str, source: SkillSource) -> SkillDefinition {
     SkillDefinition {
         name: name.into(),
@@ -68,7 +79,7 @@ fn test_skill_from_project() {
         "Deploy to production",
         "Run the deploy script.",
         SkillSource::Project {
-            path: "/project/.coco/skills/deploy/SKILL.md".into(),
+            path: config_path("/project", "skills/deploy/SKILL.md"),
         },
     );
     skill.model = Some("anthropic/claude-opus-4-7".into());
@@ -577,7 +588,8 @@ fn test_inject_skill_listing_multibyte_description_truncates_safely() {
 
 #[test]
 fn test_get_skill_paths_includes_managed() {
-    let paths = get_skill_paths(Path::new("/home/user/.coco"), Path::new("/project"));
+    let home = config_home("/home/user");
+    let paths = get_skill_paths(&home, Path::new("/project"));
     assert!(paths.len() >= 4);
     // First should be managed
     let managed = &paths[0];
@@ -589,9 +601,10 @@ fn test_get_skill_paths_includes_managed() {
 
 #[test]
 fn test_get_skill_paths_order() {
-    let paths = get_skill_paths(Path::new("/home/user/.coco"), Path::new("/project"));
-    assert_eq!(paths[1], PathBuf::from("/home/user/.coco/skills"));
-    assert_eq!(paths[2], PathBuf::from("/project/.coco/skills"));
+    let home = config_home("/home/user");
+    let paths = get_skill_paths(&home, Path::new("/project"));
+    assert_eq!(paths[1], config_path("/home/user", "skills"));
+    assert_eq!(paths[2], config_path("/project", "skills"));
     assert!(
         !paths
             .iter()
@@ -620,7 +633,7 @@ Test.
 
 // ── R7-T10: discover_skill_dirs_for_paths ──
 //
-// Walks up from each file path collecting `<ancestor>/.coco/skills/`
+// Walks up from each file path collecting `<ancestor>/project config dir/skills/`
 // directories that exist. The walk stops at (but excludes) cwd, since
 // cwd-level skills are loaded at startup.
 // The tests below cover the core walk, the cwd boundary, deepest-first
@@ -633,23 +646,43 @@ fn test_discover_skill_dirs_finds_nested() {
     // Create a nested project with a skills dir at the inner level only.
     let project = cwd.join("project");
     let inner = project.join("subdir");
-    std::fs::create_dir_all(inner.join(".coco").join("skills")).unwrap();
+    std::fs::create_dir_all(
+        inner
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+    )
+    .unwrap();
     let file = inner.join("foo.rs");
     std::fs::write(&file, "// touched by Read").unwrap();
 
     let result = discover_skill_dirs_for_paths(&[file.as_path()], cwd);
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0], inner.join(".coco").join("skills"));
+    assert_eq!(
+        result[0],
+        inner
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills")
+    );
 }
 
 #[test]
 fn test_discover_skill_dirs_skips_gitignored() {
-    // #197: a `.coco/skills` under a gitignored dir (node_modules) is
+    // #197: a `project config dir/skills` under a gitignored dir (node_modules) is
     // skipped, while a sibling under a normal dir is kept.
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    std::fs::create_dir_all(cwd.join("node_modules/pkg/.coco/skills")).unwrap();
-    std::fs::create_dir_all(cwd.join("src/.coco/skills")).unwrap();
+    std::fs::create_dir_all(
+        cwd.join("node_modules/pkg")
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(
+        cwd.join("src")
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+    )
+    .unwrap();
     let nm_file = cwd.join("node_modules/pkg/index.js");
     let src_file = cwd.join("src/main.rs");
     std::fs::write(&nm_file, "x").unwrap();
@@ -674,7 +707,11 @@ fn test_discover_skill_dirs_excludes_cwd_level() {
     let cwd = dir.path();
     // Skills dir AT cwd should NOT be returned — cwd-level skills are
     // loaded at startup, the dynamic walker only finds nested ones.
-    std::fs::create_dir_all(cwd.join(".coco").join("skills")).unwrap();
+    std::fs::create_dir_all(
+        cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+    )
+    .unwrap();
     let file = cwd.join("readme.md");
     std::fs::write(&file, "").unwrap();
 
@@ -692,16 +729,36 @@ fn test_discover_skill_dirs_deepest_first() {
     // Two skills dirs at different depths.
     let outer = cwd.join("project");
     let inner = outer.join("module");
-    std::fs::create_dir_all(outer.join(".coco").join("skills")).unwrap();
-    std::fs::create_dir_all(inner.join(".coco").join("skills")).unwrap();
+    std::fs::create_dir_all(
+        outer
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(
+        inner
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+    )
+    .unwrap();
     let file = inner.join("hot.rs");
     std::fs::write(&file, "").unwrap();
 
     let result = discover_skill_dirs_for_paths(&[file.as_path()], cwd);
     assert_eq!(result.len(), 2);
     // Inner (more components) must come before outer.
-    assert_eq!(result[0], inner.join(".coco").join("skills"));
-    assert_eq!(result[1], outer.join(".coco").join("skills"));
+    assert_eq!(
+        result[0],
+        inner
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills")
+    );
+    assert_eq!(
+        result[1],
+        outer
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills")
+    );
 }
 
 #[test]
@@ -751,7 +808,12 @@ fn test_discover_skill_dirs_dedupes_across_paths() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
     let project = cwd.join("project");
-    std::fs::create_dir_all(project.join(".coco").join("skills")).unwrap();
+    std::fs::create_dir_all(
+        project
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+    )
+    .unwrap();
     let file1 = project.join("a.rs");
     let file2 = project.join("b.rs");
     std::fs::write(&file1, "").unwrap();
@@ -761,7 +823,12 @@ fn test_discover_skill_dirs_dedupes_across_paths() {
     // Same skills dir should only appear once even though both files
     // resolve to it.
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0], project.join(".coco").join("skills"));
+    assert_eq!(
+        result[0],
+        project
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills")
+    );
 }
 
 // ── SKILL.md compatibility ──
@@ -1110,7 +1177,7 @@ fn conditional_skill(name: &str, paths: Vec<&str>) -> SkillDefinition {
         "conditional skill",
         "do conditional work",
         SkillSource::Project {
-            path: format!("/proj/.coco/skills/{name}/SKILL.md").into(),
+            path: config_path("/proj", &format!("skills/{name}/SKILL.md")),
         },
     );
     s.paths = paths.into_iter().map(str::to_string).collect();
@@ -1265,7 +1332,7 @@ paths: '*.{ts,tsx}'
 ---
 body
 ";
-    let skill = parse_skill_markdown(content, Path::new("/proj/.coco/skills/ts/SKILL.md")).unwrap();
+    let skill = parse_skill_markdown(content, &config_path("/proj", "skills/ts/SKILL.md")).unwrap();
     mgr.register(skill);
 
     let cwd = PathBuf::from("/proj");
@@ -1355,7 +1422,7 @@ paths: build/**
 body
 ";
     let skill =
-        parse_skill_markdown(content, Path::new("/proj/.coco/skills/buildskill/SKILL.md")).unwrap();
+        parse_skill_markdown(content, &config_path("/proj", "skills/buildskill/SKILL.md")).unwrap();
     assert_eq!(skill.paths, vec!["build".to_string()]);
     mgr.register(skill);
 
@@ -1402,7 +1469,10 @@ fn build_session_skill_manager_loads_parent_project_coco_skills() {
     let config_home = tmp.path().join("config");
     let project = tmp.path().join("project");
     let nested = project.join("packages").join("app");
-    let parent_skill = project.join(".coco").join("skills").join("parent-skill");
+    let parent_skill = project
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("skills")
+        .join("parent-skill");
     std::fs::create_dir_all(&parent_skill).unwrap();
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::write(
@@ -1439,13 +1509,13 @@ fn build_session_skill_manager_ignores_legacy_project_claude_skills() {
 
 #[test]
 fn build_session_skill_manager_loads_legacy_commands_dir_skill_md() {
-    // skills-195: the deprecated `.coco/commands` directory is folded in,
+    // skills-195: the deprecated `project config dir/commands` directory is folded in,
     // supporting the SKILL.md directory format.
     let tmp = tempfile::tempdir().unwrap();
     let config_home = tmp.path().join("config");
     let project = tmp.path().join("project");
     let cmd_dir = project
-        .join(".coco")
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
         .join("commands")
         .join("legacy-cmd-dir");
     std::fs::create_dir_all(&cmd_dir).unwrap();
@@ -1465,12 +1535,14 @@ fn build_session_skill_manager_loads_legacy_commands_dir_skill_md() {
 
 #[test]
 fn build_session_skill_manager_loads_legacy_commands_dir_flat_md() {
-    // skills-195: flat `.md` files in `.coco/commands` also load (legacy
+    // skills-195: flat `.md` files in `project config dir/commands` also load (legacy
     // parser compatibility) — name derives from the file stem.
     let tmp = tempfile::tempdir().unwrap();
     let config_home = tmp.path().join("config");
     let project = tmp.path().join("project");
-    let cmd_dir = project.join(".coco").join("commands");
+    let cmd_dir = project
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("commands");
     std::fs::create_dir_all(&cmd_dir).unwrap();
     std::fs::write(
         cmd_dir.join("flatcmd.md"),
@@ -1488,15 +1560,17 @@ fn build_session_skill_manager_loads_legacy_commands_dir_flat_md() {
 
 #[test]
 fn build_session_skill_manager_dedups_skill_and_legacy_command_by_realpath() {
-    // skills-195: a skill reachable from both `.coco/skills` and
-    // `.coco/commands` via the *same physical file* (symlinked dir) loads
+    // skills-195: a skill reachable from both `project config dir/skills` and
+    // `project config dir/commands` via the *same physical file* (symlinked dir) loads
     // exactly once — deduped by canonical realpath, not just by name.
     let tmp = tempfile::tempdir().unwrap();
     let config_home = tmp.path().join("config");
     let project = tmp.path().join("project");
 
-    // Real skill lives under .coco/skills/shared/SKILL.md.
-    let skills_root = project.join(".coco").join("skills");
+    // Real skill lives under project config dir/skills/shared/SKILL.md.
+    let skills_root = project
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("skills");
     let shared = skills_root.join("shared");
     std::fs::create_dir_all(&shared).unwrap();
     std::fs::write(
@@ -1505,9 +1579,11 @@ fn build_session_skill_manager_dedups_skill_and_legacy_command_by_realpath() {
     )
     .unwrap();
 
-    // Point .coco/commands at the SAME directory tree via a symlink, so the
+    // Point project config dir/commands at the SAME directory tree via a symlink, so the
     // legacy loader rediscovers the identical SKILL.md file.
-    let commands_root = project.join(".coco").join("commands");
+    let commands_root = project
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("commands");
     #[cfg(unix)]
     std::os::unix::fs::symlink(&skills_root, &commands_root).unwrap();
     #[cfg(not(unix))]
@@ -1534,7 +1610,7 @@ fn build_session_skill_manager_dedups_skill_and_legacy_command_by_realpath() {
 
 #[test]
 fn project_dirs_up_to_home_stops_at_git_root() {
-    // Layout: a stray `<tmp>/outer/.coco/skills` OUTSIDE the repo, a repo at
+    // Layout: a stray `<tmp>/outer/project config dir/skills` OUTSIDE the repo, a repo at
     // `<tmp>/outer/repo/.git`, and a nested cwd `<tmp>/outer/repo/sub`.
     // `getProjectDirsUpToHome` stops at the git root so the parent dir's
     // skills never leak into the project scope.
@@ -1544,16 +1620,34 @@ fn project_dirs_up_to_home_stops_at_git_root() {
     let sub = repo.join("sub");
     std::fs::create_dir_all(&sub).unwrap();
     std::fs::create_dir_all(repo.join(".git")).unwrap();
-    std::fs::create_dir_all(outer.join(".coco").join("skills")).unwrap();
+    std::fs::create_dir_all(
+        outer
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+    )
+    .unwrap();
 
     let dirs = project_dirs_up_to_home(&sub, "skills");
-    assert!(dirs.contains(&sub.join(".coco").join("skills")));
     assert!(
-        dirs.contains(&repo.join(".coco").join("skills")),
+        dirs.contains(
+            &sub.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("skills")
+        )
+    );
+    assert!(
+        dirs.contains(
+            &repo
+                .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("skills")
+        ),
         "the git root dir itself is included"
     );
     assert!(
-        !dirs.contains(&outer.join(".coco").join("skills")),
+        !dirs.contains(
+            &outer
+                .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("skills")
+        ),
         "must stop at the git root and NOT leak the parent dir outside the repo: {dirs:?}"
     );
 }
@@ -1594,7 +1688,11 @@ fn build_session_skill_manager_project_gate_skips_project_scope() {
     let tmp = tempfile::tempdir().unwrap();
     let config_home = tmp.path().join("config");
     let cwd = tmp.path().join("project");
-    plant_skill(&cwd.join(".coco").join("skills"), "proj-skill");
+    plant_skill(
+        &cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+        "proj-skill",
+    );
 
     let gates = SkillLoadGates {
         project_enabled: false,
@@ -1612,7 +1710,12 @@ fn build_session_skill_manager_loads_additional_dirs() {
     let cwd = tmp.path().join("project");
     std::fs::create_dir_all(&cwd).unwrap();
     let add_root = tmp.path().join("extra");
-    plant_skill(&add_root.join(".coco").join("skills"), "extra-skill");
+    plant_skill(
+        &add_root
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+        "extra-skill",
+    );
 
     let gates = SkillLoadGates {
         additional_dirs: vec![add_root.clone()],
@@ -1637,7 +1740,11 @@ fn build_session_skill_manager_locked_skips_all_but_managed() {
     let config_home = tmp.path().join("config");
     let cwd = tmp.path().join("project");
     plant_skill(&config_home.join("skills"), "user-skill");
-    plant_skill(&cwd.join(".coco").join("skills"), "proj-skill");
+    plant_skill(
+        &cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("skills"),
+        "proj-skill",
+    );
 
     // skills_locked forces managed-only: user + project are skipped even
     // though their per-scope gates are enabled.

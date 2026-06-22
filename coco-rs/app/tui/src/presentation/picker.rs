@@ -162,7 +162,14 @@ pub(crate) fn skills_dialog_content(
     if s.rows.is_empty() {
         return (
             title,
-            t!("dialog.skills_empty").to_string(),
+            t!(
+                "dialog.skills_empty",
+                project_path =
+                    format!("{}/skills", coco_utils_common::COCO_CONFIG_DIR_NAME).as_str(),
+                user_path =
+                    format!("~/{}/skills", coco_utils_common::COCO_CONFIG_DIR_NAME).as_str(),
+            )
+            .to_string(),
             styles.primary(),
         );
     }

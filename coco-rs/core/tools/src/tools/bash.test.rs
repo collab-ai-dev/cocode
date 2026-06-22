@@ -1272,7 +1272,7 @@ mod render_for_model_tests {
 
     #[test]
     fn background_task_id_user_initiated_uses_manual_message() {
-        // `backgroundedByUser` branch — Ctrl+B path. Coco-rs's TUI doesn't
+        // `backgroundedByUser` branch — Ctrl+B path. The TUI doesn't
         // yet wire the keystroke, but the renderer already keys on the
         // `backgroundedByUser` field so adding the keybinding is data-only.
         let data = json!({

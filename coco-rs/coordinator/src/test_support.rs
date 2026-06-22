@@ -35,7 +35,7 @@ pub(crate) async fn lock_env() -> OwnedMutexGuard<()> {
 ///
 /// Team creation runs directory-WIDE probes (`unique_team_name` stats sibling
 /// dirs; cleanup/discovery `read_dir` the whole `teams/` tree). Without
-/// isolation all team tests share the real `~/.coco/teams/` tree, so those
+/// isolation all team tests share the real `config home/teams/` tree, so those
 /// probes race sibling tests' `create_dir_all` / `remove_dir_all` /
 /// half-written `config.json`. Pointing each test at its own empty tree
 /// confines every probe to that one test. Holds [`ENV_LOCK`] for its lifetime

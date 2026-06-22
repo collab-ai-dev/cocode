@@ -742,10 +742,12 @@ impl Tool for AgentTool {
             let mut available: Vec<String> = catalog.active().map(|d| d.name.clone()).collect();
             available.sort();
             available.dedup();
+            let user_agents = format!("~/{}/agents", coco_utils_common::COCO_CONFIG_DIR_NAME);
+            let project_agents = format!("{}/agents", coco_utils_common::COCO_CONFIG_DIR_NAME);
             return Err(ToolError::InvalidInput {
                 message: format!(
                     "Unknown subagent_type '{explicit_name}'. Available types: {}. \
-                     Add a `.md` file under `~/.coco/agents/` or `<project>/.coco/agents/` \
+                     Add a `.md` file under `{user_agents}` or `<project>/{project_agents}` \
                      to define a new agent type, then retry.",
                     if available.is_empty() {
                         "none (catalog empty — built-ins didn't load?)".to_string()

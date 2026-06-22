@@ -83,12 +83,12 @@ pub enum HookScope {
     Builtin = 0,
     /// Plugin-contributed hooks via `PLUGIN.toml`.
     Plugin = 1,
-    /// User-level hooks from `~/.coco/settings.json`.
+    /// User-level hooks from `config home/settings.json`.
     #[default]
     User = 2,
-    /// Project-level hooks from `.coco/settings.json` in cwd.
+    /// Project-level hooks from `project config dir/settings.json` in cwd.
     Project = 3,
-    /// Local (machine-specific) overrides from `.coco/settings.local.json`.
+    /// Local (machine-specific) overrides from `project config dir/settings.local.json`.
     Local = 4,
     /// Session-specific hooks (registered programmatically at runtime).
     Session = 5,

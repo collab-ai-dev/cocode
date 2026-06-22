@@ -1,6 +1,6 @@
 //! Plan mode file management: slug generation, CRUD, recovery.
 //!
-//! Plans are stored as markdown files at `~/.coco/plans/{slug}.md` where
+//! Plans are stored as markdown files at `config home/plans/{slug}.md` where
 //! the slug is a random `{adjective}-{verb}-{noun}` word combination.
 //! Each session gets a unique slug cached for its lifetime.
 //!
@@ -551,7 +551,7 @@ pub fn clear_all_plan_slugs() {
 
 /// Resolve the plans directory from settings or default.
 ///
-/// Default: `~/.coco/plans/`. If `plans_directory` setting is set,
+/// Default: `config home/plans/`. If `plans_directory` setting is set,
 /// resolves it relative to the project root and validates it stays within.
 pub fn resolve_plans_directory(
     config_dir: &Path,

@@ -137,7 +137,7 @@ pub(crate) fn open_theme_picker(state: &mut AppState) {
 
 /// Build the picker entries for `role` from the session-frozen
 /// `model_catalog`. The catalog covers all three resolution layers
-/// (L0 builtin + L1 `~/.coco/models.json` + L2 per-provider
+/// (L0 builtin + L1 `config home/models.json` + L2 per-provider
 /// overrides), seeded by `tui_runner` at session start. When the
 /// catalog is empty, the picker shows only provider-level availability
 /// rows; tests and mock pre-bootstrap paths must seed catalog entries

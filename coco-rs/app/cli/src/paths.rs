@@ -12,10 +12,10 @@ use std::sync::Arc;
 use coco_config::global_config;
 use coco_paths::ProjectPaths;
 
-/// `~/.coco/sessions` — legacy flat session directory.
+/// `config home/sessions` — legacy flat session directory.
 ///
 /// **DEPRECATED** for new code. The current layout puts session files
-/// under `~/.coco/projects/{sanitized_cwd}/{session_id}.jsonl` — use
+/// under `config home/projects/{sanitized_cwd}/{session_id}.jsonl` — use
 /// [`project_paths`] to construct paths in the new layout.
 ///
 /// This function is retained until every consumer migrates to
@@ -38,7 +38,7 @@ pub fn project_paths(cwd: &Path) -> Arc<ProjectPaths> {
     Arc::new(ProjectPaths::new(memory_base, cwd))
 }
 
-/// `~/.coco/output-styles` — user-scope output style markdown dir.
+/// `config home/output-styles` — user-scope output style markdown dir.
 ///
 /// [`OutputStyleManagerBuilder`] also honors managed and project sources
 /// — see [`output_style_dirs`].
@@ -49,18 +49,19 @@ pub fn user_output_style_dir() -> PathBuf {
     global_config::config_home().join("output-styles")
 }
 
-/// `<cwd>/.coco/output-styles` — direct project output style dir.
+/// `project config dir/output-styles` — direct project output style dir.
 pub fn project_output_style_dir(cwd: &Path) -> PathBuf {
-    cwd.join(".coco").join("output-styles")
+    cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("output-styles")
 }
 
 /// Project output-style dirs from most-specific to least-specific.
 ///
-/// The walk starts at `cwd`, checks each `.coco/output-styles`
+/// The walk starts at `cwd`, checks each `project config dir/output-styles`
 /// directory, and stops after the git root when inside a repository; if
 /// not in git, it stops at the user's home directory or filesystem root.
 /// Linked worktrees fall back to the canonical repository copy when the
-/// worktree root does not have `.coco/output-styles` checked out.
+/// worktree root does not have `project config dir/output-styles` checked out.
 pub fn project_output_style_dirs(cwd: &Path) -> Vec<PathBuf> {
     project_coco_subdirs_up_to_home("output-styles", cwd)
 }
@@ -89,12 +90,12 @@ pub fn output_style_dirs(cwd: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// Standard CLI agent search paths: `~/.coco/agents` (user) plus
-/// `<cwd>/.coco/agents` (project).
+/// Standard CLI agent search paths: `config home/agents` (user) plus
+/// `project config dir/agents` (project).
 ///
 /// **Worktree fallback**: when `cwd` resolves into a linked git worktree
-/// whose `.coco/agents/` is empty (or not checked out), we additionally
-/// search the canonical (main) repo's `.coco/agents/`. The fallback only
+/// whose `project config dir/agents/` is empty (or not checked out), we additionally
+/// search the canonical (main) repo's `project config dir/agents/`. The fallback only
 /// fires when the canonical root differs from the worktree's git root
 /// **and** the worktree dir is missing — a `git worktree add` checks out
 /// the full tree, so the shared case (worktree already has the same agent
@@ -103,21 +104,28 @@ pub fn standard_agent_search_paths(
     config_home: &Path,
     cwd: &Path,
 ) -> coco_subagent::definition_store::AgentSearchPaths {
-    let mut project_dirs = vec![cwd.join(".coco").join("agents")];
+    let mut project_dirs = vec![
+        cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("agents"),
+    ];
 
     // Push the canonical-repo fallback when applicable. Errors / no-git
     // states are treated as "no fallback needed" — the loader degrades
     // gracefully on missing dirs.
     if let Some(canonical_root) = coco_git::find_canonical_git_root(cwd) {
-        let worktree_agents_dir = cwd.join(".coco").join("agents");
+        let worktree_agents_dir = cwd
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("agents");
         let worktree_root = git_root_for(cwd);
         let worktree_has_agents = std::fs::metadata(&worktree_agents_dir)
             .map(|m| m.is_dir())
             .unwrap_or(false);
-        let canonical_agents_dir = canonical_root.join(".coco").join("agents");
+        let canonical_agents_dir = canonical_root
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("agents");
         // Only add the canonical-root copy when:
         // 1. cwd is inside a worktree distinct from the canonical root, AND
-        // 2. the worktree's own .coco/agents/ is missing or empty.
+        // 2. the worktree's own project config dir/agents/ is missing or empty.
         // Same-root cases (cwd == canonical_root, or worktree already
         // has agent files) keep the original single-entry shape.
         if worktree_root.as_deref() != Some(canonical_root.as_path())
@@ -184,7 +192,9 @@ fn project_coco_subdirs_up_to_home(subdir: &str, cwd: &Path) -> Vec<PathBuf> {
             break;
         }
 
-        let candidate = current.join(".coco").join(subdir);
+        let candidate = current
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join(subdir);
         if candidate.is_dir() {
             dirs.push(candidate);
         }
@@ -220,13 +230,18 @@ fn add_worktree_canonical_fallback(
 
     let worktree_has_subdir = git_root
         .as_ref()
-        .map(|root| root.join(".coco").join(subdir))
+        .map(|root| {
+            root.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join(subdir)
+        })
         .is_some_and(|worktree_subdir| dirs.iter().any(|dir| same_path(dir, &worktree_subdir)));
     if worktree_has_subdir {
         return;
     }
 
-    let canonical_subdir = canonical_root.join(".coco").join(subdir);
+    let canonical_subdir = canonical_root
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join(subdir);
     if !dirs.iter().any(|dir| same_path(dir, &canonical_subdir)) {
         dirs.push(canonical_subdir);
     }

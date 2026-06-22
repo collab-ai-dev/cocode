@@ -98,7 +98,11 @@ pub(crate) fn settings_surface_content(
             }
         }
         SettingsTab::About => vec![
-            t!("dialog.settings_about_title").to_string(),
+            t!(
+                "dialog.settings_about_title",
+                product = coco_config::constants::PRODUCT_NAME
+            )
+            .to_string(),
             t!("dialog.settings_about_arch").to_string(),
             t!("dialog.settings_about_built").to_string(),
         ],

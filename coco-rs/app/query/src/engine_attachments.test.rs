@@ -324,7 +324,7 @@ async fn drain_dedupes_via_file_read_state() {
 
 #[tokio::test]
 async fn drain_picks_up_agents_md() {
-    // Coco-rs extension: AGENTS.md alongside CLAUDE.md.
+    // Runtime extension: AGENTS.md alongside CLAUDE.md.
     let root = tempdir().unwrap();
     let proj = root.path().join("proj");
     let sub = proj.join("sub");

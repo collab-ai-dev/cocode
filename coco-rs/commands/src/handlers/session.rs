@@ -1,7 +1,6 @@
 //! `/session` — list, resume, and delete sessions with real file I/O.
 //!
-//! Reads session files from `~/.coco/sessions/`, parses their metadata
-//! (timestamps, model, working directory), and formats a listing.
+//! Reads session files, parses their metadata, and formats a listing.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -49,17 +48,20 @@ pub fn handler(
 /// List all sessions, sorted by modification time (newest first).
 async fn list_sessions(sessions_dir: &Path) -> crate::Result<String> {
     if !sessions_dir.exists() {
-        return Ok(
-            "No sessions found.\n\nSessions are stored in ~/.coco/sessions/\n\
-             Start a conversation to create your first session."
-                .to_string(),
-        );
+        return Ok(format!(
+            "No sessions found.\n\nSessions are stored in {}\n\
+             Start a conversation to create your first session.",
+            sessions_dir.display()
+        ));
     }
 
     let sessions = scan_sessions(sessions_dir).await;
 
     if sessions.is_empty() {
-        return Ok("No session files found in ~/.coco/sessions/".to_string());
+        return Ok(format!(
+            "No session files found in {}",
+            sessions_dir.display()
+        ));
     }
 
     let mut out = format!("## Sessions ({} found)\n\n", sessions.len());

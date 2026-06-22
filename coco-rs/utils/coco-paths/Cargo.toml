@@ -11,5 +11,6 @@ workspace = true
 unicode-normalization = { workspace = true }
 
 [dev-dependencies]
+coco-utils-common = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

@@ -1,6 +1,6 @@
 //! File-based mailbox system for inter-teammate messaging.
 //!
-//! Inbox layout: `~/.coco/teams/{team_name}/inboxes/{agent_name}.json`
+//! Inbox layout: `config home/teams/{team_name}/inboxes/{agent_name}.json`
 //! — a JSON array of [`TeammateMessage`] read-modify-written under an
 //! advisory `fs2` lock. Mailboxes also carry structured protocol
 //! envelopes (idle, permission, plan approval, shutdown, mode change)

@@ -8,7 +8,9 @@ async fn creates_template_when_missing() {
     let out = handler_with_overrides(home.clone(), String::new())
         .await
         .unwrap();
-    let path = home.join(".coco").join("keybindings.json");
+    let path = home
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("keybindings.json");
     assert!(path.exists(), "expected file at {}", path.display());
     let body = tokio::fs::read_to_string(&path).await.unwrap();
     assert!(body.contains("bindings"));
@@ -21,7 +23,9 @@ async fn preserves_existing_file() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let home = tmp.path().to_path_buf();
 
-    let path = home.join(".coco").join("keybindings.json");
+    let path = home
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("keybindings.json");
     tokio::fs::create_dir_all(path.parent().unwrap())
         .await
         .unwrap();

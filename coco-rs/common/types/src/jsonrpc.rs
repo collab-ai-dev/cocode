@@ -104,7 +104,7 @@ pub struct JsonRpcNotification {
     pub params: serde_json::Value,
 }
 
-/// Standard JSON-RPC 2.0 error codes plus coco-rs extensions.
+/// Standard JSON-RPC 2.0 error codes plus local extensions.
 pub mod error_codes {
     /// Malformed JSON received.
     pub const PARSE_ERROR: i32 = -32700;
@@ -117,7 +117,7 @@ pub mod error_codes {
     /// Internal server error.
     pub const INTERNAL_ERROR: i32 = -32603;
 
-    // coco-rs extensions (≥ -32000 per JSON-RPC reserved range)
+    // Local extensions (>= -32000 per JSON-RPC reserved range)
     /// Request cancelled by the server (e.g. turn/interrupt).
     pub const REQUEST_CANCELLED: i32 = -32001;
     /// Permission denied for the requested action.

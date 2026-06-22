@@ -166,10 +166,10 @@ pub const UNAVAILABLE_WARNING: &str = "Note: The safety classifier was unavailab
 
 /// `agentToolUtils.ts:404-405` — handoff classification only runs
 /// when the parent's permission mode is [`PermissionMode::Auto`] AND the
-/// `TRANSCRIPT_CLASSIFIER` feature is on. Coco-rs surfaces the same
+/// `TRANSCRIPT_CLASSIFIER` feature is on. This crate surfaces the same
 /// gate as a pure predicate so callers don't re-derive it. The
 /// `feature_enabled` flag captures the feature-flag layer
-/// (`feature('TRANSCRIPT_CLASSIFIER')` ≈ coco-rs runtime config; coco-rs
+/// (`feature('TRANSCRIPT_CLASSIFIER')` ≈ runtime config; this crate
 /// ships no such kill-switch yet, so callers pass `true`).
 pub fn handoff_classifier_active(
     permission_mode: Option<coco_types::PermissionMode>,

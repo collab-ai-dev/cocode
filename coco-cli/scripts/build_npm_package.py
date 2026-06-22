@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and optionally package the @coco-cli/coco-cli npm module."""
+"""Stage and optionally package the npm module."""
 
 import argparse
 import json
@@ -11,27 +11,31 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 COCO_CLI_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = COCO_CLI_ROOT.parent
-COCO_NPM_NAME = "@coco-cli/coco-cli"
+PRODUCT_NAME = "cocode"
+NPM_SCOPE = "@cocode"
+NPM_PACKAGE_BASENAME = "cocode-cli"
+NPM_PACKAGE_NAME = f"{NPM_SCOPE}/{NPM_PACKAGE_BASENAME}"
+NPM_BIN_NAME = NPM_PACKAGE_BASENAME
 
 # `npm_name` is the local optional-dependency alias consumed by `bin/coco-cli.js`.
-# The underlying package published to npm is always `@coco-cli/coco-cli`.
+# The underlying package published to npm is always the meta package.
 COCO_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
     "coco-cli-linux-x64": {
-        "npm_name": "@coco-cli/coco-cli-linux-x64",
+        "npm_name": f"{NPM_PACKAGE_NAME}-linux-x64",
         "npm_tag": "linux-x64",
         "target_triple": "x86_64-unknown-linux-musl",
         "os": "linux",
         "cpu": "x64",
     },
     "coco-cli-linux-arm64": {
-        "npm_name": "@coco-cli/coco-cli-linux-arm64",
+        "npm_name": f"{NPM_PACKAGE_NAME}-linux-arm64",
         "npm_tag": "linux-arm64",
         "target_triple": "aarch64-unknown-linux-musl",
         "os": "linux",
         "cpu": "arm64",
     },
     "coco-cli-darwin-arm64": {
-        "npm_name": "@coco-cli/coco-cli-darwin-arm64",
+        "npm_name": f"{NPM_PACKAGE_NAME}-darwin-arm64",
         "npm_tag": "darwin-arm64",
         "target_triple": "aarch64-apple-darwin",
         "os": "darwin",
@@ -63,7 +67,9 @@ COMPONENT_DEST_DIR: dict[str, str] = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build or stage the Coco CLI npm package.")
+    parser = argparse.ArgumentParser(
+        description=f"Build or stage the {PRODUCT_NAME} CLI npm package."
+    )
     parser.add_argument(
         "--package",
         choices=PACKAGE_CHOICES,
@@ -218,7 +224,7 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
             coco_package_json = json.load(fh)
 
         package_json = {
-            "name": COCO_NPM_NAME,
+            "name": NPM_PACKAGE_NAME,
             "version": platform_version,
             "license": coco_package_json.get("license", "Apache-2.0"),
             "os": [platform_package["os"]],
@@ -244,9 +250,10 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
 
     if package == "coco-cli":
         package_json["files"] = ["bin"]
+        package_json["bin"] = {NPM_BIN_NAME: "bin/coco-cli.js"}
         package_json["optionalDependencies"] = {
             COCO_PLATFORM_PACKAGES[platform_package]["npm_name"]: (
-                f"npm:{COCO_NPM_NAME}@"
+                f"npm:{NPM_PACKAGE_NAME}@"
                 f"{compute_platform_package_version(version, COCO_PLATFORM_PACKAGES[platform_package]['npm_tag'])}"
             )
             for platform_package in PACKAGE_EXPANSIONS["coco-cli"]

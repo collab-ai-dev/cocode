@@ -3,7 +3,7 @@
 //! Reads from [`crate::keymap::KEYMAP`] (the structured source of truth)
 //! and renders one row per entry, grouped by `KeymapGroup`. For entries
 //! bound to a configurable `KeybindingAction`, the displayed combo comes
-//! from the user's active resolver (so a rebind in `~/.coco/keybindings.json`
+//! from the user's active resolver (so a rebind in `config home/keybindings.json`
 //! shows the rebound key, not the default). For built-in verbs and
 //! prompt prefixes the combo from the keymap entry is used as-is.
 

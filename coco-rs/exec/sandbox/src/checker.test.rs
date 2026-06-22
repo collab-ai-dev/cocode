@@ -119,11 +119,10 @@ fn test_workspace_write_protects_git_subpath() {
 #[test]
 fn test_workspace_write_protects_coco_subpath() {
     let checker = PermissionChecker::new(workspace_write_config());
-    assert!(
-        checker
-            .check_path(Path::new("/home/user/project/.coco/config.json"), true)
-            .is_err()
-    );
+    let protected_path = Path::new("/home/user/project")
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("config.json");
+    assert!(checker.check_path(&protected_path, true).is_err());
 }
 
 #[test]

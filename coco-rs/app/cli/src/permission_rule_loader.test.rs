@@ -22,10 +22,13 @@ fn settings_with(per_source: HashMap<SettingSource, serde_json::Value>) -> Setti
 fn permission_rule_source_roots_mirror_ts_settings_roots() {
     let original_cwd = Path::new("/repo");
     let mut settings = settings_with(HashMap::new());
-    settings.source_paths.insert(
-        SettingSource::User,
-        PathBuf::from("/home/me/.coco/settings.json"),
-    );
+    let user_root = PathBuf::from(format!(
+        "/home/me/{}",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    ));
+    settings
+        .source_paths
+        .insert(SettingSource::User, user_root.join("settings.json"));
     settings.source_paths.insert(
         SettingSource::Flag,
         PathBuf::from("/tmp/coco-flags/custom.json"),
@@ -35,7 +38,7 @@ fn permission_rule_source_roots_mirror_ts_settings_roots() {
 
     assert_eq!(
         roots.get(&PermissionRuleSource::UserSettings),
-        Some(&PathBuf::from("/home/me/.coco"))
+        Some(&user_root)
     );
     assert_eq!(
         roots.get(&PermissionRuleSource::FlagSettings),

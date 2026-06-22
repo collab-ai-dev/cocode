@@ -202,13 +202,13 @@ pub struct MemoryFileEntry {
 pub enum MemoryScope {
     /// Enterprise / managed.
     Managed,
-    /// User-global (`~/.coco/CLAUDE.md`).
+    /// User-global (`config home/CLAUDE.md`).
     User,
     /// Project (`./CLAUDE.md`).
     Project,
     /// Project-local (`./CLAUDE.local.md`).
     ProjectLocal,
-    /// `<dir>/.coco/CLAUDE.md` — project-config-dir convention.
+    /// `<dir>/project config dir/CLAUDE.md` — project-config-dir convention.
     ProjectConfig,
     /// Subdirectory CLAUDE.md (auto-loaded under cwd).
     Subdir,
@@ -1333,7 +1333,7 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         ("doctor", "Run diagnostic checks", &[], doctor_handler),
         (
             "init",
-            "Initialize project with .coco/ directory",
+            "Initialize project config directory",
             &[],
             init_handler,
         ),
@@ -1488,9 +1488,10 @@ fn plugin_handler(args: &str) -> String {
 }
 
 fn agents_handler(_args: &str) -> String {
-    "Available agents:\n  (none defined)\n\
-     Place agent definitions in .coco/agents/"
-        .to_string()
+    let config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;
+    format!(
+        "Available agents:\n  (none defined)\n     Place agent definitions in {config_dir}/agents/"
+    )
 }
 
 fn tasks_handler(_args: &str) -> String {
@@ -1508,10 +1509,10 @@ fn doctor_handler(_args: &str) -> String {
 }
 
 fn init_handler(_args: &str) -> String {
-    "Initializing project...\n\
-     Created .coco/ directory\n\
-     Created .coco/settings.json"
-        .to_string()
+    let config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;
+    format!(
+        "Initializing project...\n     Created {config_dir}/ directory\n     Created {config_dir}/settings.json"
+    )
 }
 
 #[cfg(test)]

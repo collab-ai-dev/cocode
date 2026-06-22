@@ -17,6 +17,7 @@ schema = ["dep:schemars", "coco-types/schema"]
 coco-config.workspace = true
 coco-error.workspace = true
 coco-types.workspace = true
+coco-utils-common.workspace = true
 coco-messages.workspace = true
 coco-shell-discovery.workspace = true
 coco-system-reminder.workspace = true

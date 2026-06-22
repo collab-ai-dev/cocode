@@ -62,7 +62,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
             "deepseek-v4-flash",
             PartialModelInfo {
                 display_name: Some("DeepSeek V4 Flash".into()),
-                base_instructions: Some(super::DEFAULT_BASE_INSTRUCTIONS.into()),
+                base_instructions: Some(super::default_base_instructions()),
                 context_window: Some(PositiveTokens::new(1_000_000)),
                 max_output_tokens: Some(PositiveTokens::new(12_288)),
                 capabilities: Some(vec![
@@ -83,7 +83,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
             "deepseek-v4-pro",
             PartialModelInfo {
                 display_name: Some("DeepSeek V4 Pro".into()),
-                base_instructions: Some(super::DEFAULT_BASE_INSTRUCTIONS.into()),
+                base_instructions: Some(super::default_base_instructions()),
                 context_window: Some(PositiveTokens::new(1_000_000)),
                 max_output_tokens: Some(PositiveTokens::new(12_288)),
                 capabilities: Some(vec![

@@ -48,7 +48,17 @@ use crate::provider::ProviderConfig;
 /// `instructions/default_prompt.md` (aligned with the claude-code TS
 /// source) and is reused by both the runtime SP-fallback path and the
 /// DeepSeek builtin catalog.
-pub const DEFAULT_BASE_INSTRUCTIONS: &str = include_str!("../../instructions/default_prompt.md");
+const DEFAULT_BASE_INSTRUCTIONS_TEMPLATE: &str =
+    include_str!("../../instructions/default_prompt.md");
+pub const DEFAULT_BASE_INSTRUCTIONS: &str = DEFAULT_BASE_INSTRUCTIONS_TEMPLATE;
+
+pub fn default_base_instructions() -> String {
+    render_instruction_template(DEFAULT_BASE_INSTRUCTIONS_TEMPLATE)
+}
+
+pub(crate) fn render_instruction_template(template: &str) -> String {
+    template.replace("{{PRODUCT_NAME}}", crate::constants::PRODUCT_NAME)
+}
 
 /// Compiled-in builtin model registry — well-known models with known
 /// metadata. User catalogue files override these per-key.

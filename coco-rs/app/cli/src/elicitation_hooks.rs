@@ -11,7 +11,7 @@
 //!    the action/content or block (forces decline).
 //! 5. Fires `Notification` with `notification_type: "elicitation_response"`.
 //!
-//! Coco-rs has no dialog UI yet — every `SendElicitation` call site
+//! There is no dialog UI yet — every `SendElicitation` call site
 //! returns `Err`. By wrapping the closure with this helper, hooks fire
 //! regardless of whether a UI exists, so users can program-respond to
 //! elicitations through hooks even on headless / SDK paths.

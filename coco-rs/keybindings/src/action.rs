@@ -35,23 +35,23 @@ pub enum KeybindingAction {
     AppRedraw,
     AppGlobalSearch,
     AppQuickOpen,
-    /// coco-rs extension: immediate quit without the double-press confirmation
+    /// Local extension: immediate quit without the double-press confirmation
     /// `app:exit` goes through. Default `ctrl+q`.
     AppForceQuit,
-    /// coco-rs extension: open the help overlay. Default `f1`. (`?` on an
+    /// Local extension: open the help overlay. Default `f1`. (`?` on an
     /// empty composer also opens help, hardcoded in the TUI because it must
     /// fall through to typing otherwise.)
     AppHelp,
-    /// coco-rs extension: open the command palette. Default `ctrl+p`;
+    /// Local extension: open the command palette. Default `ctrl+p`;
     /// `history:search` (ctrl+r) opens the same surface.
     AppCommandPalette,
-    /// coco-rs extension: open the settings overlay. Default `ctrl+,` (the
+    /// Local extension: open the settings overlay. Default `ctrl+,` (the
     /// conventional settings shortcut).
     AppSettings,
-    /// coco-rs extension: open the session browser / resume picker. Default
+    /// Local extension: open the session browser / resume picker. Default
     /// `ctrl+s` (folded from the old TUI cascade).
     AppSessionBrowser,
-    /// coco-rs extension: open the plan editor for the current plan. Default
+    /// Local extension: open the plan editor for the current plan. Default
     /// `ctrl+g` (folded from the old TUI cascade).
     AppPlanEditor,
 
@@ -67,7 +67,7 @@ pub enum KeybindingAction {
     ChatModelPicker,
     ChatFastMode,
     ChatThinkingToggle,
-    /// coco-rs extension: cycle the Main role's thinking effort forward
+    /// Local extension: cycle the Main role's thinking effort forward
     /// through the current model's
     /// `supported_thinking_levels`, wrapping at the end. Bound to
     /// `ctrl+t` in Chat context.
@@ -79,10 +79,10 @@ pub enum KeybindingAction {
     ChatStash,
     ChatImagePaste,
     ChatMessageActions,
-    /// coco-rs extension: toggle `<system-reminder>` visibility in the
+    /// Local extension: toggle `<system-reminder>` visibility in the
     /// transcript. Default `ctrl+shift+r`.
     ChatToggleSystemReminders,
-    /// coco-rs extension: toggle plan mode. Default `tab` in Chat — dispatch
+    /// Local extension: toggle plan mode. Default `tab` in Chat — dispatch
     /// is state-dependent (an active inline ghost or prompt suggestion accepts
     /// instead of toggling).
     ChatTogglePlanMode,

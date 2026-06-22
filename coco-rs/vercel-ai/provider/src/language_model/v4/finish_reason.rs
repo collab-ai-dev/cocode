@@ -1,6 +1,6 @@
 //! Finish reason types for model responses.
 //!
-//! # coco-rs extension (deviates from `@ai-sdk/provider` v4)
+//! # Local extension (deviates from `@ai-sdk/provider` v4)
 //!
 //! The upstream TS spec defines six unified values
 //! (`"stop" | "length" | "content-filter" | "tool-calls" | "error" |
@@ -54,7 +54,7 @@ pub enum UnifiedFinishReason {
     /// (no tool calls).
     #[default]
     EndTurn,
-    /// Stop sequence matched. Coco-rs refinement of the spec's
+    /// Stop sequence matched. Runtime refinement of the spec's
     /// `Stop` bucket — provider raw is `stop_sequence` /
     /// `"stop-sequence"`.
     StopSequence,
@@ -66,7 +66,7 @@ pub enum UnifiedFinishReason {
     /// `length`, Google `MAX_TOKENS`. Engine drives 64k escalate +
     /// multi-turn recovery (`app/query/src/engine.rs`).
     MaxTokens,
-    /// Context-window limit hit. Coco-rs refinement of the
+    /// Context-window limit hit. Runtime refinement of the
     /// `MaxTokens` bucket — provider raw is
     /// `model_context_window_exceeded`. Recovery path is shared with
     /// `MaxTokens`; the variant exists so the user-facing wording

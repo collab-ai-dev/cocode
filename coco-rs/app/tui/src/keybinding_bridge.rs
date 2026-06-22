@@ -440,7 +440,7 @@ fn map_autocomplete_key(key: KeyEvent) -> Option<TuiCommand> {
 
 /// Residual hardcoded keys for the Chat context — only what CANNOT be a
 /// rebindable default. Every former "TUI-only shortcut" arm has been folded
-/// into `coco-keybindings` defaults as documented coco-rs extensions
+/// into keybinding defaults as documented local extensions
 /// (`app:forceQuit`, `app:help`, `app:commandPalette`, `app:settings`,
 /// `chat:toggleSystemReminders`, `chat:togglePlanMode`, plus second default
 /// bindings on existing actions: ctrl+f → `chat:killAgents`, ctrl+m →

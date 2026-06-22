@@ -5,9 +5,9 @@
 //! payload survives on [`ReminderMetadata::AlreadyReadFile`] so UI /
 //! transcript layers can surface "already in context" hints.
 //!
-//! cocode-rs reference: `core/system-reminder/src/generators/` (the
+//! Reference implementation: `core/system-reminder/src/generators/` (the
 //! `SystemReminder::already_read_files(paths)` constructor produces the
-//! same shape inline; coco-rs packages it as a dedicated generator so
+//! same shape inline; this crate packages it as a dedicated generator so
 //! the engine populates
 //! [`GeneratorContext::already_read_file_paths`](crate::generator::GeneratorContext::already_read_file_paths)
 //! and the orchestrator's tier / throttle gates apply uniformly.

@@ -121,7 +121,10 @@ fn test_generate_seatbelt_profile_with_writable_roots() {
     assert!(profile.contains("(allow file-write* (subpath \"/home/user/project\"))"));
     // Protected subpaths denied for writes
     assert!(profile.contains("(deny file-write* (subpath \"/home/user/project/.git\"))"));
-    assert!(profile.contains("(deny file-write* (subpath \"/home/user/project/.coco\"))"));
+    assert!(profile.contains(&format!(
+        "(deny file-write* (subpath \"/home/user/project/{}\"))",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    )));
     assert!(profile.contains("(deny file-write* (subpath \"/home/user/project/.agents\"))"));
     // Network fully allowed + TLS services
     assert!(profile.contains("(allow network*)"));

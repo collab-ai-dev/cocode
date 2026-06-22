@@ -82,7 +82,7 @@ async fn null_unbind_round_trips() {
 fn default_path_is_under_coco_home() {
     let path = default_keybindings_path();
     let s = path.to_string_lossy();
-    assert!(s.contains(".coco"));
+    assert!(s.contains(coco_utils_common::COCO_CONFIG_DIR_NAME));
     assert!(s.ends_with("keybindings.json"));
 }
 

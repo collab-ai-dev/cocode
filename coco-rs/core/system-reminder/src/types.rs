@@ -292,7 +292,7 @@ impl AttachmentType {
             | Self::InvokedSkills
             | Self::IdeSelection
             | Self::IdeOpenedFile
-            // Silent reminder-native types — cocode-rs places these in
+            // Silent reminder-native types — the reference implementation places these in
             // MainAgentOnly since the dedup/change bookkeeping is
             // main-thread concern (subagents see parent context).
             | Self::AlreadyReadFile

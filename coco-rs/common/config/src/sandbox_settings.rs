@@ -1,7 +1,7 @@
 //! Sandbox settings.
 //!
 //! Single source of truth for sandbox configuration consumed by both
-//! `~/.coco/settings.json` deserialization and the sandbox runtime
+//! `config home/settings.json` deserialization and the sandbox runtime
 //! (`coco-sandbox`). The runtime adapter takes a `&SandboxSettings` and
 //! produces its own platform-bound `SandboxConfig` (which is a separate
 //! type owned by the sandbox crate — adapter output, not user-facing).
@@ -120,7 +120,7 @@ pub struct FilesystemConfig {
 
 /// Network access configuration for the sandbox.
 ///
-/// The `denied_domains` and `mode` fields are coco-rs extensions that
+/// The `denied_domains` and `mode` fields are local extensions that
 /// gracefully degrade when consumed by clients that ignore extra fields.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct NetworkConfig {
@@ -202,7 +202,7 @@ pub struct RipgrepConfig {
 
 /// Sandbox settings.
 ///
-/// Deserialized directly from `~/.coco/settings.json`'s `sandbox` block;
+/// Deserialized directly from `config home/settings.json`'s `sandbox` block;
 /// consumed by both the high-level posture decision (`mode`) and the
 /// platform-specific runtime (filesystem/network/etc.).
 ///

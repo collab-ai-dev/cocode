@@ -147,13 +147,16 @@ pub const OAUTH_AUTHORIZE_URL: &str = "https://platform.claude.com/oauth/authori
 // ---------------------------------------------------------------------------
 
 /// Product name for paths and display.
-pub const PRODUCT_NAME: &str = "coco";
+pub const PRODUCT_NAME: &str = "cocode";
+
+/// Public CLI command name.
+pub const CLI_BIN_NAME: &str = "cocode-cli";
 
 /// Config directory name.
-pub const CONFIG_DIR_NAME: &str = ".coco";
+pub const CONFIG_DIR_NAME: &str = coco_utils_common::COCO_CONFIG_DIR_NAME;
 
 /// Project config directory name.
-pub const PROJECT_CONFIG_DIR: &str = ".coco";
+pub const PROJECT_CONFIG_DIR: &str = coco_utils_common::COCO_CONFIG_DIR_NAME;
 
 /// No-content message placeholder.
 pub const NO_CONTENT_MESSAGE: &str = "(no content)";

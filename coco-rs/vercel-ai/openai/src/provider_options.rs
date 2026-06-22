@@ -7,7 +7,7 @@
 //! (`reasoning_stor`) fails at startup rather than silently shipping the
 //! default. Mirrors `vercel-ai-anthropic::parse_provider_options`.
 //!
-//! Settings example (`~/.coco/provider.json`):
+//! Settings example (`config home/provider.json`):
 //!
 //! ```json
 //! {

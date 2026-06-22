@@ -25,7 +25,7 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
     let marker_str = marker_path.to_string_lossy().into_owned();
 
     // settings.json — installs a PreToolUse hook on Bash. Same shape
-    // production users write in `~/.coco/settings.json`. We escape the
+    // production users write in `config home/settings.json`. We escape the
     // shell to handle paths with spaces, but tempdirs under /tmp are
     // ASCII-safe so it's redundant — kept for clarity.
     let settings_path = workdir_path.join("settings.json");

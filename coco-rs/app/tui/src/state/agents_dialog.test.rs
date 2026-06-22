@@ -270,7 +270,11 @@ fn resolve_target_project_source_paths_under_cwd_coco() {
     .expect("clean target");
     assert_eq!(
         target,
-        tmp_cwd.path().join(".coco").join("agents").join("demo.md")
+        tmp_cwd
+            .path()
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("agents")
+            .join("demo.md")
     );
 }
 

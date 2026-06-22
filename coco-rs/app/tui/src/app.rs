@@ -100,7 +100,7 @@ pub struct App {
     /// here so the TUI surfaces them as toasts. `None` in tests /
     /// headless paths.
     kb_warnings_rx: Option<mpsc::Receiver<Vec<coco_keybindings::ValidationIssue>>>,
-    /// Optional channel of theme reload results from `~/.coco/theme.json`.
+    /// Optional channel of theme reload results from `config home/theme.json`.
     theme_reload_rx: Option<mpsc::Receiver<crate::theme::ThemeLoadResult>>,
     /// Optional channel of display settings derived from settings hot reload.
     display_settings_rx: Option<mpsc::Receiver<crate::display_settings::DisplaySettings>>,
@@ -367,7 +367,7 @@ impl App {
                 Some(issues) = recv_optional(&mut self.kb_warnings_rx), if self.kb_warnings_rx.is_some() => {
                     needs_redraw = surface_keybinding_warnings(&mut self.state, issues);
                 }
-                // Theme config reloads from ~/.coco/theme.json. Invalid
+                // Theme config reloads from config home/theme.json. Invalid
                 // reloads surface as toasts and keep the prior palette.
                 Some(result) = recv_optional(&mut self.theme_reload_rx), if self.theme_reload_rx.is_some() => {
                     needs_redraw = apply_theme_reload(&mut self.state, result);
@@ -528,10 +528,7 @@ impl App {
 
     fn handle_surface_attention_requested(&mut self) {
         let message = crate::i18n::t!("notification.action_required").to_string();
-        coco_tui_ui::widgets::notification::notify(
-            &crate::i18n::t!("notification.app_name"),
-            &message,
-        );
+        coco_tui_ui::widgets::notification::notify(coco_config::constants::PRODUCT_NAME, &message);
         self.state.ui.add_toast(Toast::warning(message));
     }
 
@@ -974,7 +971,10 @@ impl App {
         let _ = self
             .command_tx
             .send(UserCommand::FireIdleNotification {
-                message: "Coco is waiting for your input".to_string(),
+                message: format!(
+                    "{} is waiting for your input",
+                    coco_config::constants::PRODUCT_NAME
+                ),
             })
             .await;
         self.state.session.idle_prompt_fired = true;

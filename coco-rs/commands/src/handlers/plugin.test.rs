@@ -79,12 +79,20 @@ async fn test_scan_plugin_dir_skips_non_plugin_dirs() {
 #[tokio::test]
 async fn test_install_plugin() {
     let tmp = tempfile::tempdir().unwrap();
-    let plugin_dir = tmp.path().join(".coco").join("plugins").join("test-plugin");
+    let plugin_dir = tmp
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("plugins")
+        .join("test-plugin");
 
     // Install into the temp dir
-    tokio::fs::create_dir_all(tmp.path().join(".coco").join("plugins"))
-        .await
-        .unwrap();
+    tokio::fs::create_dir_all(
+        tmp.path()
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("plugins"),
+    )
+    .await
+    .unwrap();
 
     // We test the manifest creation logic directly since install_plugin
     // uses relative paths

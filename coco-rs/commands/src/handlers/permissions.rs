@@ -6,20 +6,10 @@
 use coco_types::MCP_TOOL_PREFIX;
 use coco_types::ToolName;
 use std::path::Path;
+use std::path::PathBuf;
 use std::pin::Pin;
 
 /// Priority order for permission rule sources (highest to lowest).
-const RULE_SOURCES: &[(&str, &str)] = &[
-    ("Session", "(set during this session via /permissions)"),
-    ("Command", "(from --allow-tool / --deny-tool flags)"),
-    ("CLI", "(from command-line arguments)"),
-    ("Flag", "(from feature flags)"),
-    ("Local", ".coco/settings.local.json"),
-    ("Project", ".coco/settings.json"),
-    ("Policy", "(organization policy)"),
-    ("User", "~/.coco/settings.json"),
-];
-
 /// Async handler for `/permissions [allow|deny|reset|list]`.
 pub fn handler(
     args: String,
@@ -48,7 +38,7 @@ pub fn handler(
             return Ok(
                 "Session permission rules: reset is only effective inside the TUI \
                  (it mutates the live engine config). File-based rules \
-                 (.coco/settings.json, ~/.coco/settings.json) are unchanged — \
+                 (project and user settings.json) are unchanged — \
                  edit those files directly to modify persistent rules."
                     .to_string(),
             );
@@ -70,14 +60,19 @@ async fn list_permissions() -> crate::Result<String> {
     let mut out = String::from("## Permission Rules\n\n");
 
     out.push_str("Rule sources (highest to lowest priority):\n\n");
-    for (i, (name, desc)) in RULE_SOURCES.iter().enumerate() {
+    for (i, (name, desc)) in rule_sources().iter().enumerate() {
         out.push_str(&format!("  {}. {:<10} {desc}\n", i + 1, name));
     }
     out.push('\n');
 
     // Read project settings
-    let project_rules = read_permission_rules(".coco/settings.json").await;
-    let local_rules = read_permission_rules(".coco/settings.local.json").await;
+    let project_settings = project_settings_path();
+    let local_settings = local_settings_path();
+    let project_label = project_settings_label();
+    let local_label = local_settings_label();
+    let user_label = user_settings_label();
+    let project_rules = read_permission_rules_from_path(&project_settings).await;
+    let local_rules = read_permission_rules_from_path(&local_settings).await;
     let user_rules =
         read_permission_rules_from_path(&coco_config::global_config::user_settings_path()).await;
 
@@ -87,7 +82,7 @@ async fn list_permissions() -> crate::Result<String> {
         out.push_str("### Active Rules\n\n");
 
         if !project_rules.is_empty() {
-            out.push_str("**Project** (.coco/settings.json):\n");
+            out.push_str(&format!("**Project** ({project_label}):\n"));
             for rule in &project_rules {
                 out.push_str(&format!("  {rule}\n"));
             }
@@ -95,7 +90,7 @@ async fn list_permissions() -> crate::Result<String> {
         }
 
         if !local_rules.is_empty() {
-            out.push_str("**Local** (.coco/settings.local.json):\n");
+            out.push_str(&format!("**Local** ({local_label}):\n"));
             for rule in &local_rules {
                 out.push_str(&format!("  {rule}\n"));
             }
@@ -103,7 +98,7 @@ async fn list_permissions() -> crate::Result<String> {
         }
 
         if !user_rules.is_empty() {
-            out.push_str("**User** (~/.coco/settings.json):\n");
+            out.push_str(&format!("**User** ({user_label}):\n"));
             for rule in &user_rules {
                 out.push_str(&format!("  {rule}\n"));
             }
@@ -119,6 +114,51 @@ async fn list_permissions() -> crate::Result<String> {
     out.push_str("  /permissions reset         Clear session rules");
 
     Ok(out)
+}
+
+fn rule_sources() -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "Session",
+            "(set during this session via /permissions)".to_string(),
+        ),
+        (
+            "Command",
+            "(from --allow-tool / --deny-tool flags)".to_string(),
+        ),
+        ("CLI", "(from command-line arguments)".to_string()),
+        ("Flag", "(from feature flags)".to_string()),
+        ("Local", local_settings_label()),
+        ("Project", project_settings_label()),
+        ("Policy", "(organization policy)".to_string()),
+        ("User", user_settings_label()),
+    ]
+}
+
+fn project_settings_path() -> PathBuf {
+    PathBuf::from(coco_utils_common::COCO_CONFIG_DIR_NAME).join("settings.json")
+}
+
+fn local_settings_path() -> PathBuf {
+    PathBuf::from(coco_utils_common::COCO_CONFIG_DIR_NAME).join("settings.local.json")
+}
+
+fn project_settings_label() -> String {
+    format!("{}/settings.json", coco_utils_common::COCO_CONFIG_DIR_NAME)
+}
+
+fn local_settings_label() -> String {
+    format!(
+        "{}/settings.local.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    )
+}
+
+fn user_settings_label() -> String {
+    format!(
+        "~/{}/settings.json",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    )
 }
 
 /// Stub for non-TUI contexts. The TUI dispatcher
@@ -161,11 +201,6 @@ async fn add_permission_rule(action: &str, tool: &str) -> crate::Result<String> 
     }
 
     Ok(out)
-}
-
-/// Read permission rules from a settings JSON file (relative path).
-async fn read_permission_rules(path: &str) -> Vec<String> {
-    read_permission_rules_from_path(Path::new(path)).await
 }
 
 /// Read permission rules from an absolute or relative path.

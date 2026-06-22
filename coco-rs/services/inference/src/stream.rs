@@ -75,7 +75,7 @@ pub struct ToolCallSegment {
     /// filters on `is_input_complete || is_complete`.
     pub is_complete: bool,
     pub provider_metadata: Option<ProviderMetadata>,
-    /// Coco-rs extension carried through from
+    /// Runtime extension carried through from
     /// [`vercel_ai_provider::LanguageModelV4ToolCall.invalid`]: the
     /// adapter detected an unrecoverable wire-parsing parse failure on
     /// the wire. Engine reconstruction copies this onto the rebuilt
@@ -853,7 +853,7 @@ pub fn synthetic_stream_from_content(
                 // after `ToolInputEnd`. Required so the accumulator
                 // can mark `is_complete=true` and downstream consumers
                 // that filter on `is_complete` see the tool call.
-                // Coco-rs extension: carry `invalid` + `invalid_reason`
+                // Runtime extension: carry `invalid` + `invalid_reason`
                 // through the stream so adapter-detected wire-parsing
                 // failures (e.g. Anthropic streaming `content_block_stop`
                 // flush) survive engine reconstruction.

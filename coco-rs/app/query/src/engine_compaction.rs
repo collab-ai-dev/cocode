@@ -1183,7 +1183,7 @@ impl QueryEngine {
             coco_types::CompactTrigger::ContextCollapse => "context_collapse",
         };
         info!(trigger = trigger_label, "try_full_compact entered");
-        // Hook wire trigger is `enum('manual','auto')`. Coco-rs-only
+        // Hook wire trigger is `enum('manual','auto')`. Runtime-only
         // triggers (Reactive / TimeBased / SessionMemory /
         // ContextCollapse) all map to `Auto` for the hook payload —
         // they are autonomous compaction events from the agent's

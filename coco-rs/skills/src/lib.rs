@@ -635,9 +635,9 @@ impl SettingScope {
 pub struct SkillScopes {
     /// Enterprise/policy skills (highest priority).
     pub managed: Option<PathBuf>,
-    /// `~/.coco/skills/`.
+    /// `config home/skills/`.
     pub user_skills: Option<PathBuf>,
-    /// Project `.coco/skills` directories.
+    /// Project `project config dir/skills` directories.
     pub project_skills: Option<PathBuf>,
     /// Deprecated; ignored.
     pub user_commands: Option<PathBuf>,
@@ -688,7 +688,7 @@ pub fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillDefinition> {
 }
 
 /// Walk up from each file path to the cwd boundary and collect any
-/// `<ancestor>/.coco/skills/` directories that exist on disk.
+/// `<ancestor>/project config dir/skills/` directories that exist on disk.
 ///
 /// The scanner runs on every Read/Write/Edit so the model can pick up
 /// nested project skills without having to opt into them at startup.
@@ -699,7 +699,7 @@ pub fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillDefinition> {
 ///    (i.e. `current_dir.starts_with(cwd + sep)`). The cwd boundary is
 ///    excluded because cwd-level skills are already loaded at startup —
 ///    only nested ones are interesting here.
-/// 3. At each level, check `<currentDir>/.coco/skills` and add it to
+/// 3. At each level, check `<currentDir>/project config dir/skills` and add it to
 ///    the result list if the directory exists.
 /// 4. Sort the results by path depth (deepest first) so deeper skills
 ///    take precedence when the manager loads them.
@@ -720,7 +720,7 @@ pub fn discover_skill_dirs_for_paths(file_paths: &[&Path], cwd: &Path) -> Vec<Pa
     let mut seen: HashSet<PathBuf> = HashSet::new();
 
     // Runs `isPathGitignored` before adding each dir, so e.g.
-    // `node_modules/pkg/.coco/skills` is skipped. Fails open outside a
+    // `node_modules/pkg/project config dir/skills` is skipped. Fails open outside a
     // git repo (PathChecker ignores nothing).
     let ignore_checker = coco_file_ignore::PathChecker::new(
         &resolved_cwd,
@@ -745,7 +745,9 @@ pub fn discover_skill_dirs_for_paths(file_paths: &[&Path], cwd: &Path) -> Vec<Pa
             // Skip gitignored containing dirs (node_modules, build dirs,
             // etc.) but keep walking up to non-ignored ancestors.
             if !ignore_checker.is_ignored(&current_dir) {
-                let skill_dir = current_dir.join(".coco").join("skills");
+                let skill_dir = current_dir
+                    .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                    .join("skills");
                 if seen.insert(skill_dir.clone()) && skill_dir.is_dir() {
                     result.push(skill_dir);
                 }
@@ -1162,12 +1164,12 @@ fn scalar_to_string(v: &coco_frontmatter::FrontmatterValue) -> Option<String> {
 fn managed_base_path() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from("/Library/Application Support/ClaudeCode/.coco")
+        PathBuf::from("/Library/Application Support/ClaudeCode")
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        // Linux and other Unix platforms
-        PathBuf::from("/etc/claude-code/.coco")
+        PathBuf::from("/etc/claude-code").join(coco_utils_common::COCO_CONFIG_DIR_NAME)
     }
 }
 
@@ -1191,17 +1193,17 @@ pub fn get_managed_commands_path() -> PathBuf {
 /// policy locks customization surfaces to plugin-only sources).
 #[derive(Debug, Clone)]
 pub struct SkillLoadGates {
-    /// Load managed/policy `.coco/skills`. Gated by `COCO_DISABLE_POLICY_SKILLS`.
+    /// Load managed/policy `project config dir/skills`. Gated by `COCO_DISABLE_POLICY_SKILLS`.
     pub managed_enabled: bool,
-    /// Load user `~/.coco/skills`. Requires `userSettings` enabled and not locked.
+    /// Load user `config home/skills`. Requires `userSettings` enabled and not locked.
     pub user_enabled: bool,
-    /// Load project `.coco/skills` walk-up. Requires `projectSettings` enabled
+    /// Load project `project config dir/skills` walk-up. Requires `projectSettings` enabled
     /// and not locked.
     pub project_enabled: bool,
-    /// Load legacy `.coco/commands` dirs (managed → user → project up-to-home).
+    /// Load legacy `project config dir/commands` dirs (managed → user → project up-to-home).
     /// Gated like project (`!skillsLocked`).
     pub legacy_enabled: bool,
-    /// Load `.coco/skills` under each `--add-dir` path. Requires project scope
+    /// Load `project config dir/skills` under each `--add-dir` path. Requires project scope
     /// enabled (and not locked).
     pub additional_dirs_enabled: bool,
     /// Resolved `--add-dir` (and settings `additional_directories`) roots.
@@ -1228,7 +1230,7 @@ impl SkillLoadGates {
 }
 
 /// Build the canonical per-session skill catalog: bundled skills plus
-/// managed, user, and project `.coco/skills` disk scopes.
+/// managed, user, and project `project config dir/skills` disk scopes.
 ///
 /// Single source of truth so the command registry, the `/context` usage
 /// detail, the `/skills` dialog, and the reminder `SkillsSource` all read
@@ -1238,7 +1240,7 @@ impl SkillLoadGates {
 /// `gates` controls which disk scopes load (per `--setting-sources` and the
 /// `strictPluginOnlyCustomization` policy). `skills_locked` forces a managed-
 /// only load. Load order: managed → user → project walk-up → additional
-/// `--add-dir` `.coco/skills`. The [`SkillManager`] dedups by canonical path
+/// `--add-dir` `project config dir/skills`. The [`SkillManager`] dedups by canonical path
 /// (first-wins), so overlapping dirs don't double-register.
 pub fn build_session_skill_manager(
     config_home: &Path,
@@ -1277,7 +1279,10 @@ pub fn build_session_skill_manager(
         if gates.additional_dirs_enabled {
             for dir in &gates.additional_dirs {
                 manager.load_scoped(&SkillScopes {
-                    project_skills: Some(dir.join(".coco").join("skills")),
+                    project_skills: Some(
+                        dir.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                            .join("skills"),
+                    ),
                     ..SkillScopes::default()
                 });
             }
@@ -1300,12 +1305,12 @@ pub fn build_session_skill_manager(
 
 /// Standard skill directory paths by source, in loading priority order.
 ///
-/// Order: managed → user → project `.coco/skills` walk-up.
+/// Order: managed → user → project `project config dir/skills` walk-up.
 pub fn get_skill_paths(config_dir: &Path, project_dir: &Path) -> Vec<PathBuf> {
     let mut paths = vec![
         // Enterprise/policy-managed skills (highest priority)
         get_managed_skills_path(),
-        // User-level skills: ~/.coco/skills/
+        // User-level skills: config home/skills/
         config_dir.join("skills"),
     ];
     paths.extend(project_skill_dirs_up_to_home(project_dir));
@@ -1316,21 +1321,21 @@ pub(crate) fn project_skill_dirs_up_to_home(cwd: &Path) -> Vec<PathBuf> {
     project_dirs_up_to_home(cwd, "skills")
 }
 
-/// Legacy `.coco/commands` directories walked from `cwd` up to home,
+/// Legacy `project config dir/commands` directories walked from `cwd` up to home,
 /// mirroring [`project_skill_dirs_up_to_home`] but for the deprecated
 /// commands subdir.
 pub(crate) fn project_command_dirs_up_to_home(cwd: &Path) -> Vec<PathBuf> {
     project_dirs_up_to_home(cwd, "commands")
 }
 
-/// Walk from `cwd` upward, collecting `.coco/<subdir>` at each level, and stop
+/// Walk from `cwd` upward, collecting `project config dir/<subdir>` at each level, and stop
 /// at the **git root OR home — whichever comes first**.
 ///
 /// Stops after processing the git root specifically to "prevent commands from
 /// parent directories outside the repository from appearing in the project
 /// scope".
 /// Without the git-root boundary, sibling repos sharing a parent dir (e.g.
-/// `~/projects` holding a stray `~/projects/.coco/skills`) would leak skills
+/// `~/projects` holding a stray `~/projects/project config dir/skills`) would leak skills
 /// into every child repo. We detect the git root by the presence of a `.git`
 /// entry — a directory for the main checkout, a file for a linked worktree —
 /// which is equivalent to `git rev-parse --show-toplevel` for this boundary
@@ -1341,7 +1346,11 @@ fn project_dirs_up_to_home(cwd: &Path, subdir: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     let mut current = cwd.to_path_buf();
     loop {
-        dirs.push(current.join(".coco").join(subdir));
+        dirs.push(
+            current
+                .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join(subdir),
+        );
         // Stop after including the git root (project isolation).
         if current.join(".git").exists() {
             break;
@@ -1551,7 +1560,9 @@ The following skills are available for use with the Skill tool:
 /// Dynamic skill discovery triggered during Read/Write/Glob tool execution.
 /// Skills found here are inserted after plugins but before built-in commands.
 pub fn discover_dynamic_skills(dir: &Path) -> Vec<SkillDefinition> {
-    let skills_dir = dir.join(".coco").join("skills");
+    let skills_dir = dir
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("skills");
     if !skills_dir.is_dir() {
         return Vec::new();
     }

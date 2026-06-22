@@ -23,9 +23,9 @@ use crate::rule_compiler;
 /// `PermissionStore` backed by JSON settings files on disk.
 ///
 /// Reads rules from:
-/// - `~/.coco/settings.json` (userSettings)
-/// - `.coco/settings.json` (projectSettings)
-/// - `.coco/settings.local.json` (localSettings)
+/// - `config home/settings.json` (userSettings)
+/// - `project config dir/settings.json` (projectSettings)
+/// - `project config dir/settings.local.json` (localSettings)
 /// - Managed settings path (policySettings)
 ///
 /// Writes rules back to the corresponding file when persisting updates.

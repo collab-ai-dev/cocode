@@ -20,7 +20,7 @@
 //!
 //! [retrieval]
 //! enabled = true
-//! data_dir = "~/.coco/retrieval"
+//! data_dir = "config home/retrieval"
 //! ```
 
 // Core modules

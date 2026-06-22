@@ -1,36 +1,46 @@
 use super::*;
+use coco_utils_common::COCO_CONFIG_DIR_NAME;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 
+fn home_config_path(child: &str) -> PathBuf {
+    let base = PathBuf::from(format!("/home/u/{COCO_CONFIG_DIR_NAME}"));
+    if child.is_empty() {
+        base
+    } else {
+        base.join(child)
+    }
+}
+
 fn paths() -> ProjectPaths {
     ProjectPaths::new(
-        PathBuf::from("/home/u/.coco"),
+        home_config_path(""),
         std::path::Path::new("/Users/foo/proj"),
     )
 }
 
+fn project_path(child: &str) -> PathBuf {
+    let base = home_config_path("projects/-Users-foo-proj");
+    if child.is_empty() {
+        base
+    } else {
+        base.join(child)
+    }
+}
+
 #[test]
 fn projects_root_is_memory_base_join_projects() {
-    assert_eq!(
-        paths().projects_root(),
-        PathBuf::from("/home/u/.coco/projects"),
-    );
+    assert_eq!(paths().projects_root(), home_config_path("projects"),);
 }
 
 #[test]
 fn project_dir_appends_slug() {
-    assert_eq!(
-        paths().project_dir(),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj"),
-    );
+    assert_eq!(paths().project_dir(), project_path(""),);
 }
 
 #[test]
 fn transcript_path() {
-    assert_eq!(
-        paths().transcript("sid-1"),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/sid-1.jsonl"),
-    );
+    assert_eq!(paths().transcript("sid-1"), project_path("sid-1.jsonl"),);
 }
 
 #[test]
@@ -38,11 +48,11 @@ fn agent_transcript_and_metadata() {
     let p = paths();
     assert_eq!(
         p.agent_transcript("sid-1", "a-7"),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/sid-1/subagents/agent-a-7.jsonl"),
+        project_path("sid-1/subagents/agent-a-7.jsonl"),
     );
     assert_eq!(
         p.agent_metadata("sid-1", "a-7"),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/sid-1/subagents/agent-a-7.meta.json",),
+        project_path("sid-1/subagents/agent-a-7.meta.json"),
     );
 }
 
@@ -50,9 +60,7 @@ fn agent_transcript_and_metadata() {
 fn agent_transcript_in_subdir() {
     assert_eq!(
         paths().agent_transcript_in_subdir("sid-1", "workflows/run-99", "a-3"),
-        PathBuf::from(
-            "/home/u/.coco/projects/-Users-foo-proj/sid-1/subagents/workflows/run-99/agent-a-3.jsonl"
-        ),
+        project_path("sid-1/subagents/workflows/run-99/agent-a-3.jsonl"),
     );
 }
 
@@ -60,9 +68,7 @@ fn agent_transcript_in_subdir() {
 fn remote_agent_metadata_path() {
     assert_eq!(
         paths().remote_agent_metadata("sid-1", "task-x"),
-        PathBuf::from(
-            "/home/u/.coco/projects/-Users-foo-proj/sid-1/remote-agents/remote-agent-task-x.meta.json",
-        ),
+        project_path("sid-1/remote-agents/remote-agent-task-x.meta.json"),
     );
 }
 
@@ -70,7 +76,7 @@ fn remote_agent_metadata_path() {
 fn tool_results_dir_path() {
     assert_eq!(
         paths().tool_results_dir("sid-1"),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/sid-1/tool-results"),
+        project_path("sid-1/tool-results"),
     );
 }
 
@@ -78,7 +84,7 @@ fn tool_results_dir_path() {
 fn session_memory_summary_path() {
     assert_eq!(
         paths().session_memory_summary("sid-1"),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/sid-1/session-memory/summary.md",),
+        project_path("sid-1/session-memory/summary.md"),
     );
 }
 
@@ -86,32 +92,23 @@ fn session_memory_summary_path() {
 fn session_usage_path() {
     assert_eq!(
         paths().session_usage("sid-1"),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/sid-1/usage.json"),
+        project_path("sid-1/usage.json"),
     );
 }
 
 #[test]
 fn memory_paths() {
     let p = paths();
-    assert_eq!(
-        p.memory_dir(),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/memory"),
-    );
-    assert_eq!(
-        p.memory_entrypoint(),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/memory/MEMORY.md"),
-    );
-    assert_eq!(
-        p.team_memory_dir(),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/memory/team"),
-    );
+    assert_eq!(p.memory_dir(), project_path("memory"),);
+    assert_eq!(p.memory_entrypoint(), project_path("memory/MEMORY.md"),);
+    assert_eq!(p.team_memory_dir(), project_path("memory/team"),);
     assert_eq!(
         p.team_memory_entrypoint(),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/memory/team/MEMORY.md"),
+        project_path("memory/team/MEMORY.md"),
     );
     assert_eq!(
         p.consolidation_lock(),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/memory/.consolidate-lock"),
+        project_path("memory/.consolidate-lock"),
     );
 }
 
@@ -119,7 +116,7 @@ fn memory_paths() {
 fn daily_log_zero_pads() {
     assert_eq!(
         paths().daily_log(2026, 5, 9),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/memory/logs/2026/05/2026-05-09.md"),
+        project_path("memory/logs/2026/05/2026-05-09.md"),
     );
 }
 
@@ -127,6 +124,6 @@ fn daily_log_zero_pads() {
 fn daily_log_double_digit_components() {
     assert_eq!(
         paths().daily_log(2026, 11, 23),
-        PathBuf::from("/home/u/.coco/projects/-Users-foo-proj/memory/logs/2026/11/2026-11-23.md"),
+        project_path("memory/logs/2026/11/2026-11-23.md"),
     );
 }

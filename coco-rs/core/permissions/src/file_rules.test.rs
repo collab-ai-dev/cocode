@@ -130,13 +130,14 @@ fn test_edit_tool_type_does_not_match_write_or_notebook_edit_path_rule() {
 
 #[test]
 fn test_single_slash_pattern_uses_source_root_override() {
+    let source_root = format!("/home/me/{}", coco_utils_common::COCO_CONFIG_DIR_NAME);
     let ctx = FileRuleMatchContext::new("/repo")
-        .with_source_root(PermissionRuleSource::UserSettings, "/home/me/.coco");
+        .with_source_root(PermissionRuleSource::UserSettings, &source_root);
     let rule = rule(PermissionRuleSource::UserSettings, "Read", "/commands/**");
 
     assert!(file_rule_matches_paths(
         &rule,
-        &["/home/me/.coco/commands/status.md".to_string()],
+        &[format!("{source_root}/commands/status.md")],
         FileRuleToolType::Read,
         &ctx
     ));

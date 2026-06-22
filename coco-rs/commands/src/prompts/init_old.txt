@@ -1,4 +1,4 @@
-Please analyze this codebase and create a CLAUDE.md file, which will be given to future instances of coco to operate in this repository.
+Please analyze this codebase and create a CLAUDE.md file, which will be given to future instances of {{PRODUCT_NAME}} to operate in this repository.
 
 What to add:
 1. Commands that will be commonly used, such as how to build, lint, and run tests. Include the necessary commands to develop in this codebase, such as how to run a single test.
@@ -17,5 +17,5 @@ Usage notes:
 ```
 # CLAUDE.md
 
-This file provides guidance to coco when working with code in this repository.
+This file provides guidance to {{PRODUCT_NAME}} when working with code in this repository.
 ```

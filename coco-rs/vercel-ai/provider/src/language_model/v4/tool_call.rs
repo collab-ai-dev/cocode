@@ -10,7 +10,7 @@ use serde::Serialize;
 
 /// Tool calls that the model has generated.
 ///
-/// **Coco-rs-specific extension**: `invalid` + `invalid_reason` mirror the
+/// **Runtime-specific extension**: `invalid` + `invalid_reason` mirror the
 /// fields on the post-stream [`crate::ToolCallPart`] so a provider adapter
 /// that detects an unrecoverable wire-parsing parse failure (e.g. Anthropic
 /// streaming `content_block_stop` flush) can carry the structured
@@ -75,7 +75,7 @@ impl LanguageModelV4ToolCall {
         }
     }
 
-    /// Coco-rs extension: mark the call as invalid with a structured
+    /// Runtime extension: mark the call as invalid with a structured
     /// reason. The agent loop reads the reason to pick the
     /// `<tool_use_error>` wrap prefix without string-matching.
     pub fn with_invalid_reason(mut self, reason: ToolInputInvalidReason) -> Self {

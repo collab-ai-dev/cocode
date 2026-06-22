@@ -2,7 +2,7 @@
 //!
 //! File layout:
 //! ```text
-//! ~/.coco/teams/
+//! config home/teams/
 //!   {team-name}/
 //!     config.json       # TeamFile
 //!     inboxes/
@@ -19,14 +19,14 @@ use crate::types::TeamFile;
 /// Base directory for all teams.
 ///
 /// `COCO_TEAMS_DIR` overrides it (tests isolate the teams/mailbox tree; a
-/// future swarm-leader can relocate it). Otherwise `~/.coco/teams/`.
+/// future swarm-leader can relocate it). Otherwise `config home/teams/`.
 pub fn teams_base_dir() -> PathBuf {
     if let Some(dir) = coco_config::env::env_opt(coco_config::EnvKey::CocoTeamsDir) {
         return PathBuf::from(dir);
     }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".coco")
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
         .join("teams")
 }
 

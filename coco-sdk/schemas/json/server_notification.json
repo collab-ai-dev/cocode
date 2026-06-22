@@ -3494,7 +3494,7 @@
       ]
     },
     "McpConnectionStatus": {
-      "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`:\n`'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`.\n`Disconnected` is a coco-rs extension used when the connection manager\nhas no record of a named server.",
+      "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`:\n`'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`.\n`Disconnected` is a local extension used when the connection manager\nhas no record of a named server.",
       "oneOf": [
         {
           "type": "string",
@@ -3507,7 +3507,7 @@
           ]
         },
         {
-          "description": "coco-rs extension: server name unknown to the connection manager.",
+          "description": "Local extension: server name unknown to the connection manager.",
           "type": "string",
           "const": "disconnected"
         }
@@ -4544,7 +4544,7 @@
           "default": {}
         },
         "num_api_calls": {
-          "description": "coco-rs extension: num_api_calls for observability (not in TS).",
+          "description": "Local extension: num_api_calls for observability (not in TS).",
           "type": [
             "integer",
             "null"
@@ -4665,7 +4665,7 @@
           }
         },
         "protocol_version": {
-          "description": "coco-rs extension: protocol version negotiation.",
+          "description": "Local extension: protocol version negotiation.",
           "type": "string"
         },
         "provider": {
@@ -7473,7 +7473,7 @@
           "const": "end_turn"
         },
         {
-          "description": "Stop sequence matched. Coco-rs refinement of the spec's\n`Stop` bucket — provider raw is `stop_sequence` /\n`\"stop-sequence\"`.",
+          "description": "Stop sequence matched. Runtime refinement of the spec's\n`Stop` bucket — provider raw is `stop_sequence` /\n`\"stop-sequence\"`.",
           "type": "string",
           "const": "stop_sequence"
         },
@@ -7488,7 +7488,7 @@
           "const": "max_tokens"
         },
         {
-          "description": "Context-window limit hit. Coco-rs refinement of the\n`MaxTokens` bucket — provider raw is\n`model_context_window_exceeded`. Recovery path is shared with\n`MaxTokens`; the variant exists so the user-facing wording\ncan distinguish \"context window\" vs \"output token maximum\".\nWire string keeps the Anthropic-original\n`model_context_window_exceeded` form so transcripts that\ncaptured the raw value round-trip via the typed enum.",
+          "description": "Context-window limit hit. Runtime refinement of the\n`MaxTokens` bucket — provider raw is\n`model_context_window_exceeded`. Recovery path is shared with\n`MaxTokens`; the variant exists so the user-facing wording\ncan distinguish \"context window\" vs \"output token maximum\".\nWire string keeps the Anthropic-original\n`model_context_window_exceeded` form so transcripts that\ncaptured the raw value round-trip via the typed enum.",
           "type": "string",
           "const": "model_context_window_exceeded"
         },

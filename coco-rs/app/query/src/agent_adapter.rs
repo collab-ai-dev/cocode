@@ -138,7 +138,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // (deny) since coco has no parent-terminal prompt routing for
             // child engines. `bubble`-mode subagents bubble the prompt to
             // the parent terminal; `avoid_permission_prompts` is only set
-            // for async subagents. Coco defines `PermissionMode::Bubble`
+            // for async subagents. The type defines `PermissionMode::Bubble`
             // but does not yet route subagent prompts upward, so
             // unconditional fail-closed is the correct (fail-safe) choice.
             // Make this conditional on `permission_mode != Bubble` only

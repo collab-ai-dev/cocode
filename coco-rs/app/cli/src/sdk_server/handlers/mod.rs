@@ -281,7 +281,7 @@ pub struct SdkServerState {
     /// to browse and resume historical sessions. When `None`, those
     /// handlers reply with `METHOD_NOT_FOUND` (session persistence is
     /// disabled). The CLI entry point (`run_sdk_mode`) wires one
-    /// pointing at `~/.coco/sessions`; in-memory tests that don't
+    /// pointing at `config home/sessions`; in-memory tests that don't
     /// exercise session/list can leave it as `None`.
     pub session_manager: RwLock<Option<Arc<coco_session::SessionManager>>>,
     /// Optional shared file-history state used by `control/rewindFiles`.

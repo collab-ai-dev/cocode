@@ -19,6 +19,7 @@ use crate::state::WizardSource;
 use crate::state::WizardTextField;
 use crate::theme::Theme;
 use coco_types::AgentSource;
+use coco_utils_common::COCO_CONFIG_DIR_NAME;
 use std::path::PathBuf;
 
 fn wizard_with(step: CreateWizardStep) -> CreateWizardState {
@@ -28,6 +29,10 @@ fn wizard_with(step: CreateWizardStep) -> CreateWizardState {
     w.description = WizardTextField::seeded("Handles XYZ.");
     w.source = WizardSource::Project;
     w
+}
+
+fn user_config_path(child: &str) -> PathBuf {
+    PathBuf::from(format!("/home/u/{COCO_CONFIG_DIR_NAME}/{child}"))
 }
 
 /// Fixed wall-clock for renders so any elapsed-time output is
@@ -108,7 +113,7 @@ fn snapshot_library_list_grouped() {
             is_builtin: false,
             is_overridden: false,
             running_count: 0,
-            source_path: Some(PathBuf::from("/home/u/.coco/agents/alpha.md")),
+            source_path: Some(user_config_path("agents/alpha.md")),
         },
         LibraryRow::SourceHeader {
             label: "Built-in agents".into(),
@@ -185,7 +190,7 @@ fn snapshot_wizard_already_exists_error() {
     state.wizard = Some({
         let mut w = wizard_with(CreateWizardStep::Confirm);
         w.error = Some(WizardError::AlreadyExists {
-            path: PathBuf::from("/home/u/.coco/agents/my-agent.md"),
+            path: user_config_path("agents/my-agent.md"),
         });
         w
     });

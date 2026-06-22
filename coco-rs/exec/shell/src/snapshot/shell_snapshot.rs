@@ -68,7 +68,7 @@ impl Default for SnapshotConfig {
     fn default() -> Self {
         let home = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".coco");
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME);
         Self {
             snapshot_dir: home.join(DEFAULT_SNAPSHOT_DIR),
             timeout: DEFAULT_SNAPSHOT_TIMEOUT,

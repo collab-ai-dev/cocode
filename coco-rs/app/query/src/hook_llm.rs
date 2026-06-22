@@ -31,7 +31,7 @@
 //! # Model selection
 //!
 //! The per-hook `hook.model` field can override with either a literal
-//! model id or an alias. Coco-rs routes through `ModelRole::HookAgent`
+//! model id or an alias. The runtime routes through `ModelRole::HookAgent`
 //! — bare model strings are deliberately rejected per the project rule
 //! "never bare model string; route via `ModelRole`" (see root `CLAUDE.md`).
 //!

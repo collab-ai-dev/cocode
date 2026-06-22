@@ -91,7 +91,10 @@ fn parse_paths_field_empty_returns_none() {
 #[test]
 fn collect_rule_files_unconditional_only() {
     let dir = tempdir().unwrap();
-    let rules = dir.path().join(".coco").join("rules");
+    let rules = dir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("rules");
     fs::create_dir_all(&rules).unwrap();
     fs::write(rules.join("uncond.md"), "no frontmatter here\n").unwrap();
     fs::write(
@@ -114,7 +117,10 @@ fn collect_rule_files_unconditional_only() {
 #[test]
 fn collect_rule_files_recurses_into_subdirs() {
     let dir = tempdir().unwrap();
-    let rules = dir.path().join(".coco").join("rules");
+    let rules = dir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("rules");
     let subdir = rules.join("nested");
     fs::create_dir_all(&subdir).unwrap();
     fs::write(rules.join("a.md"), "x").unwrap();
@@ -162,7 +168,10 @@ fn filter_rules_matching_simple_glob() {
     fs::write(&target, "").unwrap();
 
     let rule = super::RuleFile {
-        path: proj.join(".coco").join("rules").join("r.md"),
+        path: proj
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("rules")
+            .join("r.md"),
         raw_content: "body".into(),
         content: "body".into(),
         paths: Some(vec!["src/**/*.rs".into()]),
@@ -181,7 +190,10 @@ fn filter_rules_matching_non_matching_glob() {
     fs::write(&target, "").unwrap();
 
     let rule = super::RuleFile {
-        path: proj.join(".coco").join("rules").join("r.md"),
+        path: proj
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("rules")
+            .join("r.md"),
         raw_content: "body".into(),
         content: "body".into(),
         paths: Some(vec!["docs/**/*.md".into()]),
@@ -201,7 +213,10 @@ fn filter_rules_matching_brace_pattern() {
 
     // Pre-expanded into separate patterns (simulates parse_paths_field output).
     let rule = super::RuleFile {
-        path: proj.join(".coco").join("rules").join("r.md"),
+        path: proj
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("rules")
+            .join("r.md"),
         raw_content: "body".into(),
         content: "body".into(),
         paths: Some(vec!["src/*.ts".into(), "src/*.tsx".into()]),
@@ -221,7 +236,10 @@ fn filter_rules_target_outside_base_returns_empty() {
     fs::write(&target, "").unwrap();
 
     let rule = super::RuleFile {
-        path: proj.join(".coco").join("rules").join("r.md"),
+        path: proj
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("rules")
+            .join("r.md"),
         raw_content: "body".into(),
         content: "body".into(),
         paths: Some(vec!["**".into()]),

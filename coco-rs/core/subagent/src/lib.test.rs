@@ -314,7 +314,7 @@ fn async_clamp_readmits_exit_plan_mode_in_plan_mode() {
 fn frontmatter_wildcard_tools_collapses_to_default_allow_list() {
     // `parseAgentToolsFromFrontmatter` (`utils/markdownConfigLoader.ts:122-124`)
     // turns `tools: ['*']` into `undefined` (= use default allow set).
-    // Coco-rs represents that with an empty allow-list.
+    // This crate represents that with an empty allow-list.
     let project = TempDir::new().unwrap();
     write_md(
         project.path(),
@@ -719,7 +719,7 @@ fn frontmatter_tools_csv_string_is_split_on_commas() {
 fn auto_memory_injection_adds_read_edit_write_when_enabled() {
     // `loadAgentsDir.ts:455-467` adds Read/Edit/Write to non-wildcard
     // tool lists when AutoMemory is on AND the agent declares a `memory`
-    // scope. Coco-rs runs the same transform once the store's
+    // scope. This crate runs the same transform once the store's
     // `auto_memory_enabled` flag is set.
     let project = TempDir::new().unwrap();
     write_md(
@@ -955,13 +955,16 @@ fn prompt_lists_active_agents_in_source_load_order() {
     let snap = store.snapshot();
     let renderer = AgentToolPromptRenderer::new(&snap);
     let listing = renderer.agent_list(&PromptOptions::default());
-    let lines: Vec<&str> = listing.lines().collect();
+    let lines: Vec<String> = listing.lines().map(str::to_string).collect();
     assert_eq!(
         lines,
         vec![
-            "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: All tools)",
-            "- statusline-setup: Use this agent to configure the user's Coco status line setting. (Tools: Read, Edit)",
-            "- build: Build verification (Tools: Bash, Read)",
+            "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: All tools)".to_string(),
+            format!(
+                "- statusline-setup: Use this agent to configure the user's {} status line setting. (Tools: Read, Edit)",
+                coco_config::constants::PRODUCT_NAME
+            ),
+            "- build: Build verification (Tools: Bash, Read)".to_string(),
         ]
     );
 }

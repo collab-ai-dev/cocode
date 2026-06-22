@@ -22,7 +22,7 @@ use crate::session_runtime::SessionRuntime;
 /// dirs [`crate::session_runtime::SessionRuntime::reload_plugins`] /
 /// `build_session_command_registry` load from:
 /// - `<config_home>/skills` — user scope
-/// - every `<ancestor>/.coco/skills` from cwd upward
+/// - every `<ancestor>/project config dir/skills` from cwd upward
 pub fn default_watch_paths(cwd: &Path, config_home: &Path) -> Vec<PathBuf> {
     session_reload_scopes(config_home, cwd)
         .into_iter()

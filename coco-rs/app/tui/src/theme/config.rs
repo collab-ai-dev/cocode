@@ -38,7 +38,7 @@ impl ThemeRuntimeState {
         if path.exists() {
             return Self::load_from_path(path);
         }
-        // No TUI-local `theme.json`: honor `GlobalConfig.theme` (`~/.coco.json`).
+        // No TUI-local `theme.json`: honor `GlobalConfig.theme` (the global config file).
         let config = ThemeConfig {
             active: global_theme_setting().unwrap_or_default(),
             ..ThemeConfig::default()
@@ -824,7 +824,7 @@ pub(crate) fn persisted_active_setting() -> ThemeSetting {
     global_theme_setting().unwrap_or_default()
 }
 
-/// The theme selection from `GlobalConfig` (`~/.coco.json`). `None` when
+/// The theme selection from `GlobalConfig` (the global config file). `None` when
 /// unset/empty. Consulted only when no TUI-local `theme.json` exists; the
 /// in-app picker still writes `theme.json`, which takes precedence.
 fn global_theme_setting() -> Option<ThemeSetting> {

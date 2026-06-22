@@ -158,7 +158,7 @@ pub async fn build_live_server(provider: &str, model: &str) -> Result<LiveSdkSer
 #[derive(Default)]
 pub struct BuildOptions {
     /// Pre-minted cwd. When `None` the harness creates one. Tests that
-    /// need to plant files (`.coco/skills/*.md`, nested `CLAUDE.md`,
+    /// need to plant files (`project config dir/skills/*.md`, nested `CLAUDE.md`,
     /// `settings.json`) before the runtime boots pass the dir here so
     /// they can compute paths in advance.
     pub cwd: Option<TempDir>,
@@ -195,9 +195,9 @@ pub async fn build_live_server_with_options(
     // `<config_home>/projects/<slug>/<id>.jsonl` (config_home is not
     // injectable — see app/cli/src/paths.rs), while `SessionManager`
     // below reads from `sessions_dir`. Without this they diverge (real
-    // `~/.coco` vs tempdir) and `session/resume` fails with
+    // the config home vs tempdir) and `session/resume` fails with
     // `transcript not found`. This also makes every sdk_server live test
-    // hermetic from the developer's real `~/.coco`.
+    // hermetic from the developer's real the config home.
     //
     // SAFETY: nextest isolates each test in its own process, so this
     // process-global set is not observed by other tests; the
@@ -257,10 +257,12 @@ pub async fn build_live_server_with_options(
     let command_registry = Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry)));
 
     // Mirror `build_session_command_registry`'s skill load so any
-    // `<cwd>/.coco/skills/<name>/SKILL.md` planted by the test fixture
+    // `project config dir/skills/<name>/SKILL.md` planted by the test fixture
     // is discovered and threaded into `ReminderSources.skills`.
     let skill_manager = coco_skills::SkillManager::new();
-    skill_manager.load_from_dirs(&[cwd.join(".coco").join("skills")]);
+    skill_manager.load_from_dirs(&[cwd
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("skills")]);
     let skill_manager = Arc::new(skill_manager);
 
     let session_runtime = SessionRuntime::build(SessionRuntimeBuildOpts {

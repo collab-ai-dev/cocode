@@ -28,7 +28,11 @@ const SKILL_NAME: &str = "test-skill-runtime-foo";
 
 pub async fn run(provider: &str, model: &str) -> Result<()> {
     let workdir = crate::common::tmpdir::make("coco-tests-sdk-skill-listing-")?;
-    let skill_dir = workdir.path().join(".coco").join("skills").join(SKILL_NAME);
+    let skill_dir = workdir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("skills")
+        .join(SKILL_NAME);
     fs::create_dir_all(&skill_dir)?;
     // `parse_skill_markdown` (skills/src/lib.rs) requires `# Name`
     // FIRST then frontmatter. Wrong order → "expected `# Name` heading

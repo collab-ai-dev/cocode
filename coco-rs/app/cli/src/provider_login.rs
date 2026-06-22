@@ -53,7 +53,7 @@ fn instance_name(provider: Option<&str>) -> String {
 }
 
 /// Look up a configured provider instance's `auth` mode, preferring the fully
-/// layered config (honors `~/.coco/providers.json` + settings) and falling back
+/// layered config (honors `config home/providers.json` + settings) and falling back
 /// to builtins when a full build needs a Main model that isn't set yet (e.g. a
 /// brand-new machine running `coco login` before configuring anything).
 fn provider_auth_for(provider_name: &str) -> Result<ProviderAuth> {
@@ -64,9 +64,10 @@ fn provider_auth_for(provider_name: &str) -> Result<ProviderAuth> {
             .get(provider_name)
             .map(|p| p.auth.clone())
             .ok_or_else(|| {
+                let config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;
                 anyhow::anyhow!(
                     "unknown provider '{provider_name}' — configure it under `providers` in \
-                     ~/.coco/providers.json, or use a builtin (e.g. `openai`)"
+                     ~/{config_dir}/providers.json, or use a builtin (e.g. `openai`)"
                 )
             });
     }

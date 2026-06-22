@@ -36,7 +36,10 @@ fn test_snapshot_config_default() {
 
 #[test]
 fn test_snapshot_config_new() {
-    let home = PathBuf::from("/home/test/.coco");
+    let home = PathBuf::from(format!(
+        "/home/test/{}",
+        coco_utils_common::COCO_CONFIG_DIR_NAME
+    ));
     let config = SnapshotConfig::new(&home);
     assert_eq!(config.snapshot_dir, home.join("shell-snapshots"));
 }

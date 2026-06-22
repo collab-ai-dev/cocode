@@ -74,7 +74,7 @@ pub enum WriteClassification {
     /// Distinct from auto-mem because session-memory is a fundamentally
     /// different artifact with its own lifecycle.
     SessionMem,
-    /// Path is one of the curated `CLAUDE.md` / `AGENTS.md` / `.coco/rules/`
+    /// Path is one of the curated `CLAUDE.md` / `AGENTS.md` / `project config dir/rules/`
     /// files in user, project, or local scope. Captured as a single
     /// variant — the dialog handles the finer scope distinction.
     Claudemd,
@@ -108,9 +108,7 @@ pub fn classify_written_path(
     if is_within_memory_dir(path, memory_dir) {
         return WriteClassification::AutoMem;
     }
-    // Curated CLAUDE.md / AGENTS.md / .coco/rules/*.md by basename.
-    // Cheaper than a recursive containment check — these files have a
-    // stable naming convention.
+    // Curated CLAUDE.md / AGENTS.md / rules/*.md by basename.
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
         match name {
             "CLAUDE.md" | "AGENTS.md" | "CLAUDE.local.md" => {
@@ -118,10 +116,9 @@ pub fn classify_written_path(
             }
             _ => {}
         }
-        // `.coco/rules/<anything>.md`
         if path
             .components()
-            .any(|c| c.as_os_str().to_string_lossy() == ".coco")
+            .any(|c| c.as_os_str().to_string_lossy() == coco_utils_common::COCO_CONFIG_DIR_NAME)
             && path
                 .components()
                 .any(|c| c.as_os_str().to_string_lossy() == "rules")

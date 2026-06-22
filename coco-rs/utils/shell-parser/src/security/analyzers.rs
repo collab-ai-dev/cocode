@@ -763,9 +763,9 @@ impl Analyzer for SensitiveRedirectAnalyzer {
             // Tool config
             ".ripgreprc",
             ".mcp.json",
-            ".coco.json",
             ".claude.json",
         ];
+        let config_file = format!("{}.json", coco_utils_common::COCO_CONFIG_DIR_NAME);
 
         if let Some(tree) = cmd.tree() {
             let redirects = extract_redirects_from_tree(tree, cmd.source());
@@ -777,7 +777,11 @@ impl Analyzer for SensitiveRedirectAnalyzer {
                     continue;
                 }
 
-                for sensitive in SENSITIVE_PATHS.iter() {
+                for sensitive in SENSITIVE_PATHS
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(config_file.as_str()))
+                {
                     if redirect.target.contains(sensitive) {
                         let direction = if redirect.kind.is_output() {
                             "writing to"
@@ -1598,10 +1602,7 @@ impl DangerousPathAnalyzer {
     ];
 
     /// Dangerous config directories.
-    const DANGEROUS_DIRS: &[&str] = &[
-        ".git/", ".git", ".vscode/", ".vscode", ".idea/", ".idea", ".coco/", ".coco", ".claude/",
-        ".claude",
-    ];
+    const DANGEROUS_DIRS: &[&str] = &[".git", ".vscode", ".idea", ".claude"];
 }
 
 impl Analyzer for DangerousPathAnalyzer {
@@ -1645,7 +1646,11 @@ impl Analyzer for DangerousPathAnalyzer {
                 }
 
                 // Check dangerous config directories
-                for &dd in Self::DANGEROUS_DIRS {
+                for dd in Self::DANGEROUS_DIRS
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(coco_utils_common::COCO_CONFIG_DIR_NAME))
+                {
                     if arg == dd
                         || arg.starts_with(&format!("{dd}/"))
                         || arg.ends_with(&format!("/{dd}"))

@@ -51,6 +51,7 @@ coco-messages.workspace = true
 # `CLAUDE.md` "Error Handling" rule. `thiserror` stays for legacy /
 # diagnostic enums that haven't been migrated yet.
 coco-error.workspace = true
+coco-utils-common.workspace = true
 snafu.workspace = true
 
 serde = { workspace = true, features = ["derive"] }

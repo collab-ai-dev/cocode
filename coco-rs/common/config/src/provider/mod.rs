@@ -37,7 +37,7 @@ pub enum ProviderAuth {
     },
 }
 
-/// Wire format for `~/.coco/providers.json` and the per-user
+/// Wire format for `config home/providers.json` and the per-user
 /// `settings.providers.<name>` overlay. Every field is `Option` so an
 /// overlay never silently coerces a non-set field to a serde default.
 ///

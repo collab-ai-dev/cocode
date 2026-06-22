@@ -189,7 +189,7 @@ pub struct ToolUseContext {
     /// Default `false` for unknown / user-declared models so the
     /// runtime falls back to the safe "eager-load every tool"
     /// behavior — the user can opt a custom model in by adding the
-    /// capability via `~/.coco/models.json`.
+    /// capability via `config home/models.json`.
     pub model_supports_client_side_tool_search: bool,
 
     /// Whether this turn has anything ToolSearch can usefully surface:
@@ -273,7 +273,7 @@ pub struct ToolUseContext {
     /// Directories that triggered dynamic skill discovery.
     ///
     /// When Read/Write/Edit touch a file, we walk up to find any
-    /// `.coco/skills/` ancestor dir and record it here. The app/query
+    /// `project config dir/skills/` ancestor dir and record it here. The app/query
     /// layer drains this set after the tool batch completes and asks the
     /// SkillManager to load any newly-discovered dirs.
     ///

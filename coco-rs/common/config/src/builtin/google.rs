@@ -51,7 +51,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
         "gemini-3.1-pro-preview",
         PartialModelInfo {
             display_name: Some("Gemini 3.1 Pro Preview".into()),
-            base_instructions: Some(GEMINI.into()),
+            base_instructions: Some(super::render_instruction_template(GEMINI)),
             context_window: Some(PositiveTokens::new(1_000_000)),
             max_output_tokens: Some(PositiveTokens::new(65_536)),
             capabilities: Some(vec![

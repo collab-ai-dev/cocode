@@ -223,7 +223,7 @@ pub struct QueryEngineConfig {
     /// child `QueryEngineConfig`.
     pub cwd_override: Option<std::path::PathBuf>,
     /// Optional override for the plans directory, relative to the
-    /// project root. Empty = use the default `~/.coco/plans/`.
+    /// project root. Empty = use the default `config home/plans/`.
     /// Validated by [`coco_context::resolve_plans_directory`] to stay
     /// within the project root.
     pub plans_directory: Option<String>,

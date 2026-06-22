@@ -17,7 +17,7 @@
 //! `ProviderConfig.provider_options`; the adapter
 //! (`vercel-ai-anthropic`) parses them via `parse_provider_options`.
 //!
-//! Bridges `~/.coco/settings.json` and `COCO_*` env vars into resolved
+//! Bridges `config home/settings.json` and `COCO_*` env vars into resolved
 //! configs that `services/inference::model_factory::build_anthropic`
 //! consumes through plain struct references — no env reads in the
 //! adapter or in `services/inference` after `RuntimeConfig` is built.

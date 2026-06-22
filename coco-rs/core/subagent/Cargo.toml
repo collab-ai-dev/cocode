@@ -21,6 +21,7 @@ coco-config.workspace = true
 coco-error.workspace = true
 coco-frontmatter.workspace = true
 coco-llm-types.workspace = true
+coco-utils-common.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

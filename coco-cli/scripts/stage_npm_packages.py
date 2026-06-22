@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage one or more Coco npm packages for release."""
+"""Stage one or more npm packages for release."""
 
 from __future__ import annotations
 

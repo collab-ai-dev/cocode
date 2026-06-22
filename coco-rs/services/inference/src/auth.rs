@@ -96,7 +96,7 @@ pub enum LoginMethod {
 /// Auth resolution options.
 #[derive(Debug, Clone, Default)]
 pub struct AuthResolveOptions {
-    /// Config directory for OAuth token persistence (e.g., ~/.coco/).
+    /// Config directory for OAuth token persistence (e.g., config home/).
     pub config_dir: Option<PathBuf>,
     /// API key helper command from settings.
     pub api_key_helper: Option<String>,

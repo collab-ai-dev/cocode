@@ -51,7 +51,7 @@ pub struct SkillRow {
     /// — pre-computed so the filter matcher is one `contains` call
     /// per row.
     pub search_haystack: String,
-    /// Value in `<cwd>/.coco/settings.local.json` right now.
+    /// Value in `project config dir/settings.local.json` right now.
     /// `None` ⇒ key absent.
     pub current_local: Option<SkillOverrideState>,
     /// Project-or-user resolution (without local / policy / flag).

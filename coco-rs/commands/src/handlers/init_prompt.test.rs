@@ -7,7 +7,7 @@ fn human_user_gets_old_prompt() {
         features: Features::with_defaults(),
         project_root: None,
     };
-    assert_eq!(h.select_prompt(), OLD_INIT_PROMPT);
+    assert_eq!(h.select_prompt(), render_prompt_template(OLD_INIT_PROMPT));
 }
 
 #[test]
@@ -19,7 +19,11 @@ fn ant_user_with_new_init_feature_gets_new_prompt() {
         features,
         project_root: None,
     };
-    assert_eq!(h.select_prompt(), NEW_INIT_PROMPT);
+    let prompt = h.select_prompt();
+    assert!(prompt.contains(coco_config::constants::PRODUCT_NAME));
+    assert!(prompt.contains(coco_utils_common::COCO_CONFIG_DIR_NAME));
+    assert!(!prompt.contains("{{PRODUCT_NAME}}"));
+    assert!(!prompt.contains("{{CONFIG_DIR_NAME}}"));
 }
 
 #[test]
@@ -29,7 +33,7 @@ fn ant_user_without_new_init_falls_back_to_old() {
         features: Features::empty(),
         project_root: None,
     };
-    assert_eq!(h.select_prompt(), OLD_INIT_PROMPT);
+    assert_eq!(h.select_prompt(), render_prompt_template(OLD_INIT_PROMPT));
 }
 
 #[tokio::test]

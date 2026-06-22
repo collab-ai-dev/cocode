@@ -2,9 +2,8 @@ use super::*;
 
 #[test]
 fn test_find_coco_home_default() {
-    // When COCO_CONFIG_DIR is not set, should return ~/.coco
     let home = find_coco_home();
-    assert!(home.ends_with(DEFAULT_DIR));
+    assert!(home.ends_with(COCO_CONFIG_DIR_NAME));
 }
 
 #[test]

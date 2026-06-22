@@ -198,9 +198,29 @@ fn destination_label(dest: EditorDestination) -> String {
 
 fn destination_desc(dest: EditorDestination) -> String {
     match dest {
-        EditorDestination::Local => t!("dialog.perms_dest_local_desc").to_string(),
-        EditorDestination::Project => t!("dialog.perms_dest_project_desc").to_string(),
-        EditorDestination::User => t!("dialog.perms_dest_user_desc").to_string(),
+        EditorDestination::Local => t!(
+            "dialog.perms_dest_local_desc",
+            path = format!(
+                "{}/settings.local.json",
+                coco_utils_common::COCO_CONFIG_DIR_NAME
+            )
+            .as_str(),
+        )
+        .to_string(),
+        EditorDestination::Project => t!(
+            "dialog.perms_dest_project_desc",
+            path = format!("{}/settings.json", coco_utils_common::COCO_CONFIG_DIR_NAME).as_str(),
+        )
+        .to_string(),
+        EditorDestination::User => t!(
+            "dialog.perms_dest_user_desc",
+            path = format!(
+                "~/{}/settings.json",
+                coco_utils_common::COCO_CONFIG_DIR_NAME
+            )
+            .as_str(),
+        )
+        .to_string(),
     }
 }
 
