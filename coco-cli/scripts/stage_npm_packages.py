@@ -22,7 +22,7 @@ INSTALL_NATIVE_DEPS = SCRIPT_DIR / "install_native_deps.py"
 # for a given rust-v<version> tag. Change to "rust-release" if the existing
 # rust-release workflow is extended to also build coco-rs artifacts.
 WORKFLOW_NAME = "coco-release"
-GITHUB_REPO = "coco-collab-dev/coco"
+GITHUB_REPO = "coco-collab-dev/cocode"
 
 _SPEC = importlib.util.spec_from_file_location("coco_build_npm_package", BUILD_SCRIPT)
 if _SPEC is None or _SPEC.loader is None:

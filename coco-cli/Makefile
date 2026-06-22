@@ -1,15 +1,15 @@
-# Quick-release helpers for @cocode/cocode-cli.
+# Quick-release helpers for @cocode-cli/cocode-cli.
 # Run from the coco-cli/ directory.
 #
 # Usage:
 #   make build [TARGET=<triple>]    Build coco for one target into vendor/
 #   make smoke                       Run the launcher against the built binary
-#   make pack VERSION=0.1.0          Pack meta + every platform with vendor/
-#   make tag VERSION=0.1.0           git tag coco-vVERSION + push (triggers CI)
-#   make publish VERSION=0.1.0       npm publish all tarballs in correct order
+#   make pack VERSION=0.1.1          Pack meta + every platform with vendor/
+#   make tag VERSION=0.1.1           git tag coco-vVERSION + push (triggers CI)
+#   make publish VERSION=0.1.1       npm publish all tarballs in correct order
 #   make clean                       Remove vendor/ and dist/
 
-VERSION ?= 0.1.0
+VERSION ?= 0.1.1
 TARGET  ?= $(shell rustc -vV 2>/dev/null | sed -n 's/^host: //p')
 
 REPO_ROOT := $(abspath ..)

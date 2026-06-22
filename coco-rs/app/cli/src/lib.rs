@@ -63,9 +63,9 @@ const LONG_VERSION: &str = concat!(
     env!("COCO_BUILD_TIME"),
 );
 
-/// The coco CLI.
+/// The cocode CLI.
 #[derive(Clone, Parser)]
-#[command(name = "coco", about = "AI coding agent", version = LONG_VERSION)]
+#[command(name = "cocode", about = "AI coding agent", version = LONG_VERSION)]
 pub struct Cli {
     /// Prompt to send (non-interactive mode).
     #[arg(short, long)]
