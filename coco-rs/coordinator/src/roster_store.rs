@@ -22,6 +22,7 @@ pub struct CreateTeamResult {
     pub team_name: String,
     pub lead_agent_id: String,
     pub task_list_id: String,
+    pub team_file_path: std::path::PathBuf,
     pub team_file: TeamFile,
 }
 
@@ -66,9 +67,15 @@ pub struct SetMemberActiveRequest {
 pub struct DeleteTeamRequest;
 
 #[derive(Debug, Clone)]
-pub struct DeleteTeamResult {
-    pub team_name: Option<String>,
-    pub deleted: bool,
+pub enum DeleteTeamResult {
+    NoTeam,
+    Blocked {
+        team_name: String,
+        names: Vec<String>,
+    },
+    Deleted {
+        team_name: String,
+    },
 }
 
 /// Roster owner shared by `SwarmAgentHandle` and future coordinator
@@ -113,14 +120,12 @@ impl TeamRosterStore {
         // owns exactly one process, whose `active_team` is the authority.
 
         let team_name = unique_team_name(&request.requested_name);
-        let lead_agent_id = request
-            .leader_agent_id
-            .unwrap_or_else(|| format!("{TEAM_LEAD_NAME}@{team_name}"));
+        let lead_agent_id = format!("{TEAM_LEAD_NAME}@{team_name}");
         let task_list_id = crate::types::sanitize_name(&team_name);
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         let team_file = TeamFile {
             name: team_name.clone(),
-            description: None,
+            description: request.description,
             created_at: now,
             lead_agent_id: lead_agent_id.clone(),
             lead_session_id: Some(request.leader_session_id),
@@ -138,7 +143,11 @@ impl TeamRosterStore {
             members: vec![TeamMember {
                 agent_id: lead_agent_id.clone(),
                 name: TEAM_LEAD_NAME.to_string(),
-                agent_type: Some("team-lead".to_string()),
+                agent_type: Some(
+                    request
+                        .leader_agent_type
+                        .unwrap_or_else(|| "team-lead".to_string()),
+                ),
                 model: request.leader_model,
                 prompt: None,
                 color: None,
@@ -157,6 +166,7 @@ impl TeamRosterStore {
 
         team_file::write_team_file(&team_name, &team_file)
             .map_err(|e| format!("Failed to create team '{team_name}': {e}"))?;
+        let team_file_path = team_file::get_team_file_path(&team_name);
         if let Some(router) = request.task_list_router {
             if let Err(e) = router.route_team_task_list(&task_list_id).await {
                 let _ = team_file::cleanup_team_directories(&team_name);
@@ -176,6 +186,7 @@ impl TeamRosterStore {
             team_name,
             lead_agent_id,
             task_list_id,
+            team_file_path,
             team_file,
         })
     }
@@ -205,7 +216,7 @@ impl TeamRosterStore {
             prompt: Some(request.prompt),
             color: request.color,
             plan_mode_required: request.plan_mode_required,
-            joined_at: chrono::Utc::now().timestamp(),
+            joined_at: chrono::Utc::now().timestamp_millis(),
             tmux_pane_id: String::new(),
             cwd: request.cwd,
             worktree_path: request.worktree_path,
@@ -427,19 +438,12 @@ impl TeamRosterStore {
         notifier: Option<&dyn coco_tool_runtime::TaskListHandle>,
     ) -> Result<DeleteTeamResult, String> {
         let Some(team_name) = self.active_team_name().await else {
-            return Ok(DeleteTeamResult {
-                team_name: None,
-                deleted: false,
-            });
+            return Ok(DeleteTeamResult::NoTeam);
         };
         let non_lead = self.running_non_lead_members().await;
         if !non_lead.is_empty() {
-            let names = non_lead
-                .iter()
-                .map(|m| m.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(format!("Cannot delete team: active members: {names}"));
+            let names = non_lead.into_iter().map(|m| m.name).collect();
+            return Ok(DeleteTeamResult::Blocked { team_name, names });
         }
         let outcome = team_file::cleanup_team_directories(&team_name)
             .map_err(|e| format!("Failed to delete team '{team_name}': {e}"))?;
@@ -450,23 +454,23 @@ impl TeamRosterStore {
             notifier.notify_change().await;
         }
         *self.active_team.write().await = None;
-        Ok(DeleteTeamResult {
-            team_name: Some(team_name),
-            deleted: true,
-        })
+        Ok(DeleteTeamResult::Deleted { team_name })
     }
 }
 
 fn unique_team_name(requested_name: &str) -> String {
-    let base = crate::types::sanitize_name(requested_name);
-    if !team_file::get_team_dir(&base).exists() {
-        return base;
+    if !team_file::get_team_dir(requested_name).exists() {
+        return requested_name.to_string();
     }
-    for suffix in 2..100 {
-        let candidate = format!("{base}-{suffix}");
+    for _ in 0..100 {
+        let candidate = coco_context::generate_word_slug();
         if !team_file::get_team_dir(&candidate).exists() {
             return candidate;
         }
     }
-    format!("{base}-{}", &uuid::Uuid::new_v4().simple().to_string()[..8])
+    format!(
+        "{}-{}",
+        coco_context::generate_word_slug(),
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    )
 }

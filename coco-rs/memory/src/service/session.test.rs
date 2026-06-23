@@ -18,7 +18,12 @@ impl AgentHandle for FailingHandle {
     async fn spawn_agent(&self, _request: AgentSpawnRequest) -> Result<AgentSpawnResponse, String> {
         Err("forced spawn failure".into())
     }
-    async fn send_message(&self, _to: &str, _content: &str) -> Result<String, String> {
+    async fn send_message(
+        &self,
+        _to: &str,
+        _content: &str,
+        _summary: Option<&str>,
+    ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
         Err("unused".into())
     }
     async fn create_team(
@@ -27,7 +32,7 @@ impl AgentHandle for FailingHandle {
     ) -> Result<coco_tool_runtime::CreateTeamResult, String> {
         Err("unused".into())
     }
-    async fn delete_team(&self) -> Result<String, String> {
+    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
         Err("unused".into())
     }
     async fn resume_agent(

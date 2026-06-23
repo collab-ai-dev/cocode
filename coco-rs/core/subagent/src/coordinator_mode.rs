@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use coco_config::EnvKey;
-use coco_types::{Feature, Features, ToolName};
+use coco_types::{Feature, Features, ToolAllowList, ToolName};
 
 use crate::filter::ASYNC_AGENT_ALLOWED_TOOLS;
 use crate::fork;
@@ -31,6 +31,48 @@ const INTERNAL_WORKER_TOOLS: &[&str] = &[
     ToolName::SendMessage.as_str(),
     ToolName::StructuredOutput.as_str(),
 ];
+
+const TEAMMATE_ESSENTIAL_TOOLS: &[&str] = &[
+    ToolName::SendMessage.as_str(),
+    ToolName::TeamCreate.as_str(),
+    ToolName::TeamDelete.as_str(),
+    ToolName::TaskCreate.as_str(),
+    ToolName::TaskGet.as_str(),
+    ToolName::TaskList.as_str(),
+    ToolName::TaskUpdate.as_str(),
+];
+
+/// Tool allow-list for the coordinator lead itself.
+///
+/// This is intentionally name-based so it can run in the registry filter
+/// pipeline before execution lookup. MCP tools are allowed by suffix to
+/// mirror TS' PR-activity subscription affordance.
+pub fn coordinator_allows_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        n if n == ToolName::Agent.as_str()
+            || n == ToolName::TaskStop.as_str()
+            || n == ToolName::SendMessage.as_str()
+            || n == ToolName::StructuredOutput.as_str()
+    ) || name.ends_with("subscribe_pr_activity")
+        || name.ends_with("unsubscribe_pr_activity")
+}
+
+/// Inject team-essential tools into an explicit teammate tool list.
+///
+/// Wildcard definitions stay unrestricted. Explicit lists are modified
+/// in-place, preserving existing order and appending missing essentials in
+/// the fixed TS order.
+pub fn inject_teammate_essential_tools(allowed_tools: &mut ToolAllowList) {
+    let Some(list) = allowed_tools.as_explicit_mut() else {
+        return;
+    };
+    for tool in TEAMMATE_ESSENTIAL_TOOLS {
+        if !list.iter().any(|existing| existing == tool) {
+            list.push((*tool).to_string());
+        }
+    }
+}
 
 /// Whether the env var alone says coordinator mode is requested.
 ///

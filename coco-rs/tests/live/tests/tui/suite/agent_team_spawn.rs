@@ -99,7 +99,12 @@ impl AgentHandle for TestAgentHandle {
         })
     }
 
-    async fn send_message(&self, _to: &str, _content: &str) -> Result<String, String> {
+    async fn send_message(
+        &self,
+        _to: &str,
+        _content: &str,
+        _summary: Option<&str>,
+    ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
         Err("send_message unused in TestAgentHandle".to_string())
     }
 
@@ -107,7 +112,7 @@ impl AgentHandle for TestAgentHandle {
         Err("create_team unused in TestAgentHandle".to_string())
     }
 
-    async fn delete_team(&self) -> Result<String, String> {
+    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
         Err("delete_team unused in TestAgentHandle".to_string())
     }
 

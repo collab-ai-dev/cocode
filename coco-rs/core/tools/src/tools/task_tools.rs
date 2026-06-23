@@ -1206,6 +1206,7 @@ impl Tool for TaskUpdateTool {
                 text: body,
                 from: sender.to_string(),
                 timestamp: now_iso(),
+                summary: Some("task assignment".to_string()),
             };
             // Best effort — failures in mailbox routing shouldn't block
             // the core task update.

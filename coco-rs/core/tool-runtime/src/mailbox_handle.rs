@@ -20,6 +20,8 @@ pub struct MailboxEnvelope {
     pub from: String,
     /// ISO-8601 timestamp.
     pub timestamp: String,
+    /// Optional model/UI summary.
+    pub summary: Option<String>,
 }
 
 /// A message in a recipient's inbox, with its index for mark-read ops.

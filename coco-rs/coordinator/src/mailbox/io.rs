@@ -169,10 +169,13 @@ pub fn mark_messages_as_read_by_predicate(
 /// Clear an agent's inbox.
 pub fn clear_mailbox(agent_name: &str, team_name: &str) -> crate::Result<()> {
     let path = inbox_path(agent_name, team_name);
-    if path.exists() {
-        std::fs::remove_file(&path)?;
+    if !path.exists() {
+        return Ok(());
     }
-    Ok(())
+    with_inbox_lock(&path, |path| {
+        std::fs::write(path, "[]")?;
+        Ok(())
+    })
 }
 
 /// Format teammate messages for display in the conversation.

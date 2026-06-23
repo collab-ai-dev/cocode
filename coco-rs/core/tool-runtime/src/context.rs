@@ -850,6 +850,12 @@ impl ToolUseContext {
         self.tool_search_supported() && self.tool_search_has_candidates
     }
 
+    pub fn is_coordinator_lead(&self) -> bool {
+        coco_subagent::is_coordinator_mode(&self.features)
+            && self.agent_id.is_none()
+            && !self.is_teammate
+    }
+
     /// Create a minimal context for testing.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_default() -> Self {

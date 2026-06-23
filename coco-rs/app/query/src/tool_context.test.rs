@@ -426,7 +426,7 @@ async fn test_factory_defaults_agent_handle_to_noop() {
     let ctx = factory(test_config()).build(Default::default()).await;
     // Call a NoOp method — the NoOp impl returns Err, but the key
     // point is that the handle is installed (not a null pointer).
-    let res = ctx.agent.send_message("any", "ping").await;
+    let res = ctx.agent.send_message("any", "ping", None).await;
     assert!(res.is_err());
 }
 
@@ -446,8 +446,17 @@ async fn test_factory_installs_custom_agent_handle() {
         ) -> Result<AgentSpawnResponse, String> {
             Err("marker".into())
         }
-        async fn send_message(&self, _to: &str, _content: &str) -> Result<String, String> {
-            Ok("marker".into())
+        async fn send_message(
+            &self,
+            _to: &str,
+            _content: &str,
+            _summary: Option<&str>,
+        ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
+            Ok(coco_tool_runtime::TeamMessageDispatchResult {
+                message: "marker".into(),
+                recipients: Vec::new(),
+                routing: None,
+            })
         }
         async fn create_team(
             &self,
@@ -455,7 +464,7 @@ async fn test_factory_installs_custom_agent_handle() {
         ) -> Result<coco_tool_runtime::CreateTeamResult, String> {
             Err("marker".into())
         }
-        async fn delete_team(&self) -> Result<String, String> {
+        async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
             Err("marker".into())
         }
         // resume_agent uses the trait default impl.
@@ -474,8 +483,8 @@ async fn test_factory_installs_custom_agent_handle() {
     let ctx = f.build(Default::default()).await;
     // `send_message` on the marker returns Ok("marker") — proves
     // the factory installed our handle, not the NoOp fallback.
-    let res = ctx.agent.send_message("any", "ping").await;
-    assert_eq!(res.as_deref().ok(), Some("marker"));
+    let res = ctx.agent.send_message("any", "ping", None).await;
+    assert_eq!(res.ok().map(|r| r.message), Some("marker".to_string()));
 }
 
 #[tokio::test]

@@ -40,6 +40,44 @@ fn test_read_write_mailbox() {
     assert_eq!(parsed[0].summary.as_deref(), Some("greeting"));
 }
 
+#[tokio::test]
+async fn clear_mailbox_missing_file_is_noop() {
+    let _teams = crate::test_support::isolate_teams_dir().await;
+    let path = inbox_path("worker", "test-team");
+    assert!(!path.exists());
+
+    clear_mailbox("worker", "test-team").unwrap();
+
+    assert!(
+        !path.exists(),
+        "clear_mailbox should mirror TS and not create a missing inbox"
+    );
+}
+
+#[tokio::test]
+async fn clear_mailbox_writes_empty_array_for_existing_inbox() {
+    let _teams = crate::test_support::isolate_teams_dir().await;
+    write_to_mailbox(
+        "worker",
+        TeammateMessage {
+            from: "leader".to_string(),
+            text: "Hello teammate".to_string(),
+            timestamp: "2026-04-06T10:00:00Z".to_string(),
+            read: false,
+            color: None,
+            summary: Some("greeting".to_string()),
+        },
+        "test-team",
+    )
+    .unwrap();
+
+    clear_mailbox("worker", "test-team").unwrap();
+
+    let path = inbox_path("worker", "test-team");
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "[]");
+    assert!(read_mailbox("worker", "test-team").unwrap().is_empty());
+}
+
 #[test]
 fn test_format_teammate_messages() {
     let messages = vec![TeammateMessage {
