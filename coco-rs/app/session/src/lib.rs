@@ -153,6 +153,10 @@ impl SessionManager {
         }
     }
 
+    pub fn memory_base(&self) -> &Path {
+        &self.memory_base
+    }
+
     /// A store scoped to `cwd`'s project, from the configured backend.
     /// The per-turn engine sources its transcript store here so it shares
     /// the manager's backend (and, for non-disk backends, its state).

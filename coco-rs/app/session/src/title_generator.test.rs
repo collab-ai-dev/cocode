@@ -130,6 +130,7 @@ fn seed_transcript(memory_base: &std::path::Path, sid: &str) {
         message: Some(serde_json::json!({"role":"user","content":"hi"})),
         usage: None,
         model: None,
+        request_id: None,
         cost_usd: None,
         extra: serde_json::Map::new(),
     };

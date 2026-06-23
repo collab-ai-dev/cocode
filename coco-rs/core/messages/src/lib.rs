@@ -9,6 +9,7 @@ pub mod lookups;
 pub mod normalize;
 pub mod pipeline;
 pub mod predicates;
+pub mod resume;
 pub mod token_estimation;
 pub mod wrapping;
 
@@ -82,6 +83,10 @@ pub use normalize::to_llm_prompt;
 pub use normalize::validate_images_for_api;
 pub use predicates::count_tool_calls_in_last_assistant_turn;
 pub use predicates::messages_after_compact_boundary;
+pub use resume::RESUME_CONTINUATION_PROMPT;
+pub use resume::ResumeSanitizationResult;
+pub use resume::TurnInterruptionState;
+pub use resume::sanitize_messages_for_resume;
 pub use token_estimation::estimate_message_tokens;
 pub use token_estimation::estimate_text_tokens;
 pub use token_estimation::estimate_tokens_for_messages;

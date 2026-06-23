@@ -490,6 +490,11 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // chain. Pre-populating the transcript dedup set with the loaded
     // uuids prevents `record_transcript_tail` from re-appending
     // entries that are already on disk.
+    let startup_session_start_source = if resume_plan.is_some() {
+        "resume"
+    } else {
+        "startup"
+    };
     if let Some(plan) = resume_plan {
         tracing::info!(
             target: "coco_cli::resume",
@@ -521,7 +526,9 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // Fire SessionStart hooks once at session bootstrap. Output queues
     // onto the shared sync-hook buffer and surfaces as `hook_*` reminders
     // on the first turn's reminder pass.
-    runtime.fire_session_start_hooks("startup").await;
+    runtime
+        .fire_session_start_hooks(startup_session_start_source)
+        .await;
 
     // TUI users opt into per-spawn periodic AgentSummary timers via
     // `COCO_AGENT_SUMMARY_ENABLE`. Default off keeps LLM cost off the
@@ -2089,40 +2096,17 @@ async fn run_agent_driver(
     info!("Agent driver stopped");
 }
 
-/// Wait up to `coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT`
-/// (60s) for an in-flight extraction fork to finish before the session
-/// shuts down. Silently no-ops when `Feature::AutoMemory` is off.
-///
-/// Covers all three memory subagents:
-/// - **Extract** (`drain` polling, 60s default).
-/// - **Session memory** (`wait_for_extraction`, 15s default). An in-flight SM fork that
-///   doesn't drain leaves a half-written `summary.md` that the next
-///   compact reads as truth.
-/// - **Dream** is intentionally NOT drained — the PID-lock + rollback
-///   path covers the "killed mid-consolidation" case (next session
-///   sees stale mtime, retries cleanly). Blocking shutdown on a
-///   multi-minute consolidation would hurt UX more than the
-///   correctness gain.
+/// Wait for scheduled turn-end extraction/session-memory work before
+/// shutdown. Silently no-ops when auto-memory is inactive.
 async fn drain_pending_memory_extraction(runtime: &Arc<crate::session_runtime::SessionRuntime>) {
     let Some(memory_runtime) = runtime.memory_runtime() else {
         return;
     };
     if !memory_runtime
-        .extract
         .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
         .await
     {
         warn!("auto-memory extraction did not drain within timeout — continuing shutdown");
-    }
-    if !memory_runtime
-        .session_memory
-        .wait_for_extraction(coco_memory::service::session::DEFAULT_WAIT_TIMEOUT)
-        .await
-    {
-        warn!(
-            "session-memory extraction did not drain within timeout — continuing shutdown \
-             (summary.md may be partial; next compact will rebuild)"
-        );
     }
 }
 
@@ -2380,7 +2364,11 @@ async fn dispatch_resume(
                 prior_messages = plan.prior_messages.len(),
                 "slash resume: hydrating session",
             );
+            runtime
+                .fire_session_end_hooks(coco_hooks::orchestration::ExitReason::Resume)
+                .await;
             hydrate_resume_plan(&plan, runtime, event_tx).await;
+            runtime.fire_session_start_hooks("resume").await;
             // Reconcile coordinator mode to the resumed session. Runs at a
             // turn boundary, so the env flip is
             // observed by the next prompt assembly.
@@ -2468,7 +2456,11 @@ async fn dispatch_branch(
             } else {
                 Some(custom_title)
             };
+            runtime
+                .fire_session_end_hooks(coco_hooks::orchestration::ExitReason::Resume)
+                .await;
             hydrate_resume_plan(&plan, runtime, event_tx).await;
+            runtime.fire_session_start_hooks("resume").await;
             // Reconcile coordinator mode onto the fork, same as /resume — the
             // fork inherits the source's persisted mode. Runs at a turn
             // boundary so the next prompt assembly observes the flip.

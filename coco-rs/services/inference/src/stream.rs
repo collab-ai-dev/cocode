@@ -160,6 +160,7 @@ struct AssistantTurnSnapshotState {
     active_text: HashMap<String, usize>,
     active_reasoning: HashMap<String, usize>,
     active_tool: HashMap<String, usize>,
+    response_id: Option<String>,
 }
 
 impl AssistantTurnSnapshotState {
@@ -457,6 +458,11 @@ impl AssistantTurnSnapshotState {
                     },
                 ));
             }
+            LanguageModelV4StreamPart::ResponseMetadata(meta) => {
+                if meta.id.is_some() {
+                    self.response_id = meta.id.clone();
+                }
+            }
 
             // ─── Non-content / lifecycle / unhandled ─────────────────
             //
@@ -511,6 +517,7 @@ pub enum StreamEvent {
         /// variants.
         stop_reason: coco_llm_types::FinishReason,
         metrics: StreamMetrics,
+        response_id: Option<String>,
         snapshot: Arc<AssistantTurnSnapshot>,
     },
     /// Error during streaming.
@@ -723,6 +730,7 @@ fn stream_event_from_part(
                 usage: token_usage_from_provider_usage(&usage),
                 stop_reason: finish_reason,
                 metrics,
+                response_id: turn_state.response_id.clone(),
                 snapshot,
             })
         }

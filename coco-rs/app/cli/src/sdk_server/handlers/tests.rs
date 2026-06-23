@@ -139,6 +139,7 @@ fn seed_session_transcript(
         message: Some(serde_json::json!({"role":"user","content":"seed"})),
         usage: None,
         model: model.map(str::to_string),
+        request_id: None,
         cost_usd: None,
         extra: serde_json::Map::new(),
     };

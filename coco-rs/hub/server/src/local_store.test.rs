@@ -35,6 +35,7 @@ fn seed(memory_base: &Path, cwd: &str, session_id: &str) {
         message: Some(json!({"role":"user","content":[{"type":"text","text":"inspect logs"}]})),
         usage: None,
         model: None,
+        request_id: None,
         cost_usd: None,
         extra: serde_json::Map::new(),
     };
@@ -61,6 +62,7 @@ fn seed(memory_base: &Path, cwd: &str, session_id: &str) {
             cache_creation_tokens: None,
         }),
         model: Some("test-model".into()),
+        request_id: None,
         cost_usd: Some(0.01),
         extra: serde_json::Map::new(),
     };

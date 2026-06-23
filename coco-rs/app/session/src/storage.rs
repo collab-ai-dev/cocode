@@ -117,6 +117,9 @@ pub struct TranscriptEntry {
     /// Model used for this entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Provider response/request id for assistant entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     /// Estimated cost in USD for this entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,

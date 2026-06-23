@@ -191,6 +191,7 @@ fn make_user_entry(uuid: &str, session_id: &str, text: &str) -> TranscriptEntry 
         })),
         usage: None,
         model: None,
+        request_id: None,
         cost_usd: None,
         extra: serde_json::Map::new(),
     }
@@ -220,6 +221,7 @@ fn make_assistant_entry(uuid: &str, parent_uuid: &str, session_id: &str) -> Tran
             cache_creation_tokens: None,
         }),
         model: Some("claude-sonnet-4-6".into()),
+        request_id: None,
         cost_usd: Some(0.003),
         extra: serde_json::Map::new(),
     }
@@ -710,6 +712,7 @@ fn test_transcript_entry_serializes_with_snake_case_keys() {
             cache_creation_tokens: Some(4),
         }),
         model: Some("claude-sonnet-4-6".into()),
+        request_id: None,
         cost_usd: Some(0.5),
         extra: serde_json::Map::new(),
     };
@@ -875,6 +878,39 @@ fn test_transcript_only_flag_survives_jsonl_round_trip() {
         restored.origin,
         Some(coco_messages::MessageOrigin::SlashCommand)
     );
+}
+
+#[test]
+fn test_assistant_request_id_survives_jsonl_round_trip() {
+    let message = coco_messages::Message::Assistant(coco_messages::AssistantMessage {
+        message: coco_messages::LlmMessage::assistant_text("hello"),
+        uuid: uuid::Uuid::new_v4(),
+        model: "claude-sonnet-4-6".into(),
+        stop_reason: None,
+        usage: None,
+        cost_usd: None,
+        request_id: Some("msg_abc123".into()),
+        api_error: None,
+    });
+    let entries = transcript_entries_for_message(
+        &message,
+        TranscriptEntryOptions {
+            session_id: "ss",
+            cwd: "/tmp",
+            timestamp: "2025-01-15T10:00:00Z",
+            parent_uuid: None,
+            logical_parent_uuid: None,
+            is_sidechain: false,
+            agent_id: None,
+            git_branch: None,
+        },
+    );
+
+    let restored = messages_from_transcript_entry(&entries[0]);
+    let coco_messages::Message::Assistant(assistant) = &restored[0] else {
+        panic!("expected assistant");
+    };
+    assert_eq!(assistant.request_id.as_deref(), Some("msg_abc123"));
 }
 
 #[test]

@@ -93,6 +93,73 @@ fn assistant_line(
     serde_json::to_string(&entry).unwrap()
 }
 
+fn assistant_line_with_request(
+    uuid: &str,
+    parent: &str,
+    text: &str,
+    request_id: &str,
+    timestamp: &str,
+) -> String {
+    serde_json::to_string(&json!({
+        "type": "assistant",
+        "uuid": uuid,
+        "parent_uuid": parent,
+        "session_id": "s1",
+        "cwd": "/tmp/p",
+        "timestamp": timestamp,
+        "is_sidechain": false,
+        "request_id": request_id,
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": text}],
+        },
+        "model": "claude-sonnet-4-6",
+    }))
+    .unwrap()
+}
+
+fn tool_result_line(uuid: &str, parent: &str, tool_use_id: &str, timestamp: &str) -> String {
+    serde_json::to_string(&json!({
+        "type": "user",
+        "uuid": uuid,
+        "parent_uuid": parent,
+        "session_id": "s1",
+        "cwd": "/tmp/p",
+        "timestamp": timestamp,
+        "is_sidechain": false,
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "tool_name": "Read",
+                "content": "ok",
+            }],
+        },
+    }))
+    .unwrap()
+}
+
+fn assistant_text(message: &Message) -> Option<&str> {
+    let Message::Assistant(assistant) = message else {
+        return None;
+    };
+    let coco_messages::LlmMessage::Assistant { content, .. } = &assistant.message else {
+        return None;
+    };
+    content.iter().find_map(|part| match part {
+        coco_messages::AssistantContent::Text(text) => Some(text.text.as_str()),
+        _ => None,
+    })
+}
+
+fn tool_use_id(message: &Message) -> Option<&str> {
+    let Message::ToolResult(result) = message else {
+        return None;
+    };
+    Some(result.tool_use_id.as_str())
+}
+
 fn compact_boundary_line(
     uuid: &uuid::Uuid,
     preserved_segment: Option<serde_json::Value>,
@@ -187,6 +254,135 @@ fn test_load_conversation_for_resume_basic_round_trip() {
     // No sidechain in this transcript.
     assert!(!conversation.has_sidechain);
     assert!(conversation.plan_slug.is_none());
+}
+
+#[test]
+fn test_load_session_state_for_resume_recovers_parallel_tool_siblings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("parallel.jsonl");
+    let u1 = uuid::Uuid::new_v4().to_string();
+    let a_main = uuid::Uuid::new_v4().to_string();
+    let a_sibling = uuid::Uuid::new_v4().to_string();
+    let tr_sibling = uuid::Uuid::new_v4().to_string();
+    let tr_main = uuid::Uuid::new_v4().to_string();
+    let a_final = uuid::Uuid::new_v4().to_string();
+    let body = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n",
+        user_line(&u1, "prompt"),
+        assistant_line_with_request(
+            &a_main,
+            &u1,
+            "main tool call",
+            "req-parallel",
+            "2025-01-15T10:00:01Z"
+        ),
+        assistant_line_with_request(
+            &a_sibling,
+            &u1,
+            "sibling tool call",
+            "req-parallel",
+            "2025-01-15T10:00:02Z"
+        ),
+        tool_result_line(
+            &tr_sibling,
+            &a_sibling,
+            "toolu_sibling",
+            "2025-01-15T10:00:03Z"
+        ),
+        tool_result_line(&tr_main, &a_main, "toolu_main", "2025-01-15T10:00:04Z"),
+        assistant_line_with_request(
+            &a_final,
+            &tr_main,
+            "final",
+            "req-final",
+            "2025-01-15T10:00:05Z"
+        ),
+    );
+    std::fs::write(&path, body).unwrap();
+
+    let state = load_session_state_for_resume(&path).expect("resume loads");
+    let summary = state
+        .messages
+        .iter()
+        .filter_map(|message| {
+            assistant_text(message)
+                .map(str::to_string)
+                .or_else(|| tool_use_id(message).map(str::to_string))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        summary,
+        vec![
+            "main tool call",
+            "sibling tool call",
+            "toolu_sibling",
+            "toolu_main",
+            "final",
+        ]
+    );
+}
+
+#[test]
+fn test_load_session_state_for_resume_sorts_recovered_siblings_by_timestamp_then_jsonl_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("parallel-order.jsonl");
+    let u1 = uuid::Uuid::new_v4().to_string();
+    let a_main = uuid::Uuid::new_v4().to_string();
+    let a_late = uuid::Uuid::new_v4().to_string();
+    let a_early = uuid::Uuid::new_v4().to_string();
+    let a_same_1 = uuid::Uuid::new_v4().to_string();
+    let a_same_2 = uuid::Uuid::new_v4().to_string();
+    let tr_main = uuid::Uuid::new_v4().to_string();
+    let a_final = uuid::Uuid::new_v4().to_string();
+    let body = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        user_line(&u1, "prompt"),
+        assistant_line_with_request(&a_main, &u1, "main", "req-parallel", "2025-01-15T10:00:01Z"),
+        assistant_line_with_request(&a_late, &u1, "late", "req-parallel", "2025-01-15T10:00:04Z"),
+        assistant_line_with_request(
+            &a_early,
+            &u1,
+            "early",
+            "req-parallel",
+            "2025-01-15T10:00:02Z"
+        ),
+        assistant_line_with_request(
+            &a_same_1,
+            &u1,
+            "same-1",
+            "req-parallel",
+            "2025-01-15T10:00:03Z"
+        ),
+        assistant_line_with_request(
+            &a_same_2,
+            &u1,
+            "same-2",
+            "req-parallel",
+            "2025-01-15T10:00:03Z"
+        ),
+        tool_result_line(&tr_main, &a_main, "toolu_main", "2025-01-15T10:00:05Z"),
+        assistant_line_with_request(
+            &a_final,
+            &tr_main,
+            "final",
+            "req-final",
+            "2025-01-15T10:00:06Z"
+        ),
+    );
+    std::fs::write(&path, body).unwrap();
+
+    let state = load_session_state_for_resume(&path).expect("resume loads");
+    let assistant_texts = state
+        .messages
+        .iter()
+        .filter_map(assistant_text)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        assistant_texts,
+        vec!["main", "early", "same-1", "same-2", "late", "final"]
+    );
 }
 
 #[test]
@@ -498,15 +694,47 @@ fn test_load_conversation_for_resume_preserves_tool_blocks() {
             ]
         },
     });
+    let tool_result = json!({
+        "type": "user",
+        "uuid": "tr1",
+        "parent_uuid": "a1",
+        "session_id": "s7",
+        "is_sidechain": false,
+        "timestamp": "2025-01-15T10:00:02Z",
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "call_1",
+                "tool_name": "Read",
+                "content": "file contents"
+            }],
+        },
+    });
+    let final_assistant = json!({
+        "type": "assistant",
+        "uuid": "a2",
+        "parent_uuid": "tr1",
+        "session_id": "s7",
+        "is_sidechain": false,
+        "timestamp": "2025-01-15T10:00:03Z",
+        "model": "claude-sonnet-4-6",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "done"}],
+        },
+    });
     let body = format!(
-        "{}\n{}\n",
+        "{}\n{}\n{}\n{}\n",
         user_line("u1", "read foo"),
         serde_json::to_string(&assistant_msg_with_tool).unwrap(),
+        serde_json::to_string(&tool_result).unwrap(),
+        serde_json::to_string(&final_assistant).unwrap(),
     );
     std::fs::write(&path, body).unwrap();
 
     let conversation = load_conversation_for_resume(&path).expect("resume loads");
-    assert_eq!(conversation.messages.len(), 2);
+    assert_eq!(conversation.messages.len(), 4);
 
     // Assistant message must round-trip both the text and the
     // tool_call so resumed turns can match the tool_result against
@@ -574,12 +802,13 @@ fn test_load_conversation_for_resume_tool_result_user_block() {
     std::fs::write(&path, body).unwrap();
 
     let conversation = load_conversation_for_resume(&path).expect("resume loads");
-    assert_eq!(conversation.messages.len(), 3);
+    assert_eq!(conversation.messages.len(), 4);
     let Message::ToolResult(result) = &conversation.messages[2] else {
         panic!("expected tool result, got {:?}", conversation.messages[2]);
     };
     assert_eq!(result.tool_use_id, "toolu_1");
     assert_eq!(result.tool_id.to_string(), "Read");
+    assert!(matches!(conversation.messages[3], Message::Attachment(_),));
 }
 
 #[test]
@@ -619,18 +848,23 @@ fn test_load_session_state_for_resume_splits_multi_tool_result_blocks_with_uniqu
     .unwrap();
 
     let resume_state = load_session_state_for_resume(&path).expect("resume loads");
-    assert_eq!(resume_state.messages.len(), 2);
+    assert_eq!(resume_state.messages.len(), 3);
     let ids = resume_state
         .messages
         .iter()
+        .filter(|message| matches!(message, Message::ToolResult(_)))
         .filter_map(Message::uuid)
         .copied()
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(ids.len(), 2, "split tool results must not share UUIDs");
     for message in &resume_state.messages {
         let Message::ToolResult(result) = message else {
-            panic!("expected tool result, got {message:?}");
+            continue;
         };
         assert_eq!(result.source_assistant_uuid, Some(assistant_uuid));
     }
+    assert!(matches!(
+        resume_state.turn_interruption_state,
+        coco_messages::TurnInterruptionState::InterruptedPrompt { .. }
+    ));
 }

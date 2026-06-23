@@ -37,6 +37,7 @@ fn seed_transcript(memory_base: &Path, sid: &str) -> Arc<coco_paths::ProjectPath
         })),
         usage: None,
         model: None,
+        request_id: None,
         cost_usd: None,
         extra: serde_json::Map::new(),
     };
