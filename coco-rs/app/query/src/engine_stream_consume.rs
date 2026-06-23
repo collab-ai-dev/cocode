@@ -167,6 +167,7 @@ pub(crate) struct StreamConsumed {
     pub(crate) tool_order: Vec<String>,
     pub(crate) tool_buffers: HashMap<String, StreamingToolCallBuffer>,
     pub(crate) outcome: StreamOutcome,
+    pub(crate) response_id: Option<String>,
 }
 
 impl QueryEngine {
@@ -232,6 +233,7 @@ impl QueryEngine {
         // the loop. `Finish` / `Error` event arms overwrite with the
         // appropriate variant before breaking.
         let mut outcome = StreamOutcome::PrematureClose;
+        let mut response_id = None;
 
         loop {
             let event = tokio::select! {
@@ -510,6 +512,7 @@ impl QueryEngine {
                 StreamEvent::Finish {
                     usage,
                     stop_reason,
+                    response_id: finish_response_id,
                     snapshot,
                     ..
                 } => {
@@ -547,6 +550,7 @@ impl QueryEngine {
                         // logged above and is not needed past this seam.
                         stop_reason: stop_reason.unified,
                     };
+                    response_id = finish_response_id;
                     break;
                 }
                 StreamEvent::Error { message, .. } => {
@@ -586,6 +590,7 @@ impl QueryEngine {
             tool_order,
             tool_buffers,
             outcome,
+            response_id,
         }
     }
 

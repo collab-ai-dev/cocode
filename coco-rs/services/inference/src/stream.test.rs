@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4ToolCall;
+use vercel_ai_provider::ResponseMetadata;
 use vercel_ai_provider::StreamError;
 
 use super::StreamEvent;
@@ -34,6 +35,31 @@ fn read_meta(pm: &ProviderMetadata, provider: &str, key: &str) -> Option<String>
         .get(key)
         .and_then(|v| v.as_str())
         .map(str::to_string)
+}
+
+#[tokio::test]
+async fn process_stream_carries_response_metadata_id_to_finish() {
+    let parts = vec![
+        Ok(LanguageModelV4StreamPart::ResponseMetadata(
+            ResponseMetadata::new().with_id("msg_response_1"),
+        )),
+        Ok(LanguageModelV4StreamPart::Finish {
+            usage: Usage::new(1, 2),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
+            provider_metadata: None,
+        }),
+    ];
+    let stream = futures::stream::iter(parts);
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(8);
+    tokio::spawn(process_stream(Box::pin(stream), tx));
+
+    while let Some(event) = rx.recv().await {
+        if let StreamEvent::Finish { response_id, .. } = event {
+            assert_eq!(response_id.as_deref(), Some("msg_response_1"));
+            return;
+        }
+    }
+    panic!("expected finish event");
 }
 
 /// End-to-end: feeding `synthetic_stream_from_content`'s output through

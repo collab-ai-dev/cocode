@@ -894,6 +894,12 @@ pub async fn run_chat_with_options(
     crate::leader_inbox_poller::install_leader(runtime.clone(), None).await;
 
     let session_id = runtime.current_session_id().await;
+    let session_start_source = if opts.session_id_override.is_some() {
+        "resume"
+    } else {
+        "startup"
+    };
+    runtime.fire_session_start_hooks(session_start_source).await;
 
     // Resume hydration: seed transcript dedup + tool-result replacement onto
     // the runtime so `wire_engine` installs them on the engine and the resumed
@@ -1018,19 +1024,12 @@ pub async fn run_chat_with_options(
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     drainer.abort();
 
-    // Wait for any in-flight auto-memory extraction + session-memory
-    // fork to complete before we return so partial writes aren't dropped
-    // on process exit. Drains extraction (60 s) and session memory
-    // (15 s) so a half-written `summary.md` doesn't survive into the
-    // next `--resume`.
+    // Wait for scheduled turn-end extraction/session-memory work before
+    // returning so partial writes aren't dropped on process exit. Auto-dream
+    // remains fire-and-forget like TS.
     if let Some(memory_runtime) = engine.memory_runtime() {
         let _ = memory_runtime
-            .extract
             .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
-            .await;
-        let _ = memory_runtime
-            .session_memory
-            .wait_for_extraction(coco_memory::service::session::DEFAULT_WAIT_TIMEOUT)
             .await;
     }
 

@@ -776,6 +776,7 @@ impl QueryEngine {
                 tool_order,
                 tool_buffers,
                 outcome,
+                response_id,
             } = consumed;
 
             let api_elapsed_ms = api_start.elapsed().as_millis() as i64;
@@ -895,12 +896,7 @@ impl QueryEngine {
                 stop_reason: parsed_stop_reason,
                 usage: Some(usage),
                 cost_usd: None,
-                // Streaming-path response.id is not currently plumbed
-                // through `StreamEvent::Finish`. The marker uses the
-                // anchor index (set by `MessageHistory::anchor_api_response`
-                // after this push), so `request_id` is purely for trace
-                // diagnostics today — `None` here is non-load-bearing.
-                request_id: None,
+                request_id: response_id,
                 api_error: None,
             });
 

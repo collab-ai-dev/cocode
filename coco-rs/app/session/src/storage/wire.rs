@@ -103,6 +103,10 @@ pub fn transcript_entries_for_message(
         message: message_value,
         usage,
         model,
+        request_id: match msg {
+            coco_messages::Message::Assistant(a) => a.request_id.clone(),
+            _ => None,
+        },
         cost_usd,
         extra: user_envelope_extra(msg),
     }]
@@ -302,7 +306,7 @@ fn reconstruct_regular_message(entry: &TranscriptEntry) -> Option<coco_messages:
                     stop_reason: None,
                     usage,
                     cost_usd: entry.cost_usd,
-                    request_id: None,
+                    request_id: entry.request_id.clone(),
                     api_error: None,
                 },
             ))

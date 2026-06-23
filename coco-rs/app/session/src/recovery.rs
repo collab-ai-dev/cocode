@@ -18,6 +18,7 @@ use crate::storage::messages_from_transcript_entry;
 use coco_messages::Message;
 use coco_messages::PreservedSegment;
 use coco_messages::SystemMessage;
+use coco_messages::TurnInterruptionState;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::BufRead;
@@ -31,6 +32,7 @@ pub struct ConversationForResume {
     pub turn_count: i32,
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
+    pub turn_interruption_state: TurnInterruptionState,
     /// Plan slug extracted from transcript (for plan resume).
     pub plan_slug: Option<String>,
     /// Whether the session had sidechain entries.
@@ -48,6 +50,7 @@ pub struct SessionResumeState {
     pub content_replacements: Vec<ContentReplacementRecord>,
     pub agent_content_replacements: HashMap<String, Vec<ContentReplacementRecord>>,
     pub file_history_snapshots: Vec<serde_json::Value>,
+    pub turn_interruption_state: TurnInterruptionState,
     pub model: String,
     pub turn_count: i32,
     pub total_input_tokens: i64,
@@ -76,6 +79,7 @@ pub fn load_conversation_for_resume(
         turn_count: resume_state.turn_count,
         total_input_tokens: resume_state.total_input_tokens,
         total_output_tokens: resume_state.total_output_tokens,
+        turn_interruption_state: resume_state.turn_interruption_state,
         plan_slug: resume_state.plan_slug,
         has_sidechain: resume_state.has_sidechain,
         mode: resume_state.mode,
@@ -230,6 +234,7 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
     } else {
         (0..entries.len()).collect()
     };
+    let chain_indices = recover_parallel_tool_branch_indices(&entries, chain_indices);
 
     // Pass 3: reconstruct typed messages, aggregating model + token +
     // turn counters along the way. `latest_model` uses "newest
@@ -243,9 +248,6 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
 
     for idx in chain_indices {
         let te = &entries[idx];
-        if !te.uuid.is_empty() {
-            selected_chain_uuids.insert(te.uuid.clone());
-        }
         if let Some(m) = &te.model
             && !m.is_empty()
         {
@@ -263,6 +265,10 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
             messages.extend(entry_messages);
         }
     }
+
+    let sanitized = coco_messages::sanitize_messages_for_resume(messages);
+    let messages = sanitized.messages;
+    let turn_interruption_state = sanitized.turn_interruption_state;
 
     for msg in &messages {
         if let Some(uuid) = msg.uuid() {
@@ -328,6 +334,7 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
         content_replacements,
         agent_content_replacements,
         file_history_snapshots,
+        turn_interruption_state,
         model: latest_model,
         turn_count,
         total_input_tokens: total_input,
@@ -434,6 +441,114 @@ fn preserved_segment_uuids(
             return None;
         }
     }
+}
+
+fn recover_parallel_tool_branch_indices(
+    entries: &[TranscriptEntry],
+    chain_indices: Vec<usize>,
+) -> Vec<usize> {
+    if chain_indices.is_empty() {
+        return chain_indices;
+    }
+
+    let chain_set: HashSet<usize> = chain_indices.iter().copied().collect();
+    let mut assistant_groups: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut tool_result_children: HashMap<&str, Vec<usize>> = HashMap::new();
+
+    for (idx, entry) in entries.iter().enumerate() {
+        if entry.entry_type == "assistant"
+            && let Some(request_id) = entry.request_id.as_deref()
+            && !request_id.is_empty()
+        {
+            assistant_groups.entry(request_id).or_default().push(idx);
+        }
+        if entry.entry_type == "user"
+            && is_tool_result_entry(entry)
+            && let Some(parent_uuid) = entry.parent_uuid.as_deref()
+            && !parent_uuid.is_empty()
+        {
+            tool_result_children
+                .entry(parent_uuid)
+                .or_default()
+                .push(idx);
+        }
+    }
+
+    let mut last_group_position: HashMap<&str, usize> = HashMap::new();
+    for (pos, idx) in chain_indices.iter().copied().enumerate() {
+        let entry = &entries[idx];
+        if entry.entry_type == "assistant"
+            && let Some(request_id) = entry.request_id.as_deref()
+            && assistant_groups.contains_key(request_id)
+        {
+            last_group_position.insert(request_id, pos);
+        }
+    }
+
+    let mut out = Vec::with_capacity(chain_indices.len());
+    let mut emitted: HashSet<usize> = HashSet::new();
+    let mut expanded_request_ids: HashSet<&str> = HashSet::new();
+    for (pos, idx) in chain_indices.into_iter().enumerate() {
+        if emitted.insert(idx) {
+            out.push(idx);
+        }
+
+        let entry = &entries[idx];
+        let Some(request_id) = (entry.entry_type == "assistant")
+            .then_some(entry.request_id.as_deref())
+            .flatten()
+        else {
+            continue;
+        };
+        if last_group_position.get(request_id) != Some(&pos)
+            || !expanded_request_ids.insert(request_id)
+        {
+            continue;
+        }
+
+        let mut recovered = Vec::new();
+        if let Some(group) = assistant_groups.get(request_id) {
+            for assistant_idx in group {
+                if !chain_set.contains(assistant_idx) {
+                    recovered.push(*assistant_idx);
+                }
+                if let Some(children) =
+                    tool_result_children.get(entries[*assistant_idx].uuid.as_str())
+                {
+                    recovered.extend(children.iter().copied().filter(|i| !chain_set.contains(i)));
+                }
+            }
+        }
+        recovered.sort_by(|a, b| {
+            entries[*a]
+                .timestamp
+                .cmp(&entries[*b].timestamp)
+                .then_with(|| a.cmp(b))
+        });
+        for recovered_idx in recovered {
+            if emitted.insert(recovered_idx) {
+                out.push(recovered_idx);
+            }
+        }
+    }
+
+    out
+}
+
+fn is_tool_result_entry(entry: &TranscriptEntry) -> bool {
+    entry
+        .message
+        .as_ref()
+        .and_then(|message| message.get("content"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|content| {
+            content.iter().any(|block| {
+                block
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|kind| kind == "tool_result" || kind == "tool-result")
+            })
+        })
 }
 
 fn relink_live_preserved_segment(

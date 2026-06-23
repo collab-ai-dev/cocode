@@ -812,6 +812,7 @@ pub(super) async fn handle_session_resume(
             data: None,
         };
     };
+    let memory_base = manager.memory_base().to_path_buf();
     let manager_arc = Arc::clone(manager);
     // Release the manager read lock before acquiring the session write lock
     // to avoid potential lock-ordering complications in future refactors.
@@ -837,16 +838,15 @@ pub(super) async fn handle_session_resume(
     };
 
     // Load the JSONL transcript so the resumed run sees its own
-    // history. Best-effort: a missing transcript leaves the runtime
-    // with an empty history — the resumed session starts cold rather
-    // than failing the resume call.
+    // history. Resume must fail if the transcript cannot be loaded;
+    // silently starting with empty history makes "resume" behave like
+    // a fresh session under an old id.
     //
     // The transcript lives in the resumed session's own project tree
     // (`<memory_base>/projects/<slug>/<sid>.jsonl`). Route through
     // `resolve_session_file_path` so a linked worktree (whose long cwd
     // path produces a different djb2 slug suffix than its sibling repo)
     // still resolves to the right file.
-    let memory_base = coco_config::global_config::config_home();
     let transcript_path = coco_session::storage::resolve_session_file_path(
         &memory_base,
         &session.id,
@@ -855,26 +855,32 @@ pub(super) async fn handle_session_resume(
     .ok()
     .flatten()
     .map(|r| r.file_path);
-    let conversation = if let Some(transcript_path) = transcript_path.as_ref() {
-        match coco_session::recovery::load_conversation_for_resume(transcript_path) {
-            Ok(r) => Some(r),
-            Err(e) => {
-                warn!(
-                    session_id = %session.id,
-                    error = %e,
-                    "session/resume: transcript load failed; resuming with empty history"
-                );
-                None
-            }
+    let Some(transcript_path) = transcript_path.as_ref() else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: format!(
+                "session/resume: transcript for {} was not found",
+                session.id
+            ),
+            data: None,
+        };
+    };
+    let conversation = match coco_session::recovery::load_conversation_for_resume(transcript_path) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: format!("session/resume: transcript load failed: {e}"),
+                data: None,
+            };
         }
-    } else {
-        None
     };
 
     // Install as the active session. If a session is already active,
     // cancel any in-flight turn and replace it — `session/resume`
     // implicitly archives the prior session.
     let mut slot = ctx.state.session.write().await;
+    let prior_was_active = slot.is_some();
     if let Some(prior) = slot.as_ref()
         && let Some(token) = &prior.active_turn_cancel
     {
@@ -897,6 +903,11 @@ pub(super) async fn handle_session_resume(
     // history + transcript dedup so the next turn's prompt build sees
     // the loaded chain rather than starting cold.
     if let Some(runtime) = ctx.state.session_runtime.read().await.clone() {
+        if prior_was_active {
+            runtime
+                .fire_session_end_hooks(coco_hooks::orchestration::ExitReason::Resume)
+                .await;
+        }
         runtime.start_new_session(session.id.clone()).await;
         if let Some(conversation) = &conversation {
             {
@@ -921,6 +932,7 @@ pub(super) async fn handle_session_resume(
                 .seed_tool_result_replacement_state(&conversation.messages, &session.id, None)
                 .await;
         }
+        runtime.fire_session_start_hooks("resume").await;
     }
 
     info!(

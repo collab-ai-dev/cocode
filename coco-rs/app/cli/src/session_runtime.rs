@@ -825,9 +825,8 @@ impl SessionRuntime {
 
         let config_home = coco_config::global_config::config_home();
         let session_id = session_id_override.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        // Bare mode (`COCO_BARE_MODE` / `--bare`) skips session-start background
-        // housekeeping. Recall / memory_runtime build / snapshot start stay on;
-        // only the fire-and-forget sweeps + SM warm-load are suppressed.
+        // Bare mode (`COCO_BARE_MODE` / `--bare`) disables auto-memory
+        // for this session, matching the TS bare-mode behavior.
         let bare_mode = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode);
         // Session-persistence kill switch: `--no-session-persistence`
         // (print-mode-only, validated at startup) suppresses ALL transcript
@@ -898,10 +897,7 @@ impl SessionRuntime {
         // rendering work without an agent handle.
         let active_shell_tool =
             crate::shell_tool_selection::active_shell_tool_from_runtime(&runtime_config)?;
-        let memory_runtime = if runtime_config
-            .features
-            .enabled(coco_types::Feature::AutoMemory)
-        {
+        let memory_runtime = if runtime_config.memory_activation.active {
             let agent: coco_tool_runtime::AgentHandleRef =
                 Arc::new(coco_tool_runtime::NoOpAgentHandle);
             let mem_cfg = coco_memory::MemoryConfig::from(runtime_config.memory.clone());
@@ -943,7 +939,7 @@ impl SessionRuntime {
             let enumerator_session_id = session_id.clone();
             let enumerator_memory_dir = runtime_arc.personal_dir().to_path_buf();
             // Wire the session enumerator backed by `TranscriptStore`
-            // so per-turn `tick_dream` can list real prior sessions.
+            // so turn-end auto-dream can list real prior sessions.
             // Lists sessions touched since `lastAt`, drops the current
             // session. Invoked only after the time + scan throttle
             // gates pass inside `DreamService` so cost is bounded.
@@ -970,23 +966,18 @@ impl SessionRuntime {
             // call site per slot); swallow the duplicate-install Err so
             // a future double-install in tests doesn't blow up startup.
             let _ = runtime_arc.install_session_enumerator(enumerator);
-            // NOTE: the tick_dream fire-and-forget is intentionally
-            // deferred to AFTER `install_agent` below. Spawning it here
-            // (before the real `SwarmAgentHandle` lands in the slot)
-            // creates a multi-threaded race where the dream task can
-            // read the NoOp handle, fail to spawn the consolidation
-            // subagent, and emit a spurious `AutoDreamFailed` event.
             Some(runtime_arc)
         } else {
-            // Feature gate off — emit MemdirDisabled so dashboards
-            // can split sessions that never bootstrapped memory from
-            // those that did. Emitted directly here instead of through
-            // `MemoryRuntime` because no runtime exists at this point.
+            let reason = runtime_config
+                .memory_activation
+                .disabled_reason
+                .unwrap_or(coco_config::MemoryDisabledReason::FeatureGate)
+                .as_str();
             tracing::info!(
                 target: "coco_memory::telemetry",
                 event_type = "tengu_memdir_disabled",
-                reason = "feature_gate",
-                "auto-memory feature gate off"
+                reason,
+                "auto-memory disabled"
             );
             None
         };
@@ -1007,21 +998,6 @@ impl SessionRuntime {
         if let Some(runtime) = &memory_runtime {
             runtime.install_agent(swarm_agent_handle.clone());
             let _ = runtime.install_side_query(side_query.clone());
-
-            // Fire-and-forget auto-dream gate-check at session start.
-            // Deferred here (vs. inside the runtime build above) so
-            // the task observes the just-installed real
-            // `SwarmAgentHandle` — multi-threaded schedulers were
-            // racing the NoOp slot and emitting spurious
-            // `AutoDreamFailed` events. Skipped in bare mode.
-            if !bare_mode {
-                let dream_clone = runtime.clone();
-                tokio::spawn(async move {
-                    let now_ms = coco_memory::service::dream::DreamService::now_ms();
-                    let outcome = dream_clone.tick_dream(now_ms).await;
-                    tracing::debug!(?outcome, "auto-dream gate check at session start");
-                });
-            }
         }
 
         // Session-memory handle threaded into the engine. Same `Arc`
@@ -1377,9 +1353,7 @@ impl SessionRuntime {
         // (mostly built-in) catalog. Snapshot is reload-able via
         // [`Self::reload_agent_catalog`]; this initial build lives on
         // the blocking pool because the markdown loader is sync IO.
-        let auto_memory_enabled = runtime_config
-            .features
-            .enabled(coco_types::Feature::AutoMemory);
+        let auto_memory_enabled = runtime_config.memory_activation.active;
         // Initial agent-catalog load. SDK-supplied agents from
         // `initialize.agents` get injected here on session start —
         // they live on `SessionRuntime.sdk_supplied_agents` until
@@ -1539,10 +1513,7 @@ impl SessionRuntime {
         let paths = self.agent_search_paths.clone();
         let cwd = std::env::current_dir().unwrap_or_default();
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
-        let auto_memory_enabled = self
-            .runtime_config
-            .features
-            .enabled(coco_types::Feature::AutoMemory);
+        let auto_memory_enabled = self.runtime_config.memory_activation.active;
         // Clone the SDK-supplied agents Vec into the worker. After
         // `set_sdk_supplied_agents` populates the slot, every reload
         // picks up the same set as additional FlagSettings entries.
@@ -3055,6 +3026,36 @@ impl SessionRuntime {
         }
     }
 
+    pub async fn fire_session_end_hooks(&self, reason: coco_hooks::orchestration::ExitReason) {
+        let cur_session_id = self.current_session_id().await;
+        let cfg = self.current_engine_config().await;
+        let ctx = coco_hooks::orchestration::OrchestrationContext {
+            session_id: cur_session_id,
+            cwd: std::env::current_dir().unwrap_or_default(),
+            project_dir: cfg.project_dir.clone(),
+            permission_mode: None,
+            transcript_path: None,
+            agent_id: None,
+            agent_type: None,
+            cancel: self.cancel.clone(),
+            disable_all_hooks: cfg.disable_all_hooks,
+            allow_managed_hooks_only: cfg.allow_managed_hooks_only,
+            attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+            sync_event_sink: None,
+            http_url_allowlist: None,
+            http_env_var_policy: None,
+            async_registry: Some(self.async_hook_registry.clone()),
+            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
+            llm_handle: Some(self.hook_llm_handle.clone()),
+            workspace_trust_accepted: None,
+        };
+        if let Err(e) =
+            coco_hooks::orchestration::execute_session_end(&self.hook_registry, &ctx, reason).await
+        {
+            warn!(error = %e, ?reason, "SessionEnd hook execution failed");
+        }
+    }
+
     /// Fire Setup hooks (`Maintenance` at bootstrap, `Init` at `coco init`).
     ///
     /// Output is fire-and-forget — Setup is observability-only (no blocking,
@@ -3502,11 +3503,15 @@ impl SessionRuntime {
         for skill in coco_plugins::builtin_plugin_skills(&self.config_home) {
             self.skill_manager.register(skill);
         }
+        let mut command_features = runtime_config.features.clone();
+        if !runtime_config.memory_activation.active {
+            command_features.disable(coco_types::Feature::AutoMemory);
+        }
         let registry = coco_commands::build_command_registry(
             &self.skill_manager,
             &plugins,
             coco_types::UserType::from_env(),
-            runtime_config.features.clone(),
+            command_features,
             cwd.to_path_buf(),
             dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
             None,
@@ -3602,38 +3607,8 @@ impl SessionRuntime {
         // Step 1: SessionEnd hooks fire BEFORE the reset, with the bounded
         // SESSION_END timeout (1.5s default;
         // `COCO_SESSIONEND_HOOKS_TIMEOUT_MS` overrides).
-        let cur_session_id = self.current_session_id().await;
-        let cfg = self.current_engine_config().await;
-        let pre_ctx = coco_hooks::orchestration::OrchestrationContext {
-            session_id: cur_session_id,
-            cwd: std::env::current_dir().unwrap_or_default(),
-            project_dir: cfg.project_dir.clone(),
-            permission_mode: None,
-            transcript_path: None,
-            agent_id: None,
-            agent_type: None,
-            cancel: self.cancel.clone(),
-            disable_all_hooks: cfg.disable_all_hooks,
-            allow_managed_hooks_only: cfg.allow_managed_hooks_only,
-            attachment_emitter: coco_messages::AttachmentEmitter::noop(),
-            // SessionEnd doesn't surface as a reminder, so no sink needed here.
-            sync_event_sink: None,
-            http_url_allowlist: None,
-            http_env_var_policy: None,
-            async_registry: Some(self.async_hook_registry.clone()),
-            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
-            llm_handle: Some(self.hook_llm_handle.clone()),
-            workspace_trust_accepted: None,
-        };
-        if let Err(e) = coco_hooks::orchestration::execute_session_end(
-            &self.hook_registry,
-            &pre_ctx,
-            coco_hooks::orchestration::ExitReason::Clear,
-        )
-        .await
-        {
-            warn!(error = %e, "SessionEnd hook execution failed during /clear");
-        }
+        self.fire_session_end_hooks(coco_hooks::orchestration::ExitReason::Clear)
+            .await;
 
         // Step 2: reset session caches. `/clear` clears the CONVERSATION, not
         // the session's permission grants — preserve the current live
