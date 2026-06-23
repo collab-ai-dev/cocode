@@ -75,6 +75,8 @@ members = [
     "core/permissions",
     "core/tool-runtime",
     "core/tools",
+    "core/workflow",
+    "core/workflow-runtime",
     "core/system-reminder",
     "core/subagent",
 
@@ -196,6 +198,8 @@ coco-context = { path = "core/context" }
 coco-permissions = { path = "core/permissions" }
 coco-tool-runtime = { path = "core/tool-runtime" }
 coco-tools = { path = "core/tools" }
+coco-workflow = { path = "core/workflow" }
+coco-workflow-runtime = { path = "core/workflow-runtime" }
 coco-system-reminder = { path = "core/system-reminder" }
 coco-subagent = { path = "core/subagent" }
 
@@ -295,6 +299,7 @@ portable-pty = "0.9.0"
 pretty_assertions = "1.4.1"
 rand = "0.9"
 fs2 = "0.4"
+rquickjs = { version = "0.12", features = ["macro", "futures"] }
 regex = "1.12.2"
 regex-lite = "0.1.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

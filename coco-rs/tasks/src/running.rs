@@ -37,6 +37,7 @@ use coco_types::TaskUsage;
 use coco_types::TeammateExtras;
 use coco_types::TeammateRef;
 use coco_types::TeammateTaskMessage;
+use coco_types::WorkflowProgressEvent;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -115,6 +116,8 @@ pub struct TaskCreateRequest {
     pub status: TaskStatus,
     pub cancel: CancellationToken,
     pub invoking_agent: Option<String>,
+    pub workflow_name: Option<String>,
+    pub workflow_prompt: Option<String>,
     /// Pre-populated shell extras for `TaskType::Shell`. Ignored for
     /// other task types.
     pub shell_extras: Option<ShellExtras>,
@@ -389,7 +392,10 @@ impl TaskManager {
                 continue;
             }
             let task_type = row.extras.task_type();
-            if !matches!(task_type, TaskType::BgAgent | TaskType::Shell) {
+            if !matches!(
+                task_type,
+                TaskType::BgAgent | TaskType::Shell | TaskType::LocalWorkflow
+            ) {
                 continue;
             }
             if !row.extras.set_backgrounded(true) {
@@ -420,6 +426,9 @@ impl TaskManager {
                 Some(shell) => TaskExtras::Shell(shell),
                 None => TaskExtras::shell_default(),
             },
+            TaskType::LocalWorkflow => {
+                TaskExtras::local_workflow(request.workflow_name.clone(), request.workflow_prompt)
+            }
             TaskType::Teammate => {
                 panic!(
                     "create_task called with TaskType::Teammate — use create_teammate_task instead"
@@ -884,13 +893,17 @@ impl TaskManager {
 
     async fn emit_task_started(&self, state: &TaskStateBase) {
         let Some(tx) = &self.event_tx else { return };
+        let workflow = match &state.extras {
+            TaskExtras::LocalWorkflow(extras) => Some(extras),
+            _ => None,
+        };
         let params = TaskStartedParams {
             task_id: state.id.clone(),
             tool_use_id: state.tool_use_id.clone(),
             description: state.description.clone(),
             task_type: Some(task_type_wire_name(state.task_type()).to_string()),
-            workflow_name: None,
-            prompt: None,
+            workflow_name: workflow.and_then(|extras| extras.workflow_name.clone()),
+            prompt: workflow.and_then(|extras| extras.prompt.clone()),
             agent_name: None,
             team_name: None,
             color: None,
@@ -899,6 +912,26 @@ impl TaskManager {
         let _ = tx
             .send(CoreEvent::Protocol(ServerNotification::TaskStarted(params)))
             .await;
+    }
+
+    /// Append a workflow progress delta to a `LocalWorkflow` row's
+    /// `workflow_progress` vec and emit a `task/progress` carrying the
+    /// cumulative vec. No-op for non-`LocalWorkflow` rows or unknown ids.
+    /// (The generic `set_progress`/`emit_progress` paths intentionally drop
+    /// workflow deltas — only `emit_task_progress` carries `workflow_progress`.)
+    pub async fn push_workflow_progress(&self, id: &str, event: WorkflowProgressEvent) {
+        let snapshot = {
+            let mut rows = self.rows.write().await;
+            let Some(row) = rows.get_mut(id) else {
+                return;
+            };
+            let TaskExtras::LocalWorkflow(extras) = &mut row.extras else {
+                return;
+            };
+            extras.workflow_progress.push(event);
+            row.clone()
+        };
+        self.emit_task_progress(id, &snapshot).await;
     }
 
     async fn emit_task_progress(&self, task_id: &str, state: &TaskStateBase) {
@@ -921,7 +954,7 @@ impl TaskManager {
             summary: None,
             agent_type: state.progress().and_then(|p| p.agent_type.clone()),
             recent_activities: Vec::new(),
-            workflow_progress: Vec::new(),
+            workflow_progress: workflow_progress(state),
         };
         let _ = tx
             .send(CoreEvent::Protocol(ServerNotification::TaskProgress(
@@ -996,6 +1029,13 @@ fn current_time_ms() -> i64 {
 /// `coco_types::task_type_wire` constants stay paired with it.
 pub fn task_type_wire_name(task_type: TaskType) -> &'static str {
     task_type.wire_name()
+}
+
+fn workflow_progress(state: &TaskStateBase) -> Vec<WorkflowProgressEvent> {
+    match &state.extras {
+        TaskExtras::LocalWorkflow(extras) => extras.workflow_progress.clone(),
+        _ => Vec::new(),
+    }
 }
 
 /// Map the terminal [`TaskStatus`] onto the SDK-facing

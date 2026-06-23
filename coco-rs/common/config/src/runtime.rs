@@ -31,7 +31,9 @@ use crate::sections::DiagnosticsConfig;
 use crate::sections::LoopConfig;
 use crate::sections::LspConfig;
 use crate::sections::McpRuntimeConfig;
+use crate::sections::MemoryActivation;
 use crate::sections::MemoryConfig;
+use crate::sections::MemoryDisabledReason;
 use crate::sections::PathConfig;
 use crate::sections::ShellConfig;
 use crate::sections::ToolConfig;
@@ -65,6 +67,7 @@ pub struct RuntimeConfig {
     pub shell: ShellConfig,
     pub sandbox: SandboxSettings,
     pub memory: MemoryConfig,
+    pub memory_activation: MemoryActivation,
     pub mcp: McpRuntimeConfig,
     pub web_fetch: WebFetchConfig,
     pub web_search: WebSearchConfig,
@@ -332,6 +335,8 @@ pub fn build_runtime_config_with(
     validate_roles_against_registry(&model_roles, &model_registry)?;
 
     let features = resolve_features(merged, &env, &overrides);
+    let memory = MemoryConfig::resolve_with_sources(&settings, &env);
+    let memory_activation = resolve_memory_activation(&features, &env, &memory);
     let tool_overrides = resolve_main_tool_overrides(&model_roles, &model_registry);
     // `skill_overrides` is read from per-tier raw JSON rather than
     // `merged` — see `SkillOverrideTiers` docs for why this field
@@ -344,7 +349,8 @@ pub fn build_runtime_config_with(
         tool: ToolConfig::resolve(merged, &env),
         shell: ShellConfig::resolve(merged, &env),
         sandbox: SandboxSettings::resolve(merged, &env),
-        memory: MemoryConfig::resolve(merged, &env),
+        memory,
+        memory_activation,
         mcp: McpRuntimeConfig::resolve(merged, &env),
         web_fetch: WebFetchConfig::resolve(merged),
         web_search: WebSearchConfig::resolve(merged),
@@ -426,6 +432,23 @@ fn resolve_features(
         features.set_enabled(*feat, *enabled);
     }
     features
+}
+
+fn resolve_memory_activation(
+    features: &Features,
+    env: &EnvSnapshot,
+    memory: &MemoryConfig,
+) -> MemoryActivation {
+    if !features.enabled(coco_types::Feature::AutoMemory) {
+        return MemoryActivation::disabled(MemoryDisabledReason::FeatureGate);
+    }
+    if env.is_truthy(crate::env::EnvKey::CocoBareMode) {
+        return MemoryActivation::disabled(MemoryDisabledReason::BareMode);
+    }
+    if env.is_truthy(crate::env::EnvKey::CocoRemote) && memory.memory_base_override.is_none() {
+        return MemoryActivation::disabled(MemoryDisabledReason::RemoteWithoutMemoryDir);
+    }
+    MemoryActivation::active()
 }
 
 /// Load a JSON catalog file into a partial overlay map. Missing file

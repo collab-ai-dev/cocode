@@ -10,14 +10,15 @@ use std::sync::Arc;
 fn test_register_all_tools_count() {
     let registry = ToolRegistry::new();
     crate::register_all_tools(&registry);
-    // 41 = 40 baseline + ApplyPatchTool (gated to gpt-5 family via
+    // 42 = 40 baseline + ApplyPatchTool (gated to gpt-5 family via
+    // ToolOverrides) + Workflow (gated by Feature::Workflow).
     // ToolOverrides; registered universally so the layer-2 filter
     // can surface it when the model declares it as extra).
     // `StructuredOutputTool` is intentionally **not** in the baseline:
     // it's conditionally injected via `register_structured_output_tool`
     // only when the non-interactive bootstrap parses `--json-schema`
     // (`specialTools` excludes it).
-    assert_eq!(registry.len(), 41, "expected 41 tools registered");
+    assert_eq!(registry.len(), 42, "expected 42 tools registered");
 }
 
 #[test]
@@ -57,6 +58,7 @@ fn test_lookup_by_name() {
         "Glob",
         "Grep",
         "Agent",
+        "Workflow",
         "WebFetch",
         "LSP",
         "Config",
@@ -102,6 +104,9 @@ fn kairos_brief_and_proactive_tools_are_hidden_by_default() {
         !visible.contains(ToolName::Sleep.as_str()),
         "Sleep must require Feature::Proactive"
     );
+    // Note: Workflow is default-on (Feature::Workflow Stable), so it IS visible
+    // by default — its gating is covered by `workflow_feature_exposes_...` and
+    // `workflow_tool_is_feature_gated` (disable → hidden).
 }
 
 #[test]
@@ -128,6 +133,25 @@ fn kairos_brief_and_proactive_features_expose_their_tools() {
         visible.contains(ToolName::Sleep.as_str()),
         "Feature::Proactive should expose Sleep"
     );
+}
+
+#[test]
+fn workflow_feature_exposes_workflow_tool() {
+    let registry = ToolRegistry::new();
+    crate::register_all_tools(&registry);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Workflow);
+    let mut ctx = ToolUseContext::test_default();
+    ctx.features = Arc::new(features);
+
+    let visible: HashSet<String> = registry
+        .loaded_tools(&ctx)
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+
+    assert!(visible.contains(ToolName::Workflow.as_str()));
+    assert!(registry.get_by_name("RunWorkflow").is_some());
 }
 
 #[test]

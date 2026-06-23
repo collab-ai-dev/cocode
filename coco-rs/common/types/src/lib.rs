@@ -479,6 +479,8 @@ pub use task::TaskType;
 pub use task::TeammateExtras;
 pub use task::TeammateRef;
 pub use task::TeammateTaskMessage;
+pub use task::WorkflowAgentState;
+pub use task::WorkflowProgressEvent;
 pub use task::generate_bg_agent_id;
 pub use task::generate_task_id;
 pub use task::task_type_wire;

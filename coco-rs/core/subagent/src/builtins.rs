@@ -162,6 +162,8 @@ fn read_only_disallowed() -> Vec<String> {
     // These are real ToolName variants — `Edit`/`Write`, NOT `FileEdit`/`FileWrite`.
     vec![
         ToolName::Agent.as_str().into(),
+        ToolName::Workflow.as_str().into(),
+        ToolName::SendUserMessage.as_str().into(),
         ToolName::ExitPlanMode.as_str().into(),
         ToolName::Edit.as_str().into(),
         ToolName::Write.as_str().into(),

@@ -41,6 +41,69 @@ struct CapturingTextModel {
     captured_prompts: Arc<Mutex<Vec<Vec<LlmMessage>>>>,
 }
 
+#[test]
+fn workflow_keyword_matcher_ignores_code_and_paths() {
+    assert!(super::contains_unmasked_workflow_keyword(
+        "please ultracode this"
+    ));
+    assert!(super::contains_unmasked_workflow_keyword(
+        "please ULTRACODE this"
+    ));
+    assert!(!super::contains_unmasked_workflow_keyword(
+        "please inspect `ultracode`"
+    ));
+    assert!(!super::contains_unmasked_workflow_keyword(
+        "open docs/ultracode.md"
+    ));
+    assert!(!super::contains_unmasked_workflow_keyword("/ultracode"));
+    assert!(!super::contains_unmasked_workflow_keyword(
+        "please inspect 'ultracode'"
+    ));
+    assert!(!super::contains_unmasked_workflow_keyword(
+        "please inspect \"ultracode\""
+    ));
+    assert!(!super::contains_unmasked_workflow_keyword(
+        "<tag ultracode=\"true\">"
+    ));
+    assert!(!super::contains_unmasked_workflow_keyword(
+        "please (ultracode) this"
+    ));
+    assert!(!super::contains_unmasked_workflow_keyword(
+        "please [ultracode] this"
+    ));
+    assert!(!super::contains_unmasked_workflow_keyword(
+        "please {ultracode} this"
+    ));
+    assert!(!super::contains_unmasked_workflow_keyword(
+        "run --ultracode"
+    ));
+    // `word.ultracode` (keyword after a dot, at the end) is prose in TS — only
+    // `ultracode.word` member access is suppressed.
+    assert!(super::contains_unmasked_workflow_keyword(
+        "config.ultracode"
+    ));
+    assert!(!super::contains_unmasked_workflow_keyword("ultracode.foo"));
+    assert!(!super::contains_unmasked_workflow_keyword(
+        "search ultracode?mode=1"
+    ));
+    // Sentence-final keyword fires (the trailing '.' is not member access).
+    assert!(super::contains_unmasked_workflow_keyword(
+        "let's ultracode."
+    ));
+    assert!(super::contains_unmasked_workflow_keyword(
+        "ultracode, please"
+    ));
+    // Backslash-glued forms do not fire (path/flag rejection on both sides).
+    assert!(!super::contains_unmasked_workflow_keyword(
+        r"run \ultracode"
+    ));
+    assert!(!super::contains_unmasked_workflow_keyword(r"ultracode\foo"));
+    // `a < b` math must not open a phantom `<` span that swallows the keyword.
+    assert!(super::contains_unmasked_workflow_keyword(
+        "if a < b ultracode now"
+    ));
+}
+
 #[async_trait]
 impl LanguageModel for CapturingTextModel {
     fn provider(&self) -> &str {

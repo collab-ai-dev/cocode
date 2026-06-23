@@ -93,6 +93,8 @@ pub struct AttachmentSettings {
     /// default off. Users flip this in `settings.json` to enable keyword-
     /// driven high-effort routing.
     pub ultrathink_effort: bool,
+    /// Workflow keyword trigger (Claude Code `ultracode`). On by default.
+    pub workflow_keyword_request: bool,
 
     /// Token-usage report (TS `token_usage`). **Opt-in** — TS requires
     /// `CLAUDE_CODE_ENABLE_TOKEN_USAGE_ATTACHMENT` env var. When enabled,
@@ -213,6 +215,7 @@ impl Default for AttachmentSettings {
             verify_plan_reminder: true,
             // Phase 1 — feature-gated in TS, default off in external builds.
             ultrathink_effort: false,
+            workflow_keyword_request: true,
             token_usage: false,
             output_token_usage: false,
             companion_intro: false,

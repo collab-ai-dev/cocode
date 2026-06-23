@@ -55,6 +55,7 @@ fn default_is_fully_enabled_except_feature_gated() {
     assert!(!c.attachments.token_usage);
     assert!(!c.attachments.output_token_usage);
     assert!(!c.attachments.companion_intro);
+    assert!(c.attachments.workflow_keyword_request);
     assert_eq!(c.critical_instruction, None);
 }
 
@@ -114,6 +115,7 @@ fn serde_roundtrip_preserves_all_fields() {
             already_read_file: true,
             edited_image_file: false,
             skill_discovery: false,
+            workflow_keyword_request: true,
         },
         critical_instruction: Some("be careful".to_string()),
     };
@@ -138,6 +140,10 @@ fn serde_roundtrip_preserves_all_fields() {
     assert_eq!(
         back.attachments.verify_plan_reminder,
         original.attachments.verify_plan_reminder
+    );
+    assert_eq!(
+        back.attachments.workflow_keyword_request,
+        original.attachments.workflow_keyword_request
     );
     assert_eq!(back.critical_instruction, original.critical_instruction);
 }

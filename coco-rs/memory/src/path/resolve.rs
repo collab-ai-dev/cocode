@@ -6,12 +6,13 @@
 //!   3. `settings.json` `autoMemoryDirectory`
 //!   4. `<config_home>/projects/<sanitized-canonical-git-root>/memory/`
 //!
-//! Steps (1)-(3) are folded into `coco_config::MemoryConfig::resolve`
-//! by the time we see the runtime adapter — its `directory: Option<PathBuf>`
-//! already represents the result of those overrides. This module
-//! handles step (4): the default layout under the config home, anchored
-//! to the **canonical** git root so worktrees of the same repo share
-//! one memory dir.
+//! Steps (1)-(3) are folded into source-aware
+//! `coco_config::MemoryConfig` resolution by the time we see the runtime
+//! adapter. A full path override lands in `directory`; a remote base
+//! override replaces the config home before this module appends the
+//! project slug. This module handles the default/project layout,
+//! anchored to the **canonical** git root so worktrees of the same repo
+//! share one memory dir.
 //!
 //! The slug computation lives in [`coco_paths::ProjectSlug`] /
 //! [`coco_paths::ProjectPaths`] — see that crate for the
@@ -34,8 +35,8 @@ pub struct MemoryDir {
 impl MemoryDir {
     /// Resolve from a project root.
     ///
-    /// `override_dir` wins outright (settings + env layers already
-    /// merged by `coco_config::MemoryConfig::resolve`). Otherwise the
+    /// `override_dir` wins outright (trusted settings + env layers
+    /// already resolved by `coco_config::MemoryConfig`). Otherwise the
     /// default layout is `<config_home>/projects/<sanitized>/memory/`,
     /// where `sanitized` is derived from the **canonical** git root so
     /// linked worktrees share one memory dir. When `project_root`

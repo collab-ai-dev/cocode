@@ -40,8 +40,8 @@ pub struct MemoryFileInfo {
 /// Resolves the memory base via [`coco_config::global_config::config_home`].
 /// TODO(parity): honour the `COCO_REMOTE_MEMORY_DIR` override here —
 /// currently only the `coco-memory` crate consumes that env override
-/// (via `MemoryConfig::resolve`); the context-layer discovery path
-/// is still hard-coded to `config_home`.
+/// through source-aware `MemoryConfig` resolution; the context-layer
+/// discovery path is still hard-coded to `config_home`.
 pub fn get_memory_files(cwd: &Path) -> Vec<MemoryFileInfo> {
     let mut files = Vec::new();
 

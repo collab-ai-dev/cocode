@@ -137,6 +137,8 @@ pub enum TaskIdentity<'a> {
     RemoteTeammate { session_id: &'a str },
     /// Background shell task. Optional issuing-agent context.
     Shell { issuing_agent: Option<&'a str> },
+    /// Local workflow task. Identity is the row id itself.
+    LocalWorkflow(&'a str),
     /// Dream task (memory consolidation).
     Dream,
 }
@@ -247,6 +249,7 @@ pub struct TeammateTaskMessage {
 pub enum TaskType {
     BgAgent,
     Shell,
+    LocalWorkflow,
     Teammate,
     RemoteTeammate,
     Dream,
@@ -262,6 +265,7 @@ impl TaskType {
         match self {
             Self::Shell => task_type_wire::LOCAL_BASH,
             Self::BgAgent => task_type_wire::LOCAL_AGENT,
+            Self::LocalWorkflow => task_type_wire::LOCAL_WORKFLOW,
             Self::Teammate => task_type_wire::IN_PROCESS_TEAMMATE,
             Self::RemoteTeammate => task_type_wire::REMOTE_AGENT,
             Self::Dream => task_type_wire::DREAM,
@@ -276,6 +280,7 @@ impl TaskType {
 pub mod task_type_wire {
     pub const LOCAL_BASH: &str = "local_bash";
     pub const LOCAL_AGENT: &str = "local_agent";
+    pub const LOCAL_WORKFLOW: &str = "local_workflow";
     pub const IN_PROCESS_TEAMMATE: &str = "in_process_teammate";
     pub const REMOTE_AGENT: &str = "remote_agent";
     pub const DREAM: &str = "dream";
@@ -355,6 +360,87 @@ pub struct ShellExtras {
 /// don't require a wire-format migration.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DreamExtras {}
+
+/// Local workflow task sidecar.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalWorkflowExtras {
+    /// Workflow display name, when known from script metadata or input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_name: Option<String>,
+    /// Prompt passed into the workflow, when supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Streaming workflow state deltas.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflow_progress: Vec<WorkflowProgressEvent>,
+    /// Foreground (false) vs detached (true).
+    #[serde(default)]
+    pub is_backgrounded: bool,
+}
+
+/// Typed workflow progress payload carried by `task/progress`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum WorkflowProgressEvent {
+    WorkflowAgent {
+        index: i32,
+        state: WorkflowAgentState,
+        label: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase_title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase_index: Option<i32>,
+        /// Spawned subagent id (TS `agentId`), once running.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+        /// Resolved model id for the subagent (TS `model`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_calls: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<i64>,
+        /// Cache-replay hit: emitted as `state: done` with `cached: true`
+        /// (TS does not use a distinct state for cache hits).
+        #[serde(default)]
+        cached: bool,
+        /// Truncated preview of the subagent result (TS `resultPreview`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_preview: Option<String>,
+        /// Truncated preview of the subagent prompt (TS `promptPreview`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_preview: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    WorkflowPhase {
+        index: i32,
+        title: String,
+    },
+    WorkflowLog {
+        message: String,
+    },
+}
+
+/// Per-agent lifecycle state. Wire strings mirror TS `workflow_agent.state`
+/// (`start` → `progress` → `done`, or `error`). A cache-replay hit is reported
+/// as `Done` with the sibling `cached: true` flag, not a distinct state.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowAgentState {
+    Start,
+    Progress,
+    Done,
+    Error,
+}
 
 /// Local in-process teammate sidecar.
 ///
@@ -441,6 +527,7 @@ pub struct RemoteTeammateExtras {
 pub enum TaskExtras {
     BgAgent(BgAgentExtras),
     Shell(ShellExtras),
+    LocalWorkflow(LocalWorkflowExtras),
     Teammate(TeammateExtras),
     RemoteTeammate(RemoteTeammateExtras),
     Dream(DreamExtras),
@@ -451,6 +538,7 @@ impl TaskExtras {
         match self {
             Self::BgAgent(_) => TaskType::BgAgent,
             Self::Shell(_) => TaskType::Shell,
+            Self::LocalWorkflow(_) => TaskType::LocalWorkflow,
             Self::Teammate(_) => TaskType::Teammate,
             Self::RemoteTeammate(_) => TaskType::RemoteTeammate,
             Self::Dream(_) => TaskType::Dream,
@@ -527,7 +615,7 @@ impl TaskExtras {
             Self::BgAgent(e) => e.progress.as_ref(),
             Self::Teammate(e) => e.progress.as_ref(),
             Self::RemoteTeammate(e) => e.progress.as_ref(),
-            Self::Shell(_) | Self::Dream(_) => None,
+            Self::Shell(_) | Self::LocalWorkflow(_) | Self::Dream(_) => None,
         }
     }
 
@@ -539,7 +627,7 @@ impl TaskExtras {
             Self::BgAgent(e) => Some(&mut e.progress),
             Self::Teammate(e) => Some(&mut e.progress),
             Self::RemoteTeammate(e) => Some(&mut e.progress),
-            Self::Shell(_) | Self::Dream(_) => None,
+            Self::Shell(_) | Self::LocalWorkflow(_) | Self::Dream(_) => None,
         }
     }
 
@@ -549,6 +637,7 @@ impl TaskExtras {
         match self {
             Self::BgAgent(e) => e.is_backgrounded,
             Self::Shell(e) => e.is_backgrounded,
+            Self::LocalWorkflow(e) => e.is_backgrounded,
             Self::Teammate(_) | Self::RemoteTeammate(_) | Self::Dream(_) => false,
         }
     }
@@ -562,6 +651,10 @@ impl TaskExtras {
                 true
             }
             Self::Shell(e) => {
+                e.is_backgrounded = value;
+                true
+            }
+            Self::LocalWorkflow(e) => {
                 e.is_backgrounded = value;
                 true
             }
@@ -579,6 +672,14 @@ impl TaskExtras {
 
     pub fn dream() -> Self {
         Self::Dream(DreamExtras::default())
+    }
+
+    pub fn local_workflow(workflow_name: Option<String>, prompt: Option<String>) -> Self {
+        Self::LocalWorkflow(LocalWorkflowExtras {
+            workflow_name,
+            prompt,
+            ..LocalWorkflowExtras::default()
+        })
     }
 }
 
@@ -635,6 +736,7 @@ impl TaskStateBase {
     pub fn identity(&self) -> TaskIdentity<'_> {
         match &self.extras {
             TaskExtras::BgAgent(_) => TaskIdentity::BgAgent(self.id.as_str()),
+            TaskExtras::LocalWorkflow(_) => TaskIdentity::LocalWorkflow(self.id.as_str()),
             TaskExtras::Teammate(e) => TaskIdentity::Teammate(&e.agent_ref),
             TaskExtras::RemoteTeammate(e) => TaskIdentity::RemoteTeammate {
                 session_id: e.session_id.as_str(),
@@ -698,6 +800,7 @@ pub fn generate_task_id(task_type: TaskType) -> String {
     match task_type {
         TaskType::BgAgent => generate_bg_agent_id(),
         TaskType::Shell => format!("b{}", random_alphanumeric(8)),
+        TaskType::LocalWorkflow => format!("w{}", random_alphanumeric(8)),
         TaskType::Teammate => format!("t{}", random_alphanumeric(8)),
         TaskType::RemoteTeammate => format!("r{}", random_alphanumeric(8)),
         TaskType::Dream => format!("d{}", random_alphanumeric(8)),

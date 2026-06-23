@@ -15,6 +15,8 @@ coco-types = { workspace = true, features = ["schema"] }
 coco-messages.workspace = true
 coco-subagent.workspace = true
 coco-tool-runtime.workspace = true
+coco-workflow.workspace = true
+coco-workflow-runtime.workspace = true
 coco-context.workspace = true
 coco-permissions.workspace = true
 coco-sandbox.workspace = true

@@ -98,8 +98,8 @@ fn scoped_tool_registry(runtime: &SessionRuntime) -> Result<Arc<ToolRegistry>, S
     Ok(registry)
 }
 
-/// Builtin tools withheld from a Stop-hook agent. The Agent tool is
-/// always withheld. coco-rs has no Workflow tool.
+/// Builtin tools withheld from a Stop-hook agent. Agent and Workflow are
+/// always withheld.
 fn is_agent_hook_disallowed_tool(id: &ToolId) -> bool {
     matches!(
         id,
@@ -108,6 +108,7 @@ fn is_agent_hook_disallowed_tool(id: &ToolId) -> bool {
                 | ToolName::ExitPlanMode
                 | ToolName::EnterPlanMode
                 | ToolName::Agent
+                | ToolName::Workflow
                 | ToolName::AskUserQuestion
                 | ToolName::TaskStop
         )

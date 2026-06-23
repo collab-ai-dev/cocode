@@ -64,6 +64,7 @@ pub enum AttachmentKind {
     UserContext,
     VerifyPlanReminder,
     UltrathinkEffort,
+    WorkflowKeywordRequest,
     TokenUsage,
     BudgetUsd,
     OutputTokenUsage,
@@ -144,6 +145,7 @@ impl AttachmentKind {
             Self::UserContext => "user_context",
             Self::VerifyPlanReminder => "verify_plan_reminder",
             Self::UltrathinkEffort => "ultrathink_effort",
+            Self::WorkflowKeywordRequest => "workflow_keyword_request",
             Self::TokenUsage => "token_usage",
             Self::BudgetUsd => "budget_usd",
             Self::OutputTokenUsage => "output_token_usage",
@@ -223,6 +225,7 @@ impl AttachmentKind {
             | UserContext
             | VerifyPlanReminder
             | UltrathinkEffort
+            | WorkflowKeywordRequest
             | TokenUsage
             | BudgetUsd
             | OutputTokenUsage
@@ -331,6 +334,7 @@ impl AttachmentKind {
             | CompanionIntro
             | TokenUsage
             | UltrathinkEffort
+            | WorkflowKeywordRequest
             | MaxTurnsReached
             | AutoMode
             | AutoModeExit
@@ -421,6 +425,7 @@ impl AttachmentKind {
             Self::UserContext,
             Self::VerifyPlanReminder,
             Self::UltrathinkEffort,
+            Self::WorkflowKeywordRequest,
             Self::TokenUsage,
             Self::BudgetUsd,
             Self::OutputTokenUsage,
@@ -607,6 +612,10 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         },
         UltrathinkEffort => Coverage::Reminder {
             generator: "UltrathinkEffortGenerator",
+        },
+        WorkflowKeywordRequest => Coverage::OutsideReminder {
+            owner_crate: "app/query",
+            note: "ultracode keyword reminder injected when workflow keyword trigger is enabled",
         },
         TokenUsage => Coverage::Reminder {
             generator: "TokenUsageGenerator",

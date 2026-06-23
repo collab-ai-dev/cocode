@@ -31,6 +31,8 @@ pub mod task_tools;
 pub mod tool_search;
 pub mod verify_plan_execution;
 pub mod web;
+pub mod workflow;
+mod workflow_host;
 pub mod worktree;
 pub mod write;
 pub(crate) mod write_permissions;
@@ -48,6 +50,7 @@ pub use write::WriteTool;
 // Web (2)
 pub use web::WebFetchTool;
 pub use web::WebSearchTool;
+pub use workflow::WorkflowTool;
 
 // Agent & Team (5) — schema/validation/result-formatting wrappers only.
 // The catalog (definitions, prompt, filter, fork, transcript) lives in

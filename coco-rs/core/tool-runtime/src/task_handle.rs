@@ -28,6 +28,8 @@ use coco_types::BackendType;
 use coco_types::FieldUpdate;
 use coco_types::TaskStateBase;
 use coco_types::TeammateRef;
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -82,6 +84,17 @@ pub struct BackgroundShellRequest {
     /// Optional sandbox runtime state.
     pub sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
     pub sandbox_bypass: coco_sandbox::SandboxBypass,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowTaskRequest {
+    pub task_id: String,
+    pub run_id: String,
+    pub workflow_name: Option<String>,
+    pub prompt: Option<String>,
+    pub tool_use_id: Option<String>,
+    pub script: String,
+    pub source_path: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -368,6 +381,14 @@ pub trait TaskHandle: Send + Sync {
         Err(unavail())
     }
 
+    async fn register_workflow_task(
+        &self,
+        _request: WorkflowTaskRequest,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> String {
+        String::new()
+    }
+
     // ── BgAgent / Dream registration / progress ──
 
     async fn register_agent_task(
@@ -406,6 +427,15 @@ pub trait TaskHandle: Send + Sync {
     async fn set_progress_summary(&self, _task_id: &str, _summary: String) {}
 
     async fn set_progress(&self, _task_id: &str, _progress: coco_types::TaskProgress) {}
+
+    /// Append a workflow progress delta (phase/log/agent) to a
+    /// `LocalWorkflow` task row and emit it on `task/progress`.
+    async fn push_workflow_progress(
+        &self,
+        _task_id: &str,
+        _event: coco_types::WorkflowProgressEvent,
+    ) {
+    }
 
     async fn mark_completed(&self, _task_id: &str, _payload: AgentCompletionPayload) {}
 

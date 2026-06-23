@@ -117,6 +117,8 @@ pub enum Feature {
     /// if a transcript somehow re-enters it, but nothing in a fresh session
     /// will surface plan mode to the model.
     PlanMode,
+    /// Dynamic local workflow scripts.
+    Workflow,
 
     // /experimental menu (UnderDevelopment, default=false).
     /// Auto-memory subsystem (extraction, team sync, relevant injection).
@@ -362,6 +364,12 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PlanMode,
         key: "plan_mode",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Workflow,
+        key: "workflow",
         stage: Stage::Stable,
         default_enabled: true,
     },

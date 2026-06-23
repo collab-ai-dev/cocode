@@ -19,8 +19,10 @@
 use std::collections::HashSet;
 
 use coco_messages::CostTracker;
+use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
+use coco_messages::wrapping::wrap_in_system_reminder;
 use coco_system_reminder::AttachmentType as ReminderAttachmentType;
 use coco_system_reminder::SystemReminderOrchestrator;
 use coco_system_reminder::TurnReminderInput;
@@ -507,6 +509,17 @@ impl QueryEngine {
         // `AttachmentEmitter` and are drained from the inbox at the
         // head of `inject_reminders_into_history` below — there is no
         // separate mailbox state to thread into `TurnReminderInput`.
+        let workflow_keyword_message = should_fire_workflow_keyword_reminder(
+            reminder_user_input.as_deref(),
+            reminder_orchestrator
+                .config()
+                .attachments
+                .workflow_keyword_request,
+            reminder_loaded_tools
+                .iter()
+                .any(|name| name == ToolName::Workflow.as_str()),
+        )
+        .then(workflow_keyword_reminder_message);
 
         let reminder_input = TurnReminderInput {
             config: reminder_orchestrator.config(),
@@ -742,6 +755,9 @@ impl QueryEngine {
         for msg in batch.model_visible {
             crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
         }
+        if let Some(msg) = workflow_keyword_message {
+            crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+        }
         for msg in &batch.display_only {
             tracing::debug!(
                 target: "coco::system_reminder::display_only",
@@ -782,6 +798,152 @@ fn active_agent_mentions(
                 .then_some(coco_system_reminder::AgentMentionEntry { agent_type })
         })
         .collect()
+}
+
+const WORKFLOW_KEYWORD: &str = "ultracode";
+const WORKFLOW_KEYWORD_REMINDER: &str = "The user included the keyword \"ultracode\", opting this turn into multi-agent orchestration — use the Workflow tool to fulfill the request.";
+
+fn should_fire_workflow_keyword_reminder(
+    user_input: Option<&str>,
+    setting_enabled: bool,
+    workflow_tool_loaded: bool,
+) -> bool {
+    setting_enabled
+        && workflow_tool_loaded
+        && user_input.is_some_and(contains_unmasked_workflow_keyword)
+}
+
+fn workflow_keyword_reminder_message() -> Message {
+    Message::Attachment(coco_messages::AttachmentMessage::api(
+        coco_types::AttachmentKind::WorkflowKeywordRequest,
+        LlmMessage::user_text(wrap_in_system_reminder(WORKFLOW_KEYWORD_REMINDER)),
+    ))
+}
+
+/// Faithful port of claude-code's `matchKeyword` (obf `hho`,
+/// cli_inner_pretty.js:464214-464253), specialized to the `ultracode` keyword.
+/// Returns true iff the keyword appears as bare prose: not inside a masked
+/// code/quote/bracket span and not glued to a path/flag character. Operates
+/// over Unicode scalars (close enough to TS's UTF-16 indexing for the ASCII
+/// keyword and the BMP delimiters in play).
+fn contains_unmasked_workflow_keyword(input: &str) -> bool {
+    // Slash commands are not prose (TS @464216 — note: no trimming).
+    if input.starts_with('/') {
+        return false;
+    }
+    let chars: Vec<char> = input.chars().collect();
+    let keyword: Vec<char> = WORKFLOW_KEYWORD.chars().collect();
+    let klen = keyword.len();
+    if chars.len() < klen {
+        return false;
+    }
+    let masked = workflow_keyword_masked_spans(&chars);
+    for start in 0..=chars.len() - klen {
+        let end = start + klen;
+        if !chars[start..end]
+            .iter()
+            .zip(keyword.iter())
+            .all(|(c, k)| c.eq_ignore_ascii_case(k))
+        {
+            continue;
+        }
+        // ASCII `\b` word boundary (JS regex, no `u` flag) on both sides.
+        if start > 0 && is_ascii_word_char(chars[start - 1]) {
+            continue;
+        }
+        if end < chars.len() && is_ascii_word_char(chars[end]) {
+            continue;
+        }
+        // Hit starts inside a masked span → skip (TS @464245).
+        if masked.iter().any(|(s, e)| start >= *s && start < *e) {
+            continue;
+        }
+        let before = start.checked_sub(1).map(|i| chars[i]);
+        let after = chars.get(end).copied();
+        // Glued to a path/flag char before / after (TS @464248-464249).
+        if matches!(before, Some('/' | '\\' | '-')) {
+            continue;
+        }
+        if matches!(after, Some('/' | '\\' | '-' | '?')) {
+            continue;
+        }
+        // Member access / filename `ultracode.foo` (TS @464250).
+        if after == Some('.') && chars.get(end + 1).copied().is_some_and(is_word_char) {
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+/// Pass 1 of `matchKeyword`: a depth-1 delimiter scan recording the masked
+/// `[start, end)` spans (code spans, quotes, bracket pairs). Mirrors TS
+/// @464222-464237 — first-close (NOT balanced nesting), the `[[` span reset,
+/// the `<`/`'` open guards, and the apostrophe-in-contraction close guard.
+fn workflow_keyword_masked_spans(chars: &[char]) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut open: Option<char> = None;
+    let mut span_start = 0usize;
+    for (i, &ch) in chars.iter().enumerate() {
+        if let Some(delim) = open {
+            // `[[` resets the span start (TS @464224).
+            if delim == '[' && ch == '[' {
+                span_start = i;
+                continue;
+            }
+            if ch != keyword_delimiter_close(delim) {
+                continue;
+            }
+            // A `'` only closes when the next char is not a word char, so an
+            // apostrophe in a contraction does not end the span (TS @464229).
+            if delim == '\'' && chars.get(i + 1).copied().is_some_and(is_word_char) {
+                continue;
+            }
+            spans.push((span_start, i + 1));
+            open = None;
+        } else if keyword_delimiter_opens(chars, i) {
+            open = Some(ch);
+            span_start = i;
+        }
+    }
+    spans
+}
+
+/// Whether the char at `i` opens a masked span (TS @464232-464234): `<` opens
+/// only before a tag-ish char `[a-zA-Z/]`, `'` only after a non-word char, and
+/// every other registered delimiter (backtick, `"`, `{`, `[`, `(`) opens
+/// unconditionally.
+fn keyword_delimiter_opens(chars: &[char], i: usize) -> bool {
+    match chars[i] {
+        '<' => chars
+            .get(i + 1)
+            .copied()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '/'),
+        '\'' => !(i > 0 && is_word_char(chars[i - 1])),
+        '`' | '"' | '{' | '[' | '(' => true,
+        _ => false,
+    }
+}
+
+fn keyword_delimiter_close(open: char) -> char {
+    match open {
+        '<' => '>',
+        '{' => '}',
+        '[' => ']',
+        '(' => ')',
+        // backtick, '"', and '\'' close on themselves.
+        other => other,
+    }
+}
+
+/// JS ASCII `\b` word char (`[A-Za-z0-9_]`, no `u` flag).
+fn is_ascii_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Unicode word char `[\p{L}\p{N}_]` used by the `'`/`.` guards (TS @464220).
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 /// Tool names the assistant successfully invoked since the previous

@@ -19,6 +19,8 @@ pub const ALL_AGENT_DISALLOWED_TOOLS: &[&str] = &[
     ToolName::ExitPlanMode.as_str(),
     ToolName::EnterPlanMode.as_str(),
     ToolName::Agent.as_str(),
+    ToolName::Workflow.as_str(),
+    ToolName::SendUserMessage.as_str(),
     ToolName::AskUserQuestion.as_str(),
     ToolName::TaskStop.as_str(),
 ];

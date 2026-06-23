@@ -321,6 +321,7 @@ pub(super) fn handle(
             }
             let kind = match p.task_type.as_deref() {
                 Some(s) if s == task_type_wire::LOCAL_BASH => TaskEntryKind::Shell,
+                Some(s) if s == task_type_wire::LOCAL_WORKFLOW => TaskEntryKind::Other,
                 Some(s)
                     if s == task_type_wire::LOCAL_AGENT
                         || s == task_type_wire::IN_PROCESS_TEAMMATE
@@ -452,6 +453,12 @@ pub(super) fn handle(
                 .find(|t| t.task_id == p.task_id)
             {
                 task.description = p.description.clone();
+                // Surface the latest workflow phase/agent/log as the live task
+                // description so a running `LocalWorkflow` shows progress in the
+                // task panel.
+                if let Some(summary) = latest_workflow_progress_summary(&p.workflow_progress) {
+                    task.description = summary;
+                }
             }
             // BgAgent task IDs are also subagent IDs (see `TaskStateBase
             // ::identity` in coco-types). Mirror the progress counters
@@ -1260,6 +1267,27 @@ fn token_usage_from_session_snapshot(
         cache_read_tokens: snapshot.totals.cache_read_input_tokens,
         cache_creation_tokens: snapshot.totals.cache_creation_input_tokens,
     }
+}
+
+/// A one-line summary of the most recent workflow progress event, for the task
+/// panel's live description.
+fn latest_workflow_progress_summary(
+    events: &[coco_types::WorkflowProgressEvent],
+) -> Option<String> {
+    use coco_types::WorkflowAgentState;
+    use coco_types::WorkflowProgressEvent;
+    events.last().map(|event| match event {
+        WorkflowProgressEvent::WorkflowPhase { title, .. } => format!("▸ {title}"),
+        WorkflowProgressEvent::WorkflowAgent { label, state, .. } => {
+            let verb = match state {
+                WorkflowAgentState::Start | WorkflowAgentState::Progress => "running",
+                WorkflowAgentState::Done => "done",
+                WorkflowAgentState::Error => "error",
+            };
+            format!("{label} — {verb}")
+        }
+        WorkflowProgressEvent::WorkflowLog { message } => message.clone(),
+    })
 }
 
 #[cfg(test)]

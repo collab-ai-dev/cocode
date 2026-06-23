@@ -1396,7 +1396,7 @@ pub struct TaskProgressParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_activities: Vec<crate::task::TaskActivity>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub workflow_progress: Vec<serde_json::Value>,
+    pub workflow_progress: Vec<crate::task::WorkflowProgressEvent>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

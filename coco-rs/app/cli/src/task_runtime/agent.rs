@@ -11,7 +11,7 @@ use coco_tasks::{
 };
 use coco_tool_runtime::{
     AgentCompletionPayload, AgentRegistration, TaskHandle, TeammateTaskRegistration,
-    TeammateTaskUpdate,
+    TeammateTaskUpdate, WorkflowTaskRequest,
 };
 use coco_types::{TaskStatus, TaskType};
 use tokio::sync::Notify;
@@ -117,6 +117,8 @@ impl TaskRuntime {
                 status: TaskStatus::Running,
                 cancel: cancel.clone(),
                 invoking_agent: invoking_agent.map(String::from),
+                workflow_name: None,
+                workflow_prompt: None,
                 shell_extras: None,
             })
             .await;
@@ -370,6 +372,80 @@ impl TaskHandle for TaskRuntime {
         )
         .await
     }
+
+    /// Dormant launch seam for the future local-workflow runtime driver.
+    ///
+    /// Persists the script and creates a `Running` backgrounded
+    /// `LocalWorkflow` task row. The current stubbed `WorkflowTool` does **not**
+    /// call this — it returns an honest error instead of launching — so no task
+    /// is created until the JS runtime lands and a driver wires this up.
+    async fn register_workflow_task(
+        &self,
+        request: WorkflowTaskRequest,
+        cancel: CancellationToken,
+    ) -> String {
+        let task_id = request.task_id;
+        let dto = self.disk.get_or_create(&task_id).await;
+        let output_path = dto.path().display().to_string();
+        let script_path = dto.path().with_extension("workflow.js");
+        if let Some(parent) = script_path.parent()
+            && let Err(error) = tokio::fs::create_dir_all(parent).await
+        {
+            warn!(
+                target: "coco::task_runtime",
+                task_id = %task_id,
+                error = %error,
+                "failed to create workflow script directory"
+            );
+        }
+        if let Err(error) = tokio::fs::write(&script_path, request.script.as_bytes()).await {
+            warn!(
+                target: "coco::task_runtime",
+                task_id = %task_id,
+                script_path = %script_path.display(),
+                error = %error,
+                "failed to persist workflow script"
+            );
+        }
+        let description = request
+            .workflow_name
+            .clone()
+            .unwrap_or_else(|| "local workflow".to_string());
+        let assigned = self
+            .manager
+            .create_task(TaskCreateRequest {
+                task_id: task_id.clone(),
+                task_type: TaskType::LocalWorkflow,
+                description,
+                output_file: Some(output_path.clone()),
+                tool_use_id: request.tool_use_id,
+                is_backgrounded: true,
+                status: TaskStatus::Running,
+                cancel,
+                invoking_agent: None,
+                workflow_name: request.workflow_name,
+                workflow_prompt: request.prompt,
+                shell_extras: None,
+            })
+            .await;
+        debug_assert_eq!(assigned, task_id);
+        dto.append(&format!(
+            "Workflow run {} registered.\nScript: {}\n\n",
+            request.run_id,
+            script_path.display()
+        ));
+        let _ = dto.flush().await;
+        info!(
+            target: "coco::task_runtime",
+            task_id = %task_id,
+            run_id = %request.run_id,
+            task_type = "local_workflow",
+            output_file = %output_path,
+            "workflow task registered"
+        );
+        task_id
+    }
+
     async fn append_output(&self, task_id: &str, chunk: &str) {
         TaskRuntime::append_output(self, task_id, chunk).await
     }
@@ -378,6 +454,13 @@ impl TaskHandle for TaskRuntime {
     }
     async fn set_progress(&self, task_id: &str, progress: coco_types::TaskProgress) {
         self.manager.set_progress(task_id, progress).await;
+    }
+    async fn push_workflow_progress(
+        &self,
+        task_id: &str,
+        event: coco_types::WorkflowProgressEvent,
+    ) {
+        self.manager.push_workflow_progress(task_id, event).await;
     }
     async fn mark_completed(&self, task_id: &str, payload: AgentCompletionPayload) {
         TaskRuntime::mark_completed(self, task_id, payload).await
@@ -420,6 +503,8 @@ impl TaskHandle for TaskRuntime {
                 status: TaskStatus::Running,
                 cancel,
                 invoking_agent: None,
+                workflow_name: None,
+                workflow_prompt: None,
                 shell_extras: None,
             })
             .await;

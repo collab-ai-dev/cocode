@@ -38,8 +38,9 @@ pub enum ToolName {
     // Web (2)
     WebFetch,
     WebSearch,
-    // Agent & Team (5)
+    // Agent, Workflow & Team (6)
     Agent,
+    Workflow,
     Skill,
     SendMessage,
     TeamCreate,
@@ -106,6 +107,7 @@ impl ToolName {
             Self::WebFetch => "WebFetch",
             Self::WebSearch => "WebSearch",
             Self::Agent => "Agent",
+            Self::Workflow => "Workflow",
             Self::Skill => "Skill",
             Self::SendMessage => "SendMessage",
             Self::TeamCreate => "TeamCreate",
@@ -223,6 +225,7 @@ impl FromStr for ToolName {
             "WebFetch" => Ok(Self::WebFetch),
             "WebSearch" => Ok(Self::WebSearch),
             "Agent" => Ok(Self::Agent),
+            "Workflow" | "RunWorkflow" => Ok(Self::Workflow),
             "Skill" => Ok(Self::Skill),
             "SendMessage" => Ok(Self::SendMessage),
             "TeamCreate" => Ok(Self::TeamCreate),
@@ -268,11 +271,13 @@ impl FromStr for ToolName {
 ///
 /// Aliases:
 /// - `Task` → `Agent`
+/// - `RunWorkflow` → `Workflow`
 /// - `KillShell` → `TaskStop`
 /// - `AgentOutputTool` / `BashOutputTool` → `TaskOutput`
 pub fn normalize_legacy_tool_name(name: &str) -> &str {
     match name {
         "Task" => "Agent",
+        "RunWorkflow" => "Workflow",
         "KillShell" => "TaskStop",
         "AgentOutputTool" | "BashOutputTool" => "TaskOutput",
         other => other,
@@ -286,6 +291,7 @@ pub fn normalize_legacy_tool_name(name: &str) -> &str {
 pub fn legacy_tool_name_aliases_of(canonical: &str) -> &'static [&'static str] {
     match canonical {
         "Agent" => &["Task"],
+        "Workflow" => &["RunWorkflow"],
         "TaskStop" => &["KillShell"],
         "TaskOutput" => &["AgentOutputTool", "BashOutputTool"],
         _ => &[],

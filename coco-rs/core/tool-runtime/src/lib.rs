@@ -178,6 +178,7 @@ pub use task_handle::TeammateTaskRegistration;
 pub use task_handle::TeammateTaskUpdate;
 pub use task_handle::TerminalOutputs;
 pub use task_handle::TerminalSignal;
+pub use task_handle::WorkflowTaskRequest;
 pub use task_list_handle::InMemoryTaskListHandle;
 pub use task_list_handle::InMemoryTodoListHandle;
 pub use task_list_handle::NoOpTaskListHandle;
