@@ -1,7 +1,7 @@
 //! Tests for ToolRegistry, focusing on the B3.3 MCP naming convention
 //! enforcement (`mcp__<server>__<tool>`) and deregister cleanup.
 
-use super::ToolRegistry;
+use super::{ToolLookup, ToolRegistry};
 use crate::traits::DescriptionOptions;
 use crate::traits::DynTool;
 use crate::traits::McpToolInfo;
@@ -10,7 +10,41 @@ use coco_messages::ToolResult;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use serde_json::Value;
+use std::ffi::OsString;
 use std::sync::Arc;
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct CoordinatorModeEnvGuard {
+    previous: Option<OsString>,
+}
+
+impl CoordinatorModeEnvGuard {
+    fn set() -> Self {
+        let key = "COCO_COORDINATOR_MODE";
+        let previous = std::env::var_os(key);
+        // SAFETY: tests that mutate this process-global env var hold ENV_LOCK.
+        unsafe { std::env::set_var(key, "1") };
+        Self { previous }
+    }
+}
+
+impl Drop for CoordinatorModeEnvGuard {
+    fn drop(&mut self) {
+        let key = "COCO_COORDINATOR_MODE";
+        match self.previous.take() {
+            Some(value) => {
+                // SAFETY: tests that mutate this process-global env var hold ENV_LOCK.
+                unsafe { std::env::set_var(key, value) };
+            }
+            None => {
+                // SAFETY: tests that mutate this process-global env var hold ENV_LOCK.
+                unsafe { std::env::remove_var(key) };
+            }
+        }
+    }
+}
 
 /// Minimal test tool with configurable name + optional MCP info. Used
 /// to simulate MCP-backed tools, built-in tools, and edge cases without
@@ -374,6 +408,50 @@ fn pipeline_agent_filter_narrows() {
             .map(ToString::to_string)
             .collect();
     assert_eq!(visible, expected);
+}
+
+#[test]
+fn coordinator_lead_filter_allows_pr_activity_mcp_in_schema_and_lookup() {
+    let _env_lock = ENV_LOCK.lock().unwrap();
+    let _env = CoordinatorModeEnvGuard::set();
+    let reg = ToolRegistry::new();
+    reg.register(builtin(ToolName::Agent, true, None));
+    reg.register(builtin(ToolName::Read, true, None));
+    reg.register(mcp_stub(
+        "subscribe_pr_activity",
+        "github",
+        "subscribe_pr_activity",
+    ));
+
+    let mut features = coco_types::Features::with_defaults();
+    features.enable(coco_types::Feature::AgentTeams);
+    let ctx = crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(features),
+        Arc::new(coco_types::ToolOverrides::none()),
+        coco_types::ToolFilter::unrestricted(),
+        coco_types::PermissionMode::Default,
+    );
+    assert!(ctx.is_coordinator_lead());
+
+    let visible = names(&reg.loaded_tools(&ctx));
+    assert!(visible.contains(ToolName::Agent.as_str()));
+    assert!(visible.contains("subscribe_pr_activity"));
+    assert!(!visible.contains(ToolName::Read.as_str()));
+
+    assert!(matches!(
+        reg.lookup_loaded(
+            &ToolId::Mcp {
+                server: "github".into(),
+                tool: "subscribe_pr_activity".into()
+            },
+            &ctx
+        ),
+        ToolLookup::Loaded(_)
+    ));
+    assert!(matches!(
+        reg.lookup_loaded(&ToolId::Builtin(ToolName::Read), &ctx),
+        ToolLookup::Unavailable
+    ));
 }
 
 /// End-to-end design-doc §8 trace: gpt-5 + Plan mode.

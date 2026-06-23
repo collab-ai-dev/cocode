@@ -53,6 +53,21 @@ use crate::runner::SpawnConfig;
 use crate::teammate::resolve_teammate_model;
 use crate::types::TeamManager;
 
+fn teammate_allowed_tools(definition: Option<&coco_types::AgentDefinition>) -> Vec<String> {
+    let Some(definition) = definition else {
+        return Vec::new();
+    };
+    let mut allowed = definition.allowed_tools.clone();
+    coco_subagent::inject_teammate_essential_tools(&mut allowed);
+    match allowed {
+        coco_types::ToolAllowList::Explicit(list) => coco_subagent::parse_tool_allow_list(&list)
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        coco_types::ToolAllowList::Wildcard => Vec::new(),
+    }
+}
+
 /// AgentHandle implementation backed by the swarm infrastructure.
 ///
 /// The bridge between the tool layer (AgentTool) and the state layer
@@ -495,6 +510,7 @@ impl SwarmAgentHandle {
             .set_member_color(team_name, &reservation.agent_id, color.as_str().to_string())
             .await?;
 
+        let allowed_tools = teammate_allowed_tools(request.definition.as_deref());
         let config = SpawnConfig {
             name: name.to_string(),
             team_name: team_name.to_string(),
@@ -504,7 +520,7 @@ impl SwarmAgentHandle {
             model: Some(resolved_model.model.clone()),
             working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
             system_prompt: teammate_system_prompt,
-            allowed_tools: Vec::new(),
+            allowed_tools,
             allow_permission_prompts: true,
             // Static effort lives on `AgentDefinition.effort`. Read it
             // through here (was: blank pass-through of unset
@@ -900,7 +916,12 @@ impl AgentHandle for SwarmAgentHandle {
             .await
     }
 
-    async fn send_message(&self, to: &str, content: &str) -> Result<String, String> {
+    async fn send_message(
+        &self,
+        to: &str,
+        content: &str,
+        summary: Option<&str>,
+    ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
         let team_name = {
             let tm = self.team_manager.read().await;
             tm.as_ref()
@@ -923,17 +944,21 @@ impl AgentHandle for SwarmAgentHandle {
                     read: false,
                     color: crate::pane::layout::get_teammate_color(&from)
                         .map(|c| c.as_str().to_string()),
-                    summary: None,
+                    summary: summary.map(str::to_string),
                 };
                 if write_to_mailbox(recipient, message, &team_name).is_ok() {
                     sent.push(recipient.clone());
                 }
             }
-            return Ok(format!(
-                "Broadcast from '{from}' to {} recipients: {}",
-                sent.len(),
-                sent.join(", ")
-            ));
+            return Ok(coco_tool_runtime::TeamMessageDispatchResult {
+                message: format!(
+                    "Broadcast from '{from}' to {} recipients: {}",
+                    sent.len(),
+                    sent.join(", ")
+                ),
+                recipients: sent,
+                routing: Some("mailbox".to_string()),
+            });
         }
 
         let message = TeammateMessage {
@@ -942,13 +967,17 @@ impl AgentHandle for SwarmAgentHandle {
             timestamp: chrono::Utc::now().to_rfc3339(),
             read: false,
             color: crate::pane::layout::get_teammate_color(&from).map(|c| c.as_str().to_string()),
-            summary: None,
+            summary: summary.map(str::to_string),
         };
 
         write_to_mailbox(to, message, &team_name)
             .map_err(|e| format!("Failed to send message to '{to}': {e}"))?;
 
-        Ok(format!("Message sent from '{from}' to '{to}'"))
+        Ok(coco_tool_runtime::TeamMessageDispatchResult {
+            message: format!("Message sent from '{from}' to '{to}'"),
+            recipients: Vec::new(),
+            routing: Some("mailbox".to_string()),
+        })
     }
 
     async fn create_team(
@@ -959,11 +988,11 @@ impl AgentHandle for SwarmAgentHandle {
         Ok(coco_tool_runtime::CreateTeamResult {
             team_name: result.team_name,
             lead_agent_id: result.lead_agent_id,
-            task_list_id: result.task_list_id,
+            team_file_path: result.team_file_path,
         })
     }
 
-    async fn delete_team(&self) -> Result<String, String> {
+    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
         // When no team is active, return success with a "nothing to clean
         // up" message (idempotent). Pass the session task-list handle so
         // the roster store can fire a "tasks changed" notification on the
@@ -974,27 +1003,37 @@ impl AgentHandle for SwarmAgentHandle {
             .roster_store
             .delete_team(DeleteTeamRequest, self.task_list.as_deref())
             .await?;
-        if result.deleted
-            && let Some(router) = &self.task_list_router
-        {
-            router
-                .clear_team_task_list_route()
-                .await
-                .map_err(|e| format!("Failed to restore session task list: {e}"))?;
+        match result {
+            crate::roster_store::DeleteTeamResult::NoTeam => {
+                Ok(coco_tool_runtime::DeleteTeamResult {
+                    success: true,
+                    message: "No active team to delete".to_string(),
+                    team_name: None,
+                })
+            }
+            crate::roster_store::DeleteTeamResult::Blocked { team_name, names } => {
+                Ok(coco_tool_runtime::DeleteTeamResult {
+                    success: false,
+                    message: format!("Cannot delete team: active members: {}", names.join(", ")),
+                    team_name: Some(team_name),
+                })
+            }
+            crate::roster_store::DeleteTeamResult::Deleted { team_name } => {
+                if let Some(router) = &self.task_list_router {
+                    router
+                        .clear_team_task_list_route()
+                        .await
+                        .map_err(|e| format!("Failed to restore session task list: {e}"))?;
+                }
+                Ok(coco_tool_runtime::DeleteTeamResult {
+                    success: true,
+                    message: format!(
+                        "Cleaned up directories and worktrees for team \"{team_name}\""
+                    ),
+                    team_name: Some(team_name),
+                })
+            }
         }
-        let Some(name) = result.team_name else {
-            return Ok("No team name found, nothing to clean up".into());
-        };
-
-        // Implementation gap: `clearLeaderTeamName()` and the app-state reset
-        // (`teamContext: undefined`, `inbox.messages: []`) live outside the
-        // coordinator crate. The CLI / state owner observes deletion via
-        // the returned message and performs those resets. Tracked in
-        // `docs/coco-rs/agentteam-architecture.md` "delete_team parity".
-
-        Ok(format!(
-            "Cleaned up directories and worktrees for team \"{name}\""
-        ))
     }
 
     async fn active_team_name(&self) -> Option<String> {
@@ -1019,7 +1058,11 @@ impl AgentHandle for SwarmAgentHandle {
         self.interrupt_teammate_current_work(agent_id).await
     }
 
-    async fn request_shutdown(&self, target: &str, reason: Option<&str>) -> Result<String, String> {
+    async fn request_shutdown(
+        &self,
+        target: &str,
+        reason: Option<&str>,
+    ) -> Result<coco_tool_runtime::TeamControlMessageResult, String> {
         if target == "*" {
             return Err("shutdown_request cannot be broadcast — name a single teammate".into());
         }
@@ -1037,10 +1080,13 @@ impl AgentHandle for SwarmAgentHandle {
         let request_id =
             crate::mailbox::send_shutdown_request(target, &team_name, &from, reason)
                 .map_err(|e| format!("Failed to send shutdown request to '{target}': {e}"))?;
-        Ok(format!(
-            "Shutdown requested for '{target}' (request {request_id}). \
-             Awaiting the teammate's approval."
-        ))
+        Ok(coco_tool_runtime::TeamControlMessageResult {
+            message: format!(
+                "Shutdown requested for '{target}' (request {request_id}). \
+                 Awaiting the teammate's approval."
+            ),
+            request_id: Some(request_id),
+        })
     }
 
     async fn respond_to_shutdown(
@@ -1048,7 +1094,7 @@ impl AgentHandle for SwarmAgentHandle {
         request_id: &str,
         approve: bool,
         reason: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<coco_tool_runtime::TeamControlMessageResult, String> {
         // Only teammates respond to shutdown; the leader never does.
         // Resolve this worker's own identity from the 3-tier resolver.
         let from = get_agent_name().ok_or_else(|| {
@@ -1105,13 +1151,16 @@ impl AgentHandle for SwarmAgentHandle {
             crate::identity::signal_self_stop();
         }
 
-        Ok(if approve {
-            format!(
-                "Shutdown approved. Confirmation sent to {TEAM_LEAD_NAME}; \
-                 wrap up and exit."
-            )
-        } else {
-            format!("Shutdown rejected. Notified {TEAM_LEAD_NAME} and continuing work.")
+        Ok(coco_tool_runtime::TeamControlMessageResult {
+            message: if approve {
+                format!(
+                    "Shutdown approved. Confirmation sent to {TEAM_LEAD_NAME}; \
+                     wrap up and exit."
+                )
+            } else {
+                format!("Shutdown rejected. Notified {TEAM_LEAD_NAME} and continuing work.")
+            },
+            request_id: Some(request_id.to_string()),
         })
     }
 
@@ -1122,7 +1171,7 @@ impl AgentHandle for SwarmAgentHandle {
         approve: bool,
         feedback: Option<&str>,
         permission_mode: coco_types::PermissionMode,
-    ) -> Result<String, String> {
+    ) -> Result<coco_tool_runtime::TeamControlMessageResult, String> {
         if target == TEAM_LEAD_NAME {
             return Err("plan_approval_response must target the requesting teammate".into());
         }
@@ -1169,10 +1218,13 @@ impl AgentHandle for SwarmAgentHandle {
         write_to_mailbox(target, message, &team_name)
             .map_err(|e| format!("Failed to send plan approval response to '{target}': {e}"))?;
 
-        Ok(if approve {
-            format!("Plan approved for '{target}' (request {request_id}).")
-        } else {
-            format!("Plan rejected for '{target}' (request {request_id}).")
+        Ok(coco_tool_runtime::TeamControlMessageResult {
+            message: if approve {
+                format!("Plan approved for '{target}' (request {request_id}).")
+            } else {
+                format!("Plan rejected for '{target}' (request {request_id}).")
+            },
+            request_id: Some(request_id.to_string()),
         })
     }
 

@@ -184,9 +184,9 @@ pub struct TeamCreateOutput {
     #[serde(default)]
     pub team_name: String,
     #[serde(default)]
-    pub lead_agent_id: String,
+    pub team_file_path: String,
     #[serde(default)]
-    pub task_list_id: String,
+    pub lead_agent_id: String,
 }
 
 pub struct TeamCreateTool;
@@ -224,7 +224,7 @@ impl Tool for TeamCreateTool {
     }
 
     /// Render a compact confirmation. The created `team_name` /
-    /// `lead_agent_id` / `task_list_id` are model-visible but the
+    /// `lead_agent_id` / `team_file_path` are model-visible but the
     /// typical follow-up just needs to know "team is up" — match the
     /// pre-typed default JSON dump shape so consumers can pivot off
     /// `data["team_name"]` etc.
@@ -241,7 +241,7 @@ impl Tool for TeamCreateTool {
         input: TeamCreateInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<TeamCreateOutput>, ToolError> {
-        if input.team_name.is_empty() {
+        if input.team_name.trim().is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "team_name is required".into(),
                 error_code: None,
@@ -269,6 +269,8 @@ impl Tool for TeamCreateTool {
             .agent
             .create_team(CreateTeamRequest {
                 requested_name: input.team_name.clone(),
+                description: input.description.clone(),
+                leader_agent_type: input.agent_type.clone(),
                 leader_agent_id: ctx.agent_id.as_ref().map(ToString::to_string),
                 leader_session_id,
                 cwd,
@@ -286,8 +288,8 @@ impl Tool for TeamCreateTool {
         Ok(ToolResult {
             data: TeamCreateOutput {
                 team_name: result.team_name,
+                team_file_path: result.team_file_path.display().to_string(),
                 lead_agent_id: result.lead_agent_id,
-                task_list_id: result.task_list_id,
             },
             new_messages: vec![],
             app_state_patch: None,
@@ -311,6 +313,8 @@ pub struct TeamDeleteOutput {
     pub success: bool,
     #[serde(default)]
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
 }
 
 pub struct TeamDeleteTool;
@@ -347,11 +351,11 @@ impl Tool for TeamDeleteTool {
         Some("disband a swarm team and clean up")
     }
 
-    /// Render the prebuilt `message` field — `success` flag is for
-    /// callers that key off `data["success"]`.
+    /// Render complete JSON so the model sees the success flag and
+    /// team name, matching the typed tool result.
     fn render_for_model(&self, out: &TeamDeleteOutput) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
-            text: out.message.clone(),
+            text: serde_json::to_string(out).unwrap_or_default(),
             provider_options: None,
         }]
     }
@@ -373,8 +377,9 @@ impl Tool for TeamDeleteTool {
 
         Ok(ToolResult {
             data: TeamDeleteOutput {
-                success: true,
-                message: result,
+                success: result.success,
+                message: result.message,
+                team_name: result.team_name,
             },
             new_messages: vec![],
             app_state_patch: None,

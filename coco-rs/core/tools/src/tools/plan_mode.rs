@@ -744,6 +744,7 @@ impl Tool for ExitPlanModeTool {
                 text: serialized,
                 from: agent_name.clone(),
                 timestamp: timestamp.clone(),
+                summary: Some("plan approval request".to_string()),
             };
             // "team-lead" is the canonical inbox name.
             ctx.mailbox

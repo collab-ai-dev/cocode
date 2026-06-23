@@ -29,7 +29,10 @@ use crate::traits::DynTool;
 /// `ToolRegistry::deregister_by_server`, so they never reach this pipeline.
 fn passes_filter_pipeline(tool: &dyn DynTool, ctx: &ToolUseContext) -> bool {
     let id = tool.id();
-    tool.is_enabled(ctx) && ctx.tool_overrides.permits(&id) && ctx.tool_filter.allows(&id)
+    tool.is_enabled(ctx)
+        && (!ctx.is_coordinator_lead() || coco_subagent::coordinator_allows_tool_name(tool.name()))
+        && ctx.tool_overrides.permits(&id)
+        && ctx.tool_filter.allows(&id)
 }
 
 /// Inner state protected by a single RwLock.

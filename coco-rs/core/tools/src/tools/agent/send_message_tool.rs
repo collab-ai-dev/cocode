@@ -5,6 +5,7 @@ use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::FunctionToolSpec;
 use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::SchemaContext;
+use coco_tool_runtime::TeamMessageDispatchResult;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolInputSchema;
@@ -16,6 +17,7 @@ use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
+use serde::Serialize;
 use serde::de;
 use serde_json::Value;
 use std::sync::OnceLock;
@@ -23,7 +25,7 @@ use std::sync::OnceLock;
 /// Typed input for [`SendMessageTool`].
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SendMessageInput {
-    /// Target agent name, "*" for broadcast, or agent ID
+    /// Target teammate name, or "*" for broadcast.
     pub to: String,
     /// Brief summary of the message (5-10 words). Required when
     /// `message` is a plain string (used by the leader UI message
@@ -65,6 +67,36 @@ pub enum SendMessageStructuredMessage {
         approve: bool,
         #[serde(default)]
         feedback: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SendMessageOutput {
+    Direct {
+        success: bool,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        routing: Option<String>,
+    },
+    Broadcast {
+        success: bool,
+        message: String,
+        recipients: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        routing: Option<String>,
+    },
+    Request {
+        success: bool,
+        message: String,
+        request_id: String,
+        target: String,
+    },
+    Response {
+        success: bool,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
     },
 }
 
@@ -134,12 +166,7 @@ pub struct SendMessageTool;
 #[async_trait::async_trait]
 impl Tool for SendMessageTool {
     type Input = SendMessageInput;
-    /// Output is `Value` because the wire shape is a tagged union:
-    /// bare confirmation string from `agent.send_message` for the
-    /// running-agent path, or `{auto_resumed, original_agent_id,
-    /// resumed_as, message}` envelope for the terminal-target
-    /// auto-resume path.
-    type Output = Value;
+    type Output = SendMessageOutput;
 
     fn runtime_validation_schema(&self) -> &ToolInputSchema {
         static SCHEMA: OnceLock<ToolInputSchema> = OnceLock::new();
@@ -181,16 +208,8 @@ impl Tool for SendMessageTool {
         Some("send messages to agent teammates (swarm protocol)")
     }
 
-    /// Render either the prebuilt `message` field (auto-resumed path)
-    /// or the bare confirmation string returned by `agent.send_message`.
-    fn render_for_model(&self, out: &Value) -> Vec<ToolResultContentPart> {
-        let text = if let Some(s) = out.as_str() {
-            s.to_string()
-        } else if let Some(msg) = out.get("message").and_then(Value::as_str) {
-            msg.to_string()
-        } else {
-            serde_json::to_string(out).unwrap_or_default()
-        };
+    fn render_for_model(&self, out: &SendMessageOutput) -> Vec<ToolResultContentPart> {
+        let text = serde_json::to_string(out).unwrap_or_default();
         vec![ToolResultContentPart::Text {
             text,
             provider_options: None,
@@ -201,24 +220,31 @@ impl Tool for SendMessageTool {
         &self,
         input: SendMessageInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        if input.to.is_empty() {
+    ) -> Result<ToolResult<SendMessageOutput>, ToolError> {
+        if input.to.trim().is_empty() {
             return Err(ToolError::InvalidInput {
-                message: "target agent name or ID ('to') is required".into(),
+                message: "target teammate name ('to') is required".into(),
+                error_code: None,
+            });
+        }
+        if input.to.contains('@') {
+            return Err(ToolError::InvalidInput {
+                message: "SendMessage 'to' must be a bare teammate name or \"*\", not an agent ID"
+                    .into(),
                 error_code: None,
             });
         }
 
         let content = match &input.message {
             SendMessagePayload::Text(text) => {
-                if text.is_empty() {
+                if text.trim().is_empty() {
                     return Err(ToolError::InvalidInput {
                         message: "message content must be non-empty".into(),
                         error_code: None,
                     });
                 }
                 let summary = input.summary.as_deref().unwrap_or("");
-                if summary.is_empty() {
+                if summary.trim().is_empty() {
                     return Err(ToolError::InvalidInput {
                         message: "summary is required when sending a plain-text message \
                                   (5-10 word description used by the leader UI)"
@@ -292,7 +318,10 @@ impl Tool for SendMessageTool {
         // messages stay on the (resumed) task and surface via the
         // `agent_pending_messages` reminder on the next turn. No drain,
         // no prompt-prepend.
-        if let Some(info) = task_status.as_ref().filter(|i| i.status.is_terminal()) {
+        if let Some(info) = task_status
+            .as_ref()
+            .filter(|i| i.status.is_terminal() && i.task_type() == coco_types::TaskType::BgAgent)
+        {
             // Resume needs the parent session id to find the persisted
             // transcript on disk. An empty session id makes the lookup
             // path malformed and surfaces a confusing inner error; reject
@@ -302,7 +331,8 @@ impl Tool for SendMessageTool {
                 .as_deref()
                 .filter(|s| !s.is_empty())
             else {
-                return Err(ToolError::ExecutionFailed {
+                return Ok(send_message_result(SendMessageOutput::Direct {
+                    success: false,
                     message: format!(
                         "Agent '{to}' is stopped ({status:?}) and a resume was requested, but \
                          the parent session id is unavailable. Resume is only supported in \
@@ -310,39 +340,32 @@ impl Tool for SendMessageTool {
                          minimal SDK embedding) to enable transcript-backed resume.",
                         status = info.status,
                     ),
-                    display_data: None,
-                    source: None,
-                });
+                    routing: Some("resume".to_string()),
+                }));
             };
-            let resume = ctx
-                .agent
-                .resume_agent(to, &content, session_id)
-                .await
-                .map_err(|e| ToolError::ExecutionFailed {
-                    message: format!(
-                        "Agent '{to}' is stopped ({status:?}) and could not be resumed: {e}",
-                        status = info.status,
-                    ),
-                    display_data: None,
-                    source: None,
-                })?;
+            let resume = match ctx.agent.resume_agent(to, &content, session_id).await {
+                Ok(resume) => resume,
+                Err(e) => {
+                    return Ok(send_message_result(SendMessageOutput::Direct {
+                        success: false,
+                        message: format!(
+                            "Agent '{to}' is stopped ({status:?}) and could not be resumed: {e}",
+                            status = info.status,
+                        ),
+                        routing: Some("resume".to_string()),
+                    }));
+                }
+            };
             let new_id = resume.agent_id.as_deref().unwrap_or(to);
-            return Ok(ToolResult {
-                data: serde_json::json!({
-                    "auto_resumed": true,
-                    "original_agent_id": to,
-                    "resumed_as": new_id,
-                    "message": format!(
-                        "Agent '{to}' was stopped ({status:?}); resumed it in the background \
+            return Ok(send_message_result(SendMessageOutput::Direct {
+                success: true,
+                message: format!(
+                    "Agent '{to}' was stopped ({status:?}); resumed it in the background \
                          with your message. New task id: {new_id}. You'll be notified when it finishes.",
-                        status = info.status,
-                    ),
-                }),
-                new_messages: vec![],
-                app_state_patch: None,
-                permission_updates: Vec::new(),
-                display_data: None,
-            });
+                    status = info.status,
+                ),
+                routing: Some("resume".to_string()),
+            }));
         }
 
         // Running-agent path: queue the message onto the recipient's
@@ -370,25 +393,24 @@ impl Tool for SendMessageTool {
                     },
                 )
                 .await;
+            return Ok(send_message_result(SendMessageOutput::Direct {
+                success: true,
+                message: format!("Queued message for running background agent '{to}'"),
+                routing: Some("pending_messages".to_string()),
+            }));
         }
 
-        let result =
-            ctx.agent
-                .send_message(to, &content)
-                .await
-                .map_err(|e| ToolError::ExecutionFailed {
-                    message: e,
-                    display_data: None,
-                    source: None,
-                })?;
+        let result = ctx
+            .agent
+            .send_message(to, &content, input.summary.as_deref())
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
+                message: e,
+                display_data: None,
+                source: None,
+            })?;
 
-        Ok(ToolResult {
-            data: serde_json::json!(result),
-            new_messages: vec![],
-            app_state_patch: None,
-            permission_updates: Vec::new(),
-            display_data: None,
-        })
+        Ok(send_message_result(dispatch_output(to, result)))
     }
 }
 
@@ -401,15 +423,20 @@ impl SendMessageTool {
         to: &str,
         reason: Option<&str>,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let message = ctx.agent.request_shutdown(to, reason).await.map_err(|e| {
+    ) -> Result<ToolResult<SendMessageOutput>, ToolError> {
+        let result = ctx.agent.request_shutdown(to, reason).await.map_err(|e| {
             ToolError::ExecutionFailed {
                 message: e,
                 display_data: None,
                 source: None,
             }
         })?;
-        Ok(shutdown_result(message))
+        Ok(send_message_result(SendMessageOutput::Request {
+            success: true,
+            message: result.message,
+            request_id: result.request_id.unwrap_or_default(),
+            target: to.to_string(),
+        }))
     }
 
     /// Teammate → leader: route a structured `shutdown_response` through
@@ -423,7 +450,7 @@ impl SendMessageTool {
         approve: bool,
         reason: Option<&str>,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
+    ) -> Result<ToolResult<SendMessageOutput>, ToolError> {
         // "team-lead" is the canonical leader inbox. Reject any other target.
         if to != "team-lead" {
             return Err(ToolError::InvalidInput {
@@ -445,7 +472,7 @@ impl SendMessageTool {
                 error_code: None,
             });
         }
-        let message = ctx
+        let result = ctx
             .agent
             .respond_to_shutdown(request_id, approve, reason)
             .await
@@ -454,7 +481,11 @@ impl SendMessageTool {
                 display_data: None,
                 source: None,
             })?;
-        Ok(shutdown_result(message))
+        Ok(send_message_result(SendMessageOutput::Response {
+            success: true,
+            message: result.message,
+            request_id: Some(request_id.to_string()),
+        }))
     }
 
     async fn dispatch_plan_approval_response(
@@ -464,7 +495,7 @@ impl SendMessageTool {
         approve: bool,
         feedback: Option<&str>,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
+    ) -> Result<ToolResult<SendMessageOutput>, ToolError> {
         if request_id.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "plan_approval_response requires a non-empty request_id".into(),
@@ -476,7 +507,7 @@ impl SendMessageTool {
         } else {
             Some(feedback.unwrap_or("Plan needs revision"))
         };
-        let message = ctx
+        let result = ctx
             .agent
             .respond_to_plan_approval(
                 to,
@@ -491,19 +522,38 @@ impl SendMessageTool {
                 display_data: None,
                 source: None,
             })?;
-        Ok(shutdown_result(message))
+        Ok(send_message_result(SendMessageOutput::Response {
+            success: true,
+            message: result.message,
+            request_id: Some(request_id.to_string()),
+        }))
     }
 }
 
-/// Build the `{message}` envelope returned by the shutdown control
-/// paths — rendered to the model via [`SendMessageTool::render_for_model`].
-fn shutdown_result(message: String) -> ToolResult<Value> {
+fn send_message_result(data: SendMessageOutput) -> ToolResult<SendMessageOutput> {
     ToolResult {
-        data: serde_json::json!({ "message": message }),
+        data,
         new_messages: vec![],
         app_state_patch: None,
         permission_updates: Vec::new(),
         display_data: None,
+    }
+}
+
+fn dispatch_output(to: &str, result: TeamMessageDispatchResult) -> SendMessageOutput {
+    if to == "*" {
+        SendMessageOutput::Broadcast {
+            success: true,
+            message: result.message,
+            recipients: result.recipients,
+            routing: result.routing,
+        }
+    } else {
+        SendMessageOutput::Direct {
+            success: true,
+            message: result.message,
+            routing: result.routing,
+        }
     }
 }
 
@@ -530,7 +580,7 @@ fn send_message_schema(runtime: bool) -> Value {
         "properties": {
             "to": {
                 "type": "string",
-                "description": "Target agent name, \"*\" for broadcast, or agent ID"
+                "description": "Target teammate name, or \"*\" for broadcast"
             },
             "summary": {
                 "type": "string",

@@ -130,12 +130,21 @@ impl AgentHandle for MockAgentHandle {
             .unwrap_or(Err("no mock result".into()))
     }
 
-    async fn send_message(&self, _to: &str, _content: &str) -> Result<String, String> {
-        self.send_result
-            .lock()
-            .await
-            .take()
-            .unwrap_or(Err("no mock result".into()))
+    async fn send_message(
+        &self,
+        _to: &str,
+        _content: &str,
+        _summary: Option<&str>,
+    ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
+        match self.send_result.lock().await.take() {
+            Some(Ok(message)) => Ok(coco_tool_runtime::TeamMessageDispatchResult {
+                message,
+                recipients: Vec::new(),
+                routing: None,
+            }),
+            Some(Err(e)) => Err(e),
+            None => Err("no mock result".into()),
+        }
     }
 
     async fn create_team(
@@ -149,12 +158,16 @@ impl AgentHandle for MockAgentHandle {
             .unwrap_or(Err("no mock result".into()))
     }
 
-    async fn delete_team(&self) -> Result<String, String> {
-        self.team_delete_result
-            .lock()
-            .await
-            .take()
-            .unwrap_or(Err("no mock result".into()))
+    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
+        match self.team_delete_result.lock().await.take() {
+            Some(Ok(message)) => Ok(coco_tool_runtime::DeleteTeamResult {
+                success: true,
+                message,
+                team_name: None,
+            }),
+            Some(Err(e)) => Err(e),
+            None => Err("no mock result".into()),
+        }
     }
 
     // resume_agent uses the trait default impl (Err "not supported").
@@ -209,7 +222,12 @@ impl AgentHandle for CapturingAgentHandle {
         })
     }
 
-    async fn send_message(&self, _: &str, _: &str) -> Result<String, String> {
+    async fn send_message(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
         Err("unused".into())
     }
     async fn create_team(
@@ -218,7 +236,7 @@ impl AgentHandle for CapturingAgentHandle {
     ) -> Result<CreateTeamResult, String> {
         Err("unused".into())
     }
-    async fn delete_team(&self) -> Result<String, String> {
+    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
         Err("unused".into())
     }
     // resume_agent uses the trait default impl.
@@ -1085,7 +1103,8 @@ async fn test_send_message_success() {
     .await
     .unwrap();
 
-    assert_eq!(result.data.as_str().unwrap(), "Message delivered");
+    assert_eq!(result.data["success"], true);
+    assert_eq!(result.data["message"], "Message delivered");
 }
 
 #[tokio::test]
@@ -1141,7 +1160,12 @@ impl AgentHandle for ShutdownRecordingHandle {
     async fn spawn_agent(&self, _r: AgentSpawnRequest) -> Result<AgentSpawnResponse, String> {
         Err("unused".into())
     }
-    async fn send_message(&self, _to: &str, _c: &str) -> Result<String, String> {
+    async fn send_message(
+        &self,
+        _to: &str,
+        _c: &str,
+        _summary: Option<&str>,
+    ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
         Err("send_message must not be called for structured shutdown messages".into())
     }
     async fn create_team(
@@ -1150,7 +1174,7 @@ impl AgentHandle for ShutdownRecordingHandle {
     ) -> Result<CreateTeamResult, String> {
         Err("unused".into())
     }
-    async fn delete_team(&self) -> Result<String, String> {
+    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
         Err("unused".into())
     }
     async fn query_agent_status(&self, _a: &str) -> Result<AgentSpawnResponse, String> {
@@ -1159,19 +1183,29 @@ impl AgentHandle for ShutdownRecordingHandle {
     async fn get_agent_output(&self, _a: &str) -> Result<String, String> {
         Err("unused".into())
     }
-    async fn request_shutdown(&self, target: &str, reason: Option<&str>) -> Result<String, String> {
+    async fn request_shutdown(
+        &self,
+        target: &str,
+        reason: Option<&str>,
+    ) -> Result<coco_tool_runtime::TeamControlMessageResult, String> {
         *self.request.lock().await = Some((target.to_string(), reason.map(String::from)));
-        Ok(format!("requested {target}"))
+        Ok(coco_tool_runtime::TeamControlMessageResult {
+            message: format!("requested {target}"),
+            request_id: Some("req-1".to_string()),
+        })
     }
     async fn respond_to_shutdown(
         &self,
         request_id: &str,
         approve: bool,
         reason: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<coco_tool_runtime::TeamControlMessageResult, String> {
         *self.response.lock().await =
             Some((request_id.to_string(), approve, reason.map(String::from)));
-        Ok(format!("responded {approve}"))
+        Ok(coco_tool_runtime::TeamControlMessageResult {
+            message: format!("responded {approve}"),
+            request_id: Some(request_id.to_string()),
+        })
     }
     async fn respond_to_plan_approval(
         &self,
@@ -1180,14 +1214,17 @@ impl AgentHandle for ShutdownRecordingHandle {
         approve: bool,
         feedback: Option<&str>,
         _permission_mode: coco_types::PermissionMode,
-    ) -> Result<String, String> {
+    ) -> Result<coco_tool_runtime::TeamControlMessageResult, String> {
         *self.plan_response.lock().await = Some((
             target.to_string(),
             request_id.to_string(),
             approve,
             feedback.map(String::from),
         ));
-        Ok(format!("plan responded {approve}"))
+        Ok(coco_tool_runtime::TeamControlMessageResult {
+            message: format!("plan responded {approve}"),
+            request_id: Some(request_id.to_string()),
+        })
     }
 }
 
@@ -1330,10 +1367,8 @@ async fn test_send_message_plan_approval_routes_to_plan_handle_with_feedback() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        result.data.get("message").and_then(|m| m.as_str()),
-        Some("plan responded false")
-    );
+    assert_eq!(result.data["success"], true);
+    assert_eq!(result.data["message"], "plan responded false");
     assert_eq!(
         *handle.plan_response.lock().await,
         Some((
@@ -1390,6 +1425,17 @@ async fn test_send_message_model_schema_is_typed_and_approve_is_boolean_only() {
     let message_schema = &spec.parameters["properties"]["message"];
     assert!(message_schema.get("anyOf").is_some());
     assert_ne!(message_schema, &serde_json::Value::Bool(true));
+    let to_description = spec.parameters["properties"]["to"]["description"]
+        .as_str()
+        .expect("to description");
+    assert!(
+        to_description.contains("teammate name"),
+        "SendMessage should expose teammate-name routing"
+    );
+    assert!(
+        !to_description.contains("agent ID"),
+        "SendMessage schema must not advertise agent ID routing"
+    );
 
     let variants = message_schema["anyOf"].as_array().expect("message anyOf");
     let plan = variants
@@ -1433,10 +1479,9 @@ async fn test_send_message_shutdown_request_routes_to_handle() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        result.data.get("message").and_then(|m| m.as_str()),
-        Some("requested researcher")
-    );
+    assert_eq!(result.data["success"], true);
+    assert_eq!(result.data["message"], "requested researcher");
+    assert_eq!(result.data["target"], "researcher");
     assert_eq!(
         *handle.request.lock().await,
         Some(("researcher".to_string(), Some("team disbanded".to_string())))
@@ -1473,10 +1518,8 @@ async fn test_send_message_shutdown_response_routes_to_handle() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        result.data.get("message").and_then(|m| m.as_str()),
-        Some("responded true")
-    );
+    assert_eq!(result.data["success"], true);
+    assert_eq!(result.data["message"], "responded true");
     assert_eq!(
         *handle.response.lock().await,
         Some(("s-7".to_string(), true, None))
@@ -1564,6 +1607,7 @@ async fn test_send_message_shutdown_response_reject_without_reason_rejected() {
 /// Used by the auto-resume tests to simulate a stopped bg task.
 struct StoppedTaskHandle {
     status: coco_types::TaskStatus,
+    task_type: coco_types::TaskType,
 }
 
 #[async_trait::async_trait]
@@ -1583,7 +1627,14 @@ impl coco_tool_runtime::TaskHandle for StoppedTaskHandle {
             total_paused_ms: None,
             output_file: None,
             output_offset: 0,
-            extras: coco_types::TaskExtras::bg_agent_default(),
+            extras: match self.task_type {
+                coco_types::TaskType::BgAgent => coco_types::TaskExtras::bg_agent_default(),
+                coco_types::TaskType::Dream => coco_types::TaskExtras::dream(),
+                coco_types::TaskType::Teammate | coco_types::TaskType::RemoteTeammate => {
+                    panic!("StoppedTaskHandle test mock does not construct teammate extras")
+                }
+                coco_types::TaskType::Shell => coco_types::TaskExtras::shell_default(),
+            },
         })
     }
     async fn get_task_output_delta(
@@ -1675,6 +1726,7 @@ impl coco_tool_runtime::TaskHandle for StoppedTaskHandle {
 #[derive(Default)]
 struct ResumeRecordingHandle {
     last_resume: tokio::sync::Mutex<Option<(String, String, String)>>,
+    last_send: tokio::sync::Mutex<Option<(String, String, Option<String>)>>,
 }
 
 #[async_trait::async_trait]
@@ -1682,8 +1734,18 @@ impl AgentHandle for ResumeRecordingHandle {
     async fn spawn_agent(&self, _: AgentSpawnRequest) -> Result<AgentSpawnResponse, String> {
         Err("not expected".into())
     }
-    async fn send_message(&self, _: &str, _: &str) -> Result<String, String> {
-        Err("send_message must NOT be reached when auto-resume fires".into())
+    async fn send_message(
+        &self,
+        to: &str,
+        message: &str,
+        summary: Option<&str>,
+    ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
+        *self.last_send.lock().await = Some((to.into(), message.into(), summary.map(String::from)));
+        Ok(coco_tool_runtime::TeamMessageDispatchResult {
+            message: format!("sent to {to}"),
+            recipients: Vec::new(),
+            routing: Some("mailbox".into()),
+        })
     }
     async fn create_team(
         &self,
@@ -1691,7 +1753,7 @@ impl AgentHandle for ResumeRecordingHandle {
     ) -> Result<CreateTeamResult, String> {
         Err("not expected".into())
     }
-    async fn delete_team(&self) -> Result<String, String> {
+    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
         Err("not expected".into())
     }
     async fn query_agent_status(&self, _: &str) -> Result<AgentSpawnResponse, String> {
@@ -1730,7 +1792,22 @@ fn ctx_with_resume_handle_and_status(
 ) -> ToolUseContext {
     let mut ctx = ToolUseContext::test_default();
     ctx.agent = handle;
-    ctx.task_handle = Some(Arc::new(StoppedTaskHandle { status }));
+    ctx.task_handle = Some(Arc::new(StoppedTaskHandle {
+        status,
+        task_type: coco_types::TaskType::BgAgent,
+    }));
+    ctx.session_id_for_history = Some("sess-test".into());
+    ctx
+}
+
+fn ctx_with_resume_handle_status_and_type(
+    handle: Arc<ResumeRecordingHandle>,
+    status: coco_types::TaskStatus,
+    task_type: coco_types::TaskType,
+) -> ToolUseContext {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle;
+    ctx.task_handle = Some(Arc::new(StoppedTaskHandle { status, task_type }));
     ctx.session_id_for_history = Some("sess-test".into());
     ctx
 }
@@ -1755,13 +1832,11 @@ async fn test_send_message_auto_resumes_completed_task() {
     assert_eq!(id, "agent-7af2");
     assert_eq!(prompt, "follow up question");
     assert_eq!(sess, "sess-test");
-    assert_eq!(
-        result.data.get("auto_resumed"),
-        Some(&serde_json::json!(true))
-    );
-    assert_eq!(
-        result.data.get("resumed_as"),
-        Some(&serde_json::json!("resumed-task-id-7af2"))
+    assert_eq!(result.data["success"], true);
+    assert_eq!(result.data["routing"], "resume");
+    assert!(
+        handle.last_send.lock().await.is_none(),
+        "mailbox send must not be reached when auto-resume fires"
     );
 }
 
@@ -1794,6 +1869,7 @@ async fn test_send_message_rejects_resume_with_empty_session_id() {
     ctx.agent = handle.clone();
     ctx.task_handle = Some(Arc::new(StoppedTaskHandle {
         status: coco_types::TaskStatus::Completed,
+        task_type: coco_types::TaskType::BgAgent,
     }));
     // session_id_for_history left at None.
     let result = <SendMessageTool as DynTool>::execute(
@@ -1806,8 +1882,11 @@ async fn test_send_message_rejects_resume_with_empty_session_id() {
         &ctx,
     )
     .await;
-    let err = result.expect_err("empty session id must reject upfront");
-    let msg = format!("{err}");
+    let out = result
+        .expect("empty session id should return a failed delivery result")
+        .data;
+    assert_eq!(out["success"], false);
+    let msg = out["message"].as_str().unwrap_or_default().to_string();
     assert!(
         msg.contains("parent session id is unavailable"),
         "error must explain why resume can't proceed; got: {msg}"
@@ -1820,10 +1899,8 @@ async fn test_send_message_rejects_resume_with_empty_session_id() {
 
 #[tokio::test]
 async fn test_send_message_does_not_resume_running_task() {
-    // When the task is still Running, the tool falls through to the
-    // mailbox path (`send_message`) — auto-resume must NOT fire.
-    // ResumeRecordingHandle's send_message panics if reached, so the
-    // test confirms the falls-through error rather than the resume.
+    // When the task is still Running, the tool queues a pending message
+    // for the background agent and does not touch the mailbox path.
     let handle = Arc::new(ResumeRecordingHandle::default());
     let ctx = ctx_with_resume_handle_and_status(handle.clone(), coco_types::TaskStatus::Running);
     let result = <SendMessageTool as DynTool>::execute(
@@ -1836,13 +1913,48 @@ async fn test_send_message_does_not_resume_running_task() {
         &ctx,
     )
     .await;
-    assert!(
-        result.is_err(),
-        "Running task must fall through to mailbox path"
-    );
+    let out = result.expect("running task should queue successfully").data;
+    assert_eq!(out["success"], true);
+    assert_eq!(out["routing"], "pending_messages");
     assert!(
         handle.last_resume.lock().await.is_none(),
         "no resume on Running"
+    );
+}
+
+#[tokio::test]
+async fn test_send_message_terminal_non_bg_agent_does_not_resume() {
+    let handle = Arc::new(ResumeRecordingHandle::default());
+    let ctx = ctx_with_resume_handle_status_and_type(
+        handle.clone(),
+        coco_types::TaskStatus::Completed,
+        coco_types::TaskType::Shell,
+    );
+    let result = <SendMessageTool as DynTool>::execute(
+        &SendMessageTool,
+        serde_json::json!({
+            "to": "shell-123",
+            "message": "follow up",
+            "summary": "follow up",
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.data["success"], true);
+    assert_eq!(result.data["routing"], "mailbox");
+    assert!(
+        handle.last_resume.lock().await.is_none(),
+        "terminal non-BgAgent tasks must not auto-resume"
+    );
+    assert_eq!(
+        *handle.last_send.lock().await,
+        Some((
+            "shell-123".to_string(),
+            "follow up".to_string(),
+            Some("follow up".to_string())
+        ))
     );
 }
 
@@ -1865,7 +1977,7 @@ async fn test_team_create_success() {
     let mut ctx = ctx_with_agent(MockAgentHandle::with_team_create(Ok(CreateTeamResult {
         team_name: "alpha".into(),
         lead_agent_id: "team-lead@alpha".into(),
-        task_list_id: "alpha".into(),
+        team_file_path: std::path::PathBuf::from("/tmp/teams/alpha/config.json"),
     })));
     ctx.session_id_for_history = Some("session-1".into());
     let result = <TeamCreateTool as DynTool>::execute(
@@ -1876,7 +1988,34 @@ async fn test_team_create_success() {
     .await
     .unwrap();
     assert_eq!(result.data["team_name"], "alpha");
-    assert_eq!(result.data["task_list_id"], "alpha");
+    assert_eq!(
+        result.data["team_file_path"],
+        "/tmp/teams/alpha/config.json"
+    );
+}
+
+#[tokio::test]
+async fn test_team_create_model_schema_uses_ts_agent_type_field() {
+    let coco_tool_runtime::ToolSpec::Function(spec) = <TeamCreateTool as DynTool>::tool_spec(
+        &TeamCreateTool,
+        &coco_tool_runtime::SchemaContext::default(),
+        &coco_tool_runtime::PromptOptions::default(),
+    )
+    .await
+    else {
+        panic!("TeamCreate must be a function tool");
+    };
+    let props = spec.parameters["properties"]
+        .as_object()
+        .expect("TeamCreate schema properties");
+    assert!(
+        props.contains_key("agent_type"),
+        "TeamCreate must expose TS-compatible `agent_type`"
+    );
+    assert!(
+        !props.contains_key("leader_agent_type"),
+        "internal Rust field name must not leak into the model schema"
+    );
 }
 
 // ── TeamDeleteTool tests ──
@@ -1904,12 +2043,13 @@ async fn test_team_delete_success() {
     let result = <TeamDeleteTool as DynTool>::execute(&TeamDeleteTool, serde_json::json!({}), &ctx)
         .await
         .unwrap();
-    let message = result
-        .data
-        .get("message")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    assert!(message.contains("alpha"));
+    assert_eq!(result.data["success"], true);
+    assert!(
+        result.data["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("alpha")
+    );
 }
 
 #[tokio::test]

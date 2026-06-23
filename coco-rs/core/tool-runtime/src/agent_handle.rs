@@ -461,6 +461,10 @@ pub struct TeamCreateAllowedPath {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct CreateTeamRequest {
     pub requested_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_agent_type: Option<String>,
     pub leader_agent_id: Option<String>,
     pub leader_session_id: String,
     pub cwd: PathBuf,
@@ -476,6 +480,8 @@ impl std::fmt::Debug for CreateTeamRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CreateTeamRequest")
             .field("requested_name", &self.requested_name)
+            .field("description", &self.description)
+            .field("leader_agent_type", &self.leader_agent_type)
             .field("leader_agent_id", &self.leader_agent_id)
             .field("leader_session_id", &self.leader_session_id)
             .field("cwd", &self.cwd)
@@ -490,7 +496,31 @@ impl std::fmt::Debug for CreateTeamRequest {
 pub struct CreateTeamResult {
     pub team_name: String,
     pub lead_agent_id: String,
-    pub task_list_id: String,
+    pub team_file_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TeamMessageDispatchResult {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recipients: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TeamControlMessageResult {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeleteTeamResult {
+    pub success: bool,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
 }
 
 /// Outcome of a spawn request.
@@ -523,7 +553,12 @@ pub trait AgentHandle: Send + Sync {
     ///
     /// Content may be a plain text string or a serialized structured
     /// message (shutdown_request, shutdown_response, plan_approval_response).
-    async fn send_message(&self, to: &str, content: &str) -> Result<String, String>;
+    async fn send_message(
+        &self,
+        to: &str,
+        content: &str,
+        summary: Option<&str>,
+    ) -> Result<TeamMessageDispatchResult, String>;
 
     /// Create a new team with optional description and lead agent type.
     async fn create_team(&self, request: CreateTeamRequest) -> Result<CreateTeamResult, String>;
@@ -534,7 +569,7 @@ pub trait AgentHandle: Send + Sync {
     /// The team name is taken from `appState.teamContext?.teamName`,
     /// not tool input. Implementations should read their own session
     /// state to resolve the team. Returns a human-readable message.
-    async fn delete_team(&self) -> Result<String, String>;
+    async fn delete_team(&self) -> Result<DeleteTeamResult, String>;
 
     /// Resume a previously-completed background AgentTool spawn from
     /// its persisted transcript + metadata sidecar. Triggered by
@@ -589,7 +624,7 @@ pub trait AgentHandle: Send + Sync {
         &self,
         _target: &str,
         _reason: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<TeamControlMessageResult, String> {
         Err("AgentHandle::request_shutdown not supported in this context".into())
     }
 
@@ -604,7 +639,7 @@ pub trait AgentHandle: Send + Sync {
         _request_id: &str,
         _approve: bool,
         _reason: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<TeamControlMessageResult, String> {
         Err("AgentHandle::respond_to_shutdown not supported in this context".into())
     }
 
@@ -619,7 +654,7 @@ pub trait AgentHandle: Send + Sync {
         _approve: bool,
         _feedback: Option<&str>,
         _permission_mode: coco_types::PermissionMode,
-    ) -> Result<String, String> {
+    ) -> Result<TeamControlMessageResult, String> {
         Err("AgentHandle::respond_to_plan_approval not supported in this context".into())
     }
 
@@ -683,7 +718,12 @@ impl AgentHandle for NoOpAgentHandle {
         Err("Agent spawning not available in this context".into())
     }
 
-    async fn send_message(&self, _to: &str, _content: &str) -> Result<String, String> {
+    async fn send_message(
+        &self,
+        _to: &str,
+        _content: &str,
+        _summary: Option<&str>,
+    ) -> Result<TeamMessageDispatchResult, String> {
         Err("Agent messaging not available in this context".into())
     }
 
@@ -691,7 +731,7 @@ impl AgentHandle for NoOpAgentHandle {
         Err("Team management not available in this context".into())
     }
 
-    async fn delete_team(&self) -> Result<String, String> {
+    async fn delete_team(&self) -> Result<DeleteTeamResult, String> {
         Err("Team management not available in this context".into())
     }
 

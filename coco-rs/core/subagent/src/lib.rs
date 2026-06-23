@@ -31,9 +31,10 @@ pub use builtin_prompts::{
 pub use builtins::{BuiltinAgentCatalog, builtin_definition, builtin_definitions};
 pub use coordinator_mode::{
     SessionMode, SessionModeSwitch, TaskNotification, TaskNotificationStatus,
-    TaskNotificationUsage, coordinator_system_prompt, coordinator_user_context,
-    is_coordinator_mode, is_coordinator_mode_env, is_fork_subagent_active,
-    render_task_notification, session_mode_switch_action, worker_tool_pool,
+    TaskNotificationUsage, coordinator_allows_tool_name, coordinator_system_prompt,
+    coordinator_user_context, inject_teammate_essential_tools, is_coordinator_mode,
+    is_coordinator_mode_env, is_fork_subagent_active, render_task_notification,
+    session_mode_switch_action, worker_tool_pool,
 };
 pub use definition_store::{
     AgentDefinitionStore, AgentLoadReport, AgentSearchPaths, LoadedAgentDefinition,

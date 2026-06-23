@@ -1780,6 +1780,7 @@ async fn run_agent_driver(
                     text: serde_json::to_string(&response).unwrap_or_default(),
                     from: agent_name.clone(),
                     timestamp: chrono::Utc::now().to_rfc3339(),
+                    summary: Some("plan approval response".to_string()),
                 };
                 if let Err(e) = mailbox
                     .write_to_mailbox(&teammate_agent, &team_name, envelope)

@@ -575,6 +575,8 @@ fn create_team_request(name: &str) -> CreateTeamRequest {
 fn create_team_request_with_session(name: &str, leader_session_id: &str) -> CreateTeamRequest {
     CreateTeamRequest {
         requested_name: name.to_string(),
+        description: None,
+        leader_agent_type: None,
         leader_agent_id: None,
         leader_session_id: leader_session_id.to_string(),
         cwd: std::path::PathBuf::from("/tmp"),
@@ -2236,7 +2238,9 @@ async fn test_send_message_no_team() {
     // `cargo test`.
     let _env = crate::test_support::lock_env().await;
     let handle = create_test_handle();
-    let result = handle.send_message("target", "hello").await;
+    let result = handle
+        .send_message("target", "hello", Some("greeting"))
+        .await;
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("No active team"));
 }
@@ -2332,8 +2336,11 @@ async fn test_team_lifecycle_writes_roster_and_blocks_delete_while_active() {
         "discovery must see the spawned teammate; got {statuses:?}"
     );
 
-    let broadcast = handle.send_message("*", "status please").await.unwrap();
-    assert!(broadcast.contains("1 recipients"));
+    let broadcast = handle
+        .send_message("*", "status please", Some("status request"))
+        .await
+        .unwrap();
+    assert!(broadcast.message.contains("1 recipients"));
     let mailbox = crate::mailbox::read_mailbox("researcher", &team_name).unwrap();
     assert!(
         mailbox.iter().any(|m| m.text == "status please"),
@@ -2341,11 +2348,9 @@ async fn test_team_lifecycle_writes_roster_and_blocks_delete_while_active() {
     );
 
     let delete = handle.delete_team().await;
-    assert!(
-        delete
-            .expect_err("delete must block while non-lead member is active")
-            .contains("active members: researcher")
-    );
+    let delete = delete.expect("blocked delete returns a normal result");
+    assert!(!delete.success);
+    assert!(delete.message.contains("active members: researcher"));
 
     handle
         .roster_store
@@ -2353,7 +2358,8 @@ async fn test_team_lifecycle_writes_roster_and_blocks_delete_while_active() {
         .await
         .unwrap();
     let deleted = handle.delete_team().await.unwrap();
-    assert!(deleted.contains(&team_name));
+    assert!(deleted.success);
+    assert_eq!(deleted.team_name.as_deref(), Some(team_name.as_str()));
     assert!(
         !crate::team_file::get_team_dir(&team_name).exists(),
         "team directory must be cleaned up"
@@ -2393,9 +2399,7 @@ async fn test_create_team_per_session_dedup_is_in_memory_not_disk() {
 async fn test_create_team_uses_unique_name_when_requested_dir_exists() {
     let _teams = isolate_teams_dir().await;
     let base = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
-    let expected = format!("{base}-2");
     let _ = crate::team_file::cleanup_team_directories(&base);
-    let _ = crate::team_file::cleanup_team_directories(&expected);
     std::fs::create_dir_all(crate::team_file::get_team_dir(&base)).unwrap();
 
     let handle = create_test_handle();
@@ -2403,17 +2407,18 @@ async fn test_create_team_uses_unique_name_when_requested_dir_exists() {
         .create_team(create_team_request(&base))
         .await
         .unwrap();
-    assert_eq!(created.team_name, expected);
+    assert_ne!(created.team_name, base);
+    assert!(!created.team_name.ends_with("-2"));
     assert!(
-        crate::team_file::read_team_file(&expected)
+        crate::team_file::read_team_file(&created.team_name)
             .unwrap()
             .is_some(),
-        "unique team file should be written under {expected}"
+        "unique team file should be written under {}",
+        created.team_name
     );
 
     let _ = handle.delete_team().await;
     let _ = crate::team_file::cleanup_team_directories(&base);
-    let _ = crate::team_file::cleanup_team_directories(&expected);
 }
 
 #[tokio::test]

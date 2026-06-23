@@ -106,7 +106,7 @@ impl coco_tool_runtime::MailboxHandle for SwarmMailboxHandle {
             timestamp: message.timestamp,
             read: false,
             color: None,
-            summary: None,
+            summary: message.summary,
         };
         write_to_mailbox(recipient, msg, team_name).map_err(boxed_coordinator_err)
     }
