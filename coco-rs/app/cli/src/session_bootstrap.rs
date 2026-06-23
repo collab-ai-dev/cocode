@@ -273,11 +273,16 @@ pub(crate) fn build_session_command_registry(
         skill_manager.register(skill);
     }
 
+    let mut command_features = runtime_config.features.clone();
+    if !runtime_config.memory_activation.active {
+        command_features.disable(coco_types::Feature::AutoMemory);
+    }
+
     let registry = build_command_registry(
         skill_manager.as_ref(),
         plugins,
         UserType::from_env(),
-        runtime_config.features.clone(),
+        command_features,
         cwd.to_path_buf(),
         dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
         /*managed_root*/ None,

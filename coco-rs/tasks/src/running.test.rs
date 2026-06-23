@@ -53,6 +53,8 @@ async fn create_with_status(
         status,
         cancel: tokio_util::sync::CancellationToken::new(),
         invoking_agent: None,
+        workflow_name: None,
+        workflow_prompt: None,
         shell_extras: None,
     })
     .await
@@ -251,6 +253,8 @@ async fn create_task_emits_started_with_tool_use_id() {
         status: TaskStatus::Running,
         cancel: tokio_util::sync::CancellationToken::new(),
         invoking_agent: None,
+        workflow_name: None,
+        workflow_prompt: None,
         shell_extras: None,
     })
     .await;

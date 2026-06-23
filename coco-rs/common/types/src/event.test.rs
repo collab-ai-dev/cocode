@@ -3,6 +3,8 @@ use serde_json::json;
 
 use super::*;
 use crate::TokenUsage;
+use crate::WorkflowAgentState;
+use crate::WorkflowProgressEvent;
 
 #[test]
 fn agent_stream_event_serializes_with_snake_case_tag() {
@@ -556,6 +558,59 @@ fn task_progress_params_description_and_usage_required() {
     assert_eq!(j["description"], "working");
     assert_eq!(j["usage"]["total_tokens"], 1000);
     assert_eq!(j["usage"]["tool_uses"], 5);
+}
+
+#[test]
+fn workflow_progress_events_use_ts_wire_shape() {
+    let events = vec![
+        WorkflowProgressEvent::WorkflowPhase {
+            index: 0,
+            title: "Plan".into(),
+        },
+        WorkflowProgressEvent::WorkflowAgent {
+            index: 1,
+            state: WorkflowAgentState::Done,
+            label: "agent".into(),
+            phase_title: Some("Plan".into()),
+            phase_index: Some(0),
+            agent_id: Some("a123".into()),
+            model: Some("claude-opus-4-8".into()),
+            tokens: Some(42),
+            tool_calls: Some(3),
+            duration_ms: Some(1000),
+            cached: true,
+            result_preview: Some("ok".into()),
+            prompt_preview: Some("do the thing".into()),
+            error: None,
+        },
+        WorkflowProgressEvent::WorkflowLog {
+            message: "hello".into(),
+        },
+    ];
+    let j = serde_json::to_value(&events).unwrap();
+    assert_eq!(
+        j,
+        json!([
+            {"type": "workflow_phase", "index": 0, "title": "Plan"},
+            {
+                "type": "workflow_agent",
+                "index": 1,
+                "state": "done",
+                "label": "agent",
+                "phaseTitle": "Plan",
+                "phaseIndex": 0,
+                "agentId": "a123",
+                "model": "claude-opus-4-8",
+                "tokens": 42,
+                "toolCalls": 3,
+                "durationMs": 1000,
+                "cached": true,
+                "resultPreview": "ok",
+                "promptPreview": "do the thing"
+            },
+            {"type": "workflow_log", "message": "hello"}
+        ])
+    );
 }
 
 #[test]

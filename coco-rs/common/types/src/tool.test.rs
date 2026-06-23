@@ -17,6 +17,11 @@ fn test_tool_name_as_str_roundtrip() {
         ToolName::from_str("VerifyPlanExecution").unwrap(),
         ToolName::VerifyPlanExecution
     );
+    assert_eq!(ToolName::from_str("Workflow").unwrap(), ToolName::Workflow);
+    assert_eq!(
+        ToolName::from_str("RunWorkflow").unwrap(),
+        ToolName::Workflow
+    );
 }
 
 #[test]

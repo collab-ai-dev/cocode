@@ -69,6 +69,8 @@ fn explore_built_in_omits_claude_md_and_blocks_writes() {
         ToolName::Write.as_str(),
         ToolName::NotebookEdit.as_str(),
         ToolName::Agent.as_str(),
+        ToolName::Workflow.as_str(),
+        ToolName::SendUserMessage.as_str(),
         ToolName::ExitPlanMode.as_str(),
     ] {
         assert!(
@@ -291,6 +293,8 @@ fn async_clamp_denies_non_async_safe_builtins_keeps_async_safe() {
     // Long-lived / interactive tools are denied for background spawns.
     assert!(denied.contains(&ToolName::Repl.as_str()));
     assert!(denied.contains(&ToolName::Agent.as_str()));
+    assert!(denied.contains(&ToolName::Workflow.as_str()));
+    assert!(denied.contains(&ToolName::SendUserMessage.as_str()));
     assert!(denied.contains(&ToolName::AskUserQuestion.as_str()));
     // Async-safe tools are NOT denied.
     assert!(!denied.contains(&ToolName::Read.as_str()));

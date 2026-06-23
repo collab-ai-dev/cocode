@@ -84,6 +84,7 @@ class AttachmentKind(str, Enum):
     date_change = 'date_change'
     verify_plan_reminder = 'verify_plan_reminder'
     ultrathink_effort = 'ultrathink_effort'
+    workflow_keyword_request = 'workflow_keyword_request'
     token_usage = 'token_usage'
     budget_usd = 'budget_usd'
     output_token_usage = 'output_token_usage'
@@ -531,6 +532,12 @@ class UnifiedFinishReason(str, Enum):
 class WireApi(str, Enum):
     chat = 'chat'
     responses = 'responses'
+
+class WorkflowAgentState(str, Enum):
+    start = 'start'
+    progress = 'progress'
+    done = 'done'
+    error = 'error'
 
 
 # ---------------------------------------------------------------------------
@@ -2002,6 +2009,40 @@ TurnOutcome = Annotated[
     Field(discriminator='kind'),
 ]
 
+class WorkflowProgressEventWorkflowAgent(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['workflow_agent'] = Field(default='workflow_agent', alias='type')
+    index: int
+    label: str
+    state: WorkflowAgentState
+    agent_id: str | None = Field(default=None, alias='agentId')
+    cached: bool = False
+    duration_ms: int | None = Field(default=None, alias='durationMs')
+    error: str | None = None
+    model: str | None = None
+    phase_index: int | None = Field(default=None, alias='phaseIndex')
+    phase_title: str | None = Field(default=None, alias='phaseTitle')
+    prompt_preview: str | None = Field(default=None, alias='promptPreview')
+    result_preview: str | None = Field(default=None, alias='resultPreview')
+    tokens: int | None = None
+    tool_calls: int | None = Field(default=None, alias='toolCalls')
+
+class WorkflowProgressEventWorkflowPhase(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['workflow_phase'] = Field(default='workflow_phase', alias='type')
+    index: int
+    title: str
+
+class WorkflowProgressEventWorkflowLog(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['workflow_log'] = Field(default='workflow_log', alias='type')
+    message: str
+
+WorkflowProgressEvent = Annotated[
+    Union[WorkflowProgressEventWorkflowAgent, WorkflowProgressEventWorkflowPhase, WorkflowProgressEventWorkflowLog],
+    Field(discriminator='type_'),
+]
+
 
 # ---------------------------------------------------------------------------
 # Item types
@@ -2289,7 +2330,7 @@ class TaskProgressParams(BaseModel):
     recent_activities: list[TaskActivity] | None = None
     summary: str | None = None
     tool_use_id: str | None = None
-    workflow_progress: list[Any] | None = None
+    workflow_progress: list[WorkflowProgressEvent] | None = None
 
 class TaskStartedParams(BaseModel):
     description: str

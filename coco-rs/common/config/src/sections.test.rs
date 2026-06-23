@@ -1,9 +1,26 @@
 use pretty_assertions::assert_eq;
+use std::path::PathBuf;
 
 use super::*;
 use crate::EnvKey;
 use crate::EnvSnapshot;
+use crate::SettingsWithSource;
+use crate::constants::CONFIG_DIR_NAME;
+use crate::constants::MEMORY_DIR_NAME;
 use crate::settings::Settings;
+use crate::settings::source::SettingSource;
+
+fn settings_with_sources(merged: Settings) -> SettingsWithSource {
+    SettingsWithSource {
+        merged,
+        per_source: std::collections::HashMap::new(),
+        source_paths: std::collections::HashMap::new(),
+    }
+}
+
+fn trusted_tilde_memory_dir() -> String {
+    format!("~/{CONFIG_DIR_NAME}/{MEMORY_DIR_NAME}")
+}
 
 #[test]
 fn test_agent_teams_config_defaults_to_main_model_role() {
@@ -198,10 +215,101 @@ fn test_memory_config_resolves_sub_toggles() {
     };
     let env = EnvSnapshot::from_pairs(std::iter::empty::<(EnvKey, &str)>());
 
-    let config = MemoryConfig::resolve(&settings, &env);
+    let config = MemoryConfig::resolve_with_sources(&settings_with_sources(settings), &env);
 
     assert!(!config.extraction_enabled);
     assert!(config.team_memory_enabled);
+}
+
+#[test]
+fn memory_config_ignores_project_directory_override() {
+    let mut per_source = std::collections::HashMap::new();
+    per_source.insert(
+        SettingSource::User,
+        serde_json::json!({ "memory": { "directory": "/tmp/user-memory" } }),
+    );
+    per_source.insert(
+        SettingSource::Project,
+        serde_json::json!({ "memory": { "directory": "/tmp/project-memory" } }),
+    );
+    let settings = SettingsWithSource {
+        merged: Settings {
+            memory: PartialMemorySettings {
+                directory: Some(PathBuf::from("/tmp/project-memory")),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        per_source,
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    let config = MemoryConfig::resolve_with_sources(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.directory, Some(PathBuf::from("/tmp/user-memory")));
+}
+
+#[test]
+fn memory_config_rejects_unsafe_directory_override() {
+    let mut per_source = std::collections::HashMap::new();
+    per_source.insert(
+        SettingSource::User,
+        serde_json::json!({ "memory": { "directory": "/tmp/user-memory" } }),
+    );
+    per_source.insert(
+        SettingSource::Local,
+        serde_json::json!({ "memory": { "directory": "/" } }),
+    );
+    let settings = SettingsWithSource {
+        merged: Settings {
+            memory: PartialMemorySettings {
+                directory: Some(PathBuf::from("/")),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        per_source,
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    let config = MemoryConfig::resolve_with_sources(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.directory, Some(PathBuf::from("/tmp/user-memory")));
+}
+
+#[test]
+fn memory_config_expands_safe_tilde_for_trusted_directory_setting() {
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let mut per_source = std::collections::HashMap::new();
+    per_source.insert(
+        SettingSource::User,
+        serde_json::json!({ "memory": { "directory": trusted_tilde_memory_dir() } }),
+    );
+    let settings = SettingsWithSource {
+        merged: Settings::default(),
+        per_source,
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    let config = MemoryConfig::resolve_with_sources(&settings, &EnvSnapshot::default());
+
+    assert_eq!(
+        config.directory,
+        Some(home.join(CONFIG_DIR_NAME).join(MEMORY_DIR_NAME))
+    );
+}
+
+#[test]
+fn memory_config_rejects_tilde_for_env_directory_override() {
+    let env =
+        EnvSnapshot::from_pairs([(EnvKey::CocoMemoryPathOverride, trusted_tilde_memory_dir())]);
+    let settings = settings_with_sources(Settings::default());
+
+    let config = MemoryConfig::resolve_with_sources(&settings, &env);
+
+    assert_eq!(config.directory, None);
 }
 
 #[test]

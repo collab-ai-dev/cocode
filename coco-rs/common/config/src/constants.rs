@@ -158,6 +158,9 @@ pub const CONFIG_DIR_NAME: &str = coco_utils_common::COCO_CONFIG_DIR_NAME;
 /// Project config directory name.
 pub const PROJECT_CONFIG_DIR: &str = coco_utils_common::COCO_CONFIG_DIR_NAME;
 
+/// Memory directory name under the product config directory.
+pub const MEMORY_DIR_NAME: &str = "memory";
+
 /// No-content message placeholder.
 pub const NO_CONTENT_MESSAGE: &str = "(no content)";
 

@@ -55,6 +55,9 @@ pub fn tool_input_summary(tool_name: &str, input: &Value) -> String {
         ToolName::Agent => scalar_value(input, "description")
             .or_else(|| scalar_value(input, "prompt"))
             .unwrap_or_default(),
+        ToolName::Workflow => scalar_value(input, "name")
+            .or_else(|| scalar_value(input, "scriptPath"))
+            .unwrap_or_default(),
         ToolName::ApplyPatch => input
             .get("patch")
             .and_then(Value::as_str)
@@ -135,6 +138,7 @@ pub fn tool_input_multiline(tool_name: &str, input: &Value, max_chars: usize) ->
         ToolName::WebFetch => &["url", "prompt"],
         ToolName::WebSearch => &["query"],
         ToolName::Agent => &["description", "subagent_type", "prompt"],
+        ToolName::Workflow => &["name", "scriptPath", "resumeFromRunId", "prompt"],
         _ => &[],
     };
 
@@ -285,6 +289,7 @@ pub fn partial_primary_arg(tool_name: &str, partial_json: &str) -> Option<String
         ToolName::WebFetch => "url",
         ToolName::WebSearch => "query",
         ToolName::Agent => "description",
+        ToolName::Workflow => "name",
         _ => return None,
     };
     partial_json_string_field(partial_json, key)

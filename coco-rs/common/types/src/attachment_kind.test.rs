@@ -7,11 +7,11 @@ use std::collections::HashSet;
 /// continuing. Update both the constant and the TS `Attachment` union
 /// size in the README.
 #[test]
-fn attachment_kind_all_has_62_variants() {
+fn attachment_kind_all_has_63_variants() {
     assert_eq!(
         AttachmentKind::all().len(),
-        62,
-        "60 TS Attachment union members + coco-rs-synthetic user_context and slash_command_metadata"
+        63,
+        "60 TS Attachment union members + coco-rs-synthetic user_context, slash_command_metadata, and workflow_keyword_request"
     );
 }
 
@@ -74,14 +74,14 @@ fn coverage_distribution_matches_readme_snapshot() {
         "in-crate reminders (incl. synthetic user_context)"
     );
     assert_eq!(silent_reminder, 2, "in-crate silent reminders");
-    assert_eq!(outside, 7, "owned by sister crates");
+    assert_eq!(outside, 8, "owned by sister crates");
     assert_eq!(silent_event, 9, "typed API-hidden events");
     assert_eq!(feature_gated, 1, "HISTORY_SNIP intentionally unported");
     assert_eq!(runtime, 3, "inactive runtime bookkeeping");
     assert_eq!(
         reminder + silent_reminder + outside + silent_event + feature_gated + runtime,
-        62,
-        "total must match union size + synthetic user_context + slash_command_metadata"
+        63,
+        "total must match union size + synthetic user_context + slash_command_metadata + workflow_keyword_request"
     );
 }
 
@@ -140,6 +140,7 @@ fn renders_in_transcript_matches_ts_null_rendering_list_exact() {
         AttachmentKind::CompanionIntro,
         AttachmentKind::TokenUsage,
         AttachmentKind::UltrathinkEffort,
+        AttachmentKind::WorkflowKeywordRequest,
         AttachmentKind::MaxTurnsReached,
         AttachmentKind::TaskReminder,
         AttachmentKind::AutoMode,

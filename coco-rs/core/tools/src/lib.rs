@@ -37,8 +37,9 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(WebFetchTool));
     registry.register(Arc::new(WebSearchTool));
 
-    // Agent & Team (5)
+    // Agent, Workflow & Team (6)
     registry.register(Arc::new(AgentTool));
+    registry.register(Arc::new(WorkflowTool));
     registry.register(Arc::new(SkillTool));
     registry.register(Arc::new(SendMessageTool));
     registry.register(Arc::new(TeamCreateTool));
@@ -281,8 +282,7 @@ pub(crate) async fn record_file_edit(
 ///
 /// Path detection is layered: first the authoritative resolution via
 /// `coco_memory::team_paths::is_team_mem_path` (using
-/// `MemoryConfig::resolve_memory_dir(project_root)` from the resolved
-/// tool context config, then a substring fallback
+/// the resolved tool context config, then a substring fallback
 /// for paths that don't match the resolved layout. See
 /// `is_team_memory_path` for the gating logic.
 ///

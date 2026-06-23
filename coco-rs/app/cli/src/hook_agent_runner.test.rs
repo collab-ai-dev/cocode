@@ -44,6 +44,7 @@ fn agent_hook_disallowed_tools_match_ts_set() {
         ToolName::ExitPlanMode,
         ToolName::EnterPlanMode,
         ToolName::Agent,
+        ToolName::Workflow,
         ToolName::AskUserQuestion,
         ToolName::TaskStop,
     ] {

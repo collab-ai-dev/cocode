@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use crate::env::EnvKey;
 use crate::env::EnvSnapshot;
 use crate::settings::Settings;
+use crate::settings::SettingsWithSource;
+use crate::settings::source::SettingSource;
 
 const DEFAULT_MAX_TOOL_CONCURRENCY: i32 = 10;
 const DEFAULT_MAX_RESULT_SIZE: i32 = 400_000;
@@ -583,6 +585,46 @@ pub struct MemoryConfig {
     pub extra_guidelines: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryDisabledReason {
+    FeatureGate,
+    BareMode,
+    RemoteWithoutMemoryDir,
+}
+
+impl MemoryDisabledReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FeatureGate => "feature_gate",
+            Self::BareMode => "bare_mode",
+            Self::RemoteWithoutMemoryDir => "remote_without_memory_dir",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryActivation {
+    pub active: bool,
+    pub disabled_reason: Option<MemoryDisabledReason>,
+}
+
+impl MemoryActivation {
+    pub fn active() -> Self {
+        Self {
+            active: true,
+            disabled_reason: None,
+        }
+    }
+
+    pub fn disabled(reason: MemoryDisabledReason) -> Self {
+        Self {
+            active: false,
+            disabled_reason: Some(reason),
+        }
+    }
+}
+
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
@@ -610,13 +652,10 @@ impl Default for MemoryConfig {
 }
 
 impl MemoryConfig {
-    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
+    fn resolve_sub_toggles(settings: &Settings, env: &EnvSnapshot) -> Self {
         let mut config = Self::default();
         let s = &settings.memory;
 
-        if let Some(dir) = &s.directory {
-            config.directory = Some(dir.clone());
-        }
         if let Some(v) = s.skip_index {
             config.skip_index = v;
         }
@@ -671,29 +710,6 @@ impl MemoryConfig {
             config.extra_guidelines = Some(v.clone());
         }
 
-        // Path overrides — two distinct semantics:
-        //
-        //  • `COCO_MEMORY_PATH_OVERRIDE` (operator): **full path** to the
-        //    personal memory directory. The `<projects>/<slug>/memory/`
-        //    layout is bypassed entirely. TS:
-        //    `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`.
-        //
-        //  • `COCO_REMOTE_MEMORY_DIR` (swarm leader → teammate
-        //    propagation): **base dir** that replaces `<config_home>`
-        //    in the default layout — the per-project slug + `memory/`
-        //    are still appended. Same project on both leader and
-        //    teammate (same canonical git root → same slug) resolves
-        //    to the same final memory dir. TS:
-        //    `CLAUDE_CODE_REMOTE_MEMORY_DIR`.
-        //
-        // The two MAY coexist; full override wins if both are set.
-        if let Some(dir) = env.get_string(EnvKey::CocoMemoryPathOverride) {
-            config.directory = Some(PathBuf::from(dir));
-        }
-        if let Some(base) = env.get_string(EnvKey::CocoRemoteMemoryDir) {
-            config.memory_base_override = Some(PathBuf::from(base));
-        }
-
         // Force-disable env overrides (truthy = disable). Settings can
         // already say "off"; these env vars only ever turn things off.
         if env.is_truthy(EnvKey::CocoMemoryExtractionDisable) {
@@ -726,6 +742,143 @@ impl MemoryConfig {
         config.session_memory_total_tokens = config.session_memory_total_tokens.max(1);
         config
     }
+
+    pub fn resolve_with_sources(settings: &SettingsWithSource, env: &EnvSnapshot) -> Self {
+        let mut config = Self::resolve_sub_toggles(&settings.merged, env);
+
+        // Path overrides — two distinct semantics:
+        //
+        //  • `COCO_MEMORY_PATH_OVERRIDE` (operator): **full path** to the
+        //    personal memory directory. The `<projects>/<slug>/memory/`
+        //    layout is bypassed entirely. TS:
+        //    `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`.
+        //
+        //  • `COCO_REMOTE_MEMORY_DIR` (swarm leader → teammate
+        //    propagation): **base dir** that replaces `<config_home>`
+        //    in the default layout — the per-project slug + `memory/`
+        //    are still appended. Same project on both leader and
+        //    teammate (same canonical git root → same slug) resolves
+        //    to the same final memory dir. TS:
+        //    `CLAUDE_CODE_REMOTE_MEMORY_DIR`.
+        //
+        // `memory.directory` is a full-path override and must only come
+        // from trusted/operator-controlled settings layers. Project and
+        // plugin settings may tune sub-options, but they cannot redirect
+        // the personal memory root. The two env vars MAY coexist; full
+        // override wins as the final personal directory, but the remote
+        // base still has to validate so remote activation can trust it.
+        config.directory = highest_trusted_memory_directory(settings);
+
+        if let Some(base) = env.get_string(EnvKey::CocoRemoteMemoryDir) {
+            match validate_memory_dir_override(&base, TildeExpansion::Reject) {
+                Ok(path) => config.memory_base_override = Some(path),
+                Err(reason) => tracing::warn!(
+                    target: "coco::config",
+                    env = %EnvKey::CocoRemoteMemoryDir,
+                    reason,
+                    "ignoring invalid auto-memory base override"
+                ),
+            }
+        }
+
+        if let Some(dir) = env.get_string(EnvKey::CocoMemoryPathOverride) {
+            match validate_memory_dir_override(&dir, TildeExpansion::Reject) {
+                Ok(path) => config.directory = Some(path),
+                Err(reason) => tracing::warn!(
+                    target: "coco::config",
+                    env = %EnvKey::CocoMemoryPathOverride,
+                    reason,
+                    "ignoring invalid auto-memory directory override"
+                ),
+            }
+        }
+
+        config
+    }
+}
+
+fn highest_trusted_memory_directory(settings: &SettingsWithSource) -> Option<PathBuf> {
+    for source in [
+        SettingSource::Policy,
+        SettingSource::Flag,
+        SettingSource::Local,
+        SettingSource::User,
+    ] {
+        let Some(value) = settings.per_source.get(&source) else {
+            continue;
+        };
+        let Some(raw) = value
+            .get("memory")
+            .and_then(|m| m.get("directory"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        match validate_memory_dir_override(raw, TildeExpansion::ExpandSafe) {
+            Ok(path) => return Some(path),
+            Err(reason) => tracing::warn!(
+                target: "coco::config",
+                source = %source,
+                reason,
+                "ignoring invalid auto-memory directory setting"
+            ),
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TildeExpansion {
+    Reject,
+    ExpandSafe,
+}
+
+fn validate_memory_dir_override(
+    raw: &str,
+    tilde_expansion: TildeExpansion,
+) -> Result<PathBuf, &'static str> {
+    if raw.is_empty() {
+        return Err("empty");
+    }
+    if raw.contains('\0') {
+        return Err("null_byte");
+    }
+    let expanded;
+    let raw = if raw.starts_with('~') {
+        match tilde_expansion {
+            TildeExpansion::Reject => return Err("tilde"),
+            TildeExpansion::ExpandSafe => {
+                let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) else {
+                    return Err("tilde");
+                };
+                let Some(home) = dirs::home_dir() else {
+                    return Err("home_unavailable");
+                };
+                expanded = home.join(rest).to_string_lossy().into_owned();
+                expanded.as_str()
+            }
+        }
+    } else {
+        raw
+    };
+    if raw.starts_with("\\\\") || raw.starts_with("//") {
+        return Err("unc");
+    }
+    let bytes = raw.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && (bytes[0] as char).is_ascii_alphabetic() {
+        let tail = raw[2..].trim_start_matches(['\\', '/']);
+        if tail.is_empty() {
+            return Err("drive_root");
+        }
+    }
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err("not_absolute");
+    }
+    if path.to_string_lossy().len() < 3 {
+        return Err("near_root");
+    }
+    Ok(path)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

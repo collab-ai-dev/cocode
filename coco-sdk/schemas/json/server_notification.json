@@ -1930,6 +1930,7 @@
             "date_change",
             "verify_plan_reminder",
             "ultrathink_effort",
+            "workflow_keyword_request",
             "token_usage",
             "budget_usd",
             "output_token_usage",
@@ -5974,7 +5975,9 @@
         },
         "workflow_progress": {
           "type": "array",
-          "items": true
+          "items": {
+            "$ref": "#/$defs/WorkflowProgressEvent"
+          }
         }
       },
       "required": [
@@ -7601,6 +7604,156 @@
       "required": [
         "message",
         "uuid"
+      ]
+    },
+    "WorkflowAgentState": {
+      "description": "Per-agent lifecycle state. Wire strings mirror TS `workflow_agent.state`\n(`start` → `progress` → `done`, or `error`). A cache-replay hit is reported\nas `Done` with the sibling `cached: true` flag, not a distinct state.",
+      "type": "string",
+      "enum": [
+        "start",
+        "progress",
+        "done",
+        "error"
+      ]
+    },
+    "WorkflowProgressEvent": {
+      "description": "Typed workflow progress payload carried by `task/progress`.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "agentId": {
+              "description": "Spawned subagent id (TS `agentId`), once running.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cached": {
+              "description": "Cache-replay hit: emitted as `state: done` with `cached: true`\n(TS does not use a distinct state for cache hits).",
+              "type": "boolean",
+              "default": false
+            },
+            "durationMs": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "index": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "label": {
+              "type": "string"
+            },
+            "model": {
+              "description": "Resolved model id for the subagent (TS `model`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "phaseIndex": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "phaseTitle": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "promptPreview": {
+              "description": "Truncated preview of the subagent prompt (TS `promptPreview`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resultPreview": {
+              "description": "Truncated preview of the subagent result (TS `resultPreview`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "$ref": "#/$defs/WorkflowAgentState"
+            },
+            "tokens": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
+            "toolCalls": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_agent"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "state",
+            "label"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_phase"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "title"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_log"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        }
       ]
     },
     "WorktreeEnteredParams": {

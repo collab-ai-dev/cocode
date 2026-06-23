@@ -6,6 +6,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Duration;
+use std::time::Instant;
 
 use coco_paths::ProjectPaths;
 use coco_tool_runtime::AgentHandleRef;
@@ -100,11 +102,11 @@ pub struct MemoryRuntime {
     /// runner during bootstrap). Reads become a sync atomic load with
     /// no lock acquisition.
     side_query: OnceLock<SideQueryHandle>,
-    /// Lazy session enumerator used by [`Self::tick_dream`]. The
+    /// Lazy session enumerator used by turn-end auto-dream scheduling. The
     /// session-runtime wires this with a closure that reads the
-    /// project's `TranscriptStore`. Absence ⇒ tick_dream sees an empty
-    /// list, which keeps the session-gate as the limiting factor and
-    /// matches the pre-wire baseline. Install-once via `OnceLock`.
+    /// project's `TranscriptStore`. Absence ⇒ auto-dream sees an empty
+    /// list, which keeps the session-gate as the limiting factor.
+    /// Install-once via `OnceLock`.
     session_enumerator: OnceLock<SessionEnumerator>,
     /// Shared inbox for user-visible save notices. Extract / dream
     /// push into it on success; the engine drains it once per turn
@@ -120,6 +122,9 @@ pub struct MemoryRuntime {
     /// set, so the watcher stays at its empty default and costs
     /// nothing for sessions that don't opt in.
     kairos_rollover: crate::kairos::KairosRolloverWatcher,
+    /// Turn-end background scheduler. `finalize_turn` enqueues work
+    /// here instead of awaiting forked memory agents inline.
+    turn_end_scheduler: Arc<TurnEndScheduler>,
 }
 
 impl std::fmt::Debug for MemoryRuntime {
@@ -311,6 +316,7 @@ impl MemoryRuntimeBuilder {
             notices,
             telemetry: self.telemetry,
             kairos_rollover: crate::kairos::KairosRolloverWatcher::new(),
+            turn_end_scheduler: Arc::new(TurnEndScheduler::new()),
         }
     }
 }
@@ -343,9 +349,9 @@ impl MemoryRuntime {
         self.side_query.set(handle)
     }
 
-    /// Install a [`SessionEnumerator`] used by [`Self::tick_dream`].
+    /// Install a [`SessionEnumerator`] used by turn-end auto-dream scheduling.
     /// The session-runtime wires this with a closure backed by the
-    /// project's `TranscriptStore`; before installation `tick_dream`
+    /// project's `TranscriptStore`; before installation auto-dream
     /// sees an empty list and the session gate stays the limiting
     /// factor. One-shot — see [`Self::install_side_query`].
     pub fn install_session_enumerator(
@@ -363,10 +369,10 @@ impl MemoryRuntime {
         self.notices.drain()
     }
 
-    /// Per-turn entry point for the memory subsystem. Aggregates the
-    /// three async services (session memory, extract, auto-dream) plus
-    /// future post-write inspection (Gap 4) and KAIROS rollover (Gap 2)
-    /// into a single black-box call from the engine.
+    /// Per-turn entry point for the memory subsystem. Drains completed
+    /// user-visible notices from prior background work, records cheap
+    /// synchronous effects (manual memory edits + KAIROS rollover),
+    /// then schedules the expensive memory forks in the background.
     ///
     /// Architecture: engine pre-computes everything that needs the
     /// `MessageHistory` (cursors, tool counts, fork closures) and
@@ -378,43 +384,12 @@ impl MemoryRuntime {
     ///
     /// Subagent + bare-mode gating is centralised here so callers
     /// don't need to remember the rules. Returns `skipped=true` when
-    /// the gate trips; no LLM call is made.
+    /// the gate trips; no new LLM call is scheduled.
     pub async fn finalize_turn(&self, ctx: FinalizeTurnContext) -> FinalizeTurnReport {
         if ctx.bare_mode || ctx.is_subagent {
             return FinalizeTurnReport::skipped();
         }
-
-        let extract = self.extract.clone();
-        let session_memory = self.session_memory.clone();
-        let auto_compact_enabled = ctx.auto_compact_enabled;
-        let estimated_tokens = ctx.estimated_tokens;
-        let tool_calls_since_sm = ctx.tool_calls_since_sm_cursor;
-        let had_tool_calls_in_last_turn = ctx.tool_calls_last_turn > 0;
-        let last_msg_id = ctx.last_message_id.clone();
-        let extract_input = ctx.extract_input;
         let now_ms = ctx.now_ms;
-
-        // Fan-out — three forks in parallel. Each service gates
-        // internally; the lazy `fork_messages` closure inside
-        // `extract_input` is only invoked once all extract gates pass.
-        let (sm_outcome, ex_outcome, dr_outcome) = tokio::join!(
-            async {
-                if auto_compact_enabled {
-                    session_memory
-                        .maybe_extract(
-                            estimated_tokens,
-                            tool_calls_since_sm,
-                            had_tool_calls_in_last_turn,
-                            last_msg_id,
-                        )
-                        .await
-                } else {
-                    SessionMemoryOutcome::Skipped(crate::service::session::SkipReason::Disabled)
-                }
-            },
-            extract.maybe_extract(extract_input),
-            self.tick_dream(now_ms),
-        );
 
         // Post-write classification — when the main agent (or user
         // through the `Edit`/`Write`/`NotebookEdit` tool) directly
@@ -476,14 +451,64 @@ impl MemoryRuntime {
             None
         };
 
+        self.turn_end_scheduler
+            .schedule(ctx, self.worker_deps())
+            .await;
+
         FinalizeTurnReport {
             skipped: false,
-            session_memory: Some(sm_outcome),
-            extract: Some(ex_outcome),
-            dream: Some(dr_outcome),
+            session_memory: None,
+            extract: None,
+            dream: None,
             kairos_rollover,
             notices: self.drain_user_notices(),
         }
+    }
+
+    fn worker_deps(&self) -> TurnEndWorkerDeps {
+        TurnEndWorkerDeps {
+            extract: self.extract.clone(),
+            dream: self.dream.clone(),
+            session_memory: self.session_memory.clone(),
+            transcript_dir: self
+                .transcript_dir
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from(".")),
+            session_enumerator: self.session_enumerator.get().cloned(),
+        }
+    }
+
+    /// Wait for scheduled turn-end extraction/session-memory work to
+    /// finish. Shutdown and headless paths call this when they need
+    /// best-effort completion of background memory writes that TS also
+    /// drains. Auto-dream may continue fire-and-forget once no pending
+    /// extraction is queued behind it.
+    pub async fn drain(&self, timeout: Duration) -> bool {
+        let start = Instant::now();
+        if !self
+            .turn_end_scheduler
+            .wait_for_extraction_idle(timeout)
+            .await
+        {
+            return false;
+        }
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            return false;
+        }
+        if !self.extract.drain(remaining).await {
+            return false;
+        }
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            return false;
+        }
+        self.session_memory.wait_for_extraction(remaining).await
+    }
+
+    #[cfg(test)]
+    async fn drain_all(&self, timeout: Duration) -> bool {
+        self.turn_end_scheduler.wait_for_idle(timeout).await
     }
 
     /// Per-turn auto-dream tick. Runs the three-gate scheduler
@@ -570,6 +595,24 @@ impl MemoryRuntime {
         } else {
             SystemPromptVariant::Auto
         };
+        if let Err(e) = tokio::fs::create_dir_all(&self.directories.personal).await {
+            tracing::debug!(
+                target: "coco_memory::runtime",
+                path = %self.directories.personal.display(),
+                error = %e,
+                "failed to create personal memory directory before prompt render"
+            );
+        }
+        if self.config.team_memory_enabled
+            && let Err(e) = tokio::fs::create_dir_all(&self.directories.team).await
+        {
+            tracing::debug!(
+                target: "coco_memory::runtime",
+                path = %self.directories.team.display(),
+                error = %e,
+                "failed to create team memory directory before prompt render"
+            );
+        }
 
         // Truncate-and-keep-stats so we can emit `MemdirLoaded` every
         // time the prompt section is built — dashboards use this to
@@ -835,6 +878,190 @@ impl MemoryRuntime {
     }
 }
 
+#[derive(Clone)]
+struct TurnEndWorkerDeps {
+    extract: Arc<ExtractService>,
+    dream: Arc<DreamService>,
+    session_memory: Arc<SessionMemoryService>,
+    transcript_dir: PathBuf,
+    session_enumerator: Option<SessionEnumerator>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum TurnEndPhase {
+    #[default]
+    Idle,
+    Extracting,
+    Dreaming,
+}
+
+#[derive(Default)]
+struct TurnEndSchedulerState {
+    phase: TurnEndPhase,
+    pending: Option<FinalizeTurnContext>,
+}
+
+struct TurnEndScheduler {
+    state: Arc<tokio::sync::Mutex<TurnEndSchedulerState>>,
+    state_changed: Arc<tokio::sync::Notify>,
+}
+
+impl TurnEndScheduler {
+    fn new() -> Self {
+        Self {
+            state: Arc::new(tokio::sync::Mutex::new(TurnEndSchedulerState::default())),
+            state_changed: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    async fn schedule(&self, ctx: FinalizeTurnContext, deps: TurnEndWorkerDeps) {
+        let mut state = self.state.lock().await;
+        if state.phase != TurnEndPhase::Idle {
+            state.pending = Some(ctx);
+            drop(state);
+            self.state_changed.notify_waiters();
+            return;
+        }
+        state.phase = TurnEndPhase::Extracting;
+        drop(state);
+        self.state_changed.notify_waiters();
+
+        let scheduler = Self {
+            state: self.state.clone(),
+            state_changed: self.state_changed.clone(),
+        };
+        tokio::spawn(async move {
+            scheduler.run_worker(ctx, deps).await;
+        });
+    }
+
+    async fn run_worker(self, mut ctx: FinalizeTurnContext, deps: TurnEndWorkerDeps) {
+        loop {
+            run_turn_end_memory_work(ctx, deps.clone(), &self).await;
+
+            let mut state = self.state.lock().await;
+            if let Some(next) = state.pending.take() {
+                state.phase = TurnEndPhase::Extracting;
+                drop(state);
+                self.state_changed.notify_waiters();
+                ctx = next;
+                continue;
+            }
+            state.phase = TurnEndPhase::Idle;
+            drop(state);
+            self.state_changed.notify_waiters();
+            break;
+        }
+    }
+
+    async fn mark_dreaming(&self) {
+        let mut state = self.state.lock().await;
+        state.phase = TurnEndPhase::Dreaming;
+        drop(state);
+        self.state_changed.notify_waiters();
+    }
+
+    #[cfg(test)]
+    async fn wait_for_idle(&self, timeout: Duration) -> bool {
+        self.wait_for_state(timeout, |state| {
+            state.phase == TurnEndPhase::Idle && state.pending.is_none()
+        })
+        .await
+    }
+
+    async fn wait_for_extraction_idle(&self, timeout: Duration) -> bool {
+        self.wait_for_state(timeout, |state| {
+            state.phase != TurnEndPhase::Extracting && state.pending.is_none()
+        })
+        .await
+    }
+
+    async fn wait_for_state(
+        &self,
+        timeout: Duration,
+        is_ready: impl Fn(&TurnEndSchedulerState) -> bool,
+    ) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            {
+                let state = self.state.lock().await;
+                if is_ready(&state) {
+                    return true;
+                }
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            if tokio::time::timeout(remaining, self.state_changed.notified())
+                .await
+                .is_err()
+            {
+                return false;
+            }
+        }
+    }
+}
+
+async fn run_turn_end_memory_work(
+    ctx: FinalizeTurnContext,
+    deps: TurnEndWorkerDeps,
+    scheduler: &TurnEndScheduler,
+) {
+    let auto_compact_enabled = ctx.auto_compact_enabled;
+    let estimated_tokens = ctx.estimated_tokens;
+    let tool_calls_since_sm = ctx.tool_calls_since_sm_cursor;
+    let had_tool_calls_in_last_turn = ctx.tool_calls_last_turn > 0;
+    let last_msg_id = ctx.last_message_id.clone();
+    let extract_input = ctx.extract_input;
+    let now_ms = ctx.now_ms;
+
+    let session_memory = deps.session_memory.clone();
+    let session_memory_work = tokio::spawn(async move {
+        if auto_compact_enabled {
+            session_memory
+                .maybe_extract(
+                    estimated_tokens,
+                    tool_calls_since_sm,
+                    had_tool_calls_in_last_turn,
+                    last_msg_id,
+                )
+                .await
+        } else {
+            SessionMemoryOutcome::Skipped(crate::service::session::SkipReason::Disabled)
+        }
+    });
+
+    let transcript_dir = deps.transcript_dir;
+    let enumerator = deps.session_enumerator;
+    let extract_outcome = deps.extract.maybe_extract(extract_input).await;
+    scheduler.mark_dreaming().await;
+    let dream_outcome = deps
+        .dream
+        .maybe_consolidate(
+            &transcript_dir,
+            move || match enumerator {
+                Some(e) => e(),
+                None => Vec::new(),
+            },
+            now_ms,
+        )
+        .await;
+    let sm_outcome = match session_memory_work.await {
+        Ok(outcome) => outcome,
+        Err(err) => SessionMemoryOutcome::Failed {
+            reason: format!("session-memory task join failed: {err}"),
+        },
+    };
+    tracing::debug!(
+        target: "coco_memory::runtime",
+        session_memory = ?sm_outcome,
+        extract = ?extract_outcome,
+        dream = ?dream_outcome,
+        "turn-end memory background work completed"
+    );
+}
+
 /// One main-agent tool call that may have written to disk. The engine
 /// extracts these from each finalised turn and passes them into
 /// [`MemoryRuntime::finalize_turn`] so memory's `classify_tool_write`
@@ -920,3 +1147,7 @@ impl FinalizeTurnReport {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "runtime.test.rs"]
+mod tests;

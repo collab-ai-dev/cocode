@@ -11,6 +11,7 @@ use tempfile::TempDir;
 use super::*;
 use crate::EnvKey;
 use crate::EnvSnapshot;
+use crate::MemoryDisabledReason;
 use crate::PartialProviderConfig;
 use crate::RuntimeOverrides;
 use crate::Settings;
@@ -702,6 +703,98 @@ fn test_subagent_role_defaults_to_main_when_unset() {
         .expect("Subagent defaulted from Main");
     assert_eq!(subagent.model_id, main.model_id);
     assert_eq!(subagent.provider, main.provider);
+}
+
+#[test]
+fn memory_activation_disables_bare_mode() {
+    let mut settings = settings_with_main("anthropic", "claude-sonnet-4-6");
+    settings
+        .merged
+        .features
+        .insert(coco_types::Feature::AutoMemory.key().to_string(), true);
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::from_pairs([(EnvKey::CocoBareMode, "1")]),
+        RuntimeOverrides::default(),
+    )
+    .expect("resolve");
+
+    assert!(!runtime.memory_activation.active);
+    assert_eq!(
+        runtime.memory_activation.disabled_reason,
+        Some(MemoryDisabledReason::BareMode)
+    );
+}
+
+#[test]
+fn memory_activation_disables_remote_without_memory_dir() {
+    let mut settings = settings_with_main("anthropic", "claude-sonnet-4-6");
+    settings
+        .merged
+        .features
+        .insert(coco_types::Feature::AutoMemory.key().to_string(), true);
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::from_pairs([(EnvKey::CocoRemote, "true")]),
+        RuntimeOverrides::default(),
+    )
+    .expect("resolve");
+
+    assert!(!runtime.memory_activation.active);
+    assert_eq!(
+        runtime.memory_activation.disabled_reason,
+        Some(MemoryDisabledReason::RemoteWithoutMemoryDir)
+    );
+}
+
+#[test]
+fn remote_memory_dir_is_base_override() {
+    let mut settings = settings_with_main("anthropic", "claude-sonnet-4-6");
+    settings
+        .merged
+        .features
+        .insert(coco_types::Feature::AutoMemory.key().to_string(), true);
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::from_pairs([
+            (EnvKey::CocoRemote, "true"),
+            (EnvKey::CocoRemoteMemoryDir, "/tmp/coco-remote-memory"),
+        ]),
+        RuntimeOverrides::default(),
+    )
+    .expect("resolve");
+
+    assert!(runtime.memory_activation.active);
+    assert_eq!(
+        runtime.memory.memory_base_override,
+        Some(std::path::PathBuf::from("/tmp/coco-remote-memory"))
+    );
+    assert_eq!(runtime.memory.directory, None);
+}
+
+#[test]
+fn memory_activation_disables_remote_with_invalid_memory_dir() {
+    let mut settings = settings_with_main("anthropic", "claude-sonnet-4-6");
+    settings
+        .merged
+        .features
+        .insert(coco_types::Feature::AutoMemory.key().to_string(), true);
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::from_pairs([
+            (EnvKey::CocoRemote, "true"),
+            (EnvKey::CocoRemoteMemoryDir, "relative-memory"),
+        ]),
+        RuntimeOverrides::default(),
+    )
+    .expect("resolve");
+
+    assert!(!runtime.memory_activation.active);
+    assert_eq!(
+        runtime.memory_activation.disabled_reason,
+        Some(MemoryDisabledReason::RemoteWithoutMemoryDir)
+    );
+    assert_eq!(runtime.memory.memory_base_override, None);
 }
 
 #[test]

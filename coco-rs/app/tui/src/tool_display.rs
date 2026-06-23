@@ -156,7 +156,7 @@ pub fn tool_name_tone(tool_name: &str) -> ToolNameTone {
         | ToolName::CronCreate
         | ToolName::CronDelete
         | ToolName::RemoteTrigger => ToolNameTone::Write,
-        ToolName::Agent | ToolName::Skill => ToolNameTone::Agent,
+        ToolName::Agent | ToolName::Workflow | ToolName::Skill => ToolNameTone::Agent,
         ToolName::EnterPlanMode
         | ToolName::ExitPlanMode
         | ToolName::VerifyPlanExecution
