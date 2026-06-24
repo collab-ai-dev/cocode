@@ -55,6 +55,7 @@ mod wire_tagged;
 // === Re-exports ===
 
 // App-state (cross-turn shared state carried on ToolUseContext)
+pub use app_state::ActiveGoal;
 pub use app_state::ActiveWorktreeState;
 pub use app_state::AppStatePatch;
 pub use app_state::AppStateReadHandle;

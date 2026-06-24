@@ -44,3 +44,48 @@ fn missed_notification_fences_longer_than_inner_backticks() {
         "fence must exceed inner run, got: {out}"
     );
 }
+
+#[test]
+fn scheduled_loop_sentinel_uses_shared_state_for_short_reminders() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".claude")).expect("mkdir");
+    std::fs::write(dir.path().join(".claude").join("loop.md"), "stable task\n")
+        .expect("write loop");
+    let mut state = coco_skills::bundled::loop_skill::LoopSentinelState::default();
+
+    let first = expand_scheduled_prompt(
+        coco_skills::bundled::loop_skill::LOOP_FILE_SENTINEL,
+        dir.path(),
+        dir.path(),
+        &mut state,
+        false,
+    );
+    let second = expand_scheduled_prompt(
+        coco_skills::bundled::loop_skill::LOOP_FILE_SENTINEL,
+        dir.path(),
+        dir.path(),
+        &mut state,
+        false,
+    );
+
+    assert!(first.contains("# /loop tick — tasks from "));
+    assert!(first.contains("stable task"));
+    assert!(second.contains("# /loop tick — loop.md tasks"));
+    assert!(!second.contains("stable task"));
+}
+
+#[test]
+fn scheduled_non_sentinel_prompt_is_unchanged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut state = coco_skills::bundled::loop_skill::LoopSentinelState::default();
+
+    let prompt = expand_scheduled_prompt(
+        "check deployment",
+        dir.path(),
+        dir.path(),
+        &mut state,
+        false,
+    );
+
+    assert_eq!(prompt, "check deployment");
+}

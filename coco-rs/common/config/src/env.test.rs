@@ -11,6 +11,7 @@ fn test_env_key_as_str() {
         EnvKey::CocoMcpToolTimeoutMs.as_str(),
         "COCO_MCP_TOOL_TIMEOUT_MS"
     );
+    assert_eq!(EnvKey::CocoLoopPersistent.as_str(), "COCO_LOOP_PERSISTENT");
 }
 
 #[test]

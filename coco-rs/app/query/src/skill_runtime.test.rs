@@ -70,6 +70,15 @@ fn runtime_with(skills: Vec<SkillDefinition>) -> QuerySkillRuntime {
     QuerySkillRuntime::new(Arc::new(mgr))
 }
 
+fn inline_text(result: SkillInvocationResult) -> String {
+    match result {
+        SkillInvocationResult::Inline { new_messages, .. } => {
+            serde_json::to_string(&new_messages[0]).unwrap()
+        }
+        other => panic!("expected Inline, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn test_not_found_returns_not_found_error() {
     let rt = runtime_with(vec![]);
@@ -232,6 +241,91 @@ async fn test_inline_skill_expands_arguments() {
         text.contains("hello world"),
         "args should be substituted; got: {text}"
     );
+}
+
+#[tokio::test]
+async fn test_loop_skill_invocation_uses_runtime_loop_prompt_builder() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".claude")).expect("mkdir");
+    std::fs::write(dir.path().join(".claude").join("loop.md"), "check CI\n").expect("write loop");
+
+    let mgr = SkillManager::new();
+    coco_skills::bundled::register_bundled(&mgr);
+    let rt = QuerySkillRuntime::new(Arc::new(mgr)).with_loop_context(LoopSkillContext {
+        project_root: dir.path().to_path_buf(),
+        cwd: Arc::new(tokio::sync::RwLock::new(dir.path().to_path_buf())),
+        config: coco_config::LoopConfig {
+            default_prompt_enabled: true,
+            dynamic_enabled: true,
+            ..Default::default()
+        },
+        remote_schedule_enabled: true,
+    });
+
+    let empty = rt
+        .invoke_skill(
+            "loop",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
+        .await
+        .expect("ok");
+    let empty_text = inline_text(empty);
+    assert!(empty_text.contains("# /loop — loop.md tasks with dynamic pacing"));
+    assert!(empty_text.contains("literal string `<<loop.md-dynamic>>`"));
+    assert!(empty_text.contains("check CI"));
+
+    let fixed_interval = rt
+        .invoke_skill(
+            "loop",
+            "2h summarize PR status",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
+        .await
+        .expect("ok");
+    let fixed_text = inline_text(fixed_interval);
+    assert!(fixed_text.contains("# /loop — schedule a recurring or self-paced prompt"));
+    assert!(fixed_text.contains("## Offer cloud first"));
+    assert!(fixed_text.contains("call AskUserQuestion first"));
+}
+
+#[tokio::test]
+async fn test_loop_skill_invocation_uses_live_cwd_for_loop_file_fallback() {
+    let project = tempfile::tempdir().expect("project");
+    let subdir = project.path().join("subdir");
+    std::fs::create_dir_all(&subdir).expect("mkdir");
+    std::fs::write(subdir.join("loop.md"), "live cwd task\n").expect("write loop");
+    let live_cwd = Arc::new(tokio::sync::RwLock::new(project.path().to_path_buf()));
+
+    let mgr = SkillManager::new();
+    coco_skills::bundled::register_bundled(&mgr);
+    let rt = QuerySkillRuntime::new(Arc::new(mgr)).with_loop_context(LoopSkillContext {
+        project_root: project.path().to_path_buf(),
+        cwd: live_cwd.clone(),
+        config: coco_config::LoopConfig {
+            default_prompt_enabled: true,
+            ..Default::default()
+        },
+        remote_schedule_enabled: false,
+    });
+
+    *live_cwd.write().await = subdir;
+
+    let result = rt
+        .invoke_skill(
+            "loop",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
+        .await
+        .expect("ok");
+    let text = inline_text(result);
+
+    assert!(text.contains("# /loop — schedule loop.md tasks"));
+    assert!(text.contains("live cwd task"));
 }
 
 #[tokio::test]

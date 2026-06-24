@@ -195,7 +195,9 @@ fn render_known(
         | TaskList | TaskUpdate | TaskStop | TaskOutput | EnterPlanMode | VerifyPlanExecution
         | EnterWorktree | ExitWorktree | ToolSearch | Config | SendUserMessage | Lsp | McpAuth
         | ListMcpResources | ReadMcpResource | CronCreate | CronDelete | CronList
-        | RemoteTrigger | Sleep | StructuredOutput => render_structured_default(cx, output, lines),
+        | ScheduleWakeup | Monitor | RemoteTrigger | Sleep | StructuredOutput => {
+            render_structured_default(cx, output, lines)
+        }
     }
 }
 

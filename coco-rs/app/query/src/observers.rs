@@ -120,6 +120,38 @@ impl CompactionObserver for ToolAppStateObserver {
     }
 }
 
+/// Observer that resets `/loop` sentinel delivery memory after compaction.
+/// The full prompt must be re-established because earlier loop instructions may
+/// have moved behind the compact boundary.
+pub struct LoopSentinelStateObserver {
+    loop_sentinel_state: Arc<Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>>,
+}
+
+impl LoopSentinelStateObserver {
+    pub fn new(
+        loop_sentinel_state: Arc<Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>>,
+    ) -> Self {
+        Self {
+            loop_sentinel_state,
+        }
+    }
+}
+
+#[async_trait]
+impl CompactionObserver for LoopSentinelStateObserver {
+    async fn on_compaction_complete(
+        &self,
+        _result: &CompactResult,
+        is_main_agent: bool,
+    ) -> Result<(), BoxedError> {
+        if !is_main_agent {
+            return Ok(());
+        }
+        self.loop_sentinel_state.lock().await.reset();
+        Ok(())
+    }
+}
+
 /// Convenience builder — assemble a registry with the standard
 /// observers. Callers (CLI/SDK runners) feed in the handles they
 /// own; missing handles map to omitted observers.
@@ -127,6 +159,7 @@ pub fn build_default_registry(
     file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,
     denial_tracker: Option<Arc<Mutex<coco_permissions::DenialTracker>>>,
     app_state: Option<Arc<RwLock<coco_types::ToolAppState>>>,
+    loop_sentinel_state: Option<Arc<Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>>>,
 ) -> Arc<coco_compact::CompactionObserverRegistry> {
     let mut registry = coco_compact::CompactionObserverRegistry::new();
     if let Some(frs) = file_read_state {
@@ -138,5 +171,123 @@ pub fn build_default_registry(
     if let Some(app) = app_state {
         registry.register(Arc::new(ToolAppStateObserver::new(app)));
     }
+    if let Some(state) = loop_sentinel_state {
+        registry.register(Arc::new(LoopSentinelStateObserver::new(state)));
+    }
     Arc::new(registry)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use coco_compact::CompactResult;
+    use coco_messages::Message;
+    use coco_messages::SystemCompactBoundaryMessage;
+    use coco_messages::SystemMessage;
+    use coco_types::CompactTrigger;
+    use tokio::sync::Mutex;
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn dummy_result() -> CompactResult {
+        CompactResult {
+            boundary_marker: Message::System(SystemMessage::CompactBoundary(
+                SystemCompactBoundaryMessage {
+                    uuid: Uuid::new_v4(),
+                    tokens_before: 100,
+                    tokens_after: 50,
+                    trigger: CompactTrigger::Auto,
+                    user_context: None,
+                    messages_summarized: None,
+                    pre_compact_discovered_tools: vec![],
+                    preserved_segment: None,
+                },
+            )),
+            raw_summary: None,
+            summary_messages: vec![],
+            attachments: vec![],
+            messages_to_keep: vec![],
+            hook_results: vec![],
+            user_display_message: None,
+            pre_compact_tokens: 100,
+            post_compact_tokens: 50,
+            true_post_compact_tokens: 50,
+            is_recompaction: false,
+            trigger: CompactTrigger::Auto,
+        }
+    }
+
+    #[tokio::test]
+    async fn loop_sentinel_state_observer_resets_main_agent_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = Arc::new(Mutex::new(
+            coco_skills::bundled::loop_skill::LoopSentinelState::default(),
+        ));
+        {
+            let mut guard = state.lock().await;
+            let first = coco_skills::bundled::loop_skill::expand_sentinel_prompt_with_state(
+                coco_skills::bundled::loop_skill::AUTONOMOUS_LOOP_SENTINEL,
+                dir.path(),
+                dir.path(),
+                &mut guard,
+                false,
+            )
+            .expect("first sentinel");
+            assert!(first.contains("# Autonomous loop check"));
+        }
+
+        LoopSentinelStateObserver::new(state.clone())
+            .on_compaction_complete(&dummy_result(), true)
+            .await
+            .expect("observer");
+
+        let mut guard = state.lock().await;
+        let after_reset = coco_skills::bundled::loop_skill::expand_sentinel_prompt_with_state(
+            coco_skills::bundled::loop_skill::AUTONOMOUS_LOOP_SENTINEL,
+            dir.path(),
+            dir.path(),
+            &mut guard,
+            false,
+        )
+        .expect("sentinel after reset");
+        assert!(after_reset.contains("# Autonomous loop check"));
+    }
+
+    #[tokio::test]
+    async fn loop_sentinel_state_observer_ignores_non_main_agents() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = Arc::new(Mutex::new(
+            coco_skills::bundled::loop_skill::LoopSentinelState::default(),
+        ));
+        {
+            let mut guard = state.lock().await;
+            let first = coco_skills::bundled::loop_skill::expand_sentinel_prompt_with_state(
+                coco_skills::bundled::loop_skill::AUTONOMOUS_LOOP_SENTINEL,
+                dir.path(),
+                dir.path(),
+                &mut guard,
+                false,
+            )
+            .expect("first sentinel");
+            assert!(first.contains("# Autonomous loop check"));
+        }
+
+        LoopSentinelStateObserver::new(state.clone())
+            .on_compaction_complete(&dummy_result(), false)
+            .await
+            .expect("observer");
+
+        let mut guard = state.lock().await;
+        let still_compact = coco_skills::bundled::loop_skill::expand_sentinel_prompt_with_state(
+            coco_skills::bundled::loop_skill::AUTONOMOUS_LOOP_SENTINEL,
+            dir.path(),
+            dir.path(),
+            &mut guard,
+            false,
+        )
+        .expect("sentinel after non-main compact");
+        assert!(!still_compact.contains("# Autonomous loop check"));
+    }
 }

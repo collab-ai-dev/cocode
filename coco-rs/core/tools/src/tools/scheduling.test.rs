@@ -1,10 +1,14 @@
 use super::CronCreateTool;
 use super::CronListTool;
+use super::ScheduleWakeupTool;
 use super::is_valid_cron_expression;
 use coco_tool_runtime::DynTool;
+use coco_tool_runtime::InMemoryScheduleStore;
+use coco_tool_runtime::ScheduleStore;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use serde_json::json;
+use std::sync::Arc;
 
 // ── R7-T22: cron expression validation tests ──
 //
@@ -218,6 +222,78 @@ fn cron_create_render_one_shot_session_only() {
     assert!(text.starts_with("Scheduled one-shot task x"), "got: {text}");
     assert!(text.contains("session-only"), "got: {text}");
     assert!(text.contains("fires once"), "got: {text}");
+}
+
+#[tokio::test]
+async fn schedule_wakeup_creates_session_only_one_shot() {
+    let store = Arc::new(InMemoryScheduleStore::new());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.schedules = store.clone();
+
+    let result = <ScheduleWakeupTool as DynTool>::execute(
+        &ScheduleWakeupTool,
+        json!({
+            "delaySeconds": 30,
+            "reason": "watching CI",
+            "prompt": "/loop check CI"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.data["clampedDelaySeconds"], 60);
+    assert_eq!(result.data["wasClamped"], true);
+    assert!(result.data["scheduledFor"].as_i64().unwrap() >= now_ms() + 60_000);
+    let tasks = store.list_all_cron_tasks().await.unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].prompt, "/loop check CI");
+    assert_eq!(tasks[0].recurring, None);
+    assert_eq!(tasks[0].durable, Some(false));
+}
+
+#[test]
+fn schedule_wakeup_validate_input_requires_prompt_and_reason() {
+    let ctx = ToolUseContext::test_default();
+    let missing_prompt = <ScheduleWakeupTool as DynTool>::validate_input(
+        &ScheduleWakeupTool,
+        &json!({"delaySeconds": 120, "reason": "idle", "prompt": ""}),
+        &ctx,
+    );
+    assert!(matches!(missing_prompt, ValidationResult::Invalid { .. }));
+
+    let missing_reason = <ScheduleWakeupTool as DynTool>::validate_input(
+        &ScheduleWakeupTool,
+        &json!({"delaySeconds": 120, "reason": "", "prompt": "/loop check"}),
+        &ctx,
+    );
+    assert!(matches!(missing_reason, ValidationResult::Invalid { .. }));
+}
+
+#[test]
+fn schedule_wakeup_render_reports_clamp() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let parts = <ScheduleWakeupTool as DynTool>::render_for_model(
+        &ScheduleWakeupTool,
+        &json!({
+            "scheduledFor": now_ms() + 60_000,
+            "clampedDelaySeconds": 60,
+            "wasClamped": true,
+            "id": "wake-1"
+        }),
+    );
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert!(text.contains("Next wakeup scheduled"), "got: {text}");
+    assert!(text.contains("clamped to 60s"), "got: {text}");
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default()
 }
 
 #[test]

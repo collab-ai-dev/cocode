@@ -377,6 +377,9 @@ pub struct PartialLoopSettings {
     pub total_token_budget: Option<i32>,
     pub permission_mode: Option<PermissionMode>,
     pub enable_streaming_tools: Option<bool>,
+    pub default_prompt_enabled: Option<bool>,
+    pub dynamic_enabled: Option<bool>,
+    pub persistent_preamble_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -387,6 +390,9 @@ pub struct LoopConfig {
     pub total_token_budget: Option<i32>,
     pub permission_mode: PermissionMode,
     pub enable_streaming_tools: bool,
+    pub default_prompt_enabled: bool,
+    pub dynamic_enabled: bool,
+    pub persistent_preamble_enabled: bool,
 }
 
 impl Default for LoopConfig {
@@ -399,12 +405,19 @@ impl Default for LoopConfig {
             total_token_budget: None,
             permission_mode: PermissionMode::Default,
             enable_streaming_tools: true,
+            default_prompt_enabled: false,
+            dynamic_enabled: false,
+            persistent_preamble_enabled: false,
         }
     }
 }
 
 impl LoopConfig {
-    pub fn resolve(settings: &Settings, overrides: &crate::RuntimeOverrides) -> Self {
+    pub fn resolve(
+        settings: &Settings,
+        overrides: &crate::RuntimeOverrides,
+        env: &EnvSnapshot,
+    ) -> Self {
         let mut config = Self::default();
         let loop_settings = &settings.loop_config;
 
@@ -419,6 +432,20 @@ impl LoopConfig {
         }
         if let Some(v) = loop_settings.enable_streaming_tools {
             config.enable_streaming_tools = v;
+        }
+        if let Some(v) = loop_settings.default_prompt_enabled {
+            config.default_prompt_enabled = v;
+        }
+        if let Some(v) = loop_settings.dynamic_enabled {
+            config.dynamic_enabled = v;
+        }
+        if let Some(v) = loop_settings.persistent_preamble_enabled {
+            config.persistent_preamble_enabled = v;
+        }
+        if env.is_truthy(EnvKey::CocoLoopPersistent) {
+            config.persistent_preamble_enabled = true;
+        } else if env.is_falsy(EnvKey::CocoLoopPersistent) {
+            config.persistent_preamble_enabled = false;
         }
         if let Some(mode) = overrides.permission_mode_override {
             config.permission_mode = mode;

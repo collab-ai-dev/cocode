@@ -72,6 +72,41 @@ mod agent_template_tests {
     }
 }
 
+#[cfg(test)]
+mod goal_tests {
+    use super::super::workspace_trust_rejected_from_env;
+
+    #[test]
+    fn workspace_trust_gate_only_rejects_explicit_zero() {
+        assert!(workspace_trust_rejected_from_env(Some("0")));
+        assert!(!workspace_trust_rejected_from_env(Some("1")));
+        assert!(!workspace_trust_rejected_from_env(None));
+    }
+
+    #[test]
+    fn active_goal_status_matches_non_interactive_goal_contract() {
+        let mut goal = coco_types::ActiveGoal {
+            condition: "finish the migration".to_string(),
+            iterations: 0,
+            set_at_ms: 100,
+            tokens_at_start: 10,
+            last_reason: None,
+        };
+
+        assert_eq!(
+            coco_cli::goal_command::format_active_goal_status(&goal),
+            "Goal active: finish the migration (not yet evaluated)"
+        );
+
+        goal.iterations = 2;
+        goal.last_reason = Some(" tests still failing\nrerun needed ".to_string());
+        assert_eq!(
+            coco_cli::goal_command::format_active_goal_status(&goal),
+            "Goal active: finish the migration (2 turns)\nLast check: tests still failing rerun needed"
+        );
+    }
+}
+
 use super::ActiveTurn;
 use super::ActiveTurnDrain;
 use super::PermissionsMutation;

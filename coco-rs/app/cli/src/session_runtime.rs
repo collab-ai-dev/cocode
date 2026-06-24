@@ -522,6 +522,9 @@ pub struct SessionRuntime {
     pub file_read_state: Arc<RwLock<FileReadState>>,
     pub file_history: Option<Arc<RwLock<FileHistoryState>>>,
     pub app_state: Arc<RwLock<ToolAppState>>,
+    /// `/loop` scheduled sentinel memory. Reset after compaction so the next
+    /// sentinel delivery re-establishes full instructions in the transcript.
+    pub loop_sentinel_state: Arc<Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>>,
     /// Session-scoped peer-message store, shared (one `Arc`) by every
     /// per-turn engine built via `wire_engine` — including in-process
     /// teammate engines. `SendMessage` pushes into it (`ToolUseContext.
@@ -1142,6 +1145,9 @@ impl SessionRuntime {
         // each command — `cd /tmp` in turn N survives into turn N+1.
         let session_original_cwd = cwd.clone();
         let session_current_cwd = Arc::new(RwLock::new(cwd.clone()));
+        let loop_sentinel_state = Arc::new(Mutex::new(
+            coco_skills::bundled::loop_skill::LoopSentinelState::default(),
+        ));
 
         // ── Session-scoped shell provider ──
         //
@@ -1432,6 +1438,7 @@ impl SessionRuntime {
             file_read_state,
             file_history,
             app_state,
+            loop_sentinel_state,
             pending_message_store: Arc::new(coco_tool_runtime::InMemoryPendingMessageStore::new()),
             auto_mode_state,
             denial_tracker,
@@ -2632,6 +2639,7 @@ impl SessionRuntime {
             Some(self.file_read_state.clone()),
             Some(self.denial_tracker.clone()),
             Some(app_state),
+            Some(self.loop_sentinel_state.clone()),
         );
         engine = engine.with_compaction_observers(observers);
         engine = engine.with_mailbox(self.mailbox.clone());
@@ -3528,6 +3536,7 @@ impl SessionRuntime {
             &plugins,
             coco_types::UserType::from_env(),
             command_features,
+            runtime_config.loop_config.clone(),
             cwd.to_path_buf(),
             dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
             None,

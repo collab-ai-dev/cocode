@@ -73,10 +73,12 @@ pub enum ToolName {
     ListMcpResources,
     #[serde(rename = "ReadMcpResourceTool")]
     ReadMcpResource,
-    // Scheduling (4)
+    // Scheduling (6)
     CronCreate,
     CronDelete,
     CronList,
+    ScheduleWakeup,
+    Monitor,
     RemoteTrigger,
     // Shell (2)
     PowerShell,
@@ -135,6 +137,8 @@ impl ToolName {
             Self::CronCreate => "CronCreate",
             Self::CronDelete => "CronDelete",
             Self::CronList => "CronList",
+            Self::ScheduleWakeup => "ScheduleWakeup",
+            Self::Monitor => "Monitor",
             Self::RemoteTrigger => "RemoteTrigger",
             Self::PowerShell => "PowerShell",
             Self::Repl => "REPL",
@@ -253,6 +257,8 @@ impl FromStr for ToolName {
             "CronCreate" => Ok(Self::CronCreate),
             "CronDelete" => Ok(Self::CronDelete),
             "CronList" => Ok(Self::CronList),
+            "ScheduleWakeup" => Ok(Self::ScheduleWakeup),
+            "Monitor" => Ok(Self::Monitor),
             "RemoteTrigger" => Ok(Self::RemoteTrigger),
             "PowerShell" => Ok(Self::PowerShell),
             "REPL" => Ok(Self::Repl),

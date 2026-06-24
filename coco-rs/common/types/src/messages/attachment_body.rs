@@ -129,6 +129,7 @@ pub enum SilentPayload {
     HookSystemMessage(HookSystemMessagePayload),
     HookPermissionDecision(HookPermissionDecisionPayload),
     CommandPermissions(CommandPermissionsPayload),
+    GoalStatus(GoalStatusPayload),
     StructuredOutput(StructuredOutputPayload),
     DynamicSkill(DynamicSkillPayload),
     MaxTurnsReached(MaxTurnsReachedPayload),
@@ -209,6 +210,34 @@ pub struct CommandPermissionsPayload {
     pub allowed_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+}
+
+/// TS parity: `/goal` status attachment (`goal_status`).
+///
+/// Sentinels (`sentinel: true`) are emitted by `/goal` set/clear and are
+/// ignored by "last achieved goal" lookup. Non-sentinel payloads are emitted
+/// by the Stop-hook evaluator for achieved, failed, and still-unmet checks.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct GoalStatusPayload {
+    pub met: bool,
+    pub condition: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sentinel: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub failed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(
+        default,
+        rename = "durationMs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub duration_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iterations: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<i64>,
 }
 
 /// TS parity: `structured_output` (`utils/attachments.ts:639+`,

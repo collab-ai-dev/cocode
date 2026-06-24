@@ -72,10 +72,12 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(ListMcpResourcesTool));
     registry.register(Arc::new(ReadMcpResourceTool));
 
-    // Scheduling (4)
+    // Scheduling (6)
     registry.register(Arc::new(CronCreateTool));
     registry.register(Arc::new(CronDeleteTool));
     registry.register(Arc::new(CronListTool));
+    registry.register(Arc::new(ScheduleWakeupTool));
+    registry.register(Arc::new(MonitorTool));
     registry.register(Arc::new(RemoteTriggerTool));
 
     // Shell (3)

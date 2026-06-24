@@ -73,6 +73,7 @@ fn defaults_for_experimental_gates() {
         Feature::Lsp,
         Feature::Proactive,
         Feature::KairosBrief,
+        Feature::AgentTriggers,
         Feature::NotebookEdit,
     ] {
         assert!(!f.enabled(feat), "{feat:?} must default off");

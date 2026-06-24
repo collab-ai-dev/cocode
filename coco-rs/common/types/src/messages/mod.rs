@@ -38,6 +38,7 @@ pub use attachment_body::CommandPermissionsPayload;
 pub use attachment_body::CompactFileReferencePayload;
 pub use attachment_body::DynamicSkillPayload;
 pub use attachment_body::EditedImageFilePayload;
+pub use attachment_body::GoalStatusPayload;
 pub use attachment_body::HookCancelledPayload;
 pub use attachment_body::HookErrorDuringExecutionPayload;
 pub use attachment_body::HookNonBlockingErrorPayload;

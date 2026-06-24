@@ -27,17 +27,32 @@
 
 use std::time::Duration;
 
+use coco_types::HookEventType;
+
+/// Context around an LLM-driven hook evaluation.
+#[derive(Debug, Clone)]
+pub struct HookLlmEvaluationContext {
+    pub event: HookEventType,
+    pub hook_input_json: String,
+    /// Stop/SubagentStop transcript evidence, newest last. Non-Stop hooks
+    /// usually leave this empty.
+    pub transcript_history: Vec<String>,
+}
+
 /// Outcome of evaluating a `Prompt` or `Agent` hook through an LLM.
 ///
-/// Maps onto the `{ok: bool, reason?: string}` structured output schema.
+/// Maps onto the Stop-aware `{ok, reason, impossible?}` structured output
+/// schema.
 #[derive(Debug, Clone)]
 pub enum HookEvaluationResult {
     /// `ok: true` — condition met. Treated as `HookOutcome::Success`.
-    Ok,
+    Success { reason: Option<String> },
     /// `ok: false` — condition not met. `reason` flows into a
     /// `blocking_error` that surfaces as `<hook-blocking-error>` to the
     /// model.
     Blocking { reason: String },
+    /// Stop/SubagentStop only: condition can never be satisfied.
+    Impossible { reason: String },
     /// Hit `MAX_AGENT_TURNS` (agent only) or finished without
     /// `StructuredOutputTool`. Treated as cancelled — silent, no UI message.
     Cancelled,
@@ -66,6 +81,7 @@ pub trait HookLlmHandle: Send + Sync + std::fmt::Debug {
         prompt: &str,
         model: Option<&str>,
         timeout: Duration,
+        context: HookLlmEvaluationContext,
     ) -> HookEvaluationResult;
 
     /// Multi-turn agent evaluation (Agent hook). The implementation
@@ -77,5 +93,6 @@ pub trait HookLlmHandle: Send + Sync + std::fmt::Debug {
         prompt: &str,
         model: Option<&str>,
         timeout: Duration,
+        context: HookLlmEvaluationContext,
     ) -> HookEvaluationResult;
 }

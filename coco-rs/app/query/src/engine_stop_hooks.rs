@@ -20,6 +20,7 @@
 //!   one more turn?" check that runs only when stop hooks pass
 //!   cleanly. Caller-driven.
 
+use coco_hooks::HookDefinition;
 use coco_hooks::orchestration;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
@@ -208,7 +209,10 @@ impl QueryEngine {
         };
         let history_snapshot = history.to_vec();
 
-        match orchestration::execute_stop(
+        let deferred_goal_hooks = self.take_goal_hooks_if_background_running(hooks).await;
+        let goal_evaluation_deferred = !deferred_goal_hooks.is_empty();
+
+        let stop_result = orchestration::execute_stop(
             hooks,
             &hook_ctx,
             turn_state.stop_hook_active,
@@ -216,14 +220,18 @@ impl QueryEngine {
             &history_snapshot,
             hook_tx_opt,
         )
-        .await
-        {
+        .await;
+
+        match stop_result {
             Ok(agg) if agg.prevent_continuation => {
                 info!("Stop hook prevented continuation");
+                self.restore_deferred_goal_hooks(hooks, deferred_goal_hooks);
                 StopHookDecision::Prevented
             }
             Ok(agg) if agg.is_blocked() => {
                 if let Some(err) = &agg.blocking_error {
+                    self.record_active_goal_blocked(history, event_tx, err)
+                        .await;
                     let feedback = orchestration::format_stop_hook_message(err);
                     warn!(%feedback, "Stop hook blocked session completion");
                     crate::history_sync::history_push_and_emit(
@@ -248,19 +256,245 @@ impl QueryEngine {
                     // the user-prompt perspective; the counter belongs
                     // to the previous attempt only.
                     turn_state.max_tokens_recovery_count = 0;
+                    self.restore_deferred_goal_hooks(hooks, deferred_goal_hooks);
                     StopHookDecision::BlockedContinueLoop
                 } else {
                     // Defensive: `is_blocked()` returned true but
                     // `blocking_error` is None. Shouldn't happen given the
                     // aggregator's invariants; treat as clean pass.
+                    self.restore_deferred_goal_hooks(hooks, deferred_goal_hooks);
                     StopHookDecision::Continue
                 }
             }
-            Ok(_) => StopHookDecision::Continue,
+            Ok(agg) => {
+                if !goal_evaluation_deferred {
+                    self.handle_active_goal_terminal_result(&agg, history, event_tx)
+                        .await;
+                }
+                self.restore_deferred_goal_hooks(hooks, deferred_goal_hooks);
+                StopHookDecision::Continue
+            }
             Err(e) => {
                 warn!(error = %e, "Stop hook execution failed");
+                self.restore_deferred_goal_hooks(hooks, deferred_goal_hooks);
                 StopHookDecision::Continue
             }
         }
     }
+
+    async fn take_goal_hooks_if_background_running(
+        &self,
+        registry: &coco_hooks::HookRegistry,
+    ) -> Vec<HookDefinition> {
+        let Some(app_state) = self.app_state.as_ref() else {
+            return Vec::new();
+        };
+        let Some(goal) = app_state
+            .read()
+            .await
+            .active_goal
+            .as_ref()
+            .map(|goal| goal.condition.clone())
+        else {
+            return Vec::new();
+        };
+        if !self.has_live_background_tasks().await {
+            return Vec::new();
+        }
+        let removed = registry.remove_matching_hooks(|hook| is_goal_prompt_hook(hook, &goal));
+        if !removed.is_empty() {
+            info!(
+                condition = %goal,
+                "deferred /goal Stop hook evaluation because background tasks are still running"
+            );
+        }
+        removed
+    }
+
+    async fn has_live_background_tasks(&self) -> bool {
+        let Some(task_handle) = &self.task_handle else {
+            return false;
+        };
+        task_handle
+            .list_tasks()
+            .await
+            .into_iter()
+            .any(|task| !task.status.is_terminal())
+    }
+
+    fn restore_deferred_goal_hooks(
+        &self,
+        registry: &coco_hooks::HookRegistry,
+        hooks: Vec<HookDefinition>,
+    ) {
+        for hook in hooks {
+            registry.register(hook);
+        }
+    }
+
+    async fn record_active_goal_blocked(
+        &self,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+        err: &orchestration::HookBlockingError,
+    ) {
+        let Some(app_state) = self.app_state.as_ref() else {
+            return;
+        };
+        let orchestration::HookBlockingSource::Prompt { prompt } = &err.source else {
+            return;
+        };
+        let condition = {
+            let mut state = app_state.write().await;
+            let Some(goal) = state.active_goal.as_mut() else {
+                return;
+            };
+            if prompt != &goal.condition {
+                return;
+            }
+            goal.iterations = goal.iterations.saturating_add(1);
+            goal.last_reason = Some(err.blocking_error.clone());
+            goal.condition.clone()
+        };
+        append_goal_status(
+            history,
+            event_tx,
+            coco_types::GoalStatusPayload {
+                met: false,
+                condition,
+                reason: Some(err.blocking_error.clone()),
+                ..Default::default()
+            },
+        )
+        .await;
+    }
+
+    async fn handle_active_goal_terminal_result(
+        &self,
+        agg: &orchestration::AggregatedHookResult,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+    ) {
+        let Some((met, failed, reason)) = self.goal_terminal_verdict(agg).await else {
+            return;
+        };
+        let goal = {
+            let Some(app_state) = self.app_state.as_ref() else {
+                return;
+            };
+            let mut state = app_state.write().await;
+            state.active_goal.take()
+        };
+        let Some(goal) = goal else {
+            return;
+        };
+        let Some(registry) = self.hooks.as_ref() else {
+            return;
+        };
+        let condition = goal.condition.clone();
+        let removed = registry.remove_matching_hooks(|hook| is_goal_prompt_hook(hook, &condition));
+        if removed.is_empty() {
+            let Some(app_state) = self.app_state.as_ref() else {
+                return;
+            };
+            app_state.write().await.active_goal = Some(goal);
+            return;
+        }
+        let duration_ms = unix_time_ms().saturating_sub(goal.set_at_ms);
+        let current_output_tokens = self.current_session_output_tokens().await;
+        let tokens = current_output_tokens.saturating_sub(goal.tokens_at_start);
+        append_goal_status(
+            history,
+            event_tx,
+            coco_types::GoalStatusPayload {
+                met,
+                condition,
+                failed,
+                reason,
+                iterations: Some(goal.iterations.saturating_add(1)),
+                duration_ms: Some(duration_ms),
+                tokens: Some(tokens),
+                ..Default::default()
+            },
+        )
+        .await;
+    }
+
+    async fn goal_terminal_verdict(
+        &self,
+        agg: &orchestration::AggregatedHookResult,
+    ) -> Option<(bool, bool, Option<String>)> {
+        let goal_condition = self
+            .app_state
+            .as_ref()?
+            .read()
+            .await
+            .active_goal
+            .as_ref()?
+            .condition
+            .clone();
+        if let Some(impossible) = agg.llm_impossibles.iter().find(|result| {
+            matches!(
+                &result.source,
+                orchestration::HookBlockingSource::Prompt { prompt } if prompt == &goal_condition
+            )
+        }) {
+            return Some((false, true, Some(impossible.reason.clone())));
+        }
+        agg.llm_successes.iter().find_map(|result| {
+            if matches!(
+                &result.source,
+                orchestration::HookBlockingSource::Prompt { prompt } if prompt == &goal_condition
+            ) {
+                Some((true, false, result.reason.clone()))
+            } else {
+                None
+            }
+        })
+    }
+
+    async fn current_session_output_tokens(&self) -> i64 {
+        let Some(tracker) = &self.session_usage_tracker else {
+            return 0;
+        };
+        tracker
+            .lock()
+            .await
+            .snapshot(self.transcript_session_id.clone().unwrap_or_default())
+            .totals
+            .output_tokens
+    }
+}
+
+fn is_goal_prompt_hook(hook: &HookDefinition, condition: &str) -> bool {
+    hook.event == coco_types::HookEventType::Stop
+        && hook.managed_by == Some(coco_hooks::ManagedHookKind::Goal)
+        && hook.scope == coco_types::HookScope::Session
+        && hook.matcher.is_none()
+        && matches!(
+            &hook.handler,
+            coco_hooks::HookHandler::Prompt { prompt, .. } if prompt == condition
+        )
+}
+
+async fn append_goal_status(
+    history: &mut MessageHistory,
+    event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+    payload: coco_types::GoalStatusPayload,
+) {
+    crate::history_sync::history_push_and_emit(
+        history,
+        coco_messages::Message::Attachment(coco_messages::AttachmentMessage::silent_goal_status(
+            payload,
+        )),
+        event_tx,
+    )
+    .await;
+}
+
+fn unix_time_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default()
 }

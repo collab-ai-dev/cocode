@@ -283,6 +283,7 @@ pub(crate) fn build_session_command_registry(
         plugins,
         UserType::from_env(),
         command_features,
+        runtime_config.loop_config.clone(),
         cwd.to_path_buf(),
         dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
         /*managed_root*/ None,

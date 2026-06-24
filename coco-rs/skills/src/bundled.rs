@@ -31,7 +31,7 @@ mod debug;
 mod dream;
 mod hunter;
 mod keybindings;
-mod loop_skill;
+pub mod loop_skill;
 mod lorem_ipsum;
 mod remember;
 mod run_skill_generator;
@@ -256,20 +256,28 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
 
     // ───────────────── feature-gated ─────────────────
 
-    // /loop(gated AGENT_TRIGGERS)
+    // /loop — always registered; sub-modes are controlled by loop_* settings.
     {
         let mut s = bundled(
             "loop",
-            "Run a prompt or slash command on a recurring interval",
+            "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo, defaults to 10m)",
             loop_skill::prompt(),
             vec![
-                ToolName::Bash.as_str(),
-                ToolName::Read.as_str(),
-                ToolName::Glob.as_str(),
-                ToolName::Grep.as_str(),
+                ToolName::CronCreate.as_str(),
+                ToolName::CronDelete.as_str(),
+                ToolName::ScheduleWakeup.as_str(),
+                ToolName::Monitor.as_str(),
+                ToolName::TaskList.as_str(),
+                ToolName::TaskStop.as_str(),
+                ToolName::AskUserQuestion.as_str(),
+                ToolName::Skill.as_str(),
             ],
         );
-        s.gated_by = Some(Feature::AgentTriggers);
+        s.aliases = vec!["proactive".to_string()];
+        s.when_to_use = Some(
+            "When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.".to_string(),
+        );
+        s.argument_hint = Some("[interval] <prompt>".to_string());
         skills.push(s);
     }
 

@@ -99,7 +99,9 @@ pub use mcp_tools::ReadMcpResourceTool;
 pub use scheduling::CronCreateTool;
 pub use scheduling::CronDeleteTool;
 pub use scheduling::CronListTool;
+pub use scheduling::MonitorTool;
 pub use scheduling::RemoteTriggerTool;
+pub use scheduling::ScheduleWakeupTool;
 
 // Shell (4)
 pub use shell_tools::PowerShellTool;

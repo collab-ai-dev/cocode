@@ -1,8 +1,12 @@
-//! Scheduling tools: CronCreate, CronDelete, CronList, RemoteTrigger.
+//! Scheduling tools: CronCreate, CronDelete, CronList, ScheduleWakeup, Monitor, RemoteTrigger.
 //!
 //! Uses `ctx.schedules` (ScheduleStore trait) for persistence.
 
+use chrono::Datelike;
+use chrono::Timelike;
 use coco_messages::ToolResult;
+use coco_tool_runtime::BackgroundShellKind;
+use coco_tool_runtime::BackgroundShellRequest;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::Tool;
@@ -26,6 +30,10 @@ const MAX_CRON_JOBS: usize = 50;
 /// Recurring jobs auto-expire after this many days. `DEFAULT_MAX_AGE_DAYS = 7`.
 /// Surfaced in the model-visible confirmation so the model can warn the user.
 const DEFAULT_MAX_AGE_DAYS: u32 = 7;
+const WAKEUP_MIN_DELAY_SECONDS: i64 = 60;
+const WAKEUP_MAX_DELAY_SECONDS: i64 = 3600;
+const MONITOR_DEFAULT_TIMEOUT_MS: u64 = 300_000;
+const MONITOR_MAX_TIMEOUT_MS: u64 = 3_600_000;
 
 /// Lightweight 5-field cron expression validator. Accepts standard cron
 /// syntax minus extension features (no L/W/# qualifiers) and rejects
@@ -129,9 +137,9 @@ impl Tool for CronCreateTool {
     fn name(&self) -> &str {
         ToolName::CronCreate.as_str()
     }
-    /// Hidden from the model unless the cron feature is on — without a real
-    /// [`ScheduleStore`](coco_tool_runtime::ScheduleStore) the tool only
-    /// fails, so advertising it would waste model turns.
+    /// Local scheduling is gated by [`Feature::AgentTriggers`]. `/loop`
+    /// remains user-invocable without this gate, but model access to
+    /// trigger/scheduler tools stays behind the explicit capability switch.
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::AgentTriggers)
     }
@@ -568,6 +576,339 @@ impl Tool for CronListTool {
                 source: None,
             }),
         }
+    }
+}
+
+/// Typed input for [`ScheduleWakeupTool`].
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct ScheduleWakeupInput {
+    /// Seconds from now to wake up. Runtime clamps to [60, 3600].
+    #[serde(rename = "delaySeconds")]
+    pub delay_seconds: i64,
+    /// Short explanation of why this delay was chosen.
+    pub reason: String,
+    /// Prompt to enqueue when the wakeup fires.
+    pub prompt: String,
+}
+
+/// Typed output for [`ScheduleWakeupTool`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleWakeupOutput {
+    /// Epoch ms timestamp when the next wakeup will fire.
+    #[serde(rename = "scheduledFor")]
+    pub scheduled_for: i64,
+    /// Actual delay used after clamping.
+    #[serde(rename = "clampedDelaySeconds")]
+    pub clamped_delay_seconds: i64,
+    /// True when requested delay was outside [60, 3600].
+    #[serde(rename = "wasClamped")]
+    pub was_clamped: bool,
+    pub id: String,
+}
+
+pub struct ScheduleWakeupTool;
+
+#[async_trait::async_trait]
+impl Tool for ScheduleWakeupTool {
+    type Input = ScheduleWakeupInput;
+    coco_tool_runtime::impl_runtime_schema!(ScheduleWakeupInput);
+    type Output = ScheduleWakeupOutput;
+
+    fn id(&self) -> ToolId {
+        ToolId::Builtin(ToolName::ScheduleWakeup)
+    }
+
+    fn name(&self) -> &str {
+        ToolName::ScheduleWakeup.as_str()
+    }
+
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::AgentTriggers)
+    }
+
+    fn description(&self, _input: &ScheduleWakeupInput, _options: &DescriptionOptions) -> String {
+        "Schedule when to resume work in /loop dynamic mode. Call before ending the turn to keep the loop alive; omit the call to end it.".into()
+    }
+
+    fn should_defer(&self) -> bool {
+        true
+    }
+
+    fn search_hint(&self) -> Option<&str> {
+        Some("self-pace next /loop iteration")
+    }
+
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        "Schedule when to resume work in /loop dynamic mode — the user invoked /loop without an interval, asking you to self-pace iterations of a specific task.\n\
+\n\
+Do NOT schedule a short-interval wakeup to poll for background work you started — when harness-tracked work finishes, you are re-invoked automatically, so polling is wasted. Instead schedule a long fallback (1200s+) so the loop survives if the work hangs or never notifies. The exception is external work the harness cannot track (a CI run, a deploy, a remote queue) — there, pick a delay matched to how fast that state actually changes.\n\
+\n\
+Pass the same /loop prompt back via `prompt` each turn so the next firing repeats the task. Omit the call to end the loop.\n\
+\n\
+## Picking delaySeconds\n\
+\n\
+The runtime clamps to [60, 3600]. Under 5 minutes (60s–270s) keeps prompt cache warm and is useful for external polling. For idle ticks with no specific signal, default to 1200s–1800s (20–30 min). Avoid exactly 300s: either use 270s to stay warm or 1200s+ to amortize the cache miss.\n\
+\n\
+## The reason field\n\
+\n\
+One short sentence on what you chose and why. Be specific.".into()
+    }
+
+    fn validate_input(
+        &self,
+        input: &ScheduleWakeupInput,
+        _ctx: &ToolUseContext,
+    ) -> ValidationResult {
+        if input.prompt.trim().is_empty() {
+            return ValidationResult::invalid("prompt parameter is required");
+        }
+        if input.reason.trim().is_empty() {
+            return ValidationResult::invalid("reason parameter is required");
+        }
+        ValidationResult::Valid
+    }
+
+    fn render_for_model(&self, out: &ScheduleWakeupOutput) -> Vec<ToolResultContentPart> {
+        if out.scheduled_for == 0 {
+            return vec![ToolResultContentPart::Text {
+                text: "Wakeup not scheduled. The loop has ended; do not re-issue.".to_string(),
+                provider_options: None,
+            }];
+        }
+        let wake_time = chrono::DateTime::<chrono::Local>::from(
+            std::time::UNIX_EPOCH
+                + std::time::Duration::from_millis(out.scheduled_for.max(0) as u64),
+        )
+        .format("%H:%M:%S");
+        let in_seconds = ((out.scheduled_for - now_epoch_ms()).max(0) + 999) / 1000;
+        let clamp_note = if out.was_clamped {
+            format!(
+                " (clamped to {}s from your requested value)",
+                out.clamped_delay_seconds
+            )
+        } else {
+            String::new()
+        };
+        vec![ToolResultContentPart::Text {
+            text: format!(
+                "Next wakeup scheduled for {wake_time} (in {in_seconds}s){clamp_note}. Nothing more to do this turn — the harness re-invokes you when the wakeup fires."
+            ),
+            provider_options: None,
+        }]
+    }
+
+    async fn execute(
+        &self,
+        input: ScheduleWakeupInput,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<ScheduleWakeupOutput>, ToolError> {
+        let clamped_delay_seconds = input
+            .delay_seconds
+            .clamp(WAKEUP_MIN_DELAY_SECONDS, WAKEUP_MAX_DELAY_SECONDS);
+        let was_clamped = clamped_delay_seconds != input.delay_seconds;
+        let scheduled_for = next_wakeup_epoch_ms(clamped_delay_seconds);
+        let cron = cron_for_epoch_ms(scheduled_for);
+        match ctx
+            .schedules
+            .add_cron_task(&cron, &input.prompt, false, false, None)
+            .await
+        {
+            Ok(task) => Ok(ToolResult {
+                data: ScheduleWakeupOutput {
+                    scheduled_for,
+                    clamped_delay_seconds,
+                    was_clamped,
+                    id: task.id,
+                },
+                new_messages: vec![],
+                app_state_patch: None,
+                permission_updates: Vec::new(),
+                display_data: None,
+            }),
+            Err(e) => Err(ToolError::ExecutionFailed {
+                message: format!("Failed to schedule wakeup: {e}"),
+                display_data: None,
+                source: None,
+            }),
+        }
+    }
+}
+
+fn next_wakeup_epoch_ms(delay_seconds: i64) -> i64 {
+    let now_ms = now_epoch_ms();
+    let target_ms = now_ms.saturating_add(delay_seconds.saturating_mul(1000));
+    // Cron fires at minute precision; round up to the next full minute so the
+    // wake never fires earlier than the requested delay.
+    ((target_ms + 59_999) / 60_000) * 60_000
+}
+
+fn cron_for_epoch_ms(epoch_ms: i64) -> String {
+    let wake_time = chrono::DateTime::<chrono::Local>::from(
+        std::time::UNIX_EPOCH + std::time::Duration::from_millis(epoch_ms.max(0) as u64),
+    );
+    format!(
+        "{} {} {} {} *",
+        wake_time.minute(),
+        wake_time.hour(),
+        wake_time.day(),
+        wake_time.month()
+    )
+}
+
+/// Typed input for [`MonitorTool`].
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct MonitorInput {
+    /// Shell command that emits one stdout line per event.
+    pub command: String,
+    /// Short description of what this monitor watches.
+    pub description: String,
+    /// Optional timeout in milliseconds. Ignored when persistent is true.
+    pub timeout_ms: Option<u64>,
+    /// Keep running until cancelled with TaskStop.
+    pub persistent: Option<bool>,
+}
+
+/// Typed output for [`MonitorTool`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonitorOutput {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub persistent: bool,
+    #[serde(rename = "timeoutMs")]
+    pub timeout_ms: Option<u64>,
+}
+
+pub struct MonitorTool;
+
+#[async_trait::async_trait]
+impl Tool for MonitorTool {
+    type Input = MonitorInput;
+    coco_tool_runtime::impl_runtime_schema!(MonitorInput);
+    type Output = MonitorOutput;
+
+    fn id(&self) -> ToolId {
+        ToolId::Builtin(ToolName::Monitor)
+    }
+
+    fn name(&self) -> &str {
+        ToolName::Monitor.as_str()
+    }
+
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::AgentTriggers) && ctx.task_handle.is_some()
+    }
+
+    fn description(&self, input: &MonitorInput, _options: &DescriptionOptions) -> String {
+        if input.description.trim().is_empty() {
+            "Start an event monitor".to_string()
+        } else {
+            format!("Monitor {}", input.description.trim())
+        }
+    }
+
+    fn should_defer(&self) -> bool {
+        true
+    }
+
+    fn search_hint(&self) -> Option<&str> {
+        Some("watch event stream and wake on output")
+    }
+
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        "Start a background event monitor. Use this for dynamic /loop work that should wake when an external event emits a line, such as a log watcher, file watcher, deployment watcher, or queue watcher.\n\
+\n\
+The command should print one concise stdout line per meaningful event. Each stdout line becomes a task notification; stderr is retained in task output. Do not use Monitor for a single delayed wait, polling sleep, or one-shot command — use background Bash for a single completion notification. Do not poll or sleep after starting a monitor; TaskStop cancels it.\n\
+\n\
+Use `persistent: true` only for monitors that should run until TaskStop. Otherwise set a timeout, default 300000ms, max 3600000ms. Keep event volume low: batch noisy sources in the shell command and suppress repeated duplicate lines.".into()
+    }
+
+    fn validate_input(&self, input: &MonitorInput, _ctx: &ToolUseContext) -> ValidationResult {
+        if input.command.trim().is_empty() {
+            return ValidationResult::invalid("command parameter is required");
+        }
+        if input.description.trim().is_empty() {
+            return ValidationResult::invalid("description parameter is required");
+        }
+        if let Some(timeout_ms) = input.timeout_ms
+            && timeout_ms > MONITOR_MAX_TIMEOUT_MS
+        {
+            return ValidationResult::invalid(format!(
+                "timeout_ms must be <= {MONITOR_MAX_TIMEOUT_MS}"
+            ));
+        }
+        ValidationResult::Valid
+    }
+
+    fn render_for_model(&self, out: &MonitorOutput) -> Vec<ToolResultContentPart> {
+        let timing = if out.persistent {
+            "persistent until TaskStop cancels it".to_string()
+        } else {
+            format!(
+                "timeout {}ms",
+                out.timeout_ms.unwrap_or(MONITOR_DEFAULT_TIMEOUT_MS)
+            )
+        };
+        vec![ToolResultContentPart::Text {
+            text: format!(
+                "Monitor started as background task {} ({timing}). Stdout lines will wake you as task notifications; stderr remains in task output. Do not poll or sleep. Use TaskStop to cancel the monitor.",
+                out.task_id
+            ),
+            provider_options: None,
+        }]
+    }
+
+    async fn execute(
+        &self,
+        input: MonitorInput,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<MonitorOutput>, ToolError> {
+        let Some(task_handle) = &ctx.task_handle else {
+            return Err(ToolError::ExecutionFailed {
+                message: "Monitor requires background task support".into(),
+                display_data: None,
+                source: None,
+            });
+        };
+        let persistent = input.persistent.unwrap_or(false);
+        let timeout_ms = if persistent {
+            None
+        } else {
+            Some(input.timeout_ms.unwrap_or(MONITOR_DEFAULT_TIMEOUT_MS))
+        };
+        let req = BackgroundShellRequest {
+            command: input.command,
+            shell_kind: BackgroundShellKind::DefaultPlatformShell,
+            description: format!("Monitor: {}", input.description.trim()),
+            timeout_ms: timeout_ms.map(|ms| ms as i64),
+            tool_use_id: ctx.tool_use_id.clone(),
+            issuing_agent: ctx.agent_id.as_ref().map(|a| a.as_str().to_string()),
+            progress_tx: None,
+            progress_throttle_ms: 1000,
+            auto_detach_ms: None,
+            kill_on_timeout: !persistent,
+            sandbox_state: ctx.sandbox_state.clone(),
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+        };
+        let task_id =
+            task_handle
+                .spawn_shell_task(req)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed {
+                    message: format!("Failed to start monitor: {e}"),
+                    display_data: None,
+                    source: None,
+                })?;
+        Ok(ToolResult {
+            data: MonitorOutput {
+                task_id,
+                persistent,
+                timeout_ms,
+            },
+            new_messages: vec![],
+            app_state_patch: None,
+            permission_updates: Vec::new(),
+            display_data: None,
+        })
     }
 }
 

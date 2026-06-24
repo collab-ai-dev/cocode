@@ -23,7 +23,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Every TS `Attachment.type` discriminator, plus coco-rs-synthetic
-/// reminder kinds. 62 variants.
+/// reminder kinds. 64 variants.
 ///
 /// Wire format is snake_case via `#[serde(rename_all = "snake_case")]`
 /// to match TS `Attachment.type` exactly, so transcripts round-trip.
@@ -111,6 +111,7 @@ pub enum AttachmentKind {
     HookNonBlockingError,
     HookPermissionDecision,
     HookSystemMessage,
+    GoalStatus,
     StructuredOutput,
     DynamicSkill,
 
@@ -186,6 +187,7 @@ impl AttachmentKind {
             Self::HookNonBlockingError => "hook_non_blocking_error",
             Self::HookPermissionDecision => "hook_permission_decision",
             Self::HookSystemMessage => "hook_system_message",
+            Self::GoalStatus => "goal_status",
             Self::StructuredOutput => "structured_output",
             Self::DynamicSkill => "dynamic_skill",
             Self::ContextEfficiency => "context_efficiency",
@@ -270,6 +272,7 @@ impl AttachmentKind {
             | HookNonBlockingError
             | HookPermissionDecision
             | HookSystemMessage
+            | GoalStatus
             | StructuredOutput
             | DynamicSkill
             | ContextEfficiency
@@ -344,7 +347,8 @@ impl AttachmentKind {
             | CompactionReminder
             | DateChange
             | UserContext
-            | SkillListing => false,
+            | SkillListing
+            | GoalStatus => false,
             // Also treat silent-dedup / runtime-bookkeeping kinds as
             // non-rendering (not in TS NULL_RENDERING because TS doesn't
             // enumerate them there, but coco-rs intentionally hides them).
@@ -406,9 +410,10 @@ impl AttachmentKind {
         }
     }
 
-    /// Every variant in declaration order. Length must equal 62 (60 TS
-    /// `Attachment` union members + coco-rs-synthetic `UserContext` and
-    /// `SlashCommandMetadata` reminders) — enforced by the parity test.
+    /// Every variant in declaration order. Length must equal 64 (61 TS
+    /// `Attachment` union members + coco-rs-synthetic `UserContext`,
+    /// `SlashCommandMetadata`, and `WorkflowKeywordRequest` reminders) —
+    /// enforced by the parity test.
     pub const fn all() -> &'static [AttachmentKind] {
         &[
             Self::PlanMode,
@@ -466,6 +471,7 @@ impl AttachmentKind {
             Self::HookNonBlockingError,
             Self::HookPermissionDecision,
             Self::HookSystemMessage,
+            Self::GoalStatus,
             Self::StructuredOutput,
             Self::DynamicSkill,
             Self::ContextEfficiency,
@@ -754,6 +760,10 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         HookSystemMessage => Coverage::SilentEvent {
             owner_crate: "hooks",
             note: "hook-originated system message for UI only",
+        },
+        GoalStatus => Coverage::SilentEvent {
+            owner_crate: "app/cli / app/query",
+            note: "/goal state transition marker for transcript status/history",
         },
         StructuredOutput => Coverage::SilentEvent {
             owner_crate: "core/tool-runtime",

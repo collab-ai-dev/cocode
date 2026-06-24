@@ -27,8 +27,9 @@ Use the available tools to inspect the codebase and verify the condition. Use as
 as possible — be efficient and direct.
 
 When done, return your result using the StructuredOutput tool with:
-- ok: true if the condition is met
-- ok: false with reason if the condition is not met";
+- ok: true with reason if the condition is met
+- ok: false with reason if the condition is not met
+- impossible: true with reason if the condition can never be satisfied";
 
 pub struct SessionRuntimeHookAgentRunner {
     runtime: Arc<SessionRuntime>,
@@ -155,10 +156,11 @@ fn hook_agent_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["ok"],
+        "required": ["ok", "reason"],
         "properties": {
             "ok": { "type": "boolean" },
-            "reason": { "type": "string" }
+            "reason": { "type": "string" },
+            "impossible": { "type": "boolean" }
         }
     })
 }
@@ -173,16 +175,32 @@ fn parse_structured_output(
         return Err("hook agent StructuredOutput missing boolean `ok`".to_string());
     };
     if ok {
-        return Ok(HookEvaluationResult::Ok);
+        return Ok(HookEvaluationResult::Success {
+            reason: value
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        });
     }
-    // Keep the `Agent hook condition was not met: ${reason}` prefix for
-    // blocking feedback; drop the trailing `: ` when no reason was given.
-    let reason = match value
+    let raw_reason = value
         .get("reason")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty());
+    if value
+        .get("impossible")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
     {
+        return Ok(HookEvaluationResult::Impossible {
+            reason: raw_reason
+                .unwrap_or("Agent hook condition is impossible")
+                .to_string(),
+        });
+    }
+    // Keep the `Agent hook condition was not met: ${reason}` prefix for
+    // blocking feedback; drop the trailing `: ` when no reason was given.
+    let reason = match raw_reason {
         Some(reason) => format!("Agent hook condition was not met: {reason}"),
         None => "Agent hook condition was not met".to_string(),
     };

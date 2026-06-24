@@ -118,6 +118,11 @@ pub struct ToolAppState {
     /// `appState.toolPermissionContext`. See [`LiveToolPermissionState`].
     pub permissions: LiveToolPermissionState,
 
+    /// Active `/goal` condition for this session. The Stop hook is stored in
+    /// `HookRegistry`; this tracks user-facing status and lets `/goal clear`
+    /// remove only the hook that belongs to the current goal.
+    pub active_goal: Option<ActiveGoal>,
+
     // ── Plan-mode latches (one-shot signaling) ──
     /// Set by `ExitPlanModeTool` on success; read + cleared by the
     /// plan-mode reminder on the first following turn to emit the
@@ -348,6 +353,16 @@ pub struct ToolAppState {
     /// Read by `prompt_suggestion::build_suggestion_context` to gate
     /// `SuppressReason::RateLimit` against `cache.provider`.
     pub rate_limits: BTreeMap<String, RateLimitEntry>,
+}
+
+/// Session-scoped goal metadata for `/goal`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActiveGoal {
+    pub condition: String,
+    pub iterations: i32,
+    pub set_at_ms: i64,
+    pub tokens_at_start: i64,
+    pub last_reason: Option<String>,
 }
 
 /// Foreground worktree state stored on [`ToolAppState`].

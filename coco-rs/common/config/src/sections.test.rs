@@ -125,6 +125,26 @@ fn test_bash_config_finalize_rejects_negative_max_output_bytes() {
 }
 
 #[test]
+fn test_loop_config_resolves_sub_toggles_and_env_override() {
+    let settings = Settings {
+        loop_config: PartialLoopSettings {
+            default_prompt_enabled: Some(true),
+            dynamic_enabled: Some(true),
+            persistent_preamble_enabled: Some(false),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoLoopPersistent, "1")]);
+
+    let config = LoopConfig::resolve(&settings, &crate::RuntimeOverrides::default(), &env);
+
+    assert!(config.default_prompt_enabled);
+    assert!(config.dynamic_enabled);
+    assert!(config.persistent_preamble_enabled);
+}
+
+#[test]
 fn test_tool_config_json_first_env_override() {
     let settings = Settings {
         tool: PartialToolSettings {
