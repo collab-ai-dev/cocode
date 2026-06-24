@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use coco_tasks::TaskManager;
+use coco_tool_runtime::DetachSource;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -90,7 +91,11 @@ async fn fire_detach(
     reason: DetachReason,
     timeout_ms: u64,
 ) {
-    if !manager.signal_detach(task_id).await.is_first() {
+    if !manager
+        .signal_detach_with_source(task_id, DetachSource::AssistantAuto)
+        .await
+        .is_first()
+    {
         return;
     }
     // `target:` must be a const string per tracing's macro; dispatch

@@ -54,6 +54,15 @@ impl DetachOutcome {
     }
 }
 
+/// Source that moved a foreground task into the background.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetachSource {
+    /// User-initiated, e.g. Ctrl+B / `BackgroundAllTasks`.
+    User,
+    /// Runtime auto-promotion after the foreground blocking budget.
+    AssistantAuto,
+}
+
 /// Request to spawn a background shell task.
 #[derive(Clone)]
 pub struct BackgroundShellRequest {
@@ -71,8 +80,8 @@ pub struct BackgroundShellRequest {
     /// `progress_throttle_ms`.
     pub progress_tx: Option<crate::traits::ProgressSender>,
     pub progress_throttle_ms: u64,
-    /// When set, the TaskRuntime fires `signal_detach(task_id)`
-    /// internally after this many ms of foreground execution.
+    /// When set, the TaskRuntime fires an assistant-auto detach internally
+    /// after this many ms of foreground execution.
     pub auto_detach_ms: Option<u64>,
     /// Whether the driver kills the child when it exceeds `timeout_ms`.
     /// `false` (auto-backgroundable foreground commands) means the timeout
@@ -370,6 +379,10 @@ pub trait TaskHandle: Send + Sync {
 
     async fn signal_detach(&self, _task_id: &str) -> DetachOutcome {
         DetachOutcome::Unknown
+    }
+
+    async fn detach_source(&self, _task_id: &str) -> Option<DetachSource> {
+        None
     }
 
     // ── Shell-task spawn ──

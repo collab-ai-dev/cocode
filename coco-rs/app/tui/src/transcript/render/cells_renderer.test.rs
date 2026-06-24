@@ -148,6 +148,32 @@ fn in_flight_tool_lines_render_header_and_skip_committed() {
 }
 
 #[test]
+fn in_flight_bash_line_shows_background_hint() {
+    use crate::state::session::ToolExecution;
+    use crate::state::session::ToolStatus;
+
+    let _guard = crate::i18n::locale_test_guard("en");
+    let theme = coco_tui_ui::theme::Theme::default();
+    let styles = coco_tui_ui::style::UiStyles::new(&theme);
+    let tool = ToolExecution {
+        call_id: "bash-1".to_string(),
+        name: "Bash".to_string(),
+        status: ToolStatus::Running,
+        started_at: std::time::Instant::now(),
+        completed_at: None,
+        description: None,
+        input_preview: Some("npm run build".to_string()),
+        streaming_input: None,
+        message_uuid: None,
+    };
+
+    let lines = in_flight_tool_lines(&[tool], styles);
+    assert_eq!(lines.len(), 2, "bash row plus background hint");
+    let hint: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(hint.contains("Ctrl+B to run in background"), "{hint:?}");
+}
+
+#[test]
 fn bare_file_attachment_listing_renders_nothing() {
     // The `@-mentioned files` generator listing (`K::File` + API body) is
     // model-only metadata — it must not leak as a transcript row, and it has

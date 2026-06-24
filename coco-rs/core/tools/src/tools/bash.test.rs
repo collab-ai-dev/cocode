@@ -2,6 +2,7 @@ use crate::tools::bash::BashTool;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::PromptOptions;
+use coco_tool_runtime::TaskHandle;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
@@ -677,6 +678,96 @@ async fn test_bash_background_without_task_handle() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(err.to_string().contains("not available"));
+}
+
+#[derive(Clone)]
+struct DetachingTaskHandle {
+    source: coco_tool_runtime::DetachSource,
+    notify: std::sync::Arc<tokio::sync::Notify>,
+    status_tx: tokio::sync::watch::Sender<coco_types::TaskStatus>,
+}
+
+impl DetachingTaskHandle {
+    fn new(source: coco_tool_runtime::DetachSource) -> std::sync::Arc<Self> {
+        let (status_tx, _) = tokio::sync::watch::channel(coco_types::TaskStatus::Running);
+        std::sync::Arc::new(Self {
+            source,
+            notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+            status_tx,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskHandle for DetachingTaskHandle {
+    async fn spawn_shell_task(
+        &self,
+        _request: coco_tool_runtime::BackgroundShellRequest,
+    ) -> Result<String, coco_error::BoxedError> {
+        let notify = self.notify.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            notify.notify_one();
+        });
+        Ok("task-detach".to_string())
+    }
+
+    async fn subscribe_terminal(
+        &self,
+        _task_id: &str,
+    ) -> Option<coco_tool_runtime::TerminalSignal> {
+        Some(coco_tool_runtime::TerminalSignal::new(
+            self.status_tx.subscribe(),
+        ))
+    }
+
+    async fn detach_handle(&self, _task_id: &str) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+        Some(self.notify.clone())
+    }
+
+    async fn detach_source(&self, _task_id: &str) -> Option<coco_tool_runtime::DetachSource> {
+        Some(self.source)
+    }
+
+    async fn output_file_path(&self, _task_id: &str) -> Option<std::path::PathBuf> {
+        Some(std::path::PathBuf::from("/tmp/task-detach.output"))
+    }
+}
+
+async fn execute_bash_with_detach_source(
+    source: coco_tool_runtime::DetachSource,
+) -> serde_json::Value {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.task_handle = Some(DetachingTaskHandle::new(source));
+    let result = <BashTool as DynTool>::execute(
+        &BashTool,
+        json!({"command": "npm run build", "timeout": 5_000}),
+        &ctx,
+    )
+    .await;
+    match result {
+        Ok(result) => result.data,
+        Err(err) => panic!("detach path should return a background result: {err}"),
+    }
+}
+
+#[tokio::test]
+async fn foreground_detach_source_assistant_auto_sets_auto_flag() {
+    let data =
+        execute_bash_with_detach_source(coco_tool_runtime::DetachSource::AssistantAuto).await;
+
+    assert_eq!(data["backgroundTaskId"], "task-detach");
+    assert_eq!(data["assistantAutoBackgrounded"], true);
+    assert!(data.get("backgroundedByUser").is_none(), "{data}");
+}
+
+#[tokio::test]
+async fn foreground_detach_source_user_sets_user_flag() {
+    let data = execute_bash_with_detach_source(coco_tool_runtime::DetachSource::User).await;
+
+    assert_eq!(data["backgroundTaskId"], "task-detach");
+    assert_eq!(data["backgroundedByUser"], true);
+    assert!(data.get("assistantAutoBackgrounded").is_none(), "{data}");
 }
 
 // -- Stall detection tests --

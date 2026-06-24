@@ -863,7 +863,8 @@ pub(crate) fn in_flight_tool_lines(
     tools: &[ToolExecution],
     styles: UiStyles<'_>,
 ) -> Vec<Line<'static>> {
-    tools
+    let mut lines = Vec::new();
+    for tool in tools
         .iter()
         .filter(|t| crate::presentation::transcript::is_tool_in_flight(t))
         // Agent (subagent) spawns render in the dedicated Agents panel
@@ -871,30 +872,48 @@ pub(crate) fn in_flight_tool_lines(
         // same work as both an inline `Agent(...)` row and a panel row
         // (the two surfaces are independently keyed and drift out of sync).
         .filter(|t| t.name != coco_types::ToolName::Agent.as_str())
-        .map(|tool| {
-            let tone = tool_tone_color(tool_name_tone(&tool.name), styles);
-            let mut spans = vec![
-                Span::raw("● ").fg(tone),
-                Span::raw(tool.name.clone()).fg(tone).bold(),
-            ];
-            if let Some(preview) = tool
-                .input_preview
-                .as_deref()
-                .or(tool.description.as_deref())
-                .filter(|preview| !preview.is_empty())
-            {
-                spans.push(Span::raw("(").fg(styles.text()));
-                spans.push(Span::raw(truncate_chars(preview, 96)).fg(styles.dim()));
-                spans.push(Span::raw(")").fg(styles.text()));
-            }
-            spans.push(
-                Span::raw(format!(" ({})", format_duration_seconds(tool.elapsed())))
-                    .fg(styles.dim())
-                    .dim(),
-            );
-            Line::from(spans)
-        })
-        .collect()
+    {
+        let tone = tool_tone_color(tool_name_tone(&tool.name), styles);
+        let mut spans = vec![
+            Span::raw("● ").fg(tone),
+            Span::raw(tool.name.clone()).fg(tone).bold(),
+        ];
+        if let Some(preview) = tool
+            .input_preview
+            .as_deref()
+            .or(tool.description.as_deref())
+            .filter(|preview| !preview.is_empty())
+        {
+            spans.push(Span::raw("(").fg(styles.text()));
+            spans.push(Span::raw(truncate_chars(preview, 96)).fg(styles.dim()));
+            spans.push(Span::raw(")").fg(styles.text()));
+        }
+        spans.push(
+            Span::raw(format!(" ({})", format_duration_seconds(tool.elapsed())))
+                .fg(styles.dim())
+                .dim(),
+        );
+        lines.push(Line::from(spans));
+        if matches!(tool.status, crate::state::session::ToolStatus::Running)
+            && is_backgroundable_tool(&tool.name)
+        {
+            lines.push(background_hint_line(styles, "  "));
+        }
+    }
+    lines
+}
+
+fn is_backgroundable_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "Bash" | "PowerShell")
+}
+
+pub(crate) fn background_hint_line(styles: UiStyles<'_>, indent: &'static str) -> Line<'static> {
+    Line::from(vec![
+        Span::raw(indent).fg(styles.dim()).dim(),
+        Span::raw(t!("activity.background_hint").to_string())
+            .fg(styles.dim())
+            .dim(),
+    ])
 }
 
 fn tool_tone_color(

@@ -390,6 +390,7 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
     // viewed agent carries a `◀` marker; a hint line lists the keys.
     let switcher_active = state.ui.focus == crate::state::FocusTarget::AgentSwitcher;
     let switcher_sel = state.ui.agent_switcher_selected;
+    let mut foreground_background_hint = false;
     for (pos, (i, agent)) in live.iter().enumerate() {
         let i = *i;
         let is_focused = state.session.focused_subagent_index == Some(i as i32);
@@ -522,6 +523,13 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         }
         lines.push(ActivityLine { spans });
 
+        if matches!(agent.kind, crate::state::SubagentKind::Subagent)
+            && !agent.is_backgrounded
+            && matches!(agent.status, SubagentStatus::Running)
+        {
+            foreground_background_hint = true;
+        }
+
         // Backgrounded but still alive — hint the user how to bring it back.
         // After the underlying task terminates the flag stays set but the
         // status icon already conveys the outcome, so the hint stays useful
@@ -550,6 +558,18 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
                 });
             }
         }
+    }
+
+    if foreground_background_hint {
+        lines.push(ActivityLine {
+            spans: vec![
+                ActivitySpan::raw("  "),
+                ActivitySpan::tone(
+                    t!("activity.background_hint").to_string(),
+                    ActivityTone::Dim,
+                ),
+            ],
+        });
     }
 
     // Switcher key hints. When focused, list the in-switcher keys; otherwise

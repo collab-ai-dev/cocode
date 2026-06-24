@@ -323,6 +323,9 @@ impl TaskHandle for TaskRuntime {
     async fn signal_detach(&self, task_id: &str) -> coco_tool_runtime::DetachOutcome {
         TaskRuntime::signal_detach(self, task_id).await
     }
+    async fn detach_source(&self, task_id: &str) -> Option<coco_tool_runtime::DetachSource> {
+        self.manager.detach_source(task_id).await
+    }
 
     // ── Shell spawn (was ShellTaskSpawner) ──
     async fn spawn_shell_task(

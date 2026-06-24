@@ -19,6 +19,7 @@
 //! without dragging cancel-token Arcs through them.
 
 use coco_tool_runtime::DetachOutcome;
+use coco_tool_runtime::DetachSource;
 use coco_types::BackendType;
 use coco_types::CoreEvent;
 use coco_types::FieldUpdate;
@@ -70,6 +71,7 @@ struct TaskControl {
     invoking_agent: Option<String>,
     detach: Arc<Notify>,
     detached: Arc<AtomicBool>,
+    detach_source: Arc<OnceLock<DetachSource>>,
     exit_code: Arc<OnceLock<i32>>,
     /// In-process teammate turn cancel slot. Only populated for
     /// teammate rows; `None` everywhere else.
@@ -92,6 +94,7 @@ impl TaskControl {
             invoking_agent,
             detach: Arc::new(Notify::new()),
             detached: Arc::new(AtomicBool::new(false)),
+            detach_source: Arc::new(OnceLock::new()),
             exit_code: Arc::new(OnceLock::new()),
             current_work_cancel: Arc::new(Mutex::new(None)),
             join_handle: Arc::new(Mutex::new(None)),
@@ -370,8 +373,9 @@ impl TaskManager {
         updated
     }
 
-    /// Flip `is_backgrounded` on every non-terminal, non-already-backgrounded
-    /// running task whose type supports backgrounding (BgAgent + Shell).
+    /// Flip `is_backgrounded` and wake the detach waiter on every non-terminal,
+    /// non-already-backgrounded running task whose type supports backgrounding
+    /// (BgAgent + Shell + LocalWorkflow).
     /// Returns the wire ids that were just transitioned. Emits no wire event
     /// — foreground→background is a pure UI-state transition, not a task
     /// lifecycle event (the task continues running and will emit its
@@ -386,7 +390,9 @@ impl TaskManager {
     /// no foreground tasks returns an empty Vec.
     pub async fn background_all_foreground(&self) -> Vec<String> {
         let mut transitions: Vec<String> = Vec::new();
+        let mut notifications: Vec<Arc<Notify>> = Vec::new();
         let mut rows = self.rows.write().await;
+        let controls = self.controls.read().await;
         for (id, row) in rows.iter_mut() {
             if row.status.is_terminal() || row.extras.is_backgrounded() {
                 continue;
@@ -398,10 +404,21 @@ impl TaskManager {
             ) {
                 continue;
             }
-            if !row.extras.set_backgrounded(true) {
+            let Some(control) = controls.get(id) else {
+                continue;
+            };
+            if control.detached.swap(true, Ordering::SeqCst) {
                 continue;
             }
+            let _ = control.detach_source.set(DetachSource::User);
+            row.extras.set_backgrounded(true);
             transitions.push(id.clone());
+            notifications.push(control.detach.clone());
+        }
+        drop(controls);
+        drop(rows);
+        for detach in notifications {
+            detach.notify_one();
         }
         transitions
     }
@@ -732,6 +749,10 @@ impl TaskManager {
     }
 
     pub async fn signal_detach(&self, id: &str) -> DetachOutcome {
+        self.signal_detach_with_source(id, DetachSource::User).await
+    }
+
+    pub async fn signal_detach_with_source(&self, id: &str, source: DetachSource) -> DetachOutcome {
         let detach = {
             let mut rows = self.rows.write().await;
             let Some(row) = rows.get_mut(id) else {
@@ -740,23 +761,34 @@ impl TaskManager {
             if row.status.is_terminal() {
                 return DetachOutcome::Unknown;
             }
-            let Some((detach, detached)) = self
-                .controls
-                .read()
-                .await
-                .get(id)
-                .map(|c| (c.detach.clone(), c.detached.clone()))
+            let Some((detach, detached, detach_source)) =
+                self.controls.read().await.get(id).map(|c| {
+                    (
+                        c.detach.clone(),
+                        c.detached.clone(),
+                        c.detach_source.clone(),
+                    )
+                })
             else {
                 return DetachOutcome::Unknown;
             };
             if detached.swap(true, Ordering::SeqCst) {
                 return DetachOutcome::AlreadyDetached;
             }
+            let _ = detach_source.set(source);
             row.extras.set_backgrounded(true);
             detach
         };
         detach.notify_one();
         DetachOutcome::Detached
+    }
+
+    pub async fn detach_source(&self, id: &str) -> Option<DetachSource> {
+        self.controls
+            .read()
+            .await
+            .get(id)
+            .and_then(|c| c.detach_source.get().copied())
     }
 
     pub async fn subscribe_terminal(&self, id: &str) -> Option<watch::Receiver<TaskStatus>> {
