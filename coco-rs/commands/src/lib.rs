@@ -26,10 +26,13 @@ use coco_types::CommandBase;
 use coco_types::CommandSafety;
 use coco_types::CommandSource;
 use coco_types::CommandType;
+use coco_types::Feature;
 use coco_types::LocalCommandData;
 use coco_types::SlashCommandInfo;
 
 pub use implementations::ADD_DIR_SENTINEL;
+pub use implementations::GOAL_SENTINEL;
+pub use implementations::GoalCommandRequest;
 pub use implementations::ParsedRename;
 pub use implementations::RELOAD_HOOKS_SENTINEL;
 pub use implementations::RELOAD_PLUGINS_SENTINEL;
@@ -38,6 +41,8 @@ pub use implementations::STATUS_SENTINEL;
 pub use implementations::TAG_SENTINEL;
 pub use implementations::names;
 pub use implementations::parse_add_dir_sentinel;
+pub use implementations::parse_goal_command_args;
+pub use implementations::parse_goal_sentinel;
 pub use implementations::parse_reload_hooks_sentinel;
 pub use implementations::parse_reload_plugins_sentinel;
 pub use implementations::parse_rename_sentinel;
@@ -545,6 +550,7 @@ pub fn build_command_registry(
     plugins: &[coco_plugins::loader::LoadedPluginV2],
     user_type: coco_types::UserType,
     features: coco_types::Features,
+    loop_config: coco_config::LoopConfig,
     project_root: std::path::PathBuf,
     user_home: std::path::PathBuf,
     managed_root: Option<std::path::PathBuf>,
@@ -563,6 +569,7 @@ pub fn build_command_registry(
         &mut registry,
         skill_manager,
         &features,
+        &loop_config,
         skill_overrides,
         &project_root,
     );
@@ -587,6 +594,7 @@ fn register_skills_as_commands(
     registry: &mut CommandRegistry,
     manager: &coco_skills::SkillManager,
     features: &coco_types::Features,
+    loop_config: &coco_config::LoopConfig,
     tiers: &coco_config::SkillOverrideTiers,
     project_root: &Path,
 ) {
@@ -623,7 +631,8 @@ fn register_skills_as_commands(
                 server_name: server_name.clone(),
             },
         };
-        let mut base = builtin_base(&skill.name, &skill.description, &[]);
+        let aliases: Vec<&str> = skill.aliases.iter().map(String::as_str).collect();
+        let mut base = builtin_base(&skill.name, &skill.description, &aliases);
         base.loaded_from = Some(source);
         base.is_hidden = skill.is_hidden;
         base.user_invocable = skill.user_invocable;
@@ -634,12 +643,25 @@ fn register_skills_as_commands(
             .map(|_| CommandArgumentKind::FreeText)
             .unwrap_or(CommandArgumentKind::None);
         base.when_to_use = skill.when_to_use.clone();
+        if skill.name == "loop" {
+            if loop_config.default_prompt_enabled {
+                base.argument_hint = Some("[interval] [prompt]".to_string());
+            }
+            if loop_config.dynamic_enabled {
+                base.description = "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace.".to_string();
+            }
+        }
         let prompt = skill.prompt.clone();
         let progress_message = "running".to_string();
         let skill_handler = SkillPromptHandler {
             name: skill.name.clone(),
             body: prompt,
             progress_message: progress_message.clone(),
+            project_root: project_root.to_path_buf(),
+            loop_default_prompt_enabled: loop_config.default_prompt_enabled,
+            loop_dynamic_enabled: loop_config.dynamic_enabled,
+            loop_persistent_preamble_enabled: loop_config.persistent_preamble_enabled,
+            loop_remote_schedule_enabled: features.enabled(Feature::AgentTriggersRemote),
             // MCP-source gate: MCP skills are remote and untrusted —
             // never run their in-prompt shell.
             is_mcp: matches!(skill.source, coco_skills::SkillSource::Mcp { .. }),
@@ -747,6 +769,11 @@ struct SkillPromptHandler {
     name: String,
     body: String,
     progress_message: String,
+    project_root: PathBuf,
+    loop_default_prompt_enabled: bool,
+    loop_dynamic_enabled: bool,
+    loop_persistent_preamble_enabled: bool,
+    loop_remote_schedule_enabled: bool,
     /// Whether the skill was loaded from an MCP server. MCP skills skip
     /// in-prompt shell execution entirely.
     is_mcp: bool,
@@ -769,7 +796,20 @@ impl CommandHandler for SkillPromptHandler {
     async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
         // Argument substitution via the canonical implementation
         // in `coco_skills::prompt_render`.
-        let mut text = render_skill_prompt_args(&self.name, &self.body, args);
+        let mut text = if self.name == "loop" {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| self.project_root.clone());
+            coco_skills::bundled::loop_skill::prompt_for_command(
+                args,
+                &self.project_root,
+                &cwd,
+                self.loop_default_prompt_enabled,
+                self.loop_dynamic_enabled,
+                self.loop_persistent_preamble_enabled,
+                self.loop_remote_schedule_enabled,
+            )
+        } else {
+            render_skill_prompt_args(&self.name, &self.body, args)
+        };
         // Replace `${CLAUDE_SKILL_DIR}` / `${CLAUDE_SESSION_ID}` on every
         // invocation. Snapshot the session-id cell, dropping the read guard
         // before any later `.await`.
@@ -875,6 +915,7 @@ mod seam_tests {
             &[],
             UserType::Human,
             Features::with_defaults(),
+            coco_config::LoopConfig::default(),
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
@@ -918,6 +959,7 @@ mod seam_tests {
             &[],
             UserType::Ant,
             Features::empty(),
+            coco_config::LoopConfig::default(),
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
@@ -927,8 +969,11 @@ mod seam_tests {
         // `/dream` and `/summary` are gated on Feature::AutoMemory in
         // `register_ts_parity_handlers`; the rest are skill-only and serve
         // as the gate test.
+        assert!(
+            reg.get("loop").is_some(),
+            "/loop is always registered; its sub-modes are configured separately"
+        );
         for missing in [
-            "loop",
             "schedule",
             "claude-api",
             "hunter",
@@ -946,7 +991,6 @@ mod seam_tests {
         // Enable the relevant features and confirm they show up.
         let mut features = Features::empty();
         features
-            .enable(coco_types::Feature::AgentTriggers)
             .enable(coco_types::Feature::AgentTriggersRemote)
             .enable(coco_types::Feature::BuildingClaudeApps)
             .enable(coco_types::Feature::AutoMemory);
@@ -955,6 +999,7 @@ mod seam_tests {
             &[],
             UserType::Ant,
             features,
+            coco_config::LoopConfig::default(),
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
@@ -976,6 +1021,7 @@ mod seam_tests {
             &[],
             UserType::Human,
             Features::with_defaults(),
+            coco_config::LoopConfig::default(),
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,
@@ -1050,6 +1096,11 @@ mod seam_tests {
             name: name.to_string(),
             body: body.to_string(),
             progress_message: "running".to_string(),
+            project_root: PathBuf::from("."),
+            loop_default_prompt_enabled: false,
+            loop_dynamic_enabled: false,
+            loop_persistent_preamble_enabled: false,
+            loop_remote_schedule_enabled: false,
             is_mcp,
             allowed_tools,
             bash_tool_handle: cell,
@@ -1171,6 +1222,7 @@ mod seam_tests {
             &[],
             UserType::Human,
             Features::with_defaults(),
+            coco_config::LoopConfig::default(),
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("/home/test"),
             None,

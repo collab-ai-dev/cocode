@@ -2,8 +2,9 @@ use super::*;
 
 #[test]
 fn parse_structured_output_ok_true() {
-    let result = parse_structured_output(Some(serde_json::json!({"ok": true}))).unwrap();
-    assert!(matches!(result, HookEvaluationResult::Ok));
+    let result =
+        parse_structured_output(Some(serde_json::json!({"ok": true, "reason": "done"}))).unwrap();
+    assert!(matches!(result, HookEvaluationResult::Success { .. }));
 }
 
 #[test]

@@ -23,6 +23,7 @@ fn test_hook_registry_register_and_find() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
     registry.register(HookDefinition {
         event: HookEventType::PostToolUse,
@@ -39,6 +40,7 @@ fn test_hook_registry_register_and_find() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     assert_eq!(registry.len(), 2);
@@ -74,6 +76,7 @@ fn test_hook_wildcard_matcher() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let matches = registry.find(HookEventType::PreToolUse, Some("anything"));
@@ -115,6 +118,7 @@ fn test_find_matching_returns_sorted_by_scope_then_priority() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
@@ -131,6 +135,7 @@ fn test_find_matching_returns_sorted_by_scope_then_priority() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
@@ -147,6 +152,7 @@ fn test_find_matching_returns_sorted_by_scope_then_priority() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let matches = registry.find_matching(HookEventType::PreToolUse, Some("Bash"));
@@ -156,6 +162,87 @@ fn test_find_matching_returns_sorted_by_scope_then_priority() {
     // Then User scope sorted by priority ascending
     assert_eq!(matches[1].priority, -5);
     assert_eq!(matches[2].priority, 10);
+}
+
+#[test]
+fn reload_from_runtime_preserves_session_scoped_hooks() {
+    let registry = HookRegistry::new();
+    registry.register(HookDefinition {
+        event: HookEventType::Stop,
+        matcher: None,
+        handler: HookHandler::Prompt {
+            prompt: "finish the goal".into(),
+            model: None,
+            timeout_ms: None,
+        },
+        priority: 0,
+        scope: HookScope::Session,
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+        managed_by: None,
+    });
+
+    let count = registry
+        .reload_from_runtime(&[], LoaderPolicy::default())
+        .expect("reload should succeed");
+
+    assert_eq!(count, 1);
+    let matches = registry.find_matching(HookEventType::Stop, None);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].scope, HookScope::Session);
+}
+
+#[test]
+fn remove_matching_hooks_removes_only_matching_definitions() {
+    let registry = HookRegistry::new();
+    registry.register(HookDefinition {
+        event: HookEventType::Stop,
+        matcher: None,
+        handler: HookHandler::Prompt {
+            prompt: "remove me".into(),
+            model: None,
+            timeout_ms: None,
+        },
+        priority: 0,
+        scope: HookScope::Session,
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+        managed_by: None,
+    });
+    registry.register(HookDefinition {
+        event: HookEventType::Stop,
+        matcher: None,
+        handler: HookHandler::Prompt {
+            prompt: "keep me".into(),
+            model: None,
+            timeout_ms: None,
+        },
+        priority: 0,
+        scope: HookScope::Session,
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+        managed_by: None,
+    });
+
+    let removed = registry.remove_matching_hooks(
+        |hook| matches!(&hook.handler, HookHandler::Prompt { prompt, .. } if prompt == "remove me"),
+    );
+
+    assert_eq!(removed.len(), 1);
+    let matches = registry.find_matching(HookEventType::Stop, None);
+    assert_eq!(matches.len(), 1);
+    assert!(
+        matches!(&matches[0].handler, HookHandler::Prompt { prompt, .. } if prompt == "keep me")
+    );
 }
 
 #[test]
@@ -176,6 +263,7 @@ fn test_glob_matcher() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     // Matches glob pattern
@@ -205,6 +293,7 @@ fn test_pipe_separated_matcher() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     assert_eq!(
@@ -251,6 +340,7 @@ fn test_regex_matcher() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     assert_eq!(
@@ -291,6 +381,7 @@ fn test_regex_prefix_matcher() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     assert_eq!(
@@ -336,6 +427,7 @@ fn test_prompt_handler() {
         HookExecutionResult::CommandOutput { .. } => {
             panic!("expected PromptText, got CommandOutput");
         }
+        HookExecutionResult::LlmOutput { .. } => panic!("expected non-LLM variant"),
         HookExecutionResult::SdkOutput(_) => panic!("expected non-SDK variant"),
     }
 }
@@ -362,6 +454,7 @@ async fn test_command_hook_execution() {
         HookExecutionResult::PromptText(_) => {
             panic!("expected CommandOutput, got PromptText");
         }
+        HookExecutionResult::LlmOutput { .. } => panic!("expected non-LLM variant"),
         HookExecutionResult::SdkOutput(_) => panic!("expected non-SDK variant"),
     }
 }
@@ -384,6 +477,7 @@ async fn test_execute_hooks_runs_all_matching() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
@@ -400,6 +494,7 @@ async fn test_execute_hooks_runs_all_matching() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
     // Different event — should not match
     registry.register(HookDefinition {
@@ -417,6 +512,7 @@ async fn test_execute_hooks_runs_all_matching() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let results = registry
@@ -445,6 +541,7 @@ fn test_no_tool_name_with_wildcard_does_not_match() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     // Wildcard requires a tool name to be present
@@ -470,6 +567,7 @@ fn test_no_matcher_matches_without_tool_name() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let matches = registry.find_matching(HookEventType::SessionStart, None);
@@ -538,6 +636,7 @@ fn test_all_hook_event_variants_are_present() {
             is_async: false,
             async_rewake: false,
             status_message: None,
+            managed_by: None,
         });
         assert_eq!(registry.find_matching(parsed, None).len(), 1);
     }
@@ -562,6 +661,7 @@ fn test_if_condition_filters_matching_hooks() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
     // Hook without if_condition: matches everything
     registry.register(HookDefinition {
@@ -579,6 +679,7 @@ fn test_if_condition_filters_matching_hooks() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let ctx = IfConditionContext {
@@ -937,6 +1038,7 @@ fn test_register_deduped_allows_unique_hooks() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     };
     let h2 = HookDefinition {
         event: HookEventType::PreToolUse,
@@ -953,6 +1055,7 @@ fn test_register_deduped_allows_unique_hooks() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     };
 
     assert!(registry.register_deduped(h1));
@@ -978,6 +1081,7 @@ fn test_register_deduped_rejects_duplicate_command() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     };
     let h2 = HookDefinition {
         event: HookEventType::PreToolUse,
@@ -994,6 +1098,7 @@ fn test_register_deduped_rejects_duplicate_command() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     };
 
     assert!(registry.register_deduped(h1));
@@ -1020,6 +1125,7 @@ fn test_register_deduped_different_if_condition_not_duplicate() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     };
     let h2 = HookDefinition {
         event: HookEventType::PreToolUse,
@@ -1036,6 +1142,7 @@ fn test_register_deduped_different_if_condition_not_duplicate() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     };
 
     assert!(registry.register_deduped(h1));
@@ -1061,6 +1168,7 @@ fn test_register_deduped_different_shell_not_duplicate() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     };
     let h2 = HookDefinition {
         event: HookEventType::PreToolUse,
@@ -1077,6 +1185,7 @@ fn test_register_deduped_different_shell_not_duplicate() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     };
 
     assert!(registry.register_deduped(h1));
@@ -1102,6 +1211,7 @@ fn test_register_deduped_prompt_hooks() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     };
     let h2 = h1.clone();
 
@@ -1130,6 +1240,7 @@ async fn test_command_hook_custom_shell() {
         HookExecutionResult::PromptText(_) => {
             panic!("expected CommandOutput, got PromptText");
         }
+        HookExecutionResult::LlmOutput { .. } => panic!("expected non-LLM variant"),
         HookExecutionResult::SdkOutput(_) => panic!("expected non-SDK variant"),
     }
 }
@@ -1365,6 +1476,7 @@ fn test_reload_preserves_agent_scoped() {
             is_async: false,
             async_rewake: false,
             status_message: None,
+            managed_by: None,
         }],
         true,
     );

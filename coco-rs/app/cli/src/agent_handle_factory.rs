@@ -281,6 +281,15 @@ pub async fn build_agent_team_wiring(
         coco_query::skill_runtime::QuerySkillRuntime::new(runtime.skill_manager())
             .with_agent_engine(adapter.clone())
             .with_session_id(runtime.current_session_id().await)
+            .with_loop_context(coco_query::skill_runtime::LoopSkillContext {
+                project_root: runtime.original_cwd.clone(),
+                cwd: runtime.current_cwd.clone(),
+                config: (*runtime.runtime_config).loop_config.clone(),
+                remote_schedule_enabled: runtime
+                    .runtime_config
+                    .features
+                    .enabled(coco_types::Feature::AgentTriggersRemote),
+            })
             // Share the per-turn Bash handle so in-prompt `` !`cmd` ``
             // markers in model-invoked / fork-mode skills run through the
             // same permission-checked route as slash-command handlers.

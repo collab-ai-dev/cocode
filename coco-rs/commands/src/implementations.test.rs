@@ -119,6 +119,7 @@ fn test_all_name_constants_are_valid() {
         names::CLEAR,
         names::COMPACT,
         names::STATUS,
+        names::GOAL,
         names::EXIT,
         names::VERSION,
         names::CONFIG,
@@ -188,6 +189,57 @@ fn test_all_name_constants_are_valid() {
         "expected at least 50 command name constants, got {}",
         all_names.len()
     );
+}
+
+#[test]
+fn goal_handler_emits_typed_sentinels() {
+    assert_eq!(
+        parse_goal_sentinel(&goal_handler("")),
+        Some(GoalCommandRequest::Status)
+    );
+    assert_eq!(
+        parse_goal_sentinel(&goal_handler("clear")),
+        Some(GoalCommandRequest::Clear)
+    );
+    for keyword in ["stop", "off", "reset", "none", "cancel"] {
+        assert_eq!(
+            parse_goal_sentinel(&goal_handler(keyword)),
+            Some(GoalCommandRequest::Clear),
+            "{keyword} should clear the active goal"
+        );
+    }
+    assert_eq!(
+        parse_goal_sentinel(&goal_handler("finish the migration")),
+        Some(GoalCommandRequest::Set {
+            condition: "finish the migration".to_string()
+        })
+    );
+}
+
+#[test]
+fn goal_registration_matches_upstream_interactive_metadata() {
+    let mut registry = CommandRegistry::new();
+    register_extended_builtins(&mut registry);
+
+    let goal = registry.get(names::GOAL).expect("/goal registered");
+    assert_eq!(
+        goal.base.description,
+        "Set a goal Claude checks before stopping"
+    );
+    assert_eq!(
+        goal.base.argument_hint.as_deref(),
+        Some("[<condition> | clear]")
+    );
+}
+
+#[test]
+fn goal_handler_rejects_conditions_over_upstream_limit() {
+    let output = goal_handler(&"x".repeat(4001));
+    assert_eq!(
+        output,
+        "Goal condition is limited to 4000 characters (got 4001)"
+    );
+    assert!(parse_goal_sentinel(&output).is_none());
 }
 
 #[tokio::test]

@@ -2601,6 +2601,7 @@ async fn pre_tool_use_updated_input_reaches_execution() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let engine = QueryEngine::new(
@@ -2653,6 +2654,7 @@ async fn post_tool_use_receives_effective_input() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PostToolUse,
@@ -2669,6 +2671,7 @@ async fn post_tool_use_receives_effective_input() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let engine = QueryEngine::new(
@@ -2720,6 +2723,7 @@ async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let engine = QueryEngine::new(
@@ -2796,6 +2800,7 @@ async fn post_tool_use_updated_mcp_output_is_ignored_for_non_mcp_tool() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let engine = QueryEngine::new(
@@ -2847,6 +2852,7 @@ async fn post_tool_use_additional_context_is_injected() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let engine = QueryEngine::new(
@@ -2902,6 +2908,7 @@ async fn post_tool_use_prevent_continuation_stops_next_turn() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let engine = QueryEngine::new(
@@ -2955,6 +2962,7 @@ async fn non_mcp_success_path_orders_post_hook_messages_before_new_messages() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+                    managed_by: None,
     });
 
     let engine = QueryEngine::new(
@@ -3019,6 +3027,7 @@ async fn mcp_success_path_defers_post_hook_messages_until_after_prevent() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+                    managed_by: None,
     });
 
     let engine = QueryEngine::new(
@@ -3083,6 +3092,7 @@ async fn failure_path_orders_error_result_before_post_tool_use_failure_context()
         is_async: false,
         async_rewake: false,
         status_message: None,
+                    managed_by: None,
     });
 
     let engine = QueryEngine::new(
@@ -3191,6 +3201,7 @@ async fn pre_tool_use_permission_deny_records_denial() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let engine = QueryEngine::new(
@@ -3982,6 +3993,7 @@ async fn pre_tool_use_block_runs_before_permission_ask() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
 
     let engine = QueryEngine::new(
@@ -4146,6 +4158,7 @@ async fn stop_hook_prevent_continuation_matches_ts_terminal_reason() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
@@ -4207,6 +4220,7 @@ async fn stop_hook_blocking_flushes_transcript_before_retry() {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     });
     let session_id = "transcript-stop-blocking";
     let tempdir = tempfile::tempdir().unwrap();

@@ -700,6 +700,43 @@ pub async fn run_chat_with_options(
     } else {
         std::env::current_dir()?
     };
+    if let Some(goal_args) = parse_headless_goal_slash(prompt) {
+        match coco_commands::parse_goal_command_args(goal_args) {
+            Err(text) => {
+                return Ok(headless_local_goal_text_outcome(
+                    cli,
+                    &cwd,
+                    goal_args,
+                    text,
+                    opts.prior_messages,
+                ));
+            }
+            Ok(coco_commands::GoalCommandRequest::Status) => {
+                let text = match crate::goal_command::find_last_achieved_goal(&opts.prior_messages)
+                {
+                    Some(goal) => crate::goal_command::format_achieved_goal_status(&goal),
+                    None => "No goal set. Usage: `/goal <condition>`".to_string(),
+                };
+                return Ok(headless_local_goal_text_outcome(
+                    cli,
+                    &cwd,
+                    "",
+                    text,
+                    opts.prior_messages,
+                ));
+            }
+            Ok(coco_commands::GoalCommandRequest::Clear) => {
+                return Ok(headless_local_goal_text_outcome(
+                    cli,
+                    &cwd,
+                    "clear",
+                    "No goal set".to_string(),
+                    opts.prior_messages,
+                ));
+            }
+            Ok(coco_commands::GoalCommandRequest::Set { .. }) => {}
+        }
+    }
     tracing::info!(
         target: "coco_cli::headless",
         cwd = %cwd.display(),
@@ -987,27 +1024,161 @@ pub async fn run_chat_with_options(
     );
 
     let engine = runtime.build_engine_from_config(config, cancel, None).await;
+    let mut effective_prompt = prompt.to_string();
+    let mut prefix_messages: Vec<std::sync::Arc<coco_messages::Message>> = Vec::new();
+    let prior_messages = opts.prior_messages;
+
+    if let Some(goal_args) = parse_headless_goal_slash(prompt) {
+        match coco_commands::parse_goal_command_args(goal_args) {
+            Err(text) => {
+                append_headless_slash_text(&mut prefix_messages, "goal", goal_args, &text);
+                let mut final_messages = prior_messages;
+                final_messages.extend(prefix_messages);
+                return Ok(headless_text_outcome(
+                    cli,
+                    &cwd,
+                    text,
+                    final_messages,
+                    model_id,
+                    provider_api,
+                    permission_mode,
+                    bypass_permissions_available,
+                    startup.notification,
+                    installed_fallback_count,
+                ));
+            }
+            Ok(coco_commands::GoalCommandRequest::Status) => {
+                let goal = runtime.app_state.read().await.active_goal.clone();
+                let text = match goal {
+                    Some(goal) => crate::goal_command::format_active_goal_status(&goal),
+                    None => match crate::goal_command::find_last_achieved_goal(&prior_messages) {
+                        Some(goal) => crate::goal_command::format_achieved_goal_status(&goal),
+                        None => "No goal set. Usage: `/goal <condition>`".to_string(),
+                    },
+                };
+                append_headless_slash_text(&mut prefix_messages, "goal", "", &text);
+                let mut final_messages = prior_messages;
+                final_messages.extend(prefix_messages);
+                return Ok(headless_text_outcome(
+                    cli,
+                    &cwd,
+                    text,
+                    final_messages,
+                    model_id,
+                    provider_api,
+                    permission_mode,
+                    bypass_permissions_available,
+                    startup.notification,
+                    installed_fallback_count,
+                ));
+            }
+            Ok(coco_commands::GoalCommandRequest::Clear) => {
+                let removed = crate::goal_command::remove_all_goal_hooks(&runtime);
+                let active_condition = {
+                    let mut state = runtime.app_state.write().await;
+                    state.active_goal.take().map(|goal| goal.condition)
+                };
+                let condition = active_condition.or_else(|| {
+                    removed
+                        .iter()
+                        .find_map(crate::goal_command::prompt_from_hook)
+                });
+                let text = match condition {
+                    Some(condition) => {
+                        append_headless_goal_status(
+                            &mut prefix_messages,
+                            crate::goal_command::goal_status_sentinel(true, condition.clone()),
+                        );
+                        format!("Goal cleared: {condition}")
+                    }
+                    None => "No goal set".to_string(),
+                };
+                append_headless_slash_text(&mut prefix_messages, "goal", "clear", &text);
+                let mut final_messages = prior_messages;
+                final_messages.extend(prefix_messages);
+                return Ok(headless_text_outcome(
+                    cli,
+                    &cwd,
+                    text,
+                    final_messages,
+                    model_id,
+                    provider_api,
+                    permission_mode,
+                    bypass_permissions_available,
+                    startup.notification,
+                    installed_fallback_count,
+                ));
+            }
+            Ok(coco_commands::GoalCommandRequest::Set { condition }) => {
+                let cfg = runtime.current_engine_config().await;
+                if cfg.disable_all_hooks || cfg.allow_managed_hooks_only {
+                    let text = crate::goal_command::HOOKS_GATE_MESSAGE.to_string();
+                    append_headless_slash_text(&mut prefix_messages, "goal", &condition, &text);
+                    let mut final_messages = prior_messages;
+                    final_messages.extend(prefix_messages);
+                    return Ok(headless_text_outcome(
+                        cli,
+                        &cwd,
+                        text,
+                        final_messages,
+                        model_id,
+                        provider_api,
+                        permission_mode,
+                        bypass_permissions_available,
+                        startup.notification,
+                        installed_fallback_count,
+                    ));
+                }
+
+                let tokens_at_start = runtime.session_usage_snapshot().await.totals.output_tokens;
+                crate::goal_command::remove_all_goal_hooks(&runtime);
+                {
+                    let mut state = runtime.app_state.write().await;
+                    state.active_goal = Some(crate::goal_command::active_goal(
+                        condition.clone(),
+                        tokens_at_start,
+                    ));
+                }
+                append_headless_goal_status(
+                    &mut prefix_messages,
+                    crate::goal_command::goal_status_sentinel(false, condition.clone()),
+                );
+                runtime
+                    .hook_registry()
+                    .register(crate::goal_command::managed_goal_hook(condition.clone()));
+                append_headless_slash_text(
+                    &mut prefix_messages,
+                    "goal",
+                    &condition,
+                    &format!("Goal set: {condition}"),
+                );
+                effective_prompt = crate::goal_command::build_goal_kickoff_prompt(&condition);
+            }
+        }
+    }
 
     // Resolve `@`-mentions in the prompt to file-content system-reminder
     // messages. Both branches below share one expansion pipeline so
     // headless behaves like TUI / SDK.
     let inputs = crate::at_mention_turn::resolve_turn_inputs_text_only(
-        prompt,
+        &effective_prompt,
         &cwd,
         &runtime.file_read_state,
     )
     .await;
     let new_turn_messages = crate::at_mention_turn::build_messages_for_turn(&inputs);
-    let messages: Vec<std::sync::Arc<coco_messages::Message>> = if opts.prior_messages.is_empty() {
-        new_turn_messages
-            .into_iter()
-            .map(std::sync::Arc::new)
-            .collect()
-    } else {
-        let mut combined = opts.prior_messages;
-        combined.extend(new_turn_messages.into_iter().map(std::sync::Arc::new));
-        combined
-    };
+    let messages: Vec<std::sync::Arc<coco_messages::Message>> =
+        if prior_messages.is_empty() && prefix_messages.is_empty() {
+            new_turn_messages
+                .into_iter()
+                .map(std::sync::Arc::new)
+                .collect()
+        } else {
+            let mut combined = prior_messages;
+            combined.extend(prefix_messages);
+            combined.extend(new_turn_messages.into_iter().map(std::sync::Arc::new));
+            combined
+        };
     if !inputs.mentioned_paths.is_empty() {
         engine
             .note_mentioned_paths(inputs.mentioned_paths.clone())
@@ -1068,6 +1239,103 @@ pub async fn run_chat_with_options(
         installed_fallback_count,
         final_messages: result.final_messages,
     })
+}
+
+fn parse_headless_goal_slash(text: &str) -> Option<&str> {
+    let body = text.trim().strip_prefix('/')?;
+    if body == "goal" {
+        return Some("");
+    }
+    let args = body.strip_prefix("goal")?;
+    if !args
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_whitespace())
+    {
+        return None;
+    }
+    Some(args.trim_start())
+}
+
+fn append_headless_slash_text(
+    messages: &mut Vec<std::sync::Arc<coco_messages::Message>>,
+    command: &str,
+    args: &str,
+    text: &str,
+) {
+    messages.extend(
+        coco_messages::build_slash_command_messages(command, args, text, false)
+            .into_iter()
+            .map(std::sync::Arc::new),
+    );
+}
+
+fn append_headless_goal_status(
+    messages: &mut Vec<std::sync::Arc<coco_messages::Message>>,
+    payload: coco_types::GoalStatusPayload,
+) {
+    messages.push(std::sync::Arc::new(coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(payload),
+    )));
+}
+
+fn headless_local_goal_text_outcome(
+    cli: &Cli,
+    cwd: &Path,
+    args: &str,
+    response_text: String,
+    prior_messages: Vec<std::sync::Arc<coco_messages::Message>>,
+) -> RunChatOutcome {
+    let mut final_messages = prior_messages;
+    append_headless_slash_text(&mut final_messages, "goal", args, &response_text);
+    headless_text_outcome(
+        cli,
+        cwd,
+        response_text,
+        final_messages,
+        "local".to_string(),
+        None,
+        coco_types::PermissionMode::default(),
+        false,
+        None,
+        0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn headless_text_outcome(
+    cli: &Cli,
+    cwd: &Path,
+    response_text: String,
+    final_messages: Vec<std::sync::Arc<coco_messages::Message>>,
+    model_id: String,
+    provider_api: Option<coco_types::ProviderApi>,
+    permission_mode: coco_types::PermissionMode,
+    bypass_permissions_available: bool,
+    permission_notification: Option<String>,
+    installed_fallback_count: usize,
+) -> RunChatOutcome {
+    RunChatOutcome {
+        response_text,
+        turns: 0,
+        total_usage: TokenUsage::default(),
+        cost_tracker: CostTracker::new(),
+        model_id,
+        provider_api,
+        permission_mode,
+        bypass_permissions_available,
+        permission_notification,
+        duration_ms: 0,
+        duration_api_ms: 0,
+        budget_exhausted: false,
+        cancelled: false,
+        last_continue_reason: None,
+        installed_fallback_count,
+        final_messages,
+        effective_cwd: cwd.to_path_buf(),
+        additional_dirs: resolve_additional_dirs(cli, cwd),
+        tool_filter_summary: summarize_tool_filter(cli),
+    }
 }
 
 /// Compose the session's system prompt, honoring `--system-prompt`
@@ -1170,4 +1438,26 @@ pub fn resolve_additional_dirs_display(cli: &Cli, cwd: &Path) -> Vec<String> {
         .iter()
         .map(|p| p.display().to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_headless_goal_slash;
+
+    #[test]
+    fn parse_headless_goal_slash_accepts_exact_goal_command() {
+        assert_eq!(parse_headless_goal_slash("/goal"), Some(""));
+        assert_eq!(parse_headless_goal_slash("  /goal   "), Some(""));
+        assert_eq!(
+            parse_headless_goal_slash("/goal finish migration"),
+            Some("finish migration")
+        );
+    }
+
+    #[test]
+    fn parse_headless_goal_slash_rejects_other_inputs() {
+        assert_eq!(parse_headless_goal_slash("goal finish"), None);
+        assert_eq!(parse_headless_goal_slash("/goalx finish"), None);
+        assert_eq!(parse_headless_goal_slash("/loop 5m /goal done"), None);
+    }
 }

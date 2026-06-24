@@ -62,6 +62,13 @@ pub fn spawn(runtime: Arc<SessionRuntime>) -> JoinHandle<()> {
     let cancel = runtime.shutdown_signal();
     let store = runtime.schedule_store();
     let queue = runtime.command_queue().clone();
+    let project_root = runtime.original_cwd.clone();
+    let current_cwd = runtime.current_cwd.clone();
+    let loop_sentinel_state = runtime.loop_sentinel_state.clone();
+    let loop_persistent_preamble_enabled = runtime
+        .runtime_config
+        .loop_config
+        .persistent_preamble_enabled;
 
     tokio::spawn(async move {
         let mut state = CronTickState::new();
@@ -114,9 +121,20 @@ pub fn spawn(runtime: Arc<SessionRuntime>) -> JoinHandle<()> {
                                 id = %fire.id, recurring = fire.recurring, aged = fire.aged,
                                 "scheduled task fired"
                             );
+                            let cwd = current_cwd.read().await.clone();
+                            let prompt = {
+                                let mut state = loop_sentinel_state.lock().await;
+                                expand_scheduled_prompt(
+                                    &task.prompt,
+                                    &project_root,
+                                    &cwd,
+                                    &mut state,
+                                    loop_persistent_preamble_enabled,
+                                )
+                            };
                             queue
                                 .enqueue(
-                                    QueuedCommand::new(task.prompt.clone(), QueuePriority::Later)
+                                    QueuedCommand::new(prompt, QueuePriority::Later)
                                         .with_origin(QueueOrigin::Cron),
                                 )
                                 .await;
@@ -132,6 +150,23 @@ pub fn spawn(runtime: Arc<SessionRuntime>) -> JoinHandle<()> {
             }
         }
     })
+}
+
+fn expand_scheduled_prompt(
+    prompt: &str,
+    project_root: &std::path::Path,
+    cwd: &std::path::Path,
+    state: &mut coco_skills::bundled::loop_skill::LoopSentinelState,
+    persistent_preamble_enabled: bool,
+) -> String {
+    coco_skills::bundled::loop_skill::expand_sentinel_prompt_with_state(
+        prompt,
+        project_root,
+        cwd,
+        state,
+        persistent_preamble_enabled,
+    )
+    .unwrap_or_else(|| prompt.to_string())
 }
 
 /// Batched "missed while not running" notification. Guidance precedes the task

@@ -157,6 +157,8 @@ pub enum EnvKey {
     /// into `ShellConfig` / `ShellExecutor` (bash-tool uses its own
     /// settings.json path).
     CocoShellPrefix,
+    /// Truthy ⇒ use the persistent autonomous `/loop` preamble.
+    CocoLoopPersistent,
     CocoSimple,
     /// Truthy ⇒ emit startup phase timings (one `debug!` per phase with a
     /// `duration_ms` field). Read by `coco_cli::startup_profile`.
@@ -353,6 +355,7 @@ impl EnvKey {
             Self::CocoSessionEndHooksTimeoutMs => "COCO_SESSIONEND_HOOKS_TIMEOUT_MS",
             Self::CocoShell => "COCO_SHELL",
             Self::CocoShellPrefix => "COCO_SHELL_PREFIX",
+            Self::CocoLoopPersistent => "COCO_LOOP_PERSISTENT",
             Self::CocoSimple => "COCO_SIMPLE",
             Self::CocoStartupProfile => "COCO_STARTUP_PROFILE",
             Self::CocoTaskListId => "COCO_TASK_LIST_ID",

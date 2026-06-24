@@ -44,10 +44,10 @@ use coco_types::TuiOnlyEvent;
 use coco_types::TurnAbortReason;
 use tokio_util::sync::CancellationToken;
 
+use coco_cli::goal_command;
+use coco_cli::resume_resolver::ResumePlan;
 use coco_cli::session_bootstrap::build_engine_resources;
 use coco_cli::session_bootstrap::install_session_late_binds;
-
-use coco_cli::resume_resolver::ResumePlan;
 
 use crate::Cli;
 
@@ -2173,6 +2173,10 @@ enum SlashOutcome {
     /// plan mode / MCP servers). Emitted on `STATUS_SENTINEL`; the runner
     /// builds it from `runtime.status_report()`.
     ShowStatus,
+    /// Install, clear, or show the session-scoped `/goal` Stop hook.
+    TriggerGoal {
+        request: coco_commands::GoalCommandRequest,
+    },
     /// Rename the current session. `Explicit(name)` uses the
     /// caller-supplied name verbatim; `Auto` directs the dispatcher
     /// to derive a kebab-case name via the `ModelRole::Fast`
@@ -2699,6 +2703,9 @@ enum SentinelTrigger {
     Summary,
     Cost,
     Status,
+    Goal {
+        request: coco_commands::GoalCommandRequest,
+    },
     Rename {
         request: coco_commands::ParsedRename,
     },
@@ -2749,6 +2756,11 @@ fn classify_sentinel_trigger(text: &str) -> Option<SentinelTrigger> {
         && coco_commands::parse_status_sentinel(text).is_some()
     {
         return Some(SentinelTrigger::Status);
+    }
+    if text.starts_with(coco_commands::GOAL_SENTINEL)
+        && let Some(request) = coco_commands::parse_goal_sentinel(text)
+    {
+        return Some(SentinelTrigger::Goal { request });
     }
     if text.starts_with(coco_commands::RENAME_SENTINEL)
         && let Some(request) = coco_commands::parse_rename_sentinel(text)
@@ -2900,6 +2912,7 @@ async fn handle_slash_outcome(
             emit_slash_text(event_tx, "status", "", &text).await;
             SlashFollowup::Done
         }
+        SlashOutcome::TriggerGoal { request } => run_goal_command(runtime, event_tx, request).await,
         SlashOutcome::TriggerRename { request } => {
             run_session_rename(runtime, event_tx, request).await;
             SlashFollowup::Done
@@ -3007,6 +3020,24 @@ async fn drain_queued_slash_commands(
             SlashOutcome::ShowStatus => {
                 let text = runtime.status_report().await;
                 emit_slash_text(event_tx, "status", "", &text).await;
+            }
+            SlashOutcome::TriggerGoal { request } => {
+                if let SlashFollowup::RunEngine { content, metadata } =
+                    run_goal_command(runtime, event_tx, request).await
+                {
+                    let session_id = runtime.current_session_id().await;
+                    spawn_slash_run_engine_turn(
+                        SlashEnginePrompt { content, metadata },
+                        runtime,
+                        event_tx,
+                        active_turn,
+                        title_gen_attempted,
+                        turn_done_tx,
+                        &session_id,
+                    )
+                    .await;
+                    break;
+                }
             }
             SlashOutcome::TriggerRename { request } => {
                 run_session_rename(runtime, event_tx, request).await;
@@ -3348,6 +3379,28 @@ async fn dispatch_slash_command(
     let Some(cmd) = registry_snapshot.get(name) else {
         return SlashOutcome::NotFound;
     };
+    if cmd.base.name == "loop" {
+        let cwd = runtime.current_cwd.read().await.clone();
+        let prompt = coco_skills::bundled::loop_skill::prompt_for_command(
+            args,
+            &runtime.original_cwd,
+            &cwd,
+            runtime.runtime_config.loop_config.default_prompt_enabled,
+            runtime.runtime_config.loop_config.dynamic_enabled,
+            runtime
+                .runtime_config
+                .loop_config
+                .persistent_preamble_enabled,
+            runtime
+                .runtime_config
+                .features
+                .enabled(coco_types::Feature::AgentTriggersRemote),
+        );
+        return SlashOutcome::RunEngine {
+            content: prompt,
+            metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
+        };
+    }
     // Fork-mode skills (`context: fork`) run as a subagent via the
     // installed `SkillHandle`, not by expanding inline into the main loop.
     // Mirrors TS `processSlashCommand` (`context === 'fork'` →
@@ -3415,6 +3468,7 @@ async fn dispatch_slash_command(
                     SentinelTrigger::Summary => SlashOutcome::TriggerSummary,
                     SentinelTrigger::Cost => SlashOutcome::ShowCost,
                     SentinelTrigger::Status => SlashOutcome::ShowStatus,
+                    SentinelTrigger::Goal { request } => SlashOutcome::TriggerGoal { request },
                     SentinelTrigger::Rename { request } => SlashOutcome::TriggerRename { request },
                     SentinelTrigger::Tag { tag } => SlashOutcome::TriggerTag { tag },
                     SentinelTrigger::AddDir { path } => SlashOutcome::TriggerAddDir { path },
@@ -4326,6 +4380,142 @@ async fn run_reload_hooks(
         Err(e) => format!("Hook reload failed: {e}"),
     };
     emit_slash_text(event_tx, "hooks", "", &body).await;
+}
+
+async fn run_goal_command(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    request: coco_commands::GoalCommandRequest,
+) -> SlashFollowup {
+    match request {
+        coco_commands::GoalCommandRequest::Status => {
+            let goal = runtime.app_state.read().await.active_goal.clone();
+            let text = match goal {
+                Some(goal) => goal_command::format_active_goal_status(&goal),
+                None => {
+                    let history = runtime.history.lock().await;
+                    match goal_command::find_last_achieved_goal(history.as_slice()) {
+                        Some(goal) => goal_command::format_achieved_goal_status(&goal),
+                        None => "No goal set. Usage: `/goal <condition>`".to_string(),
+                    }
+                }
+            };
+            emit_slash_text(event_tx, "goal", "", &text).await;
+            SlashFollowup::Done
+        }
+        coco_commands::GoalCommandRequest::Clear => {
+            let removed = goal_command::remove_all_goal_hooks(runtime);
+            let active_condition = {
+                let mut state = runtime.app_state.write().await;
+                state.active_goal.take().map(|goal| goal.condition)
+            };
+            let condition = active_condition
+                .or_else(|| removed.iter().find_map(goal_command::prompt_from_hook));
+            match condition {
+                Some(condition) => {
+                    append_goal_status(
+                        runtime,
+                        event_tx,
+                        goal_command::goal_status_sentinel(true, condition.clone()),
+                    )
+                    .await;
+                    emit_slash_text(
+                        event_tx,
+                        "goal",
+                        "clear",
+                        &format!("Goal cleared: {condition}"),
+                    )
+                    .await;
+                }
+                None => {
+                    emit_slash_text(event_tx, "goal", "clear", "No goal set").await;
+                }
+            }
+            SlashFollowup::Done
+        }
+        coco_commands::GoalCommandRequest::Set { condition } => {
+            let cfg = runtime.current_engine_config().await;
+            if cfg.disable_all_hooks || cfg.allow_managed_hooks_only {
+                emit_slash_text(
+                    event_tx,
+                    "goal",
+                    &condition,
+                    goal_command::HOOKS_GATE_MESSAGE,
+                )
+                .await;
+                return SlashFollowup::Done;
+            }
+            if workspace_trust_rejected() {
+                emit_slash_text(
+                    event_tx,
+                    "goal",
+                    &condition,
+                    goal_command::TRUST_GATE_MESSAGE,
+                )
+                .await;
+                return SlashFollowup::Done;
+            }
+
+            let tokens_at_start = runtime.session_usage_snapshot().await.totals.output_tokens;
+            goal_command::remove_all_goal_hooks(runtime);
+            {
+                let mut state = runtime.app_state.write().await;
+                state.active_goal = Some(goal_command::active_goal(
+                    condition.clone(),
+                    tokens_at_start,
+                ));
+            }
+            append_goal_status(
+                runtime,
+                event_tx,
+                goal_command::goal_status_sentinel(false, condition.clone()),
+            )
+            .await;
+            runtime
+                .hook_registry()
+                .register(goal_command::managed_goal_hook(condition.clone()));
+            emit_slash_text(
+                event_tx,
+                "goal",
+                &condition,
+                &format!("Goal set: {condition}"),
+            )
+            .await;
+            SlashFollowup::RunEngine {
+                content: goal_command::build_goal_kickoff_prompt(&condition),
+                metadata: Some(format_slash_command_metadata("goal", &condition)),
+            }
+        }
+    }
+}
+
+async fn append_goal_status(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    payload: coco_types::GoalStatusPayload,
+) {
+    let mut history = runtime.history.lock().await;
+    let event_tx_opt = Some(event_tx.clone());
+    coco_query::history_sync::history_push_and_emit(
+        &mut history,
+        coco_messages::Message::Attachment(coco_messages::AttachmentMessage::silent_goal_status(
+            payload,
+        )),
+        &event_tx_opt,
+    )
+    .await;
+}
+
+fn workspace_trust_rejected() -> bool {
+    workspace_trust_rejected_from_env(
+        std::env::var("COCO_WORKSPACE_TRUST_ACCEPTED")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn workspace_trust_rejected_from_env(value: Option<&str>) -> bool {
+    matches!(value, Some("0"))
 }
 
 /// `/add-dir <abs-path>` runner — pushes the (already-validated)

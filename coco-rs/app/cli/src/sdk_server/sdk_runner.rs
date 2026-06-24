@@ -80,7 +80,7 @@ impl TurnRunner for QueryEngineRunner {
         event_tx: mpsc::Sender<CoreEvent>,
         cancel: CancellationToken,
     ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
-        let prompt = params.prompt;
+        let mut prompt = params.prompt;
         let system_prompt = self.system_prompt.clone();
         let max_output_tokens = self.max_output_tokens;
         let max_turns = self.max_turns;
@@ -202,6 +202,101 @@ impl TurnRunner for QueryEngineRunner {
             let engine = runtime
                 .build_engine_from_config(config, cancel, Some(handoff.app_state.clone()))
                 .await;
+
+            if let Some(request) = coco_commands::parse_goal_sentinel(&prompt) {
+                match request {
+                    coco_commands::GoalCommandRequest::Status => {
+                        let goal = handoff.app_state.read().await.active_goal.clone();
+                        let text = match goal {
+                            Some(goal) => crate::goal_command::format_active_goal_status(&goal),
+                            None => {
+                                let history = history_handle.lock().await;
+                                match crate::goal_command::find_last_achieved_goal(&history) {
+                                    Some(goal) => {
+                                        crate::goal_command::format_achieved_goal_status(&goal)
+                                    }
+                                    None => "No goal set. Usage: `/goal <condition>`".to_string(),
+                                }
+                            }
+                        };
+                        sdk_append_slash_text(&history_handle, &event_tx, "goal", "", &text).await;
+                        return Ok(());
+                    }
+                    coco_commands::GoalCommandRequest::Clear => {
+                        let removed = crate::goal_command::remove_all_goal_hooks(&runtime);
+                        let active_condition = {
+                            let mut state = handoff.app_state.write().await;
+                            state.active_goal.take().map(|goal| goal.condition)
+                        };
+                        let condition = active_condition.or_else(|| {
+                            removed
+                                .iter()
+                                .find_map(crate::goal_command::prompt_from_hook)
+                        });
+                        let text = match condition {
+                            Some(condition) => {
+                                sdk_append_goal_status(
+                                    &history_handle,
+                                    &event_tx,
+                                    crate::goal_command::goal_status_sentinel(
+                                        true,
+                                        condition.clone(),
+                                    ),
+                                )
+                                .await;
+                                format!("Goal cleared: {condition}")
+                            }
+                            None => "No goal set".to_string(),
+                        };
+                        sdk_append_slash_text(&history_handle, &event_tx, "goal", "clear", &text)
+                            .await;
+                        return Ok(());
+                    }
+                    coco_commands::GoalCommandRequest::Set { condition } => {
+                        if current_engine_config.disable_all_hooks
+                            || current_engine_config.allow_managed_hooks_only
+                        {
+                            sdk_append_slash_text(
+                                &history_handle,
+                                &event_tx,
+                                "goal",
+                                &condition,
+                                crate::goal_command::HOOKS_GATE_MESSAGE,
+                            )
+                            .await;
+                            return Ok(());
+                        }
+                        let tokens_at_start =
+                            runtime.session_usage_snapshot().await.totals.output_tokens;
+                        crate::goal_command::remove_all_goal_hooks(&runtime);
+                        {
+                            let mut state = handoff.app_state.write().await;
+                            state.active_goal = Some(crate::goal_command::active_goal(
+                                condition.clone(),
+                                tokens_at_start,
+                            ));
+                        }
+                        sdk_append_goal_status(
+                            &history_handle,
+                            &event_tx,
+                            crate::goal_command::goal_status_sentinel(false, condition.clone()),
+                        )
+                        .await;
+                        runtime
+                            .hook_registry()
+                            .register(crate::goal_command::managed_goal_hook(condition.clone()));
+                        sdk_append_slash_text(
+                            &history_handle,
+                            &event_tx,
+                            "goal",
+                            &condition,
+                            &format!("Goal set: {condition}"),
+                        )
+                        .await;
+                        prompt = crate::goal_command::build_goal_kickoff_prompt(&condition);
+                    }
+                }
+            }
 
             // Snapshot the prior history, append a fresh user message,
             // and **persist the combined history back to shared state
@@ -691,6 +786,55 @@ impl TurnRunner for QueryEngineRunner {
                 }
             }
         })
+    }
+}
+
+async fn sdk_append_slash_text(
+    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    command: &str,
+    args: &str,
+    text: &str,
+) {
+    let messages = coco_messages::build_slash_command_messages(
+        command, args, text, /*is_sensitive*/ false,
+    );
+    sdk_append_messages(history_handle, event_tx, messages).await;
+}
+
+async fn sdk_append_goal_status(
+    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    payload: coco_types::GoalStatusPayload,
+) {
+    sdk_append_messages(
+        history_handle,
+        event_tx,
+        vec![coco_messages::Message::Attachment(
+            coco_messages::AttachmentMessage::silent_goal_status(payload),
+        )],
+    )
+    .await;
+}
+
+async fn sdk_append_messages(
+    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    messages: Vec<coco_messages::Message>,
+) {
+    let mut history = history_handle.lock().await;
+    for message in messages {
+        let message = Arc::new(message);
+        history.push(message.clone());
+        let _ = event_tx
+            .send(CoreEvent::Protocol(
+                coco_types::ServerNotification::MessageAppended {
+                    message,
+                    session_id: String::new(),
+                    agent_id: None,
+                },
+            ))
+            .await;
     }
 }
 

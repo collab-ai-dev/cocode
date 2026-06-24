@@ -18,6 +18,7 @@ use super::attachment_body::CommandPermissionsPayload;
 use super::attachment_body::CompactFileReferencePayload;
 use super::attachment_body::DynamicSkillPayload;
 use super::attachment_body::EditedImageFilePayload;
+use super::attachment_body::GoalStatusPayload;
 use super::attachment_body::HookCancelledPayload;
 use super::attachment_body::HookErrorDuringExecutionPayload;
 use super::attachment_body::HookNonBlockingErrorPayload;
@@ -327,6 +328,12 @@ impl AttachmentMessage {
         Self::silent(
             AttachmentKind::CommandPermissions,
             SilentPayload::CommandPermissions(payload),
+        )
+    }
+    pub fn silent_goal_status(payload: GoalStatusPayload) -> Self {
+        Self::silent(
+            AttachmentKind::GoalStatus,
+            SilentPayload::GoalStatus(payload),
         )
     }
     pub fn silent_structured_output(payload: StructuredOutputPayload) -> Self {

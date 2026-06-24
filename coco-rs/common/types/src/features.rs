@@ -137,7 +137,7 @@ pub enum Feature {
     // Skill / command feature gates.
     /// Brief user-message channel (`SendUserMessage`).
     KairosBrief,
-    /// `/loop` skill — recurring task scheduling.
+    /// Local agent-trigger/scheduling tools (`Cron*`, `ScheduleWakeup`, `Monitor`).
     AgentTriggers,
     /// `/schedule` skill — remote agent scheduling.
     AgentTriggersRemote,

@@ -12,6 +12,7 @@ pub mod disk_task_output;
 pub mod elicitation_hooks;
 pub mod file_changed_watcher;
 pub mod fork_dispatcher;
+pub mod goal_command;
 pub mod headless;
 pub mod hook_agent_runner;
 pub mod leader_inbox_poller;

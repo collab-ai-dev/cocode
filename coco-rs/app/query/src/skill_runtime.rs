@@ -29,6 +29,7 @@
 //! tagging before pushing to history. This module returns
 //! untagged `UserMessage` values; the caller tags.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -81,6 +82,19 @@ pub struct QuerySkillRuntime {
     /// leaves `` !`cmd` `` markers untouched (matches the prior no-shell
     /// behaviour of the inline path).
     bash_handle: Option<SkillBashHandleCell>,
+    /// Runtime inputs needed by bundled `/loop` when it is invoked through
+    /// the model-facing Skill tool. The user-typed slash path has an
+    /// equivalent command handler; this keeps both entry points on the same
+    /// prompt builder.
+    loop_context: Option<LoopSkillContext>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoopSkillContext {
+    pub project_root: PathBuf,
+    pub cwd: Arc<tokio::sync::RwLock<PathBuf>>,
+    pub config: coco_config::LoopConfig,
+    pub remote_schedule_enabled: bool,
 }
 
 impl QuerySkillRuntime {
@@ -90,7 +104,13 @@ impl QuerySkillRuntime {
             agent_engine: None,
             session_id: None,
             bash_handle: None,
+            loop_context: None,
         }
+    }
+
+    pub fn with_loop_context(mut self, context: LoopSkillContext) -> Self {
+        self.loop_context = Some(context);
+        self
     }
 
     /// Install the shared Bash handle cell used to expand in-prompt
@@ -210,19 +230,34 @@ impl SkillHandle for QuerySkillRuntime {
             .skill_root
             .as_deref()
             .and_then(std::path::Path::to_str);
-        let expanded_prompt = coco_tools::tools::skill_advanced::expand_skill_prompt(
-            &skill.prompt,
-            &coco_tools::tools::skill_advanced::ExpandOptions {
+        let expanded_prompt = if skill.name == "loop"
+            && let Some(loop_context) = &self.loop_context
+        {
+            let cwd = loop_context.cwd.read().await.clone();
+            coco_skills::bundled::loop_skill::prompt_for_command(
                 args,
-                argument_names: &[],
-                skill_dir,
-                session_id: self.session_id.as_deref(),
-                base_dir: skill_dir,
-                plugin_root: None,
-                plugin_data_dir: None,
-                user_config: None,
-            },
-        );
+                &loop_context.project_root,
+                &cwd,
+                loop_context.config.default_prompt_enabled,
+                loop_context.config.dynamic_enabled,
+                loop_context.config.persistent_preamble_enabled,
+                loop_context.remote_schedule_enabled,
+            )
+        } else {
+            coco_tools::tools::skill_advanced::expand_skill_prompt(
+                &skill.prompt,
+                &coco_tools::tools::skill_advanced::ExpandOptions {
+                    args,
+                    argument_names: &[],
+                    skill_dir,
+                    session_id: self.session_id.as_deref(),
+                    base_dir: skill_dir,
+                    plugin_root: None,
+                    plugin_data_dir: None,
+                    user_config: None,
+                },
+            )
+        };
 
         // In-prompt shell expansion (`` !`cmd` `` / ```` ```! ```` blocks),
         // permission-checked through the parent's Bash handle. Runs for both

@@ -75,6 +75,14 @@ fn silent_payload_round_trips_with_every_silent_attachment_kind() {
             AttachmentKind::CommandPermissions => {
                 AttachmentMessage::silent_command_permissions(CommandPermissionsPayload::default())
             }
+            AttachmentKind::GoalStatus => {
+                AttachmentMessage::silent_goal_status(GoalStatusPayload {
+                    met: false,
+                    condition: "finish tests".into(),
+                    reason: Some("still running".into()),
+                    ..Default::default()
+                })
+            }
             AttachmentKind::StructuredOutput => {
                 AttachmentMessage::silent_structured_output(StructuredOutputPayload::default())
             }
@@ -96,6 +104,23 @@ fn silent_payload_round_trips_with_every_silent_attachment_kind() {
         assert_eq!(msg.kind, *kind);
         assert!(matches!(msg.body, AttachmentBody::Silent(_)));
     }
+}
+
+#[test]
+fn goal_status_payload_uses_ts_wire_names() {
+    let payload = GoalStatusPayload {
+        met: true,
+        condition: "ship it".into(),
+        duration_ms: Some(123),
+        iterations: Some(2),
+        tokens: Some(456),
+        ..Default::default()
+    };
+    let json = serde_json::to_value(payload).unwrap();
+    assert_eq!(json["durationMs"], 123);
+    assert!(json.get("duration_ms").is_none());
+    assert!(json.get("sentinel").is_none());
+    assert!(json.get("failed").is_none());
 }
 
 #[test]

@@ -345,7 +345,7 @@ pub fn build_runtime_config_with(
 
     Ok(RuntimeConfig {
         api: ApiConfig::resolve(merged, &env),
-        loop_config: LoopConfig::resolve(merged, &overrides),
+        loop_config: LoopConfig::resolve(merged, &overrides, &env),
         tool: ToolConfig::resolve(merged, &env),
         shell: ShellConfig::resolve(merged, &env),
         sandbox: SandboxSettings::resolve(merged, &env),

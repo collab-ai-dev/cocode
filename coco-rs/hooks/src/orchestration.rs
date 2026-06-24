@@ -252,10 +252,13 @@ pub enum HookBlockingSource {
     /// log lines and telemetry can correlate to the registration
     /// site.
     Function { hook_id: String },
-    /// LLM-driven `HookHandler::Prompt` / `HookHandler::Agent` hook.
-    /// No command/id; the LLM's blocking decision lives in
-    /// `blocking_error`.
-    Llm,
+    /// LLM-driven `HookHandler::Prompt` hook. Carries the configured
+    /// prompt so session-scoped runtime features can identify their own
+    /// hook without treating every LLM Stop hook as theirs.
+    Prompt { prompt: String },
+    /// LLM-driven `HookHandler::Agent` hook. Carries the configured
+    /// prompt for the same provenance reason as [`Self::Prompt`].
+    Agent { prompt: String },
     /// SDK-supplied [`crate::HookHandler::SdkCallback`] — carries the
     /// `callback_id` registered at `initialize` time so telemetry,
     /// log filtering, and error rendering can distinguish SDK denials
@@ -294,6 +297,22 @@ pub struct AggregatedHookResult {
     pub elicitation_response: Option<ElicitationResponse>,
     /// ElicitationResult hook response.
     pub elicitation_result_response: Option<ElicitationResponse>,
+    /// Successful LLM hook verdicts for this event.
+    pub llm_successes: Vec<LlmHookSuccess>,
+    /// Stop/SubagentStop LLM hook verdicts that declared the condition impossible.
+    pub llm_impossibles: Vec<LlmHookImpossible>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmHookSuccess {
+    pub source: HookBlockingSource,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmHookImpossible {
+    pub source: HookBlockingSource,
+    pub reason: String,
 }
 
 /// SessionStart hook output captured for immediate insertion into a
@@ -346,6 +365,13 @@ pub struct SingleHookResult {
     /// fallback, no string-vs-typed round-trip. `None` for every
     /// other handler kind (Command/Http/Prompt/Agent).
     pub sdk_output: Option<coco_types::SdkHookOutput>,
+    pub llm_verdict: Option<LlmHookVerdict>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlmHookVerdict {
+    Success { reason: Option<String> },
+    Impossible { reason: String },
 }
 
 impl SingleHookResult {
@@ -540,6 +566,7 @@ pub async fn execute_hooks_parallel(
         /*async_rewake_sink*/ None,
         /*llm_handle*/ None,
         /*workspace_trust_accepted*/ None,
+        /*transcript_history*/ None,
     )
     .await
 }
@@ -577,6 +604,7 @@ async fn execute_hooks_parallel_filtered(
     async_rewake_sink: Option<&std::sync::Arc<dyn crate::AsyncRewakeSink>>,
     llm_handle: Option<&std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
     workspace_trust_accepted: Option<bool>,
+    transcript_history: Option<&[std::sync::Arc<coco_messages::Message>]>,
 ) -> Vec<SingleHookResult> {
     // Global trust gate — if the workspace is explicitly untrusted,
     // no hook fires.
@@ -677,6 +705,9 @@ async fn execute_hooks_parallel_filtered(
         let cancel = cancel.clone();
         let env = env_vars.clone();
         let input_json = hook_input_json.to_string();
+        let transcript_history = transcript_history
+            .map(render_transcript_history)
+            .unwrap_or_default();
         let timeout = resolve_timeout(&handler, default_timeout);
         let command_label = handler_label(&handler);
         // Tag this spawn with its provenance so `apply_hook_specific_output`
@@ -774,6 +805,7 @@ async fn execute_hooks_parallel_filtered(
                         async_rewake: false,
                         source: handler_source.clone(),
                         sdk_output: None,
+                        llm_verdict: None,
                     }
                 }
                 res = tokio::time::timeout(
@@ -786,6 +818,7 @@ async fn execute_hooks_parallel_filtered(
                         sdk_hook_callback: sdk_hook_callback.as_ref(),
                         event,
                         timeout,
+                        transcript_history: transcript_history.clone(),
                         async_options: Some(crate::AsyncCommandOptions {
                             registry: async_reg_for_spawn.clone(),
                             hook_id: async_hook_id.clone(),
@@ -829,6 +862,7 @@ async fn execute_hooks_parallel_filtered(
                                 async_rewake: false,
                                 source: handler_source.clone(),
                                 sdk_output: None,
+                                llm_verdict: None,
                             }
                         }
                         Err(_elapsed) => {
@@ -854,6 +888,7 @@ async fn execute_hooks_parallel_filtered(
                                 async_rewake: false,
                                 source: handler_source.clone(),
                                 sdk_output: None,
+                                llm_verdict: None,
                             }
                         }
                     }
@@ -934,6 +969,21 @@ pub fn aggregate_results_for_event(
         }
         if r.async_rewake {
             agg.async_rewake = true;
+        }
+        match &r.llm_verdict {
+            Some(LlmHookVerdict::Success { reason }) if r.succeeded => {
+                agg.llm_successes.push(LlmHookSuccess {
+                    source: r.blocking_source(),
+                    reason: reason.clone(),
+                });
+            }
+            Some(LlmHookVerdict::Impossible { reason }) => {
+                agg.llm_impossibles.push(LlmHookImpossible {
+                    source: r.blocking_source(),
+                    reason: reason.clone(),
+                });
+            }
+            _ => {}
         }
 
         // **Typed SDK path** — when the callback returned a typed
@@ -1466,6 +1516,7 @@ pub async fn execute_event(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -1514,6 +1565,7 @@ pub async fn execute_pre_tool_use(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -1567,6 +1619,7 @@ pub async fn execute_post_tool_use(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -1625,6 +1678,7 @@ pub async fn execute_post_tool_use_failure(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -1675,6 +1729,7 @@ pub async fn execute_pre_compact(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -1762,6 +1817,7 @@ pub async fn execute_post_compact(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -1871,6 +1927,7 @@ async fn execute_session_start_raw(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -1925,6 +1982,7 @@ pub async fn execute_user_prompt_submit(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -2068,6 +2126,7 @@ pub async fn execute_subagent_start(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -2131,6 +2190,7 @@ pub async fn execute_subagent_stop(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -2178,6 +2238,7 @@ pub async fn execute_session_end(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -2238,6 +2299,7 @@ pub async fn execute_stop(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        Some(history),
     )
     .await;
 
@@ -2398,6 +2460,7 @@ pub async fn execute_stop_failure(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
 
@@ -2451,6 +2514,7 @@ pub async fn execute_setup(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -2503,6 +2567,7 @@ pub async fn execute_notification(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -2557,6 +2622,7 @@ pub async fn execute_permission_request(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -2612,6 +2678,7 @@ pub async fn execute_permission_denied(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -2671,6 +2738,7 @@ pub async fn execute_elicitation(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -2727,6 +2795,7 @@ pub async fn execute_elicitation_result(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -2775,6 +2844,7 @@ pub async fn execute_config_change(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -2834,6 +2904,7 @@ pub async fn execute_instructions_loaded(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -2882,6 +2953,7 @@ pub async fn execute_cwd_changed(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -2937,6 +3009,7 @@ pub async fn execute_file_changed(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -2984,6 +3057,7 @@ pub async fn execute_worktree_create(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -3030,6 +3104,7 @@ pub async fn execute_worktree_remove(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(
@@ -3076,6 +3151,7 @@ async fn run_event_with_input<I: serde::Serialize>(
         ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
+        None,
     )
     .await;
     Ok(aggregate_results_for_event(&results, Some(event)))
@@ -3179,6 +3255,7 @@ struct HookExecutionRequest<'a> {
     sdk_hook_callback: Option<&'a crate::SdkHookCallback>,
     event: HookEventType,
     timeout: Duration,
+    transcript_history: Vec<String>,
     async_options: Option<crate::AsyncCommandOptions>,
 }
 
@@ -3195,6 +3272,7 @@ async fn run_hook_via_handle_or_fallback(
         sdk_hook_callback,
         event,
         timeout,
+        transcript_history,
         async_options,
     } = request;
 
@@ -3266,34 +3344,51 @@ async fn run_hook_via_handle_or_fallback(
         None => prompt,
     };
 
+    let eval_context = crate::llm_handle::HookLlmEvaluationContext {
+        event,
+        hook_input_json: stdin_input.unwrap_or_default().to_string(),
+        transcript_history,
+    };
     let outcome = if is_agent {
-        llm.evaluate_agent(&processed, model.as_deref(), timeout)
+        llm.evaluate_agent(&processed, model.as_deref(), timeout, eval_context)
             .await
     } else {
-        llm.evaluate_prompt(&processed, model.as_deref(), timeout)
+        llm.evaluate_prompt(&processed, model.as_deref(), timeout, eval_context)
             .await
     };
 
     // Map evaluation outcomes back onto the JSON-output shape that
     // `aggregate_results` already understands. exit_code 2 = blocking,
     // 1 = non-blocking error, 0 = success.
-    let (exit_code, stdout, stderr) = match outcome {
-        HookEvaluationResult::Ok => (0, String::new(), String::new()),
+    let (exit_code, stdout, stderr, verdict) = match outcome {
+        HookEvaluationResult::Success { reason } => (
+            0,
+            String::new(),
+            String::new(),
+            Some(LlmHookVerdict::Success { reason }),
+        ),
         HookEvaluationResult::Blocking { reason } => {
             let body = serde_json::json!({
                 "decision": "block",
                 "reason": reason,
             })
             .to_string();
-            (2, body, String::new())
+            (2, body, String::new(), None)
         }
-        HookEvaluationResult::Cancelled => (1, String::new(), "hook cancelled".to_string()),
-        HookEvaluationResult::NonBlockingError { error } => (1, String::new(), error),
+        HookEvaluationResult::Impossible { reason } => (
+            0,
+            String::new(),
+            String::new(),
+            Some(LlmHookVerdict::Impossible { reason }),
+        ),
+        HookEvaluationResult::Cancelled => (1, String::new(), "hook cancelled".to_string(), None),
+        HookEvaluationResult::NonBlockingError { error } => (1, String::new(), error, None),
     };
-    Ok(HookExecutionResult::CommandOutput {
+    Ok(HookExecutionResult::LlmOutput {
         exit_code,
         stdout,
         stderr,
+        verdict,
     })
 }
 
@@ -3326,7 +3421,12 @@ fn derive_handler_source(handler: &HookHandler) -> HookBlockingSource {
     match handler {
         HookHandler::Command { command, .. } => HookBlockingSource::Command(command.clone()),
         HookHandler::Http { url, .. } => HookBlockingSource::Http(url.clone()),
-        HookHandler::Prompt { .. } | HookHandler::Agent { .. } => HookBlockingSource::Llm,
+        HookHandler::Prompt { prompt, .. } => HookBlockingSource::Prompt {
+            prompt: prompt.clone(),
+        },
+        HookHandler::Agent { prompt, .. } => HookBlockingSource::Agent {
+            prompt: prompt.clone(),
+        },
         HookHandler::SdkCallback { callback_id, .. } => HookBlockingSource::Sdk {
             callback_id: callback_id.clone(),
         },
@@ -3344,6 +3444,16 @@ fn handler_label(handler: &HookHandler) -> String {
     }
 }
 
+fn render_transcript_history(history: &[std::sync::Arc<coco_messages::Message>]) -> Vec<String> {
+    history
+        .iter()
+        .map(|message| {
+            serde_json::to_string(message.as_ref())
+                .unwrap_or_else(|_| format!("{:?}", message.as_ref()))
+        })
+        .collect()
+}
+
 /// Process a raw `HookExecutionResult` into a `SingleHookResult`.
 fn process_execution_result(
     exec: HookExecutionResult,
@@ -3357,65 +3467,17 @@ fn process_execution_result(
             exit_code,
             stdout,
             stderr,
-        } => {
-            // Exit code 2 is the "blocking error" convention.
-            let parsed = parse_hook_output(&stdout);
-            let stdout_has_json_control = matches!(parsed, ParsedHookOutput::Json(_));
-            // Valid-JSON-but-wrong-shape stdout is a non-blocking validation
-            // error: surface it for UI/audit. Aggregation suppresses the raw
-            // text from model context.
-            if let ParsedHookOutput::ValidationError(msg) = &parsed {
-                emitter.emit(AttachmentMessage::silent_hook_non_blocking_error(
-                    HookNonBlockingErrorPayload {
-                        error: msg.clone(),
-                        hook_name: label.to_string(),
-                        tool_use_id: String::new(),
-                        hook_event: event,
-                    },
-                ));
-            }
-            let blocked = exit_code == 2 && !stdout_has_json_control;
-            // A non-zero, non-2 plain exit yields ONLY a
-            // `hook_non_blocking_error` carrying the stderr — it never becomes
-            // model context. Emit that attachment here (the aggregator already
-            // suppresses the failed-hook stdout from `additional_contexts`).
-            if exit_code != 0 && exit_code != 2 && !stdout_has_json_control {
-                let trimmed = stderr.trim();
-                let detail = if trimmed.is_empty() {
-                    "No stderr output".to_string()
-                } else {
-                    trimmed.to_string()
-                };
-                emitter.emit(AttachmentMessage::silent_hook_non_blocking_error(
-                    HookNonBlockingErrorPayload {
-                        error: format!("Failed with non-blocking status code: {detail}"),
-                        hook_name: label.to_string(),
-                        tool_use_id: String::new(),
-                        hook_event: event,
-                    },
-                ));
-            }
-            let output = if stdout_has_json_control || exit_code == 0 {
-                stdout
-            } else {
-                stderr
-            };
-            SingleHookResult {
-                command: label.to_string(),
-                succeeded: exit_code == 0,
-                output,
-                blocked,
-                outcome: match exit_code {
-                    0 => HookOutcome::Success,
-                    2 => HookOutcome::Blocking,
-                    _ => HookOutcome::NonBlockingError,
-                },
-                status_message: None,
-                async_rewake: false,
-                source,
-                sdk_output: None,
-            }
-        }
+        } => process_command_like_execution_result(
+            exit_code, stdout, stderr, None, label, source, event, emitter,
+        ),
+        HookExecutionResult::LlmOutput {
+            exit_code,
+            stdout,
+            stderr,
+            verdict,
+        } => process_command_like_execution_result(
+            exit_code, stdout, stderr, verdict, label, source, event, emitter,
+        ),
         HookExecutionResult::PromptText(text) => SingleHookResult {
             command: label.to_string(),
             succeeded: true,
@@ -3426,6 +3488,7 @@ fn process_execution_result(
             async_rewake: false,
             source,
             sdk_output: None,
+            llm_verdict: None,
         },
         HookExecutionResult::SdkOutput(out) => {
             // Compute `blocked` directly from the typed output:
@@ -3450,8 +3513,80 @@ fn process_execution_result(
                 async_rewake: false,
                 source,
                 sdk_output: Some(out),
+                llm_verdict: None,
             }
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn process_command_like_execution_result(
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+    llm_verdict: Option<LlmHookVerdict>,
+    label: &str,
+    source: HookBlockingSource,
+    event: HookEventType,
+    emitter: &AttachmentEmitter,
+) -> SingleHookResult {
+    // Exit code 2 is the "blocking error" convention.
+    let parsed = parse_hook_output(&stdout);
+    let stdout_has_json_control = matches!(parsed, ParsedHookOutput::Json(_));
+    // Valid-JSON-but-wrong-shape stdout is a non-blocking validation
+    // error: surface it for UI/audit. Aggregation suppresses the raw
+    // text from model context.
+    if let ParsedHookOutput::ValidationError(msg) = &parsed {
+        emitter.emit(AttachmentMessage::silent_hook_non_blocking_error(
+            HookNonBlockingErrorPayload {
+                error: msg.clone(),
+                hook_name: label.to_string(),
+                tool_use_id: String::new(),
+                hook_event: event,
+            },
+        ));
+    }
+    let blocked = exit_code == 2 && !stdout_has_json_control;
+    // A non-zero, non-2 plain exit yields ONLY a
+    // `hook_non_blocking_error` carrying the stderr — it never becomes
+    // model context. Emit that attachment here (the aggregator already
+    // suppresses the failed-hook stdout from `additional_contexts`).
+    if exit_code != 0 && exit_code != 2 && !stdout_has_json_control {
+        let trimmed = stderr.trim();
+        let detail = if trimmed.is_empty() {
+            "No stderr output".to_string()
+        } else {
+            trimmed.to_string()
+        };
+        emitter.emit(AttachmentMessage::silent_hook_non_blocking_error(
+            HookNonBlockingErrorPayload {
+                error: format!("Failed with non-blocking status code: {detail}"),
+                hook_name: label.to_string(),
+                tool_use_id: String::new(),
+                hook_event: event,
+            },
+        ));
+    }
+    let output = if stdout_has_json_control || exit_code == 0 {
+        stdout
+    } else {
+        stderr
+    };
+    SingleHookResult {
+        command: label.to_string(),
+        succeeded: exit_code == 0,
+        output,
+        blocked,
+        outcome: match exit_code {
+            0 => HookOutcome::Success,
+            2 => HookOutcome::Blocking,
+            _ => HookOutcome::NonBlockingError,
+        },
+        status_message: None,
+        async_rewake: false,
+        source,
+        sdk_output: None,
+        llm_verdict,
     }
 }
 

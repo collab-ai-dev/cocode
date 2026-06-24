@@ -4,8 +4,11 @@ use coco_llm_types::TextPart;
 #[test]
 fn test_parse_hook_response_ok_true() {
     let content = vec![AssistantContentPart::Text(TextPart::new(r#"{"ok": true}"#))];
-    let result = parse_hook_response(&content);
-    matches!(result, HookEvaluationResult::Ok);
+    let result = parse_hook_response(&content, coco_types::HookEventType::PreToolUse);
+    assert!(matches!(
+        result,
+        HookEvaluationResult::Success { reason: None }
+    ));
 }
 
 #[test]
@@ -13,7 +16,7 @@ fn test_parse_hook_response_ok_false_with_reason() {
     let content = vec![AssistantContentPart::Text(TextPart::new(
         r#"{"ok": false, "reason": "found AWS key"}"#,
     ))];
-    let result = parse_hook_response(&content);
+    let result = parse_hook_response(&content, coco_types::HookEventType::PreToolUse);
     match result {
         HookEvaluationResult::Blocking { reason } => assert_eq!(reason, "found AWS key"),
         other => panic!("expected Blocking, got {other:?}"),
@@ -21,23 +24,23 @@ fn test_parse_hook_response_ok_false_with_reason() {
 }
 
 #[test]
-fn test_parse_hook_response_ok_false_default_reason() {
+fn test_parse_hook_response_ok_false_missing_reason_is_schema_error() {
     let content = vec![AssistantContentPart::Text(TextPart::new(
         r#"{"ok": false}"#,
     ))];
-    let result = parse_hook_response(&content);
+    let result = parse_hook_response(&content, coco_types::HookEventType::PreToolUse);
     match result {
-        HookEvaluationResult::Blocking { reason } => {
-            assert_eq!(reason, "Prompt hook condition not met")
+        HookEvaluationResult::NonBlockingError { error } => {
+            assert!(error.contains("reason"));
         }
-        other => panic!("expected Blocking with default reason, got {other:?}"),
+        other => panic!("expected NonBlockingError, got {other:?}"),
     }
 }
 
 #[test]
 fn test_parse_hook_response_invalid_json() {
     let content = vec![AssistantContentPart::Text(TextPart::new("not json"))];
-    let result = parse_hook_response(&content);
+    let result = parse_hook_response(&content, coco_types::HookEventType::PreToolUse);
     match result {
         HookEvaluationResult::NonBlockingError { error } => {
             assert!(
@@ -52,7 +55,7 @@ fn test_parse_hook_response_invalid_json() {
 #[test]
 fn test_parse_hook_response_empty_text() {
     let content: Vec<AssistantContentPart> = vec![];
-    let result = parse_hook_response(&content);
+    let result = parse_hook_response(&content, coco_types::HookEventType::PreToolUse);
     match result {
         HookEvaluationResult::NonBlockingError { error } => {
             assert!(error.contains("empty assistant text"));
@@ -67,8 +70,8 @@ fn test_parse_hook_response_concatenates_multiple_text_parts() {
         AssistantContentPart::Text(TextPart::new(r#"{"ok":"#)),
         AssistantContentPart::Text(TextPart::new(r#" true}"#)),
     ];
-    let result = parse_hook_response(&content);
-    matches!(result, HookEvaluationResult::Ok);
+    let result = parse_hook_response(&content, coco_types::HookEventType::PreToolUse);
+    assert!(matches!(result, HookEvaluationResult::Success { .. }));
 }
 
 #[test]
@@ -78,13 +81,20 @@ fn test_parse_hook_response_ignores_non_text_parts() {
         AssistantContentPart::Reasoning(ReasoningPart::new("thinking…")),
         AssistantContentPart::Text(TextPart::new(r#"{"ok": true}"#)),
     ];
-    let result = parse_hook_response(&content);
-    matches!(result, HookEvaluationResult::Ok);
+    let result = parse_hook_response(&content, coco_types::HookEventType::PreToolUse);
+    assert!(matches!(result, HookEvaluationResult::Success { .. }));
 }
 
 #[test]
 fn test_build_prompt_shape() {
-    let messages = build_prompt("is the file safe?");
+    let messages = build_prompt(
+        "is the file safe?",
+        &HookLlmEvaluationContext {
+            event: coco_types::HookEventType::PreToolUse,
+            hook_input_json: "{}".to_string(),
+            transcript_history: vec![],
+        },
+    );
     assert_eq!(messages.len(), 2);
     matches!(messages[0], LlmMessage::System { .. });
     matches!(messages[1], LlmMessage::User { .. });
@@ -97,4 +107,28 @@ fn test_build_prompt_shape() {
     } else {
         panic!("first message should be System");
     }
+}
+
+#[test]
+fn stop_response_requires_reason_and_accepts_impossible() {
+    let content = vec![AssistantContentPart::Text(TextPart::new(
+        r#"{"ok": false, "reason": "blocked", "impossible": true}"#,
+    ))];
+    let result = parse_hook_response(&content, coco_types::HookEventType::Stop);
+    match result {
+        HookEvaluationResult::Impossible { reason } => assert_eq!(reason, "blocked"),
+        other => panic!("expected Impossible, got {other:?}"),
+    }
+}
+
+#[test]
+fn non_stop_rejects_impossible() {
+    let content = vec![AssistantContentPart::Text(TextPart::new(
+        r#"{"ok": false, "reason": "blocked", "impossible": true}"#,
+    ))];
+    let result = parse_hook_response(&content, coco_types::HookEventType::PreToolUse);
+    assert!(matches!(
+        result,
+        HookEvaluationResult::NonBlockingError { .. }
+    ));
 }

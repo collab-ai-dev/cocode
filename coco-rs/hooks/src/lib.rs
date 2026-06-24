@@ -18,6 +18,7 @@ pub use function_hook::FunctionHook;
 pub use function_hook::FunctionHookPredicate;
 pub use function_hook::RegisterFunctionHookError;
 pub use llm_handle::HookEvaluationResult;
+pub use llm_handle::HookLlmEvaluationContext;
 pub use llm_handle::HookLlmHandle;
 pub use sync_hook_buffer::SyncHookEventBuffer;
 
@@ -80,6 +81,15 @@ pub struct HookDefinition {
     /// Human-readable status message shown while the hook is running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_message: Option<String>,
+    /// Runtime-owned hook marker. User config should not set this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_by: Option<ManagedHookKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedHookKind {
+    Goal,
 }
 
 /// How to handle a hook event.
@@ -151,6 +161,13 @@ pub enum HookExecutionResult {
         exit_code: i32,
         stdout: String,
         stderr: String,
+    },
+    /// LLM-driven Prompt/Agent hook output plus its typed verdict.
+    LlmOutput {
+        exit_code: i32,
+        stdout: String,
+        stderr: String,
+        verdict: Option<crate::orchestration::LlmHookVerdict>,
     },
     /// Prompt text to inject into the conversation.
     PromptText(String),
@@ -258,6 +275,38 @@ impl HookRegistry {
         }
     }
 
+    /// Remove hooks matching `predicate`, returning the removed definitions.
+    ///
+    /// Used by session-scoped runtime features such as `/goal clear` that own
+    /// in-memory hooks outside settings.json.
+    pub fn remove_matching_hooks(
+        &self,
+        mut predicate: impl FnMut(&HookDefinition) -> bool,
+    ) -> Vec<HookDefinition> {
+        let mut removed = Vec::new();
+        let Ok(mut hooks) = self.hooks.write() else {
+            return removed;
+        };
+        let mut retained = Vec::with_capacity(hooks.len());
+        for hook in hooks.drain(..) {
+            if predicate(&hook) {
+                removed.push(hook);
+            } else {
+                retained.push(hook);
+            }
+        }
+        *hooks = retained;
+
+        if let Ok(mut keys) = self.seen_keys.write() {
+            keys.clear();
+            for hook in hooks.iter() {
+                keys.insert(dedup_key(hook));
+            }
+        }
+
+        removed
+    }
+
     pub fn set_sdk_hook_callback(&self, callback: SdkHookCallback) {
         if let Ok(mut slot) = self.sdk_hook_callback.write() {
             *slot = Some(callback);
@@ -316,6 +365,17 @@ impl HookRegistry {
         sources: &[(coco_types::HookScope, serde_json::Value)],
         policy: LoaderPolicy,
     ) -> crate::Result<usize> {
+        let preserved_session_hooks: Vec<HookDefinition> = self
+            .hooks
+            .read()
+            .map(|hooks| {
+                hooks
+                    .iter()
+                    .filter(|hook| hook.scope == HookScope::Session)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut new_hooks: Vec<HookDefinition> = Vec::new();
         let mut new_keys: HashSet<String> = HashSet::new();
 
@@ -326,6 +386,13 @@ impl HookRegistry {
                 if new_keys.insert(key) {
                     new_hooks.push(def);
                 }
+            }
+        }
+
+        for def in preserved_session_hooks {
+            let key = dedup_key(&def);
+            if new_keys.insert(key) {
+                new_hooks.push(def);
             }
         }
 
@@ -1426,6 +1493,7 @@ pub fn load_hooks_from_config_with_policy(
                 is_async,
                 async_rewake,
                 status_message,
+                managed_by: None,
             });
         }
     }

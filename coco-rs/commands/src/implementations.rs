@@ -33,6 +33,7 @@ pub mod names {
     /// `/dream` — manual auto-memory consolidation trigger.
     pub const DREAM: &str = "dream";
     pub const STATUS: &str = "status";
+    pub const GOAL: &str = "goal";
     pub const EXIT: &str = "exit";
     pub const VERSION: &str = "version";
 
@@ -242,6 +243,15 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             true,
             AlwaysSafe,
             None,
+        ),
+        (
+            names::GOAL,
+            "Set a goal Claude checks before stopping",
+            &[],
+            goal_handler,
+            true,
+            AlwaysSafe,
+            Some("[<condition> | clear]"),
         ),
         (
             names::UPGRADE,
@@ -739,6 +749,68 @@ fn sandbox_handler(args: &str) -> String {
 fn usage_handler(_args: &str) -> String {
     "Plan usage information is not available. Use /cost to see this session's token usage and cost."
         .to_string()
+}
+
+pub const GOAL_SENTINEL: &str = "__COCO_GOAL__";
+const GOAL_MAX_CONDITION_CHARS: usize = 4000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoalCommandRequest {
+    Status,
+    Clear,
+    Set { condition: String },
+}
+
+fn goal_handler(args: &str) -> String {
+    match parse_goal_command_args(args) {
+        Ok(GoalCommandRequest::Status) => format!("{GOAL_SENTINEL}\nstatus"),
+        Ok(GoalCommandRequest::Clear) => format!("{GOAL_SENTINEL}\nclear"),
+        Ok(GoalCommandRequest::Set { condition }) => format!("{GOAL_SENTINEL}\nset\n{condition}"),
+        Err(message) => message,
+    }
+}
+
+pub fn parse_goal_command_args(args: &str) -> std::result::Result<GoalCommandRequest, String> {
+    let condition = args.trim();
+    if condition.is_empty() {
+        return Ok(GoalCommandRequest::Status);
+    }
+    if is_goal_clear_keyword(condition) {
+        return Ok(GoalCommandRequest::Clear);
+    }
+
+    let char_count = condition.chars().count();
+    if char_count > GOAL_MAX_CONDITION_CHARS {
+        return Err(format!(
+            "Goal condition is limited to {GOAL_MAX_CONDITION_CHARS} characters (got {char_count})"
+        ));
+    }
+
+    Ok(GoalCommandRequest::Set {
+        condition: condition.to_string(),
+    })
+}
+
+pub fn parse_goal_sentinel(handler_output: &str) -> Option<GoalCommandRequest> {
+    let payload = handler_output
+        .strip_prefix(GOAL_SENTINEL)?
+        .strip_prefix('\n')?;
+    match payload {
+        "status" => Some(GoalCommandRequest::Status),
+        "clear" => Some(GoalCommandRequest::Clear),
+        _ => payload
+            .strip_prefix("set\n")
+            .map(|condition| GoalCommandRequest::Set {
+                condition: condition.to_string(),
+            }),
+    }
+}
+
+fn is_goal_clear_keyword(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "clear" | "stop" | "off" | "reset" | "none" | "cancel"
+    )
 }
 
 fn upgrade_handler(_args: &str) -> String {

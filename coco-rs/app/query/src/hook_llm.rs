@@ -59,6 +59,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use coco_hooks::HookEvaluationResult;
+use coco_hooks::HookLlmEvaluationContext;
 use coco_hooks::HookLlmHandle;
 use coco_inference::ModelRuntimeQueryOutcome;
 use coco_inference::ModelRuntimeRegistry;
@@ -68,7 +69,7 @@ use coco_llm_types::AssistantContentPart;
 use coco_llm_types::LlmMessage;
 use coco_llm_types::UserContentPart;
 use coco_types::ModelRole;
-use serde::Deserialize;
+use serde_json::Value;
 
 /// System prompt prepended to every Prompt hook evaluation.
 ///
@@ -80,14 +81,6 @@ const HOOK_PROMPT_SYSTEM: &str = "You are evaluating a hook in Claude Code.
 Your response must be a JSON object matching one of the following schemas:
 1. If the condition is met, return: {\"ok\": true}
 2. If the condition is not met, return: {\"ok\": false, \"reason\": \"Reason for why it is not met\"}";
-
-/// JSON shape the hook prompt is expected to produce.
-#[derive(Debug, Clone, Deserialize)]
-struct HookResponse {
-    ok: bool,
-    #[serde(default)]
-    reason: Option<String>,
-}
 
 /// `coco-query`'s `HookLlmHandle` implementation. Single struct for
 /// both Prompt and Agent paths — they share `model_runtimes` and the
@@ -198,10 +191,11 @@ impl HookLlmHandle for QueryHookLlm {
         prompt: &str,
         model: Option<&str>,
         timeout: Duration,
+        context: HookLlmEvaluationContext,
     ) -> HookEvaluationResult {
         let source = self.pick_source(model);
 
-        let prompt = build_prompt(prompt);
+        let prompt = build_prompt(prompt, &context);
 
         let result = async {
             loop {
@@ -256,7 +250,7 @@ impl HookLlmHandle for QueryHookLlm {
                          decision may default to Cancelled"
                     );
                 }
-                parse_hook_response(&query_result.content)
+                parse_hook_response(&query_result.content, context.event)
             }
         }
     }
@@ -266,6 +260,7 @@ impl HookLlmHandle for QueryHookLlm {
         prompt: &str,
         model: Option<&str>,
         timeout: Duration,
+        _context: HookLlmEvaluationContext,
     ) -> HookEvaluationResult {
         let source = self.pick_source(model);
         let model_id = self
@@ -301,7 +296,34 @@ impl HookLlmHandle for QueryHookLlm {
 /// Two-message shape: `System` carries the JSON-output instruction;
 /// `User` carries the user's hook prompt with `$ARGUMENTS` already
 /// substituted upstream by `run_hook_via_handle_or_fallback`.
-fn build_prompt(user_prompt: &str) -> Vec<LlmMessage> {
+fn build_prompt(user_prompt: &str, context: &HookLlmEvaluationContext) -> Vec<LlmMessage> {
+    if matches!(
+        context.event,
+        coco_types::HookEventType::Stop | coco_types::HookEventType::SubagentStop
+    ) {
+        let transcript = if context.transcript_history.is_empty() {
+            "(no transcript evidence available)".to_string()
+        } else {
+            context.transcript_history.join("\n")
+        };
+        let stop_prompt = format!(
+            "Transcript evidence:\n{transcript}\n\nHook input JSON:\n{input}\n\nCondition: {condition}\n\nReturn a strict JSON object with exactly these fields: `ok` (boolean) and `reason` (string). You may also include `impossible` (boolean) only if the condition can never be satisfied. Do not include any other fields.",
+            input = context.hook_input_json,
+            condition = user_prompt,
+        );
+        return vec![
+            LlmMessage::System {
+                content: vec![UserContentPart::text(
+                    "You are judging whether a Stop hook condition is satisfied. Respond only with strict JSON.",
+                )],
+                provider_options: None,
+            },
+            LlmMessage::User {
+                content: vec![UserContentPart::text(stop_prompt)],
+                provider_options: None,
+            },
+        ];
+    }
     vec![
         LlmMessage::System {
             content: vec![UserContentPart::text(HOOK_PROMPT_SYSTEM)],
@@ -321,7 +343,10 @@ fn build_prompt(user_prompt: &str) -> Vec<LlmMessage> {
 /// - Text is not valid JSON or doesn't match `HookResponse` → NonBlockingError
 /// - `ok: false` → Blocking with the supplied reason
 /// - `ok: true` → Ok
-fn parse_hook_response(content: &[AssistantContentPart]) -> HookEvaluationResult {
+fn parse_hook_response(
+    content: &[AssistantContentPart],
+    event: coco_types::HookEventType,
+) -> HookEvaluationResult {
     // Multi-text-part assistant messages are now possible (streaming
     // path preserves per-part `provider_metadata`). The naive `join("")`
     // still works for hook LLM responses because hooks emit a single
@@ -347,7 +372,7 @@ fn parse_hook_response(content: &[AssistantContentPart]) -> HookEvaluationResult
         };
     }
 
-    let parsed = match serde_json::from_str::<HookResponse>(&text) {
+    let parsed = match serde_json::from_str::<Value>(&text) {
         Ok(p) => p,
         Err(e) => {
             return HookEvaluationResult::NonBlockingError {
@@ -356,14 +381,76 @@ fn parse_hook_response(content: &[AssistantContentPart]) -> HookEvaluationResult
         }
     };
 
-    if parsed.ok {
-        HookEvaluationResult::Ok
+    parse_hook_response_value(parsed, event, &text)
+}
+
+fn parse_hook_response_value(
+    value: Value,
+    event: coco_types::HookEventType,
+    raw: &str,
+) -> HookEvaluationResult {
+    let Some(obj) = value.as_object() else {
+        return schema_error("expected JSON object", raw);
+    };
+    let is_stop = matches!(
+        event,
+        coco_types::HookEventType::Stop | coco_types::HookEventType::SubagentStop
+    );
+    let allowed: &[&str] = if is_stop {
+        &["ok", "reason", "impossible"]
     } else {
-        HookEvaluationResult::Blocking {
-            reason: parsed
-                .reason
-                .unwrap_or_else(|| "Prompt hook condition not met".into()),
+        &["ok", "reason"]
+    };
+    if let Some(field) = obj.keys().find(|k| !allowed.contains(&k.as_str())) {
+        return schema_error(format!("unknown field `{field}`"), raw);
+    }
+    if !is_stop && obj.contains_key("impossible") {
+        return schema_error(
+            "`impossible` is only valid for Stop/SubagentStop hooks",
+            raw,
+        );
+    }
+    let Some(ok) = obj.get("ok").and_then(Value::as_bool) else {
+        return schema_error("field `ok` must be a boolean", raw);
+    };
+    let reason = obj
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if is_stop {
+        let Some(reason) = reason.filter(|r| !r.trim().is_empty()) else {
+            return schema_error("field `reason` is required", raw);
+        };
+        if obj
+            .get("impossible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return HookEvaluationResult::Impossible { reason };
         }
+        if ok {
+            HookEvaluationResult::Success {
+                reason: Some(reason),
+            }
+        } else {
+            HookEvaluationResult::Blocking { reason }
+        }
+    } else if ok {
+        HookEvaluationResult::Success { reason: None }
+    } else {
+        let Some(reason) = reason.filter(|r| !r.trim().is_empty()) else {
+            return schema_error("field `reason` is required when `ok` is false", raw);
+        };
+        HookEvaluationResult::Blocking { reason }
+    }
+}
+
+fn schema_error(message: impl Into<String>, raw: &str) -> HookEvaluationResult {
+    HookEvaluationResult::NonBlockingError {
+        error: format!(
+            "schema validation failed: {} — raw response: {raw}",
+            message.into()
+        ),
     }
 }
 

@@ -1,3 +1,4 @@
+use coco_tool_runtime::NoOpBackgroundTaskHandle;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::Feature;
@@ -132,6 +133,76 @@ fn kairos_brief_and_proactive_features_expose_their_tools() {
     assert!(
         visible.contains(ToolName::Sleep.as_str()),
         "Feature::Proactive should expose Sleep"
+    );
+}
+
+#[test]
+fn local_scheduling_tools_are_hidden_by_default() {
+    let registry = ToolRegistry::new();
+    crate::register_all_tools(&registry);
+    let mut ctx = ToolUseContext::test_default();
+    ctx.features = Arc::new(Features::with_defaults());
+
+    let visible: HashSet<String> = registry
+        .loaded_tools(&ctx)
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+
+    for name in [
+        ToolName::CronCreate,
+        ToolName::CronDelete,
+        ToolName::CronList,
+        ToolName::ScheduleWakeup,
+        ToolName::Monitor,
+    ] {
+        assert!(
+            !visible.contains(name.as_str()),
+            "local scheduling should require Feature::AgentTriggers for {name:?}"
+        );
+    }
+}
+
+#[test]
+fn agent_triggers_feature_exposes_local_scheduling_tools() {
+    let registry = ToolRegistry::new();
+    crate::register_all_tools(&registry);
+    let mut features = Features::empty();
+    features.enable(Feature::AgentTriggers);
+    let mut ctx = ToolUseContext::test_default();
+    ctx.features = Arc::new(features);
+
+    let visible: HashSet<String> = registry
+        .loaded_tools(&ctx)
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+
+    for name in [
+        ToolName::CronCreate,
+        ToolName::CronDelete,
+        ToolName::CronList,
+        ToolName::ScheduleWakeup,
+    ] {
+        assert!(
+            visible.contains(name.as_str()),
+            "Feature::AgentTriggers should expose {name:?}"
+        );
+    }
+    assert!(
+        !visible.contains(ToolName::Monitor.as_str()),
+        "Monitor also requires background task support"
+    );
+
+    ctx.task_handle = Some(Arc::new(NoOpBackgroundTaskHandle));
+    let visible_with_tasks: HashSet<String> = registry
+        .loaded_tools(&ctx)
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+    assert!(
+        visible_with_tasks.contains(ToolName::Monitor.as_str()),
+        "Feature::AgentTriggers plus task_handle should expose Monitor"
     );
 }
 

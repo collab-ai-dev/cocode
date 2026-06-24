@@ -7,11 +7,11 @@ use std::collections::HashSet;
 /// continuing. Update both the constant and the TS `Attachment` union
 /// size in the README.
 #[test]
-fn attachment_kind_all_has_63_variants() {
+fn attachment_kind_all_has_64_variants() {
     assert_eq!(
         AttachmentKind::all().len(),
-        63,
-        "60 TS Attachment union members + coco-rs-synthetic user_context, slash_command_metadata, and workflow_keyword_request"
+        64,
+        "61 TS Attachment union members + coco-rs-synthetic user_context, slash_command_metadata, and workflow_keyword_request"
     );
 }
 
@@ -75,12 +75,12 @@ fn coverage_distribution_matches_readme_snapshot() {
     );
     assert_eq!(silent_reminder, 2, "in-crate silent reminders");
     assert_eq!(outside, 8, "owned by sister crates");
-    assert_eq!(silent_event, 9, "typed API-hidden events");
+    assert_eq!(silent_event, 10, "typed API-hidden events");
     assert_eq!(feature_gated, 1, "HISTORY_SNIP intentionally unported");
     assert_eq!(runtime, 3, "inactive runtime bookkeeping");
     assert_eq!(
         reminder + silent_reminder + outside + silent_event + feature_gated + runtime,
-        63,
+        64,
         "total must match union size + synthetic user_context + slash_command_metadata + workflow_keyword_request"
     );
 }
@@ -178,6 +178,7 @@ fn is_api_visible_matches_ts_normalize_attachment_for_api_returns_empty() {
         AttachmentKind::HookSystemMessage,
         AttachmentKind::StructuredOutput,
         AttachmentKind::HookPermissionDecision,
+        AttachmentKind::GoalStatus,
         // Early `return []` inside the `dynamic_skill` case.
         AttachmentKind::DynamicSkill,
         // Feature-gated off by default in external builds →
