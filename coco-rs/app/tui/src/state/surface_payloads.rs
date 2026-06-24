@@ -554,7 +554,7 @@ pub struct TaskDetailState {
     pub scroll: i32,
 }
 
-/// Background-tasks dialog state: a list of running shells/agents that drills
+/// Background-tasks dialog state: a list of running shells/agents/workflows that drills
 /// into a per-task detail view. The task rows are derived live from
 /// `SessionState::running_background_tasks`; this struct holds only the
 /// cursor and which layer is showing.
@@ -733,6 +733,41 @@ impl MemoryDialogState {
                     row_kind: MemoryDialogRowKind::from_wire(e.row_kind),
                 })
                 .collect(),
+            selected: 0,
+        }
+    }
+}
+
+/// `/workflow` picker state. Built from
+/// `TuiOnlyEvent::OpenWorkflowPicker`; selection confirms by re-dispatching
+/// `/workflow <name>` so the existing slash-command launch path stays single.
+#[derive(Debug, Clone)]
+pub struct WorkflowPickerState {
+    pub entries: Vec<WorkflowPickerEntry>,
+    pub filter: String,
+    pub selected: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkflowPickerEntry {
+    pub name: String,
+    pub description: String,
+    pub source_path: String,
+}
+
+impl WorkflowPickerState {
+    pub fn from_wire(payload: coco_types::WorkflowDialogPayload) -> Self {
+        Self {
+            entries: payload
+                .entries
+                .into_iter()
+                .map(|entry| WorkflowPickerEntry {
+                    name: entry.name,
+                    description: entry.description,
+                    source_path: entry.source_path,
+                })
+                .collect(),
+            filter: String::new(),
             selected: 0,
         }
     }

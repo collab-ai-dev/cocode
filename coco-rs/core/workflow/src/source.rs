@@ -62,6 +62,13 @@ pub struct WorkflowSourceSpec {
     pub source_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowRegistryEntry {
+    pub name: String,
+    pub description: String,
+    pub source_path: PathBuf,
+}
+
 pub fn resolve_workflow_source(input: WorkflowSourceInput) -> Result<WorkflowSourceSpec> {
     let cwd = input
         .cwd
@@ -118,6 +125,25 @@ pub fn resolve_workflow_source(input: WorkflowSourceInput) -> Result<WorkflowSou
     }
 
     MissingSourceSnafu.fail()
+}
+
+pub fn list_workflows(cwd: Option<PathBuf>) -> Vec<WorkflowRegistryEntry> {
+    let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let mut out = Vec::new();
+    for (path, _, meta) in scan_workflow_registry(&cwd) {
+        if out
+            .iter()
+            .any(|entry: &WorkflowRegistryEntry| entry.name == meta.name)
+        {
+            continue;
+        }
+        out.push(WorkflowRegistryEntry {
+            name: meta.name,
+            description: meta.description,
+            source_path: path,
+        });
+    }
+    out
 }
 
 fn resolve_script_path(cwd: &Path, path: PathBuf) -> PathBuf {

@@ -42,12 +42,12 @@ fn workflow_prompt() -> String {
         "Run a local dynamic workflow script that orchestrates multiple subagents.\n\n\
 The script is plain JavaScript that MUST begin with `export const meta = {{ name, description, phases }}` (a pure object literal) and MUST be deterministic — no `Date.now()`, `Math.random()`, or `new Date()`.\n\n\
 Globals available to the script:\n\
-- `agent(prompt, opts?)` — spawn one subagent and `await` its result text. opts: {{ label, phase, agentType, model, schema }}.\n\
+- `agent(prompt, opts?)` — spawn one subagent and `await` its result text. opts: {{ label, phase, agentType, model, effort, isolation, schema }}. isolation may be \"worktree\"; \"remote\" is not available.\n\
 - `parallel(thunks)` — run `[() => agent(...), ...]` concurrently (a barrier); a failed call resolves to `null`.\n\
 - `pipeline(items, ...stages)` — flow each item independently through all stages; a stage gets `(prev, item, index)`.\n\
 - `phase(title)` / `log(message)` — emit progress.\n\
 - `args` — the value passed as the `args` parameter; `budget` — the token budget.\n\n\
-Provide the source via `scriptPath`, `name` (loaded from {dirs}), or an inline `script`; use `resumeFromRunId` to resume.\n\
+Provide the source via `scriptPath`, `name` (loaded from {dirs}), or an inline `script`; `resumeFromRunId` is accepted for compatibility but not available.\n\
 The workflow runs in the BACKGROUND: this returns immediately with a taskId, and progress + the final result arrive via task notifications.",
         dirs = coco_workflow::workflow_dirs_hint()
     )
@@ -83,6 +83,7 @@ pub struct WorkflowInput {
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowLaunchResult {
     pub status: String,
+    pub task_type: String,
     pub task_id: String,
     pub run_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -345,7 +346,7 @@ impl Tool for WorkflowTool {
             ctx.agent.clone(),
             task_handle,
             task_id.clone(),
-            cancel,
+            cancel.clone(),
             workflow_host::WorkflowSpawnContext {
                 session_id: ctx.session_id_for_history.clone().unwrap_or_default(),
                 invoking_agent_id: ctx.agent_id.as_ref().map(|id| id.as_str().to_string()),
@@ -356,12 +357,16 @@ impl Tool for WorkflowTool {
                 parent_tool_filter: ctx.tool_filter.clone(),
                 active_shell_tool: ctx.active_shell_tool,
                 parent_mode: ctx.permission_context.mode,
+                agent_catalog: ctx.agent_catalog.clone(),
+                total_token_budget: ctx.total_token_budget,
+                workflow_abort: coco_tool_runtime::TurnAbortSignal::from_token(cancel.clone()),
             },
             tokio::runtime::Handle::current(),
         );
 
         Ok(ToolResult::data(WorkflowLaunchResult {
             status: "async_launched".to_string(),
+            task_type: "local_workflow".to_string(),
             task_id,
             run_id,
             workflow_name,
@@ -371,8 +376,8 @@ impl Tool for WorkflowTool {
 
     fn render_for_model(&self, output: &Self::Output) -> Vec<ToolResultContentPart> {
         let mut text = format!(
-            "Workflow launched in background.\ntaskId: {}\nrunId: {}",
-            output.task_id, output.run_id
+            "Workflow launched in background.\ntaskType: {}\ntaskId: {}\nrunId: {}",
+            output.task_type, output.task_id, output.run_id
         );
         if let Some(name) = &output.workflow_name {
             text.push_str(&format!("\nworkflow: {name}"));

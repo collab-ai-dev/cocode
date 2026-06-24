@@ -85,6 +85,7 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::Rewind(r) => TextSurfaceContent::Rewind(r),
         ModalState::Settings(s) => TextSurfaceContent::Settings(s),
         ModalState::MemoryDialog(_) => return None,
+        ModalState::WorkflowPicker(_) => return None,
         ModalState::SkillsDialog(s) => TextSurfaceContent::SkillsDialog(s),
         ModalState::PluginDialog(p) => TextSurfaceContent::PluginDialog(p),
         ModalState::AgentsDialog(a) => TextSurfaceContent::AgentsDialog(a),
@@ -125,6 +126,7 @@ pub(crate) fn modal_styled_surface(
     Some(match modal {
         ModalState::Export(e) => ps::export_lines(e, styles, list_budget),
         ModalState::MemoryDialog(m) => ps::memory_dialog_lines(m, styles, list_budget),
+        ModalState::WorkflowPicker(w) => ps::workflow_picker_lines(w, styles, list_budget),
         ModalState::QuickOpen(q) => ps::quick_open_lines(q, styles, list_budget),
         ModalState::SessionBrowser(s) => ps::session_browser_lines(s, styles, list_budget),
         ModalState::GlobalSearch(g) => ps::global_search_lines(g, styles, list_budget),

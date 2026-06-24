@@ -322,11 +322,13 @@ fn permission_mode_status(mode: PermissionMode) -> Option<(&'static str, String,
     Some((symbol, t!(key).to_string(), tone))
 }
 
-/// TS `getPillLabel` port: "1 agent", "2 shells", or "1 agent · 2 shells".
+/// TS `getPillLabel` port, extended for local workflows: "1 agent",
+/// "2 shells", "1 workflow", or "1 agent · 2 shells · 1 workflow".
 /// Counts only running tasks; `None` when nothing is running.
 pub(crate) fn background_pill_label(state: &AppState) -> Option<String> {
     let mut shells = 0i64;
     let mut agents = 0i64;
+    let mut workflows = 0i64;
     for task in state
         .session
         .active_tasks
@@ -336,6 +338,7 @@ pub(crate) fn background_pill_label(state: &AppState) -> Option<String> {
         match task.kind {
             TaskEntryKind::Shell => shells += 1,
             TaskEntryKind::Agent => agents += 1,
+            TaskEntryKind::Workflow => workflows += 1,
             TaskEntryKind::Other => {}
         }
     }
@@ -356,6 +359,16 @@ pub(crate) fn background_pill_label(state: &AppState) -> Option<String> {
                 t!("status.background.shell_one", count = shells)
             } else {
                 t!("status.background.shell_other", count = shells)
+            }
+            .to_string(),
+        );
+    }
+    if workflows > 0 {
+        parts.push(
+            if workflows == 1 {
+                t!("status.background.workflow_one", count = workflows)
+            } else {
+                t!("status.background.workflow_other", count = workflows)
             }
             .to_string(),
         );

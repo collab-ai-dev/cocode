@@ -23,3 +23,4 @@ pub mod slash_copy;
 pub mod thinking_block;
 pub mod tool_chain;
 pub mod tool_error;
+pub mod workflow_e2e;

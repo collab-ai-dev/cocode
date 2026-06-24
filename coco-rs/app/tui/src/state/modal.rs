@@ -19,6 +19,7 @@ use crate::state::surface_payloads::SessionBrowserState;
 use crate::state::surface_payloads::TaskDetailState;
 use crate::state::surface_payloads::TeamRosterState;
 use crate::state::surface_payloads::ThemePickerState;
+use crate::state::surface_payloads::WorkflowPickerState;
 use crate::state::surface_payloads::{self};
 
 #[derive(Debug, Clone)]
@@ -35,6 +36,7 @@ pub enum ModalState {
     Rewind(crate::state::rewind::RewindState),
     Settings(crate::widgets::settings_panel::SettingsPanelState),
     MemoryDialog(MemoryDialogState),
+    WorkflowPicker(WorkflowPickerState),
     SkillsDialog(SkillsDialogState),
     PluginDialog(PluginDialogState),
     AgentsDialog(AgentsDialogState),
@@ -78,6 +80,7 @@ impl ModalState {
             | Self::Settings(_)
             | Self::Transcript(_)
             | Self::MemoryDialog(_)
+            | Self::WorkflowPicker(_)
             | Self::SkillsDialog(_)
             | Self::PluginDialog(_)
             | Self::AgentsDialog(_)

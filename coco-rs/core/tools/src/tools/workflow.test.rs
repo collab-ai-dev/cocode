@@ -1,6 +1,8 @@
+use coco_tool_runtime::TaskHandle;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::WorkflowTaskRequest;
 use coco_types::Feature;
 use coco_types::Features;
 use coco_types::PermissionRule;
@@ -9,10 +11,60 @@ use coco_types::PermissionRuleValue;
 use coco_types::ToolCheckResult;
 use coco_types::ToolId;
 use coco_types::ToolName;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use super::WorkflowInput;
 use super::WorkflowTool;
+
+#[derive(Default)]
+struct RecordingTaskHandle {
+    registered: Mutex<Vec<WorkflowTaskRequest>>,
+    progress: Mutex<Vec<coco_types::WorkflowProgressEvent>>,
+    completed: Mutex<Vec<coco_tool_runtime::AgentCompletionPayload>>,
+    notify_progress: tokio::sync::Notify,
+    notify_completed: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl TaskHandle for RecordingTaskHandle {
+    async fn register_workflow_task(
+        &self,
+        request: WorkflowTaskRequest,
+        _cancel: CancellationToken,
+    ) -> String {
+        let task_id = request.task_id.clone();
+        self.registered
+            .lock()
+            .expect("registered lock")
+            .push(request);
+        task_id
+    }
+
+    async fn output_file_path(&self, task_id: &str) -> Option<PathBuf> {
+        Some(PathBuf::from(format!("/tmp/{task_id}.out")))
+    }
+
+    async fn push_workflow_progress(
+        &self,
+        _task_id: &str,
+        event: coco_types::WorkflowProgressEvent,
+    ) {
+        self.progress.lock().expect("progress lock").push(event);
+        self.notify_progress.notify_waiters();
+    }
+
+    async fn mark_completed(
+        &self,
+        _task_id: &str,
+        payload: coco_tool_runtime::AgentCompletionPayload,
+    ) {
+        self.completed.lock().expect("completed lock").push(payload);
+        self.notify_completed.notify_waiters();
+    }
+}
 
 #[test]
 fn workflow_tool_identity_and_alias_match_contract() {
@@ -52,6 +104,82 @@ async fn workflow_execute_without_task_runtime_errors() {
     let err = tool.execute(input, &ctx).await.unwrap_err();
     assert!(matches!(err, ToolError::ExecutionFailed { .. }));
     assert!(err.to_string().contains("Background tasks"));
+}
+
+#[tokio::test]
+async fn workflow_execute_launches_background_task() {
+    let tool = WorkflowTool;
+    let mut ctx = ToolUseContext::test_default();
+    ctx.tool_use_id = Some("toolu_workflow".to_string());
+    let handle = Arc::new(RecordingTaskHandle::default());
+    let task_handle: coco_tool_runtime::TaskHandleRef = handle.clone();
+    ctx.task_handle = Some(task_handle);
+
+    let result = tool
+        .execute(
+            WorkflowInput {
+                script: Some(
+                    "export const meta = { name: 'launch', description: 'test' };\n\
+                     log('queued');\n\
+                     return { ok: args.ok };"
+                        .to_string(),
+                ),
+                args: serde_json::json!({"ok": true}),
+                ..WorkflowInput::default()
+            },
+            &ctx,
+        )
+        .await
+        .expect("workflow launch");
+
+    assert_eq!(result.data.status, "async_launched");
+    assert_eq!(result.data.task_type, "local_workflow");
+    assert_eq!(result.data.workflow_name.as_deref(), Some("launch"));
+    assert!(result.data.task_id.starts_with('w'));
+    assert!(result.data.run_id.starts_with("wf_"));
+    let output_file = format!("/tmp/{}.out", result.data.task_id);
+    assert_eq!(
+        result.data.output_file.as_deref(),
+        Some(output_file.as_str())
+    );
+
+    {
+        let registered = handle.registered.lock().expect("registered lock");
+        assert_eq!(registered.len(), 1);
+        assert_eq!(registered[0].task_id, result.data.task_id);
+        assert_eq!(registered[0].workflow_name.as_deref(), Some("launch"));
+        assert_eq!(registered[0].tool_use_id.as_deref(), Some("toolu_workflow"));
+        assert!(registered[0].script.contains("export const meta"));
+    }
+
+    let completed_empty = handle.completed.lock().expect("completed lock").is_empty();
+    if completed_empty {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            handle.notify_completed.notified(),
+        )
+        .await
+        .expect("workflow completes");
+    }
+    let progress_empty = handle.progress.lock().expect("progress lock").is_empty();
+    if progress_empty {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            handle.notify_progress.notified(),
+        )
+        .await
+        .expect("workflow progress arrives");
+    }
+    let progress = handle.progress.lock().expect("progress lock");
+    assert!(matches!(
+        progress.as_slice(),
+        [coco_types::WorkflowProgressEvent::WorkflowLog { message }]
+            if message == "queued"
+    ));
+    drop(progress);
+    let completed = handle.completed.lock().expect("completed lock");
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].result.as_deref(), Some("{\n  \"ok\": true\n}"));
 }
 
 #[tokio::test]

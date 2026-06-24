@@ -4,6 +4,9 @@ use coco_types::ExpandedView;
 use crate::state::AppState;
 use crate::state::session::SubagentInstance;
 use crate::state::session::SubagentStatus;
+use crate::state::session::TaskEntry;
+use crate::state::session::TaskEntryKind;
+use crate::state::session::TaskEntryStatus;
 
 fn surface(view: TurnActivityView) -> ActivitySurfaceView {
     match view {
@@ -83,6 +86,50 @@ fn turn_activity_view_falls_back_to_agents_when_present() {
     let view = surface(turn_activity_view(&state, 160));
 
     assert_eq!(view.title, ActivityTitle::Agents);
+}
+
+#[test]
+fn turn_activity_view_shows_running_workflow_tasks() {
+    let mut state = AppState::default();
+    state.session.active_tasks.push(TaskEntry {
+        task_id: "wf_123".into(),
+        description: "▸ analyze repository".into(),
+        status: TaskEntryStatus::Running,
+        kind: TaskEntryKind::Workflow,
+        started_at_ms: 0,
+        workflow_name: Some("analyze".into()),
+        workflow_progress: Vec::new(),
+    });
+
+    let view = surface(turn_activity_view(&state, 160));
+    let text = per_line_text(&view).join("\n");
+
+    assert_eq!(view.title, ActivityTitle::Tasks);
+    assert!(text.contains("analyze repository"));
+}
+
+#[test]
+fn turn_activity_view_labels_completed_workflow_as_task_activity() {
+    let _locale = crate::i18n::locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.expanded_view = ExpandedView::Tasks;
+    state.session.active_tasks.push(TaskEntry {
+        task_id: "wf_123".into(),
+        description: "Explore — done".into(),
+        status: TaskEntryStatus::Completed,
+        kind: TaskEntryKind::Workflow,
+        started_at_ms: 0,
+        workflow_name: Some("analyze".into()),
+        workflow_progress: Vec::new(),
+    });
+
+    let view = surface(turn_activity_view(&state, 160));
+    let text = per_line_text(&view).join("\n");
+
+    assert_eq!(view.title, ActivityTitle::Tasks);
+    assert!(text.contains("Task activity:"), "{text}");
+    assert!(text.contains("Explore — done"), "{text}");
+    assert!(!text.contains("Running:"), "{text}");
 }
 
 #[test]

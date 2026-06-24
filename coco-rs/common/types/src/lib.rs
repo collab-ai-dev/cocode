@@ -217,6 +217,8 @@ pub use event::TurnAbortReason;
 pub use event::TurnEndedParams;
 pub use event::TurnOutcome;
 pub use event::TurnStartedParams;
+pub use event::WorkflowDialogEntry;
+pub use event::WorkflowDialogPayload;
 pub use event::WorktreeEnteredParams;
 pub use event::WorktreeExitedParams;
 

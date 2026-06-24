@@ -71,6 +71,7 @@ pub mod names {
     pub const PLUGIN: &str = "plugin";
     pub const AGENTS: &str = "agents";
     pub const TASKS: &str = "tasks";
+    pub const WORKFLOW: &str = "workflow";
     pub const SKILLS: &str = "skills";
     pub const HOOKS: &str = "hooks";
     pub const FILES: &str = "files";
@@ -1372,6 +1373,7 @@ const SECURITY_REVIEW_PROMPT: &str = include_str!("prompts/security_review.txt")
 const INSIGHTS_PROMPT: &str = include_str!("prompts/insights.txt");
 const PR_COMMENTS_PROMPT: &str = include_str!("prompts/pr_comments.txt");
 const REVIEW_PROMPT: &str = include_str!("prompts/review.txt");
+const WORKFLOW_PROMPT: &str = include_str!("prompts/workflow.txt");
 // /commit-push-pr loads its prompt directly inside
 // handlers::commit_push_pr::PROMPT_TEMPLATE.
 const STATUSLINE_PROMPT_TEMPLATE: &str = include_str!("prompts/statusline.txt");
@@ -1652,6 +1654,41 @@ pub fn register_ts_parity_handlers(
         &insights_prompt,
         handlers::prompt_command::ArgsHandling::AppendUnderTask,
     );
+
+    // /workflow — prompt the agent to launch a local workflow through the
+    // Workflow tool. The plural alias matches TS `/workflows` muscle memory.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::WORKFLOW,
+            "Run a local workflow script",
+            &["workflows"],
+            CommandSafety::LocalOnly,
+            Some("[name|scriptPath|task]"),
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::Prompt(coco_types::PromptCommandData {
+                progress_message: "starting workflow".to_string(),
+                content_length: WORKFLOW_PROMPT.len() as i64,
+                allowed_tools: Some(vec!["Workflow".to_string()]),
+                model: None,
+                context: coco_types::CommandContext::Inline,
+                agent: None,
+                thinking_level: None,
+                hooks: None,
+            }),
+            handler: Some(Arc::new(handlers::prompt_command::WorkflowPromptHandler {
+                inner: handlers::prompt_command::StaticPromptHandler {
+                    name: names::WORKFLOW.to_string(),
+                    progress_message: "starting workflow".to_string(),
+                    body: WORKFLOW_PROMPT.to_string(),
+                    args_handling: handlers::prompt_command::ArgsHandling::AppendUnderTask,
+                },
+            })),
+            is_enabled: None,
+        });
+    }
 
     // /review — Prompt-type, not a local handler. Appends `PR number: ${args}`
     // inline at the body's end — even when `args` is empty, the literal

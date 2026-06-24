@@ -270,6 +270,67 @@ async fn create_task_emits_started_with_tool_use_id() {
 }
 
 #[tokio::test]
+async fn push_workflow_progress_emits_cumulative_task_progress() {
+    let (tx, mut rx) = mpsc::channel::<CoreEvent>(16);
+    let mgr = TaskManager::new().with_event_sink(tx);
+    let id = coco_types::generate_task_id(TaskType::LocalWorkflow);
+
+    mgr.create_task(TaskCreateRequest {
+        task_id: id.clone(),
+        task_type: TaskType::LocalWorkflow,
+        description: "ship workflow".to_string(),
+        output_file: Some("/tmp/workflow.out".to_string()),
+        tool_use_id: Some("toolu_workflow".to_string()),
+        is_backgrounded: true,
+        status: TaskStatus::Running,
+        cancel: tokio_util::sync::CancellationToken::new(),
+        invoking_agent: None,
+        workflow_name: Some("ship".to_string()),
+        workflow_prompt: None,
+        shell_extras: None,
+    })
+    .await;
+
+    let started = collect(&mut rx);
+    match &started[0] {
+        ServerNotification::TaskStarted(p) => {
+            assert_eq!(p.task_id, id);
+            assert_eq!(p.task_type.as_deref(), Some("local_workflow"));
+            assert_eq!(p.workflow_name.as_deref(), Some("ship"));
+        }
+        other => panic!("expected TaskStarted, got {other:?}"),
+    }
+
+    let phase = coco_types::WorkflowProgressEvent::WorkflowPhase {
+        index: 0,
+        title: "Plan".to_string(),
+    };
+    let log = coco_types::WorkflowProgressEvent::WorkflowLog {
+        message: "Queued agents".to_string(),
+    };
+
+    mgr.push_workflow_progress(&id, phase.clone()).await;
+    mgr.push_workflow_progress(&id, log.clone()).await;
+
+    let events = collect(&mut rx);
+    assert_eq!(events.len(), 2, "expected progress events, got: {events:?}");
+    match &events[0] {
+        ServerNotification::TaskProgress(p) => {
+            assert_eq!(p.task_id, id);
+            assert_eq!(p.workflow_progress, vec![phase.clone()]);
+        }
+        other => panic!("expected TaskProgress, got {other:?}"),
+    }
+    match &events[1] {
+        ServerNotification::TaskProgress(p) => {
+            assert_eq!(p.task_id, id);
+            assert_eq!(p.workflow_progress, vec![phase, log]);
+        }
+        other => panic!("expected TaskProgress, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn mark_notified_once_suppresses_duplicates() {
     let mgr = TaskManager::new();
     let id = create_running(&mgr, TaskType::BgAgent, "agent", "/tmp/out").await;

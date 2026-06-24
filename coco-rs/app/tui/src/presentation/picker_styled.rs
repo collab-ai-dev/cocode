@@ -22,6 +22,8 @@ use crate::state::MemoryDialogState;
 use crate::state::QuickOpenState;
 use crate::state::SessionBrowserState;
 use crate::state::TeamRosterState;
+use crate::state::WorkflowPickerEntry;
+use crate::state::WorkflowPickerState;
 use crate::state::session::SubagentInstance;
 use crate::state::session::TaskEntry;
 use crate::state::session::TaskEntryKind;
@@ -181,6 +183,70 @@ pub(crate) fn memory_dialog_lines(
     lines.extend(render_select_list(
         &items,
         m.selected.max(0) as usize,
+        &list_style(list_budget),
+        styles,
+    ));
+    lines.push(Line::default());
+    lines.push(dim_line(t!("dialog.hints_nav_select_cancel"), styles));
+    (title, lines, styles.primary())
+}
+
+pub(crate) fn filtered_workflows(w: &WorkflowPickerState) -> Vec<&WorkflowPickerEntry> {
+    let filter_lower = w.filter.to_lowercase();
+    w.entries
+        .iter()
+        .filter(|entry| {
+            filter_lower.is_empty()
+                || entry.name.to_lowercase().contains(&filter_lower)
+                || entry.description.to_lowercase().contains(&filter_lower)
+                || entry.source_path.to_lowercase().contains(&filter_lower)
+        })
+        .collect()
+}
+
+/// `/workflow` — pick a registered workflow to run.
+pub(crate) fn workflow_picker_lines(
+    w: &WorkflowPickerState,
+    styles: UiStyles<'_>,
+    list_budget: usize,
+) -> (String, Vec<Line<'static>>, Color) {
+    let title = t!("dialog.title_workflow_picker").to_string();
+    let workflows = filtered_workflows(w);
+    let filter = if w.filter.is_empty() {
+        dim_line(t!("dialog.workflow_picker_select"), styles)
+    } else {
+        dim_line(
+            t!("dialog.workflow_picker_filter", text = w.filter.as_str()),
+            styles,
+        )
+    };
+    if workflows.is_empty() {
+        return (
+            title,
+            vec![
+                filter,
+                Line::default(),
+                dim_line(t!("dialog.workflow_picker_empty"), styles),
+            ],
+            styles.primary(),
+        );
+    }
+
+    let items: Vec<SelectItem> = workflows
+        .iter()
+        .map(|entry| {
+            let label = if entry.description.is_empty() {
+                entry.name.clone()
+            } else {
+                format!("{} · {}", entry.name, entry.description)
+            };
+            SelectItem::new(label)
+        })
+        .collect();
+    let mut lines = vec![filter, Line::default()];
+    lines.extend(render_select_list(
+        &items,
+        w.selected.max(0) as usize,
         &list_style(list_budget),
         styles,
     ));
@@ -360,7 +426,7 @@ pub(crate) fn copy_picker_lines(
     )
 }
 
-/// Background-tasks dialog — running shells/agents grouped into dim-headed
+/// Background-tasks dialog — running shells, agents, and workflows grouped into dim-headed
 /// sections, or a single task's detail view. Selection is a flat index into
 /// `running_background_tasks()` (shared with `update::background_tasks`), and
 /// rows render in that same grouped order so the `❯` cursor lands on the row
@@ -460,6 +526,16 @@ fn background_task_row(
                 Style::default().fg(label_color),
             ));
         }
+        TaskEntryKind::Workflow => {
+            spans.push(Span::styled(
+                "wf ".to_string(),
+                Style::default().fg(styles.dim()),
+            ));
+            spans.push(Span::styled(
+                truncate_to_width(&task.description, 52),
+                Style::default().fg(label_color),
+            ));
+        }
         TaskEntryKind::Shell | TaskEntryKind::Other => {
             spans.push(Span::styled(
                 "$ ".to_string(),
@@ -496,12 +572,12 @@ fn background_tasks_detail_lines(
     styles: UiStyles<'_>,
 ) -> (String, Vec<Line<'static>>, Color) {
     let task = rows.iter().find(|t| t.task_id == task_id).copied();
-    let (title, status, runtime, command, kind) = match task {
+    let (title, status, runtime, detail_value, kind) = match task {
         Some(t) => (
             t!(detail_title_key(t.kind)).to_string(),
             t!(task_status_key(t.status)).to_string(),
             format_runtime(now_ms - t.started_at_ms),
-            t.description.clone(),
+            detail_value(t),
             Some(t.kind),
         ),
         None => (
@@ -516,40 +592,173 @@ fn background_tasks_detail_lines(
     let mut lines = vec![
         text_line(t!("dialog.background_status", status = status), styles),
         text_line(t!("dialog.background_runtime", runtime = runtime), styles),
-        text_line(t!("dialog.background_command", command = command), styles),
+        detail_value_line(kind, detail_value, styles),
         Line::default(),
     ];
 
-    if matches!(kind, Some(TaskEntryKind::Agent)) {
-        lines.push(dim_line(t!("dialog.background_activity_label"), styles));
-        let activities = find_subagent(state, task_id)
-            .map(|s| s.recent_activities.as_slice())
-            .unwrap_or(&[]);
-        if activities.is_empty() {
-            lines.push(dim_line(t!("dialog.background_no_activity"), styles));
-        } else {
-            for act in activities {
-                let mut spans = vec![
-                    Span::styled(" · ".to_string(), Style::default().fg(styles.dim())),
-                    Span::styled(act.tool_name.clone(), Style::default().fg(styles.text())),
-                ];
-                if let Some(summary) = &act.summary {
-                    spans.push(Span::styled(
-                        format!("  {}", truncate_to_width(summary, 40)),
-                        Style::default().fg(styles.dim()),
-                    ));
+    match kind {
+        Some(TaskEntryKind::Agent) => {
+            lines.push(dim_line(t!("dialog.background_activity_label"), styles));
+            let activities = find_subagent(state, task_id)
+                .map(|s| s.recent_activities.as_slice())
+                .unwrap_or(&[]);
+            if activities.is_empty() {
+                lines.push(dim_line(t!("dialog.background_no_activity"), styles));
+            } else {
+                for act in activities {
+                    let mut spans = vec![
+                        Span::styled(" · ".to_string(), Style::default().fg(styles.dim())),
+                        Span::styled(act.tool_name.clone(), Style::default().fg(styles.text())),
+                    ];
+                    if let Some(summary) = &act.summary {
+                        spans.push(Span::styled(
+                            format!("  {}", truncate_to_width(summary, 40)),
+                            Style::default().fg(styles.dim()),
+                        ));
+                    }
+                    lines.push(Line::from(spans));
                 }
-                lines.push(Line::from(spans));
             }
         }
-    } else {
-        lines.push(dim_line(t!("dialog.background_output_label"), styles));
-        lines.push(dim_line(t!("dialog.background_output_empty"), styles));
+        Some(TaskEntryKind::Workflow) => {
+            lines.push(dim_line(t!("dialog.workflow_progress_label"), styles));
+            let progress = task
+                .map(|task| task.workflow_progress.as_slice())
+                .unwrap_or(&[]);
+            if progress.is_empty() {
+                lines.push(dim_line(t!("dialog.workflow_progress_empty"), styles));
+            } else {
+                for event in progress.iter().rev().take(8).rev() {
+                    lines.push(workflow_progress_line(event, styles));
+                }
+            }
+        }
+        Some(TaskEntryKind::Shell | TaskEntryKind::Other) | None => {
+            lines.push(dim_line(t!("dialog.background_output_label"), styles));
+            lines.push(dim_line(t!("dialog.background_output_empty"), styles));
+        }
     }
 
     lines.push(Line::default());
     lines.push(dim_line(t!("dialog.background_detail_hints"), styles));
     (title, lines, styles.primary())
+}
+
+fn workflow_progress_line(
+    event: &coco_types::WorkflowProgressEvent,
+    styles: UiStyles<'_>,
+) -> Line<'static> {
+    match event {
+        coco_types::WorkflowProgressEvent::WorkflowPhase { title, .. } => Line::from(vec![
+            Span::styled(" · ".to_string(), Style::default().fg(styles.dim())),
+            Span::styled(
+                format!("▸ {}", truncate_to_width(title, 52)),
+                Style::default().fg(styles.text()),
+            ),
+        ]),
+        coco_types::WorkflowProgressEvent::WorkflowLog { message } => Line::from(vec![
+            Span::styled(" · ".to_string(), Style::default().fg(styles.dim())),
+            Span::styled(
+                truncate_to_width(message, 64),
+                Style::default().fg(styles.dim()),
+            ),
+        ]),
+        coco_types::WorkflowProgressEvent::WorkflowAgent {
+            label,
+            state,
+            phase_title,
+            model,
+            tokens,
+            tool_calls,
+            duration_ms,
+            cached,
+            result_preview,
+            prompt_preview,
+            error,
+            ..
+        } => {
+            let (icon, state_key, color) = match state {
+                coco_types::WorkflowAgentState::Start
+                | coco_types::WorkflowAgentState::Progress => {
+                    ("●", "dialog.workflow_agent_state_running", styles.accent())
+                }
+                coco_types::WorkflowAgentState::Done => {
+                    ("✓", "dialog.workflow_agent_state_done", styles.text())
+                }
+                coco_types::WorkflowAgentState::Error => {
+                    ("✗", "dialog.workflow_agent_state_error", styles.error())
+                }
+            };
+            let state_text = t!(state_key).to_string();
+            let mut tail = Vec::new();
+            if let Some(phase_title) = phase_title {
+                tail.push(
+                    t!(
+                        "dialog.workflow_phase_context",
+                        title = truncate_to_width(phase_title, 24)
+                    )
+                    .to_string(),
+                );
+            }
+            if let Some(model) = model {
+                tail.push(
+                    t!(
+                        "dialog.workflow_model",
+                        model = truncate_to_width(model, 24)
+                    )
+                    .to_string(),
+                );
+            }
+            if let Some(tokens) = tokens {
+                tail.push(
+                    t!(
+                        "dialog.workflow_tokens",
+                        count = format_short_count(*tokens)
+                    )
+                    .to_string(),
+                );
+            }
+            if let Some(tool_calls) = tool_calls {
+                tail.push(t!("dialog.workflow_tool_calls", count = *tool_calls).to_string());
+            }
+            if *cached {
+                tail.push(t!("dialog.workflow_cached").to_string());
+            }
+            if let Some(duration_ms) = duration_ms {
+                tail.push(format_runtime(*duration_ms));
+            }
+            if let Some(error) = error {
+                tail.push(truncate_to_width(error, 32));
+            } else if let Some(result) = result_preview {
+                tail.push(truncate_to_width(result, 32));
+            } else if let Some(prompt) = prompt_preview {
+                tail.push(
+                    t!(
+                        "dialog.workflow_prompt_preview",
+                        prompt = truncate_to_width(prompt, 32)
+                    )
+                    .to_string(),
+                );
+            }
+
+            let mut spans = vec![
+                Span::styled(" · ".to_string(), Style::default().fg(styles.dim())),
+                Span::styled(format!("{icon} "), Style::default().fg(color)),
+                Span::styled(
+                    truncate_to_width(label, 32),
+                    Style::default().fg(styles.text()),
+                ),
+                Span::styled(format!("  {state_text}"), Style::default().fg(styles.dim())),
+            ];
+            if !tail.is_empty() {
+                spans.push(Span::styled(
+                    format!(" · {}", tail.join(" · ")),
+                    Style::default().fg(styles.dim()),
+                ));
+            }
+            Line::from(spans)
+        }
+    }
 }
 
 fn find_subagent<'a>(state: &'a AppState, task_id: &str) -> Option<&'a SubagentInstance> {
@@ -564,6 +773,7 @@ fn section_header(kind: TaskEntryKind) -> String {
     match kind {
         TaskEntryKind::Agent => t!("dialog.background_section_agents").to_string(),
         TaskEntryKind::Shell => t!("dialog.background_section_shells").to_string(),
+        TaskEntryKind::Workflow => t!("dialog.background_section_workflows").to_string(),
         TaskEntryKind::Other => t!("dialog.background_section_other").to_string(),
     }
 }
@@ -572,7 +782,30 @@ fn detail_title_key(kind: TaskEntryKind) -> &'static str {
     match kind {
         TaskEntryKind::Shell => "dialog.shell_details_title",
         TaskEntryKind::Agent => "dialog.agent_details_title",
+        TaskEntryKind::Workflow => "dialog.workflow_details_title",
         TaskEntryKind::Other => "dialog.task_details_title",
+    }
+}
+
+fn detail_value(task: &TaskEntry) -> String {
+    if task.kind == TaskEntryKind::Workflow {
+        task.workflow_name
+            .clone()
+            .unwrap_or_else(|| task.description.clone())
+    } else {
+        task.description.clone()
+    }
+}
+
+fn detail_value_line(
+    kind: Option<TaskEntryKind>,
+    value: String,
+    styles: UiStyles<'_>,
+) -> Line<'static> {
+    if kind == Some(TaskEntryKind::Workflow) {
+        text_line(t!("dialog.background_workflow", workflow = value), styles)
+    } else {
+        text_line(t!("dialog.background_command", command = value), styles)
     }
 }
 
@@ -582,6 +815,16 @@ fn task_status_key(status: TaskEntryStatus) -> &'static str {
         TaskEntryStatus::Completed => "task_status.completed",
         TaskEntryStatus::Failed => "task_status.failed",
         TaskEntryStatus::Stopped => "task_status.stopped",
+    }
+}
+
+fn format_short_count(n: i64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}m", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
     }
 }
 

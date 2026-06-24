@@ -10,7 +10,22 @@ use coco_types::ModelRole;
 
 use crate::i18n::locale_test_guard;
 use crate::state::AppState;
+use crate::state::session::TaskEntry;
+use crate::state::session::TaskEntryKind;
+use crate::state::session::TaskEntryStatus;
 use crate::transcript::derive::test_helpers;
+
+fn running_task(task_id: &str, kind: TaskEntryKind) -> TaskEntry {
+    TaskEntry {
+        task_id: task_id.into(),
+        description: task_id.into(),
+        status: TaskEntryStatus::Running,
+        kind,
+        started_at_ms: 0,
+        workflow_name: None,
+        workflow_progress: Vec::new(),
+    }
+}
 
 #[test]
 fn status_bar_view_renders_model_tokens_context_and_messages() {
@@ -90,9 +105,6 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
 
 #[test]
 fn status_bar_splits_permission_pill_and_directory_onto_dynamic_lines() {
-    use crate::state::session::TaskEntry;
-    use crate::state::session::TaskEntryKind;
-    use crate::state::session::TaskEntryStatus;
     use coco_types::PermissionMode;
 
     let _locale = locale_test_guard("en");
@@ -103,20 +115,8 @@ fn status_bar_splits_permission_pill_and_directory_onto_dynamic_lines() {
     state.session.working_dir = Some("/home/user/codex".into());
     state.session.git_branch = Some("feat/automode".into());
     state.session.active_tasks = vec![
-        TaskEntry {
-            task_id: "a1".into(),
-            description: "monitor".into(),
-            status: TaskEntryStatus::Running,
-            kind: TaskEntryKind::Agent,
-            started_at_ms: 0,
-        },
-        TaskEntry {
-            task_id: "s1".into(),
-            description: "sleep 9999".into(),
-            status: TaskEntryStatus::Running,
-            kind: TaskEntryKind::Shell,
-            started_at_ms: 0,
-        },
+        running_task("a1", TaskEntryKind::Agent),
+        running_task("s1", TaskEntryKind::Shell),
     ];
 
     assert_eq!(status_bar_height(&state), 3);
@@ -139,6 +139,35 @@ fn status_bar_splits_permission_pill_and_directory_onto_dynamic_lines() {
     assert!(line_text(1).contains("1 agent · 1 shell"));
     // Line 3: directory basename + git branch (zsh-prompt style).
     assert_eq!(line_text(2), " codex git:(feat/automode)");
+}
+
+#[test]
+fn background_pill_label_counts_workflows() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.active_tasks = vec![
+        running_task("a1", TaskEntryKind::Agent),
+        running_task("s1", TaskEntryKind::Shell),
+        running_task("wf1", TaskEntryKind::Workflow),
+        running_task("wf2", TaskEntryKind::Workflow),
+    ];
+
+    assert_eq!(
+        background_pill_label(&state),
+        Some("1 agent · 1 shell · 2 workflows".to_string())
+    );
+}
+
+#[test]
+fn background_pill_label_localizes_workflows() {
+    let _locale = locale_test_guard("zh-CN");
+    let mut state = AppState::default();
+    state.session.active_tasks = vec![running_task("wf1", TaskEntryKind::Workflow)];
+
+    assert_eq!(
+        background_pill_label(&state),
+        Some("1 个工作流".to_string())
+    );
 }
 
 #[test]

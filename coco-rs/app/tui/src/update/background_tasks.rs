@@ -132,7 +132,7 @@ fn toggle_detail(state: &mut AppState, row_ids: &[String]) {
 }
 
 /// `x`: cancel the focused task via `CancelSubagent`, which fires the task's
-/// cancellation token (works for shells and agents alike). The engine's
+/// cancellation token (works for shells, agents, and workflows alike). The engine's
 /// `TaskCompleted` event then folds the row out of the list.
 async fn stop_focused(
     state: &mut AppState,
@@ -153,3 +153,7 @@ async fn stop_focused(
             .await;
     }
 }
+
+#[cfg(test)]
+#[path = "background_tasks.test.rs"]
+mod tests;

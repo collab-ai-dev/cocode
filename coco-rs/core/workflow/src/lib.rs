@@ -9,9 +9,11 @@ pub use meta::WorkflowScript;
 pub use meta::parse_workflow_meta;
 pub use meta::parse_workflow_script;
 pub use source::MAX_WORKFLOW_SOURCE_BYTES;
+pub use source::WorkflowRegistryEntry;
 pub use source::WorkflowSourceInput;
 pub use source::WorkflowSourceKind;
 pub use source::WorkflowSourceSpec;
+pub use source::list_workflows;
 pub use source::resolve_workflow_source;
 pub use source::workflow_dirs_hint;
 

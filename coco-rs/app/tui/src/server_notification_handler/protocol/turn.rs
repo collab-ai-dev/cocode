@@ -11,6 +11,8 @@ use crate::state::AppState;
 use crate::state::ModalState;
 use crate::state::session::SubagentKind;
 use crate::state::session::SubagentStatus;
+use crate::state::session::TaskEntryKind;
+use crate::state::session::TaskEntryStatus;
 use crate::state::session::TokenUsage;
 use crate::state::ui::Toast;
 
@@ -36,10 +38,11 @@ pub(super) fn clear_session_boundary_state(state: &mut AppState) {
         .session
         .subagents
         .retain(|agent| retained_subagent_ids.contains(&agent.agent_id));
-    state
-        .session
-        .active_tasks
-        .retain(|task| retained_subagent_ids.contains(&task.task_id));
+    state.session.active_tasks.retain(|task| {
+        retained_subagent_ids.contains(&task.task_id)
+            || (matches!(task.kind, TaskEntryKind::Workflow)
+                && matches!(task.status, TaskEntryStatus::Running))
+    });
 
     state.session.set_busy(false);
     state.session.current_turn_number = None;

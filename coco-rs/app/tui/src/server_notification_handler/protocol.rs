@@ -321,7 +321,7 @@ pub(super) fn handle(
             }
             let kind = match p.task_type.as_deref() {
                 Some(s) if s == task_type_wire::LOCAL_BASH => TaskEntryKind::Shell,
-                Some(s) if s == task_type_wire::LOCAL_WORKFLOW => TaskEntryKind::Other,
+                Some(s) if s == task_type_wire::LOCAL_WORKFLOW => TaskEntryKind::Workflow,
                 Some(s)
                     if s == task_type_wire::LOCAL_AGENT
                         || s == task_type_wire::IN_PROCESS_TEAMMATE
@@ -338,6 +338,8 @@ pub(super) fn handle(
                 status: TaskEntryStatus::Running,
                 kind,
                 started_at_ms,
+                workflow_name: p.workflow_name,
+                workflow_progress: Vec::new(),
             });
             true
         }
@@ -453,11 +455,15 @@ pub(super) fn handle(
                 .find(|t| t.task_id == p.task_id)
             {
                 task.description = p.description.clone();
-                // Surface the latest workflow phase/agent/log as the live task
-                // description so a running `LocalWorkflow` shows progress in the
-                // task panel.
-                if let Some(summary) = latest_workflow_progress_summary(&p.workflow_progress) {
-                    task.description = summary;
+                if task.kind == TaskEntryKind::Workflow {
+                    let merged = merge_workflow_progress(
+                        &task.workflow_progress,
+                        p.workflow_progress.as_slice(),
+                    );
+                    if let Some(summary) = latest_workflow_progress_summary(&merged) {
+                        task.description = summary;
+                    }
+                    task.workflow_progress = merged;
                 }
             }
             // BgAgent task IDs are also subagent IDs (see `TaskStateBase
@@ -1278,16 +1284,42 @@ fn latest_workflow_progress_summary(
     use coco_types::WorkflowProgressEvent;
     events.last().map(|event| match event {
         WorkflowProgressEvent::WorkflowPhase { title, .. } => format!("▸ {title}"),
-        WorkflowProgressEvent::WorkflowAgent { label, state, .. } => {
+        WorkflowProgressEvent::WorkflowAgent {
+            label,
+            state,
+            cached,
+            ..
+        } => {
             let verb = match state {
-                WorkflowAgentState::Start | WorkflowAgentState::Progress => "running",
-                WorkflowAgentState::Done => "done",
-                WorkflowAgentState::Error => "error",
+                WorkflowAgentState::Start | WorkflowAgentState::Progress => {
+                    t!("dialog.workflow_agent_state_running").to_string()
+                }
+                WorkflowAgentState::Done => t!("dialog.workflow_agent_state_done").to_string(),
+                WorkflowAgentState::Error => t!("dialog.workflow_agent_state_error").to_string(),
             };
-            format!("{label} — {verb}")
+            if *cached {
+                format!("{label} — {verb} · {}", t!("dialog.workflow_cached"))
+            } else {
+                format!("{label} — {verb}")
+            }
         }
         WorkflowProgressEvent::WorkflowLog { message } => message.clone(),
     })
+}
+
+fn merge_workflow_progress(
+    existing: &[coco_types::WorkflowProgressEvent],
+    incoming: &[coco_types::WorkflowProgressEvent],
+) -> Vec<coco_types::WorkflowProgressEvent> {
+    if incoming.is_empty() {
+        return existing.to_vec();
+    }
+    if incoming.starts_with(existing) {
+        return incoming.to_vec();
+    }
+    let mut merged = existing.to_vec();
+    merged.extend_from_slice(incoming);
+    merged
 }
 
 #[cfg(test)]

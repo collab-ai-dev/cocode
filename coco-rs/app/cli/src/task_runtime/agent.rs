@@ -373,12 +373,11 @@ impl TaskHandle for TaskRuntime {
         .await
     }
 
-    /// Dormant launch seam for the future local-workflow runtime driver.
+    /// Register a launched local workflow with the background task manager.
     ///
     /// Persists the script and creates a `Running` backgrounded
-    /// `LocalWorkflow` task row. The current stubbed `WorkflowTool` does **not**
-    /// call this — it returns an honest error instead of launching — so no task
-    /// is created until the JS runtime lands and a driver wires this up.
+    /// `LocalWorkflow` task row. The workflow runtime calls back through
+    /// `push_workflow_progress` and terminal task updates after this row exists.
     async fn register_workflow_task(
         &self,
         request: WorkflowTaskRequest,

@@ -1973,6 +1973,11 @@ pub enum TuiOnlyEvent {
     /// visible event. On cancel the TUI emits "Cancelled memory editing".
     /// TS parity: `commands/memory/memory.tsx`.
     OpenMemoryDialog { entries: Vec<MemoryDialogEntry> },
+    /// Tell the TUI to open the `/workflow` picker. The CLI dispatcher
+    /// builds the registry snapshot from `.coco/workflows` and
+    /// `.claude/workflows`; the TUI only renders and re-dispatches the
+    /// selected workflow name as `/workflow <name>`.
+    OpenWorkflowPicker { payload: WorkflowDialogPayload },
     /// `/copy [N]` slash command — the TUI walks its transcript, picks
     /// the Nth-latest assistant message, and either directly copies it
     /// (when there are no code blocks or `copy_full_response` is on) or
@@ -2223,6 +2228,25 @@ pub enum MemoryDialogScope {
     TeamMemFolder,
     /// Per-agent memory directory entry.
     AgentMemFolder,
+}
+
+/// Payload for [`TuiOnlyEvent::OpenWorkflowPicker`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowDialogPayload {
+    pub entries: Vec<WorkflowDialogEntry>,
+}
+
+/// One selectable workflow script in the `/workflow` picker.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowDialogEntry {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    pub source_path: String,
 }
 
 /// Per-skill override state stored under `skill_overrides` in any

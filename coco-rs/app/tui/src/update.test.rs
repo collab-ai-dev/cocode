@@ -183,6 +183,32 @@ async fn submit_slash_dispatches_typed_command_without_chat_echo() {
 }
 
 #[tokio::test]
+async fn submit_workflows_alias_dispatches_workflow_command_args() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("/workflows build release");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
+
+    assert!(
+        state.session.transcript.is_empty(),
+        "workflow slash invocations should dispatch as commands, not chat"
+    );
+    match next_user_command(&mut rx) {
+        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+            assert_eq!(name, "workflows");
+            assert_eq!(args, "build release");
+        }
+        other => panic!("expected ExecuteSlashCommand on the wire, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn submit_exit_command_shuts_down_via_double_press_path() {
     // `/exit` must funnel into the same shutdown mechanism as the Ctrl+C/Ctrl+D
     // double-press exit — NOT the registry handler (which only prints text).
@@ -330,6 +356,45 @@ async fn autocomplete_enter_completes_arg_slash_command_without_submitting() {
     assert!(
         rx.try_recv().is_err(),
         "commands with argument hints should wait for user args"
+    );
+}
+
+#[tokio::test]
+async fn autocomplete_enter_completes_workflow_without_submitting() {
+    let mut state = AppState::new();
+    state.session.available_commands = vec![SlashCommandInfo {
+        name: "workflow".into(),
+        aliases: vec!["workflows".into()],
+        argument_hint: Some("[name|scriptPath|task]".into()),
+        argument_kind: CommandArgumentKind::FreeText,
+        kind: CommandTypeTag::Prompt,
+        ..SlashCommandInfo::default()
+    }];
+    state.ui.input.textarea.set_text("/workf");
+    state.ui.input.textarea.set_cursor(6);
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items: vec![SuggestionItem {
+            label: "/workflow".into(),
+            description: None,
+            metadata: None,
+        }],
+        selected: 0,
+        query: "workf".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "/workflow ");
+    assert_eq!(
+        state.ui.input.inline_hint.as_deref(),
+        Some(" [name|scriptPath|task]")
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "workflow waits for the user to type the workflow target/task"
     );
 }
 

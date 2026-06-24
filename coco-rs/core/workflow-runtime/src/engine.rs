@@ -178,10 +178,28 @@ fn install_globals<'js>(
     // args — the workflow input value, frozen.
     globals.set("args", json_to_js(ctx, args)?)?;
 
-    // budget — frozen; total unknown (no token target wired yet) → remaining = Infinity.
-    ctx.eval::<(), _>(
-        "globalThis.budget = Object.freeze({ total: null, spent: () => 0, remaining: () => Infinity });",
-    )?;
+    // budget — frozen object with live spent/remaining views backed by the
+    // host. `remaining()` stays Infinity only when no token cap is known.
+    {
+        let total = host.budget_total_tokens();
+        globals.set("__cocoWorkflowBudgetTotal", Func::from(move || total))?;
+        let host_for_spent = host.clone();
+        globals.set(
+            "__cocoWorkflowBudgetSpent",
+            Func::from(move || host_for_spent.budget_spent_tokens()),
+        )?;
+        ctx.eval::<(), _>(
+            r#"globalThis.budget = Object.freeze({
+              get total() { return globalThis.__cocoWorkflowBudgetTotal(); },
+              spent() { return globalThis.__cocoWorkflowBudgetSpent(); },
+              remaining() {
+                const total = globalThis.__cocoWorkflowBudgetTotal();
+                if (total === null || total === undefined) return Infinity;
+                return Math.max(0, total - globalThis.__cocoWorkflowBudgetSpent());
+              }
+            });"#,
+        )?;
+    }
 
     // log(message) — sync.
     {
@@ -228,16 +246,27 @@ fn install_globals<'js>(
                     WorkflowAgentState::Start,
                     label.clone(),
                     phase_title.clone(),
-                    None,
+                    DoneDetails::default(),
                 ));
                 match host.run_agent(prompt, opts).await {
                     Ok(result) => {
+                        if let Some(tokens) = result.tokens {
+                            host.record_agent_tokens(tokens);
+                        }
+                        let result_preview = preview_value(&result.value);
                         host.push_progress(agent_event(
                             index,
                             WorkflowAgentState::Done,
                             label,
                             phase_title,
-                            None,
+                            DoneDetails {
+                                model: result.model.clone(),
+                                tokens: result.tokens,
+                                tool_calls: result.tool_calls,
+                                duration_ms: result.duration_ms,
+                                result_preview,
+                                error: None,
+                            },
                         ));
                         json_to_js(&ctx2, &result.value)
                     }
@@ -247,7 +276,10 @@ fn install_globals<'js>(
                             WorkflowAgentState::Error,
                             label,
                             phase_title,
-                            Some(message.clone()),
+                            DoneDetails {
+                                error: Some(message.clone()),
+                                ..DoneDetails::default()
+                            },
                         ));
                         let thrown = message.into_js(&ctx2)?;
                         Err(ctx2.throw(thrown))
@@ -269,7 +301,7 @@ fn agent_event(
     state: WorkflowAgentState,
     label: String,
     phase_title: Option<String>,
-    error: Option<String>,
+    details: DoneDetails,
 ) -> WorkflowProgressEvent {
     WorkflowProgressEvent::WorkflowAgent {
         index,
@@ -278,15 +310,38 @@ fn agent_event(
         phase_title,
         phase_index: None,
         agent_id: None,
-        model: None,
-        tokens: None,
-        tool_calls: None,
-        duration_ms: None,
+        model: details.model,
+        tokens: details.tokens,
+        tool_calls: details.tool_calls,
+        duration_ms: details.duration_ms,
         cached: false,
-        result_preview: None,
+        result_preview: details.result_preview,
         prompt_preview: None,
-        error,
+        error: details.error,
     }
+}
+
+#[derive(Default)]
+struct DoneDetails {
+    model: Option<String>,
+    tokens: Option<i64>,
+    tool_calls: Option<i32>,
+    duration_ms: Option<i64>,
+    result_preview: Option<String>,
+    error: Option<String>,
+}
+
+fn preview_value(value: &serde_json::Value) -> Option<String> {
+    let text = match value {
+        serde_json::Value::Null => return None,
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    let mut preview: String = text.chars().take(400).collect();
+    if text.chars().count() > 400 {
+        preview.push_str("...");
+    }
+    Some(preview)
 }
 
 /// A short progress label derived from the prompt's first line.

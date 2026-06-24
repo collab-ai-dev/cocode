@@ -7,6 +7,7 @@ use crate::WorkflowMeta;
 use crate::WorkflowPhaseMeta;
 use crate::WorkflowSourceInput;
 use crate::WorkflowSourceKind;
+use crate::list_workflows;
 use crate::parse_workflow_meta;
 use crate::parse_workflow_script;
 use crate::resolve_workflow_source;
@@ -74,6 +75,41 @@ fn test_resolve_workflow_source_uses_coco_before_claude_for_name() {
 
     assert_eq!(spec.kind, WorkflowSourceKind::Name("build".to_string()));
     assert!(spec.source.contains("coco-build"));
+}
+
+#[test]
+fn test_list_workflows_uses_precedence_and_meta_names() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let coco_workflows = dir
+        .path()
+        .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+        .join("workflows");
+    let claude_workflows = dir.path().join(".claude").join("workflows");
+    fs::create_dir_all(&coco_workflows).expect("mkdir coco");
+    fs::create_dir_all(&claude_workflows).expect("mkdir claude");
+    fs::write(
+        coco_workflows.join("release.ts"),
+        r#"export const meta = { name: "Release", description: "Ship it" };"#,
+    )
+    .expect("write coco");
+    fs::write(
+        claude_workflows.join("release.js"),
+        r#"export const meta = { name: "Release", description: "Old copy" };"#,
+    )
+    .expect("write duplicate");
+    fs::write(
+        claude_workflows.join("audit.js"),
+        r#"export const meta = { name: "Audit", description: "Check it" };"#,
+    )
+    .expect("write audit");
+
+    let entries = list_workflows(Some(dir.path().to_path_buf()));
+
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].name, "Release");
+    assert_eq!(entries[0].description, "Ship it");
+    assert_eq!(entries[1].name, "Audit");
+    assert_eq!(entries[1].description, "Check it");
 }
 
 #[test]

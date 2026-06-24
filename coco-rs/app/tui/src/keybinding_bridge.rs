@@ -85,6 +85,7 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             ModalState::SessionBrowser(_)
             | ModalState::GlobalSearch(_)
             | ModalState::QuickOpen(_)
+            | ModalState::WorkflowPicker(_)
             | ModalState::Export(_)
             | ModalState::Feedback(_)
             | ModalState::McpServerSelect(_)

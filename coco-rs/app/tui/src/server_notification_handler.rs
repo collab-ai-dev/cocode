@@ -180,6 +180,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::OpenContextUsage { .. } => "OpenContextUsage",
         E::OpenRewindPicker => "OpenRewindPicker",
         E::OpenMemoryDialog { .. } => "OpenMemoryDialog",
+        E::OpenWorkflowPicker { .. } => "OpenWorkflowPicker",
         E::CopyCommandRequested { .. } => "CopyCommandRequested",
         E::MemoryFileOpened { .. } => "MemoryFileOpened",
         E::MemoryFileOpenFailed { .. } => "MemoryFileOpenFailed",

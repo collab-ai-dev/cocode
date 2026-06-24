@@ -59,6 +59,9 @@ pub struct ToolUseContext {
     pub avoid_permission_prompts: bool,
     /// Cost budget limit (USD).
     pub max_budget_usd: Option<f64>,
+    /// Session token budget limit. Tools that spawn nested model calls can use
+    /// this to expose meaningful budget state.
+    pub total_token_budget: Option<i64>,
     /// Custom system prompt override.
     pub custom_system_prompt: Option<String>,
     /// Appended system prompt.
@@ -606,6 +609,7 @@ impl ToolUseContext {
             is_non_interactive: self.is_non_interactive,
             avoid_permission_prompts: self.avoid_permission_prompts,
             max_budget_usd: self.max_budget_usd,
+            total_token_budget: self.total_token_budget,
             custom_system_prompt: self.custom_system_prompt.clone(),
             append_system_prompt: self.append_system_prompt.clone(),
             debug: self.debug,
@@ -870,6 +874,7 @@ impl ToolUseContext {
             is_non_interactive: false,
             avoid_permission_prompts: false,
             max_budget_usd: None,
+            total_token_budget: None,
             custom_system_prompt: None,
             append_system_prompt: None,
             debug: false,

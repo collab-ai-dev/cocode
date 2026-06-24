@@ -92,7 +92,6 @@ backend, so the slash command is intentionally absent.
 | `/remote-env` | `isClaudeAISubscriber() && isPolicyAllowed('allow_remote_sessions')` — teleport remote-env config. |
 | `/remote-control` (alias `/rc`) | `feature('BRIDGE_MODE') && isBridgeEnabled()`. coco ships `coco-bridge`; wire if/when bridge UX is finalized. |
 | `/peers` | `feature('UDS_INBOX')` (off) — agent-to-agent UDS inbox. |
-| `/workflows` | `feature('WORKFLOW_SCRIPTS')` (off). |
 | `/torch` | `feature('TORCH')` (off). |
 
 ### Re-introducing one of these
@@ -114,6 +113,7 @@ closes.
 | Command | Rust state | Gap |
 |---|---|---|
 | `/insights` | `register_static_prompt` with 12-line body in `prompts/insights.txt` | Full behavior: Opus-driven facet extraction + SCP-from-Coder for remote sessions + JSONL log parsing. Rust delegates the work to the agent via prompt. P3. |
+| `/workflow` (alias `/workflows`) | Prompt command in `prompts/workflow.txt` with `allowed_tools=["Workflow"]` | Bare `/workflow` opens the workflow picker; `/workflow <name>` launches through the Workflow tool. Launched workflows run as `local_workflow` background tasks and the TUI background-task/detail surfaces render workflow progress notifications. Gap: no workflow editor/creation UI yet. P2. |
 | `/ide` | Static text stub in `ide_handler` | Full behavior: `detectRunningIDEs`, JetBrains/VS Code auto-connect dialogs, MCP cache invalidation. Rust ships the `coco-bridge` crate but the slash command is not wired to it. P2 — wire when bridge UX is finalized. |
 | `/help` | Hardcoded `CATEGORIES` in `handlers/help.rs` | User-installed skills, plugin contributions, and MCP-bridged tools won't appear in `/help` output. P1 — refactor to iterate the live `CommandRegistry`; needs handler-side registry access (currently `CommandHandler::execute_command(&self, args: &str)` doesn't carry one). |
 | `/color` | `dispatch_color` writes only to live `app_state.agent_color` | Choice should persist in the session transcript so it survives restarts. Currently ephemeral. P3 — wire to settings.json or session metadata. |

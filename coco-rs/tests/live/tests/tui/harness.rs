@@ -38,6 +38,7 @@
 //! disk lands inside `/tmp/coco-tests-tui-<rand>/...` and is cleaned up
 //! when the harness drops.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,6 +51,7 @@ use coco_hooks::HookRegistry;
 use coco_inference::LanguageModel;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
+use coco_tool_runtime::TaskHandle;
 use coco_tool_runtime::ToolRegistry;
 use coco_tui::AppState;
 use coco_tui::TuiCommand;
@@ -68,6 +70,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -123,6 +126,9 @@ pub struct HarnessConfig {
     /// scripted model can spawn a real child `QueryEngine`. `None` keeps
     /// the default `NoOpAgentHandle` (spawn returns an error).
     pub agent_handle_factory: Option<AgentHandleFactory>,
+    /// Register `Workflow` and install a lightweight task handle that emits
+    /// workflow task events back into this harness.
+    pub workflow_tool: bool,
 }
 
 impl Default for HarnessConfig {
@@ -136,6 +142,7 @@ impl Default for HarnessConfig {
             replies: Vec::new(),
             workdir: None,
             agent_handle_factory: None,
+            workflow_tool: false,
         }
     }
 }
@@ -209,6 +216,11 @@ impl TuiHarnessBuilder {
         self
     }
 
+    pub fn with_workflow_tool(mut self) -> Self {
+        self.cfg.workflow_tool = true;
+        self
+    }
+
     pub async fn build(self) -> Result<TuiHarness> {
         TuiHarness::build(self.cfg).await
     }
@@ -263,6 +275,11 @@ impl TuiHarness {
         };
         let workdir_path = workdir.path().to_path_buf();
 
+        // Channels — same shapes `coco_tui::create_channels` produces,
+        // sized for the harness rather than a real TUI session.
+        let (command_tx, command_rx) = mpsc::channel::<UserCommand>(64);
+        let (event_tx, event_rx) = mpsc::channel::<CoreEvent>(512);
+
         // Engine plumbing: ScriptedModel → ModelRuntimeRegistry → QueryEngine.
         let model = ScriptedModel::new(cfg.replies);
         let model_runtimes = coco_query::test_support::model_runtime_registry(
@@ -279,6 +296,9 @@ impl TuiHarness {
         tool_registry.register(Arc::new(coco_tools::WriteTool));
         tool_registry.register(Arc::new(coco_tools::EditTool));
         tool_registry.register(Arc::new(coco_tools::GlobTool));
+        if cfg.workflow_tool {
+            tool_registry.register(Arc::new(coco_tools::WorkflowTool));
+        }
         // Expose the `Agent` tool only when a handle is installed, so the
         // tool list stays identical for every other suite.
         if cfg.agent_handle_factory.is_some() {
@@ -327,10 +347,12 @@ impl TuiHarness {
             ..QueryEngineConfig::default()
         };
 
-        // Channels — same shapes `coco_tui::create_channels` produces,
-        // sized for the harness rather than a real TUI session.
-        let (command_tx, command_rx) = mpsc::channel::<UserCommand>(64);
-        let (event_tx, event_rx) = mpsc::channel::<CoreEvent>(512);
+        let task_handle = cfg.workflow_tool.then(|| {
+            Arc::new(WorkflowHarnessTaskHandle::new(
+                event_tx.clone(),
+                workdir_path.join(".workflow-tasks"),
+            )) as Arc<dyn TaskHandle>
+        });
 
         // Permission bridge: production `TuiPermissionBridge` reused
         // verbatim — it surfaces `ApprovalRequired` over the same
@@ -344,8 +366,11 @@ impl TuiHarness {
                 event_tx.clone(),
                 pending_approvals.clone(),
             ));
-        let engine = QueryEngine::new(engine_cfg, model_runtimes, tools, cancel.clone(), hooks)
+        let mut engine = QueryEngine::new(engine_cfg, model_runtimes, tools, cancel.clone(), hooks)
             .with_permission_bridge(bridge);
+        if let Some(handle) = task_handle {
+            engine = engine.with_task_handle(handle);
+        }
         // Install the model-spawnable agent handle when the test provided
         // one — replaces the default `NoOpAgentHandle` so `Agent`-tool
         // spawns run a real child engine instead of returning an error.
@@ -833,6 +858,170 @@ impl Drop for TuiHarness {
         if let Some(handle) = self.driver_task.take() {
             handle.abort();
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WorkflowHarnessTask {
+    output_file: PathBuf,
+    description: String,
+    tool_use_id: Option<String>,
+    progress: Vec<coco_types::WorkflowProgressEvent>,
+}
+
+#[derive(Debug)]
+struct WorkflowHarnessTaskHandle {
+    event_tx: mpsc::Sender<CoreEvent>,
+    output_dir: PathBuf,
+    tasks: Mutex<HashMap<String, WorkflowHarnessTask>>,
+}
+
+impl WorkflowHarnessTaskHandle {
+    fn new(event_tx: mpsc::Sender<CoreEvent>, output_dir: PathBuf) -> Self {
+        Self {
+            event_tx,
+            output_dir,
+            tasks: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskHandle for WorkflowHarnessTaskHandle {
+    async fn register_workflow_task(
+        &self,
+        request: coco_tool_runtime::WorkflowTaskRequest,
+        _cancel: CancellationToken,
+    ) -> String {
+        let task_id = request.task_id;
+        let _ = tokio::fs::create_dir_all(&self.output_dir).await;
+        let output_file = self.output_dir.join(format!("{task_id}.out"));
+        let script_path = self.output_dir.join(format!("{task_id}.workflow.js"));
+        let _ = tokio::fs::write(&script_path, request.script.as_bytes()).await;
+        let description = request
+            .workflow_name
+            .clone()
+            .unwrap_or_else(|| "local workflow".to_string());
+        self.tasks.lock().await.insert(
+            task_id.clone(),
+            WorkflowHarnessTask {
+                output_file: output_file.clone(),
+                description: description.clone(),
+                tool_use_id: request.tool_use_id.clone(),
+                progress: Vec::new(),
+            },
+        );
+        let _ = self
+            .event_tx
+            .send(CoreEvent::Protocol(ServerNotification::TaskStarted(
+                coco_types::TaskStartedParams {
+                    task_id: task_id.clone(),
+                    tool_use_id: request.tool_use_id,
+                    description,
+                    task_type: Some(coco_types::task_type_wire::LOCAL_WORKFLOW.to_string()),
+                    workflow_name: request.workflow_name,
+                    prompt: request.prompt,
+                    agent_name: None,
+                    team_name: None,
+                    color: None,
+                    backend_kind: None,
+                },
+            )))
+            .await;
+        task_id
+    }
+
+    async fn output_file_path(&self, task_id: &str) -> Option<PathBuf> {
+        self.tasks
+            .lock()
+            .await
+            .get(task_id)
+            .map(|task| task.output_file.clone())
+    }
+
+    async fn push_workflow_progress(
+        &self,
+        task_id: &str,
+        event: coco_types::WorkflowProgressEvent,
+    ) {
+        let snapshot = {
+            let mut tasks = self.tasks.lock().await;
+            let Some(task) = tasks.get_mut(task_id) else {
+                return;
+            };
+            task.progress.push(event);
+            task.clone()
+        };
+        let _ = self
+            .event_tx
+            .send(CoreEvent::Protocol(ServerNotification::TaskProgress(
+                coco_types::TaskProgressParams {
+                    task_id: task_id.to_string(),
+                    tool_use_id: snapshot.tool_use_id,
+                    description: snapshot.description,
+                    usage: coco_types::TaskUsage {
+                        total_tokens: 0,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cache_read_tokens: 0,
+                        tool_uses: 0,
+                        duration_ms: 0,
+                        cost_usd: 0.0,
+                    },
+                    last_tool_name: None,
+                    summary: None,
+                    agent_type: None,
+                    recent_activities: Vec::new(),
+                    workflow_progress: snapshot.progress,
+                },
+            )))
+            .await;
+    }
+
+    async fn mark_completed(
+        &self,
+        task_id: &str,
+        payload: coco_tool_runtime::AgentCompletionPayload,
+    ) {
+        let Some(snapshot) = self.tasks.lock().await.get(task_id).cloned() else {
+            return;
+        };
+        if let Some(result) = payload.result.as_deref() {
+            let _ = tokio::fs::write(&snapshot.output_file, result.as_bytes()).await;
+        }
+        let _ = self
+            .event_tx
+            .send(CoreEvent::Protocol(ServerNotification::TaskCompleted(
+                coco_types::TaskCompletedParams {
+                    task_id: task_id.to_string(),
+                    tool_use_id: snapshot.tool_use_id,
+                    status: coco_types::TaskCompletionStatus::Completed,
+                    output_file: snapshot.output_file.display().to_string(),
+                    summary: payload.result.unwrap_or(snapshot.description),
+                    usage: None,
+                },
+            )))
+            .await;
+    }
+
+    async fn mark_failed(&self, task_id: &str, error: &str) {
+        let Some(snapshot) = self.tasks.lock().await.get(task_id).cloned() else {
+            return;
+        };
+        let _ = tokio::fs::write(&snapshot.output_file, error.as_bytes()).await;
+        let _ = self
+            .event_tx
+            .send(CoreEvent::Protocol(ServerNotification::TaskCompleted(
+                coco_types::TaskCompletedParams {
+                    task_id: task_id.to_string(),
+                    tool_use_id: snapshot.tool_use_id,
+                    status: coco_types::TaskCompletionStatus::Failed,
+                    output_file: snapshot.output_file.display().to_string(),
+                    summary: error.to_string(),
+                    usage: None,
+                },
+            )))
+            .await;
     }
 }
 

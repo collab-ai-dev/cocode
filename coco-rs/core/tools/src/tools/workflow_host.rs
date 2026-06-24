@@ -8,6 +8,8 @@
 //! dedicated thread awaits their `JoinHandle`.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 
 use coco_tool_runtime::AgentCompletionPayload;
 use coco_tool_runtime::AgentHandleRef;
@@ -36,6 +38,9 @@ pub(crate) struct WorkflowSpawnContext {
     pub parent_tool_filter: coco_types::ToolFilter,
     pub active_shell_tool: coco_types::ActiveShellTool,
     pub parent_mode: coco_types::PermissionMode,
+    pub agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
+    pub total_token_budget: Option<i64>,
+    pub workflow_abort: coco_tool_runtime::TurnAbortSignal,
 }
 
 struct WorkflowRunHost {
@@ -44,12 +49,25 @@ struct WorkflowRunHost {
     task_id: String,
     main_handle: tokio::runtime::Handle,
     spawn_ctx: WorkflowSpawnContext,
+    budget_spent_tokens: AtomicI64,
 }
 
 impl WorkflowRunHost {
-    fn build_request(&self, prompt: String, opts: &WorkflowAgentOpts) -> AgentSpawnRequest {
+    fn build_request(
+        &self,
+        prompt: String,
+        opts: &WorkflowAgentOpts,
+    ) -> Result<AgentSpawnRequest, String> {
         let ctx = &self.spawn_ctx;
-        AgentSpawnRequest {
+        if opts.isolation == Some(coco_types::AgentIsolation::Remote) {
+            return Err("Isolation 'remote' is not available in this build.".to_string());
+        }
+        let definition = Some(self.definition_for_opts(opts)?);
+        let isolation = opts
+            .isolation
+            .or_else(|| definition.as_ref().map(|def| def.isolation))
+            .filter(|isolation| *isolation != coco_types::AgentIsolation::None);
+        Ok(AgentSpawnRequest {
             prompt,
             description: Some(
                 opts.label
@@ -74,9 +92,50 @@ impl WorkflowRunHost {
             spawn_mode: SpawnMode::Fresh,
             tool_use_id: ctx.tool_use_id.clone(),
             invoking_agent_id: ctx.invoking_agent_id.clone(),
+            isolation,
+            definition,
             is_non_interactive: true,
+            parent_turn_abort: Some(ctx.workflow_abort.clone()),
             ..Default::default()
+        })
+    }
+
+    fn definition_for_opts(
+        &self,
+        opts: &WorkflowAgentOpts,
+    ) -> Result<Arc<coco_types::AgentDefinition>, String> {
+        let agent_name = opts
+            .agent_type
+            .as_deref()
+            .unwrap_or(coco_types::SubagentType::GeneralPurpose.as_str());
+        let mut definition = self
+            .spawn_ctx
+            .agent_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.find_active(agent_name).cloned())
+            .unwrap_or_else(|| coco_types::AgentDefinition {
+                agent_type: agent_name
+                    .parse()
+                    .expect("AgentTypeId::from_str is Infallible"),
+                name: agent_name.to_string(),
+                source: coco_types::AgentSource::BuiltIn,
+                ..Default::default()
+            });
+
+        if let Some(model) = opts.model.as_ref().filter(|model| !model.trim().is_empty()) {
+            definition.model = Some(model.trim().to_string());
         }
+        if let Some(effort) = opts
+            .effort
+            .as_deref()
+            .filter(|effort| !effort.trim().is_empty())
+        {
+            definition.effort = Some(effort.trim().parse::<coco_types::ReasoningEffort>()?);
+        }
+        if let Some(isolation) = opts.isolation {
+            definition.isolation = isolation;
+        }
+        Ok(Arc::new(definition))
     }
 }
 
@@ -87,7 +146,7 @@ impl WorkflowHost for WorkflowRunHost {
         prompt: String,
         opts: WorkflowAgentOpts,
     ) -> Result<WorkflowAgentResult, String> {
-        let request = self.build_request(prompt, &opts);
+        let request = self.build_request(prompt, &opts)?;
         let agent = self.agent.clone();
         // Spawn on the main runtime (the agent system runs there); await the
         // result from this dedicated engine thread.
@@ -108,7 +167,14 @@ impl WorkflowHost for WorkflowRunHost {
                 } else {
                     serde_json::Value::String(text)
                 };
-                Ok(WorkflowAgentResult { value })
+                let tokens = response.input_tokens + response.output_tokens;
+                Ok(WorkflowAgentResult {
+                    value,
+                    model: None,
+                    tokens: Some(tokens),
+                    tool_calls: i32::try_from(response.total_tool_use_count).ok(),
+                    duration_ms: Some(response.duration_ms),
+                })
             }
             AgentSpawnStatus::Failed => Err(response
                 .error
@@ -126,6 +192,19 @@ impl WorkflowHost for WorkflowRunHost {
         self.main_handle.spawn(async move {
             task_handle.push_workflow_progress(&task_id, event).await;
         });
+    }
+
+    fn budget_total_tokens(&self) -> Option<i64> {
+        self.spawn_ctx.total_token_budget
+    }
+
+    fn budget_spent_tokens(&self) -> i64 {
+        self.budget_spent_tokens.load(Ordering::Relaxed)
+    }
+
+    fn record_agent_tokens(&self, tokens: i64) {
+        self.budget_spent_tokens
+            .fetch_add(tokens, Ordering::Relaxed);
     }
 }
 
@@ -153,6 +232,7 @@ pub(crate) fn spawn_workflow_engine(
                 task_id: task_id.clone(),
                 main_handle,
                 spawn_ctx,
+                budget_spent_tokens: AtomicI64::new(0),
             });
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -199,3 +279,7 @@ fn render_result(value: &serde_json::Value) -> String {
         other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
     }
 }
+
+#[cfg(test)]
+#[path = "workflow_host.test.rs"]
+mod tests;
