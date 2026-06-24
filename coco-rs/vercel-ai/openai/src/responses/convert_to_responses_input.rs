@@ -26,6 +26,7 @@ pub struct ProviderToolFlags {
     pub has_local_shell: bool,
     pub has_shell: bool,
     pub has_apply_patch: bool,
+    pub has_tool_search: bool,
     pub custom_tool_names: HashSet<String>,
 }
 
@@ -61,6 +62,7 @@ impl ProviderToolFlags {
                     "local_shell" => flags.has_local_shell = true,
                     "shell" => flags.has_shell = true,
                     "apply_patch" => flags.has_apply_patch = true,
+                    "tool_search" => flags.has_tool_search = true,
                     t if !builtin_types.contains(&t) => {
                         flags.custom_tool_names.insert(pt.name.clone());
                     }
@@ -292,6 +294,14 @@ fn convert_assistant_parts(
                         "status": "completed",
                         "operation": tc.input,
                     }));
+                } else if flags.has_tool_search && tool_name == "tool_search" {
+                    items.push(json!({
+                        "type": "tool_search_call",
+                        "call_id": tc.tool_call_id,
+                        "execution": "client",
+                        "status": "completed",
+                        "arguments": tc.input,
+                    }));
                 } else if flags.custom_tool_names.contains(tool_name) {
                     let input_str = if tc.input.is_string() {
                         tc.input.as_str().unwrap_or("").to_string()
@@ -443,6 +453,18 @@ fn convert_tool_parts(
                     continue;
                 }
 
+                if flags.has_tool_search && tool_name == "tool_search" {
+                    let tools = tool_search_output_tools(&result.output);
+                    items.push(json!({
+                        "type": "tool_search_output",
+                        "execution": "client",
+                        "status": "completed",
+                        "call_id": result.tool_call_id,
+                        "tools": tools,
+                    }));
+                    continue;
+                }
+
                 if flags.custom_tool_names.contains(tool_name) {
                     let output = serialize_tool_result_for_responses(&result.output);
                     items.push(json!({
@@ -469,6 +491,20 @@ fn convert_tool_parts(
             }
         }
     }
+}
+
+fn tool_search_output_tools(content: &ToolResultContent) -> Value {
+    let value = serialize_tool_result_for_responses(content);
+    if let Some(tools) = value.get("tools") {
+        return tools.clone();
+    }
+    if let Some(text) = value.as_str()
+        && let Ok(parsed) = serde_json::from_str::<Value>(text)
+        && let Some(tools) = parsed.get("tools")
+    {
+        return tools.clone();
+    }
+    json!([])
 }
 
 fn serialize_tool_result_for_responses(content: &ToolResultContent) -> Value {

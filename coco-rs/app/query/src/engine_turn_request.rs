@@ -204,23 +204,15 @@ impl QueryEngine {
         };
 
         let streaming_ctx: Option<Arc<ToolUseContext>> = if self.config.streaming_tool_execution {
-            let current_supports_tool_reference =
-                active_snapshot.model_info.as_ref().is_some_and(|info| {
-                    info.has_capability(coco_types::Capability::ServerSideToolReference)
-                });
-            let current_supports_client_side_tool_search =
-                active_snapshot.model_info.as_ref().is_some_and(|info| {
-                    info.has_capability(coco_types::Capability::ClientSideToolSearch)
-                });
+            let current_tool_search_strategy =
+                crate::tool_context::resolve_tool_search_strategy(Some(&active_snapshot));
             let base = self
                 .tool_context_factory(hook_tx_opt)
                 .build(crate::tool_context::ToolContextOverrides {
                     user_message_id: Some(consts.user_uuid.clone()),
                     progress_tx: Some(services.progress_tx.clone()),
                     current_model_id: Some(services.current_model_id()),
-                    current_model_supports_tool_reference: current_supports_tool_reference,
-                    current_model_supports_client_side_tool_search:
-                        current_supports_client_side_tool_search,
+                    current_tool_search_strategy,
                     messages_snapshot: Some(messages_snapshot.clone()),
                 })
                 .await;

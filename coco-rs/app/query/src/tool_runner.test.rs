@@ -47,9 +47,7 @@ async fn deferred_tool_call_before_tool_search_does_not_schema_validate() {
     // are no longer deferred, so they can't exercise the not-yet-loaded path.)
     let tools = registry_with(Arc::new(coco_tools::tools::WebFetchTool));
     let ctx = ToolUseContext::test_default()
-        .with_model_capabilities(
-            /*supports_tool_reference*/ false, /*supports_client_side_tool_search*/ true,
-        )
+        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion)
         .with_tool_search_candidates(true);
     let mut history = MessageHistory::new();
     let tc = ToolCallPart::new(

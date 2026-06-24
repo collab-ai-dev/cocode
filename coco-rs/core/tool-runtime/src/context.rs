@@ -35,6 +35,46 @@ use crate::task_list_handle::TeamTaskListRouterRef;
 use crate::task_list_handle::TodoListHandleRef;
 use crate::traits::ProgressSender;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ToolSearchStrategy {
+    #[default]
+    Eager,
+    AnthropicToolReference,
+    OpenAiNativeClient,
+    ClientSidePromotion,
+}
+
+impl ToolSearchStrategy {
+    pub const fn is_supported(self) -> bool {
+        !matches!(self, Self::Eager)
+    }
+
+    pub const fn uses_anthropic_tool_reference(self) -> bool {
+        matches!(self, Self::AnthropicToolReference)
+    }
+
+    pub const fn uses_openai_native_client(self) -> bool {
+        matches!(self, Self::OpenAiNativeClient)
+    }
+
+    /// Shared trait of both native paths ([`Self::AnthropicToolReference`]
+    /// and [`Self::OpenAiNativeClient`]): the provider's server expands
+    /// discovered tool schemas (Anthropic `tool_reference` blocks /
+    /// OpenAI `tool_search_output` entries), so the client-side `tools`
+    /// array is **not** grown and the `discovered_tool_names` promotion
+    /// patch is skipped — the cache prefix stays warm across discoveries.
+    ///
+    /// The inverse is [`Self::ClientSidePromotion`], the universal path
+    /// that grows the next turn's `tools` array (one cache break per
+    /// discovery). [`Self::Eager`] never reaches ToolSearch at all.
+    pub const fn uses_server_side_expansion(self) -> bool {
+        matches!(
+            self,
+            Self::AnthropicToolReference | Self::OpenAiNativeClient
+        )
+    }
+}
+
 /// Context provided to every tool execution.
 ///
 /// Organized into logical groups.
@@ -158,42 +198,8 @@ pub struct ToolUseContext {
     /// until the model finds them via `ToolSearch`.
     pub discovered_tool_names: Arc<HashSet<String>>,
 
-    /// Whether the current model supports Anthropic's server-side
-    /// `tool_reference` expansion (`tool-search-tool-2025-10-19`).
-    /// Populated by `ToolContextFactory::build` from the active runtime
-    /// snapshot's `ModelInfo`.
-    ///
-    /// When `true`, `ToolSearchTool::execute` emits matches as
-    /// `tool_reference` content blocks (via
-    /// `ToolResultContentPart::Custom`) so the Anthropic server
-    /// expands their schemas inline — keeping the client-side `tools`
-    /// array constant across turns (cache-friendly). The
-    /// `discovered_tool_names` patch is **skipped** on this path
-    /// because the discovery state lives in message history, not in
-    /// `ToolAppState`.
-    ///
-    /// When `false`, the runtime falls back to the
-    /// [`Self::model_supports_client_side_tool_search`] path (if also
-    /// declared) — text envelope + `AppStatePatch` adding matches to
-    /// `discovered_tool_names` so the next turn's `tools` array
-    /// surfaces the schemas client-side (one cache break per
-    /// discovery).
-    pub model_supports_tool_reference: bool,
-
-    /// Whether the current model has been validated against coco-rs's
-    /// client-side `ToolSearch` promotion path. Mirrors
-    /// [`coco_types::Capability::ClientSideToolSearch`] from the
-    /// resolved `ModelInfo`.
-    ///
-    /// Combined with [`Self::model_supports_tool_reference`] +
-    /// [`coco_types::Feature::ToolSearch`] to form the runtime
-    /// activation predicate (see [`Self::tool_search_active`]).
-    ///
-    /// Default `false` for unknown / user-declared models so the
-    /// runtime falls back to the safe "eager-load every tool"
-    /// behavior — the user can opt a custom model in by adding the
-    /// capability via `config home/models.json`.
-    pub model_supports_client_side_tool_search: bool,
+    /// Selected ToolSearch execution path for the active model.
+    pub tool_search_strategy: ToolSearchStrategy,
 
     /// Whether this turn has anything ToolSearch can usefully surface:
     /// at least one filtered, undiscovered deferred tool or one MCP server
@@ -632,8 +638,7 @@ impl ToolUseContext {
             tool_overrides: self.tool_overrides.clone(),
             tool_filter: self.tool_filter.clone(),
             discovered_tool_names: self.discovered_tool_names.clone(),
-            model_supports_tool_reference: self.model_supports_tool_reference,
-            model_supports_client_side_tool_search: self.model_supports_client_side_tool_search,
+            tool_search_strategy: self.tool_search_strategy,
             tool_search_has_candidates: self.tool_search_has_candidates,
             abort: self.abort.clone(),
             messages: self.messages.clone(),
@@ -794,18 +799,10 @@ impl ToolUseContext {
         out
     }
 
-    /// Builder: install the current model's `ToolSearch`-related
-    /// capability flags on a stub context. Used by `engine_prompt`
-    /// and `engine_turn_reminders` so the registry filter and the
-    /// `deferred_tools_delta` partitioner see the same activation
-    /// predicate the runtime would see.
-    pub fn with_model_capabilities(
-        mut self,
-        supports_tool_reference: bool,
-        supports_client_side_tool_search: bool,
-    ) -> Self {
-        self.model_supports_tool_reference = supports_tool_reference;
-        self.model_supports_client_side_tool_search = supports_client_side_tool_search;
+    /// Builder: install the current model's ToolSearch strategy on a
+    /// filtering stub.
+    pub fn with_tool_search_strategy(mut self, strategy: ToolSearchStrategy) -> Self {
+        self.tool_search_strategy = strategy;
         self
     }
 
@@ -826,17 +823,14 @@ impl ToolUseContext {
     /// are currently searchable.
     pub fn tool_search_supported(&self) -> bool {
         self.features.enabled(coco_types::Feature::ToolSearch)
-            && (self.model_supports_tool_reference || self.model_supports_client_side_tool_search)
+            && self.tool_search_strategy.is_supported()
     }
 
     /// Effective `ToolSearch` activation for the current turn.
     ///
     /// Three-way predicate combining:
     /// 1. User-facing [`coco_types::Feature::ToolSearch`] gate.
-    /// 2. Model capability — at least one of
-    ///    [`Self::model_supports_tool_reference`] (server-side, cache-friendly)
-    ///    or [`Self::model_supports_client_side_tool_search`]
-    ///    (universal, costs cache breaks on Anthropic) must be declared.
+    /// 2. A non-eager [`ToolSearchStrategy`] resolved from model capabilities.
     /// 3. A current candidate source — at least one undiscovered deferred
     ///    tool or one pending MCP server.
     ///
@@ -897,8 +891,7 @@ impl ToolUseContext {
             tool_overrides: Arc::new(ToolOverrides::none()),
             tool_filter: ToolFilter::unrestricted(),
             discovered_tool_names: Arc::new(HashSet::new()),
-            model_supports_tool_reference: false,
-            model_supports_client_side_tool_search: false,
+            tool_search_strategy: ToolSearchStrategy::Eager,
             tool_search_has_candidates: false,
             abort: ToolAbortSignal::from_turn(TurnAbortController::new().signal()),
             messages: Arc::new(Vec::new()),

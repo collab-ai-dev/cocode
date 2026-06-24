@@ -126,26 +126,15 @@ impl QueryEngine {
             return ToolExecutionBranch::ContinueLoop;
         }
 
-        let ctx_supports_tool_reference =
-            opened_runtime_snapshot
-                .model_info
-                .as_ref()
-                .is_some_and(|info| {
-                    info.has_capability(coco_types::Capability::ServerSideToolReference)
-                });
-        let ctx_supports_client_side_tool_search = opened_runtime_snapshot
-            .model_info
-            .as_ref()
-            .is_some_and(|info| info.has_capability(coco_types::Capability::ClientSideToolSearch));
+        let tool_search_strategy =
+            crate::tool_context::resolve_tool_search_strategy(Some(opened_runtime_snapshot));
         let ctx = self
             .tool_context_factory(hook_tx_opt)
             .build(crate::tool_context::ToolContextOverrides {
                 user_message_id: Some(consts.user_uuid.clone()),
                 progress_tx: Some(services.progress_tx.clone()),
                 current_model_id: Some(opened_runtime_snapshot.model_id.clone()),
-                current_model_supports_tool_reference: ctx_supports_tool_reference,
-                current_model_supports_client_side_tool_search:
-                    ctx_supports_client_side_tool_search,
+                current_tool_search_strategy: tool_search_strategy,
                 messages_snapshot: Some(messages_snapshot),
             })
             .await;

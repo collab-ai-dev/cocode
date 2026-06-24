@@ -908,10 +908,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     has_function_call = true;
                     let tc_id = call_id.clone().or_else(|| id.clone()).unwrap_or_default();
                     let is_hosted = execution.as_deref() == Some("server");
-                    let input = json!({
-                        "arguments": arguments,
-                        "call_id": call_id,
-                    });
+                    let input = arguments.clone().unwrap_or_else(|| json!({}));
                     let mut item_meta = HashMap::new();
                     if let Some(item_id) = id {
                         item_meta.insert("itemId".into(), Value::String(item_id.clone()));
@@ -1081,6 +1078,15 @@ struct ActiveCustomToolCall {
     started: bool,
 }
 
+struct ActiveToolSearchCall {
+    /// Wire item id (`ts_...`) — receive-only; rides
+    /// `provider_metadata.openai.itemId`.
+    id: String,
+    /// Wire `call_id` — echoed back as `tool_search_output.call_id`.
+    call_id: String,
+    arguments: String,
+}
+
 struct ActiveReasoning {
     started: bool,
 }
@@ -1140,6 +1146,7 @@ struct ResponsesStreamState {
     active_texts: HashMap<String, ActiveTextItem>,
     active_fn_calls: HashMap<String, ActiveFnCall>,
     active_custom_calls: HashMap<String, ActiveCustomToolCall>,
+    active_tool_search_calls: HashMap<String, ActiveToolSearchCall>,
     /// Summary reasoning channel (`reasoning_summary_text.*`), keyed by item id.
     active_reasoning: HashMap<String, ActiveReasoning>,
     /// Raw reasoning channel (`reasoning_text.*`), tracked separately so it
@@ -1174,6 +1181,7 @@ impl ResponsesStreamState {
             active_texts: HashMap::new(),
             active_fn_calls: HashMap::new(),
             active_custom_calls: HashMap::new(),
+            active_tool_search_calls: HashMap::new(),
             active_reasoning: HashMap::new(),
             active_reasoning_content: HashMap::new(),
             usage: None,
@@ -1225,6 +1233,45 @@ impl ResponsesStreamState {
             });
         let tc = vercel_ai_provider::LanguageModelV4ToolCall::new(emit_id, fc.name, fc.arguments)
             .with_metadata(meta);
+        self.pending
+            .push_back(LanguageModelV4StreamPart::ToolCall(tc));
+    }
+
+    /// Closing emit for client-executed native `tool_search` calls. The
+    /// Responses API streams the item id separately from the `call_id` that
+    /// must be echoed in `tool_search_output`, so all emitted tool input and
+    /// call parts use `call_id` while the item id rides provider metadata.
+    fn finalize_tool_search_call(&mut self, ts: ActiveToolSearchCall) {
+        let emit_id = ts.call_id;
+        let mut openai_meta = serde_json::Map::new();
+        openai_meta.insert("itemId".into(), Value::String(ts.id));
+        let mut meta_map = HashMap::new();
+        meta_map.insert("openai".to_string(), Value::Object(openai_meta));
+        let meta = ProviderMetadata(meta_map);
+
+        self.pending
+            .push_back(LanguageModelV4StreamPart::ToolInputStart {
+                id: emit_id.clone(),
+                tool_name: "tool_search".into(),
+                provider_executed: None,
+                dynamic: None,
+                title: None,
+                provider_metadata: None,
+            });
+        self.pending
+            .push_back(LanguageModelV4StreamPart::ToolInputDelta {
+                id: emit_id.clone(),
+                delta: ts.arguments.clone(),
+                provider_metadata: None,
+            });
+        self.pending
+            .push_back(LanguageModelV4StreamPart::ToolInputEnd {
+                id: emit_id.clone(),
+                provider_metadata: Some(meta.clone()),
+            });
+        let tc =
+            vercel_ai_provider::LanguageModelV4ToolCall::new(emit_id, "tool_search", ts.arguments)
+                .with_metadata(meta);
         self.pending
             .push_back(LanguageModelV4StreamPart::ToolCall(tc));
     }
@@ -1591,22 +1638,27 @@ impl ResponsesStreamState {
                             provider_metadata: None,
                         });
                 }
-                ResponseOutputItem::ToolSearchCall { id, execution, .. } => {
+                ResponseOutputItem::ToolSearchCall {
+                    id,
+                    execution,
+                    call_id,
+                    ..
+                } => {
                     self.has_function_call = true;
                     let item_id = id.clone().unwrap_or_default();
                     let is_hosted = execution.as_deref() == Some("server");
                     if is_hosted {
                         self.hosted_tool_search_call_ids.push_back(item_id);
                     } else {
-                        self.pending
-                            .push_back(LanguageModelV4StreamPart::ToolInputStart {
+                        let call_id = call_id.clone().unwrap_or_else(|| item_id.clone());
+                        self.active_tool_search_calls.insert(
+                            item_id.clone(),
+                            ActiveToolSearchCall {
                                 id: item_id,
-                                tool_name: "tool_search".into(),
-                                provider_executed: None,
-                                dynamic: None,
-                                title: None,
-                                provider_metadata: None,
-                            });
+                                call_id,
+                                arguments: json!({}).to_string(),
+                            },
+                        );
                     }
                 }
                 _ => {}
@@ -2111,25 +2163,32 @@ impl ResponsesStreamState {
                         let item_id = id.clone().unwrap_or_default();
                         let tc_id = call_id.clone().unwrap_or_else(|| item_id.clone());
                         let is_hosted = execution.as_deref() == Some("server");
-                        self.pending
-                            .push_back(LanguageModelV4StreamPart::ToolInputEnd {
-                                id: item_id,
-                                provider_metadata: None,
-                            });
-                        let input = json!({
-                            "arguments": arguments,
-                            "call_id": call_id,
-                        });
-                        let mut tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
-                            &tc_id,
-                            "tool_search",
-                            input,
-                        );
+                        let input = arguments.clone().unwrap_or_else(|| json!({}));
                         if is_hosted {
+                            self.pending
+                                .push_back(LanguageModelV4StreamPart::ToolInputEnd {
+                                    id: item_id,
+                                    provider_metadata: None,
+                                });
+                            let mut tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
+                                &tc_id,
+                                "tool_search",
+                                input,
+                            );
                             tc = tc.with_provider_executed(true);
+                            self.pending
+                                .push_back(LanguageModelV4StreamPart::ToolCall(tc));
+                        } else {
+                            let mut ts = self.active_tool_search_calls.remove(&item_id).unwrap_or(
+                                ActiveToolSearchCall {
+                                    id: item_id,
+                                    call_id: tc_id,
+                                    arguments: String::new(),
+                                },
+                            );
+                            ts.arguments = input.to_string();
+                            self.finalize_tool_search_call(ts);
                         }
-                        self.pending
-                            .push_back(LanguageModelV4StreamPart::ToolCall(tc));
                     }
                     ResponseOutputItem::ToolSearchOutput {
                         id, call_id, tools, ..

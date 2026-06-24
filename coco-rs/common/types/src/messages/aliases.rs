@@ -40,7 +40,7 @@ pub use coco_llm_types::UserContentPart as UserContent;
 ///
 /// Non-Anthropic providers will emit a `Warning::Other` and skip the
 /// block; callers must gate on the model's
-/// `Capability::ServerSideToolReference` before using this builder.
+/// `Capability::AnthropicToolReference` before using this builder.
 ///
 /// Skipping multi-provider concerns is intentional —
 /// only the Anthropic adapter knows how to unwrap them, and the

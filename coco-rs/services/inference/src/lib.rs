@@ -134,6 +134,7 @@ pub use vercel_ai_provider::language_model::v4::LanguageModelV4ProviderTool as L
 // a Freeform `ToolSpec` (apply_patch). Kept in the provider crate so callers
 // pass only neutral (name, description, syntax, definition).
 pub use vercel_ai_openai::tool::openai_custom_grammar_tool;
+pub use vercel_ai_openai::tool::openai_tool_search_tool;
 
 // Provider-internal content variants not part of the DTO seam (used by
 // vercel-ai's own conversion code and by streaming-side rebuild logic

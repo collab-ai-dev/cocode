@@ -246,6 +246,47 @@ fn converts_tool_result() {
 }
 
 #[test]
+fn converts_tool_search_result_to_native_output() {
+    use std::collections::HashMap;
+    use vercel_ai_provider::LanguageModelV4ProviderTool;
+
+    let flags = ProviderToolFlags::from_tools(&Some(vec![LanguageModelV4Tool::Provider(
+        LanguageModelV4ProviderTool {
+            id: "openai.tool_search".into(),
+            name: "tool_search".into(),
+            args: HashMap::new(),
+        },
+    )]));
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "ts_1".into(),
+            tool_name: "tool_search".into(),
+            output: ToolResultContent::Text {
+                value: serde_json::json!({
+                    "tools": [{
+                        "type": "function",
+                        "name": "Read",
+                        "parameters": { "type": "object" },
+                    }]
+                })
+                .to_string(),
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (items, _) =
+        convert_to_openai_responses_input_with_flags(&prompt, SystemMessageMode::System, &flags);
+    assert_eq!(items[0]["type"], "tool_search_output");
+    assert_eq!(items[0]["execution"], "client");
+    assert_eq!(items[0]["status"], "completed");
+    assert_eq!(items[0]["call_id"], "ts_1");
+    assert_eq!(items[0]["tools"][0]["name"], "Read");
+}
+
+#[test]
 fn tool_result_content_image_data_passes_through_as_input_image() {
     // Responses API natively supports images in tool results via
     // `input_image` with a `data:` URL. Pre-refactor the FileData branch

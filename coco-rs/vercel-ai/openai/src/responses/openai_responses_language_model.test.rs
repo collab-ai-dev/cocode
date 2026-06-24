@@ -304,3 +304,93 @@ fn parallel_tool_calls_typed_provider_option_wins_over_generic() {
         "Typed provider_options.parallelToolCalls must win over generic flag"
     );
 }
+
+#[tokio::test]
+async fn client_tool_search_stream_uses_call_id_and_emits_arguments() {
+    use bytes::Bytes;
+    use futures::StreamExt;
+
+    let added = serde_json::json!({
+        "type": "response.output_item.added",
+        "item": {
+            "type": "tool_search_call",
+            "id": "ts_item",
+            "call_id": "call_abc",
+            "execution": "client",
+            "status": "in_progress"
+        }
+    });
+    let done = serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "tool_search_call",
+            "id": "ts_item",
+            "call_id": "call_abc",
+            "execution": "client",
+            "status": "completed",
+            "arguments": {
+                "query": "read file helpers"
+            }
+        }
+    });
+    let sse = format!("data: {added}\n\ndata: {done}\n\n");
+    let byte_stream: vercel_ai_provider_utils::ByteStream =
+        Box::pin(futures::stream::iter([Ok::<Bytes, reqwest::Error>(
+            Bytes::from(sse),
+        )]));
+
+    let mut stream = create_responses_stream(byte_stream, Vec::new(), false);
+    let mut parts = Vec::new();
+    while let Some(part) = stream.next().await {
+        parts.push(part.expect("stream part"));
+    }
+
+    let mut saw_start = false;
+    let mut saw_delta = false;
+    let mut saw_end = false;
+    let mut saw_call = false;
+
+    for part in &parts {
+        match part {
+            LanguageModelV4StreamPart::ToolInputStart { id, tool_name, .. } => {
+                assert_ne!(id, "ts_item");
+                if id == "call_abc" {
+                    saw_start = true;
+                    assert_eq!(tool_name, "tool_search");
+                }
+            }
+            LanguageModelV4StreamPart::ToolInputDelta { id, delta, .. } => {
+                assert_ne!(id, "ts_item");
+                if id == "call_abc" {
+                    saw_delta = true;
+                    let input: serde_json::Value =
+                        serde_json::from_str(delta).expect("tool_search input json");
+                    assert_eq!(input["query"], "read file helpers");
+                }
+            }
+            LanguageModelV4StreamPart::ToolInputEnd { id, .. } => {
+                assert_ne!(id, "ts_item");
+                if id == "call_abc" {
+                    saw_end = true;
+                }
+            }
+            LanguageModelV4StreamPart::ToolCall(tc) => {
+                assert_ne!(tc.tool_call_id, "ts_item");
+                if tc.tool_call_id == "call_abc" {
+                    saw_call = true;
+                    assert_eq!(tc.tool_name, "tool_search");
+                    let input: serde_json::Value =
+                        serde_json::from_str(&tc.input).expect("tool call input json");
+                    assert_eq!(input["query"], "read file helpers");
+                    assert_eq!(tc.provider_executed, None);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_start, "missing tool input start for call_id");
+    assert!(saw_delta, "missing serialized tool_search arguments");
+    assert!(saw_end, "missing tool input end for call_id");
+    assert!(saw_call, "missing tool call for call_id");
+}

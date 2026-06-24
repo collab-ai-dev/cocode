@@ -217,7 +217,7 @@ fn new_engine_with_tools(
         coco_config::PartialModelInfo {
             context_window: Some(coco_config::PositiveTokens::new(200_000)),
             max_output_tokens: Some(coco_config::PositiveTokens::new(8_192)),
-            capabilities: Some(vec![coco_types::Capability::ClientSideToolSearch]),
+            capabilities: Some(vec![coco_types::Capability::ClientSideToolSearchPromotion]),
             ..Default::default()
         },
     )

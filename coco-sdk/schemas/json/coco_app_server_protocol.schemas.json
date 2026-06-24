@@ -1210,13 +1210,18 @@
           "type": "string"
         },
         {
-          "const": "server_side_tool_reference",
+          "const": "anthropic_tool_reference",
           "description": "Server-side `tool_reference` expansion (Anthropic beta\n`tool-search-tool-2025-10-19`). When set, the provider's API\nserver expands `{type:\"tool_reference\",tool_name:X}` content\nblocks into inline `<functions>...</functions>` markup before\nthe prompt reaches the model. Lets the client keep the `tools`\narray constant across turns (delayed tools carry\n`defer_loading: true`) and emit references inside\n`tool_result.content` instead of growing the tools list \u2014\npreserving prompt cache prefix across `ToolSearch` discoveries.\n\nProvider-specific (Anthropic-only). The multi-provider default\npath is client-side promotion through\n`ToolAppState::discovered_tool_names`, which costs a cache\nbreak on the tools array but works on every provider.\n\nKnown supporting models: Claude Sonnet 4.5+, Opus 4+, GPT-5\n(anthropic-compat). NOT supported on Haiku 4.5 / 3.5 /\nolder 3-series.",
           "type": "string"
         },
         {
-          "const": "client_side_tool_search",
-          "description": "Provider/model is known to work correctly with coco-rs's\nclient-side `ToolSearch` promotion path (`discovered_tool_names`\n`AppStatePatch` + tools-array growth on the next turn).\n\n**Per-model opt-in**, default **off** for unknown models.\nRationale: a model that doesn't tolerate the growing tools\narray (legacy proxies, local quantized models with strict\nschema cache, \u2026) shouldn't be silently subjected to ToolSearch\n\u2014 eager-loading every tool's full schema on turn 1 is the\nsafe degradation. Set this capability in the registry\n(`builtin_models_partial`) once a model has been validated.\n\nThe runtime activation predicate is:\n```text\ntool_search_active =\n    Feature::ToolSearch\n    && (ServerSideToolReference || ClientSideToolSearch)\n```\nWhen **both** capabilities are absent, the model lands in the\n\"eager-load every tool, hide ToolSearch\" state regardless of\nthe user's `Feature::ToolSearch` setting.\n\nNo TS analogue \u2014 TS only ships the server-side path and\nblacklists incompatible models via\n`DEFAULT_UNSUPPORTED_MODEL_PATTERNS`. coco-rs needs a positive\ncapability for the client-side path because it works on every\nProvider, so \"default-on\" would mis-fire on local / custom\nmodel deployments that nobody has vetted.",
+          "const": "client_side_tool_search_promotion",
+          "description": "Provider/model is known to work correctly with coco-rs's\nclient-side `ToolSearch` promotion path (`discovered_tool_names`\n`AppStatePatch` + tools-array growth on the next turn).\n\n**Per-model opt-in**, default **off** for unknown models.\nRationale: a model that doesn't tolerate the growing tools\narray (legacy proxies, local quantized models with strict\nschema cache, \u2026) shouldn't be silently subjected to ToolSearch\n\u2014 eager-loading every tool's full schema on turn 1 is the\nsafe degradation. Set this capability in the registry\n(`builtin_models_partial`) once a model has been validated.\n\nThe runtime activation predicate is:\n```text\ntool_search_active =\n    Feature::ToolSearch\n    && strategy != Eager\n```\nWhen no resolver-supported capability is present, the model lands in the\n\"eager-load every tool, hide ToolSearch\" state regardless of\nthe user's `Feature::ToolSearch` setting.\n\nNo TS analogue \u2014 TS only ships Anthropic-style server expansion and\nblacklists incompatible models via\n`DEFAULT_UNSUPPORTED_MODEL_PATTERNS`. coco-rs needs a positive\ncapability for ClientSideToolSearchPromotion because it works on every\nProvider, so \"default-on\" would mis-fire on local / custom\nmodel deployments that nobody has vetted.",
+          "type": "string"
+        },
+        {
+          "const": "open_ai_native_tool_search",
+          "description": "OpenAI Responses native `tool_search` provider tool with\nclient-side execution (`execution: \"client\"`).",
           "type": "string"
         }
       ],

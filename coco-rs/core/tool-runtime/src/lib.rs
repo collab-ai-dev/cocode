@@ -80,6 +80,7 @@ pub use cancellation::ToolAbortSignal;
 pub use cancellation::ToolAbortSignalPart;
 pub use cancellation::TurnAbortController;
 pub use cancellation::TurnAbortSignal;
+pub use context::ToolSearchStrategy;
 pub use context::ToolUseContext;
 pub use denial_tracking::DenialTracker;
 pub use derive::derive_input_schema_value;
