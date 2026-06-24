@@ -1,5 +1,6 @@
-//! `/batch` — research and plan a large change, then execute it in parallel across 5–30 isolated worktree agents that each open a PR. Mirrors claude-code's batch.ts.
-//! Deferred: the TS arg-empty / not-a-git-repo return branches are dropped (no arg/git seam here); the git-repo guard is folded into one prose line in the prompt.
+//! `/batch` — research and plan a large change, then execute it in parallel
+//! across 5–30 isolated worktree agents that each open a PR. Mirrors
+//! claude-code's bundled `batch.ts` skill prompt.
 
 use coco_types::ToolName;
 
@@ -16,7 +17,9 @@ const TEMPLATE: &str = r#"# Batch: Parallel Work Orchestration
 
 You are orchestrating a large, parallelizable change across this codebase.
 
-If the current directory is not a git repository, tell the user `/batch` requires one and stop.
+## User Instruction
+
+$ARGUMENTS
 
 ## Phase 1: Research and Plan (Plan Mode)
 

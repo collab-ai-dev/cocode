@@ -143,19 +143,14 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
     {
         let mut s = bundled(
             "batch",
-            "Run a prompt or command on multiple files",
+            "Research and plan a large-scale change, then execute it in parallel across 5–30 isolated worktree agents that each open a PR.",
             batch::prompt(),
-            vec![
-                ToolName::Bash.as_str(),
-                ToolName::Read.as_str(),
-                ToolName::Glob.as_str(),
-                ToolName::Grep.as_str(),
-                ToolName::Edit.as_str(),
-                ToolName::Write.as_str(),
-            ],
+            vec![],
         );
-        s.when_to_use =
-            Some("When user wants sweeping mechanical changes across many files".to_string());
+        s.when_to_use = Some(
+            "Use when the user wants to make a sweeping, mechanical change across many files (migrations, refactors, bulk renames) that can be decomposed into independent parallel units.".to_string(),
+        );
+        s.argument_hint = Some("<instruction>".to_string());
         s.disable_model_invocation = true;
         skills.push(s);
     }
@@ -230,16 +225,9 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         // /simplify(general-purpose) — upstream simplify.ts has no ant gate
         skills.push(bundled(
             "simplify",
-            "Review changed code for reuse, quality, and efficiency, then fix any issues found",
+            "Review changed code for reuse, quality, and efficiency, then fix any issues found.",
             simplify::prompt(),
-            vec![
-                ToolName::Bash.as_str(),
-                ToolName::Read.as_str(),
-                ToolName::Glob.as_str(),
-                ToolName::Grep.as_str(),
-                ToolName::Edit.as_str(),
-                ToolName::Write.as_str(),
-            ],
+            vec![],
         ));
 
         // /stuck(ant-only)

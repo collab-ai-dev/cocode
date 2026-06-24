@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn test_handler_empty_question_returns_usage() {
     let out = handler("");
-    assert!(out.starts_with("Usage:"), "empty arg gives usage: {out}");
+    assert_eq!(out, "Usage: /btw <your question>");
     // Must NOT emit the sentinel — runner should display the usage
     // text verbatim, not interpret it as a fork request.
     assert!(!out.contains(BTW_SENTINEL));
@@ -24,7 +24,7 @@ fn test_parse_sentinel_extracts_question() {
 
 #[test]
 fn test_parse_sentinel_returns_none_for_non_sentinel_output() {
-    assert!(parse_btw_sentinel("Usage: /btw <question>").is_none());
+    assert!(parse_btw_sentinel("Usage: /btw <your question>").is_none());
     assert!(parse_btw_sentinel("Hello world").is_none());
 }
 

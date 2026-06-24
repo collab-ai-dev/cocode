@@ -47,7 +47,8 @@ pub async fn run_side_question_fork(
 ) -> String {
     let wrapped = format!("{SIDE_QUESTION_SYSTEM_REMINDER}\n\n{question}");
     let mut options = ForkedAgentOptions::for_label(ForkLabel::SideQuestion);
-    options.can_use_tool = Some(deny_all_handle("side question: tools disabled"));
+    options.can_use_tool = Some(deny_all_handle("Side questions cannot use tools"));
+    options.require_can_use_tool = true;
     match dispatcher.dispatch(cache, &options, &wrapped, None).await {
         Ok(result) => extract_side_question_answer(&result.messages),
         Err(e) => format!("(side-question failed: {e})"),

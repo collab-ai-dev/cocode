@@ -816,6 +816,50 @@ async fn test_cache_safe_params_unset_before_first_turn() {
 }
 
 #[tokio::test]
+async fn test_cache_safe_params_fallback_builds_before_first_turn() {
+    let model = Arc::new(TextMock { text: "_".into() });
+    let client = crate::test_support::model_runtime_registry(model);
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let config = QueryEngineConfig {
+        model_id: "claude-opus-4-7".into(),
+        system_prompt: Some("You are helpful.".into()),
+        active_shell_tool: coco_types::ActiveShellTool::Disabled,
+        prompt_cache: Some(coco_types::PromptCacheConfig {
+            mode: coco_types::PromptCacheMode::Auto,
+            ttl: coco_types::CacheTtl::OneHour,
+            scope: None,
+            requested_betas: Default::default(),
+            skip_cache_write: false,
+        }),
+        ..QueryEngineConfig::default()
+    };
+    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let mut history = coco_messages::MessageHistory::new();
+    history.push(coco_messages::create_user_message("parent context"));
+
+    assert!(
+        engine.last_cache_safe_params().await.is_none(),
+        "fallback must not require a populated post-turn slot"
+    );
+    let cache = engine.cache_safe_params_from_history(&history);
+
+    assert_eq!(cache.rendered_system_prompt, "You are helpful.");
+    assert_eq!(cache.model_id, "claude-opus-4-7");
+    assert_eq!(cache.provider, "mock");
+    assert_eq!(
+        cache.active_shell_tool,
+        coco_types::ActiveShellTool::Disabled
+    );
+    assert!(cache.prompt_cache.is_some());
+    assert_eq!(cache.fork_context_messages.len(), 1);
+    assert!(
+        coco_messages::wrapping::extract_text_from_message(&cache.fork_context_messages[0])
+            .contains("parent context")
+    );
+}
+
+#[tokio::test]
 async fn test_cache_safe_params_populated_after_turn() {
     // After a successful turn the slot is populated with the
     // model_id + post-turn history. Future post-turn fork features

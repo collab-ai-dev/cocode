@@ -366,38 +366,57 @@ impl TurnRunner for QueryEngineRunner {
             // single turn against it, and returns the response text;
             // the parent's history and cache slot are untouched.
             if let Some(req) = coco_commands::handlers::btw::parse_btw_sentinel(&prompt) {
-                let cache = engine.last_cache_safe_params().await;
                 // Shares the fork+extract logic with the TUI path
                 // (`crate::side_question`): tool-less one-shot fork sharing the
                 // parent cache, answer flattened across all per-block messages.
-                let response_text = match cache {
+                let cache = match engine.last_cache_safe_params().await {
+                    Some(cache) => cache,
                     None => {
-                        "(no parent turn yet — run a regular prompt first so /btw can share its cache)"
-                            .to_string()
+                        let history = {
+                            let h = history_handle.lock().await;
+                            MessageHistory::from_arcs_preserving_latest_usage(h.clone())
+                        };
+                        engine.cache_safe_params_from_history(&history)
                     }
-                    Some(cache) => match runtime.current_fork_dispatcher().await {
-                        None => {
-                            "(fork dispatcher not installed — /btw requires CLI bootstrap)"
-                                .to_string()
-                        }
-                        Some(dispatcher) => {
-                            crate::side_question::run_side_question_fork(
-                                &cache,
-                                &dispatcher,
-                                &req.question,
-                            )
-                            .await
-                        }
-                    },
                 };
-                // Surface the answer as a meta message — visible to
-                // SDK consumers but flagged so future compaction
-                // passes know it's not part of the main conversation.
+                let response_text = match runtime.current_fork_dispatcher().await {
+                    None => {
+                        "(fork dispatcher not installed — /btw requires CLI bootstrap)".to_string()
+                    }
+                    Some(dispatcher) => {
+                        crate::side_question::run_side_question_fork(
+                            &cache,
+                            &dispatcher,
+                            &req.question,
+                        )
+                        .await
+                    }
+                };
+                // Surface the answer through the same transcript-only
+                // slash-command messages as the TUI path. A meta message
+                // would be API-visible and would leak the side answer into the
+                // parent model context on the next SDK turn.
+                let messages = coco_messages::build_slash_command_messages(
+                    "btw",
+                    &req.question,
+                    &response_text,
+                    /*is_sensitive*/ false,
+                );
                 {
                     let mut h = history_handle.lock().await;
-                    h.push(std::sync::Arc::new(coco_messages::create_meta_message(
-                        &response_text,
-                    )));
+                    for msg in messages {
+                        let msg = std::sync::Arc::new(msg);
+                        h.push(msg.clone());
+                        let _ = event_tx
+                            .send(CoreEvent::Protocol(
+                                coco_types::ServerNotification::MessageAppended {
+                                    message: msg,
+                                    session_id: String::new(),
+                                    agent_id: None,
+                                },
+                            ))
+                            .await;
+                    }
                 }
                 return Ok(());
             }

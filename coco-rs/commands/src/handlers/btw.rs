@@ -7,10 +7,11 @@
 //! The answer is surfaced as **model-invisible** content so it never
 //! re-enters the LLM's view of the main conversation (the "without
 //! interrupting" contract): the TUI renders it as a transcript-only
-//! slash result, the SDK pushes a meta message. Intentional divergence
-//! from TS, whose modal is fully ephemeral — coco has no modal, so the
-//! answer stays visible in scrollback (and the JSONL) but out of the
-//! model's context.
+//! slash result, and the SDK appends the same transcript-only slash
+//! messages. Intentional divergence from TS, whose modal is fully
+//! ephemeral — coco has no modal, so the answer stays visible in
+//! scrollback / SDK notifications (and the JSONL) but out of the model's
+//! context.
 //!
 //! ## Sentinel pattern
 //!
@@ -57,7 +58,7 @@ pub fn parse_btw_sentinel(handler_output: &str) -> Option<BtwRequest> {
 pub fn handler(args: &str) -> String {
     let question = args.trim();
     if question.is_empty() {
-        return "Usage: /btw <question> — Ask a quick side question without interrupting the main conversation.".to_string();
+        return "Usage: /btw <your question>".to_string();
     }
     format!("{BTW_SENTINEL} {question}")
 }

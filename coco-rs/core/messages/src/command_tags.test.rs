@@ -52,6 +52,24 @@ fn test_build_is_transcript_only_and_carries_args() {
 }
 
 #[test]
+fn test_btw_slash_messages_are_transcript_only() {
+    let msgs = build_slash_command_messages("btw", "what changed?", "Only tests changed.", false);
+    assert_eq!(msgs.len(), 2);
+
+    let (echo, echo_t_only) = user_text(&msgs[0]);
+    let (result, result_t_only) = user_text(&msgs[1]);
+
+    assert_eq!(extract_tag(echo, COMMAND_NAME_TAG), Some("/btw"));
+    assert_eq!(extract_tag(echo, COMMAND_ARGS_TAG), Some("what changed?"));
+    assert_eq!(
+        extract_tag(result, LOCAL_COMMAND_STDOUT_TAG),
+        Some("Only tests changed.")
+    );
+    assert!(echo_t_only, "/btw echo must not reach the model");
+    assert!(result_t_only, "/btw answer must not reach the model");
+}
+
+#[test]
 fn test_build_context_usage_messages_echo_then_system_snapshot() {
     // `/context` prints inline: a `❯ /context` echo (transcript-only User)
     // followed by a typed System snapshot the TUI paints. Neither is a
