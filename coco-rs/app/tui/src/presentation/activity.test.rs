@@ -89,6 +89,18 @@ fn turn_activity_view_falls_back_to_agents_when_present() {
 }
 
 #[test]
+fn foreground_subagent_row_shows_background_hint() {
+    let _locale = crate::i18n::locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.subagents.push(subagent());
+
+    let view = surface(turn_activity_view(&state, 160));
+    let text = per_line_text(&view).join("\n");
+
+    assert!(text.contains("Ctrl+B to run in background"), "{text}");
+}
+
+#[test]
 fn turn_activity_view_shows_running_workflow_tasks() {
     let mut state = AppState::default();
     state.session.active_tasks.push(TaskEntry {

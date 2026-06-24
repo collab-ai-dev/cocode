@@ -170,6 +170,7 @@ pub use task_handle::BackgroundShellKind;
 pub use task_handle::BackgroundShellRequest;
 pub use task_handle::BackgroundTaskHandleRef;
 pub use task_handle::DetachOutcome;
+pub use task_handle::DetachSource;
 pub use task_handle::NoOpBackgroundTaskHandle;
 pub use task_handle::TaskHandle;
 pub use task_handle::TaskHandleRef;

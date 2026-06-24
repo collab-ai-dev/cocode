@@ -512,6 +512,41 @@ async fn signal_detach_wakes_notify_awaiter() {
         .expect("awaiter must wake within 1s");
 }
 
+/// `background_all_foreground` is the Ctrl+B backend path. It must do more
+/// than flip row state: foreground tool awaiters (BashTool / AgentTool) are
+/// parked on the same detach `Notify`, so the broadcast is what releases the
+/// foreground tool call.
+#[tokio::test]
+async fn background_all_foreground_wakes_detach_awaiter() {
+    let rt = rt();
+    let task_id = rt
+        .register_agent_task("work", None, None, CancellationToken::new(), AR::Foreground)
+        .await;
+    let notify = coco_tool_runtime::TaskHandle::detach_handle(&*rt, &task_id)
+        .await
+        .expect("entry must exist");
+    let rt2 = rt.clone();
+    let id = task_id.clone();
+    let _handle = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(rt2.manager().background_all_foreground().await, vec![id]);
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), notify.notified())
+        .await
+        .expect("background-all must wake the foreground waiter");
+    let state = rt.manager().get(&task_id).await.expect("task still exists");
+    assert!(state.is_backgrounded());
+    assert_eq!(
+        rt.manager().detach_source(&task_id).await,
+        Some(coco_tool_runtime::DetachSource::User)
+    );
+    assert!(
+        rt.manager().background_all_foreground().await.is_empty(),
+        "second background-all is idempotent"
+    );
+}
+
 /// `signal_detach` flips `TaskStateBase.is_backgrounded()` for
 /// `LocalAgent` tasks so the TUI panel filter can hide detached
 /// tasks. After the unification refactor `is_backgrounded` lives on
@@ -529,6 +564,10 @@ async fn signal_detach_flips_is_backgrounded_for_local_agent() {
     assert!(
         state_after.is_backgrounded(),
         "is_backgrounded must flip to true after signal_detach"
+    );
+    assert_eq!(
+        rt.manager().detach_source(&task_id).await,
+        Some(coco_tool_runtime::DetachSource::User)
     );
 }
 
@@ -1037,6 +1076,10 @@ async fn shell_spawn_auto_detach_timer_fires() {
     tokio::time::timeout(std::time::Duration::from_secs(2), notify.notified())
         .await
         .expect("auto-detach must fire within 2s");
+    assert_eq!(
+        rt.manager().detach_source(&task_id).await,
+        Some(coco_tool_runtime::DetachSource::AssistantAuto)
+    );
 
     // Subsequent explicit signal_detach is a no-op (already detached
     // by the timer).

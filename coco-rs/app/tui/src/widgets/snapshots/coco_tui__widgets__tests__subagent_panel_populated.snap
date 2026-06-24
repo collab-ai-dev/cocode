@@ -1,5 +1,6 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
+assertion_line: 810
 expression: output
 ---
  ╭─╮ ╭─╮  COCODE v0.1.1                                                                             
@@ -10,6 +11,7 @@ expression: output
   Subagents (0/2)                                                                                   
 ▸ ● Explore: Search for auth handlers                                                               
   ● Plan: Design refactor plan                                                                      
+  Ctrl+B to run in background                                                                       
   Shift+↑ switch agent                                                                              
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯                                                                                                   

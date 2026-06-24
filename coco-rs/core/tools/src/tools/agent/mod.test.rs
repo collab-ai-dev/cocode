@@ -187,6 +187,26 @@ fn ctx_with_agent(handle: impl AgentHandle + 'static) -> ToolUseContext {
     ctx
 }
 
+struct DetachSourceTaskHandle {
+    source: coco_tool_runtime::DetachSource,
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::TaskHandle for DetachSourceTaskHandle {
+    async fn detach_source(&self, _task_id: &str) -> Option<coco_tool_runtime::DetachSource> {
+        Some(self.source)
+    }
+}
+
+fn ctx_with_agent_and_detach_source(
+    handle: impl AgentHandle + 'static,
+    source: coco_tool_runtime::DetachSource,
+) -> ToolUseContext {
+    let mut ctx = ctx_with_agent(handle);
+    ctx.task_handle = Some(Arc::new(DetachSourceTaskHandle { source }));
+    ctx
+}
+
 fn enable_agent_teams(ctx: &mut ToolUseContext) {
     let mut features = (*ctx.features).clone();
     features.enable(coco_types::Feature::AgentTeams);
@@ -733,6 +753,60 @@ async fn test_agent_tool_async_launched() {
 
     assert_eq!(result.data["status"], "async_launched");
     assert_eq!(result.data["agentId"], "agent-abc");
+}
+
+#[tokio::test]
+async fn test_agent_tool_async_launched_marks_assistant_auto_backgrounded() {
+    let response = AgentSpawnResponse {
+        status: AgentSpawnStatus::AsyncLaunched,
+        agent_id: Some("agent-auto".into()),
+        ..Default::default()
+    };
+    let ctx = ctx_with_agent_and_detach_source(
+        MockAgentHandle::with_spawn(Ok(response)),
+        coco_tool_runtime::DetachSource::AssistantAuto,
+    );
+    let result = <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "Background task",
+            "description": "bg task",
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.data["status"], "async_launched");
+    assert_eq!(result.data["assistantAutoBackgrounded"], true);
+    assert!(result.data.get("backgroundedByUser").is_none());
+}
+
+#[tokio::test]
+async fn test_agent_tool_async_launched_marks_backgrounded_by_user() {
+    let response = AgentSpawnResponse {
+        status: AgentSpawnStatus::AsyncLaunched,
+        agent_id: Some("agent-user".into()),
+        ..Default::default()
+    };
+    let ctx = ctx_with_agent_and_detach_source(
+        MockAgentHandle::with_spawn(Ok(response)),
+        coco_tool_runtime::DetachSource::User,
+    );
+    let result = <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "Background task",
+            "description": "bg task",
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.data["status"], "async_launched");
+    assert_eq!(result.data["backgroundedByUser"], true);
+    assert!(result.data.get("assistantAutoBackgrounded").is_none());
 }
 
 #[tokio::test]

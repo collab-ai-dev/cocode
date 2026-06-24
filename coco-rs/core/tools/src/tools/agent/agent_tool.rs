@@ -4,6 +4,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnStatus;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::DetachSource;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
@@ -116,6 +117,13 @@ pub enum AgentSpawnRenderResult {
         output_file: Option<String>,
         #[serde(rename = "canReadOutputFile", skip_serializing_if = "Option::is_none")]
         can_read_output_file: Option<bool>,
+        #[serde(
+            rename = "assistantAutoBackgrounded",
+            skip_serializing_if = "Option::is_none"
+        )]
+        assistant_auto_backgrounded: Option<bool>,
+        #[serde(rename = "backgroundedByUser", skip_serializing_if = "Option::is_none")]
+        backgrounded_by_user: Option<bool>,
     },
     /// Teammate spawned into the active team via `name` / `team_name`.
     TeammateSpawned {
@@ -1089,6 +1097,12 @@ impl Tool for AgentTool {
                 }
             }
             AgentSpawnStatus::AsyncLaunched => {
+                let detach_source = match (response.agent_id.as_deref(), ctx.task_handle.as_ref()) {
+                    (Some(agent_id), Some(task_handle)) => {
+                        task_handle.detach_source(agent_id).await
+                    }
+                    _ => None,
+                };
                 let output_file = response
                     .output_file
                     .as_ref()
@@ -1106,6 +1120,13 @@ impl Tool for AgentTool {
                     description: request_description,
                     output_file,
                     can_read_output_file,
+                    assistant_auto_backgrounded: matches!(
+                        detach_source,
+                        Some(DetachSource::AssistantAuto)
+                    )
+                    .then_some(true),
+                    backgrounded_by_user: matches!(detach_source, Some(DetachSource::User))
+                        .then_some(true),
                 }
             }
             AgentSpawnStatus::TeammateSpawned => AgentSpawnRenderResult::TeammateSpawned {

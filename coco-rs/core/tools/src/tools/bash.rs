@@ -14,6 +14,7 @@ use coco_shell::security::SecuritySeverity;
 use coco_shell::security::check_security;
 use coco_tool_runtime::BackgroundShellRequest;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::DetachSource;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolProgress;
@@ -957,9 +958,10 @@ impl Tool for BashTool {
 ///      another co-routine) → return bg-shape result; task keeps
 ///      running.
 ///   4. Auto-detach timer (when `auto_background_on_timeout` config is set;
-///      see `ASSISTANT_BLOCKING_BUDGET_MS = 15_000`) → same as (3) but the
-///      timer itself fires `signal_detach`. The
-///      detach arm in (3) observes the notification.
+///      see `ASSISTANT_BLOCKING_BUDGET_MS = 15_000`) → same as (3), but the
+///      timer records `DetachSource::AssistantAuto` before notifying. The
+///      detach arm in (3) observes the notification and stamps
+///      `assistantAutoBackgrounded`.
 ///
 /// This replaces both the old `execute_background` and the D5 re-run
 /// path on foreground timeout — the previous code re-spawned the
@@ -1157,28 +1159,26 @@ async fn execute_via_task_runtime(
             })
         }
         BashOutcome::Detached { by_user } => {
-            // Auto-detach timer or external `signal_detach` fired.
-            // Differentiate the two with `by_user`: when the
-            // auto-detach timer is the originator, the task's own
-            // `BgAgentExtras.is_backgrounded()` flip is observable —
-            // but for now we just stamp the differentiator in the
-            // result shape so the model sees the right signals
-            // (`backgroundedByUser` vs `assistantAutoBackgrounded`).
-            //
-            // `by_user` is `true` whenever the detach arm wins; we
-            // can't distinguish auto-detach-timer from external-TUI
-            // sources here without an extra atomic. Default to
-            // `backgroundedByUser=true` matching the most-common
-            // interactive case; auto-detach will surface a follow-up
-            // path in a later refactor.
             let _ = by_user;
             let output_path = background_output_path(task_handle, &task_id).await;
+            let source = task_handle
+                .detach_source(&task_id)
+                .await
+                .unwrap_or(DetachSource::User);
+            let mut data = serde_json::json!({
+                "backgroundTaskId": task_id,
+                "outputPath": output_path,
+            });
+            match source {
+                DetachSource::AssistantAuto => {
+                    data["assistantAutoBackgrounded"] = serde_json::Value::Bool(true);
+                }
+                DetachSource::User => {
+                    data["backgroundedByUser"] = serde_json::Value::Bool(true);
+                }
+            }
             Ok(ToolResult {
-                data: serde_json::json!({
-                    "backgroundTaskId": task_id,
-                    "outputPath": output_path,
-                    "backgroundedByUser": true,
-                }),
+                data,
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
