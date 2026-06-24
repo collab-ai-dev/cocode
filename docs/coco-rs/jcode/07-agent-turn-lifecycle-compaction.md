@@ -627,7 +627,7 @@ prose.
 **Correction folded in (gating mechanism).** coco-rs has no per-call
 `ProviderApi` string at `engine.rs:2395` to branch on directly — **gate
 via a model `Capability`** instead. The engine already reads
-`info.has_capability(...)` for `ServerSideToolReference`/`ClientSideToolSearch`
+`info.has_capability(...)` for `AnthropicToolReference`/`OpenAiNativeToolSearch`/`ClientSideToolSearchPromotion`
 (`engine.rs:2646,2652`), so declare a new
 `Capability::TextWrappedToolCallRecovery` only on OpenAI-compatible model
 cards; first-party Anthropic and OpenAI-Responses then never run the scan.

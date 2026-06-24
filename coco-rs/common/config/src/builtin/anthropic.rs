@@ -58,8 +58,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     Capability::InterleavedThinking,
                     Capability::ContextManagement,
                     Capability::ParallelToolCalls,
-                    Capability::ServerSideToolReference,
-                    Capability::ClientSideToolSearch,
+                    Capability::AnthropicToolReference,
                     // Adapter `get_model_capabilities("claude-sonnet-4-6")`
                     // returns `supports_structured_output: true` →
                     // native `output_format` + `structured-outputs-2025-11-13`
@@ -90,8 +89,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     Capability::InterleavedThinking,
                     Capability::ContextManagement,
                     Capability::ParallelToolCalls,
-                    Capability::ServerSideToolReference,
-                    Capability::ClientSideToolSearch,
+                    Capability::AnthropicToolReference,
                     // Anthropic adapter does not yet have an explicit
                     // entry for `claude-opus-4-7` in
                     // `get_model_capabilities`, so it falls back to the
@@ -127,9 +125,9 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     Capability::ContextManagement,
                     Capability::ParallelToolCalls,
                     // Haiku is on TS `DEFAULT_UNSUPPORTED_MODEL_PATTERNS`
-                    // so no ServerSideToolReference, but the client-side
+                    // so no AnthropicToolReference, but the client-side
                     // path has been validated.
-                    Capability::ClientSideToolSearch,
+                    Capability::ClientSideToolSearchPromotion,
                     // Adapter `get_model_capabilities("claude-haiku-4-5")`
                     // returns `supports_structured_output: true`.
                     Capability::StructuredOutput,

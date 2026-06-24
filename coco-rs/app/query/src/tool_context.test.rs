@@ -80,6 +80,76 @@ fn factory_with_live_rules(
     }
 }
 
+fn snapshot_with(
+    api: coco_types::ProviderApi,
+    wire_api: Option<coco_types::WireApi>,
+    capabilities: Vec<coco_types::Capability>,
+) -> coco_inference::ModelRuntimeSnapshot {
+    coco_inference::ModelRuntimeSnapshot {
+        source: coco_inference::ModelRuntimeSource::Role(coco_types::ModelRole::Main),
+        provider: "provider".into(),
+        provider_api: api,
+        model_id: "model".into(),
+        model_info: Some(coco_config::ModelInfo {
+            capabilities: Some(capabilities),
+            ..Default::default()
+        }),
+        supports_prompt_cache: false,
+        supports_server_side_context_edits: false,
+        runtime_snapshot: coco_types::SubagentRuntimeSnapshot {
+            provider: "provider".into(),
+            api,
+            api_model_name: "model".into(),
+            base_url: "https://example.test".into(),
+            wire_api,
+        },
+        active_slot: 0,
+    }
+}
+
+#[test]
+fn resolve_tool_search_strategy_prioritizes_supported_paths() {
+    let anthropic = snapshot_with(
+        coco_types::ProviderApi::Anthropic,
+        None,
+        vec![coco_types::Capability::AnthropicToolReference],
+    );
+    assert_eq!(
+        resolve_tool_search_strategy(Some(&anthropic)),
+        coco_tool_runtime::ToolSearchStrategy::AnthropicToolReference
+    );
+
+    let openai = snapshot_with(
+        coco_types::ProviderApi::Openai,
+        Some(coco_types::WireApi::Responses),
+        vec![coco_types::Capability::OpenAiNativeToolSearch],
+    );
+    assert_eq!(
+        resolve_tool_search_strategy(Some(&openai)),
+        coco_tool_runtime::ToolSearchStrategy::OpenAiNativeClient
+    );
+
+    let promotion = snapshot_with(
+        coco_types::ProviderApi::Gemini,
+        None,
+        vec![coco_types::Capability::ClientSideToolSearchPromotion],
+    );
+    assert_eq!(
+        resolve_tool_search_strategy(Some(&promotion)),
+        coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion
+    );
+
+    let eager = snapshot_with(
+        coco_types::ProviderApi::Openai,
+        Some(coco_types::WireApi::Chat),
+        vec![],
+    );
+    assert_eq!(
+        resolve_tool_search_strategy(Some(&eager)),
+        coco_tool_runtime::ToolSearchStrategy::Eager
+    );
+}
+
 #[derive(Debug)]
 struct PendingMcpHandle;
 
@@ -193,40 +263,14 @@ async fn test_factory_honors_current_model_id_override() {
 }
 
 #[tokio::test]
-async fn test_factory_threads_tool_reference_capability() {
-    // The engine derives `current_model_supports_tool_reference` from
-    // the active client's `ModelInfo` and passes it through overrides.
-    // The factory must surface it on the built `ToolUseContext` so
-    // `ToolSearchTool::execute` can branch into the cache-friendly
-    // path on capable models.
-    let config = test_config();
-    let ctx_capable = factory(config.clone())
-        .build(ToolContextOverrides {
-            current_model_supports_tool_reference: true,
-            ..Default::default()
-        })
-        .await;
-    assert!(ctx_capable.model_supports_tool_reference);
-
-    let ctx_incapable = factory(config)
-        .build(ToolContextOverrides {
-            current_model_supports_tool_reference: false,
-            ..Default::default()
-        })
-        .await;
-    assert!(!ctx_incapable.model_supports_tool_reference);
-}
-
-#[tokio::test]
-async fn test_factory_threads_client_side_tool_search_capability() {
-    // Same plumbing as `tool_reference` — the client-side capability
-    // is the universal cousin (no Anthropic beta dependency). When
-    // both capabilities are absent, `ctx.tool_search_supported()` is
-    // false and `ToolSearch` hides from the model.
+async fn test_factory_threads_tool_search_strategy() {
     let config = test_config();
 
     let ctx_neither = factory(config.clone()).build(Default::default()).await;
-    assert!(!ctx_neither.model_supports_client_side_tool_search);
+    assert_eq!(
+        ctx_neither.tool_search_strategy,
+        coco_tool_runtime::ToolSearchStrategy::Eager
+    );
     assert!(
         !ctx_neither.tool_search_supported(),
         "no capability → tool_search inactive even if feature on"
@@ -234,15 +278,18 @@ async fn test_factory_threads_client_side_tool_search_capability() {
 
     let ctx_client_only = factory(config.clone())
         .build(ToolContextOverrides {
-            current_model_supports_client_side_tool_search: true,
+            current_tool_search_strategy:
+                coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion,
             ..Default::default()
         })
         .await;
-    assert!(ctx_client_only.model_supports_client_side_tool_search);
-    assert!(!ctx_client_only.model_supports_tool_reference);
+    assert_eq!(
+        ctx_client_only.tool_search_strategy,
+        coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion
+    );
     assert!(
         ctx_client_only.tool_search_supported(),
-        "client-side cap alone is supported when feature on"
+        "client-side promotion is supported when feature on"
     );
     assert!(
         !ctx_client_only.tool_search_active(),
@@ -251,7 +298,8 @@ async fn test_factory_threads_client_side_tool_search_capability() {
 
     let ctx_server_only = factory(config)
         .build(ToolContextOverrides {
-            current_model_supports_tool_reference: true,
+            current_tool_search_strategy:
+                coco_tool_runtime::ToolSearchStrategy::AnthropicToolReference,
             ..Default::default()
         })
         .await;
@@ -274,7 +322,7 @@ async fn test_factory_activates_tool_search_for_deferred_tools() {
         ..factory(test_config())
     }
     .build(ToolContextOverrides {
-        current_model_supports_client_side_tool_search: true,
+        current_tool_search_strategy: coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion,
         ..Default::default()
     })
     .await;
@@ -289,7 +337,7 @@ async fn test_factory_activates_tool_search_for_pending_mcp() {
         ..factory(test_config())
     }
     .build(ToolContextOverrides {
-        current_model_supports_client_side_tool_search: true,
+        current_tool_search_strategy: coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion,
         ..Default::default()
     })
     .await;

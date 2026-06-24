@@ -264,7 +264,7 @@ pub struct ToolAppState {
     /// `/clear` resets `ToolAppState` and therefore the set.
     ///
     /// **Cache cost**: on Anthropic + a model **without**
-    /// `Capability::ServerSideToolReference`, each discovery grows
+    /// `Capability::AnthropicToolReference`, each discovery grows
     /// the `tools` wire array by one entry and breaks the
     /// prompt-cache prefix once. After the model has discovered
     /// every tool it needs (typically a handful of early turns) the

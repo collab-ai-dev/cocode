@@ -155,8 +155,9 @@ class Capability(str, Enum):
     context_management = 'context_management'
     adaptive_thinking = 'adaptive_thinking'
     token_efficient_tools = 'token_efficient_tools'
-    server_side_tool_reference = 'server_side_tool_reference'
-    client_side_tool_search = 'client_side_tool_search'
+    anthropic_tool_reference = 'anthropic_tool_reference'
+    client_side_tool_search_promotion = 'client_side_tool_search_promotion'
+    open_ai_native_tool_search = 'open_ai_native_tool_search'
 
 class CommandArgumentKind(str, Enum):
     none = 'none'

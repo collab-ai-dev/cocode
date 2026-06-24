@@ -44,7 +44,7 @@ pub struct AnthropicModelCapabilities {
     /// `tool-search-tool-2025-10-19` beta header. Lets the caller keep
     /// the `tools` array constant across turns (cache-friendly).
     ///
-    /// Maps from `coco_types::Capability::ServerSideToolReference`.
+    /// Maps from `coco_types::Capability::AnthropicToolReference`.
     pub tool_reference: bool,
 }
 

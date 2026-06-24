@@ -45,6 +45,7 @@ use coco_tool_runtime::TodoListHandleRef;
 use coco_tool_runtime::ToolAbortSignal;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tool_runtime::ToolRegistry;
+use coco_tool_runtime::ToolSearchStrategy;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::TurnAbortSignal;
 use coco_types::AgentId;
@@ -58,6 +59,30 @@ use coco_types::ToolPermissionContext;
 use tokio::sync::RwLock;
 
 use crate::config::QueryEngineConfig;
+
+pub(crate) fn resolve_tool_search_strategy(
+    snapshot: Option<&coco_inference::ModelRuntimeSnapshot>,
+) -> ToolSearchStrategy {
+    let Some(snapshot) = snapshot else {
+        return ToolSearchStrategy::Eager;
+    };
+    let Some(info) = snapshot.model_info.as_ref() else {
+        return ToolSearchStrategy::Eager;
+    };
+    if info.has_capability(coco_types::Capability::AnthropicToolReference) {
+        return ToolSearchStrategy::AnthropicToolReference;
+    }
+    if info.has_capability(coco_types::Capability::OpenAiNativeToolSearch)
+        && snapshot.provider_api == coco_types::ProviderApi::Openai
+        && snapshot.runtime_snapshot.wire_api == Some(coco_types::WireApi::Responses)
+    {
+        return ToolSearchStrategy::OpenAiNativeClient;
+    }
+    if info.has_capability(coco_types::Capability::ClientSideToolSearchPromotion) {
+        return ToolSearchStrategy::ClientSidePromotion;
+    }
+    ToolSearchStrategy::Eager
+}
 
 /// Immutable inputs needed to build a `ToolUseContext`.
 ///
@@ -166,24 +191,8 @@ pub(crate) struct ToolContextOverrides {
     /// reflects post-fallback state; absent falls back to
     /// `config.model_id` (tests, pre-fallback paths).
     pub(crate) current_model_id: Option<String>,
-    /// `true` when the post-fallback active model declares
-    /// [`coco_types::Capability::ServerSideToolReference`]. Engine
-    /// resolves this from the active runtime snapshot so a model swap
-    /// (primary → fallback) changes the ToolSearch envelope shape
-    /// without a context-factory rebuild. Default `false` keeps the
-    /// non-Anthropic / non-capable path (client-side promotion).
-    pub(crate) current_model_supports_tool_reference: bool,
-    /// `true` when the active model declares
-    /// [`coco_types::Capability::ClientSideToolSearch`] — the
-    /// universal `discovered_tool_names` promotion path. Default
-    /// `false` for unknown/custom models so they degrade to
-    /// eager-loading (no `ToolSearch` round-trip).
-    ///
-    /// Combined with [`Self::current_model_supports_tool_reference`]
-    /// inside the factory to populate the ctx capability flags;
-    /// `ToolUseContext::tool_search_active()` then drives the
-    /// runtime three-state activation.
-    pub(crate) current_model_supports_client_side_tool_search: bool,
+    /// ToolSearch strategy resolved from the active runtime snapshot.
+    pub(crate) current_tool_search_strategy: ToolSearchStrategy,
     /// Post-budget message snapshot from `build_prompt`. Threaded onto
     /// `ToolUseContext.messages` so tools observe the exact view this
     /// turn's model just received. `None` falls back to an empty
@@ -474,9 +483,7 @@ impl ToolContextFactory {
             tool_overrides: self.config.tool_overrides.clone(),
             tool_filter: self.config.tool_filter.clone(),
             discovered_tool_names: live_discovered_tool_names,
-            model_supports_tool_reference: overrides.current_model_supports_tool_reference,
-            model_supports_client_side_tool_search: overrides
-                .current_model_supports_client_side_tool_search,
+            tool_search_strategy: overrides.current_tool_search_strategy,
             tool_search_has_candidates: false,
             is_teammate: self.config.is_teammate,
             is_in_process_teammate: self.config.is_in_process_teammate,

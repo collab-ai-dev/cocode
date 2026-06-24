@@ -159,7 +159,7 @@ fn task_tools_loaded_except_task_output() {
     let registry = ToolRegistry::new();
     crate::register_all_tools(&registry);
     let ctx = ToolUseContext::test_default()
-        .with_model_capabilities(false, true)
+        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion)
         .with_tool_search_candidates(true);
 
     let loaded: HashSet<String> = registry
@@ -200,7 +200,7 @@ fn todo_write_loaded_in_v1_mode() {
     let mut features = Features::with_defaults();
     features.disable(Feature::TaskV2);
     let ctx = ToolUseContext::test_default()
-        .with_model_capabilities(false, true)
+        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion)
         .with_tool_search_candidates(true);
     let mut ctx = ctx;
     ctx.features = Arc::new(features);

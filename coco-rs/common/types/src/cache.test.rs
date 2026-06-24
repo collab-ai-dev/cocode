@@ -148,11 +148,17 @@ fn capability_prompt_cache_wire_format_is_snake_case() {
         "\"token_efficient_tools\""
     );
     assert_eq!(
-        serde_json::to_string(&Capability::ServerSideToolReference).unwrap(),
-        "\"server_side_tool_reference\""
+        serde_json::to_string(&Capability::AnthropicToolReference).unwrap(),
+        "\"anthropic_tool_reference\""
     );
     assert_eq!(
-        serde_json::to_string(&Capability::ClientSideToolSearch).unwrap(),
-        "\"client_side_tool_search\""
+        serde_json::to_string(&Capability::ClientSideToolSearchPromotion).unwrap(),
+        "\"client_side_tool_search_promotion\""
     );
+    assert_eq!(
+        serde_json::to_string(&Capability::OpenAiNativeToolSearch).unwrap(),
+        "\"open_ai_native_tool_search\""
+    );
+    assert!(serde_json::from_str::<Capability>("\"server_side_tool_reference\"").is_err());
+    assert!(serde_json::from_str::<Capability>("\"client_side_tool_search\"").is_err());
 }

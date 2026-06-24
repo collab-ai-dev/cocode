@@ -321,7 +321,7 @@ fn mcp_auth_server_tool_is_searchable_by_qualified_name() {
         None,
     )));
     let ctx = coco_tool_runtime::ToolUseContext::test_default()
-        .with_model_capabilities(false, true)
+        .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion)
         .with_tool_search_candidates(true);
 
     let names: Vec<String> = registry

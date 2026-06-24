@@ -408,7 +408,7 @@ impl ApiClient {
     /// that bypass the registry resolution path.
     ///
     /// Callers that need capability gates (e.g. `engine_prompt`
-    /// branching on [`coco_types::Capability::ServerSideToolReference`])
+    /// branching on [`coco_types::Capability::AnthropicToolReference`])
     /// look up through this accessor rather than reaching into the
     /// configuration tree, so post-fallback model swaps surface
     /// immediately on the next turn.

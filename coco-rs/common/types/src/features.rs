@@ -87,7 +87,7 @@ pub enum Feature {
     /// either through the client-side `discovered_tool_names` patch
     /// (default path, every Provider) or Anthropic's server-side
     /// `tool_reference` expansion (when the model declares
-    /// `Capability::ServerSideToolReference`). Saves a large chunk of
+    /// `Capability::AnthropicToolReference`). Saves a large chunk of
     /// the tools-array token budget on sessions with many MCP tools.
     ///
     /// When **off**, the `ToolSearch` tool is hidden from the model AND the

@@ -185,39 +185,47 @@ fn builtin_claude_haiku_does_not_declare_isp_or_context1m() {
 }
 
 #[test]
-fn builtin_claude_sonnet_opus_declare_server_side_tool_reference() {
+fn builtin_claude_sonnet_opus_declare_anthropic_tool_reference() {
     // `tool-search-tool-2025-10-19` beta is shipped on Claude
     // Sonnet 4.5+/Opus 4+; Haiku ships without it (TS
     // `DEFAULT_UNSUPPORTED_MODEL_PATTERNS=['haiku']`).
     let builtin = builtin_models_partial();
 
     let sonnet_caps = builtin["claude-sonnet-4-6"].capabilities.as_ref().unwrap();
-    assert!(sonnet_caps.contains(&Capability::ServerSideToolReference));
+    assert!(sonnet_caps.contains(&Capability::AnthropicToolReference));
 
     let opus_caps = builtin["claude-opus-4-7"].capabilities.as_ref().unwrap();
-    assert!(opus_caps.contains(&Capability::ServerSideToolReference));
+    assert!(opus_caps.contains(&Capability::AnthropicToolReference));
 
     let haiku_caps = builtin["claude-haiku-4-5"].capabilities.as_ref().unwrap();
-    assert!(!haiku_caps.contains(&Capability::ServerSideToolReference));
+    assert!(!haiku_caps.contains(&Capability::AnthropicToolReference));
 }
 
 #[test]
-fn every_builtin_model_declares_client_side_tool_search() {
-    // The client-side `discovered_tool_names` promotion path is the
-    // universal fallback — every built-in model is validated against
-    // it (TS has no analogue: TS only supports the server-side path
-    // and blacklists incompatible models). Custom models added via
-    // `config home/models.json` without this capability degrade to
-    // eager-load (safe default; ToolSearch hidden).
+fn builtin_tool_search_capabilities_match_strategy_split() {
     let builtin = builtin_models_partial();
-    for (model_id, info) in builtin.iter() {
-        let caps = info
-            .capabilities
-            .as_ref()
-            .unwrap_or_else(|| panic!("{model_id} must seed capabilities"));
+    let caps = |model: &str| builtin[model].capabilities.as_ref().unwrap();
+
+    assert!(caps("claude-sonnet-4-6").contains(&Capability::AnthropicToolReference));
+    assert!(!caps("claude-sonnet-4-6").contains(&Capability::ClientSideToolSearchPromotion));
+    assert!(caps("claude-opus-4-7").contains(&Capability::AnthropicToolReference));
+    assert!(!caps("claude-opus-4-7").contains(&Capability::ClientSideToolSearchPromotion));
+
+    assert!(caps("gpt-5-4").contains(&Capability::OpenAiNativeToolSearch));
+    assert!(!caps("gpt-5-4").contains(&Capability::ClientSideToolSearchPromotion));
+    assert!(caps("gpt-5-5").contains(&Capability::OpenAiNativeToolSearch));
+    assert!(!caps("gpt-5-5").contains(&Capability::ClientSideToolSearchPromotion));
+
+    for model_id in [
+        "claude-haiku-4-5",
+        "gpt-5-3-codex",
+        "gemini-3.1-pro-preview",
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+    ] {
         assert!(
-            caps.contains(&Capability::ClientSideToolSearch),
-            "{model_id} must declare ClientSideToolSearch (validated client-side path)"
+            caps(model_id).contains(&Capability::ClientSideToolSearchPromotion),
+            "{model_id} must declare ClientSideToolSearchPromotion"
         );
     }
 }

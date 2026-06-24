@@ -279,7 +279,7 @@ fn allowed_callers_adds_advanced_tool_use_beta() {
 /// the wire as `defer_loading: true`. This is the multi-provider TS
 /// parity path: `engine_prompt::build_tool_definitions` writes the
 /// `deferLoading` flag for deferred-but-not-discovered tools when the
-/// model supports `ServerSideToolReference`, and the Anthropic adapter
+/// model supports `AnthropicToolReference`, and the Anthropic adapter
 /// translates it to the server's wire shape verbatim.
 #[test]
 fn defer_loading_provider_option_surfaces_on_wire() {

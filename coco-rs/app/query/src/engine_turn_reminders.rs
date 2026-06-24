@@ -144,16 +144,8 @@ impl QueryEngine {
         // `deferred_tools_delta` reminder collapses to "nothing
         // searchable", which is the correct truth.
         let snapshot = self.runtime_snapshot();
-        let supports_tool_reference = snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.model_info.as_ref())
-            .is_some_and(|info| {
-                info.has_capability(coco_types::Capability::ServerSideToolReference)
-            });
-        let supports_client_side_tool_search = snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.model_info.as_ref())
-            .is_some_and(|info| info.has_capability(coco_types::Capability::ClientSideToolSearch));
+        let tool_search_strategy =
+            crate::tool_context::resolve_tool_search_strategy(snapshot.as_ref());
         // Both partitions share the same filter context so they
         // cover disjoint halves of the registry — `loaded` includes
         // discovered tools, `deferred` excludes them.
@@ -165,7 +157,7 @@ impl QueryEngine {
                 self.config.permission_mode,
             )
             .with_discovered_tool_names(pre_snapshot_discovered)
-            .with_model_capabilities(supports_tool_reference, supports_client_side_tool_search)
+            .with_tool_search_strategy(tool_search_strategy)
             .with_active_shell_tool(self.config.active_shell_tool);
             let stub_ctx = self.with_current_tool_search_candidates(stub_ctx).await;
             let mut loaded: Vec<String> = self

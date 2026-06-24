@@ -312,7 +312,7 @@ pub enum Capability {
     /// Known supporting models: Claude Sonnet 4.5+, Opus 4+, GPT-5
     /// (anthropic-compat). NOT supported on Haiku 4.5 / 3.5 /
     /// older 3-series.
-    ServerSideToolReference,
+    AnthropicToolReference,
     /// Provider/model is known to work correctly with coco-rs's
     /// client-side `ToolSearch` promotion path (`discovered_tool_names`
     /// `AppStatePatch` + tools-array growth on the next turn).
@@ -329,19 +329,22 @@ pub enum Capability {
     /// ```text
     /// tool_search_active =
     ///     Feature::ToolSearch
-    ///     && (ServerSideToolReference || ClientSideToolSearch)
+    ///     && strategy != Eager
     /// ```
-    /// When **both** capabilities are absent, the model lands in the
+    /// When no resolver-supported capability is present, the model lands in the
     /// "eager-load every tool, hide ToolSearch" state regardless of
     /// the user's `Feature::ToolSearch` setting.
     ///
-    /// No TS analogue — TS only ships the server-side path and
+    /// No TS analogue — TS only ships Anthropic-style server expansion and
     /// blacklists incompatible models via
     /// `DEFAULT_UNSUPPORTED_MODEL_PATTERNS`. coco-rs needs a positive
-    /// capability for the client-side path because it works on every
+    /// capability for ClientSideToolSearchPromotion because it works on every
     /// Provider, so "default-on" would mis-fire on local / custom
     /// model deployments that nobody has vetted.
-    ClientSideToolSearch,
+    ClientSideToolSearchPromotion,
+    /// OpenAI Responses native `tool_search` provider tool with
+    /// client-side execution (`execution: "client"`).
+    OpenAiNativeToolSearch,
 }
 
 /// How a model's `apply_patch` tool is presented to the model. Per-model,

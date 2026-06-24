@@ -341,34 +341,9 @@ impl QueryEngine {
         // this turn's request.
         let discovered = std::sync::Arc::new(app_state.discovered_tool_names.clone());
 
-        // Resolve both `ToolSearch`-related capabilities from the
-        // active client's `ModelInfo`. Three-state outcome:
-        //   - server (Anthropic Sonnet 4.5+/Opus 4+ via beta
-        //     `tool-search-tool-2025-10-19`): tools array carries every
-        //     enabled tool with `deferLoading: true` on deferred ones.
-        //     Server expands `tool_reference` content blocks into
-        //     `<functions>` markup inline — `tools` shape is constant
-        //     across turns, prompt-cache prefix stays warm.
-        //   - client-side only (capable models without server beta —
-        //     GPT-5, Gemini, DeepSeek, Haiku, …): tools array contains
-        //     only the loaded set; deferred tools enter on the next
-        //     turn after `ToolSearch` writes
-        //     `discovered_tool_names`. One cache break per discovery.
-        //   - neither (unknown / custom model that didn't declare
-        //     either capability): the registry filter auto-disables
-        //     deferral via `tool_search_active`, so every enabled
-        //     tool's full schema lands on turn 1 (safe default).
         let snapshot = self.runtime_snapshot();
-        let supports_tool_reference = snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.model_info.as_ref())
-            .is_some_and(|info| {
-                info.has_capability(coco_types::Capability::ServerSideToolReference)
-            });
-        let supports_client_side_tool_search = snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.model_info.as_ref())
-            .is_some_and(|info| info.has_capability(coco_types::Capability::ClientSideToolSearch));
+        let tool_search_strategy =
+            crate::tool_context::resolve_tool_search_strategy(snapshot.as_ref());
 
         let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
             self.config.features.clone(),
@@ -377,21 +352,22 @@ impl QueryEngine {
             self.config.permission_mode,
         )
         .with_discovered_tool_names(discovered.clone())
-        .with_model_capabilities(supports_tool_reference, supports_client_side_tool_search)
+        .with_tool_search_strategy(tool_search_strategy)
         .with_active_shell_tool(self.config.active_shell_tool);
         let stub_ctx = self.with_current_tool_search_candidates(stub_ctx).await;
 
-        // The tool list sent to the model. When the server-side path
-        // is live (capability declared AND `Feature::ToolSearch` on),
+        // The tool list sent to the model. When Anthropic tool-reference
+        // expansion is live (capability declared AND `Feature::ToolSearch` on),
         // `enabled` includes deferred tools too; `deferred_marker`
         // captures which names need the `deferLoading` provider-option
-        // patch below. Otherwise (client-side path OR feature off OR
+        // patch below. Otherwise (client-side promotion OR feature off OR
         // capability missing), `loaded_tools` handles the partition
         // — its short-circuit on `tool_search_active` covers the
         // capability-missing case automatically.
-        let use_server_side_path = supports_tool_reference && stub_ctx.tool_search_active();
+        let use_anthropic_tool_reference =
+            tool_search_strategy.uses_anthropic_tool_reference() && stub_ctx.tool_search_active();
         let (mut model_tools, deferred_marker): (Vec<_>, std::collections::HashSet<String>) =
-            if use_server_side_path {
+            if use_anthropic_tool_reference {
                 let enabled = self.tools.enabled(&stub_ctx);
                 let deferred: std::collections::HashSet<String> = self
                     .tools
@@ -596,6 +572,36 @@ impl QueryEngine {
                 po_map.insert("anthropic".to_string(), anthropic);
                 Some(coco_llm_types::ProviderOptions(po_map))
             };
+            if tool_search_strategy.uses_openai_native_client()
+                && tool_name == coco_types::ToolName::ToolSearch.as_str()
+            {
+                let parameters = serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Query to find deferred tools. Use select:<tool_name> for exact selection."
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 5
+                        }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                });
+                out.push(BuiltToolDefinition {
+                    tool: LanguageModelTool::Provider(coco_inference::openai_tool_search_tool(
+                        Some("client"),
+                        Some(&tool.prompt(&prompt_options).await),
+                        Some(parameters),
+                    )),
+                    source,
+                    deferred,
+                });
+                continue;
+            }
             // Convert the neutral `ToolSpec` to the provider wire form. A
             // `Freeform` tool becomes an OpenAI provider-defined custom tool
             // (`id: "openai.custom"`) carrying the lark grammar; `prepare_tools`

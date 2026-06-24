@@ -138,6 +138,7 @@ pub fn prepare_responses_tools(
                                 | "apply_patch"
                                 | "image_generation"
                                 | "mcp"
+                                | "tool_search"
                         );
                         if !is_builtin {
                             Some(pt.name.as_str())

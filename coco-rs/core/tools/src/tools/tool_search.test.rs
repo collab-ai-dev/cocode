@@ -670,26 +670,22 @@ mod execute_tests {
         assert!(matches.is_empty());
     }
 
-    // ── ServerSideToolReference capability — emission path ─
+    // ── AnthropicToolReference capability — emission path ─
 
-    /// Server-side capable ctx (Anthropic Sonnet 4.5+/Opus 4+).
-    /// `model_supports_client_side_tool_search` is also true because
-    /// every server-side-capable model can run the client-side
-    /// fallback if the beta header ever fails to negotiate.
+    /// Anthropic tool-reference capable ctx (Sonnet/Opus).
     fn ctx_with_tools_capable(tools: Vec<Arc<dyn DynTool>>) -> ToolUseContext {
         let mut ctx = ctx_with_tools(tools);
-        ctx.model_supports_tool_reference = true;
-        ctx.model_supports_client_side_tool_search = true;
+        ctx.tool_search_strategy = coco_tool_runtime::ToolSearchStrategy::AnthropicToolReference;
         ctx.tool_search_has_candidates = true;
         ctx
     }
 
     /// Client-side-only capable ctx (GPT-5, Gemini, DeepSeek, Haiku).
     /// Used to verify the universal promotion path remains active
-    /// when the model only declares `ClientSideToolSearch`.
+    /// when the model only declares `ClientSideToolSearchPromotion`.
     fn ctx_with_tools_client_capable(tools: Vec<Arc<dyn DynTool>>) -> ToolUseContext {
         let mut ctx = ctx_with_tools(tools);
-        ctx.model_supports_client_side_tool_search = true;
+        ctx.tool_search_strategy = coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion;
         ctx.tool_search_has_candidates = true;
         ctx
     }
@@ -773,8 +769,10 @@ mod execute_tests {
         let ctx = ctx_with_tools(vec![]);
         // `ctx_with_tools` → defaults: feature on, no capability.
         assert!(ctx.features.enabled(coco_types::Feature::ToolSearch));
-        assert!(!ctx.model_supports_tool_reference);
-        assert!(!ctx.model_supports_client_side_tool_search);
+        assert_eq!(
+            ctx.tool_search_strategy,
+            coco_tool_runtime::ToolSearchStrategy::Eager
+        );
         assert!(
             !<ToolSearchTool as DynTool>::is_enabled(&ToolSearchTool, &ctx),
             "no capability → ToolSearch must hide regardless of feature flag"
@@ -784,9 +782,9 @@ mod execute_tests {
 
     /// Client-side-only capable model: text envelope + promotion patch.
     /// Pinned to make sure capability gating doesn't regress the
-    /// client-side path other providers rely on (GPT-5, Gemini,
+    /// ClientSideToolSearchPromotion path other providers rely on (GPT-5, Gemini,
     /// DeepSeek, Haiku — every model that declares only
-    /// `ClientSideToolSearch`).
+    /// `ClientSideToolSearchPromotion`).
     #[tokio::test]
     async fn client_side_only_model_keeps_patch_and_omits_tag() {
         let ctx = ctx_with_tools_client_capable(vec![deferred("WebFetch", "Fetch a URL", None)]);
@@ -797,7 +795,7 @@ mod execute_tests {
         assert!(result.data.get("render_as_tool_reference").is_none());
         let patch = result
             .app_state_patch
-            .expect("client-side path must keep the discovery patch");
+            .expect("ClientSideToolSearchPromotion must keep the discovery patch");
         let mut state = coco_types::ToolAppState::default();
         patch(&mut state);
         assert!(state.discovered_tool_names.contains("WebFetch"));
@@ -855,6 +853,139 @@ mod execute_tests {
         };
         assert_eq!(text, first_schema);
     }
+
+    // ── OpenAiNativeClient capability — native tool_search emission ─
+
+    /// OpenAI Responses native-`tool_search` capable ctx (gpt-5.4 / 5.5):
+    /// resolves to `OpenAiNativeClient`, which surfaces matched schemas
+    /// inside the `tool_search_output.tools` payload instead of the
+    /// client-side `<functions>` text + promotion patch.
+    fn ctx_with_tools_openai_native(tools: Vec<Arc<dyn DynTool>>) -> ToolUseContext {
+        let mut ctx = ctx_with_tools(tools);
+        ctx.tool_search_strategy = coco_tool_runtime::ToolSearchStrategy::OpenAiNativeClient;
+        ctx.tool_search_has_candidates = true;
+        ctx
+    }
+
+    /// Native path: `openai_tools` carries codex-shaped function entries
+    /// (`type:"function"`, `strict:false`, `defer_loading:true` for deferred
+    /// tools, `parameters`), the Anthropic tag and client-side `<functions>`
+    /// block are absent, and the discovery patch is suppressed (schemas ride
+    /// the `tool_search_output` item, keeping the client `tools` array
+    /// cache-stable).
+    #[tokio::test]
+    async fn openai_native_select_emits_openai_tools_and_skips_patch() {
+        let ctx = ctx_with_tools_openai_native(vec![
+            deferred("WebFetch", "Fetch URL", Some("fetch a URL")),
+            deferred("WebSearch", "Search the web", Some("search the web")),
+        ]);
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:WebFetch,WebSearch"}),
+            &ctx,
+        )
+        .await
+        .expect("select executes");
+
+        assert!(result.data.get("render_as_tool_reference").is_none());
+        assert!(result.data.get("rendered_functions").is_none());
+        assert!(
+            result.app_state_patch.is_none(),
+            "OpenAI-native path must suppress the discovery patch"
+        );
+
+        // Entries mirror codex-rs's LoadableToolSpec::Function wire shape,
+        // sorted by canonical tool name (WebFetch < WebSearch).
+        let tools = result.data["openai_tools"]
+            .as_array()
+            .expect("openai_tools array");
+        assert_eq!(tools.len(), 2);
+        for (entry, name) in tools.iter().zip(["WebFetch", "WebSearch"]) {
+            assert_eq!(entry["type"], json!("function"));
+            assert_eq!(entry["name"], json!(name));
+            assert_eq!(entry["strict"], json!(false));
+            assert_eq!(
+                entry["defer_loading"],
+                json!(true),
+                "deferred tool keeps defer_loading: {entry:?}"
+            );
+            assert!(entry.get("parameters").is_some(), "parameters present");
+        }
+    }
+
+    /// `render_for_model` on the native path emits a single Text part whose
+    /// body is the `{"tools":[...]}` JSON the OpenAI provider lifts into the
+    /// native `tool_search_output` item.
+    #[tokio::test]
+    async fn openai_native_render_emits_tools_json() {
+        let ctx = ctx_with_tools_openai_native(vec![deferred("WebFetch", "Fetch a URL", None)]);
+        let result =
+            <ToolSearchTool as DynTool>::execute(&ToolSearchTool, json!({"query": "fetch"}), &ctx)
+                .await
+                .expect("keyword executes");
+        let parts = <ToolSearchTool as DynTool>::render_for_model(&ToolSearchTool, &result.data);
+        let coco_tool_runtime::ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part, got {:?}", parts[0]);
+        };
+        let parsed: Value = serde_json::from_str(text).expect("render emits valid JSON");
+        let tools = parsed["tools"].as_array().expect("tools array");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], json!("WebFetch"));
+        assert_eq!(tools[0]["type"], json!("function"));
+        assert_eq!(tools[0]["defer_loading"], json!(true));
+    }
+
+    /// An already-loaded (eager) tool surfaced via select-mode full-pool
+    /// fallback must OMIT `defer_loading` — it is not deferred, mirroring
+    /// codex's `defer_loading.then_some(true)`.
+    #[tokio::test]
+    async fn openai_native_eager_fallback_omits_defer_loading() {
+        let ctx = ctx_with_tools_openai_native(vec![eager("Read", "Read a file")]);
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:Read"}),
+            &ctx,
+        )
+        .await
+        .expect("select executes");
+        let tools = result.data["openai_tools"]
+            .as_array()
+            .expect("openai_tools array");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], json!("Read"));
+        assert_eq!(tools[0]["strict"], json!(false));
+        assert!(
+            tools[0].get("defer_loading").is_none(),
+            "already-loaded tool must omit defer_loading: {:?}",
+            tools[0]
+        );
+    }
+
+    /// `max_results` accepts `limit` as an alias so models primed on the
+    /// codex-rs `tool_search` provider tool (which names the field `limit`)
+    /// parse cleanly on the OpenAI-native path.
+    #[tokio::test]
+    async fn max_results_accepts_limit_alias() {
+        let ctx = ctx_with_tools(vec![
+            deferred("TaskCreate", "create task", None),
+            deferred("TaskGet", "get task", None),
+            deferred("TaskList", "list tasks", None),
+            deferred("TaskUpdate", "update task", None),
+        ]);
+        let result = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "task", "limit": 2}),
+            &ctx,
+        )
+        .await
+        .expect("keyword executes");
+        let matches = result.data["matches"].as_array().unwrap();
+        assert_eq!(
+            matches.len(),
+            2,
+            "limit alias caps results like max_results"
+        );
+    }
 }
 
 // ── parse_tool_name — decomposition ────────────────────────
@@ -892,5 +1023,41 @@ mod parse_name_tests {
         assert!(p.is_mcp);
         assert_eq!(p.parts, vec!["github", "list"]);
         assert_eq!(p.full, "github list");
+    }
+}
+
+// ── ToolSearchStrategy::uses_server_side_expansion ────────────
+
+mod strategy_predicate_tests {
+    use coco_tool_runtime::ToolSearchStrategy;
+
+    /// Both native paths surface schemas server-side (Anthropic
+    /// `tool_reference` / OpenAI `tool_search_output`), so they share the
+    /// "don't grow the tools array, skip the discovery patch" behavior.
+    /// `ClientSidePromotion` grows the array; `Eager` never searches.
+    #[test]
+    fn server_side_expansion_covers_exactly_the_two_native_paths() {
+        assert!(ToolSearchStrategy::AnthropicToolReference.uses_server_side_expansion());
+        assert!(ToolSearchStrategy::OpenAiNativeClient.uses_server_side_expansion());
+        assert!(!ToolSearchStrategy::ClientSidePromotion.uses_server_side_expansion());
+        assert!(!ToolSearchStrategy::Eager.uses_server_side_expansion());
+    }
+
+    /// Pins the predicate as exactly the disjunction it replaced in
+    /// `ToolSearchTool::execute`, so the refactor is behavior-preserving.
+    #[test]
+    fn server_side_expansion_equals_anthropic_or_openai_native() {
+        for strategy in [
+            ToolSearchStrategy::Eager,
+            ToolSearchStrategy::AnthropicToolReference,
+            ToolSearchStrategy::OpenAiNativeClient,
+            ToolSearchStrategy::ClientSidePromotion,
+        ] {
+            assert_eq!(
+                strategy.uses_server_side_expansion(),
+                strategy.uses_anthropic_tool_reference() || strategy.uses_openai_native_client(),
+                "predicate must equal the old disjunction for {strategy:?}"
+            );
+        }
     }
 }

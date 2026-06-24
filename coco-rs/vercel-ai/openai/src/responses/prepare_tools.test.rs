@@ -45,6 +45,32 @@ fn provider_tool_web_search() {
 }
 
 #[test]
+fn provider_tool_search_client_execution() {
+    let tool = LanguageModelV4Tool::Provider(LanguageModelV4ProviderTool {
+        id: "openai.tool_search".into(),
+        name: "tool_search".into(),
+        args: [
+            ("execution".into(), serde_json::json!("client")),
+            (
+                "parameters".into(),
+                serde_json::json!({
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"],
+                }),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    });
+    let r = prepare_responses_tools(&Some(vec![tool]), &None);
+    let tools = r.tools.expect("should have tools");
+    assert_eq!(tools[0]["type"], "tool_search");
+    assert_eq!(tools[0]["execution"], "client");
+    assert_eq!(tools[0]["parameters"]["required"][0], "query");
+}
+
+#[test]
 fn provider_tool_apply_patch_custom_grammar() {
     // coco's freeform apply_patch: a provider-defined custom tool carrying the
     // lark grammar. `id: "openai.custom"` is mandatory — `id:"openai.apply_patch"`

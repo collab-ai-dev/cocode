@@ -494,6 +494,80 @@ fn build_discovery_patch(matches: &[String]) -> Option<coco_types::AppStatePatch
     }))
 }
 
+/// Build the OpenAI Responses `tool_search_output.tools` entries for the
+/// matched tools. Each entry mirrors codex-rs's `LoadableToolSpec::Function`
+/// wire shape: `{type:"function", name, description, strict:false,
+/// defer_loading?:true, parameters}`.
+///
+/// `strict` is always `false` (matching codex's
+/// `tool_definition_to_responses_api_tool`). `defer_loading:true` is emitted
+/// **only** for tools that are genuinely deferred (`should_defer()`), mirroring
+/// codex's `defer_loading.then_some(true)`: a discovered deferred tool stays
+/// "discovered-but-deferred" — its schema is injected just-in-time by the
+/// Responses server rather than promoted into the persistent `tools` array.
+/// This is what lets the OpenAI-native path skip the `discovered_tool_names`
+/// AppStatePatch and keep the client `tools` array cache-stable. Already-loaded
+/// fallback matches (`should_defer() == false`) omit the flag.
+///
+/// Resolution spans `deferred + enabled + all_tools` via
+/// [`matched_tools_for_schema`] so select-mode names that resolve only in the
+/// full pool are surfaced too — symmetric with the client-side `<functions>`
+/// path (previously this searched `deferred + enabled` only and silently
+/// dropped full-pool hits).
+///
+/// Entries are flat `function`s keyed on each tool's **full registered name**
+/// (e.g. `mcp__<server>__<tool>`), NOT codex-style `namespace` groupings.
+/// coco dispatches tool calls by flat qualified name and has no namespace
+/// call-routing (no `DynamicToolCallRequest` machinery), so a `namespace`
+/// entry carrying short inner names would break MCP call-back resolution. Flat
+/// function entries are valid OpenAI tool defs and round-trip correctly.
+async fn openai_function_specs_for_matches(
+    matches: &[String],
+    deferred: &[Arc<dyn DynTool>],
+    enabled_tools: &[Arc<dyn DynTool>],
+    all_tools: &[Arc<dyn DynTool>],
+    ctx: &ToolUseContext,
+) -> Vec<Value> {
+    let tools = matched_tools_for_schema(matches, deferred, enabled_tools, all_tools);
+    if tools.is_empty() {
+        return Vec::new();
+    }
+
+    let mut tool_names: Vec<String> = all_tools
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+    tool_names.sort();
+    let prompt_options = PromptOptions {
+        is_non_interactive: ctx.is_non_interactive,
+        tool_names,
+        permission_context: Some(ctx.permission_context.clone()),
+        ..PromptOptions::default()
+    };
+    let schema_ctx = SchemaContext {
+        features: Some(ctx.features.clone()),
+        ..SchemaContext::default()
+    };
+    let mut specs = Vec::new();
+    for tool in tools {
+        let ToolSpec::Function(spec) = tool.tool_spec(&schema_ctx, &prompt_options).await else {
+            continue;
+        };
+        let mut entry = serde_json::json!({
+            "type": "function",
+            "name": spec.name,
+            "description": spec.description,
+            "strict": false,
+            "parameters": spec.parameters,
+        });
+        if tool.should_defer() {
+            entry["defer_loading"] = Value::Bool(true);
+        }
+        specs.push(entry);
+    }
+    specs
+}
+
 /// Serde default for `max_results` — default is 5.
 fn default_tool_search_max_results() -> Option<i64> {
     Some(DEFAULT_MAX_RESULTS as i64)
@@ -505,8 +579,12 @@ pub struct ToolSearchInput {
     /// Query to find deferred tools. Use "select:<tool_name>" for
     /// direct selection, or keywords to search.
     pub query: String,
-    /// Maximum number of results to return (default: 5)
-    #[serde(default = "default_tool_search_max_results")]
+    /// Maximum number of results to return (default: 5).
+    ///
+    /// Accepts `limit` as an alias so models primed on the codex-rs
+    /// `tool_search` provider tool (which names this field `limit`) parse
+    /// cleanly on the OpenAI-native path.
+    #[serde(default = "default_tool_search_max_results", alias = "limit")]
     pub max_results: Option<i64>,
 }
 
@@ -535,6 +613,9 @@ pub struct ToolSearchOutput {
     /// Client-side fallback schema block rendered for the model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rendered_functions: Option<String>,
+    /// OpenAI Responses native `tool_search_output.tools` payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_tools: Option<Vec<Value>>,
 }
 
 pub struct ToolSearchTool;
@@ -552,9 +633,8 @@ impl Tool for ToolSearchTool {
         ToolName::ToolSearch.as_str()
     }
     /// Hidden from the model when `ToolSearch` is inactive: the feature is off,
-    /// the current model declared neither
-    /// [`coco_types::Capability::ServerSideToolReference`] nor
-    /// [`coco_types::Capability::ClientSideToolSearch`], or there are no
+    /// the current model resolved to [`coco_tool_runtime::ToolSearchStrategy::Eager`],
+    /// or there are no
     /// deferred tools / pending MCP servers to search.
     ///
     /// Symmetric with [`coco_tool_runtime::ToolRegistry::loaded_tools`]
@@ -583,8 +663,8 @@ impl Tool for ToolSearchTool {
 
     /// Render the search envelope into content parts the model sees.
     ///
-    /// **Two emission shapes**, selected by the `render_as_tool_reference`
-    /// flag the executor sets in `out`:
+    /// **Three emission shapes**, selected by the strategy flags the executor
+    /// sets in `out`:
     ///
     /// 1. **`tool_reference` blocks** (Anthropic, capable models) —
     ///    one `Custom` part per match carrying
@@ -594,7 +674,13 @@ impl Tool for ToolSearchTool {
     ///    the prompt reaches the model. Client-side `tools` array is
     ///    NOT modified — cache prefix stays warm across discoveries.
     ///
-    /// 2. **Text list** (every other provider + non-capable Anthropic
+    /// 2. **OpenAI native tool list** (OpenAI Responses with
+    ///    `tool_search`, `execution:"client"`) — single JSON text
+    ///    payload mirroring `tool_search_output.tools`; the OpenAI
+    ///    provider lifts this into the native response item.
+    ///    Client-side `tools` array is NOT modified.
+    ///
+    /// 3. **Text list** (every other provider + non-capable Anthropic
     ///    models) — single `Text` part rendering matched names and
     ///    explaining schemas arrive next turn. The executor pairs this
     ///    branch with an `AppStatePatch` that adds matches to
@@ -618,7 +704,9 @@ impl Tool for ToolSearchTool {
                 .collect();
         }
 
-        let text = if out.matches.is_empty() {
+        let text = if let Some(tools) = out.openai_tools.as_ref() {
+            serde_json::to_string(&serde_json::json!({ "tools": tools })).unwrap_or_default()
+        } else if out.matches.is_empty() {
             let mut text = "No matching deferred tools found".to_string();
             if let Some(pending) = out.pending_mcp_servers.as_ref() {
                 let names: Vec<&str> = pending.iter().map(String::as_str).collect();
@@ -712,7 +800,13 @@ impl Tool for ToolSearchTool {
         // blocks (cache-friendly), and the `discovered_tool_names`
         // patch is skipped — the discovery state lives in message
         // history (the `tool_reference` blocks themselves).
-        let use_tool_reference = ctx.model_supports_tool_reference;
+        let strategy = ctx.tool_search_strategy;
+        let use_tool_reference = strategy.uses_anthropic_tool_reference();
+        let use_openai_native = strategy.uses_openai_native_client();
+        // Both native paths surface schemas server-side: skip the client
+        // `<functions>` block AND the `discovered_tool_names` patch, leaving
+        // the tools array (and cache prefix) untouched across discoveries.
+        let server_side_expansion = strategy.uses_server_side_expansion();
 
         // Direct selection mode — `select:Tool1,Tool2,...`. Missing names
         // are silently dropped. Names that resolve in the full pool but not
@@ -755,7 +849,7 @@ impl Tool for ToolSearchTool {
                 matches = ?matches,
                 "ToolSearch resolved matches"
             );
-            let rendered_functions = if use_tool_reference {
+            let rendered_functions = if server_side_expansion {
                 None
             } else {
                 render_functions_for_client_side(
@@ -767,19 +861,34 @@ impl Tool for ToolSearchTool {
                 )
                 .await
             };
+            let openai_tools = if use_openai_native {
+                Some(
+                    openai_function_specs_for_matches(
+                        &matches,
+                        &deferred,
+                        &enabled_tools,
+                        &all_tools,
+                        ctx,
+                    )
+                    .await,
+                )
+            } else {
+                None
+            };
             let envelope = build_envelope(
                 &matches,
                 &raw_query,
                 total_deferred_tools,
                 use_tool_reference,
                 rendered_functions,
+                openai_tools,
                 &ctx.mcp,
             )
             .await;
             return Ok(ToolResult {
                 data: envelope,
                 new_messages: vec![],
-                app_state_patch: if use_tool_reference {
+                app_state_patch: if server_side_expansion {
                     None
                 } else {
                     build_discovery_patch(&matches)
@@ -804,11 +913,25 @@ impl Tool for ToolSearchTool {
             "ToolSearch resolved matches"
         );
 
-        let rendered_functions = if use_tool_reference {
+        let rendered_functions = if server_side_expansion {
             None
         } else {
             render_functions_for_client_side(&matches, &deferred, &enabled_tools, &all_tools, ctx)
                 .await
+        };
+        let openai_tools = if use_openai_native {
+            Some(
+                openai_function_specs_for_matches(
+                    &matches,
+                    &deferred,
+                    &enabled_tools,
+                    &all_tools,
+                    ctx,
+                )
+                .await,
+            )
+        } else {
+            None
         };
         let envelope = build_envelope(
             &matches,
@@ -816,13 +939,14 @@ impl Tool for ToolSearchTool {
             total_deferred_tools,
             use_tool_reference,
             rendered_functions,
+            openai_tools,
             &ctx.mcp,
         )
         .await;
         Ok(ToolResult {
             data: envelope,
             new_messages: vec![],
-            app_state_patch: if use_tool_reference {
+            app_state_patch: if server_side_expansion {
                 None
             } else {
                 build_discovery_patch(&matches)
@@ -835,18 +959,20 @@ impl Tool for ToolSearchTool {
 
 /// Construct the structured envelope returned in `ToolResult.data`.
 /// `render_for_model` reads:
-/// - `matches: [String]` — names to surface (text list OR
-///   `tool_reference` blocks, gated by `render_as_tool_reference`).
+/// - `matches: [String]` — names to surface.
 /// - `pending_mcp_servers: [String]` — non-empty only when the match
 ///   list is empty AND an MCP server is mid-handshake (retry hint).
 /// - `render_as_tool_reference: bool` — set by the executor based on
-///   the current model's `Capability::ServerSideToolReference`.
+///   the current model's `Capability::AnthropicToolReference`.
+/// - `openai_tools: [Value]` — OpenAI Responses-compatible function
+///   specs when using native client-side `tool_search`.
 async fn build_envelope(
     matches: &[String],
     raw_query: &str,
     total_deferred_tools: i64,
     use_tool_reference: bool,
     rendered_functions: Option<String>,
+    openai_tools: Option<Vec<Value>>,
     mcp: &coco_tool_runtime::McpHandleRef,
 ) -> ToolSearchOutput {
     // Empty-result retry hint: only attach when there's genuine MCP-
@@ -869,6 +995,7 @@ async fn build_envelope(
         render_as_tool_reference: use_tool_reference.then_some(true),
         pending_mcp_servers,
         rendered_functions,
+        openai_tools,
     }
 }
 

@@ -560,7 +560,7 @@ fn tool_search_enabled_keeps_deferred_pool() {
     )
     // Declare client-side capability so `tool_search_active()` is
     // true — feature alone isn't enough now that we three-state.
-    .with_model_capabilities(false, true)
+    .with_tool_search_strategy(crate::ToolSearchStrategy::ClientSidePromotion)
     .with_tool_search_candidates(true);
 
     let loaded = names(&reg.loaded_tools(&ctx));
@@ -587,7 +587,7 @@ fn tool_search_inactive_when_model_lacks_capability() {
         coco_types::ToolFilter::unrestricted(),
         coco_types::PermissionMode::Default,
     );
-    // No `with_model_capabilities` call → both flags default false.
+    // No strategy override → ToolSearch stays in eager fallback.
 
     let loaded = names(&reg.loaded_tools(&ctx));
     let deferred = names(&reg.deferred_tools(&ctx));
@@ -628,7 +628,7 @@ fn loaded_tools_includes_always_load_mcp_tool_on_turn_one() {
     // Declare a capability so `tool_search_active()` is true and the
     // deferral filter actually runs (the always-load short-circuit
     // is what the test is asserting).
-    .with_model_capabilities(false, true)
+    .with_tool_search_strategy(crate::ToolSearchStrategy::ClientSidePromotion)
     .with_tool_search_candidates(true);
 
     let loaded = names(&reg.loaded_tools(&ctx));
