@@ -281,7 +281,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         ),
         (
             names::BTW,
-            "Ask a quick side question",
+            "Ask a quick side question without interrupting the main conversation",
             &[],
             btw_handler,
             true,

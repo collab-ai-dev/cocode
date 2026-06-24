@@ -15,6 +15,8 @@ pub use coco_skills::BashToolHandle;
 pub use coco_skills::NoOpBashToolHandle;
 
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -557,7 +559,13 @@ pub fn build_command_registry(
     // 2-5. Skill-derived commands (filtered by feature gates + the
     // `off` override; the dialog's gate keeps the `name-only` /
     // `user-invocable-only` rows discoverable via `/`).
-    register_skills_as_commands(&mut registry, skill_manager, &features, skill_overrides);
+    register_skills_as_commands(
+        &mut registry,
+        skill_manager,
+        &features,
+        skill_overrides,
+        &project_root,
+    );
     register_plugin_contributions(&mut registry, plugins);
 
     // 6. P1 handlers — last so they win over any name collisions
@@ -580,6 +588,7 @@ fn register_skills_as_commands(
     manager: &coco_skills::SkillManager,
     features: &coco_types::Features,
     tiers: &coco_config::SkillOverrideTiers,
+    project_root: &Path,
 ) {
     use coco_types::CommandSource;
     use coco_types::PromptCommandData;
@@ -627,6 +636,33 @@ fn register_skills_as_commands(
         base.when_to_use = skill.when_to_use.clone();
         let prompt = skill.prompt.clone();
         let progress_message = "running".to_string();
+        let skill_handler = SkillPromptHandler {
+            name: skill.name.clone(),
+            body: prompt,
+            progress_message: progress_message.clone(),
+            // MCP-source gate: MCP skills are remote and untrusted —
+            // never run their in-prompt shell.
+            is_mcp: matches!(skill.source, coco_skills::SkillSource::Mcp { .. }),
+            // Skill frontmatter `allowed-tools` → `alwaysAllowRules.command`.
+            allowed_tools: skill.allowed_tools.clone().unwrap_or_default(),
+            bash_tool_handle: Arc::clone(&bash_cell),
+            // `${CLAUDE_SKILL_DIR}` is known now; `${CLAUDE_SESSION_ID}` is
+            // late-bound via the shared cell.
+            skill_dir: skill
+                .skill_root
+                .as_ref()
+                .and_then(|p| p.to_str())
+                .map(str::to_owned),
+            session_id: Arc::clone(&session_cell),
+        };
+        let handler: Arc<dyn CommandHandler> = if skill.name == "batch" {
+            Arc::new(BatchSkillPromptHandler {
+                inner: skill_handler,
+                project_root: project_root.to_path_buf(),
+            })
+        } else {
+            Arc::new(skill_handler)
+        };
         registry.register(RegisteredCommand {
             base,
             command_type: CommandType::Prompt(PromptCommandData {
@@ -642,25 +678,7 @@ fn register_skills_as_commands(
                 thinking_level: None,
                 hooks: skill.hooks.clone(),
             }),
-            handler: Some(std::sync::Arc::new(SkillPromptHandler {
-                name: skill.name.clone(),
-                body: prompt,
-                progress_message,
-                // MCP-source gate: MCP skills are remote and untrusted —
-                // never run their in-prompt shell.
-                is_mcp: matches!(skill.source, coco_skills::SkillSource::Mcp { .. }),
-                // Skill frontmatter `allowed-tools` → `alwaysAllowRules.command`.
-                allowed_tools: skill.allowed_tools.clone().unwrap_or_default(),
-                bash_tool_handle: Arc::clone(&bash_cell),
-                // `${CLAUDE_SKILL_DIR}` is known now; `${CLAUDE_SESSION_ID}` is
-                // late-bound via the shared cell.
-                skill_dir: skill
-                    .skill_root
-                    .as_ref()
-                    .and_then(|p| p.to_str())
-                    .map(str::to_owned),
-                session_id: Arc::clone(&session_cell),
-            })),
+            handler: Some(handler),
             is_enabled: None,
         });
     }
@@ -785,6 +803,59 @@ impl CommandHandler for SkillPromptHandler {
     fn handler_name(&self) -> &str {
         &self.name
     }
+}
+
+const BATCH_NOT_A_GIT_REPO_MESSAGE: &str = "This is not a git repository. The `/batch` command requires a git repo because it spawns agents in isolated git worktrees and creates PRs from each. Initialize a repo first, or run this from inside an existing one.";
+
+const BATCH_MISSING_INSTRUCTION_MESSAGE: &str = "Provide an instruction describing the batch change you want to make.\n\nExamples:\n  /batch migrate from react to vue\n  /batch replace all uses of lodash with native equivalents\n  /batch add type annotations to all untyped function parameters";
+
+struct BatchSkillPromptHandler {
+    inner: SkillPromptHandler,
+    project_root: PathBuf,
+}
+
+#[async_trait]
+impl CommandHandler for BatchSkillPromptHandler {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
+        let instruction = args.trim();
+        if instruction.is_empty() {
+            return Ok(batch_guard_prompt(
+                &self.inner.progress_message,
+                BATCH_MISSING_INSTRUCTION_MESSAGE,
+            ));
+        }
+
+        if !is_git_work_tree(&self.project_root).await {
+            return Ok(batch_guard_prompt(
+                &self.inner.progress_message,
+                BATCH_NOT_A_GIT_REPO_MESSAGE,
+            ));
+        }
+
+        self.inner.execute_command(instruction).await
+    }
+
+    fn handler_name(&self) -> &str {
+        self.inner.handler_name()
+    }
+}
+
+fn batch_guard_prompt(progress_message: &str, text: &str) -> CommandResult {
+    CommandResult::Prompt {
+        progress_message: progress_message.to_string(),
+        parts: vec![PromptPart::Text {
+            text: text.to_string(),
+        }],
+    }
+}
+
+async fn is_git_work_tree(cwd: &Path) -> bool {
+    tokio::process::Command::new("git")
+        .current_dir(cwd)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .await
+        .is_ok_and(|out| out.status.success())
 }
 
 #[cfg(test)]
@@ -1520,3 +1591,7 @@ fn init_handler(_args: &str) -> String {
 #[cfg(test)]
 #[path = "lib.test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "skill_prompt_commands.test.rs"]
+mod skill_prompt_commands_tests;

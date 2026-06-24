@@ -165,6 +165,25 @@ fn temp_transcript_store(home: &TempDir) -> Arc<coco_session::TranscriptStore> {
 }
 
 #[tokio::test]
+async fn runtime_fallback_cache_params_use_current_transcript() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime(&home).await;
+    {
+        let mut history = runtime.history.lock().await;
+        history.push(coco_messages::create_user_message("fresh transcript"));
+    }
+
+    let cache = runtime.fallback_cache_safe_params().await;
+
+    assert_eq!(cache.rendered_system_prompt, "test");
+    assert_eq!(cache.model_id, "mock-model");
+    assert_eq!(cache.provider, "mock");
+    assert_eq!(cache.fork_context_messages.len(), 1);
+    let text = coco_messages::wrapping::extract_text_from_message(&cache.fork_context_messages[0]);
+    assert!(text.contains("fresh transcript"));
+}
+
+#[tokio::test]
 async fn dispatch_with_parent_history_uses_no_event_message_path() {
     let home = TempDir::new().expect("home tempdir");
     let runtime = build_runtime(&home).await;

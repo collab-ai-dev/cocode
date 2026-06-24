@@ -2195,9 +2195,9 @@ enum SlashOutcome {
     /// Run a `/btw` side question as a one-shot fork that shares the
     /// parent turn's prompt cache, then render the answer inline. Emitted
     /// when the dispatcher sees `BTW_SENTINEL`; the runner reads
-    /// `runtime.last_cache_safe_params()` + the installed `ForkDispatcher`
-    /// (mirrors the SDK `/btw` short-circuit). The parent conversation is
-    /// untouched.
+    /// `runtime.last_cache_safe_params()` (or the transcript fallback) plus
+    /// the installed `ForkDispatcher` (mirrors the SDK `/btw` short-circuit).
+    /// The parent conversation is untouched.
     TriggerBtw {
         request: coco_commands::handlers::btw::BtwRequest,
     },
@@ -4153,24 +4153,25 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
 /// fork that shares the parent turn's prompt cache (`CacheSafeParams`) and
 /// renders the answer inline as the slash result. Shares the fork+extract
 /// logic with the SDK path via [`crate::side_question`]; the parent
-/// conversation is never mutated. Degrades to a hint line when no parent turn
-/// has finalised yet (incl. right after `/clear`) or the fork dispatcher is
-/// not installed.
+/// conversation is never mutated. If no parent turn has finalised yet,
+/// falls back to cache params rebuilt from the current transcript, matching
+/// the TS `/btw` fallback path. Degrades only when the fork dispatcher is not
+/// installed.
 async fn run_side_question(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
     event_tx: &mpsc::Sender<CoreEvent>,
     request: coco_commands::handlers::btw::BtwRequest,
 ) {
-    let answer = match runtime.last_cache_safe_params().await {
-        None => "(no parent turn yet — run a regular prompt first so /btw can share its cache)"
-            .to_string(),
-        Some(cache) => match runtime.current_fork_dispatcher().await {
-            None => "(fork dispatcher not installed — /btw requires CLI bootstrap)".to_string(),
-            Some(dispatcher) => {
-                crate::side_question::run_side_question_fork(&cache, &dispatcher, &request.question)
-                    .await
-            }
-        },
+    let cache = match runtime.last_cache_safe_params().await {
+        Some(cache) => cache,
+        None => runtime.fallback_cache_safe_params().await,
+    };
+    let answer = match runtime.current_fork_dispatcher().await {
+        None => "(fork dispatcher not installed — /btw requires CLI bootstrap)".to_string(),
+        Some(dispatcher) => {
+            crate::side_question::run_side_question_fork(&cache, &dispatcher, &request.question)
+                .await
+        }
     };
     // Echo the question as the command args so the row reads `❯ /btw <q>`,
     // and surface just the answer as the result body.

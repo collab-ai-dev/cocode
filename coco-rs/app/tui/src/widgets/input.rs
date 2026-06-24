@@ -274,14 +274,18 @@ impl Widget for InputWidget<'_> {
                 let split = ghost.byte_pos.min(model.display_text.len());
                 let before = model.display_text[..split].to_string();
                 let after = model.display_text[split..].to_string();
-                spans.push(Span::styled(before, text_style));
+                spans.extend(styled_display_text_spans(before, text_style, self.styles));
                 spans.push(Span::styled(
                     ghost.text.clone(),
                     Style::default().fg(self.styles.dim()),
                 ));
                 spans.push(Span::styled(after, text_style));
             } else {
-                spans.push(Span::styled(model.display_text.clone(), text_style));
+                spans.extend(styled_display_text_spans(
+                    model.display_text.clone(),
+                    text_style,
+                    self.styles,
+                ));
             }
             if let Some(hint) = model.inline_hint.as_ref() {
                 spans.push(Span::styled(
@@ -311,6 +315,35 @@ pub(crate) fn scroll_offset(cursor_row: usize, total_rows: usize, content_rows: 
     }
     let max_scroll = total_rows - content_rows;
     cursor_row.saturating_sub(content_rows - 1).min(max_scroll)
+}
+
+fn styled_display_text_spans(
+    text: String,
+    text_style: Style,
+    styles: UiStyles<'_>,
+) -> Vec<Span<'static>> {
+    let Some(trigger_len) = btw_trigger_len(&text) else {
+        return vec![Span::styled(text, text_style)];
+    };
+    let mut spans = vec![Span::styled(
+        text[..trigger_len].to_string(),
+        Style::default().fg(styles.warning()),
+    )];
+    if trigger_len < text.len() {
+        spans.push(Span::styled(text[trigger_len..].to_string(), text_style));
+    }
+    spans
+}
+
+fn btw_trigger_len(text: &str) -> Option<usize> {
+    let tail = text.get(4..)?;
+    text.get(..4)
+        .is_some_and(|head| head.eq_ignore_ascii_case("/btw"))
+        .then_some(())?;
+    tail.chars()
+        .next()
+        .is_none_or(char::is_whitespace)
+        .then_some(4)
 }
 
 impl InputWidget<'_> {

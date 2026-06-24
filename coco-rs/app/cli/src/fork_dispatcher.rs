@@ -5,9 +5,9 @@
 //! drive a *fresh* [`coco_query::QueryEngine`] without mutating the
 //! parent. This module owns that bridge.
 //!
-//! Constructs an `AgentQueryConfig` from `lastCacheSafeParams`,
-//! runs a one-shot turn against a fresh engine, and returns the
-//! response text. The contract is threaded through the
+//! Constructs an `AgentQueryConfig` from cache-safe params, runs a
+//! one-shot turn against a fresh engine, and returns the response text.
+//! The contract is threaded through the
 //! [`coco_query::forked_agent::ForkDispatcher`] trait so that
 //! `app/query` stays free of CLI / runtime types.
 //!
@@ -24,9 +24,9 @@
 //! ## What this is NOT
 //!
 //! It is not a generic "run another query" helper — it specifically
-//! implements the post-turn cache-sharing contract. AgentTool spawn
-//! goes through [`coco_query::QueryEngineAdapter`] (different
-//! contract: no cache slot, full child engine lifecycle).
+//! implements the cache-sharing fork contract. AgentTool spawn goes
+//! through [`coco_query::QueryEngineAdapter`] (different contract: no
+//! cache slot, full child engine lifecycle).
 
 use std::sync::Arc;
 

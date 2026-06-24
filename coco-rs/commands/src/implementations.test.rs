@@ -20,6 +20,24 @@ fn test_register_extended_builtins() {
 }
 
 #[test]
+fn btw_registration_matches_upstream_command_metadata() {
+    let mut registry = CommandRegistry::new();
+    register_extended_builtins(&mut registry);
+
+    let btw = registry.get(names::BTW).expect("btw registered");
+    assert_eq!(
+        btw.base.description,
+        "Ask a quick side question without interrupting the main conversation"
+    );
+    assert_eq!(btw.base.argument_hint.as_deref(), Some("<question>"));
+    assert_eq!(
+        btw.base.argument_kind,
+        coco_types::CommandArgumentKind::FreeText
+    );
+    assert_eq!(btw.base.safety, coco_types::CommandSafety::AlwaysSafe);
+}
+
+#[test]
 fn test_extended_builtins_no_overlap_with_base() {
     let mut base_registry = CommandRegistry::new();
     register_builtins(&mut base_registry);

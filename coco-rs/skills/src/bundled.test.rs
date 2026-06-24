@@ -51,10 +51,69 @@ fn batch_disables_model_invocation() {
 }
 
 #[test]
+fn batch_metadata_matches_upstream_skill() {
+    let skills = get_bundled_skills();
+    let batch = skills.iter().find(|s| s.name == "batch").unwrap();
+    assert!(batch.user_invocable);
+    assert_eq!(
+        batch.description,
+        "Research and plan a large-scale change, then execute it in parallel across 5–30 isolated worktree agents that each open a PR."
+    );
+    assert_eq!(
+        batch.when_to_use.as_deref(),
+        Some(
+            "Use when the user wants to make a sweeping, mechanical change across many files (migrations, refactors, bulk renames) that can be decomposed into independent parallel units."
+        )
+    );
+    assert_eq!(batch.argument_hint.as_deref(), Some("<instruction>"));
+    assert!(
+        batch
+            .allowed_tools
+            .as_deref()
+            .is_some_and(<[String]>::is_empty)
+    );
+}
+
+#[test]
+fn batch_prompt_preserves_user_instruction_and_worker_contract() {
+    let skills = get_bundled_skills();
+    let batch = skills.iter().find(|s| s.name == "batch").unwrap();
+    assert!(batch.prompt.contains("## User Instruction\n\n$ARGUMENTS"));
+    assert!(batch.prompt.contains("Call the `EnterPlanMode` tool now"));
+    assert!(batch.prompt.contains("use the `AskUserQuestion` tool"));
+    assert!(batch.prompt.contains("Call `ExitPlanMode`"));
+    assert!(batch.prompt.contains("using the `Agent` tool"));
+    assert!(
+        batch
+            .prompt
+            .contains("`isolation: \"worktree\"` and `run_in_background: true`")
+    );
+    assert!(
+        batch
+            .prompt
+            .contains("Invoke the `Skill` tool with `skill: \"simplify\"")
+    );
+    assert!(batch.prompt.contains("PR: <url>"));
+}
+
+#[test]
 fn simplify_prompt_matches_review_agent_flow() {
     let skills = get_bundled_skills();
     let simplify = skills.iter().find(|s| s.name == "simplify").unwrap();
     assert!(simplify.user_invocable);
+    assert!(!simplify.disable_model_invocation);
+    assert_eq!(
+        simplify.description,
+        "Review changed code for reuse, quality, and efficiency, then fix any issues found."
+    );
+    assert!(simplify.argument_hint.is_none());
+    assert!(simplify.when_to_use.is_none());
+    assert!(
+        simplify
+            .allowed_tools
+            .as_deref()
+            .is_some_and(<[String]>::is_empty)
+    );
     assert!(
         simplify
             .prompt

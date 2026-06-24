@@ -1,10 +1,49 @@
 use super::*;
 use crate::state::InputState;
+use coco_tui_ui::theme::Theme;
 
 fn input(text: &str) -> InputState {
     let mut input = InputState::new();
     input.set_text(text);
     input
+}
+
+#[test]
+fn btw_trigger_highlight_matches_start_only_word_boundary() {
+    assert_eq!(btw_trigger_len("/btw"), Some(4));
+    assert_eq!(btw_trigger_len("/BTW why"), Some(4));
+    assert_eq!(btw_trigger_len("/btw\twhy"), Some(4));
+    assert_eq!(btw_trigger_len("/btwice"), None);
+    assert_eq!(btw_trigger_len("ask /btw why"), None);
+    assert_eq!(btw_trigger_len("/bt"), None);
+}
+
+#[test]
+fn styled_display_text_spans_warns_for_btw_trigger_only() {
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let text_style = Style::default().fg(styles.text());
+
+    let spans = styled_display_text_spans("/btw explain".to_string(), text_style, styles);
+
+    assert_eq!(spans.len(), 2);
+    assert_eq!(spans[0].content.as_ref(), "/btw");
+    assert_eq!(spans[0].style.fg, Some(styles.warning()));
+    assert_eq!(spans[1].content.as_ref(), " explain");
+    assert_eq!(spans[1].style.fg, Some(styles.text()));
+}
+
+#[test]
+fn styled_display_text_spans_leaves_non_btw_text_plain() {
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let text_style = Style::default().fg(styles.text());
+
+    let spans = styled_display_text_spans("/btwice".to_string(), text_style, styles);
+
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].content.as_ref(), "/btwice");
+    assert_eq!(spans[0].style.fg, Some(styles.text()));
 }
 
 #[test]

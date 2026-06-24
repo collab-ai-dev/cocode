@@ -323,17 +323,17 @@ impl SideQueryResponse {
 
 // ── Post-turn cache-safe params (D8) ──
 
-/// Parameters that must be **byte-identical** between the parent
-/// session's last turn and a post-turn fork's first request to share
-/// the parent's prompt cache.
+/// Parameters that should be **byte-identical** between the parent
+/// session context and a fork's first request to share the parent's
+/// prompt cache when a saved parent request exists.
 ///
 /// **Runtime scope**: this is the cross-layer DTO. The slot itself
 /// lives on `coco_query::QueryEngine` (`last_cache_safe_params:
 /// Arc<RwLock<Option<CacheSafeParams>>>`) populated in
-/// `finalize_turn_post_tools`. Cleared on `/clear`. Post-turn fork
-/// features (none ship in coco-rs today — see
-/// `docs/coco-rs/agentteam-architecture.md` "Deferred design
-/// decisions") will read it via `engine.last_cache_safe_params()`.
+/// `finalize_turn_post_tools`. Cleared on `/clear`. Fork features such
+/// as `/btw` read it via `engine.last_cache_safe_params()` and may
+/// rebuild equivalent params from the current transcript before the
+/// first saved parent request exists.
 ///
 /// **Cache-key fields included here**: rendered system prompt, model
 /// id, parent message history. **Excluded**: the live `ToolUseContext`

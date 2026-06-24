@@ -373,6 +373,39 @@ impl QueryEngine {
         self.last_cache_safe_params.read().await.clone()
     }
 
+    /// Build cache-safe params from the current engine config and an
+    /// arbitrary history snapshot. Used as the `/btw` fallback before the
+    /// first parent turn has populated `last_cache_safe_params`.
+    pub fn cache_safe_params_from_history(
+        &self,
+        history: &coco_messages::MessageHistory,
+    ) -> coco_types::CacheSafeParams {
+        let provider = self
+            .runtime_snapshot()
+            .map(|snapshot| snapshot.provider)
+            .unwrap_or_default();
+        Self::cache_safe_params_from_parts(&self.config, provider, history)
+    }
+
+    /// Construct [`coco_types::CacheSafeParams`] from explicit config parts.
+    /// This is intentionally small and byte-for-byte aligned with
+    /// `save_post_turn_cache_params`, except callers supply the provider
+    /// snapshot when they do not have a live `QueryEngine`.
+    pub fn cache_safe_params_from_parts(
+        config: &QueryEngineConfig,
+        provider: String,
+        history: &coco_messages::MessageHistory,
+    ) -> coco_types::CacheSafeParams {
+        coco_types::CacheSafeParams {
+            rendered_system_prompt: config.system_prompt.clone().unwrap_or_default(),
+            model_id: config.model_id.clone(),
+            provider,
+            active_shell_tool: config.active_shell_tool,
+            prompt_cache: config.prompt_cache.clone(),
+            fork_context_messages: history.as_slice().to_vec(),
+        }
+    }
+
     /// Clone the `Arc<RwLock<...>>` so observers (the TUI runtime, transcript
     /// recorder) can poll the slot across the per-turn engine's lifetime
     /// without holding a `&QueryEngine`. Read-only contract: external holders
@@ -404,28 +437,8 @@ impl QueryEngine {
         if history.is_empty() {
             return;
         }
-        // Snapshot the post-turn history into shared `Arc<Message>`
-        // entries so the slot can be observed without holding a
-        // parent-history reference. Same shape that
-        // `AgentQueryConfig.fork_context_messages` expects, so a fork
-        // caller threads it directly through the existing
-        // fork-context plumbing — no serialize / deserialize hop.
-        let fork_messages: Vec<std::sync::Arc<coco_messages::Message>> =
-            history.as_slice().to_vec();
-        let rendered_system_prompt = self.config.system_prompt.clone().unwrap_or_default();
-        let provider = self
-            .runtime_snapshot()
-            .map(|snapshot| snapshot.provider)
-            .unwrap_or_default();
-        self.save_cache_safe_params(coco_types::CacheSafeParams {
-            rendered_system_prompt,
-            model_id: self.config.model_id.clone(),
-            provider,
-            active_shell_tool: self.config.active_shell_tool,
-            prompt_cache: self.config.prompt_cache.clone(),
-            fork_context_messages: fork_messages,
-        })
-        .await;
+        self.save_cache_safe_params(self.cache_safe_params_from_history(history))
+            .await;
     }
 
     /// Cache-break tracking attribution. Subagents land under

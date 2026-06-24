@@ -619,7 +619,7 @@ pub struct SessionRuntime {
     /// `agent_handle`: built after `build()` returns the `Arc<Self>`
     /// (the dispatcher impl captures the runtime), and installed on
     /// every per-turn engine via `wire_engine`. `None` ⇒ post-turn
-    /// forks degrade to no-op (`/btw` returns a hint message,
+    /// forks degrade to no-op (`/btw` returns a bootstrap hint,
     /// `promptSuggestion` skips). Real impl lives in
     /// `app/cli/src/fork_dispatcher.rs`.
     fork_dispatcher: Arc<RwLock<Option<coco_query::forked_agent::ForkDispatcherRef>>>,
@@ -628,7 +628,8 @@ pub struct SessionRuntime {
     /// is shared with the engine's slot, so it keeps observing the params the
     /// engine writes at turn finalize and survives the engine drop. A
     /// between-turns `/btw` reads it to share the parent turn's prompt cache
-    /// (the SDK path reads the same data off its persistent `engine`).
+    /// when available; otherwise it rebuilds cache params from the current
+    /// transcript.
     /// `None` until the first engine is built; the inner `Option` is `None`
     /// until the first turn finalises (or after `/clear`).
     last_engine_cache_handle: Arc<RwLock<Option<CacheParamsHandle>>>,
@@ -2865,14 +2866,29 @@ impl SessionRuntime {
 
     /// Read the most recent turn's cache-safe params. `None` before the
     /// first turn finalises (or after `/clear`). The TUI `/btw` dispatch
-    /// reads this to share the parent's prompt cache; the SDK path reads
-    /// the same data straight off its persistent `engine`.
+    /// uses this when present and falls back to rebuilding from transcript.
     pub async fn last_cache_safe_params(&self) -> Option<coco_types::CacheSafeParams> {
         let handle = self.last_engine_cache_handle.read().await.clone();
         match handle {
             Some(h) => h.read().await.clone(),
             None => None,
         }
+    }
+
+    /// Build fresh cache params from the current session config and transcript.
+    /// This is the `/btw` fallback when no post-turn cache slot exists yet.
+    pub async fn fallback_cache_safe_params(&self) -> coco_types::CacheSafeParams {
+        let cfg = self.current_engine_config().await;
+        let provider = self
+            .model_runtimes
+            .snapshot_for_role(coco_types::ModelRole::Main)
+            .map(|snapshot| snapshot.provider)
+            .unwrap_or_default();
+        let history = {
+            let guard = self.history.lock().await;
+            guard.snapshot()
+        };
+        coco_query::QueryEngine::cache_safe_params_from_parts(&cfg, provider, &history)
     }
 
     /// Install the background task runtime. Called once during CLI
@@ -3626,9 +3642,8 @@ impl SessionRuntime {
         // `/btw` issued between this `/clear` and the first post-clear turn
         // would read the dropped pre-clear engine's slot (still holding the
         // discarded conversation in `fork_context_messages`) and fork against
-        // content the user just cleared. Nulling it makes `last_cache_safe_params`
-        // return `None`, so `/btw` shows the "no parent turn yet" hint until a
-        // fresh turn repopulates it. Matches the field/getter doc contract.
+        // content the user just cleared. With the handle nulled, `/btw` falls
+        // back to fresh cache params built from the now-empty transcript.
         *self.last_engine_cache_handle.write().await = None;
         // Clear the per-agent skill announcement map so every skill
         // re-announces in the post-clear transcript's first listing pass.
