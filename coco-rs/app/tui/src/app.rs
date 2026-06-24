@@ -1196,13 +1196,21 @@ fn coalesce_lossy_deferred_event(buffer: &mut VecDeque<CoreEvent>, event: &CoreE
             })
         }
         CoreEvent::Protocol(ServerNotification::TaskProgress(p)) => {
-            replace_matching_deferred(buffer, event, |candidate| {
-                matches!(
-                    candidate,
-                    CoreEvent::Protocol(ServerNotification::TaskProgress(existing))
-                        if existing.task_id == p.task_id
-                )
-            })
+            for existing_event in buffer.iter_mut().rev() {
+                if let CoreEvent::Protocol(ServerNotification::TaskProgress(existing)) =
+                    existing_event
+                    && existing.task_id == p.task_id
+                {
+                    let mut merged = p.clone();
+                    merged.workflow_progress = merge_deferred_workflow_progress(
+                        &existing.workflow_progress,
+                        &p.workflow_progress,
+                    );
+                    *existing = merged;
+                    return true;
+                }
+            }
+            false
         }
         CoreEvent::Protocol(ServerNotification::ToolProgress(p)) => {
             replace_matching_deferred(buffer, event, |candidate| {
@@ -1291,6 +1299,21 @@ fn is_repeat_safe_key(key: &KeyEvent) -> bool {
         | KeyCode::Null
         | KeyCode::Tab => false,
     }
+}
+
+fn merge_deferred_workflow_progress(
+    existing: &[coco_types::WorkflowProgressEvent],
+    incoming: &[coco_types::WorkflowProgressEvent],
+) -> Vec<coco_types::WorkflowProgressEvent> {
+    if incoming.is_empty() {
+        return existing.to_vec();
+    }
+    if incoming.starts_with(existing) {
+        return incoming.to_vec();
+    }
+    let mut merged = existing.to_vec();
+    merged.extend_from_slice(incoming);
+    merged
 }
 
 fn replace_matching_deferred(

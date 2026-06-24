@@ -748,3 +748,23 @@ fn memory_dialog_entry_round_trips_row_kind() {
     let back: MemoryDialogEntry = serde_json::from_value(json).unwrap();
     assert_eq!(back, entry);
 }
+
+#[test]
+fn workflow_dialog_payload_uses_camel_case_wire_shape() {
+    let payload = WorkflowDialogPayload {
+        entries: vec![WorkflowDialogEntry {
+            name: "Release".into(),
+            description: "Ship it".into(),
+            source_path: ".coco/workflows/release.ts".into(),
+        }],
+    };
+
+    let json = serde_json::to_value(&payload).unwrap();
+
+    assert_eq!(json["entries"][0]["name"], "Release");
+    assert_eq!(json["entries"][0]["description"], "Ship it");
+    assert_eq!(
+        json["entries"][0]["sourcePath"],
+        ".coco/workflows/release.ts"
+    );
+}

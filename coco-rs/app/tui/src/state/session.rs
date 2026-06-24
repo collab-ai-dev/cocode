@@ -936,6 +936,12 @@ pub struct TaskEntry {
     /// "Runtime" field in the shell-detail view. Clock-sourced (not
     /// `Instant`) so snapshot tests can pin it via `MockClock`.
     pub started_at_ms: i64,
+    /// Workflow display name, when known from the `TaskStarted` sidecar.
+    /// Empty for non-workflow tasks.
+    pub workflow_name: Option<String>,
+    /// Cumulative workflow progress events for `TaskEntryKind::Workflow`.
+    /// Empty for non-workflow tasks.
+    pub workflow_progress: Vec<coco_types::WorkflowProgressEvent>,
 }
 
 /// Task entry lifecycle status.
@@ -955,21 +961,27 @@ pub enum TaskEntryKind {
     Shell,
     /// `local_agent` / `in_process_teammate` / `remote_agent` — a subagent.
     Agent,
+    /// `local_workflow` — a backgrounded workflow script.
+    Workflow,
     /// Anything else (e.g. `dream`).
     Other,
 }
 
 impl TaskEntry {
-    /// A running shell or agent — the set surfaced by the footer pill and the
-    /// background-tasks dialog. The single source of this predicate.
+    /// A running shell, agent, or workflow — the set surfaced by the footer
+    /// pill and the background-tasks dialog. The single source of this
+    /// predicate.
     pub(crate) fn is_running_background(&self) -> bool {
         self.status == TaskEntryStatus::Running
-            && matches!(self.kind, TaskEntryKind::Shell | TaskEntryKind::Agent)
+            && matches!(
+                self.kind,
+                TaskEntryKind::Shell | TaskEntryKind::Agent | TaskEntryKind::Workflow
+            )
     }
 }
 
 impl SessionState {
-    /// Running shells and agents in start order — the rows shown in the
+    /// Running shells, agents, and workflows in start order — the rows shown in the
     /// background-tasks dialog and counted by the footer pill. Shared by the
     /// renderer and the key-intercept so selection indices stay aligned.
     pub fn running_background_tasks(&self) -> Vec<&TaskEntry> {
@@ -986,7 +998,8 @@ impl SessionState {
         rows.sort_by_key(|t| match t.kind {
             TaskEntryKind::Agent => 0,
             TaskEntryKind::Shell => 1,
-            TaskEntryKind::Other => 2,
+            TaskEntryKind::Workflow => 2,
+            TaskEntryKind::Other => 3,
         });
         rows
     }

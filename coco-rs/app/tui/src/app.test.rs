@@ -3,7 +3,10 @@ use std::collections::VecDeque;
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
+use coco_types::TaskProgressParams;
+use coco_types::TaskUsage;
 use coco_types::TuiOnlyEvent;
+use coco_types::WorkflowProgressEvent;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -132,6 +135,35 @@ fn lossy_text(n: usize) -> CoreEvent {
     })
 }
 
+fn workflow_progress_event(progress: TaskProgressParams) -> CoreEvent {
+    CoreEvent::Protocol(ServerNotification::TaskProgress(progress))
+}
+
+fn task_progress(
+    description: &str,
+    workflow_progress: Vec<WorkflowProgressEvent>,
+) -> TaskProgressParams {
+    TaskProgressParams {
+        task_id: "workflow-1".to_string(),
+        tool_use_id: None,
+        description: description.to_string(),
+        usage: TaskUsage {
+            total_tokens: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            tool_uses: 0,
+            duration_ms: 0,
+            cost_usd: 0.0,
+        },
+        last_tool_name: None,
+        summary: None,
+        agent_type: None,
+        recent_activities: Vec::new(),
+        workflow_progress,
+    }
+}
+
 #[test]
 fn deferred_event_buffer_coalesces_stream_deltas() {
     let mut buffer = VecDeque::new();
@@ -162,6 +194,73 @@ fn deferred_event_buffer_coalesces_stream_deltas() {
         panic!("expected coalesced text delta");
     };
     assert_eq!(delta, "hello world");
+}
+
+#[test]
+fn deferred_event_buffer_merges_workflow_task_progress_deltas() {
+    let mut buffer = VecDeque::new();
+    let phase = WorkflowProgressEvent::WorkflowPhase {
+        index: 0,
+        title: "Build".to_string(),
+    };
+    let log = WorkflowProgressEvent::WorkflowLog {
+        message: "Compiled".to_string(),
+    };
+
+    assert!(matches!(
+        defer_core_event(
+            &mut buffer,
+            workflow_progress_event(task_progress("first", vec![phase.clone()])),
+        ),
+        DeferredCoreEvent::Buffered
+    ));
+    assert!(matches!(
+        defer_core_event(
+            &mut buffer,
+            workflow_progress_event(task_progress("second", vec![log.clone()])),
+        ),
+        DeferredCoreEvent::Buffered
+    ));
+
+    assert_eq!(buffer.len(), 1);
+    let CoreEvent::Protocol(ServerNotification::TaskProgress(progress)) = &buffer[0] else {
+        panic!("expected coalesced task progress");
+    };
+    assert_eq!(progress.description, "second");
+    assert_eq!(progress.workflow_progress, vec![phase, log]);
+}
+
+#[test]
+fn deferred_event_buffer_replaces_cumulative_workflow_task_progress() {
+    let mut buffer = VecDeque::new();
+    let phase = WorkflowProgressEvent::WorkflowPhase {
+        index: 0,
+        title: "Build".to_string(),
+    };
+    let log = WorkflowProgressEvent::WorkflowLog {
+        message: "Compiled".to_string(),
+    };
+
+    assert!(matches!(
+        defer_core_event(
+            &mut buffer,
+            workflow_progress_event(task_progress("first", vec![phase.clone()])),
+        ),
+        DeferredCoreEvent::Buffered
+    ));
+    assert!(matches!(
+        defer_core_event(
+            &mut buffer,
+            workflow_progress_event(task_progress("second", vec![phase.clone(), log.clone()],)),
+        ),
+        DeferredCoreEvent::Buffered
+    ));
+
+    let CoreEvent::Protocol(ServerNotification::TaskProgress(progress)) = &buffer[0] else {
+        panic!("expected coalesced task progress");
+    };
+    assert_eq!(progress.description, "second");
+    assert_eq!(progress.workflow_progress, vec![phase, log]);
 }
 
 #[test]

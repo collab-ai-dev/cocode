@@ -215,6 +215,10 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
             name: "memory",
             message: "Cancelled memory editing",
         },
+        M::WorkflowPicker(_) => Slash {
+            name: "workflow",
+            message: "Workflow picker dismissed",
+        },
         M::Settings(_) => Slash {
             name: "status",
             message: "Status dialog dismissed",
@@ -335,6 +339,10 @@ pub(crate) fn filter(state: &mut AppState, c: char) {
             q.filter.push(c);
             q.selected = 0;
         }
+        Some(ModalState::WorkflowPicker(w)) => {
+            w.filter.push(c);
+            w.selected = 0;
+        }
         _ => {}
     }
 }
@@ -356,6 +364,10 @@ pub(crate) fn filter_backspace(state: &mut AppState) {
         Some(ModalState::QuickOpen(q)) => {
             q.filter.pop();
             q.selected = 0;
+        }
+        Some(ModalState::WorkflowPicker(w)) => {
+            w.filter.pop();
+            w.selected = 0;
         }
         _ => {}
     }
@@ -422,6 +434,10 @@ pub(crate) fn nav(state: &mut AppState, delta: i32) {
         Some(ModalState::MemoryDialog(m)) => {
             let count = m.entries.len() as i32;
             m.selected = (m.selected + delta).clamp(0, (count - 1).max(0));
+        }
+        Some(ModalState::WorkflowPicker(w)) => {
+            let count = crate::presentation::picker_styled::filtered_workflows(w).len() as i32;
+            w.selected = (w.selected + delta).clamp(0, (count - 1).max(0));
         }
         Some(ModalState::TeamRoster(r)) => {
             let count = r.members.len() as i32;
@@ -580,6 +596,20 @@ pub(crate) async fn route_confirm(
             } else {
                 state.ui.finish_taken_modal();
             }
+        }
+        ModalState::WorkflowPicker(w) => {
+            if let Some(entry) =
+                crate::presentation::picker_styled::filtered_workflows(&w).get(w.selected as usize)
+                && let Ok(name) = crate::state::SlashCommandName::new("workflow")
+            {
+                let _ = command_tx
+                    .send(UserCommand::ExecuteSlashCommand {
+                        name,
+                        args: entry.name.clone(),
+                    })
+                    .await;
+            }
+            state.ui.finish_taken_modal();
         }
         ModalState::Transcript(t) => {
             state.ui.restore_modal(ModalState::Transcript(t));

@@ -223,6 +223,35 @@ fn open_session_browser_populates_resume_picker() {
 }
 
 #[test]
+fn open_workflow_picker_opens_modal_with_entries() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::OpenWorkflowPicker {
+            payload: coco_types::WorkflowDialogPayload {
+                entries: vec![coco_types::WorkflowDialogEntry {
+                    name: "release".to_string(),
+                    description: "Ship the build".to_string(),
+                    source_path: ".coco/workflows/release.ts".to_string(),
+                }],
+            },
+        },
+        &tx,
+    );
+
+    assert!(consumed);
+    let Some(ModalState::WorkflowPicker(picker)) = state.ui.modal.as_ref() else {
+        panic!("expected workflow picker modal, got {:?}", state.ui.modal);
+    };
+    assert_eq!(picker.entries.len(), 1);
+    assert_eq!(picker.entries[0].name, "release");
+    assert_eq!(picker.entries[0].description, "Ship the build");
+    assert_eq!(picker.selected, 0);
+}
+
+#[test]
 fn rewind_completed_restores_prompt_before_message_truncation() {
     let mut state = AppState::new();
     let (tx, _rx) = channel();

@@ -207,6 +207,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::OpenContextUsage { .. } => "open_context_usage",
         TuiOnlyEvent::OpenRewindPicker => "open_rewind_picker",
         TuiOnlyEvent::OpenMemoryDialog { .. } => "open_memory_dialog",
+        TuiOnlyEvent::OpenWorkflowPicker { .. } => "open_workflow_picker",
         TuiOnlyEvent::CopyCommandRequested { .. } => "copy_command_requested",
         TuiOnlyEvent::MemoryFileOpened { .. } => "memory_file_opened",
         TuiOnlyEvent::MemoryFileOpenFailed { .. } => "memory_file_open_failed",

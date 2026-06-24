@@ -158,6 +158,8 @@ pub enum DialogSpec {
     /// `/theme` (no args) — standalone theme picker with live preview + a
     /// sample diff.
     ThemePicker,
+    /// `/workflow` (no args) — local workflow picker.
+    WorkflowPicker,
     /// `/skills` — read-only skill catalog overlay. Payload carries the
     /// fully-grouped entry list plus per-group subtitle text so the
     /// TUI doesn't recompute paths or token estimates.

@@ -8,6 +8,7 @@ use async_trait::async_trait;
 
 use crate::CommandHandler;
 use crate::CommandResult;
+use crate::DialogSpec;
 use crate::PromptPart;
 
 /// How a Prompt-type command should incorporate the user-supplied
@@ -114,6 +115,26 @@ impl CommandHandler for StaticPromptHandler {
 
     fn handler_name(&self) -> &str {
         &self.name
+    }
+}
+
+/// Prompt handler that opens the workflow picker on bare `/workflow`, while
+/// preserving prompt-command behavior when the user supplies a target/task.
+pub struct WorkflowPromptHandler {
+    pub inner: StaticPromptHandler,
+}
+
+#[async_trait]
+impl CommandHandler for WorkflowPromptHandler {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
+        if args.trim().is_empty() {
+            return Ok(CommandResult::OpenDialog(DialogSpec::WorkflowPicker));
+        }
+        self.inner.execute_command(args).await
+    }
+
+    fn handler_name(&self) -> &str {
+        self.inner.handler_name()
     }
 }
 

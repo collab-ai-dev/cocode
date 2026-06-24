@@ -13,6 +13,7 @@ use coco_types::ServerNotification;
 use coco_types::SessionStartedParams;
 use coco_types::TurnAbortReason;
 
+use super::clear_session_boundary_state;
 use super::on_turn_interrupted_outcome;
 use crate::state::AppState;
 use crate::state::ModalState;
@@ -98,6 +99,40 @@ fn session_started(provider: &str) -> ServerNotification {
         fast_mode_state: None,
         lsp_active: false,
     })
+}
+
+#[test]
+fn clear_session_boundary_state_keeps_running_workflow_tasks() {
+    let mut state = AppState::new();
+    state.session.active_tasks = vec![
+        crate::state::session::TaskEntry {
+            task_id: "wf_running".into(),
+            description: "Explore — running".into(),
+            status: crate::state::session::TaskEntryStatus::Running,
+            kind: crate::state::session::TaskEntryKind::Workflow,
+            started_at_ms: 0,
+            workflow_name: Some("analyze".into()),
+            workflow_progress: vec![coco_types::WorkflowProgressEvent::WorkflowLog {
+                message: "still running".into(),
+            }],
+        },
+        crate::state::session::TaskEntry {
+            task_id: "wf_done".into(),
+            description: "Explore — done".into(),
+            status: crate::state::session::TaskEntryStatus::Completed,
+            kind: crate::state::session::TaskEntryKind::Workflow,
+            started_at_ms: 0,
+            workflow_name: Some("done".into()),
+            workflow_progress: Vec::new(),
+        },
+    ];
+
+    clear_session_boundary_state(&mut state);
+
+    assert_eq!(state.session.active_tasks.len(), 1);
+    let task = &state.session.active_tasks[0];
+    assert_eq!(task.task_id, "wf_running");
+    assert_eq!(task.workflow_progress.len(), 1);
 }
 
 /// True if the receiver got a `Rewind { mode: AutoRestore }`. Drains
@@ -376,6 +411,224 @@ fn local_agent_started_params(task_id: &str, tool_use_id: &str) -> coco_types::T
         color: None,
         backend_kind: None,
     }
+}
+
+#[test]
+fn task_started_maps_local_workflow_to_workflow_kind() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    let event = coco_types::ServerNotification::TaskStarted(coco_types::TaskStartedParams {
+        task_id: "wf_123".into(),
+        tool_use_id: Some("call-workflow".into()),
+        description: "Run workflow: analyze".into(),
+        task_type: Some(coco_types::task_type_wire::LOCAL_WORKFLOW.into()),
+        workflow_name: Some("analyze".into()),
+        prompt: None,
+        agent_name: None,
+        team_name: None,
+        color: None,
+        backend_kind: None,
+    });
+    super::handle(&mut state, event, &tx);
+
+    let task = state
+        .session
+        .active_tasks
+        .iter()
+        .find(|task| task.task_id == "wf_123")
+        .expect("workflow task row created");
+    assert_eq!(task.kind, crate::state::session::TaskEntryKind::Workflow);
+    assert_eq!(task.workflow_name.as_deref(), Some("analyze"));
+}
+
+#[test]
+fn task_progress_stores_workflow_progress_events() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    super::handle(
+        &mut state,
+        coco_types::ServerNotification::TaskStarted(coco_types::TaskStartedParams {
+            task_id: "wf_123".into(),
+            tool_use_id: Some("call-workflow".into()),
+            description: "Run workflow: analyze".into(),
+            task_type: Some(coco_types::task_type_wire::LOCAL_WORKFLOW.into()),
+            workflow_name: Some("analyze".into()),
+            prompt: None,
+            agent_name: None,
+            team_name: None,
+            color: None,
+            backend_kind: None,
+        }),
+        &tx,
+    );
+
+    let mut progress = progress_params("wf_123", None, Vec::new());
+    progress.workflow_progress = vec![coco_types::WorkflowProgressEvent::WorkflowLog {
+        message: "Combining findings".into(),
+    }];
+    super::handle(
+        &mut state,
+        coco_types::ServerNotification::TaskProgress(progress),
+        &tx,
+    );
+
+    let task = state
+        .session
+        .active_tasks
+        .iter()
+        .find(|task| task.task_id == "wf_123")
+        .expect("workflow task row exists");
+    assert_eq!(task.description, "Combining findings");
+    assert_eq!(task.workflow_progress.len(), 1);
+}
+
+#[test]
+fn task_progress_merges_workflow_delta_and_cumulative_batches() {
+    let _locale = crate::i18n::locale_test_guard("en");
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    super::handle(
+        &mut state,
+        coco_types::ServerNotification::TaskStarted(coco_types::TaskStartedParams {
+            task_id: "wf_123".into(),
+            tool_use_id: Some("call-workflow".into()),
+            description: "Run workflow: analyze".into(),
+            task_type: Some(coco_types::task_type_wire::LOCAL_WORKFLOW.into()),
+            workflow_name: Some("analyze".into()),
+            prompt: None,
+            agent_name: None,
+            team_name: None,
+            color: None,
+            backend_kind: None,
+        }),
+        &tx,
+    );
+
+    let phase = coco_types::WorkflowProgressEvent::WorkflowPhase {
+        index: 0,
+        title: "Analyze".into(),
+    };
+    let log = coco_types::WorkflowProgressEvent::WorkflowLog {
+        message: "Combining findings".into(),
+    };
+    let done = coco_types::WorkflowProgressEvent::WorkflowAgent {
+        index: 0,
+        state: coco_types::WorkflowAgentState::Done,
+        label: "Explore".into(),
+        phase_title: Some("Analyze".into()),
+        phase_index: Some(0),
+        agent_id: None,
+        model: None,
+        tokens: None,
+        tool_calls: None,
+        duration_ms: None,
+        cached: false,
+        result_preview: None,
+        prompt_preview: None,
+        error: None,
+    };
+
+    let mut first = progress_params("wf_123", None, Vec::new());
+    first.workflow_progress = vec![phase.clone()];
+    super::handle(
+        &mut state,
+        coco_types::ServerNotification::TaskProgress(first),
+        &tx,
+    );
+
+    let mut delta = progress_params("wf_123", None, Vec::new());
+    delta.workflow_progress = vec![log.clone()];
+    super::handle(
+        &mut state,
+        coco_types::ServerNotification::TaskProgress(delta),
+        &tx,
+    );
+
+    let task = state
+        .session
+        .active_tasks
+        .iter()
+        .find(|task| task.task_id == "wf_123")
+        .expect("workflow task row exists");
+    assert_eq!(task.workflow_progress, vec![phase.clone(), log.clone()]);
+    assert_eq!(task.description, "Combining findings");
+
+    let mut cumulative = progress_params("wf_123", None, Vec::new());
+    cumulative.workflow_progress = vec![phase.clone(), log.clone(), done.clone()];
+    super::handle(
+        &mut state,
+        coco_types::ServerNotification::TaskProgress(cumulative),
+        &tx,
+    );
+
+    let task = state
+        .session
+        .active_tasks
+        .iter()
+        .find(|task| task.task_id == "wf_123")
+        .expect("workflow task row exists");
+    assert_eq!(task.workflow_progress, vec![phase, log, done]);
+    assert_eq!(task.description, "Explore — done");
+}
+
+#[test]
+fn task_progress_localizes_workflow_agent_summary() {
+    let _locale = crate::i18n::locale_test_guard("zh-CN");
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    super::handle(
+        &mut state,
+        coco_types::ServerNotification::TaskStarted(coco_types::TaskStartedParams {
+            task_id: "wf_123".into(),
+            tool_use_id: Some("call-workflow".into()),
+            description: "Run workflow: analyze".into(),
+            task_type: Some(coco_types::task_type_wire::LOCAL_WORKFLOW.into()),
+            workflow_name: Some("analyze".into()),
+            prompt: None,
+            agent_name: None,
+            team_name: None,
+            color: None,
+            backend_kind: None,
+        }),
+        &tx,
+    );
+
+    let mut progress = progress_params("wf_123", None, Vec::new());
+    progress.workflow_progress = vec![coco_types::WorkflowProgressEvent::WorkflowAgent {
+        index: 0,
+        state: coco_types::WorkflowAgentState::Done,
+        label: "Explore".into(),
+        phase_title: None,
+        phase_index: None,
+        agent_id: None,
+        model: None,
+        tokens: None,
+        tool_calls: None,
+        duration_ms: None,
+        cached: true,
+        result_preview: None,
+        prompt_preview: None,
+        error: None,
+    }];
+    super::handle(
+        &mut state,
+        coco_types::ServerNotification::TaskProgress(progress),
+        &tx,
+    );
+
+    let task = state
+        .session
+        .active_tasks
+        .iter()
+        .find(|task| task.task_id == "wf_123")
+        .expect("workflow task row exists");
+    assert_eq!(task.description, "Explore — 完成 · 缓存");
+    assert!(!task.description.contains("done"));
+    assert!(!task.description.contains("cached"));
 }
 
 #[test]

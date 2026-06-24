@@ -144,6 +144,8 @@ pub use surface_payloads::TeamRosterMember;
 pub use surface_payloads::TeamRosterState;
 pub use surface_payloads::ThemePickerState;
 pub use surface_payloads::TrustState;
+pub use surface_payloads::WorkflowPickerEntry;
+pub use surface_payloads::WorkflowPickerState;
 pub use surface_payloads::WorktreeExitState;
 pub use transcript::TranscriptState;
 pub use transcript_view::TranscriptView;

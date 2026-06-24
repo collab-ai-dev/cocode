@@ -92,6 +92,7 @@ pub struct QuestionView {
     pub body: String,
     pub rows: Vec<QuestionRow>,
     pub submit_review: Option<String>,
+    pub preview_label: String,
     pub preview: Option<String>,
     pub footer_actions: Vec<ActionRow>,
     pub hints: String,
@@ -181,7 +182,7 @@ impl QuestionView {
         if with_preview && let Some(preview) = &self.preview {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "preview",
+                self.preview_label.clone(),
                 Style::default().fg(styles.dim()),
             )));
             for l in wrap(preview, w) {
@@ -213,7 +214,7 @@ impl QuestionView {
             return Vec::new();
         };
         let mut lines = vec![Line::from(Span::styled(
-            "preview",
+            self.preview_label.clone(),
             Style::default().fg(styles.dim()),
         ))];
         for l in wrap(preview, width.max(1) as usize) {

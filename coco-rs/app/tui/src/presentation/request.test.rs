@@ -855,6 +855,56 @@ fn project_question_multiselect_footer_and_hints() {
 }
 
 #[test]
+fn project_question_uses_locale_strings() {
+    let _locale = locale_test_guard("zh-CN");
+    let mut state = question_prompt(QuestionItem {
+        header: "工具".to_string(),
+        question: "选择工具".to_string(),
+        options: vec![QuestionOption {
+            label: "读取".to_string(),
+            description: String::new(),
+            preview: Some("预览内容".to_string()),
+        }],
+        multi_select: true,
+        selected: None,
+        checked: Vec::new(),
+        other_input: OtherInputState::default(),
+    });
+    state.is_in_plan_mode = true;
+
+    let view = project_question(&state);
+
+    assert_eq!(view.header.title, " 提问 ");
+    assert_eq!(view.preview_label, "预览");
+    let QuestionRow::Input(input) = &view.rows[1] else {
+        panic!("expected free-text row");
+    };
+    assert_eq!(input.label, "输入其他内容。");
+    assert!(
+        view.footer_actions
+            .iter()
+            .any(|action| action.label == "继续讨论")
+    );
+    assert!(view.hints.contains("Space 切换"));
+
+    state.current_question = QuestionPage::Submit;
+    state.focus_target = QuestionFocusTarget::SubmitAction(SubmitAction::SubmitAnswers);
+    let submit = project_question(&state);
+    assert_eq!(action_label(&submit.rows[0]), "提交答案");
+    assert_eq!(action_label(&submit.rows[1]), "取消");
+    assert!(
+        submit
+            .submit_review
+            .as_ref()
+            .is_some_and(|review| review.contains("检查你的答案")
+                && review.contains("还有问题未回答")
+                && review.contains("准备提交答案？")),
+        "localized submit review: {}",
+        submit.submit_review.as_deref().unwrap_or("")
+    );
+}
+
+#[test]
 fn project_question_nav_answered_reflects_each_question() {
     let _locale = locale_test_guard("en");
     let q = |header: &str, multi: bool| QuestionItem {

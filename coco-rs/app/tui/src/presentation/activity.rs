@@ -8,6 +8,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::SubagentStatus;
+use crate::state::session::TaskEntryKind;
 use crate::state::session::TaskEntryStatus;
 use crate::state::session::ToolStatus;
 use coco_tui_ui::constants;
@@ -156,6 +157,9 @@ pub(crate) fn turn_activity_view(state: &AppState, width: u16) -> TurnActivityVi
     let has_plan_activity = !state.session.plan_tasks.is_empty()
         || !state.session.todos_by_agent.is_empty()
         || !state.session.active_tasks.is_empty();
+    let has_running_workflow = state.session.active_tasks.iter().any(|task| {
+        task.kind == TaskEntryKind::Workflow && task.status == TaskEntryStatus::Running
+    });
 
     if matches!(state.session.expanded_view, ExpandedView::Tasks) && has_plan_activity {
         return TurnActivityView::Surface(limit_surface_rows(plan_surface(state), width));
@@ -167,6 +171,8 @@ pub(crate) fn turn_activity_view(state: &AppState, width: u16) -> TurnActivityVi
 
     if has_subagents {
         TurnActivityView::Surface(limit_surface_rows(agent_surface(state), width))
+    } else if has_running_workflow {
+        TurnActivityView::Surface(limit_surface_rows(plan_surface(state), width))
     } else if state.session.stream_stall {
         // No separate "Activity / Tools:" panel for ordinary single-agent tool
         // runs — in-flight tools render inline in the transcript as
@@ -304,7 +310,7 @@ fn append_plan_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
 
     if !state.session.active_tasks.is_empty() {
         lines.push(ActivityLine::section(
-            t!("plan_panel.section_running").to_string(),
+            t!("plan_panel.section_task_activity").to_string(),
         ));
         for task in &state.session.active_tasks {
             let (icon, tone) = match task.status {

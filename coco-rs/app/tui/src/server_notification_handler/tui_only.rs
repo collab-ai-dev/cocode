@@ -455,6 +455,12 @@ pub(super) fn handle(
             }
             true
         }
+        TuiOnlyEvent::OpenWorkflowPicker { payload } => {
+            state.ui.show_modal(ModalState::WorkflowPicker(
+                crate::state::WorkflowPickerState::from_wire(payload),
+            ));
+            true
+        }
         // /skills — read-only overlay showing the skill catalog grouped
         // by source. Empty payload still opens the dialog so the user
         // sees the "no skills" hint instead of nothing happening.

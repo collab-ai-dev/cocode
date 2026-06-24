@@ -1,5 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use coco_types::WorkflowAgentState;
@@ -16,6 +18,8 @@ struct FakeHost {
     progress: Mutex<Vec<WorkflowProgressEvent>>,
     /// Prompts that should make `run_agent` fail (to exercise rejection).
     fail_on: Mutex<Vec<String>>,
+    budget_total: Option<i64>,
+    budget_spent: AtomicI64,
 }
 
 #[async_trait::async_trait]
@@ -28,15 +32,34 @@ impl WorkflowHost for FakeHost {
         if self.fail_on.lock().unwrap().contains(&prompt) {
             return Err(format!("boom: {prompt}"));
         }
-        let value = match opts.model {
+        let value = match opts.model.as_ref() {
             Some(model) => serde_json::json!({ "prompt": prompt, "model": model }),
             None => serde_json::Value::String(format!("ran: {prompt}")),
         };
-        Ok(WorkflowAgentResult { value })
+        let model = opts.model;
+        Ok(WorkflowAgentResult {
+            value,
+            model,
+            tokens: Some(10),
+            tool_calls: Some(1),
+            duration_ms: Some(25),
+        })
     }
 
     fn push_progress(&self, event: WorkflowProgressEvent) {
         self.progress.lock().unwrap().push(event);
+    }
+
+    fn budget_total_tokens(&self) -> Option<i64> {
+        self.budget_total
+    }
+
+    fn budget_spent_tokens(&self) -> i64 {
+        self.budget_spent.load(Ordering::Relaxed)
+    }
+
+    fn record_agent_tokens(&self, tokens: i64) {
+        self.budget_spent.fetch_add(tokens, Ordering::Relaxed);
     }
 }
 
@@ -123,6 +146,27 @@ fn per_call_model_opt_reaches_host() {
     let script = r#"return await agent("hi", { model: "claude-opus-4-8" });"#;
     let result = run(host, script, serde_json::Value::Null).expect("run");
     assert_eq!(result["model"], serde_json::json!("claude-opus-4-8"));
+}
+
+#[test]
+fn budget_reflects_child_agent_token_usage() {
+    let host = Arc::new(FakeHost {
+        budget_total: Some(25),
+        ..FakeHost::default()
+    });
+    let script = r#"
+        const before = budget.remaining();
+        await agent("one");
+        const afterOne = budget.remaining();
+        await agent("two");
+        return { total: budget.total, spent: budget.spent(), before, afterOne, afterTwo: budget.remaining() };
+    "#;
+    let result = run(host, script, serde_json::Value::Null).expect("run");
+    assert_eq!(result["total"], serde_json::json!(25));
+    assert_eq!(result["spent"], serde_json::json!(20));
+    assert_eq!(result["before"], serde_json::json!(25));
+    assert_eq!(result["afterOne"], serde_json::json!(15));
+    assert_eq!(result["afterTwo"], serde_json::json!(5));
 }
 
 #[test]

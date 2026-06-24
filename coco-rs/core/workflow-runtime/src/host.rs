@@ -23,6 +23,9 @@ pub struct WorkflowAgentOpts {
     pub effort: Option<String>,
     /// Subagent type (e.g. `Explore`); `None` → general-purpose.
     pub agent_type: Option<String>,
+    /// Optional execution isolation. `worktree` creates an isolated git
+    /// worktree; `remote` is accepted for compatibility but not available.
+    pub isolation: Option<coco_types::AgentIsolation>,
     /// When present, the subagent is asked to emit a JSON object matching this
     /// JSON Schema (forced StructuredOutput); the result is parsed.
     pub schema: Option<serde_json::Value>,
@@ -33,6 +36,10 @@ pub struct WorkflowAgentOpts {
 #[derive(Debug, Clone)]
 pub struct WorkflowAgentResult {
     pub value: serde_json::Value,
+    pub model: Option<String>,
+    pub tokens: Option<i64>,
+    pub tool_calls: Option<i32>,
+    pub duration_ms: Option<i64>,
 }
 
 /// Callback surface the engine drives. The implementor bridges to the real
@@ -52,4 +59,17 @@ pub trait WorkflowHost: Send + Sync + 'static {
     /// non-blocking (fire into a channel) so `log()`/`phase()` stay sync JS
     /// functions matching the TS DSL.
     fn push_progress(&self, event: coco_types::WorkflowProgressEvent);
+
+    /// Total token budget available to this workflow, when known.
+    fn budget_total_tokens(&self) -> Option<i64> {
+        None
+    }
+
+    /// Tokens consumed by workflow child agents so far.
+    fn budget_spent_tokens(&self) -> i64 {
+        0
+    }
+
+    /// Record tokens consumed by a completed child agent.
+    fn record_agent_tokens(&self, _tokens: i64) {}
 }

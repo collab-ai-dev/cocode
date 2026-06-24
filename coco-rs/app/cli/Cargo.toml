@@ -36,6 +36,7 @@ coco-memory.workspace = true
 coco-shell.workspace = true
 coco-tool-runtime.workspace = true
 coco-tools.workspace = true
+coco-workflow.workspace = true
 coco-query.workspace = true
 coco-system-reminder.workspace = true
 coco-cron.workspace = true

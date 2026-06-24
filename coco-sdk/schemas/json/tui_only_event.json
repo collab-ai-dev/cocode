@@ -764,6 +764,23 @@
       ]
     },
     {
+      "description": "Tell the TUI to open the `/workflow` picker. The CLI dispatcher\nbuilds the registry snapshot from `.coco/workflows` and\n`.claude/workflows`; the TUI only renders and re-dispatches the\nselected workflow name as `/workflow <name>`.",
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/WorkflowDialogPayload"
+        },
+        "type": {
+          "type": "string",
+          "const": "open_workflow_picker"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ]
+    },
+    {
       "description": "`/copy [N]` slash command — the TUI walks its transcript, picks\nthe Nth-latest assistant message, and either directly copies it\n(when there are no code blocks or `copy_full_response` is on) or\nopens the [`ModalState::CopyPicker`] surface. The CLI runner\nemits this through `dispatch_slash_command`'s `/copy` intercept;\nonly the TUI has the transcript in a render-ready shape.\nTS parity: `commands/copy/copy.tsx`.",
       "type": "object",
       "properties": {
@@ -3232,6 +3249,40 @@
       "required": [
         "name",
         "color"
+      ]
+    },
+    "WorkflowDialogEntry": {
+      "description": "One selectable workflow script in the `/workflow` picker.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "sourcePath": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "sourcePath"
+      ]
+    },
+    "WorkflowDialogPayload": {
+      "description": "Payload for [`TuiOnlyEvent::OpenWorkflowPicker`].",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowDialogEntry"
+          }
+        }
+      },
+      "required": [
+        "entries"
       ]
     }
   }

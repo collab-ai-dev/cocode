@@ -84,8 +84,8 @@ async fn test_tui_empty_submit() -> Result<()> {
 }
 
 // Four tests below exercise slash-command dispatch (`/copy`, `/clear`,
-// `/rewind`) and the permission Ask flow. Per `harness.rs:783-794`
-// `run_test_agent_driver` is intentionally stripped — it only handles
+// `/rewind`) and the permission Ask flow. `run_test_agent_driver` is
+// intentionally stripped — it only handles
 // `UserCommand::SubmitInput` and `Shutdown`. `ExecuteSlashCommand` /
 // `Rewind` / `PlanApprovalResponse` / permission bridge wiring would
 // require a SessionRuntime-class container the harness deliberately
@@ -96,19 +96,19 @@ async fn test_tui_empty_submit() -> Result<()> {
 // can dispatch ExecuteSlashCommand and serve permission bridge
 // requests, then remove these `#[ignore]` markers.
 #[tokio::test]
-#[ignore = "harness lacks ExecuteSlashCommand dispatch — see harness.rs:783"]
+#[ignore = "harness lacks ExecuteSlashCommand dispatch — see run_test_agent_driver"]
 async fn test_tui_slash_copy() -> Result<()> {
     tui::suite::slash_copy::run().await
 }
 
 #[tokio::test]
-#[ignore = "harness lacks ExecuteSlashCommand dispatch — see harness.rs:783"]
+#[ignore = "harness lacks ExecuteSlashCommand dispatch — see run_test_agent_driver"]
 async fn test_tui_slash_clear() -> Result<()> {
     tui::suite::slash_clear::run().await
 }
 
 #[tokio::test]
-#[ignore = "harness lacks ExecuteSlashCommand dispatch — see harness.rs:783"]
+#[ignore = "harness lacks ExecuteSlashCommand dispatch — see run_test_agent_driver"]
 async fn test_tui_rewind_overlay() -> Result<()> {
     tui::suite::rewind_overlay::run().await
 }
@@ -136,4 +136,9 @@ async fn test_tui_auto_compact_trigger() -> Result<()> {
 #[tokio::test]
 async fn test_tui_agent_team_spawn() -> Result<()> {
     tui::suite::agent_team_spawn::run().await
+}
+
+#[tokio::test]
+async fn test_tui_workflow_e2e() -> Result<()> {
+    tui::suite::workflow_e2e::run().await
 }

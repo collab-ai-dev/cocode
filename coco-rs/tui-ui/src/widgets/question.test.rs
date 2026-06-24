@@ -69,6 +69,7 @@ fn base() -> QuestionView {
             }),
         ],
         submit_review: None,
+        preview_label: "preview".into(),
         preview: None,
         footer_actions: vec![ActionRow {
             number: 3,

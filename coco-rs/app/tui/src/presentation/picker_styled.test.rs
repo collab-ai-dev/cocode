@@ -7,6 +7,7 @@ use super::global_search_lines;
 use super::memory_dialog_lines;
 use super::quick_open_lines;
 use super::session_browser_lines;
+use super::workflow_picker_lines;
 use crate::i18n::locale_test_guard;
 use crate::state::CopyPickerCodeBlock;
 use crate::state::CopyPickerSelection;
@@ -22,6 +23,8 @@ use crate::state::QuickOpenState;
 use crate::state::SearchResult;
 use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
+use crate::state::WorkflowPickerEntry;
+use crate::state::WorkflowPickerState;
 use coco_tui_ui::style::UiStyles;
 use coco_tui_ui::theme::Theme;
 
@@ -125,6 +128,57 @@ fn memory_lines_render_tags_cursor_and_empty_state() {
     let sel = cursor_row(&lines, "Local memory");
     assert!(sel.starts_with("❯ "), "{sel}");
     assert!(sel.contains("[file:new] [project-local] Local memory"));
+}
+
+#[test]
+fn workflow_picker_lines_filter_and_select() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let state = WorkflowPickerState {
+        entries: vec![
+            WorkflowPickerEntry {
+                name: "release".to_string(),
+                description: "Ship the build".to_string(),
+                source_path: ".coco/workflows/release.ts".to_string(),
+            },
+            WorkflowPickerEntry {
+                name: "audit".to_string(),
+                description: "Inspect auth".to_string(),
+                source_path: ".claude/workflows/audit.js".to_string(),
+            },
+        ],
+        filter: "ship".to_string(),
+        selected: 0,
+    };
+
+    let (title, lines, border) = workflow_picker_lines(&state, styles, 60);
+    let j = joined(&lines);
+
+    assert_eq!(title, " Workflow ");
+    assert_eq!(border, theme.primary);
+    assert!(j.contains("Filter: ship"), "{j}");
+    assert!(cursor_row(&lines, "release · Ship the build").starts_with("❯ "));
+    assert!(!j.contains("audit"), "{j}");
+}
+
+#[test]
+fn workflow_picker_lines_empty_state() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+
+    let (_, lines, _) = workflow_picker_lines(
+        &WorkflowPickerState {
+            entries: Vec::new(),
+            filter: String::new(),
+            selected: 0,
+        },
+        styles,
+        60,
+    );
+
+    assert!(joined(&lines).contains("No workflows found"));
 }
 
 #[test]
@@ -249,6 +303,8 @@ fn running_shell(id: &str, cmd: &str, started_at_ms: i64) -> crate::state::sessi
         status: crate::state::session::TaskEntryStatus::Running,
         kind: crate::state::session::TaskEntryKind::Shell,
         started_at_ms,
+        workflow_name: None,
+        workflow_progress: Vec::new(),
     }
 }
 
@@ -259,6 +315,24 @@ fn running_agent(id: &str, desc: &str, started_at_ms: i64) -> crate::state::sess
         status: crate::state::session::TaskEntryStatus::Running,
         kind: crate::state::session::TaskEntryKind::Agent,
         started_at_ms,
+        workflow_name: None,
+        workflow_progress: Vec::new(),
+    }
+}
+
+fn running_workflow(
+    id: &str,
+    desc: &str,
+    progress: Vec<coco_types::WorkflowProgressEvent>,
+) -> crate::state::session::TaskEntry {
+    crate::state::session::TaskEntry {
+        task_id: id.to_string(),
+        description: desc.to_string(),
+        status: crate::state::session::TaskEntryStatus::Running,
+        kind: crate::state::session::TaskEntryKind::Workflow,
+        started_at_ms: 0,
+        workflow_name: Some("analyze".to_string()),
+        workflow_progress: progress,
     }
 }
 
@@ -385,6 +459,146 @@ fn background_tasks_detail_agent_shows_live_activity() {
     assert!(j.contains("CLAUDE.md"), "{j}");
     // The agent detail replaces the shell "no output" placeholder.
     assert!(!j.contains("No output available"), "{j}");
+}
+
+#[test]
+fn background_tasks_detail_workflow_shows_progress_events() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let mut state = crate::state::AppState::default();
+    state.session.active_tasks = vec![running_workflow(
+        "wf_1",
+        "▸ Analyze",
+        vec![
+            coco_types::WorkflowProgressEvent::WorkflowPhase {
+                index: 0,
+                title: "Analyze".to_string(),
+            },
+            coco_types::WorkflowProgressEvent::WorkflowAgent {
+                index: 0,
+                state: coco_types::WorkflowAgentState::Done,
+                label: "Explore".to_string(),
+                phase_title: Some("Analyze".to_string()),
+                phase_index: Some(0),
+                agent_id: Some("agent-1".to_string()),
+                model: Some("sonnet".to_string()),
+                tokens: Some(12_345),
+                tool_calls: Some(3),
+                duration_ms: Some(65_000),
+                cached: true,
+                result_preview: Some("mapped crates".to_string()),
+                prompt_preview: None,
+                error: None,
+            },
+            coco_types::WorkflowProgressEvent::WorkflowLog {
+                message: "Combining findings".to_string(),
+            },
+        ],
+    )];
+    let bt = crate::state::BackgroundTasksState {
+        selected: 0,
+        detail: Some("wf_1".to_string()),
+    };
+
+    let (title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
+    let j = joined(&lines);
+
+    assert_eq!(title, " Workflow details ");
+    assert!(j.contains("Workflow: analyze"), "{j}");
+    assert!(!j.contains("Command:"), "{j}");
+    assert!(j.contains("Workflow progress"), "{j}");
+    assert!(j.contains("Analyze"), "{j}");
+    assert!(j.contains("Explore"), "{j}");
+    assert!(j.contains("phase Analyze"), "{j}");
+    assert!(j.contains("model sonnet"), "{j}");
+    assert!(j.contains("12.3k tok"), "{j}");
+    assert!(j.contains("cached"), "{j}");
+    assert!(j.contains("1m 5s"), "{j}");
+    assert!(j.contains("mapped crates"), "{j}");
+    assert!(j.contains("Combining findings"), "{j}");
+    assert!(!j.contains("No output available"), "{j}");
+}
+
+#[test]
+fn background_tasks_detail_workflow_localizes_progress_units() {
+    let _locale = locale_test_guard("zh-CN");
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let mut state = crate::state::AppState::default();
+    state.session.active_tasks = vec![running_workflow(
+        "wf_1",
+        "▸ 分析",
+        vec![coco_types::WorkflowProgressEvent::WorkflowAgent {
+            index: 0,
+            state: coco_types::WorkflowAgentState::Done,
+            label: "Explore".to_string(),
+            phase_title: None,
+            phase_index: None,
+            agent_id: None,
+            model: None,
+            tokens: Some(12_345),
+            tool_calls: Some(3),
+            duration_ms: None,
+            cached: false,
+            result_preview: None,
+            prompt_preview: None,
+            error: None,
+        }],
+    )];
+    let bt = crate::state::BackgroundTasksState {
+        selected: 0,
+        detail: Some("wf_1".to_string()),
+    };
+
+    let (_title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
+    let j = joined(&lines);
+
+    assert!(j.contains("工作流进度"), "{j}");
+    assert!(j.contains("完成"), "{j}");
+    assert!(j.contains("12.3k token"), "{j}");
+    assert!(j.contains("3 个工具"), "{j}");
+    assert!(!j.contains("done"), "{j}");
+    assert!(!j.contains("tools"), "{j}");
+}
+
+#[test]
+fn background_tasks_detail_workflow_shows_prompt_preview_for_running_agent() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let mut state = crate::state::AppState::default();
+    state.session.active_tasks = vec![running_workflow(
+        "wf_1",
+        "Explore — running",
+        vec![coco_types::WorkflowProgressEvent::WorkflowAgent {
+            index: 0,
+            state: coco_types::WorkflowAgentState::Progress,
+            label: "Explore".to_string(),
+            phase_title: Some("Analyze".to_string()),
+            phase_index: Some(0),
+            agent_id: Some("agent-1".to_string()),
+            model: Some("sonnet".to_string()),
+            tokens: None,
+            tool_calls: None,
+            duration_ms: None,
+            cached: false,
+            result_preview: None,
+            prompt_preview: Some("map the crates and summarize risk".to_string()),
+            error: None,
+        }],
+    )];
+    let bt = crate::state::BackgroundTasksState {
+        selected: 0,
+        detail: Some("wf_1".to_string()),
+    };
+
+    let (_title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
+    let j = joined(&lines);
+
+    assert!(j.contains("Explore"), "{j}");
+    assert!(j.contains("running"), "{j}");
+    assert!(j.contains("prompt map the crates and summarize"), "{j}");
 }
 
 #[test]

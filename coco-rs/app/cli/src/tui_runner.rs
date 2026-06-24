@@ -3572,6 +3572,29 @@ async fn dispatch_slash_command(
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenThemePicker))
                         .await;
                 }
+                DialogSpec::WorkflowPicker => {
+                    let cfg = runtime.current_engine_config().await;
+                    let cwd = if let Some(session_cwd) = cfg.session_cwd.as_ref() {
+                        Some(session_cwd.read().await.clone())
+                    } else {
+                        cfg.original_cwd
+                            .clone()
+                            .or_else(|| Some(runtime.original_cwd.clone()))
+                    };
+                    let entries = coco_workflow::list_workflows(cwd)
+                        .into_iter()
+                        .map(|entry| coco_types::WorkflowDialogEntry {
+                            name: entry.name,
+                            description: entry.description,
+                            source_path: entry.source_path.display().to_string(),
+                        })
+                        .collect();
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::OpenWorkflowPicker {
+                            payload: coco_types::WorkflowDialogPayload { entries },
+                        }))
+                        .await;
+                }
                 DialogSpec::SkillsList { mut payload } => {
                     // The `SkillsHandler` runs through the
                     // `CommandHandler` trait, which doesn't carry a
@@ -3627,6 +3650,7 @@ async fn dispatch_slash_command(
                         | DialogSpec::AgentsList { .. }
                         | DialogSpec::PluginPicker
                         | DialogSpec::ModelPicker
+                        | DialogSpec::WorkflowPicker
                         | DialogSpec::ThemePicker => unreachable!(),
                     }
                     .to_string();

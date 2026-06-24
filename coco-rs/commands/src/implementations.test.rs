@@ -130,6 +130,7 @@ fn test_all_name_constants_are_valid() {
         names::PLUGIN,
         names::AGENTS,
         names::TASKS,
+        names::WORKFLOW,
         names::SKILLS,
         names::HOOKS,
         names::FILES,
@@ -168,6 +169,58 @@ fn test_all_name_constants_are_valid() {
         all_names.len() >= 50,
         "expected at least 50 command name constants, got {}",
         all_names.len()
+    );
+}
+
+#[tokio::test]
+async fn workflow_prompt_command_uses_workflow_tool() {
+    let mut registry = CommandRegistry::new();
+    register_ts_parity_handlers(
+        &mut registry,
+        coco_types::UserType::Human,
+        coco_types::Features::with_defaults(),
+        std::path::PathBuf::from("."),
+        std::path::PathBuf::from("."),
+        None,
+    );
+
+    let command = registry
+        .get(names::WORKFLOW)
+        .expect("/workflow should be registered");
+    assert_eq!(
+        registry.get("workflows").map(|c| c.base.name.as_str()),
+        Some(names::WORKFLOW),
+        "/workflows should resolve to canonical /workflow"
+    );
+    let CommandType::Prompt(data) = &command.command_type else {
+        panic!("expected prompt command");
+    };
+    let allowed_tools = data.allowed_tools.as_ref().expect("allowed tools");
+    assert_eq!(allowed_tools.len(), 1);
+    assert_eq!(allowed_tools[0], "Workflow");
+
+    let result = registry
+        .execute_command(names::WORKFLOW, "name=analyze args={\"scope\":\"src\"}")
+        .await
+        .unwrap();
+    let crate::CommandResult::Prompt { parts, .. } = result else {
+        panic!("expected prompt result");
+    };
+    let text = match &parts[0] {
+        crate::PromptPart::Text { text } => text,
+        crate::PromptPart::File { .. } => panic!("expected text prompt part"),
+    };
+    assert!(text.contains("Workflow tool"));
+    assert!(text.contains("## Task"));
+    assert!(text.contains("name=analyze"));
+
+    let result = registry.execute_command(names::WORKFLOW, "").await.unwrap();
+    assert!(
+        matches!(
+            result,
+            crate::CommandResult::OpenDialog(crate::DialogSpec::WorkflowPicker)
+        ),
+        "bare /workflow should open the workflow picker"
     );
 }
 

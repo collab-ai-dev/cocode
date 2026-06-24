@@ -444,6 +444,7 @@ pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
             body: String::new(),
             rows: Vec::new(),
             submit_review: None,
+            preview_label: t!("dialog.question_preview_label").to_string(),
             preview: None,
             footer_actions: Vec::new(),
             hints: t!("dialog.hints_nav_select").to_string(),
@@ -461,13 +462,13 @@ pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
         let rows = vec![
             QuestionRow::Action(ActionRow {
                 number: 1,
-                label: "Submit answers".to_string(),
+                label: t!("dialog.question_action_submit_answers").to_string(),
                 focused: q.focus_target
                     == QuestionFocusTarget::SubmitAction(SubmitAction::SubmitAnswers),
             }),
             QuestionRow::Action(ActionRow {
                 number: 2,
-                label: "Cancel".to_string(),
+                label: t!("dialog.question_action_cancel").to_string(),
                 focused: q.focus_target == QuestionFocusTarget::SubmitAction(SubmitAction::Cancel),
             }),
         ];
@@ -507,7 +508,7 @@ pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
             .collect::<Vec<_>>();
         rows.push(QuestionRow::Input(InputRow {
             number: qi.options.len() + 1,
-            label: "Type something.".to_string(),
+            label: t!("dialog.question_other_input").to_string(),
             value: qi.other_input.value.clone(),
             selected: qi.other_input.committed && !qi.other_input.value.trim().is_empty(),
             focused: q.focus_target == QuestionFocusTarget::OtherInput,
@@ -523,14 +524,14 @@ pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
         };
         let mut footer = vec![ActionRow {
             number: qi.options.len() + 2,
-            label: "Chat about this".to_string(),
+            label: t!("dialog.question_action_chat_about").to_string(),
             focused: q.focus_target
                 == QuestionFocusTarget::QuestionFooter(QuestionFooterAction::ChatAboutThis),
         }];
         if q.is_in_plan_mode {
             footer.push(ActionRow {
                 number: qi.options.len() + 3,
-                label: "Skip interview and plan immediately".to_string(),
+                label: t!("dialog.question_action_skip_interview").to_string(),
                 focused: q.focus_target
                     == QuestionFocusTarget::QuestionFooter(QuestionFooterAction::SkipInterview),
             });
@@ -545,13 +546,11 @@ pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
     };
 
     let hints = if on_submit {
-        "Enter to select · Tab/Arrow keys to navigate · Esc to cancel".to_string()
+        t!("dialog.question_hint_submit").to_string()
     } else {
-        let mut hints = String::from(
-            "Enter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Vim · Esc to cancel",
-        );
+        let mut hints = t!("dialog.question_hint_answer").to_string();
         if qi.multi_select {
-            hints.push_str(" · Space to toggle");
+            hints.push_str(t!("dialog.question_hint_space_toggle").as_ref());
         }
         hints
     };
@@ -583,6 +582,7 @@ pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
         body,
         rows,
         submit_review,
+        preview_label: t!("dialog.question_preview_label").to_string(),
         preview,
         footer_actions: footer,
         hints,
@@ -593,21 +593,24 @@ pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
 /// the Submit tab is focused. Shows a warning when not all questions are
 /// answered, then `● question → answer` per row, then the "Ready to submit?" prompt.
 fn submit_review_text(q: &QuestionPromptState) -> String {
-    let mut out = String::from("Review your answers");
+    let mut out = t!("dialog.question_review_title").to_string();
     if !q.all_answered() {
-        out.push_str("\n\n⚠ You have not answered all questions");
+        out.push_str(&format!(
+            "\n\n⚠ {}",
+            t!("dialog.question_review_unanswered_warning")
+        ));
     }
     for item in &q.questions {
         let answer = q.committed_answer_for(item);
         let answer = answer.trim();
         let answer = if answer.is_empty() {
-            "(unanswered)"
+            t!("dialog.question_unanswered").to_string()
         } else {
-            answer
+            answer.to_string()
         };
         out.push_str(&format!("\n\n● {}\n   → {answer}", item.question));
     }
-    out.push_str("\n\nReady to submit your answers?");
+    out.push_str(&format!("\n\n{}", t!("dialog.question_ready_to_submit")));
     out
 }
 

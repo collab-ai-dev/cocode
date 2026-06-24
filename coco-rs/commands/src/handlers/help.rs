@@ -250,6 +250,12 @@ const CATEGORIES: &[Category] = &[
                 usage: "/tasks",
             },
             CommandEntry {
+                name: "workflow",
+                aliases: &["workflows"],
+                description: "Run a local workflow script",
+                usage: "/workflow [name|scriptPath|task]",
+            },
+            CommandEntry {
                 name: "skills",
                 aliases: &[],
                 description: "List available skills",
