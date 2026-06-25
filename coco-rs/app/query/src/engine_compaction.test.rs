@@ -949,3 +949,30 @@ async fn partial_compact_applies_session_start_aggregate_side_effects() {
         "partial compact should not duplicate SessionStart output into next-turn hook buffer"
     );
 }
+
+#[test]
+fn test_compact_fallback_records_carry_compact_source() {
+    use coco_inference::ModelRuntimeEvent;
+    use coco_inference::ModelRuntimeSource;
+    use coco_types::ModelRole;
+
+    let events = vec![
+        ModelRuntimeEvent::FallbackSwitched {
+            source: ModelRuntimeSource::Role(ModelRole::Main),
+            from_model_id: "primary".to_string(),
+            to_model_id: "fallback".to_string(),
+        },
+        // Non-fallback events are ignored — only model switches are
+        // attributable as a compaction fallback.
+        ModelRuntimeEvent::RoleRebound {
+            role: ModelRole::Main,
+            model_id: "primary".to_string(),
+        },
+    ];
+
+    let records = super::compact_fallback_records("compact_auto", &events);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].query_source, "compact_auto");
+    assert_eq!(records[0].from_model_id, "primary");
+    assert_eq!(records[0].to_model_id, "fallback");
+}

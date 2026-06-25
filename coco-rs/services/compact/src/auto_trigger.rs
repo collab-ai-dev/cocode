@@ -59,6 +59,26 @@ pub fn apply_context_window_override(context_window: i64, override_window: Optio
     }
 }
 
+/// Generic "model-card max wins" clamp.
+///
+/// A configured / over-large context window (from `QueryEngineConfig` or
+/// the `COCO_COMPACT_AUTO_WINDOW` override) can never exceed the active
+/// model's authoritative per-model cap (`ModelInfo.context_window`). When
+/// the model max is unknown (`None`) or non-positive the configured value
+/// passes through unchanged — the clamp only ever tightens, never widens.
+///
+/// Provider-agnostic by construction: the only input is the model-card
+/// token count threaded in by the caller. Any provider-billing-specific
+/// clamp-back (e.g. Anthropic 1M-credits latch) belongs in
+/// `vercel-ai-anthropic`, not here.
+#[must_use]
+pub fn clamp_to_model_max(context_window: i64, model_max: Option<i64>) -> i64 {
+    match model_max.filter(|v| *v > 0) {
+        Some(max) => context_window.min(max),
+        None => context_window,
+    }
+}
+
 /// Compute the effective context window size after reserving space for
 /// summary output.
 #[must_use]
