@@ -443,6 +443,14 @@ pub struct AgentSpawnResponse {
     /// Duration in milliseconds.
     #[serde(default)]
     pub duration_ms: i64,
+    /// Resolved model the subagent actually ran on — the catalog-canonical
+    /// model id produced by spawn-time identity resolution
+    /// (`definition.model` > role-resolved). Surfaced so observability layers
+    /// (notably the workflow `WorkflowAgent` progress row) can report which
+    /// model handled each step. `None` when the spawn path has no resolved
+    /// model in scope (e.g. detach / panic responses).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Worktree path (if isolation was used).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<PathBuf>,

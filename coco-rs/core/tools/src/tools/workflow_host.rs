@@ -7,7 +7,9 @@
 //! spawns run on the main runtime (where the agent system lives) and the
 //! dedicated thread awaits their `JoinHandle`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
@@ -20,12 +22,17 @@ use coco_tool_runtime::AgentSpawnStatus;
 use coco_tool_runtime::SpawnMode;
 use coco_tool_runtime::TaskHandleRef;
 use coco_types::WorkflowProgressEvent;
-use coco_workflow_runtime::WORKFLOW_VM_TIMEOUT;
+use coco_workflow_runtime::AgentCacheKey;
+use coco_workflow_runtime::WORKFLOW_STALL_MS_DEFAULT;
+use coco_workflow_runtime::WORKFLOW_STALL_RETRY;
+use coco_workflow_runtime::WORKFLOW_SYNC_EVAL_BUDGET;
 use coco_workflow_runtime::WorkflowAgentOpts;
 use coco_workflow_runtime::WorkflowAgentResult;
 use coco_workflow_runtime::WorkflowEngine;
 use coco_workflow_runtime::WorkflowHost;
 use tokio_util::sync::CancellationToken;
+
+use super::workflow_journal::WorkflowJournal;
 
 /// Parent-context fields captured at launch, needed to build faithful subagent
 /// spawn requests (inheritance must thread through; subagents narrow, never
@@ -43,6 +50,10 @@ pub(crate) struct WorkflowSpawnContext {
     pub agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
     pub total_token_budget: Option<i64>,
     pub workflow_abort: coco_tool_runtime::TurnAbortSignal,
+    /// Working directory used to resolve nested `workflow(nameOrRef)` sources
+    /// (saved-workflow name lookup + relative `{scriptPath}` resolution). `None`
+    /// falls back to the process cwd inside `resolve_workflow_source`.
+    pub cwd: Option<PathBuf>,
 }
 
 /// Ceiling on the local workflow executor width (CC `min(16, …)`).
@@ -74,6 +85,16 @@ struct WorkflowRunHost {
     budget_spent_tokens: AtomicI64,
     /// FIFO counting semaphore bounding concurrent subagent spawns.
     semaphore: Arc<Semaphore>,
+    /// Resume cache + append-only journal. On a fresh run it starts empty and
+    /// records each result; on resume it is hydrated from the prior journal so
+    /// completed `agent()` results replay without re-spawning.
+    journal: Arc<WorkflowJournal>,
+    /// Weak self-reference so `run_nested_workflow` can re-enter
+    /// [`WorkflowEngine::run`] with the SAME `Arc<dyn WorkflowHost>` — that
+    /// shared host is exactly what shares the parent's semaphore, token budget,
+    /// journal, abort signal, and agent counter with the child workflow. Set via
+    /// `Arc::new_cyclic` at construction; `Weak` avoids a self-referential cycle.
+    me: Weak<dyn WorkflowHost>,
 }
 
 impl WorkflowRunHost {
@@ -81,6 +102,7 @@ impl WorkflowRunHost {
         &self,
         prompt: String,
         opts: &WorkflowAgentOpts,
+        attempt_abort: coco_tool_runtime::TurnAbortSignal,
     ) -> Result<AgentSpawnRequest, String> {
         let ctx = &self.spawn_ctx;
         if opts.isolation == Some(coco_types::AgentIsolation::Remote) {
@@ -119,7 +141,11 @@ impl WorkflowRunHost {
             isolation,
             definition,
             is_non_interactive: true,
-            parent_turn_abort: Some(ctx.workflow_abort.clone()),
+            // Per-attempt abort: the stall watchdog aborts *this* spawn (and
+            // only this one) on timeout, so a fresh signal is threaded per
+            // attempt. It is linked to the shared `workflow_abort` so a
+            // whole-run cancel still tears the in-flight subagent down.
+            parent_turn_abort: Some(attempt_abort),
             // `agent(prompt, {schema})` forces the StructuredOutput contract:
             // the spawn driver registers `StructuredOutputTool` + a forcing
             // Stop hook on the child and routes the captured tool-call input
@@ -169,64 +195,71 @@ impl WorkflowRunHost {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl WorkflowHost for WorkflowRunHost {
     async fn run_agent(
         &self,
         prompt: String,
         opts: WorkflowAgentOpts,
     ) -> Result<WorkflowAgentResult, String> {
-        let request = self.build_request(prompt, &opts)?;
-        let agent = self.agent.clone();
         // Bound concurrent subagent spawns: each agent() call queues on the
-        // shared FIFO semaphore. Held across the spawn await; released on return.
+        // shared FIFO semaphore. Held across every retry; released on return.
         let _permit = self
             .semaphore
             .clone()
             .acquire_owned()
             .await
             .map_err(|e| format!("workflow concurrency semaphore closed: {e}"))?;
-        // Spawn on the main runtime (the agent system runs there); await the
-        // result from this dedicated engine thread.
-        let response = self
-            .main_handle
-            .spawn(async move { agent.spawn_agent(request).await })
-            .await
-            .map_err(|e| format!("workflow subagent task join error: {e}"))??;
 
-        match response.status {
-            AgentSpawnStatus::Completed => {
-                // Structured-output contract: when the spawn carried a schema,
-                // the subagent was forced to call the `StructuredOutput` tool
-                // and the schema-validated tool-call input is surfaced on
-                // `response.structured_output`. Use it directly. Fall back to
-                // parsing the final text as JSON only when the captured value
-                // is absent (e.g. the retry cap was hit) — last resort so
-                // behaviour never regresses below the old text-parse path.
-                let text = response.result.unwrap_or_default();
-                let value = if opts.schema.is_some() {
-                    response.structured_output.unwrap_or_else(|| {
-                        serde_json::from_str::<serde_json::Value>(&text)
-                            .unwrap_or(serde_json::Value::String(text))
-                    })
-                } else {
-                    serde_json::Value::String(text)
-                };
-                let tokens = response.input_tokens + response.output_tokens;
-                Ok(WorkflowAgentResult {
-                    value,
-                    model: None,
-                    tokens: Some(tokens),
-                    tool_calls: i32::try_from(response.total_tool_use_count).ok(),
-                    duration_ms: Some(response.duration_ms),
-                })
+        // Per-agent stall watchdog (CC parity): a spawn that produces no result
+        // within `stall` is aborted and retried up to WORKFLOW_STALL_RETRY
+        // times. Only this slot is reclaimed — the whole run keeps going. On
+        // exhaustion we return Err, which the engine maps to a rejected promise
+        // (→ null in the surrounding parallel/pipeline).
+        let stall_ms = opts
+            .stall_ms
+            .filter(|ms| *ms > 0)
+            .unwrap_or(WORKFLOW_STALL_MS_DEFAULT);
+        let stall = std::time::Duration::from_millis(stall_ms.max(0) as u64);
+
+        let mut attempt = 0i32;
+        loop {
+            attempt += 1;
+            // Fresh per-attempt abort built from a CHILD of the shared workflow
+            // abort token: a whole-run cancel propagates down (cancels this
+            // in-flight subagent), but cancelling this child on a stall aborts
+            // only this attempt — never the parent run.
+            let attempt_token = self.spawn_ctx.workflow_abort.token().child_token();
+            let attempt_abort =
+                coco_tool_runtime::TurnAbortSignal::from_token(attempt_token.clone());
+            let request = self.build_request(prompt.clone(), &opts, attempt_abort)?;
+            let agent = self.agent.clone();
+            // Spawn on the main runtime (the agent system runs there); await the
+            // result from this dedicated engine thread, bounded by the stall.
+            let spawn = self
+                .main_handle
+                .spawn(async move { agent.spawn_agent(request).await });
+            match tokio::time::timeout(stall, spawn).await {
+                Ok(join_result) => {
+                    let response = join_result
+                        .map_err(|e| format!("workflow subagent task join error: {e}"))??;
+                    return convert_response(response, &opts);
+                }
+                Err(_elapsed) => {
+                    // Stall: abort this attempt's subagent. Retry if budget
+                    // remains; otherwise surface a terminal failure.
+                    attempt_token.cancel();
+                    if attempt >= WORKFLOW_STALL_RETRY {
+                        return Err(format!(
+                            "workflow subagent stalled ({stall_ms} ms) after \
+                             {WORKFLOW_STALL_RETRY} attempts"
+                        ));
+                    }
+                    self.push_progress(WorkflowProgressEvent::WorkflowLog {
+                        message: format!("retrying ({attempt}/{WORKFLOW_STALL_RETRY})"),
+                    });
+                }
             }
-            AgentSpawnStatus::Failed => Err(response
-                .error
-                .unwrap_or_else(|| "workflow subagent failed".to_string())),
-            other => Err(format!(
-                "workflow subagent returned unexpected status {other:?}"
-            )),
         }
     }
 
@@ -256,6 +289,76 @@ impl WorkflowHost for WorkflowRunHost {
         self.budget_total_tokens()
             .is_some_and(|total| total > 0 && self.budget_spent_tokens() >= total)
     }
+
+    async fn cached_agent_result(&self, key: &AgentCacheKey) -> Option<serde_json::Value> {
+        self.journal.lookup(key).await
+    }
+
+    async fn record_agent_result(&self, key: &AgentCacheKey, value: &serde_json::Value) {
+        self.journal.record(key, value).await;
+    }
+
+    async fn run_nested_workflow(
+        &self,
+        name_or_ref: String,
+        args: serde_json::Value,
+        depth: i32,
+    ) -> Result<serde_json::Value, String> {
+        // Resolve the child source: a `.ts`/`.js` ref is a `{scriptPath}`,
+        // anything else is a saved-workflow name (matched against parsed
+        // meta.name). Resolution + parse live in `coco_workflow`, which is only
+        // reachable from this host crate — that is why nesting is host-backed.
+        let source_input = if is_script_path_ref(&name_or_ref) {
+            coco_workflow::WorkflowSourceInput {
+                script_path: Some(PathBuf::from(&name_or_ref)),
+                cwd: self.spawn_ctx.cwd.clone(),
+                ..Default::default()
+            }
+        } else {
+            coco_workflow::WorkflowSourceInput {
+                name: Some(name_or_ref.clone()),
+                cwd: self.spawn_ctx.cwd.clone(),
+                ..Default::default()
+            }
+        };
+        let spec = coco_workflow::resolve_workflow_source(source_input)
+            .map_err(|error| format!("workflow('{name_or_ref}') was not launched: {error}"))?;
+        // The child body has determinism checked (it is a freshly-resolved
+        // source, like a top-level named/scriptPath launch).
+        let script = coco_workflow::parse_workflow_script(&spec.source, true)
+            .map_err(|error| format!("workflow('{name_or_ref}') was not launched: {error}"))?;
+
+        // Re-enter the engine on THIS thread with the SAME host Arc so the child
+        // shares the parent's semaphore, token budget, journal, abort signal, and
+        // agent counter (no fresh governance is allocated). The child runs at
+        // `depth >= 1`, so its own `workflow()` throws the one-level guard.
+        let host = self
+            .me
+            .upgrade()
+            .ok_or_else(|| "workflow host was dropped".to_string())?;
+        let cancel = self.spawn_ctx.workflow_abort.token();
+        WorkflowEngine::run(
+            script.script_body,
+            args,
+            host,
+            cancel,
+            WORKFLOW_SYNC_EVAL_BUDGET,
+            depth,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    }
+}
+
+/// Whether a `workflow(nameOrRef)` argument is a `{scriptPath}` reference rather
+/// than a saved-workflow name: a path ending in a workflow extension. Names are
+/// matched against parsed `meta.name`, never used to build a path, so anything
+/// that is not an explicit script path is treated as a name.
+fn is_script_path_ref(name_or_ref: &str) -> bool {
+    std::path::Path::new(name_or_ref)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("ts") || ext.eq_ignore_ascii_case("js"))
 }
 
 /// Launch the workflow engine on a dedicated OS thread (the engine is `!Send`).
@@ -272,11 +375,15 @@ pub(crate) fn spawn_workflow_engine(
     cancel: CancellationToken,
     spawn_ctx: WorkflowSpawnContext,
     main_handle: tokio::runtime::Handle,
+    journal: Arc<WorkflowJournal>,
 ) {
     let thread = std::thread::Builder::new()
         .name(format!("workflow-{task_id}"))
         .spawn(move || {
-            let host: Arc<dyn WorkflowHost> = Arc::new(WorkflowRunHost {
+            // `new_cyclic` lets the host hold a `Weak` to itself so
+            // `run_nested_workflow` can re-enter the engine with the SAME host
+            // Arc — the mechanism that shares all governance with a child run.
+            let host: Arc<WorkflowRunHost> = Arc::new_cyclic(|me| WorkflowRunHost {
                 agent,
                 task_handle: task_handle.clone(),
                 task_id: task_id.clone(),
@@ -284,7 +391,12 @@ pub(crate) fn spawn_workflow_engine(
                 spawn_ctx,
                 budget_spent_tokens: AtomicI64::new(0),
                 semaphore: Arc::new(Semaphore::new(workflow_local_concurrency())),
+                journal,
+                // `new_cyclic` hands a `Weak<WorkflowRunHost>`; coerce to the
+                // trait-object weak the field stores.
+                me: me.clone() as Weak<dyn WorkflowHost>,
             });
+            let host: Arc<dyn WorkflowHost> = host;
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -297,8 +409,15 @@ pub(crate) fn spawn_workflow_engine(
             };
             let local = tokio::task::LocalSet::new();
             local.block_on(&runtime, async move {
-                let outcome =
-                    WorkflowEngine::run(script, args, host, cancel, WORKFLOW_VM_TIMEOUT).await;
+                let outcome = WorkflowEngine::run(
+                    script,
+                    args,
+                    host,
+                    cancel,
+                    WORKFLOW_SYNC_EVAL_BUDGET,
+                    /*depth*/ 0,
+                )
+                .await;
                 match outcome {
                     Ok(value) => {
                         task_handle
@@ -320,6 +439,46 @@ pub(crate) fn spawn_workflow_engine(
         });
     if let Err(error) = thread {
         tracing::error!(target: "coco::workflow", %error, "failed to spawn workflow engine thread");
+    }
+}
+
+/// Convert a completed `AgentSpawnResponse` into a `WorkflowAgentResult`.
+/// Honours the structured-output contract (schema-forced spawns surface the
+/// validated tool-call input on `structured_output`; text-JSON parse is the
+/// last-resort fallback).
+fn convert_response(
+    response: coco_tool_runtime::AgentSpawnResponse,
+    opts: &WorkflowAgentOpts,
+) -> Result<WorkflowAgentResult, String> {
+    match response.status {
+        AgentSpawnStatus::Completed => {
+            let model = response.model.clone();
+            let tokens = response.input_tokens + response.output_tokens;
+            let tool_calls = i32::try_from(response.total_tool_use_count).ok();
+            let duration_ms = Some(response.duration_ms);
+            let text = response.result.unwrap_or_default();
+            let value = if opts.schema.is_some() {
+                response.structured_output.unwrap_or_else(|| {
+                    serde_json::from_str::<serde_json::Value>(&text)
+                        .unwrap_or(serde_json::Value::String(text))
+                })
+            } else {
+                serde_json::Value::String(text)
+            };
+            Ok(WorkflowAgentResult {
+                value,
+                model,
+                tokens: Some(tokens),
+                tool_calls,
+                duration_ms,
+            })
+        }
+        AgentSpawnStatus::Failed => Err(response
+            .error
+            .unwrap_or_else(|| "workflow subagent failed".to_string())),
+        other => Err(format!(
+            "workflow subagent returned unexpected status {other:?}"
+        )),
     }
 }
 

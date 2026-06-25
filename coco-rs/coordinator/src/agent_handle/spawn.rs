@@ -1585,6 +1585,10 @@ impl SwarmAgentHandle {
         let task_registry_for_engine = task_registry.clone();
         let agent_id_for_engine = agent_id.clone();
         let agent_type_for_engine = agent_type.to_string();
+        // Resolved model id (catalog-canonical, same value that drove the
+        // `<env>` block) so the completion response can surface which model
+        // actually ran — consumed by workflow observability.
+        let model_for_engine = model_for_env.clone();
         // Permission mode gates the post-spawn handoff classifier (auto
         // only). Pre-cloned so the detached engine task can read it
         // without borrowing `request` across the `await`.
@@ -1794,6 +1798,7 @@ impl SwarmAgentHandle {
                         cache_creation_tokens: 0,
                         paths_written: Vec::new(),
                         duration_ms,
+                        model: Some(model_for_engine.clone()),
                         worktree_path: worktree_path.clone(),
                         worktree_branch: worktree_branch.clone(),
                         output_file: None,

@@ -19,12 +19,17 @@ mod sandbox;
 
 pub use convert::js_to_json;
 pub use convert::json_to_js;
-pub use engine::WORKFLOW_VM_TIMEOUT;
+pub use engine::WORKFLOW_NESTING_LIMIT_ERROR;
+pub use engine::WORKFLOW_SYNC_EVAL_BUDGET;
 pub use engine::WorkflowEngine;
 pub use error::WorkflowRuntimeError;
+pub use host::AgentCacheKey;
+pub use host::WORKFLOW_STALL_MS_DEFAULT;
+pub use host::WORKFLOW_STALL_RETRY;
 pub use host::WorkflowAgentOpts;
 pub use host::WorkflowAgentResult;
 pub use host::WorkflowHost;
+pub use host::canonical_agent_opts;
 pub use sandbox::DATE_ERROR_MESSAGE;
 pub use sandbox::RANDOM_ERROR_MESSAGE;
 
