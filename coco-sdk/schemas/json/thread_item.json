@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ThreadItem",
-  "description": "Semantic representation of a conversation thread item.\nProduced by `StreamAccumulator` from `AgentStreamEvent` sequences.\nUsed in `ServerNotification::ItemStarted / ItemUpdated / ItemCompleted`.\nSee `event-system-design.md` Section 1.6.",
+  "description": "Semantic representation of a conversation thread item.\nProduced by `StreamAccumulator` from `AgentStreamEvent` sequences.\nUsed in `ServerNotification::ItemStarted / ItemUpdated / ItemCompleted`.\n\nSee `event-system-design.md` Section 1.6.",
   "type": "object",
   "properties": {
     "details": {
@@ -53,7 +53,7 @@
       ]
     },
     "ThreadItemDetails": {
-      "description": "Tool-specific semantic mapping.\nMapping rules (from `event-system-design.md` Section 6.2):\n- Bash → `CommandExecution`\n- Edit/Write → `FileChange`\n- WebSearch → `WebSearch`\n- mcp__* → `McpToolCall`\n- Agent/Task → `Subagent`\n- all others → `ToolCall`\n- text content → `AgentMessage`\n- thinking → `Reasoning`\n- errors → `Error`",
+      "description": "Tool-specific semantic mapping.\n\nMapping rules (from `event-system-design.md` Section 6.2):\n- Bash → `CommandExecution`\n- Edit/Write → `FileChange`\n- WebSearch → `WebSearch`\n- mcp__* → `McpToolCall`\n- Agent/Task → `Subagent`\n- all others → `ToolCall`\n- text content → `AgentMessage`\n- thinking → `Reasoning`\n- errors → `Error`",
       "oneOf": [
         {
           "description": "Bash tool → command execution with output.",

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AgentStreamEvent",
-  "description": "Agent-loop stream events. Higher-level than `coco_types::StreamEvent`\n(which represents raw LLM inference deltas). Adds:\n- Tool lifecycle states (Queued → Started → Completed)\n- MCP tool call tracking\n- Turn-scoped item IDs\nInput to `StreamAccumulator`.\nSee `event-system-design.md` Section 1.5.",
+  "description": "Agent-loop stream events. Higher-level than `coco_types::StreamEvent`\n(which represents raw LLM inference deltas). Adds:\n- Tool lifecycle states (Queued → Started → Completed)\n- MCP tool call tracking\n- Turn-scoped item IDs\n\nInput to `StreamAccumulator`.\nSee `event-system-design.md` Section 1.5.",
   "oneOf": [
     {
       "description": "Text content delta from assistant response.",
@@ -96,7 +96,7 @@
       ]
     },
     {
-      "description": "Tool execution completed with result.\n`name` is carried here so StreamAccumulator and TUI consumers can\nreconstruct display state without maintaining their own call_id → name map.",
+      "description": "Tool execution completed with result.\n\n`name` is carried here so StreamAccumulator and TUI consumers can\nreconstruct display state without maintaining their own call_id → name map.",
       "type": "object",
       "properties": {
         "call_id": {
