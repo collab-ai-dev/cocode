@@ -73,11 +73,30 @@ fn defaults_for_experimental_gates() {
         Feature::Lsp,
         Feature::Proactive,
         Feature::KairosBrief,
-        Feature::AgentTriggers,
         Feature::NotebookEdit,
     ] {
         assert!(!f.enabled(feat), "{feat:?} must default off");
     }
+}
+
+#[test]
+fn agent_triggers_defaults_on_with_opt_out() {
+    // Cron / `/loop` scheduling ships on (upstream `tengu_kairos_cron`
+    // default-true). Opt out via `features.agent_triggers = false`, mirroring
+    // `CLAUDE_CODE_DISABLE_CRON`.
+    let mut f = Features::with_defaults();
+    assert!(
+        f.enabled(Feature::AgentTriggers),
+        "AgentTriggers must default on so /loop and the cron tools work out of the box"
+    );
+
+    let mut m = BTreeMap::new();
+    m.insert("agent_triggers".to_string(), false);
+    f.apply_map(&m);
+    assert!(
+        !f.enabled(Feature::AgentTriggers),
+        "explicit `agent_triggers: false` must turn cron / /loop off"
+    );
 }
 
 #[test]

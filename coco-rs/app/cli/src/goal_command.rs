@@ -125,18 +125,123 @@ pub fn is_managed_goal_hook(hook: &coco_hooks::HookDefinition) -> bool {
         && hook.scope == coco_types::HookScope::Session
 }
 
-pub fn remove_all_goal_hooks(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
-) -> Vec<coco_hooks::HookDefinition> {
-    runtime
-        .hook_registry()
-        .remove_matching_hooks(is_managed_goal_hook)
-}
-
 pub fn prompt_from_hook(hook: &coco_hooks::HookDefinition) -> Option<String> {
     match &hook.handler {
         coco_hooks::HookHandler::Prompt { prompt, .. } => Some(prompt.clone()),
         _ => None,
+    }
+}
+
+/// Precomputed gate state for a `/goal set`.
+///
+/// `hooks_restricted` mirrors `disable_all_hooks || allow_managed_hooks_only` —
+/// `/goal` *is* a Stop hook, so when hooks are restricted the feature is
+/// structurally unavailable. `trust_rejected` is the **interactive-only**
+/// workspace-trust check; it is always `false` for non-interactive surfaces
+/// (SDK / headless), which deliberately skip the trust gate (the upstream
+/// carve-out for headless / CI usage).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GoalGate {
+    pub hooks_restricted: bool,
+    pub trust_rejected: bool,
+}
+
+/// Side effects a `/goal` dispatch resolves to, decoupled from each runner's
+/// I/O substrate (TUI events vs SDK history vs headless `Vec`). The caller
+/// performs the actual emit / append / engine-run via its own sinks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoalOutcome {
+    /// Show `text`; no transcript mutation, no engine run. Covers status,
+    /// "No goal set", and both gate rejections.
+    Text(String),
+    /// Append the `status` sentinel attachment, then show `text`. Emitted by
+    /// `clear` when a goal was actually active.
+    StatusThenText {
+        status: coco_types::GoalStatusPayload,
+        text: String,
+    },
+    /// Append the `status` sentinel, show `text`, then run the engine with
+    /// `kickoff` as the user prompt. Emitted by a successful `set`.
+    SetAndRun {
+        status: coco_types::GoalStatusPayload,
+        text: String,
+        kickoff: String,
+    },
+}
+
+/// The command-echo argument string for a `/goal` request, matching the
+/// upstream transcript framing: empty for status, `clear` for any clear
+/// keyword, the raw condition for a set.
+pub fn goal_display_args(request: &coco_commands::GoalCommandRequest) -> &str {
+    match request {
+        coco_commands::GoalCommandRequest::Status => "",
+        coco_commands::GoalCommandRequest::Clear => "clear",
+        coco_commands::GoalCommandRequest::Set { condition } => condition,
+    }
+}
+
+/// Single source of truth for `/goal` dispatch across the TUI, SDK, and
+/// headless runners. Performs the app-state and hook-registry mutations and
+/// returns the I/O the caller must carry out via its own sinks.
+///
+/// `history` is the transcript scanned for the last achieved goal when no goal
+/// is active; `tokens_at_start` is the session output-token baseline recorded
+/// on a fresh `set`. The hooks gate is checked before the trust gate so a
+/// hooks-restricted session reports the structural reason rather than a
+/// misleading trust message.
+pub async fn resolve_goal_request(
+    request: coco_commands::GoalCommandRequest,
+    app_state: &tokio::sync::RwLock<coco_types::ToolAppState>,
+    hook_registry: &coco_hooks::HookRegistry,
+    history: &[Arc<coco_messages::Message>],
+    tokens_at_start: i64,
+    gate: GoalGate,
+) -> GoalOutcome {
+    match request {
+        coco_commands::GoalCommandRequest::Status => {
+            let active = app_state.read().await.active_goal.clone();
+            let text = match active {
+                Some(goal) => format_active_goal_status(&goal),
+                None => match find_last_achieved_goal(history) {
+                    Some(goal) => format_achieved_goal_status(&goal),
+                    None => "No goal set. Usage: `/goal <condition>`".to_string(),
+                },
+            };
+            GoalOutcome::Text(text)
+        }
+        coco_commands::GoalCommandRequest::Clear => {
+            let removed = hook_registry.remove_matching_hooks(is_managed_goal_hook);
+            let active_condition = app_state
+                .write()
+                .await
+                .active_goal
+                .take()
+                .map(|goal| goal.condition);
+            match active_condition.or_else(|| removed.iter().find_map(prompt_from_hook)) {
+                Some(condition) => GoalOutcome::StatusThenText {
+                    status: goal_status_sentinel(true, condition.clone()),
+                    text: format!("Goal cleared: {condition}"),
+                },
+                None => GoalOutcome::Text("No goal set".to_string()),
+            }
+        }
+        coco_commands::GoalCommandRequest::Set { condition } => {
+            if gate.hooks_restricted {
+                return GoalOutcome::Text(HOOKS_GATE_MESSAGE.to_string());
+            }
+            if gate.trust_rejected {
+                return GoalOutcome::Text(TRUST_GATE_MESSAGE.to_string());
+            }
+            hook_registry.remove_matching_hooks(is_managed_goal_hook);
+            app_state.write().await.active_goal =
+                Some(active_goal(condition.clone(), tokens_at_start));
+            hook_registry.register(managed_goal_hook(condition.clone()));
+            GoalOutcome::SetAndRun {
+                status: goal_status_sentinel(false, condition.clone()),
+                text: format!("Goal set: {condition}"),
+                kickoff: build_goal_kickoff_prompt(&condition),
+            }
+        }
     }
 }
 
@@ -148,67 +253,5 @@ pub fn unix_time_ms() -> i64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn active_goal_status_matches_noninteractive_contract() {
-        let mut goal = coco_types::ActiveGoal {
-            condition: "finish migration".to_string(),
-            iterations: 0,
-            set_at_ms: 0,
-            tokens_at_start: 0,
-            last_reason: None,
-        };
-        assert_eq!(
-            format_active_goal_status(&goal),
-            "Goal active: finish migration (not yet evaluated)"
-        );
-
-        goal.iterations = 2;
-        goal.last_reason = Some(" tests still failing\n rerun needed ".to_string());
-        assert_eq!(
-            format_active_goal_status(&goal),
-            "Goal active: finish migration (2 turns)\nLast check: tests still failing rerun needed"
-        );
-    }
-
-    #[test]
-    fn find_last_achieved_goal_skips_clear_sentinel() {
-        let clear = coco_messages::Message::Attachment(
-            coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
-                met: true,
-                condition: "cleared".to_string(),
-                sentinel: true,
-                ..Default::default()
-            }),
-        );
-        let achieved = coco_messages::Message::Attachment(
-            coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
-                met: true,
-                condition: "done".to_string(),
-                iterations: Some(3),
-                sentinel: false,
-                ..Default::default()
-            }),
-        );
-        let history = vec![Arc::new(achieved), Arc::new(clear)];
-
-        let found = find_last_achieved_goal(&history).expect("achieved goal");
-
-        assert_eq!(found.condition, "done");
-        assert_eq!(found.iterations, Some(3));
-    }
-
-    #[test]
-    fn goal_hook_matcher_requires_managed_session_stop_prompt() {
-        let mut hook = managed_goal_hook("done".to_string());
-
-        assert!(is_managed_goal_hook(&hook));
-        hook.managed_by = None;
-        assert!(!is_managed_goal_hook(&hook));
-        hook.managed_by = Some(coco_hooks::ManagedHookKind::Goal);
-        hook.scope = coco_types::HookScope::User;
-        assert!(!is_managed_goal_hook(&hook));
-    }
-}
+#[path = "goal_command.test.rs"]
+mod tests;

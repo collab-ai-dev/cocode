@@ -1047,112 +1047,71 @@ pub async fn run_chat_with_options(
                     installed_fallback_count,
                 ));
             }
-            Ok(coco_commands::GoalCommandRequest::Status) => {
-                let goal = runtime.app_state.read().await.active_goal.clone();
-                let text = match goal {
-                    Some(goal) => crate::goal_command::format_active_goal_status(&goal),
-                    None => match crate::goal_command::find_last_achieved_goal(&prior_messages) {
-                        Some(goal) => crate::goal_command::format_achieved_goal_status(&goal),
-                        None => "No goal set. Usage: `/goal <condition>`".to_string(),
-                    },
-                };
-                append_headless_slash_text(&mut prefix_messages, "goal", "", &text);
-                let mut final_messages = prior_messages;
-                final_messages.extend(prefix_messages);
-                return Ok(headless_text_outcome(
-                    cli,
-                    &cwd,
-                    text,
-                    final_messages,
-                    model_id,
-                    provider_api,
-                    permission_mode,
-                    bypass_permissions_available,
-                    startup.notification,
-                    installed_fallback_count,
-                ));
-            }
-            Ok(coco_commands::GoalCommandRequest::Clear) => {
-                let removed = crate::goal_command::remove_all_goal_hooks(&runtime);
-                let active_condition = {
-                    let mut state = runtime.app_state.write().await;
-                    state.active_goal.take().map(|goal| goal.condition)
-                };
-                let condition = active_condition.or_else(|| {
-                    removed
-                        .iter()
-                        .find_map(crate::goal_command::prompt_from_hook)
-                });
-                let text = match condition {
-                    Some(condition) => {
-                        append_headless_goal_status(
-                            &mut prefix_messages,
-                            crate::goal_command::goal_status_sentinel(true, condition.clone()),
-                        );
-                        format!("Goal cleared: {condition}")
-                    }
-                    None => "No goal set".to_string(),
-                };
-                append_headless_slash_text(&mut prefix_messages, "goal", "clear", &text);
-                let mut final_messages = prior_messages;
-                final_messages.extend(prefix_messages);
-                return Ok(headless_text_outcome(
-                    cli,
-                    &cwd,
-                    text,
-                    final_messages,
-                    model_id,
-                    provider_api,
-                    permission_mode,
-                    bypass_permissions_available,
-                    startup.notification,
-                    installed_fallback_count,
-                ));
-            }
-            Ok(coco_commands::GoalCommandRequest::Set { condition }) => {
+            Ok(request) => {
+                let args = crate::goal_command::goal_display_args(&request).to_string();
                 let cfg = runtime.current_engine_config().await;
-                if cfg.disable_all_hooks || cfg.allow_managed_hooks_only {
-                    let text = crate::goal_command::HOOKS_GATE_MESSAGE.to_string();
-                    append_headless_slash_text(&mut prefix_messages, "goal", &condition, &text);
-                    let mut final_messages = prior_messages;
-                    final_messages.extend(prefix_messages);
-                    return Ok(headless_text_outcome(
-                        cli,
-                        &cwd,
-                        text,
-                        final_messages,
-                        model_id,
-                        provider_api,
-                        permission_mode,
-                        bypass_permissions_available,
-                        startup.notification,
-                        installed_fallback_count,
-                    ));
-                }
-
+                let gate = crate::goal_command::GoalGate {
+                    hooks_restricted: cfg.disable_all_hooks || cfg.allow_managed_hooks_only,
+                    // Headless is non-interactive; the trust gate is deliberately skipped.
+                    trust_rejected: false,
+                };
                 let tokens_at_start = runtime.session_usage_snapshot().await.totals.output_tokens;
-                crate::goal_command::remove_all_goal_hooks(&runtime);
-                {
-                    let mut state = runtime.app_state.write().await;
-                    state.active_goal = Some(crate::goal_command::active_goal(
-                        condition.clone(),
-                        tokens_at_start,
-                    ));
+                let outcome = crate::goal_command::resolve_goal_request(
+                    request,
+                    &runtime.app_state,
+                    &runtime.hook_registry(),
+                    &prior_messages,
+                    tokens_at_start,
+                    gate,
+                )
+                .await;
+
+                match outcome {
+                    crate::goal_command::GoalOutcome::Text(text) => {
+                        append_headless_slash_text(&mut prefix_messages, "goal", &args, &text);
+                        let mut final_messages = prior_messages;
+                        final_messages.extend(prefix_messages);
+                        return Ok(headless_text_outcome(
+                            cli,
+                            &cwd,
+                            text,
+                            final_messages,
+                            model_id,
+                            provider_api,
+                            permission_mode,
+                            bypass_permissions_available,
+                            startup.notification,
+                            installed_fallback_count,
+                        ));
+                    }
+                    crate::goal_command::GoalOutcome::StatusThenText { status, text } => {
+                        append_headless_goal_status(&mut prefix_messages, status);
+                        append_headless_slash_text(&mut prefix_messages, "goal", &args, &text);
+                        let mut final_messages = prior_messages;
+                        final_messages.extend(prefix_messages);
+                        return Ok(headless_text_outcome(
+                            cli,
+                            &cwd,
+                            text,
+                            final_messages,
+                            model_id,
+                            provider_api,
+                            permission_mode,
+                            bypass_permissions_available,
+                            startup.notification,
+                            installed_fallback_count,
+                        ));
+                    }
+                    crate::goal_command::GoalOutcome::SetAndRun {
+                        status,
+                        text,
+                        kickoff,
+                    } => {
+                        append_headless_goal_status(&mut prefix_messages, status);
+                        append_headless_slash_text(&mut prefix_messages, "goal", &args, &text);
+                        effective_prompt = kickoff;
+                    }
                 }
-                append_headless_goal_status(
-                    &mut prefix_messages,
-                    crate::goal_command::goal_status_sentinel(false, condition.clone()),
-                );
-                runtime
-                    .hook_registry()
-                    .register(crate::goal_command::managed_goal_hook(condition.clone()));
-                append_headless_slash_text(
-                    &mut prefix_messages,
-                    "goal",
-                    &condition,
-                    &format!("Goal set: {condition}"),
-                );
-                effective_prompt = crate::goal_command::build_goal_kickoff_prompt(&condition);
             }
         }
     }
@@ -1247,11 +1206,7 @@ fn parse_headless_goal_slash(text: &str) -> Option<&str> {
         return Some("");
     }
     let args = body.strip_prefix("goal")?;
-    if !args
-        .chars()
-        .next()
-        .is_some_and(|first| first.is_whitespace())
-    {
+    if !args.chars().next().is_some_and(char::is_whitespace) {
         return None;
     }
     Some(args.trim_start())

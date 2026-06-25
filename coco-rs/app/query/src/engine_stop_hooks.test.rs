@@ -221,7 +221,7 @@ fn goal_prompt_hook_matcher_requires_managed_session_stop_prompt() {
     unmanaged.managed_by = None;
     assert!(!is_goal_prompt_hook(&unmanaged, "finish migration"));
 
-    let mut matched = hook.clone();
+    let mut matched = hook;
     matched.matcher = Some("*".to_string());
     assert!(!is_goal_prompt_hook(&matched, "finish migration"));
 }

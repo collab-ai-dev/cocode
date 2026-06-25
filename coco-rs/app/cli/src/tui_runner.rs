@@ -4387,103 +4387,47 @@ async fn run_goal_command(
     event_tx: &mpsc::Sender<CoreEvent>,
     request: coco_commands::GoalCommandRequest,
 ) -> SlashFollowup {
-    match request {
-        coco_commands::GoalCommandRequest::Status => {
-            let goal = runtime.app_state.read().await.active_goal.clone();
-            let text = match goal {
-                Some(goal) => goal_command::format_active_goal_status(&goal),
-                None => {
-                    let history = runtime.history.lock().await;
-                    match goal_command::find_last_achieved_goal(history.as_slice()) {
-                        Some(goal) => goal_command::format_achieved_goal_status(&goal),
-                        None => "No goal set. Usage: `/goal <condition>`".to_string(),
-                    }
-                }
-            };
-            emit_slash_text(event_tx, "goal", "", &text).await;
-            SlashFollowup::Done
-        }
-        coco_commands::GoalCommandRequest::Clear => {
-            let removed = goal_command::remove_all_goal_hooks(runtime);
-            let active_condition = {
-                let mut state = runtime.app_state.write().await;
-                state.active_goal.take().map(|goal| goal.condition)
-            };
-            let condition = active_condition
-                .or_else(|| removed.iter().find_map(goal_command::prompt_from_hook));
-            match condition {
-                Some(condition) => {
-                    append_goal_status(
-                        runtime,
-                        event_tx,
-                        goal_command::goal_status_sentinel(true, condition.clone()),
-                    )
-                    .await;
-                    emit_slash_text(
-                        event_tx,
-                        "goal",
-                        "clear",
-                        &format!("Goal cleared: {condition}"),
-                    )
-                    .await;
-                }
-                None => {
-                    emit_slash_text(event_tx, "goal", "clear", "No goal set").await;
-                }
-            }
-            SlashFollowup::Done
-        }
-        coco_commands::GoalCommandRequest::Set { condition } => {
+    let args = goal_command::goal_display_args(&request).to_string();
+    let gate = goal_command::GoalGate {
+        hooks_restricted: {
             let cfg = runtime.current_engine_config().await;
-            if cfg.disable_all_hooks || cfg.allow_managed_hooks_only {
-                emit_slash_text(
-                    event_tx,
-                    "goal",
-                    &condition,
-                    goal_command::HOOKS_GATE_MESSAGE,
-                )
-                .await;
-                return SlashFollowup::Done;
-            }
-            if workspace_trust_rejected() {
-                emit_slash_text(
-                    event_tx,
-                    "goal",
-                    &condition,
-                    goal_command::TRUST_GATE_MESSAGE,
-                )
-                .await;
-                return SlashFollowup::Done;
-            }
+            cfg.disable_all_hooks || cfg.allow_managed_hooks_only
+        },
+        // Trust is required only interactively; the TUI is the interactive surface.
+        trust_rejected: workspace_trust_rejected(),
+    };
+    let tokens_at_start = runtime.session_usage_snapshot().await.totals.output_tokens;
+    let history_snapshot = runtime.history.lock().await.to_vec();
+    let outcome = goal_command::resolve_goal_request(
+        request,
+        &runtime.app_state,
+        &runtime.hook_registry(),
+        &history_snapshot,
+        tokens_at_start,
+        gate,
+    )
+    .await;
 
-            let tokens_at_start = runtime.session_usage_snapshot().await.totals.output_tokens;
-            goal_command::remove_all_goal_hooks(runtime);
-            {
-                let mut state = runtime.app_state.write().await;
-                state.active_goal = Some(goal_command::active_goal(
-                    condition.clone(),
-                    tokens_at_start,
-                ));
-            }
-            append_goal_status(
-                runtime,
-                event_tx,
-                goal_command::goal_status_sentinel(false, condition.clone()),
-            )
-            .await;
-            runtime
-                .hook_registry()
-                .register(goal_command::managed_goal_hook(condition.clone()));
-            emit_slash_text(
-                event_tx,
-                "goal",
-                &condition,
-                &format!("Goal set: {condition}"),
-            )
-            .await;
+    match outcome {
+        goal_command::GoalOutcome::Text(text) => {
+            emit_slash_text(event_tx, "goal", &args, &text).await;
+            SlashFollowup::Done
+        }
+        goal_command::GoalOutcome::StatusThenText { status, text } => {
+            append_goal_status(runtime, event_tx, status).await;
+            emit_slash_text(event_tx, "goal", &args, &text).await;
+            SlashFollowup::Done
+        }
+        goal_command::GoalOutcome::SetAndRun {
+            status,
+            text,
+            kickoff,
+        } => {
+            append_goal_status(runtime, event_tx, status).await;
+            emit_slash_text(event_tx, "goal", &args, &text).await;
             SlashFollowup::RunEngine {
-                content: goal_command::build_goal_kickoff_prompt(&condition),
-                metadata: Some(format_slash_command_metadata("goal", &condition)),
+                content: kickoff,
+                metadata: Some(format_slash_command_metadata("goal", &args)),
             }
         }
     }

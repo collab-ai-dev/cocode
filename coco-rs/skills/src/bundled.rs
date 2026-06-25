@@ -256,7 +256,10 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
 
     // ───────────────── feature-gated ─────────────────
 
-    // /loop — always registered; sub-modes are controlled by loop_* settings.
+    // /loop — gated on AGENT_TRIGGERS, the same flag as the cron / scheduler
+    // tools, so the skill and the tools it drives appear (and disappear) together
+    // (matches upstream `feature('AGENT_TRIGGERS')`). Default-on; sub-modes are
+    // controlled by loop_* settings.
     {
         let mut s = bundled(
             "loop",
@@ -278,6 +281,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
             "When the user wants to set up a recurring task, poll for status, or run something repeatedly on an interval (e.g. \"check the deploy every 5 minutes\", \"keep running /babysit-prs\"). Do NOT invoke for one-off tasks.".to_string(),
         );
         s.argument_hint = Some("[interval] <prompt>".to_string());
+        s.gated_by = Some(Feature::AgentTriggers);
         skills.push(s);
     }
 
