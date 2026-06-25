@@ -30,6 +30,19 @@ impl TeammateMode {
     }
 }
 
+/// Map the config-layer `TeammateMode` (resolved from settings.json) onto the
+/// coordinator's mode enum. The two enums carry identical variants; this lets
+/// the mode-snapshot capture freeze the resolved settings value at bootstrap.
+impl From<coco_config::TeammateMode> for TeammateMode {
+    fn from(mode: coco_config::TeammateMode) -> Self {
+        match mode {
+            coco_config::TeammateMode::Auto => Self::Auto,
+            coco_config::TeammateMode::Tmux => Self::Tmux,
+            coco_config::TeammateMode::InProcess => Self::InProcess,
+        }
+    }
+}
+
 /// Team/swarm configuration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TeamConfig {

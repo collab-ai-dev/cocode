@@ -24,6 +24,8 @@ fn shell_terminal_completed_with_exit_code() {
     assert!(!xml.contains("<result>"));
     assert!(!xml.contains("<usage>"));
     assert!(!xml.contains("<worktree>"));
+    // Shell terminals carry no agent recur-note (the note is agent-specific).
+    assert!(!xml.contains("<note>"));
 }
 
 #[test]
@@ -125,6 +127,9 @@ fn agent_terminal_optional_sections_omitted_when_none() {
     assert!(!xml.contains("<result>"));
     assert!(!xml.contains("<usage>"));
     assert!(!xml.contains("<worktree>"));
+    // The recur-note is present even on the minimal agent envelope.
+    assert!(xml.contains(&format!("<note>{TASK_NOTIFICATION_RECUR_NOTE}</note>")));
+    assert!(xml.contains("may notify more than once"));
 }
 
 #[test]

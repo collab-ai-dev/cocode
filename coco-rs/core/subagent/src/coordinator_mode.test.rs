@@ -136,6 +136,10 @@ fn render_task_notification_completed_minimal() {
     // Optional sections are omitted when None.
     assert!(!xml.contains("<result>"));
     assert!(!xml.contains("<usage>"));
+    // The recur-note is always present (model-contract clarity: the same
+    // task-id may notify more than once).
+    assert!(xml.contains(&format!("<note>{TASK_NOTIFICATION_RECUR_NOTE}</note>")));
+    assert!(xml.contains("may notify more than once"));
 }
 
 #[test]

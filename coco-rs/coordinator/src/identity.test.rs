@@ -113,6 +113,63 @@ async fn test_resolve_teammate_identity_from_env_vars() {
     assert!(id.plan_mode_required);
 }
 
+/// One-shot consume: after [`consume_inherited_env_identity`] the identity env
+/// vars are removed from the process, but the cached identity still resolves —
+/// so the value survives for this process while grandchildren (which would read
+/// the now-removed env) don't inherit it.
+///
+/// This is the ONLY test that calls `consume_inherited_env_identity` because the
+/// underlying `OnceLock` is process-global + one-shot; nextest isolates each
+/// test in its own process so the cache starts empty here.
+#[tokio::test]
+async fn test_consume_inherited_env_identity_caches_then_removes() {
+    use crate::constants::AGENT_ID_ENV_VAR;
+    use crate::constants::AGENT_NAME_ENV_VAR;
+    use crate::constants::PLAN_MODE_REQUIRED_ENV_VAR;
+    use crate::constants::TEAM_NAME_ENV_VAR;
+    use crate::constants::TEAMMATE_COLOR_ENV_VAR;
+
+    let _env = crate::test_support::lock_env().await;
+    clear_dynamic_team_context();
+
+    // SAFETY: serialized via the held `ENV_LOCK` guard; nextest isolates per
+    // process so this process's `INHERITED_ENV` OnceLock starts empty.
+    unsafe {
+        std::env::set_var(AGENT_ID_ENV_VAR.as_str(), "worker@my-team");
+        std::env::set_var(AGENT_NAME_ENV_VAR.as_str(), "worker");
+        std::env::set_var(TEAM_NAME_ENV_VAR.as_str(), "my-team");
+        std::env::set_var(TEAMMATE_COLOR_ENV_VAR.as_str(), "blue");
+        std::env::set_var(PLAN_MODE_REQUIRED_ENV_VAR.as_str(), "1");
+    }
+
+    // Consume: cache the snapshot, then remove the env vars.
+    consume_inherited_env_identity();
+
+    // The env vars are now gone (so grandchildren don't inherit them).
+    assert!(std::env::var(TEAM_NAME_ENV_VAR.as_str()).is_err());
+    assert!(std::env::var(AGENT_ID_ENV_VAR.as_str()).is_err());
+    assert!(std::env::var(AGENT_NAME_ENV_VAR.as_str()).is_err());
+    assert!(std::env::var(TEAMMATE_COLOR_ENV_VAR.as_str()).is_err());
+    assert!(std::env::var(PLAN_MODE_REQUIRED_ENV_VAR.as_str()).is_err());
+
+    // But the cached identity still resolves for THIS process.
+    assert_eq!(get_team_name().as_deref(), Some("my-team"));
+    assert_eq!(get_agent_id().as_deref(), Some("worker@my-team"));
+    assert_eq!(get_agent_name().as_deref(), Some("worker"));
+    assert_eq!(get_teammate_color().as_deref(), Some("blue"));
+    assert!(is_plan_mode_required());
+
+    let id = resolve_teammate_identity().expect("cached identity resolves after consume");
+    assert_eq!(id.team_name, "my-team");
+    assert_eq!(id.agent_id, "worker@my-team");
+    assert_eq!(id.color, Some(coco_types::AgentColorName::Blue));
+    assert!(id.plan_mode_required);
+
+    // Idempotent: a second consume is a no-op (OnceLock already set).
+    consume_inherited_env_identity();
+    assert_eq!(get_team_name().as_deref(), Some("my-team"));
+}
+
 #[tokio::test]
 async fn test_task_local_context() {
     let ctx = create_teammate_context("tester", "t", None, false, "s");
