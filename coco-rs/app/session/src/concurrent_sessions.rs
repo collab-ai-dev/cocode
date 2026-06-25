@@ -289,15 +289,34 @@ pub fn is_bg_session() -> bool {
 ///
 /// Returns `0` on any directory-read error (conservative).
 pub fn count_concurrent_sessions(config_home: &Path) -> i64 {
+    sweep_and_read(config_home)
+        .into_iter()
+        .filter(|(_, live)| *live)
+        .count() as i64
+}
+
+/// Sweep the PID registry once: enumerate `<digits>.json` files, probe
+/// each PID, unlink stale files (except on WSL), and return every
+/// readable registration paired with whether its process is live.
+///
+/// This is the single sweep code path shared by
+/// [`count_concurrent_sessions`] and [`collect_ps_entries`] — the
+/// strict `^\d+\.json$` guard, the signal-0 liveness probe, and the
+/// WSL-aware unlink all live here so there is no duplication.
+///
+/// The current process is always reported `live` (its file may not be
+/// written yet, and it is by definition running). Returns an empty vec
+/// on any directory-read error (conservative).
+fn sweep_and_read(config_home: &Path) -> Vec<(SessionRegistration, bool)> {
     let dir = sessions_dir(config_home);
     let entries = match std::fs::read_dir(&dir) {
         Ok(e) => e,
-        Err(_) => return 0,
+        Err(_) => return Vec::new(),
     };
 
     let our_pid = std::process::id();
     let is_wsl = detect_wsl();
-    let mut count: i64 = 0;
+    let mut out = Vec::new();
     for entry in entries.flatten() {
         let name_os = entry.file_name();
         let name = name_os.to_string_lossy();
@@ -313,18 +332,21 @@ pub fn count_concurrent_sessions(config_home: &Path) -> i64 {
         let Ok(pid) = stem.parse::<u32>() else {
             continue;
         };
-        if pid == our_pid {
-            count += 1;
-            continue;
-        }
-        if is_process_running(pid) {
-            count += 1;
-        } else if !is_wsl {
+        let live = pid == our_pid || is_process_running(pid);
+        if !live && !is_wsl {
             // Stale file — sweep. Best effort; ignore unlink errors.
             let _ = std::fs::remove_file(entry.path());
+            // File is gone; don't surface a dead-and-swept entry.
+            continue;
+        }
+        // A readable registration is surfaced; a missing / malformed
+        // file is silently dropped (best effort — matches the prior
+        // count behavior, which only ever counted readable pid files).
+        if let Ok(Some(reg)) = read_pid_file(&entry.path()) {
+            out.push((reg, live));
         }
     }
-    count
+    out
 }
 
 /// Read a single PID file (without sweeping). Useful for `coco ps`
@@ -335,7 +357,159 @@ pub fn read_registration(
     pid: u32,
 ) -> std::io::Result<Option<SessionRegistration>> {
     let path = sessions_dir(config_home).join(format!("{pid}.json"));
-    match std::fs::read_to_string(&path) {
+    read_pid_file(&path)
+}
+
+// ── `coco ps` flat lifecycle view ─────────────────────────────────
+
+/// Flat lifecycle label for `coco ps --json`. Distinct from the
+/// transport-level [`SessionStatus`] (`busy`/`idle`/`waiting`): this is
+/// "where is the job in its lifecycle", not "what is it doing right
+/// now".
+///
+/// Terminal outcomes (`Done` / `Failed`) cannot be derived from the PID
+/// registry alone — a session's `<pid>.json` is *deleted* on exit, so a
+/// completed session leaves no record there. They are only reachable
+/// when a durable terminal record is supplied via [`view_state`]'s
+/// `job` argument (see the `coco-tasks` `JobStore`). With no such
+/// record, a dead PID maps to `Stopped`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PsViewState {
+    Working,
+    Blocked,
+    Done,
+    Failed,
+    Stopped,
+}
+
+/// Terminal outcome carried by a durable job record (e.g. the
+/// `coco-tasks` `JobStore`). Kept as a tiny `coco-session`-local enum so
+/// the layer graph stays clean: `coco-tasks` depends on `coco-session`
+/// (for [`SessionKind`]), therefore `coco-session` must NOT depend on
+/// `coco-tasks` — so [`view_state`] takes this hint rather than a
+/// `JobState`. The merge of `JobStore` records into `ps` happens in the
+/// `coco-cli` layer (which depends on both), mapping
+/// `TaskStatus::{Completed,Failed,Killed}` into these variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalJobOutcome {
+    Done,
+    Failed,
+    Stopped,
+}
+
+/// One row of `coco ps --json`. `id` aliases `session_id` to match the
+/// stable-id surface; both are emitted so scripts can key on either.
+#[derive(Debug, Clone, Serialize)]
+pub struct PsEntry {
+    pub pid: u32,
+    /// Stable id (= `session_id`).
+    pub id: String,
+    pub cwd: PathBuf,
+    pub kind: SessionKind,
+    /// Unix-ms timestamp.
+    pub started_at: i64,
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<SessionStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_for: Option<String>,
+    pub state: PsViewState,
+}
+
+/// Pure lifecycle mapper. Precedence (first match wins):
+///
+/// 1. `status == Busy` → `Working` (the worker is actively running).
+/// 2. `status == Waiting` OR `waiting_for` set → `Blocked`.
+/// 3. a terminal `job` outcome → `Done` / `Failed` / `Stopped`.
+/// 4. `!live` (PID dead, no terminal record) → `Stopped`.
+/// 5. otherwise (idle / unknown, running) → `Working`.
+///
+/// Note: the PID registry has no terminal state of its own (files are
+/// deleted on exit), so `Done` / `Failed` only ever come from a
+/// supplied `job` record — that is expected.
+///
+/// Routine / loop carve-out (a successful recurring job is not "done")
+/// is DEFERRED: there is no recurring marker on [`SessionRegistration`].
+pub fn view_state(
+    reg: &SessionRegistration,
+    live: bool,
+    job: Option<TerminalJobOutcome>,
+) -> PsViewState {
+    if reg.status == Some(SessionStatus::Busy) {
+        return PsViewState::Working;
+    }
+    if reg.status == Some(SessionStatus::Waiting) || reg.waiting_for.is_some() {
+        return PsViewState::Blocked;
+    }
+    if let Some(outcome) = job {
+        return match outcome {
+            TerminalJobOutcome::Done => PsViewState::Done,
+            TerminalJobOutcome::Failed => PsViewState::Failed,
+            TerminalJobOutcome::Stopped => PsViewState::Stopped,
+        };
+    }
+    if !live {
+        return PsViewState::Stopped;
+    }
+    PsViewState::Working
+}
+
+/// Enumerate the PID registry into flat `coco ps` rows.
+///
+/// Reuses the shared [`sweep_and_read`] pass (so the stale-PID unlink
+/// happens here too — one sweep code path), redacts each `name` through
+/// [`coco_secret_redact::redact_secrets`], maps each row through
+/// [`view_state`] (no durable job record at this layer — terminal
+/// outcomes are merged in by `coco-cli`), and sorts by `started_at`
+/// ascending.
+///
+/// `include_all = false` drops process-less terminal rows (the CC
+/// default filter). Because the sweep already deletes dead-PID files,
+/// in practice every surfaced row here is live; the `include_all` gate
+/// is honored so the contract holds once `coco-cli` merges terminal
+/// `JobStore` records.
+pub fn collect_ps_entries(config_home: &Path, include_all: bool) -> Vec<PsEntry> {
+    let mut entries: Vec<PsEntry> = sweep_and_read(config_home)
+        .into_iter()
+        .filter_map(|(reg, live)| {
+            let state = view_state(&reg, live, /*job*/ None);
+            // Drop process-less terminal rows unless --all.
+            if !include_all
+                && !live
+                && !matches!(state, PsViewState::Working | PsViewState::Blocked)
+            {
+                return None;
+            }
+            let name = reg
+                .name
+                .as_deref()
+                .map(|n| coco_secret_redact::redact_secrets(n).into_owned());
+            Some(PsEntry {
+                pid: reg.pid,
+                id: reg.session_id.clone(),
+                cwd: reg.cwd,
+                kind: reg.kind,
+                started_at: reg.started_at,
+                session_id: reg.session_id,
+                name,
+                status: reg.status,
+                waiting_for: reg.waiting_for,
+                state,
+            })
+        })
+        .collect();
+    entries.sort_by_key(|e| e.started_at);
+    entries
+}
+
+/// Read a `SessionRegistration` from an explicit path. `Ok(None)` when
+/// the file is missing; `Err` on read / parse failure. Used by the
+/// sweep, which already holds the dir entry path.
+fn read_pid_file(path: &Path) -> std::io::Result<Option<SessionRegistration>> {
+    match std::fs::read_to_string(path) {
         Ok(body) => match serde_json::from_str::<SessionRegistration>(&body) {
             Ok(rec) => Ok(Some(rec)),
             Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),

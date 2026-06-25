@@ -8,4 +8,5 @@
 pub mod agents;
 pub mod config;
 pub mod plugin;
+pub mod ps;
 pub mod sessions;

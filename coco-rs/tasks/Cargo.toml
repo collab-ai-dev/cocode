@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 coco-config.workspace = true
 coco-error.workspace = true
+coco-session.workspace = true
 coco-system-reminder.workspace = true
 coco-tool-runtime.workspace = true
 coco-types.workspace = true
@@ -26,3 +27,4 @@ tracing.workspace = true
 anyhow.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 tempfile.workspace = true
+pretty_assertions.workspace = true
