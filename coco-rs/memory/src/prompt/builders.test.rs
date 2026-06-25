@@ -13,6 +13,7 @@ fn auto_variant_includes_individual_types_and_index() {
         false,
         None,
         None,
+        &[],
     );
     assert!(p.contains("# auto memory"));
     assert!(p.contains("<types>"));
@@ -42,6 +43,7 @@ fn combined_variant_includes_scope_taxonomy_and_team_block() {
         false,
         None,
         None,
+        &[],
     );
     assert!(p.contains("private directory at `/m`"));
     assert!(p.contains("team directory at `/m/team`"));
@@ -56,6 +58,75 @@ fn combined_variant_includes_scope_taxonomy_and_team_block() {
     assert!(p.contains("personal or team"));
 }
 
+fn store(path: &str, mode: StoreMode, scope: StoreScope) -> MemoryStore {
+    MemoryStore {
+        path: coco_config::parse_memory_stores(&format!("[\"{path}\"]"))
+            .into_iter()
+            .next()
+            .expect("absolute path")
+            .path,
+        mode,
+        scope,
+        mount: Some(
+            std::path::Path::new(path)
+                .file_name()
+                .expect("name")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        prompt_index: None,
+        prompt_index_max_bytes: None,
+    }
+}
+
+#[test]
+fn mounted_stores_render_rw_ro_and_user_sections() {
+    let stores = vec![
+        store("/mnt/team-rw", StoreMode::Rw, StoreScope::Team),
+        store("/mnt/team-ro", StoreMode::Ro, StoreScope::Team),
+        store("/mnt/user-priv", StoreMode::Rw, StoreScope::User),
+    ];
+    let p = build_system_prompt_section(
+        SystemPromptVariant::Combined,
+        Path::new("/m"),
+        Some(Path::new("/m/team")),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &stores,
+    );
+    assert!(p.contains("## Mounted memory stores"));
+    assert!(p.contains("### Team stores (writable)"));
+    assert!(p.contains("/mnt/team-rw"));
+    assert!(p.contains("### Team stores (read-only)"));
+    assert!(p.contains("/mnt/team-ro"));
+    assert!(p.contains("DO NOT write to them"));
+    assert!(p.contains("### Private store"));
+    assert!(p.contains("/mnt/user-priv"));
+}
+
+#[test]
+fn mounted_stores_omitted_in_auto_variant() {
+    let stores = vec![store("/mnt/team-rw", StoreMode::Rw, StoreScope::Team)];
+    let p = build_system_prompt_section(
+        SystemPromptVariant::Auto,
+        Path::new("/m"),
+        None,
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &stores,
+    );
+    // Store prose is combined-only; Auto variant must not render it.
+    assert!(!p.contains("## Mounted memory stores"));
+}
+
 #[test]
 fn skip_index_omits_two_step_block() {
     let p = build_system_prompt_section(
@@ -68,6 +139,7 @@ fn skip_index_omits_two_step_block() {
         false,
         None,
         None,
+        &[],
     );
     assert!(!p.contains("two-step process"));
 }
@@ -84,6 +156,7 @@ fn searching_past_context_substitutes_memory_and_transcript_dir() {
         true,
         Some(Path::new("/sess/proj")),
         None,
+        &[],
     );
     assert!(p.contains("## Searching past context"));
     assert!(p.contains("/mem/dir"));
@@ -103,6 +176,7 @@ fn searching_past_context_keeps_placeholder_when_transcript_unset() {
         true,
         None,
         None,
+        &[],
     );
     // Placeholder visible to the model when projectDir isn't resolvable.
     assert!(p.contains("<your sessions directory>"));

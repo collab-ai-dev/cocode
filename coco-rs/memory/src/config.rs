@@ -40,6 +40,20 @@ pub struct MemoryConfig {
     /// system-prompt block. `None` ⇒ no extra section. Source of
     /// truth: `coco_config::MemoryConfig::extra_guidelines`.
     pub extra_guidelines: Option<String>,
+
+    /// Mounted memory stores parsed from `COCO_MEMORY_STORES`. Empty by
+    /// default. A non-empty list enables team recall outright (mounted ⇒
+    /// enabled). Source of truth: `coco_config::MemoryConfig::memory_stores`.
+    pub memory_stores: Vec<coco_config::MemoryStore>,
+}
+
+impl MemoryConfig {
+    /// Whether team-memory recall is enabled — a mounted store (non-empty
+    /// `memory_stores`) enables it outright, else the `team_memory_enabled`
+    /// toggle. Mirrors `coco_config::MemoryConfig::is_team_recall_enabled`.
+    pub fn is_team_recall_enabled(&self) -> bool {
+        !self.memory_stores.is_empty() || self.team_memory_enabled
+    }
 }
 
 impl Default for MemoryConfig {
@@ -70,6 +84,7 @@ impl From<coco_config::MemoryConfig> for MemoryConfig {
             session_memory_total_tokens: c.session_memory_total_tokens,
             searching_past_context_enabled: c.searching_past_context_enabled,
             extra_guidelines: c.extra_guidelines,
+            memory_stores: c.memory_stores,
         }
     }
 }

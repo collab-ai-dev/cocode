@@ -11,6 +11,7 @@ workspace = true
 coco-types.workspace = true
 coco-error.workspace = true
 coco-utils-common.workspace = true
+coco-utils-absolute-path.workspace = true
 
 async-trait.workspace = true
 serde = { workspace = true, features = ["derive"] }

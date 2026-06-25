@@ -3,6 +3,10 @@
 
 use std::path::Path;
 
+use coco_config::MemoryStore;
+use coco_config::StoreMode;
+use coco_config::StoreScope;
+
 const TYPES_INDIVIDUAL: &str = include_str!("text/types_individual.md");
 const TYPES_COMBINED: &str = include_str!("text/types_combined.md");
 const WHAT_NOT_TO_SAVE: &str = include_str!("text/what_not_to_save.md");
@@ -74,6 +78,7 @@ pub fn build_system_prompt_section(
     searching_past_context: bool,
     transcript_dir: Option<&Path>,
     extra_guidelines: Option<&str>,
+    memory_stores: &[MemoryStore],
 ) -> String {
     if matches!(variant, SystemPromptVariant::Kairos) {
         return build_kairos_prompt(
@@ -112,6 +117,14 @@ pub fn build_system_prompt_section(
             memory_dir.display(),
             team.display(),
         ));
+    }
+
+    // Mounted-store guidance (the `e0t` recall-dispatcher analogue at the
+    // prose level). Enumerate parsed stores and render distinct guidance
+    // for writable (rw) vs read-only (ro) mounts. Rendered only in
+    // combined mode (team recall is enabled — mounted ⇒ enabled).
+    if combined && let Some(section) = render_mounted_stores_section(memory_stores) {
+        sections.push(section);
     }
 
     sections.push(if combined {
@@ -186,6 +199,88 @@ pub fn build_system_prompt_section(
     }
 
     sections.join("\n\n")
+}
+
+/// Render the "## Mounted memory stores" prose for the parsed
+/// `COCO_MEMORY_STORES` entries.
+///
+/// Splits team-scoped stores into writable (rw) and read-only (ro)
+/// lists and renders distinct guidance: how/where to save for writable
+/// mounts, "reference only — do not write here" for read-only mounts.
+/// User-scoped stores are listed separately as private mounts.
+///
+/// Returns `None` when there are no stores (so the section is omitted
+/// entirely). This is the prose-level analogue of CC's scope-aware
+/// recall dispatcher; the network `prompt_index` injection is deferred
+/// (phase 3), so `MemoryStore::prompt_index` is intentionally not read
+/// here.
+fn render_mounted_stores_section(stores: &[MemoryStore]) -> Option<String> {
+    if stores.is_empty() {
+        return None;
+    }
+
+    let mount_label = |store: &MemoryStore| -> String {
+        let name = store.mount.as_deref().unwrap_or("(unnamed)");
+        format!("- `{name}` — {}", store.path.display())
+    };
+
+    let team_rw: Vec<&MemoryStore> = stores
+        .iter()
+        .filter(|s| matches!(s.scope, StoreScope::Team) && matches!(s.mode, StoreMode::Rw))
+        .collect();
+    let team_ro: Vec<&MemoryStore> = stores
+        .iter()
+        .filter(|s| matches!(s.scope, StoreScope::Team) && matches!(s.mode, StoreMode::Ro))
+        .collect();
+    let user_stores: Vec<&MemoryStore> = stores
+        .iter()
+        .filter(|s| matches!(s.scope, StoreScope::User))
+        .collect();
+
+    let mut parts: Vec<String> = Vec::new();
+    parts.push("## Mounted memory stores".to_string());
+    parts.push("Additional memory stores are mounted for this session. Each is listed below with its scope and access mode.".to_string());
+
+    if !team_rw.is_empty() {
+        let list = team_rw
+            .iter()
+            .map(|s| mount_label(s))
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!(
+            "### Team stores (writable)\n\nThese shared stores are writable — save team-relevant memories here using the Write tool, following the same two-step file + index convention as the team directory:\n\n{list}"
+        ));
+    }
+
+    if !team_ro.is_empty() {
+        let list = team_ro
+            .iter()
+            .map(|s| mount_label(s))
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!(
+            "### Team stores (read-only)\n\nThese shared stores are read-only — reference their contents for relevant context but DO NOT write to them:\n\n{list}"
+        ));
+    }
+
+    if !user_stores.is_empty() {
+        let list = user_stores
+            .iter()
+            .map(|s| {
+                let mode = match s.mode {
+                    StoreMode::Rw => "writable",
+                    StoreMode::Ro => "read-only",
+                };
+                format!("{} ({mode})", mount_label(s))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        parts.push(format!(
+            "### Private store\n\nA private memory store mounted for the current user only:\n\n{list}"
+        ));
+    }
+
+    Some(parts.join("\n\n"))
 }
 
 /// Build the KAIROS daily-log prompt — used when `kairos_mode` is set.

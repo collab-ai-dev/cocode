@@ -605,6 +605,12 @@ pub struct MemoryConfig {
     /// (env wins).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_guidelines: Option<String>,
+
+    /// Mounted memory stores parsed from `COCO_MEMORY_STORES`. Empty by
+    /// default. A non-empty list enables team recall outright (mounted ⇒
+    /// enabled). Env-only — not a settings field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memory_stores: Vec<crate::memory_stores::MemoryStore>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -669,6 +675,7 @@ impl Default for MemoryConfig {
             session_memory_total_tokens: 12_000,
             searching_past_context_enabled: false,
             extra_guidelines: None,
+            memory_stores: Vec::new(),
         }
     }
 }
@@ -768,6 +775,12 @@ impl MemoryConfig {
     pub fn resolve_with_sources(settings: &SettingsWithSource, env: &EnvSnapshot) -> Self {
         let mut config = Self::resolve_sub_toggles(&settings.merged, env);
 
+        // Mounted memory stores (env-only). A non-empty list enables team
+        // recall outright (mounted ⇒ enabled) — see `is_team_recall_enabled`.
+        if let Some(raw) = env.get_string(EnvKey::CocoMemoryStores) {
+            config.memory_stores = crate::memory_stores::parse_memory_stores(&raw);
+        }
+
         // Path overrides — two distinct semantics:
         // • `COCO_MEMORY_PATH_OVERRIDE` (operator): **full path** to the
         // personal memory directory. The `<projects>/<slug>/memory/`
@@ -813,6 +826,17 @@ impl MemoryConfig {
         }
 
         config
+    }
+
+    /// Whether team-memory recall is enabled.
+    ///
+    /// The `isTeamMemoryEnabled` precedence inversion: a mounted store
+    /// (non-empty `memory_stores`) enables team recall outright, BEFORE
+    /// the `team_memory_enabled` toggle is consulted. coco has no rollout
+    /// flag, so "mounted ⇒ enabled"; otherwise fall back to the existing
+    /// `team_memory_enabled` config.
+    pub fn is_team_recall_enabled(&self) -> bool {
+        !self.memory_stores.is_empty() || self.team_memory_enabled
     }
 }
 
