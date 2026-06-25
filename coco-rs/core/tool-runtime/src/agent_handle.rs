@@ -221,6 +221,15 @@ pub struct AgentSpawnRequest {
     /// only — writes / bash still evaluate against the worktree cwd + rules.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inherited_read_dirs: Vec<String>,
+    /// Query-tracking depth the spawned child will RUN at (= parent's
+    /// `ToolUseContext.query_depth + 1`). Filled at the `AgentTool::execute`
+    /// boundary from `ctx.query_depth + 1`. Threaded in-process so the
+    /// child engine carries its own depth and the universal subagent
+    /// deny-list can gate the `Agent` tool once the depth reaches
+    /// [`coco_subagent::SUBAGENT_DEPTH_LIMIT`]. Main loop = 0, so a
+    /// top-level spawn runs at depth 1.
+    #[serde(default)]
+    pub child_query_depth: i32,
     // Note: the following fields are NOT on `AgentSpawnRequest`. They
     // were dead pass-through slots — not in the AgentTool input schema
     // and no Rust caller ever set them; the
@@ -359,6 +368,20 @@ pub struct AgentSpawnRequest {
     /// meant to outlive the turn.
     #[serde(skip)]
     pub parent_turn_abort: Option<crate::cancellation::TurnAbortSignal>,
+
+    /// User-supplied JSON Schema that forces this subagent to emit its
+    /// final answer via the synthetic `StructuredOutput` tool instead of
+    /// free-form text. Set by the workflow host when `agent(prompt, {schema})`
+    /// carries a schema; the spawn driver registers `StructuredOutputTool`
+    /// (compiled from this value) into the child engine's tool registry,
+    /// installs a `StructuredOutput`-forcing Stop hook, and surfaces the
+    /// captured tool-call input on [`AgentSpawnResponse::structured_output`].
+    /// `serde_json::Value` is the sanctioned schema-blob passthrough
+    /// exception. Shared via `Arc` so the in-process inheritance path
+    /// reuses the parent allocation. Skipped at the JSON boundary like the
+    /// other in-process-only inheritance fields.
+    #[serde(skip)]
+    pub output_schema: Option<Arc<serde_json::Value>>,
 }
 
 fn default_active_shell_tool() -> ActiveShellTool {
@@ -432,6 +455,15 @@ pub struct AgentSpawnResponse {
     /// The original prompt (echoed back in response).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// Structured-output result captured from the subagent's
+    /// `StructuredOutput` tool call. Populated only when the spawn carried
+    /// an [`AgentSpawnRequest::output_schema`] and the child actually called
+    /// the tool. The schema-validated tool-call input is surfaced here verbatim
+    /// so the workflow host can thread `agent(prompt, {schema})` data without
+    /// re-parsing the response text. `None` for schema-less spawns or when
+    /// the child never produced a valid structured output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -1246,6 +1246,10 @@ impl SwarmAgentHandle {
             // an isolated-worktree subagent can read the parent project without
             // a prompt (TS subagent cwd + additionalWorkingDirectories parity).
             inherited_read_dirs: request.inherited_read_dirs.clone(),
+            // Depth this child engine runs at (= parent + 1, stamped at
+            // the AgentTool boundary). The adapter copies it onto the
+            // child `QueryEngineConfig.query_depth`.
+            child_query_depth: request.child_query_depth,
             // `max_turns` precedence: constraints (memory forks tighten
             // via `AgentSpawnConstraints.max_turns`) > definition. Top-
             // level `request.max_turns` was a dead slot and is gone.
@@ -1309,7 +1313,9 @@ impl SwarmAgentHandle {
                     .map(|d| d.disallowed_tools.clone())
                     .unwrap_or_default();
                 let plan_mode = request.mode == Some(coco_types::PermissionMode::Plan);
-                for name in coco_subagent::subagent_disallowed_tools(plan_mode) {
+                for name in
+                    coco_subagent::subagent_disallowed_tools(plan_mode, request.child_query_depth)
+                {
                     if !denied.iter().any(|d| d == name) {
                         denied.push(name.to_string());
                     }
@@ -1336,7 +1342,10 @@ impl SwarmAgentHandle {
                     coco_tool_runtime::SpawnMode::Fork { .. }
                 );
                 if is_async && !is_coordinator && !is_fork {
-                    for name in coco_subagent::async_subagent_disallowed_tools(plan_mode) {
+                    for name in coco_subagent::async_subagent_disallowed_tools(
+                        plan_mode,
+                        request.child_query_depth,
+                    ) {
                         if !denied.iter().any(|d| d == name) {
                             denied.push(name.to_string());
                         }
@@ -1420,6 +1429,12 @@ impl SwarmAgentHandle {
             fork_label: request.fork_label,
             cancel: None,
             live_transcript: live_transcript.clone(),
+            // Structured-output contract for workflow `agent(prompt, {schema})`
+            // spawns: when set, the adapter registers a per-spawn
+            // StructuredOutput tool + Stop-forcing hook and routes the
+            // captured tool-call input back through
+            // `AgentQueryResult.structured_output`.
+            output_schema: request.output_schema.clone(),
         };
 
         if request.run_in_background {
@@ -1754,6 +1769,10 @@ impl SwarmAgentHandle {
                         duration_ms,
                         "subagent spawn ok"
                     );
+                    // Capture the structured-output tool-call input (when a
+                    // schema forced the contract) before the handoff
+                    // classifier borrows `qr`.
+                    let structured_output = qr.structured_output.clone();
                     let response_text = super::handoff::classify_handoff_inline(
                         &agent_type_for_engine,
                         &qr,
@@ -1779,6 +1798,7 @@ impl SwarmAgentHandle {
                         worktree_branch: worktree_branch.clone(),
                         output_file: None,
                         prompt: None,
+                        structured_output,
                     }
                 }
                 Err(e) => {

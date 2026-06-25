@@ -9,15 +9,26 @@
 use coco_types::ToolName;
 use strum::IntoEnumIterator;
 
+/// Maximum nesting depth at which a spawned subagent still keeps the
+/// `Agent` tool. A child whose *run depth* is `>= SUBAGENT_DEPTH_LIMIT`
+/// has `Agent` removed from its tool list, so it cannot spawn deeper.
+/// The main loop runs at depth 0 and a spawn is `parent + 1`, so this
+/// permits 5 spawnable levels under main (depth 1..=5; the depth-5 leaf
+/// is the first that can no longer spawn). The cap is **unconditional**
+/// — it is enforced via silent tool removal (no error) and is distinct
+/// from the `COCO_FORK_SUBAGENT` opt-in and the fork-of-fork recursion
+/// guard.
+pub const SUBAGENT_DEPTH_LIMIT: i32 = 5;
+
 /// Tools blocked for every spawned agent.
-/// Note: internally `Agent` can be re-allowed for ant builds to enable
-/// nested-agent recursion. The default 3P/SDK build keeps `Agent` blocked;
-/// the runtime can override the list per-spawn for ant builds.
+/// `Agent` is intentionally NOT in this base list — nested spawning is
+/// gated by depth (`SUBAGENT_DEPTH_LIMIT`) rather than blocked outright,
+/// so [`subagent_disallowed_tools`] appends `Agent` only once the child's
+/// run depth reaches the limit.
 pub const ALL_AGENT_DISALLOWED_TOOLS: &[&str] = &[
     ToolName::TaskOutput.as_str(),
     ToolName::ExitPlanMode.as_str(),
     ToolName::EnterPlanMode.as_str(),
-    ToolName::Agent.as_str(),
     ToolName::Workflow.as_str(),
     ToolName::SendUserMessage.as_str(),
     ToolName::AskUserQuestion.as_str(),
@@ -50,19 +61,25 @@ pub const ASYNC_AGENT_ALLOWED_TOOLS: &[&str] = &[
 /// The universal subagent tool block as deny-list names — the tools every
 /// spawned subagent is denied regardless of its allow-list. `ExitPlanMode`
 /// is re-admitted when `plan_mode` so a plan-mode subagent can still exit
-/// the plan.
+/// the plan. `Agent` is appended only when `child_depth >=
+/// [`SUBAGENT_DEPTH_LIMIT`]` — the depth gate that bounds nested spawning
+/// (`child_depth` is the depth the spawned child will RUN at = parent + 1).
 /// coco-rs enforces tool visibility per-id via
 /// [`coco_types::ToolFilter::allows`] (`tool-runtime/registry.rs`), so a
 /// deny entry simply drops that tool from the model's list — no
 /// `available_tools` snapshot is required. The caller (coordinator spawn
 /// path) merges these into the child `ToolFilter`'s disallowed set.
-pub fn subagent_disallowed_tools(plan_mode: bool) -> Vec<&'static str> {
+pub fn subagent_disallowed_tools(plan_mode: bool, child_depth: i32) -> Vec<&'static str> {
     let exit_plan_mode = ToolName::ExitPlanMode.as_str();
-    ALL_AGENT_DISALLOWED_TOOLS
+    let mut denied: Vec<&'static str> = ALL_AGENT_DISALLOWED_TOOLS
         .iter()
         .copied()
         .filter(|name| !(plan_mode && *name == exit_plan_mode))
-        .collect()
+        .collect();
+    if child_depth >= SUBAGENT_DEPTH_LIMIT {
+        denied.push(ToolName::Agent.as_str());
+    }
+    denied
 }
 
 /// Deny-list that clamps a background (async) subagent to the async-safe
@@ -77,12 +94,22 @@ pub fn subagent_disallowed_tools(plan_mode: bool) -> Vec<&'static str> {
 /// plan-mode background spawn can still exit the plan. The caller merges
 /// these into the child `ToolFilter`'s disallowed set (deny wins over the
 /// definition's own allow-list, exactly like the universal block).
-pub fn async_subagent_disallowed_tools(plan_mode: bool) -> Vec<&'static str> {
+///
+/// The depth gate is hoisted ABOVE the async clamp so foreground and
+/// background spawns share one nesting ceiling: when `child_depth <
+/// [`SUBAGENT_DEPTH_LIMIT`]` the `Agent` tool is ALLOWED (filtered out of
+/// the deny list even though it is not in [`ASYNC_AGENT_ALLOWED_TOOLS`]);
+/// once `child_depth >= SUBAGENT_DEPTH_LIMIT` the clamp's normal denial of
+/// `Agent` stands.
+pub fn async_subagent_disallowed_tools(plan_mode: bool, child_depth: i32) -> Vec<&'static str> {
     let exit_plan_mode = ToolName::ExitPlanMode.as_str();
+    let agent = ToolName::Agent.as_str();
+    let allow_agent = child_depth < SUBAGENT_DEPTH_LIMIT;
     ToolName::iter()
         .map(|t| t.as_str())
         .filter(|name| !ASYNC_AGENT_ALLOWED_TOOLS.contains(name))
         .filter(|name| !(plan_mode && *name == exit_plan_mode))
+        .filter(|name| !(allow_agent && *name == agent))
         .collect()
 }
 

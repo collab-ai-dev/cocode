@@ -40,34 +40,51 @@ use crate::host::WorkflowHost;
 /// Default per-run wall-clock budget ().
 pub const WORKFLOW_VM_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Lifetime cap on the number of `agent()` calls a single workflow run may make.
+/// Backstops unbounded `while (budget.remaining() > 0)` loops when no token
+/// budget is set; exceeding it throws in `agent()`.
+pub const WORKFLOW_AGENT_CAP: i32 = 1000;
+
+/// Maximum number of items a single `parallel()`/`pipeline()` call accepts.
+pub const WORKFLOW_ARRAY_CAP: usize = 4096;
+
 /// JS-defined DSL combinators + `budget`, evaluated at context init. `parallel`
 /// is a true barrier (`Promise.allSettled`); `pipeline` flows each item through
-/// all stages independently..
-const DSL_COMBINATORS: &str = r#"(() => {
-  globalThis.parallel = async function parallel(funcs) {
+/// all stages independently. The array-length guard mirrors CC's per-call
+/// `WORKFLOW_ARRAY_CAP`; concurrency is bounded host-side (each `agent()` waits
+/// on a permit), so both combinators still fire every thunk.
+fn dsl_combinators() -> String {
+    format!(
+        r#"(() => {{
+  const ARRAY_CAP = {WORKFLOW_ARRAY_CAP};
+  globalThis.parallel = async function parallel(funcs) {{
     if (!Array.isArray(funcs)) throw new TypeError('parallel() expects an array of functions');
+    if (funcs.length > ARRAY_CAP) throw new RangeError('parallel()/pipeline() accepts at most ' + ARRAY_CAP + ' items.');
     for (const f of funcs)
       if (typeof f !== 'function')
         throw new TypeError('parallel() expects functions. Wrap each call: () => agent(...)');
     const settled = await Promise.allSettled(funcs.map(f => f()));
     return settled.map(s => s.status === 'fulfilled' ? s.value : null);
-  };
-  globalThis.pipeline = async function pipeline(items, ...stages) {
+  }};
+  globalThis.pipeline = async function pipeline(items, ...stages) {{
     if (!Array.isArray(items)) throw new TypeError('pipeline() expects an array as its first argument');
-    const settled = await Promise.allSettled(items.map(async (item, i) => {
+    if (items.length > ARRAY_CAP) throw new RangeError('parallel()/pipeline() accepts at most ' + ARRAY_CAP + ' items.');
+    const settled = await Promise.allSettled(items.map(async (item, i) => {{
       let value = await item;
-      for (const stage of stages) {
+      for (const stage of stages) {{
         if (value === null) break;
         value = await stage(value, item, i);
-      }
+      }}
       return value;
-    }));
+    }}));
     return settled.map(s => s.status === 'fulfilled' ? s.value : null);
-  };
-  globalThis.workflow = async function workflow() {
+  }};
+  globalThis.workflow = async function workflow() {{
     throw new Error('workflow() nesting is not available in this build yet.');
-  };
-})()"#;
+  }};
+}})()"#
+    )
+}
 
 /// The workflow execution engine.
 pub struct WorkflowEngine;
@@ -105,7 +122,7 @@ impl WorkflowEngine {
         context
             .with(move |ctx| -> rquickjs::Result<()> {
                 crate::install_sandbox(&ctx)?;
-                ctx.eval::<(), _>(DSL_COMBINATORS)?;
+                ctx.eval::<(), _>(dsl_combinators())?;
                 install_globals(&ctx, setup_host, &setup_args)?;
                 Ok(())
             })
@@ -237,6 +254,22 @@ fn install_globals<'js>(
                 .unwrap_or(serde_json::Value::Null);
             let ctx2 = ctx.clone();
             async move {
+                // Lifetime agent cap: `index` is 0-based, so the (index+1)th
+                // call exceeding the cap throws (matches CC's pre-increment gate).
+                if index >= WORKFLOW_AGENT_CAP {
+                    let msg = format!("Workflow agent cap ({WORKFLOW_AGENT_CAP}) exceeded.");
+                    let thrown = msg.into_js(&ctx2)?;
+                    return Err(ctx2.throw(thrown));
+                }
+                // Token-budget pre-call gate: reject before spawning once spent
+                // has reached a positive total. In parallel/pipeline the rejected
+                // thunk degrades that slot to null.
+                if host.budget_exhausted() {
+                    let msg = "Workflow token budget exhausted. Stopping further agent() calls."
+                        .to_string();
+                    let thrown = msg.into_js(&ctx2)?;
+                    return Err(ctx2.throw(thrown));
+                }
                 let opts: WorkflowAgentOpts = serde_json::from_value(opts_json).unwrap_or_default();
                 let label = opts.label.clone().unwrap_or_else(|| derive_label(&prompt));
                 let phase_title = opts.phase.clone();

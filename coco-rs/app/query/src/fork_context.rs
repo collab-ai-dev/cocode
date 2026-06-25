@@ -75,8 +75,9 @@ pub struct ForkContextOverrides {
     /// memdir). Empty = no fence. Enforces a path prefix via
     /// `ToolUseContext.allowed_write_roots`.
     pub allowed_write_roots: Vec<PathBuf>,
-    /// Parent's query-tracking depth. The fork's own depth is
-    /// `parent_query_depth + 1`; increments through nested subagents.
+    /// Parent's query-tracking depth. A fork inherits the parent's depth
+    /// unchanged (a fork is a sibling, not a nested level), so the fork's
+    /// own depth equals `parent_query_depth`.
     pub parent_query_depth: i32,
 }
 
@@ -122,12 +123,11 @@ impl ForkContextOverrides {
     }
 
     /// Compute the depth this fork should use on its
-    /// `ToolUseContext.query_depth` field — parent depth + 1, with
-    /// a sanity cap at 16 to prevent runaway recursion in
-    /// fork-spawning-fork scenarios.
+    /// `ToolUseContext.query_depth` field — a fork inherits the parent's
+    /// depth (a sibling, not a nested level), so this returns
+    /// `parent_query_depth` with no increment.
     pub fn child_query_depth(&self) -> i32 {
-        const MAX_DEPTH: i32 = 16;
-        (self.parent_query_depth + 1).min(MAX_DEPTH)
+        self.parent_query_depth
     }
 }
 

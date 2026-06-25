@@ -371,6 +371,7 @@ impl AgentQueryEngine for StubEngine {
             output_tokens: 5,
             tool_use_count: 0,
             cancelled: false,
+            structured_output: None,
         })
     }
 }
@@ -537,6 +538,7 @@ async fn test_fork_skill_with_allowed_tools_does_not_narrow_registry() {
                 output_tokens: 0,
                 tool_use_count: 0,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }

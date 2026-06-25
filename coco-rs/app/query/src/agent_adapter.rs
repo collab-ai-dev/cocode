@@ -121,6 +121,12 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // `--dangerously-skip-permissions` is forwarded to spawned
             // child processes; the in-process analog is this field.
             bypass_permissions_available: config.bypass_permissions_available,
+            // This child engine's OWN run depth (= parent + 1, stamped at
+            // the AgentTool boundary). For plain spawns the tool-context
+            // builder reads this directly; for forks it is overridden by
+            // `fork_isolation.child_query_depth()` (which inherits the
+            // parent's depth — a fork is a sibling, not a nested level).
+            query_depth: config.child_query_depth,
             context_window: config
                 .context_window
                 .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW),
@@ -314,6 +320,11 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 if !config.allowed_write_roots.is_empty() {
                     iso.allowed_write_roots = config.allowed_write_roots.clone();
                 }
+                // A fork inherits the PARENT's depth (sibling, not a nested
+                // level). `config.child_query_depth` is `parent + 1`, so the
+                // parent's depth is one less; `child_query_depth()` returns
+                // it unchanged.
+                iso.parent_query_depth = config.child_query_depth.saturating_sub(1);
                 std::sync::Arc::new(iso)
             }),
         };
@@ -359,6 +370,26 @@ impl AgentQueryEngine for QueryEngineAdapter {
         engine = engine.with_session_usage_tracker(Arc::new(tokio::sync::Mutex::new(
             coco_messages::CostTracker::new(),
         )));
+
+        // Structured-output forcing (workflow `agent(prompt, {schema})`):
+        // when the spawn carries an output schema, the child must emit its
+        // final answer via the synthetic `StructuredOutput` tool rather than
+        // free-form text. Mirror the headless `--json-schema` path
+        // (`coco_cli::headless::inject_structured_output_tool_if_requested`):
+        // register the compiled tool into a PER-SPAWN tool registry and a
+        // matching `StructuredOutput` Stop-enforcement hook into a per-spawn
+        // hook registry, then swap both onto the child engine. Per-spawn
+        // isolation is mandatory — registering on the shared session
+        // registries would leak the tool to the parent + siblings and make
+        // the Stop hook wrongly block every other session's turn.
+        if let Some(schema) = config.output_schema.clone()
+            && let Err(error) = install_structured_output(&mut engine, schema.as_ref())
+        {
+            return Err(Box::new(coco_error::PlainError::new(
+                format!("structured-output setup failed: {error}"),
+                coco_error::StatusCode::Internal,
+            )) as coco_error::BoxedError);
+        }
 
         // Fork mode: if the parent surfaced context messages, use
         // `run_with_messages` so the child's first turn sees the
@@ -427,8 +458,58 @@ impl AgentQueryEngine for QueryEngineAdapter {
             usage: result.total_usage,
             cost_usd: result.cost_tracker.total_cost_usd(),
             cancelled: result.cancelled,
+            // Captured `StructuredOutput` tool-call input (schema-validated)
+            // when `output_schema` forced the contract; `None` otherwise.
+            structured_output: result.structured_output,
         })
     }
+}
+
+/// Install the structured-output contract on a child engine: a per-spawn
+/// tool registry carrying every parent tool plus a freshly-compiled
+/// `StructuredOutputTool`, and a per-spawn hook registry whose only entry is
+/// the `StructuredOutput` Stop-enforcement hook. Both replace the engine's
+/// shared registries so the contract stays scoped to this single spawn.
+///
+/// Mirrors `coco_cli::headless::inject_structured_output_tool_if_requested`
+/// and `coco_cli::hook_agent_runner::{scoped_tool_registry,scoped_hook_registry}`.
+fn install_structured_output(
+    engine: &mut QueryEngine,
+    schema: &serde_json::Value,
+) -> Result<(), String> {
+    use std::time::Duration;
+
+    // Per-spawn tool registry: clone the parent's tool handles, then add the
+    // compiled StructuredOutput tool. `register_structured_output_tool` fails
+    // when the schema is invalid — propagate that as the setup error.
+    let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
+    for tool in engine.tools.all() {
+        tools.register(tool);
+    }
+    coco_tools::register_structured_output_tool(&tools, schema.clone())?;
+
+    // Per-spawn hook registry carrying only the StructuredOutput Stop hook.
+    // The engine's terminal path additionally forces a retry while the tool
+    // is registered but no structured output exists yet; this Stop hook is
+    // the nudge that blocks stop and re-prompts the model to call the tool.
+    let hooks = Arc::new(coco_hooks::HookRegistry::new());
+    hooks
+        .register_function_hook(
+            format!("structured-output-enforcement-{}", uuid::Uuid::new_v4()),
+            coco_types::HookEventType::Stop,
+            None,
+            Duration::from_millis(5_000),
+            Arc::new(crate::structured_output_enforcement::StructuredOutputEnforcement),
+            format!(
+                "You MUST call the {} tool exactly once with your final answer to complete this request. Call this tool now.",
+                coco_types::ToolName::StructuredOutput.as_str()
+            ),
+        )
+        .map_err(|e| format!("failed to register StructuredOutput Stop hook: {e}"))?;
+
+    engine.tools = tools;
+    engine.hooks = Some(hooks);
+    Ok(())
 }
 
 /// Convert a subagent's inherited read-scope dirs (the parent cwd +

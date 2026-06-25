@@ -171,6 +171,9 @@ impl Tool for SkillTool {
             tool_overrides: Some(ctx.tool_overrides.clone()),
             active_shell_tool: ctx.active_shell_tool,
             parent_tool_filter: Some(ctx.tool_filter.clone()),
+            // A fork-mode skill subagent is a sibling — it runs at the
+            // invoker's depth, not one level deeper.
+            parent_query_depth: ctx.query_depth,
         };
         // `gate` carries the inputs `QuerySkillRuntime` needs to enforce
         // the 4-state Skill tool gate. With default-empty `skill_overrides`

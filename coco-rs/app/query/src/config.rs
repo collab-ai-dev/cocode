@@ -134,6 +134,14 @@ pub struct QueryEngineConfig {
     /// rebuild so the Plan-mode auto-allow + Shift+Tab cycle gate stay
     /// aligned.
     pub bypass_permissions_available: bool,
+    /// This engine's OWN query-tracking depth (0 = main loop, 1+ =
+    /// subagent). Stamped onto every `ToolUseContext.query_depth` for
+    /// plain (non-fork) spawns; forks override it by inheriting the
+    /// parent's depth via [`crate::fork_context::ForkContextOverrides::child_query_depth`].
+    /// The spawn path sets this to `parent + 1` so a child can read its
+    /// own depth and gate nested `Agent` spawning at
+    /// `coco_subagent::SUBAGENT_DEPTH_LIMIT`. Defaults to 0.
+    pub query_depth: i32,
     /// Context window size in tokens (for compaction trigger).
     pub context_window: i64,
     /// Max output tokens for the model (used in effective window calculation).
@@ -381,6 +389,7 @@ impl Default for QueryEngineConfig {
             model_id: String::new(),
             permission_mode: PermissionMode::Default,
             bypass_permissions_available: false,
+            query_depth: 0,
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_output_tokens: 16_384,
             max_budget_usd: None,
