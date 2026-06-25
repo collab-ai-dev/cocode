@@ -131,7 +131,6 @@ type AsyncSpec = (
 );
 
 /// Register the extended set of 15 additional built-in commands.
-///
 /// These complement the original 25 from `register_builtins()` with real
 /// logic: reading files, running git, formatting output, etc.
 pub fn register_extended_builtins(registry: &mut CommandRegistry) {
@@ -650,7 +649,6 @@ fn builtin_argument_kind(name: &str, fallback: CommandArgumentKind) -> CommandAr
 // ── Sync handlers ──
 
 /// Fallback `/plan` handler used only by non-TUI paths (SDK runner, tests).
-///
 /// The TUI runner intercepts `/plan` in `tui_runner::dispatch_plan` so it
 /// can read the live `session_id` + plan file. This handler returns a
 /// documentation blurb summarizing the same UX, suitable when no per-
@@ -888,7 +886,6 @@ fn output_style_handler(_args: &str) -> String {
 const COLOR_RESET_ALIASES: &[&str] = &["default", "reset", "none", "gray", "grey"];
 
 /// `/color <name|default>` — set the prompt bar color for this session.
-///
 /// Persistence (writing to `ToolAppState.agent_color`) happens in
 /// `tui_runner::dispatch_color`, which intercepts this command before
 /// the registry to gate on `is_teammate()` and mutate runtime state.
@@ -1048,12 +1045,11 @@ pub const TAG_SENTINEL: &str = "__COCO_TAG__";
 pub const ADD_DIR_SENTINEL: &str = "__COCO_ADD_DIR__";
 /// Sentinel emitted by `/reload-plugins`. Runners rebuild the plugin
 /// + skill + command registry and atomically swap it in via
-///   `SessionRuntime::reload_plugins`.
+/// `SessionRuntime::reload_plugins`.
 pub const RELOAD_PLUGINS_SENTINEL: &str = "__COCO_RELOAD_PLUGINS__";
 /// Sentinel emitted by `/hooks reload`. Runners reload the live
 /// `HookRegistry` from the latest `RuntimeConfig` snapshot via
 /// `SessionRuntime::reload_hooks`.
-///
 /// Like RELOAD_PLUGINS_SENTINEL: only fires from a slash command,
 /// which runs only at turn boundaries (the dispatch loop in
 /// `tui_runner` `drain_active_turn`s before processing slash output),
@@ -1101,7 +1097,6 @@ fn tag_handler(args: &str) -> String {
 }
 
 /// Parsed payload of a `__COCO_RENAME__` sentinel line.
-///
 /// `Explicit` carries the user-supplied name verbatim. `Auto` signals
 /// that the user typed bare `/rename` and the runner should
 /// auto-generate a kebab-case session name via the `ModelRole::Fast`
@@ -1116,11 +1111,11 @@ pub enum ParsedRename {
 
 /// Parse a `__COCO_RENAME__ [<name>]` first line. Returns:
 /// - `Some(ParsedRename::Explicit(name))` when the user typed
-///   `/rename <name>`.
+/// `/rename <name>`.
 /// - `Some(ParsedRename::Auto)` when the user typed bare `/rename`
-///   (handler emits a bare sentinel).
+/// (handler emits a bare sentinel).
 /// - `None` when `handler_output` does not start with the sentinel
-///   (caller does not need to dispatch).
+/// (caller does not need to dispatch).
 #[must_use]
 pub fn parse_rename_sentinel(handler_output: &str) -> Option<ParsedRename> {
     let parsed = handlers::sentinel::parse_sentinel(handler_output, RENAME_SENTINEL)?;
@@ -1154,7 +1149,6 @@ fn export_handler(_args: &str) -> String {
 }
 
 // ── Async handlers ──
-//
 // Handlers for compact, context, cost, diff, model, permissions, session,
 // mcp, and plugin have been extracted to the `handlers::*` modules.
 // The remaining handlers below will be extracted in follow-up work.
@@ -1468,13 +1462,11 @@ fn statusline_prompt() -> String {
 }
 
 /// Register the P1 handlers wired in Round 11.
-///
 /// Includes:
 /// - `/rewind` (opens message-selector dialog)
 /// - `/memory` (opens file-selector dialog)
 /// - `/init` (returns codebase-init prompt — NEW or OLD per feature)
 /// - prompt-type commands: `/security-review`, `/insights`, `/commit-push-pr`
-///
 /// `user_type` and `features` come from the resolved runtime config; pass
 /// what the bootstrap layer reads from settings + env.
 pub fn register_ts_parity_handlers(
@@ -1728,7 +1720,7 @@ pub fn register_ts_parity_handlers(
     );
 
     // /workflow — prompt the agent to launch a local workflow through the
-    // Workflow tool. The plural alias matches TS `/workflows` muscle memory.
+    // Workflow tool. The plural alias muscle memory.
     {
         let mut base = crate::builtin_base_ext(
             names::WORKFLOW,

@@ -1,5 +1,5 @@
 //! End-to-end multimodal coverage for the `Tool::render_for_model`
-//! refactor (TS parity: `mapToolResultToToolResultBlockParam`).
+//! refactor.
 //!
 //! Each test boots a real `coco_query::QueryEngine` driven by a
 //! capturing scripted provider, registers the production

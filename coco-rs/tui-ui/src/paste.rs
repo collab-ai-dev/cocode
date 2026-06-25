@@ -10,7 +10,6 @@
 pub const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 
 /// Check if text matches a paste pill pattern.
-///
 /// Valid patterns: `[Pasted text #N]`, `[Image #N]`
 pub fn is_paste_pill(text: &str) -> bool {
     if !text.starts_with('[') || !text.ends_with(']') {
@@ -32,7 +31,7 @@ pub struct ImageData {
 pub struct ResolvedInput {
     /// Text with paste pills resolved: text pills expand to their content,
     /// image pills are kept inline as `[Image #N]` (the raw bytes ship
-    /// separately in `images`). Mirrors TS `expandPastedTextRefs`, which
+    /// separately in `images`). , which
     /// skips image refs so the placeholder survives into the message text.
     pub text: String,
     /// Image data extracted from image pills.
@@ -83,7 +82,6 @@ impl PasteManager {
     }
 
     /// Add an image paste with raw bytes. Returns the pill label.
-    ///
     /// There is deliberately no path-only variant: an image entry without
     /// bytes is silently dropped by [`Self::resolve_structured`] at submit,
     /// so callers must load the bytes first.
@@ -105,7 +103,6 @@ impl PasteManager {
     }
 
     /// Resolve paste pills in the input, returning the expanded content.
-    ///
     /// Simple string replacement — text pills become content, image pills become
     /// their file path (or empty string if bytes-only).
     pub fn resolve(&self, input: &str) -> String {
@@ -117,11 +114,10 @@ impl PasteManager {
     }
 
     /// Resolve paste pills, separating text expansions from image data.
-    ///
     /// Text pills are expanded inline. Image pills are kept inline as their
     /// `[Image #N]` placeholder (so the transcript can echo `❯ [Image #N] …`
     /// and hang a `⎿ [Image #N]` confirmation row), while their raw bytes are
-    /// returned separately for API content-block assembly. Mirrors TS
+    /// returned separately for API content-block assembly.
     /// `expandPastedTextRefs`, which expands text refs but leaves image refs in
     /// place.
     pub fn resolve_structured(&self, input: &str) -> ResolvedInput {
@@ -156,7 +152,7 @@ impl PasteManager {
 
     /// Take ownership of all entries, leaving the manager empty.
     /// Used by `chat:stash` to snapshot paste state alongside text +
-    /// cursor (TS `handleStash` saves `pastedContents`).
+    /// cursor (saves `pastedContents`).
     pub fn take_entries(&mut self) -> Vec<PasteEntry> {
         std::mem::take(&mut self.entries)
     }

@@ -4,7 +4,7 @@
 //! bounded timeout, parses it via [`coco_tui_ui::system_theme`], and caches the
 //! resulting [`SystemTheme`](coco_tui_ui::system_theme::SystemTheme) so `auto`
 //! resolves to dark/light from the *actual* terminal background (mirrors
-//! claude-code's `systemThemeWatcher`).
+//! system theme watcher).
 //!
 //! Strictly best-effort and bounded: on any non-response, parse miss, non-tty,
 //! or error it silently does nothing and the caller falls back to `$COLORFGBG`

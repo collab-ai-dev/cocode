@@ -139,11 +139,9 @@ pub fn apply_permission_updates(
 
 /// Apply updates directly to the live permission base
 /// ([`coco_types::LiveToolPermissionState`] = `ToolAppState.permissions`).
-///
 /// Builds a transient [`ToolPermissionContext`] view over the live base, folds
 /// the updates through the single typed [`apply_permission_updates`] helper, and
 /// writes the mutated rule maps / additional dirs / mode back. This is the Rust
-/// analog of TS `setToolPermissionContext(applyPermissionUpdate(ctx, update))`
 /// — the one mutation path for the main session's shared live rules.
 pub fn apply_permission_updates_to_live(
     live: &mut coco_types::LiveToolPermissionState,

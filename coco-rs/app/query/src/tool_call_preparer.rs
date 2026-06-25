@@ -41,7 +41,6 @@ use crate::session_state::SessionStateTracker;
 use crate::tool_runner::prepare_committed_tool_call;
 
 /// Per-call data carried from preparation → run_one → on_outcome.
-///
 /// Keyed by `tool_use_id`, this lets the runner retrieve the
 /// post-hook `tool_name` + effective input that the preparer
 /// resolved, without re-deriving them in `run_one`. `is_mcp` is
@@ -109,19 +108,16 @@ pub(crate) async fn prepare_pending_tool_calls(
 /// Run the full per-tool preparation pipeline (validate → pre-hook →
 /// input rewrite → re-validate → permission → bridge) against one
 /// committed assistant tool_use.
-///
 /// Returns `Some((PendingToolCall, ToolResultContext))` when the
 /// call made it through all gates and is ready for execution;
 /// `None` when preparation failed — in which case an error
 /// tool_result has already been pushed to history via
 /// `complete_tool_call_with_error` and the caller should simply
 /// skip the call.
-///
 /// This is the reusable per-call body used by both:
 /// - `prepare_pending_tool_calls` (batch-at-end non-streaming path)
 /// - Phase 9 streaming path (to be wired — call once per
-///   `ToolCallEnd` event so safe tools can start mid-stream)
-///
+/// `ToolCallEnd` event so safe tools can start mid-stream)
 /// Extracting this makes the streaming integration trivial: the
 /// engine's stream consumer calls this function as each tool_use
 /// block arrives, feeding the result into `StreamingHandle`. The
@@ -432,18 +428,18 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         None => evaluate_with_rules(tool, effective_input, ctx).await,
     };
 
-    // Mirror TS `permissions.ts:549`: a tool that *requires* user interaction
+    //: a tool that *requires* user interaction
     // (AskUserQuestion) returns `Ask` because the prompt IS the tool's function,
     // not a security gate. Auto mode exists to skip security confirmations, so it
     // must not run the classifier / safe-tool allowlist over such an `Ask` —
     // doing so rewrites it to `Allow`, the permission bridge never fires, and the
     // interactive overlay is silently dropped (the model just sees the questions
     // echoed back). Skip the overlay here so the `Ask` reaches the bridge.
-    // Auto-mode classifier gate — TS parity (`permissions.ts:520`): the
+    // Auto-mode classifier gate — (): the
     // decision to run the classifier reads the PER-CALL permission context
     // mode, never a shared session-global flag. Primary path is `mode == Auto`;
     // `mode == Plan` bridges to the classifier only when the narrowly-scoped
-    // auto flag is set (mirrors TS `mode === 'plan' && isAutoModeActive()`).
+    // auto flag is set ().
     // Because each subagent carries its own `permission_context.mode`, a
     // concurrent engine build can no longer race the classifier off.
     let auto_classify = should_auto_classify(ctx.permission_context.mode, auto_mode_state);
@@ -647,14 +643,12 @@ fn can_use_tool_reason_label(reason: &DecisionReason) -> String {
 }
 
 /// Run the central rule evaluator against a tool call.
-///
 /// The tool's own opinion (`Tool::check_permissions`) is captured
 /// once and supplied as the step-1c slot to
 /// [`coco_permissions::PermissionEvaluator::evaluate_with_tool_check`],
 /// so the same `ToolCheckResult` passes through deny rules → tool
 /// opinion → allow rules → ask rules → path safety → MCP server
 /// rules → mode fallthrough.
-///
 /// Returning `Allow { updated_input: Some(_) }` from the tool's
 /// opinion survives an evaluator-side `Allow` decision — `updatedInput`
 /// is preserved on downstream allows so a tool can normalize input
@@ -713,8 +707,7 @@ async fn shell_analysis_cwd(tool_id: &ToolId, ctx: &ToolUseContext) -> Option<St
 }
 
 /// Whether the auto-mode classifier should run for THIS tool call.
-///
-/// TS parity (`permissions.ts:520`): the gate is driven by the per-call
+/// (): the gate is driven by the per-call
 /// permission context `mode`, never a shared session-global flag. Primary path
 /// is `Auto`; `Plan` bridges to the classifier only when the narrowly-scoped
 /// auto flag is set (mirrors `mode === 'plan' && isAutoModeActive()`). Because
@@ -1081,7 +1074,6 @@ async fn validate_effective_input_or_complete_error(
     // envelope) or malformed JSON — both are caught HERE, before
     // `tool.validate_input`, producing a synthetic validation error
     // instead of failing silently downstream.
-    //
     // v4.2: the validator is owned by the tool's schema (synchronous,
     // lock-free). A schema-compile failure is impossible here — a tool is
     // only registered if its schema compiled at construction.

@@ -36,7 +36,6 @@ use crate::session_state::SessionStateTracker;
 
 impl QueryEngine {
     /// Run the agent loop with event streaming from a text prompt.
-    ///
     /// **I-1 protocol**: because this entry point CREATES the user
     /// message internally (vs `run_with_messages` where the caller
     /// pre-builds + pre-emits), it is the "authoritative introducer"
@@ -48,7 +47,6 @@ impl QueryEngine {
     /// so that path was unaffected, but every test using
     /// `run_with_events` silently lost user-message rendering until
     /// this commit.
-    ///
     /// `cycle_turn_id` is the lifecycle id shared between the
     /// `TurnStarted` event this function emits and every `TurnEnded`
     /// event the engine (or this function on Err) emits for the same
@@ -115,17 +113,14 @@ impl QueryEngine {
     }
 
     /// Core internal implementation: user + attachment messages.
-    ///
     /// First message is the user message (used for file history snapshot UUID).
     /// Subsequent messages are attachment messages (is_meta=true, system-reminder wrapped).
-    ///
     /// Session lifecycle sequence:
-    /// 1. SessionStarted  (if bootstrap attached)
+    /// 1. SessionStarted (if bootstrap attached)
     /// 2. SessionStateChanged(Running)
     /// 3. run_session_loop: turn-by-turn work
     /// 4. SessionStateChanged(Idle)
     /// 5. SessionResult (success or error subtype)
-    ///
     /// Steps 1/2/4/5 fire regardless of success or error so SDK consumers
     /// always see a complete session envelope.
     #[tracing::instrument(
@@ -181,11 +176,9 @@ impl QueryEngine {
         }
 
         // Set up the Hook → CoreEvent forwarder as a structured child task.
-        //
         // The forwarder is a `JoinHandle` owned by this function, cancelled
         // via a child `CancellationToken` off `self.cancel`, and drained at
         // the single exit point below. See plan file WS-5.
-        //
         // In Rust we use this child task so orchestration stays independent
         // of the coco-query event type.
         let hook_cancel = self.cancel.child_token();
@@ -274,7 +267,6 @@ impl QueryEngine {
         // usage up to the failure point flows through here — `None` only
         // when the caller provided no event_tx, never as a sentinel for
         // "zero".
-        //
         // Cancel-aware: when `self.cancel.is_cancelled()`, the Err is the
         // bubbled cancellation, not a real failure. Skip the Failed emit
         // and let the runner emit Interrupted with the correct
@@ -285,7 +277,7 @@ impl QueryEngine {
         if let (Err(e), Some(id)) = (&result, cycle_turn_id.as_ref())
             && !self.cancel.is_cancelled()
         {
-            // Inline transcript error row (TS `SystemAPIErrorMessage` parity):
+            // Inline transcript error row (`SystemAPIErrorMessage` parity):
             // a display-only `SystemMessage::ApiError` appended to history so
             // the failure renders as a `⚠ <error>` row in turn order instead
             // of an ephemeral toast / blocking modal. Dropped from the API
@@ -472,7 +464,6 @@ impl QueryEngine {
     }
 
     /// Build a `SessionResultParams` from a completed `QueryResult`.
-    ///
     /// `error_messages` is propagated into the `errors` field;
     /// success results pass an empty Vec.
     pub(crate) fn build_session_result_params(
@@ -583,11 +574,9 @@ impl QueryEngine {
 
     /// Consume `HookExecutionEvent` from the orchestration layer and forward
     /// them as `CoreEvent::Protocol(HookStarted/Progress/Response)`.
-    ///
     /// Associated function (no `&self`) so callers can drive a standalone
     /// task with `tokio::spawn(QueryEngine::forward_hook_events(...))`. Tests
     /// rely on this calling convention.
-    ///
     /// Graceful shutdown: the normal exit path is for the caller to drop
     /// the matching sender, which makes `rx.recv()` return `None` and
     /// drains any queued events before returning. The `cancel` token is

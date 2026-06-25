@@ -13,9 +13,9 @@
 //! - `has_user_input` (bool): true when the user submitted input this turn.
 //! - `is_main_agent`: true for the main thread, false for subagents.
 //! - `last_human_turn_uuid` is coco-rs specific: the plan-mode reminder
-//!   counts *human* turns (non-meta user messages), not LLM iterations, to
-//!   handle multi-tool-round turns correctly. See
-//!   `app/query/plan_mode_reminder.rs:384` for the precedent.
+//! counts *human* turns (non-meta user messages), not LLM iterations, to
+//! handle multi-tool-round turns correctly. See
+//! `app/query/plan_mode_reminder.rs:384` for the precedent.
 
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -36,13 +36,10 @@ use coco_config::SystemReminderConfig;
 
 /// One generator per reminder type. Impls live under `generators/` (added in
 /// Phase B+).
-///
 /// Lifecycle hooks the orchestrator calls each turn:
-///
 /// 1. [`is_enabled`](Self::is_enabled) — config gate.
 /// 2. [`tier`](Self::tier) — skip if subagent and tier is `MainAgentOnly`, etc.
 /// 3. [`generate`](Self::generate) — produce `Some(SystemReminder)` or `None`.
-///
 /// Cadence is no longer an orchestrator concern: generators that throttle
 /// (plan-mode / auto-mode steady-state, todo / task / verify nudges) derive
 /// their own gate from history-scan counters pre-computed on
@@ -65,14 +62,12 @@ pub trait AttachmentGenerator: Send + Sync + Debug {
     fn is_enabled(&self, config: &SystemReminderConfig) -> bool;
 
     /// Produce the reminder for this turn (or `None`).
-    ///
     /// Errors bubble up to the orchestrator, which logs them and continues —
     /// one generator's failure never poisons another's output.
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>>;
 }
 
 /// Runtime state packaged for every `generate()` call.
-///
 /// Construct via [`GeneratorContext::builder`]. Adding a new field is backward-
 /// compatible — the builder exposes a setter and defaults the scalar.
 #[derive(Debug, Clone)]
@@ -103,7 +98,6 @@ pub struct GeneratorContext<'a> {
 
     /// True on the first plan-mode turn after a prior exit in this session.
     /// Drives the `plan_mode_reentry` variant.
-    ///
     /// Source of truth: `ToolAppState::has_exited_plan_mode`, set by
     /// `ExitPlanModeTool` and cleared after Reentry emits. Engine forwards
     /// to ctx each turn.
@@ -159,7 +153,6 @@ pub struct GeneratorContext<'a> {
     pub explore_plan_agents_available: bool,
 
     /// UUID of the most recent non-meta user message in history.
-    ///
     /// coco-rs plan-mode specific: the throttle counter advances only when
     /// this UUID differs from the previously-stamped one, so multi-tool-
     /// round iterations within a single human turn count as one turn.
@@ -238,7 +231,7 @@ pub struct GeneratorContext<'a> {
     /// the engine when coordinator mode is active so the leader knows
     /// which tools the workers it spawns will have. Rendered as a sibling
     /// `# workerToolsContext` key inside the same user-context reminder
-    /// (TS `prependUserContext` one-message-multi-key shape). `None`
+    /// (`prependUserContext` one-message-multi-key shape). `None`
     /// outside coordinator mode.
     pub coordinator_worker_context: Option<String>,
 
@@ -412,7 +405,6 @@ impl<'a> GeneratorContext<'a> {
 }
 
 /// Builder for [`GeneratorContext`].
-///
 /// All per-turn scalars default to "zero / false / None" so tests can
 /// construct a minimal context with `builder(&cfg).turn_number(5).build()`.
 #[derive(Debug, Clone)]

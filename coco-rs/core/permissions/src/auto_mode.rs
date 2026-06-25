@@ -16,7 +16,6 @@ pub enum AutoModeDecision {
 }
 
 /// Extended input for auto-mode classification.
-///
 /// Callers construct this from tool metadata + shell analysis results.
 pub struct AutoModeInput<'a> {
     pub tool_name: &'a str,
@@ -29,21 +28,19 @@ pub struct AutoModeInput<'a> {
 
 /// Classify whether a NON-file tool can be used in auto mode without the LLM
 /// classifier.
-///
 /// File-modifying tools (Write/Edit/NotebookEdit/ApplyPatch) are **not**
 /// handled here — the decision orchestrator
 /// ([`crate::auto_mode_decision::can_use_tool_in_auto_mode`]) handles them
 /// with path-safety + cwd context so a lexical "relative or /tmp" shortcut
 /// can't auto-allow a CWD-escaping traversal or override a non-classifier-
 /// approvable safety block.
-///
 /// Fast-allow set:
 /// - All read-only tools: allow
 /// - Bash: allow if command is read-only, otherwise prompt
 /// - Task/Todo/Plan tools: allow (session-local side effects)
-/// - Agent: allow — `AgentTool::is_read_only` is `true` (TS parity), so the
-///   read-only fast path above handles it; the subagent's own tool calls are
-///   gated under the inherited mode
+/// - Agent: allow — `AgentTool::is_read_only` is `true`, so the
+/// read-only fast path above handles it; the subagent's own tool calls are
+/// gated under the inherited mode
 /// - Unknown / network / team / scheduling / MCP / file tools: prompt
 pub fn classify_for_auto_mode(
     tool_name: &str,
@@ -110,11 +107,10 @@ pub fn classify_auto_mode_extended(ctx: &AutoModeInput<'_>) -> AutoModeDecision 
     }
 
     // Team management — prompt (shared team-file / mailbox side effects).
-    // `Agent` itself is intentionally NOT here: mirroring TS
-    // `AgentTool.isReadOnly() => true`, an Agent spawn is treated as
-    // read-only (it delegates permission checks to the subagent's own tool
-    // calls), so it is auto-allowed before this list via the read-only fast
-    // path in `classify_auto_mode_extended`.
+    // `Agent` itself is intentionally NOT here: an Agent spawn is treated as
+    // read-only (`AgentTool::is_read_only() == true`; it delegates permission
+    // checks to the subagent's own tool calls), so it is auto-allowed before
+    // this list via the read-only fast path in `classify_auto_mode_extended`.
     const TEAM_TOOLS: &[&str] = &[
         ToolName::SendMessage.as_str(),
         ToolName::TeamCreate.as_str(),

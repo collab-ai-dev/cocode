@@ -464,7 +464,7 @@ fn test_scrub_bare_repo_files_removes_planted_files() {
 
 /// `settings.filesystem.allow_read` paths are collected and resolved
 /// against the settings root, so the platform wrappers see absolute
-/// carve-outs. TS parity: `entrypoints/sandboxTypes.ts:71-77`.
+/// carve-outs.
 #[test]
 fn test_filesystem_allow_read_paths_collected() {
     use crate::config::FilesystemConfig;

@@ -36,7 +36,6 @@ impl Default for MentionResolveOptions<'_> {
 }
 
 /// Resolve a list of mentions into attachments.
-///
 /// Checks `file_read_state` for dedup: if a file is cached and its mtime
 /// hasn't changed, returns `AlreadyReadFile` instead of re-reading.
 /// After reading a new file, updates `file_read_state` with its content and mtime.
@@ -178,8 +177,7 @@ async fn update_file_read_state(
 }
 
 /// Resolve a directory mention: list entries up to `max_entries`.
-///
-/// Mirrors TS `processAtMentionedFiles`: bare entry names (no trailing `/`),
+///: bare entry names (no trailing `/`),
 /// and when the directory exceeds the cap a trailing `… and N more entries`
 /// line carrying the exact overflow count.
 fn resolve_directory(path: &Path, display_path: &str, max_entries: i32) -> Option<Attachment> {

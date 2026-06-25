@@ -100,15 +100,15 @@ pub struct TeammateSpawnConfig {
     pub parent_session_id: String,
     pub permissions: Vec<String>,
     pub allow_permission_prompts: bool,
-    /// Reasoning-effort override (TS `AgentTool.tsx` `effort` input).
+    /// Reasoning-effort override (`effort` input).
     pub effort: Option<coco_types::ReasoningEffort>,
-    /// Cache-identical tool schema reuse flag (TS `runAgent.ts:624`).
+    /// Cache-identical tool schema reuse flag.
     pub use_exact_tools: bool,
-    /// Per-agent MCP server allow-list (TS `AgentTool.tsx:206`).
+    /// Per-agent MCP server allow-list.
     pub mcp_servers: Vec<String>,
-    /// Per-agent tool deny-list (TS `agentToolUtils.ts:122-160`).
+    /// Per-agent tool deny-list.
     pub disallowed_tools: Vec<String>,
-    /// Hard cap on agent turns (TS `runAgent.ts:624`).
+    /// Hard cap on agent turns.
     pub max_turns: Option<i32>,
 }
 
@@ -206,7 +206,6 @@ impl BackendRegistry {
     }
 
     /// Detect the best available pane backend.
-    ///
     /// Priority:
     /// 1. Inside tmux → use tmux
     /// 2. iTerm2 + it2 CLI → use iTerm2
@@ -270,12 +269,11 @@ impl BackendRegistry {
     }
 
     /// Select a teammate executor using the resolved AgentTeams mode.
-    ///
     /// - `in-process` always returns the in-process executor.
     /// - explicit `tmux` / `iterm2` fail loudly when that backend is
-    ///   unavailable or not registered.
+    /// unavailable or not registered.
     /// - `auto` prefers the detected pane backend, then falls back to
-    ///   in-process when no pane executor exists.
+    /// in-process when no pane executor exists.
     pub async fn select_teammate_executor(
         &self,
         mode: coco_config::TeammateMode,
@@ -351,14 +349,12 @@ impl Default for BackendRegistry {
 // ── Detection Logic ──
 
 /// Check if running inside tmux.
-///
 /// Checks TMUX env var captured at load.
 pub fn is_inside_tmux() -> bool {
     StartupPaneEnv::capture().is_inside_tmux()
 }
 
 /// Get the leader's tmux pane ID.
-///
 /// Returns the TMUX_PANE env var.
 pub fn get_leader_pane_id() -> Option<String> {
     StartupPaneEnv::capture().tmux_pane

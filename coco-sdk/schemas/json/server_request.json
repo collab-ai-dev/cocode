@@ -4,7 +4,7 @@
   "description": "Bidirectional control protocol \u2014 server-initiated requests.\n\nThe agent sends these to SDK clients when it needs a decision or input (permission approval, user question, hook callback, MCP routing). The SDK client must reply via the corresponding `ClientRequest` variant.",
   "oneOf": [
     {
-      "description": "Ask the SDK client to approve or deny a tool use.\nMatches TS `SDKControlPermissionRequestSchema` (controlSchemas.ts:108-121).\nExpected response: `ClientRequest::ApprovalResolve`.",
+      "description": "Ask the SDK client to approve or deny a tool use.\nExpected response: `ClientRequest::ApprovalResolve`.",
       "type": "object",
       "properties": {
         "method": {
@@ -38,7 +38,7 @@
       ]
     },
     {
-      "description": "Route an MCP JSON-RPC message to the SDK-hosted MCP server.\nMatches TS `SDKControlMcpMessageRequestSchema` (controlSchemas.ts:377-381).\nExpected response: `ClientRequest::McpRouteMessageResponse`.",
+      "description": "Route an MCP JSON-RPC message to the SDK-hosted MCP server.\nExpected response: `ClientRequest::McpRouteMessageResponse`.",
       "type": "object",
       "properties": {
         "method": {
@@ -55,7 +55,7 @@
       ]
     },
     {
-      "description": "Invoke an SDK-registered hook callback.\nMatches TS `SDKHookCallbackRequestSchema` (controlSchemas.ts:366-371).\nExpected response: `ClientRequest::HookCallbackResponse`.",
+      "description": "Invoke an SDK-registered hook callback.\nExpected response: `ClientRequest::HookCallbackResponse`.",
       "type": "object",
       "properties": {
         "method": {
@@ -108,7 +108,6 @@
   ],
   "$defs": {
     "AskForApprovalParams": {
-      "description": "Matches TS `SDKControlPermissionRequestSchema` (controlSchemas.ts:108-121).",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -179,7 +178,7 @@
       ]
     },
     "HookCallbackParams": {
-      "description": "Invoke an SDK-registered hook callback.\nMatches TS `SDKHookCallbackRequestSchema` (controlSchemas.ts:366-371).\n\nCorrelation is via the **outer** JSON-RPC `request_id` on the\nenvelope \u2014 there is no inner `request_id` field. The SDK replies\nwith a `HookCallbackResult` payload as the synchronous response.",
+      "description": "Invoke an SDK-registered hook callback.\nCorrelation is via the **outer** JSON-RPC `request_id` on the\nenvelope \u2014 there is no inner `request_id` field. The SDK replies\nwith a `HookCallbackResult` payload as the synchronous response.",
       "type": "object",
       "properties": {
         "callback_id": {
@@ -206,7 +205,7 @@
       ]
     },
     "HookEventType": {
-      "description": "27 hook event types matching TS `HOOK_EVENTS`\n(`src/entrypoints/sdk/coreSchemas.ts:355-383`).\n\nWire format is **PascalCase** (e.g. `\"PreToolUse\"`) \u2014 identical to\nTS settings.json keys. Variant names serialize as-is via serde\ndefault and strum default; do not add `rename_all`.\n\n`#[non_exhaustive]` so future TS additions can land without\nbreaking match exhaustiveness in downstream crates.",
+      "description": "27 hook event types \nEvent type identifiers for hook registration and dispatch.\nWire format is **PascalCase** (e.g. `\"PreToolUse\"`) \u2014 identical to\nTS settings.json keys. Variant names serialize as-is via serde\ndefault and strum default; do not add `rename_all`.\n`#[non_exhaustive]` so future TS additions can land without\nbreaking match exhaustiveness in downstream crates.",
       "type": "string",
       "enum": [
         "PreToolUse",
@@ -239,7 +238,7 @@
       ]
     },
     "McpRouteMessageParams": {
-      "description": "Route an MCP JSON-RPC message to an SDK-hosted server.\n\nCorrelation is via the outer JSON-RPC `request_id` on the envelope \u2014\nno inner `request_id`. The SDK replies with a `McpRouteMessageResult`\npayload carrying the forwarded MCP server's JSON-RPC response.",
+      "description": "Route an MCP JSON-RPC message to an SDK-hosted server.\nCorrelation is via the outer JSON-RPC `request_id` on the envelope \u2014\nno inner `request_id`. The SDK replies with a `McpRouteMessageResult`\npayload carrying the forwarded MCP server's JSON-RPC response.",
       "type": "object",
       "properties": {
         "message": {
@@ -255,7 +254,7 @@
       ]
     },
     "RequestElicitationParams": {
-      "description": "Forward an MCP server's elicitation request to the SDK client.\n\nThe MCP protocol lets servers ask the user for structured input\n(form fields with a JSON schema). When the bound MCP transport\nfires its `elicitation/create` callback, the SDK server bridges\nit to the connected SDK client via this `ServerRequest`. The\nclient renders a form and returns an [`ElicitationResolveParams`]\npayload as the synchronous JSON-RPC response.",
+      "description": "Forward an MCP server's elicitation request to the SDK client.\nThe MCP protocol lets servers ask the user for structured input\n(form fields with a JSON schema). When the bound MCP transport\nfires its `elicitation/create` callback, the SDK server bridges\nit to the connected SDK client via this `ServerRequest`. The\nclient renders a form and returns an [`ElicitationResolveParams`]\npayload as the synchronous JSON-RPC response.",
       "type": "object",
       "properties": {
         "elicitation": {

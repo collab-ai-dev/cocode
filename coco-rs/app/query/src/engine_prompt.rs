@@ -2,13 +2,13 @@
 //!
 //! Owns the per-turn assembly that feeds the LLM call:
 //! - [`QueryEngine::build_prompt`] — system prompt (config or CLAUDE.md
-//!   discovery) + staged-collapse application + history normalization.
+//! discovery) + staged-collapse application + history normalization.
 //! - [`QueryEngine::build_tool_definitions`] — `LanguageModelTool` schemas
-//!   resolved per-turn so Agent/Skill tools can inject live runtime state.
+//! resolved per-turn so Agent/Skill tools can inject live runtime state.
 //! - [`QueryEngine::tool_context_factory`] — `ToolContextFactory` carrying
-//!   the structured hook handle + every shared resource the executor reads.
+//! the structured hook handle + every shared resource the executor reads.
 //! - [`QueryEngine::observe_date_change`] — local-date rollover latch driving
-//!   the `date_change` system reminder.
+//! the `date_change` system reminder.
 //!
 //! Extracted from `engine.rs` so the multi-turn loop stays focused on flow
 //! control rather than per-turn data marshalling.
@@ -61,7 +61,6 @@ fn freeform_provider_tool(ff: coco_tool_runtime::FreeformToolSpec) -> LanguageMo
 
 /// Per-turn prompt + the post-budget message snapshot the engine threads
 /// into every tool invocation's `ctx.messages`.
-///
 /// The snapshot is returned here so the engine can hand the same
 /// `Arc<Vec<Arc<Message>>>` to `ToolContextFactory::build` for the same
 /// turn.
@@ -83,13 +82,12 @@ impl QueryEngine {
         let mut prompt = Vec::new();
 
         // System prompt assembly:
-        //
-        //   1. If `coco_subagent::is_coordinator_mode(features)` is on, the
-        //      leader becomes a coordinator and uses the coordinator-mode
-        //      system prompt verbatim. The `simple_mode` toggle
-        //      (`EnvKey::CocoSimple`) narrows the worker tool list.
-        //   2. Otherwise: explicit config override > built-in default +
-        //      CLAUDE.md discovery.
+        // 1. If `coco_subagent::is_coordinator_mode(features)` is on, the
+        // leader becomes a coordinator and uses the coordinator-mode
+        // system prompt verbatim. The `simple_mode` toggle
+        // (`EnvKey::CocoSimple`) narrows the worker tool list.
+        // 2. Otherwise: explicit config override > built-in default +
+        // CLAUDE.md discovery.
         let system_text = if coco_subagent::is_coordinator_mode(&self.config.features) {
             let simple_mode = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoSimple);
             coco_subagent::coordinator_system_prompt(simple_mode)
@@ -109,7 +107,6 @@ impl QueryEngine {
         // Pre-build hook: apply staged-collapse commits so each
         // archived range is a single placeholder rather than full turns.
         // No-op when collapse is inactive.
-        //
         // Default path (no collapse): `history.to_vec()` returns the
         // engine's `Vec<Arc<Message>>` — N atomic refcount increments,
         // no deep `Message` clones (pointer-only shallow copy).
@@ -141,7 +138,7 @@ impl QueryEngine {
             .await;
 
         // Apply the model-facing steering wrapper to queued-steering user
-        // messages just before normalize (mirrors TS, which wraps queued
+        // messages just before normalize (, which wraps queued
         // commands only at API-serialization time). The stored history /
         // `messages_snapshot` stays raw; only this API-bound view is wrapped,
         // so the transcript keeps showing the user's plain text. CoW: only
@@ -315,7 +312,6 @@ impl QueryEngine {
     }
 
     /// Build tool definitions for the LLM (function tool schemas).
-    ///
     /// Each `Tool::prompt(&PromptOptions)` call returns the description the
     /// model sees that turn. Agent/Skill tools use this hook to inject live
     /// runtime state (current agent / skill listings) into their description.
@@ -519,7 +515,6 @@ impl QueryEngine {
         // cache segment is the whole [tools+system+history] prefix (auto-marker on
         // the last user message), so any tool-set change forces a full re-cache of
         // the built-ins too (tools sit first in the request).
-        //
         // The engine emits only the provider-agnostic *hint* (it alone knows the
         // `is_mcp` partition); the Anthropic adapter owns the cache POLICY —
         // resolving the marker's TTL to match the auto-marker, gating on caching
@@ -636,12 +631,10 @@ impl QueryEngine {
 
     /// Build a factory that knows how to construct [`ToolUseContext`]
     /// snapshots from the engine's current config + shared handles.
-    ///
     /// Each turn calls `factory.build(...)` to get a fresh context; the
     /// factory re-reads live `ToolAppState` per call so permission-mode
     /// mutations from a prior batch (e.g. `EnterPlanMode`) propagate
     /// without a config reload.
-    ///
     /// The field mapping itself — including the five previously-hardcoded
     /// fields (`thinking_level`, `is_non_interactive`, `max_budget_usd`,
     /// `custom_system_prompt`, `append_system_prompt`) — is verified in
@@ -649,20 +642,18 @@ impl QueryEngine {
     /// Snapshot the MCP servers that are actually usable — i.e. servers that
     /// contributed tools (connected AND authenticated) — for the model-facing
     /// agent listing. Returns `None` only when no MCP handle was installed.
-    ///
     /// `None` is the no-handle sentinel, NOT "skip the filter": the AgentTool
     /// prompt renderer (`core/subagent prompt.rs`) HIDES every agent that
     /// requires MCP servers when `ready_mcp_servers` is `None` (agents with no
-    /// requirement still pass). That mirrors TS, where an empty
+    /// requirement still pass). That, where an empty
     /// `mcpServersWithTools` makes `hasRequiredMcpServers` false for any
     /// MCP-requiring agent. The call-time guard stays aligned: with no handle
     /// `ctx.mcp` is the NoOp handle whose `list_tools()` is empty, so `execute`
     /// rejects exactly the agents the listing hid — no advertise-then-reject
     /// gap. (The "absent → show all" behavior lives only in the non-model-facing
     /// `context_analysis::agent_estimates` estimator.)
-    ///
     /// Derived from `list_tools()` (distinct `server_name`s), NOT
-    /// `connected_servers()`. This mirrors TS, which builds `mcpServersWithTools`
+    /// `connected_servers()`. This, which builds `mcpServersWithTools`
     /// from `mcp__`-prefixed tool names for both the prose listing and the
     /// call-time guard, and matches `AgentTool`'s own `mcp_servers_with_tools`
     /// call-time check. Using `connected_servers()` here would advertise an
@@ -682,11 +673,10 @@ impl QueryEngine {
     /// Current active agent type names from the wired catalog — the single
     /// source of truth for every catalog-derived reminder (agent mentions,
     /// explore/plan hint, agent-listing delta) in BOTH the turn-reminder and
-    /// post-compaction paths. Keyed on `def.name` (= TS `agentType`), matching
+    /// post-compaction paths. Keyed on `def.name` (= `agentType`), matching
     /// the model-visible "Available agent types" listing and the set
     /// `AgentTool::execute` validates `subagent_type` against. Empty when no
     /// catalog is wired (tests / minimal embeddings).
-    ///
     /// Deliberately NOT `session_bootstrap.agents`: that field is `None` in
     /// every production path (TUI/SDK/headless), so reading it silently emptied
     /// these reminders. Funnel both reminder paths through here so they cannot
@@ -812,18 +802,15 @@ impl QueryEngine {
     }
 
     /// Detect local-date rollover for the `date_change` system reminder.
-    ///
     /// Reads `ToolAppState::last_emitted_date`, compares it to today's
     /// local ISO date, and:
-    ///
     /// - seeds the latch on first observation, returning `None`
-    ///   (no reminder — TS `getDateChangeAttachments` matches: the first
-    ///   turn of a session never emits because there's no prior date);
+    /// (no reminder — `getDateChangeAttachments` matches: the first
+    /// turn of a session never emits because there's no prior date);
     /// - returns `Some(today)` and updates the latch on a mismatch
-    ///   (engine passes it to `TurnReminderInput.new_date` and the
-    ///   `DateChangeGenerator` emits once);
+    /// (engine passes it to `TurnReminderInput.new_date` and the
+    /// `DateChangeGenerator` emits once);
     /// - returns `None` when the latch already matches today.
-    ///
     /// No-op (returns `None`) when `self.app_state` is `None`.
     pub(crate) async fn observe_date_change(&self) -> Option<String> {
         let state = self.app_state.as_ref()?;
@@ -965,19 +952,16 @@ fn replace_tool_result_content(tr: &mut ToolResultMessage, replacement: &str) ->
 /// that the legacy CoW path used (memcpy a 100 KB tool result then
 /// immediately overwrite it with a ~200-byte `<persisted-output>`
 /// preview).
-///
 /// Preserves metadata (`tool_use_id` / `tool_name` / `cache_control`
 /// /etc.):
-///
 /// - `uuid` / `tool_use_id` / `tool_id` / `is_error` on the outer
-///   `ToolResultMessage` are copied / cheaply cloned.
+/// `ToolResultMessage` are copied / cheaply cloned.
 /// - For the inner content block whose `tool_call_id` matches
-///   `orig.tool_use_id`, build a fresh `ToolResultPart` keeping
-///   `tool_name` + `provider_metadata` and replacing only `output`.
+/// `orig.tool_use_id`, build a fresh `ToolResultPart` keeping
+/// `tool_name` + `provider_metadata` and replacing only `output`.
 /// - Other content blocks (rare — coco-rs's
-///   `create_tool_result_message` produces single-block messages) are
-///   cloned verbatim.
-///
+/// `create_tool_result_message` produces single-block messages) are
+/// cloned verbatim.
 /// Returns `None` when the original's `LlmMessage` isn't `Tool` or no
 /// matching block exists — caller falls back to the legacy
 /// clone-then-mutate path so we never silently lose a rewrite.

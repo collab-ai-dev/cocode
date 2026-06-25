@@ -1,5 +1,5 @@
-//! `/skillify` — capture this session's repeatable process as a reusable skill. Mirrors claude-code's skillify.ts.
-//! Adapted: claude-code's runtime-injected session-memory / user-messages blocks become in-context review instructions (the skill runs inline, so the model already holds the conversation); the user description arrives via appended args.
+//! `/skillify` — capture this session's repeatable process as a reusable skill.
+//! The runtime-injected session-memory / user-messages blocks become in-context review instructions (the skill runs inline, so the model already holds the conversation); the user description arrives via appended args.
 
 use coco_types::ToolName;
 

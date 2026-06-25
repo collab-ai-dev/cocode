@@ -137,7 +137,6 @@ pub struct PartialDisplayCollapseSettings {
 }
 
 /// Tool Result Budget settings.
-///
 /// Level 2 enable + per-message char cap. Level 1 (per-tool
 /// `<persisted-output>` persistence) is driven by each tool's
 /// `max_result_size_bound()` declaration rather than this config. See
@@ -167,7 +166,7 @@ pub struct CompactConfig {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoCompactConfig {
-    /// User toggle (was TS `globalConfig.autoCompactEnabled`).
+    /// User toggle for auto-compaction.
     pub enabled: bool,
     /// Hard kill: env `COCO_COMPACT_DISABLE` — both auto and manual.
     pub disabled_by_env: bool,
@@ -377,19 +376,15 @@ impl Default for DisplayCollapseConfig {
 }
 
 /// Tool Result Budget config.
-///
 /// Mapping to TS feature gates:
-///
 /// | Field | TS gate / GrowthBook | Default |
 /// |---|---|---|
 /// | `enabled` | `tengu_hawthorn_steeple` (Level 2 enable) | `false` |
 /// | `per_message_chars` | `tengu_hawthorn_window` (per-message override) | `200_000` |
 /// | `persist_records` | — (transcript record write toggle for fork agents) | `true` |
-///
-/// Per-tool persistence threshold overrides (TS `tengu_satin_quoll`) belong on
+/// Per-tool persistence threshold overrides belong on
 /// `Tool::max_result_size_bound()`; they are intentionally not surfaced as
 /// compact config.
-///
 /// **Status**: config is live for the query-level aggregate budget. Level 1
 /// helpers live in `coco-tool-runtime::tool_result_storage` and are called by
 /// `coco-query`'s tool outcome builder when a tool opts in via
@@ -397,11 +392,11 @@ impl Default for DisplayCollapseConfig {
 /// `docs/coco-rs/tool-result-budget-plan.md`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultBudgetConfig {
-    /// Enable Level 2 per-message budget. TS `tengu_hawthorn_steeple`.
+    /// Enable Level 2 per-message budget. `tengu_hawthorn_steeple`.
     pub enabled: bool,
     /// Per-API-message aggregate char cap. TS
     /// `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS` (200_000); overridable via
-    /// TS `tengu_hawthorn_window`.
+    /// `tengu_hawthorn_window`.
     pub per_message_chars: i64,
     /// Whether `ContentReplacementRecord`s persist to the session
     /// transcript. Off for ephemeral fork agents that share a parent

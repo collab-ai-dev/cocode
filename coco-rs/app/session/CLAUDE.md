@@ -10,10 +10,7 @@ camelCase.
 
 ## Wire-format policy
 
-**Content-equivalent to the original claude-code format, not byte-compatible.**
-Every fact a session carries (chain UUIDs, timestamps, tool_use_ids,
-file-history snapshot chain, content-replacement records, marble-origami staged
-ranges) is preserved with the same semantics and the same algorithm. But:
+**Field names on disk are snake_case; wire semantics are byte-stable.** Every fact a session carries (chain UUIDs, timestamps, tool_use_ids, file-history snapshot chain, content-replacement records, marble-origami staged ranges) is preserved with well-defined semantics. Specifics:
 
 - Field names on disk are **snake_case** (`parent_uuid`, `session_id`,
   `is_sidechain`, `tool_use_id`, `message_id`, …). No `serde(rename_all =
@@ -23,10 +20,7 @@ ranges) is preserved with the same semantics and the same algorithm. But:
   (kebab-case values for the semantic taxonomy — `custom-title`,
   `file-history-snapshot`, …); `SystemMessage` and other tagged enums use
   `kind:` matching the rest of coco-rs.
-- Claude Code (TypeScript) JSONL is **not** read directly. Sessions migrating
-  from it must go through `coco_session::import_ts` (TODO — single importer
-  module, one-time migration). Cross-implementation runtime interop is **not**
-  a goal — the two tools are alternatives, not peers.
+- External JSONL formats are **not** read directly. One-time migration goes through `coco_session::import_ts` (TODO). Cross-implementation runtime interop is **not** a goal.
 - Inner `message.content` blocks keep their Anthropic API field names
   (`tool_use_id`, `tool_name`, `is_error`, …) because those ARE the wire
   format we pass to/from the LLM. This boundary is independent of the
@@ -89,8 +83,7 @@ state.
 
 ## Worktree path invariant
 
-Session transcripts are keyed by the exact session cwd / worktree path,
-mirroring the TS runtime. Do not collapse transcript paths through
+Session transcripts are keyed by the exact session cwd / worktree path. Do not collapse transcript paths through
 `coco_git::find_canonical_git_root`. The memory subsystem owns its own
 canonical-git-root path resolution so linked worktrees can share memories while
 keeping transcripts separate.
@@ -98,7 +91,7 @@ keeping transcripts separate.
 ## Concurrent session registry
 
 `SessionRegistry` writes one `<pid>.json` file per top-level session under
-`<config_home>/sessions/`. Subagents (TS `getAgentId() != null`) intentionally
+`<config_home>/sessions/`. Subagents (those with a non-null `agent_id`) intentionally
 do NOT register — counting them would conflate swarm activity with real
 concurrency. Live patches (`update_session_name`, `update_session_bridge_id`,
 `update_session_activity`) are serialised via the registry's internal write

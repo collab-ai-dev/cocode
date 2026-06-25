@@ -56,7 +56,7 @@ pub enum GridCellKind {
 
 /// One cell of the usage grid. `fullness` is the 0..=1 fractional fill of
 /// the boundary cell between a category's whole squares and the next
-/// category (TS `squareFullness`); whole cells are `1.0`.
+/// category; whole cells are `1.0`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GridCell {
     pub kind: GridCellKind,
@@ -64,9 +64,8 @@ pub struct GridCell {
 }
 
 /// Build the usage grid as a flat `cols * rows` cell vector laid out
-/// category-first, then free padding, then the reserved buffer at the end —
-/// matching TS `analyzeContext.ts` grid assembly. The renderer chunks the
-/// result into rows of `cols`.
+/// category-first, then free padding, then the reserved buffer at the end.
+/// The renderer chunks the result into rows of `cols`.
 pub fn build_grid(
     categories: &[(ContextCategoryKind, i64)],
     raw_max: i64,
@@ -117,7 +116,7 @@ pub fn build_grid(
 
 /// One category's contiguous cells: `max(1, round(ratio))` squares with the
 /// fractional boundary square (index == whole squares) carrying the leftover
-/// fill — mirrors TS `createCategorySquares`.
+/// fill —.
 fn category_cells(kind: ContextCategoryKind, tokens: i64, max: f64, total: usize) -> Vec<GridCell> {
     let exact = (tokens as f64 / max) * total as f64;
     let whole = exact.floor();
@@ -136,7 +135,7 @@ fn category_cells(kind: ContextCategoryKind, tokens: i64, max: f64, total: usize
 }
 
 /// Display group for source-grouped detail sections (agents, skills). Fixed
-/// render order mirrors TS `SOURCE_DISPLAY_ORDER`, extended with `Mcp` for
+/// render order, extended with `Mcp` for
 /// coco-rs MCP-sourced skills.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceGroup {
@@ -234,7 +233,7 @@ pub struct ContextSuggestion {
     pub savings_tokens: Option<i64>,
 }
 
-// Thresholds mirror TS `utils/contextSuggestions.ts` constants verbatim.
+// Thresholds constants verbatim.
 const LARGE_TOOL_RESULT_PERCENT: f64 = 15.0;
 const LARGE_TOOL_RESULT_TOKENS: i64 = 10_000;
 const READ_BLOAT_PERCENT: f64 = 5.0;

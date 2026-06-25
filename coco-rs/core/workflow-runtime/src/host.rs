@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Per-call options for the `agent()` DSL primitive, parsed from the JS opts
-/// object. Mirrors the TS `agent(prompt, opts)` signature.
+/// object. `agent(prompt, opts)` signature.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WorkflowAgentOpts {

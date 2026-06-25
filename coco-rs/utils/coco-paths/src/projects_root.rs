@@ -11,13 +11,12 @@ use std::path::{Path, PathBuf};
 use crate::nfc::normalize_nfc;
 use crate::sanitize::{MAX_SANITIZED_LENGTH, sanitize_path};
 
-/// `<memory_base>/projects/` — matches TS `getProjectsDir`.
+/// `<memory_base>/projects/`.
 pub fn projects_root(memory_base: &Path) -> PathBuf {
     memory_base.join("projects")
 }
 
 /// `<memory_base>/projects/<sanitize_path(normalize_nfc(project_path))>/`.
-///
 /// Pure path computation — no filesystem access. Use
 /// [`find_project_dir`] when you need to handle long-path hash
 /// mismatches.
@@ -29,16 +28,15 @@ pub fn project_dir(memory_base: &Path, project_path: &Path) -> PathBuf {
 }
 
 /// Locate the on-disk project directory for `project_path`.
-///
 /// Returns:
 /// - `Ok(Some(path))` when an exact-slug directory exists.
 /// - `Ok(Some(path))` when the sanitized slug overflows
-///   [`MAX_SANITIZED_LENGTH`] (i.e. its real disk name has a djb2
-///   suffix) and a directory whose name starts with
-///   `<prefix>-` exists. This is the long-path prefix fallback that
-///   handles Bun-vs-Node hash divergence — different runtimes can
-///   produce different suffixes for the same input, but they share
-///   the truncated prefix.
+/// [`MAX_SANITIZED_LENGTH`] (i.e. its real disk name has a djb2
+/// suffix) and a directory whose name starts with
+/// `<prefix>-` exists. This is the long-path prefix fallback that
+/// handles Bun-vs-Node hash divergence — different runtimes can
+/// produce different suffixes for the same input, but they share
+/// the truncated prefix.
 /// - `Ok(None)` when neither exact match nor prefix-match is found.
 /// - `Err` on I/O errors that aren't "not found".
 pub fn find_project_dir(

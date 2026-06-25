@@ -44,7 +44,6 @@ impl fmt::Display for ShutdownReason {
 /// parameters they need and only those parameters, so the type
 /// system rejects illegal combinations at compile time (e.g.
 /// `RestoreType` cannot leak into the `AutoRestore` path).
-///
 /// Consolidates the explicit `rewindConversationTo()` flow and the
 /// cancel-on-empty-input auto-restore branch.
 #[derive(Debug, Clone)]
@@ -144,7 +143,6 @@ pub enum UserCommand {
         /// snapshot on the same id. Single source of truth so rewind
         /// picker selections, file-history snapshots, and the JSONL
         /// transcript line up.
-        ///
         user_message_id: String,
         /// Resolved text content (paste pills expanded, image pills removed).
         content: String,
@@ -167,7 +165,6 @@ pub enum UserCommand {
     /// Cancel a running subagent / background task. Fires the task's
     /// cancellation token via `TaskManager::kill_running`; the engine's
     /// existing `TaskCompleted` event then folds the row out of the UI.
-    ///
     /// Wired from the `/agents` dialog's Running tab when the user
     /// presses `X` on the highlighted row.
     CancelSubagent {
@@ -178,7 +175,6 @@ pub enum UserCommand {
     /// bridge suspends the TUI, spawns the editor, and emits
     /// `TuiOnlyEvent::AgentFileSaved` on exit so the dialog refreshes
     /// against the live catalog.
-    ///
     /// Wired from the `/agents` Library tab when the user presses
     /// Enter on an agent row (edit) or on the `Create new agent` row
     /// (create — `path` points at a freshly-created template).
@@ -190,7 +186,6 @@ pub enum UserCommand {
     },
     /// Delete an agent markdown file and trigger a catalog reload so
     /// the dialog re-renders without the deleted row.
-    ///
     /// Wired from the `/agents` Library tab `d` keystroke after the
     /// user confirms the delete overlay.
     DeleteAgentFile {
@@ -200,15 +195,14 @@ pub enum UserCommand {
     },
     /// Finalize the `/agents` Library inline create wizard. The CLI
     /// bridge:
-    ///   1. resolves the target directory (`config home/agents` or
-    ///      `project config dir/agents`),
-    ///   2. writes a markdown template with the wizard
-    ///      inputs in the frontmatter,
-    ///   3. dispatches the existing `$EDITOR` flow on the new file so
-    ///      the user can fine-tune body / tools / model / color,
-    ///   4. on editor exit, reloads the agent catalog and refreshes
-    ///      the dialog payload.
-    ///
+    /// 1. resolves the target directory (`config home/agents` or
+    /// `project config dir/agents`),
+    /// 2. writes a markdown template with the wizard
+    /// inputs in the frontmatter,
+    /// 3. dispatches the existing `$EDITOR` flow on the new file so
+    /// the user can fine-tune body / tools / model / color,
+    /// 4. on editor exit, reloads the agent catalog and refreshes
+    /// the dialog payload.
     /// Finalizes the new-agent creation wizard.
     CreateAgent {
         /// Canonical agent identifier (validated by
@@ -216,7 +210,7 @@ pub enum UserCommand {
         name: String,
         /// `whenToUse` description body. Required.
         description: String,
-        /// Selected source — narrows TS `BaseAgentSource` to the two
+        /// Selected source — narrows `BaseAgentSource` to the two
         /// scopes coco-rs writes to directly (user / project).
         source: coco_types::AgentSource,
     },
@@ -242,7 +236,6 @@ pub enum UserCommand {
         updates: Vec<(String, PermissionMode)>,
     },
     /// Set the Main role's thinking effort.
-    ///
     /// Emitted by [`crate::events::TuiCommand::CycleThinkingLevel`]
     /// (Ctrl+T). `level` is the wire-form string from
     /// `ReasoningEffort::to_string` (e.g. `"high"`, `"xhigh"`). The
@@ -286,12 +279,10 @@ pub enum UserCommand {
     /// `project config dir/settings.local.json` and republish
     /// `RuntimeConfig`. Emitted by the `/skills` dialog's Enter
     /// handler when the diff actually changes disk state.
-    ///
     /// **No display metadata here.** TUI stashes `total_edits` on
     /// `UiState.pending_skills_save_edits` before dispatch and
     /// reads it back when [`coco_types::TuiOnlyEvent::SkillOverridesSaved`]
     /// arrives. The CLI bridge only reports Ok / typed Err.
-    ///
     /// The CLI bridge in `tui_runner` owns the
     /// [`coco_config::SettingsWriter`] handle — keeping the writer
     /// out of the TUI lib avoids a coco-tui → coco-config write
@@ -309,7 +300,6 @@ pub enum UserCommand {
         args: String,
     },
     /// Queue a command for mid-turn injection.
-    ///
     /// Sent by [`crate::update::QueueInput`] when the user presses
     /// Enter while the agent is streaming. The CLI bridge in
     /// `tui_runner` forwards this to
@@ -342,12 +332,10 @@ pub enum UserCommand {
     /// the user's focus directive.
     Compact { custom_instructions: Option<String> },
     /// Rewind to an earlier user message.
-    ///
     /// `mode` is an ADT, not a flag — the `AutoRestore` variant
     /// structurally cannot carry a `RestoreType`, so the
     /// "auto-restore never touches files" invariant is enforced by
     /// the type system, not by separate command variants.
-    ///
     /// See `engine-tui-unified-transcript-plan.md` §4.2 / §7.4.
     Rewind {
         message_id: String,

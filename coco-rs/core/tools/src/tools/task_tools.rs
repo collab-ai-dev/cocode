@@ -161,7 +161,6 @@ fn project_output_background(
 /// 1. Stores the snapshot in `ToolAppState.plan_tasks`
 /// 2. Sets `expanded_view = Tasks` (auto-expand)
 /// 3. Updates `verification_nudge_pending`
-///
 /// The snapshot is computed *now* and moved into the closure. The
 /// executor applies the patch post-execute under a single write lock.
 async fn build_task_list_patch(
@@ -204,7 +203,6 @@ async fn build_todo_patch(
 }
 
 /// Key under which a TodoWrite list is stored in `TodoListHandle`.
-///
 /// Uses `context.agentId` when present, falling back to `session_id_for_history`
 /// (passed to `ToolUseContext` at bootstrap). As a last resort (tests without
 /// either), uses a stable literal so list-local operations remain round-trippable.
@@ -1503,7 +1501,7 @@ impl Tool for TaskOutputTool {
         true
     }
     // The lone deferred Task tool: deprecated + low-frequency, so it stays
-    // behind ToolSearch (matches TS `shouldDefer: true`). See the family defer
+    // behind ToolSearch (). See the family defer
     // policy on `TaskCreateTool::should_defer`.
     fn should_defer(&self) -> bool {
         true
@@ -1512,20 +1510,14 @@ impl Tool for TaskOutputTool {
     /// Render the retrieval envelope as XML tags. Format:
     /// ```text
     /// <retrieval_status>STATUS</retrieval_status>
-    ///
     /// <task_id>ID</task_id>
-    ///
     /// <task_type>TYPE</task_type>
-    ///
     /// <status>TASK_STATUS</status>
-    ///
-    /// <exit_code>N</exit_code>      # only when present
-    ///
+    /// <exit_code>N</exit_code> # only when present
     /// <output>
     /// CAPTURED_OUTPUT
-    /// </output>                     # only when output is non-empty
-    ///
-    /// <error>...</error>            # only when present
+    /// </output> # only when output is non-empty
+    /// <error>...</error> # only when present
     /// ```
     /// Pieces are joined with `\n\n`. Missing fields are skipped.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
@@ -1628,7 +1620,6 @@ impl Tool for TaskOutputTool {
 /// driven via [`TaskReader::subscribe_terminal`] — the production
 /// impl returns a `watch::Receiver` that fires exactly once on the
 /// `update_status` transition into Completed/Failed/Killed.
-///
 /// Falls back to a one-shot `get_task_status` snapshot if no
 /// terminal subscription is available (test handles without watch
 /// wiring). Uses O(1) await instead of polling — no reason to busy-wait.

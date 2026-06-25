@@ -90,7 +90,7 @@ pub fn load_for_prompt_bytes(
 
         // Original (pre-resize) dimensions — captured before any
         // resize so the EncodedImage can report both original and
-        // display sizes to the model. TS `FileReadTool.ts:276-296`
+        // display sizes to the model.
         // surfaces both via the `dimensions` field on image output.
         let (original_width, original_height) = dynamic.dimensions();
 
@@ -142,7 +142,6 @@ pub fn load_for_prompt_bytes(
 }
 
 /// Normalize raw image bytes for API submission.
-///
 /// Resizes if the image exceeds `MAX_WIDTH`x`MAX_HEIGHT` and re-encodes
 /// to a suitable format. Returns the normalized bytes and MIME type.
 pub fn normalize_image_bytes(

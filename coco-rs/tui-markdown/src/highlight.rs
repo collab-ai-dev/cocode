@@ -72,7 +72,7 @@ impl CodeToken {
         match self {
             // No BOLD: a saturated keyword color plus bold reads as "loud"
             // (the old ANSI-Magenta+bold looked harsh red). Both of
-            // claude-code's highlighters leave keywords unbolded.
+            // Leave keywords unbolded.
             Self::Keyword => Style::default().fg(styles.code_keyword()),
             Self::String => Style::default().fg(styles.code_string()),
             Self::Comment => Style::default()

@@ -114,7 +114,6 @@ pub(crate) fn resolve_repository_root(path: &Path) -> Result<PathBuf, GitTooling
 }
 
 /// Find the canonical git root for `start`, sharing one identity across worktrees.
-///
 /// Linked worktrees point their `.git` file at a sibling under the main
 /// repo's `.git/worktrees/<name>`; the `--git-common-dir` rev-parse returns
 /// that shared `.git`, whose parent is the canonical root every worktree of
@@ -265,7 +264,7 @@ pub fn get_default_branch(dir: &Path) -> String {
             return cand.to_string();
         }
     }
-    // 3. Hardcoded fallback (TS `computeDefaultBranch` final default).
+    // 3. Hardcoded fallback.
     "main".to_string()
 }
 
@@ -328,7 +327,6 @@ struct GitRun {
 // === Public API for basic git operations ===
 
 /// Get the current HEAD commit ID.
-///
 /// Returns the full SHA of HEAD, or an error if not in a git repository.
 pub fn get_head_commit(path: &Path) -> Result<String, GitToolingError> {
     resolve_head(path)?.ok_or_else(|| GitToolingError::NotAGitRepository {
@@ -337,7 +335,6 @@ pub fn get_head_commit(path: &Path) -> Result<String, GitToolingError> {
 }
 
 /// Get list of uncommitted changes using `git status --porcelain`.
-///
 /// Returns a list of file paths that have uncommitted changes.
 pub fn get_uncommitted_changes(path: &Path) -> Result<Vec<String>, GitToolingError> {
     let output = run_git_for_stdout(path, ["status", "--porcelain"], None)?;
@@ -360,7 +357,6 @@ pub fn get_uncommitted_changes(path: &Path) -> Result<Vec<String>, GitToolingErr
 }
 
 /// Stage all changes and create a commit.
-///
 /// Returns the new commit ID, or None if there were no changes to commit.
 pub fn commit_all(path: &Path, message: &str) -> Result<Option<String>, GitToolingError> {
     // Check for changes first

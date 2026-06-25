@@ -2,9 +2,7 @@
 
 Unified diff/patch application with fuzzy matching.
 
-## Source
-
-Ported from `codex-rs/apply-patch` (NOT from claude-code TS). Treat `codex-rs` as upstream. Lives under `exec/` (not `utils/`) because it performs filesystem side-effects alongside `coco-shell`, `coco-sandbox`, and `coco-exec-server`.
+Lives under `exec/` (not `utils/`) because it performs filesystem side-effects alongside `coco-shell`, `coco-sandbox`, and `coco-exec-server`.
 
 ## Key Types
 

@@ -12,7 +12,6 @@ pub enum CommandAvailability {
 }
 
 /// How a command was loaded.
-///
 /// Payload-carrying variants (`Plugin { name }`, `Mcp { server_name }`)
 /// ensure source and attribution can never disagree. This replaces the
 /// older `loaded_from + plugin_name` dual-field layout, which allowed
@@ -242,7 +241,6 @@ pub struct LocalCommandData {
 /// these at startup (and again after `/reload-plugins`) so the
 /// autocomplete popup and command palette can render and rank without
 /// reaching into [`CommandBase`] every time.
-///
 /// Lives in `coco-types` (rather than `coco-tui`) so it can travel on a
 /// [`crate::TuiOnlyEvent`] variant — events are the only path between
 /// the agent driver and the TUI, and event payload types must be
@@ -280,17 +278,15 @@ pub struct SlashCommandInfo {
     /// [`CommandTypeTag::Prompt`] entries as skills eligible for the
     /// "recently used" section — builtin local commands always sit in
     /// the builtin bucket (`cmd.type === 'prompt'` filtering).
-    ///
     /// Derived from the source [`CommandType`] via
     /// [`CommandType::tag`] at snapshot time; the projection is
     /// centralised there so the enum can't drift.
     #[serde(default)]
     pub kind: CommandTypeTag,
     /// Recency-decayed usage score precomputed at snapshot time.
-    /// Higher means "used more recently and/or more often". TS parity:
+    /// Higher means "used more recently and/or more often".
     /// `getSkillUsageScore` in `utils/suggestions/skillUsageTracking.ts`
     /// — same 7-day half-life with a 0.1 recency floor.
-    ///
     /// Embedded in the snapshot so the TUI ranker never touches disk
     /// on the hot popup path. Updated naturally at the existing
     /// snapshot-refresh moments (session start, `/reload-plugins`).

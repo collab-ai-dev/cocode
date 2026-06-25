@@ -51,7 +51,7 @@ Implemented behaviors:
   `CompactSummaryAttempt` rather than rendering the conversation into a
   single legacy prompt string. The attempt separates `messages` (the
   selected slice being summarized) from `context_messages` (the structured
-  API/fork context), matching TS partial `from` behavior. On PTL retry,
+  API/fork context). On PTL retry,
   partial `from` truncates the full API context, not just the tail
   summary slice. The legacy `render_summary_prompt_for_debug` remains
   only for diagnostics.

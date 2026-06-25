@@ -1,6 +1,5 @@
 //! Terminal notification backends — OSC escape sequences for 5 terminals.
 //!
-//! Parity with TS `src/services/notifier.ts` + `src/ink/useTerminalNotification.ts`.
 //! Detects the terminal from `$TERM_PROGRAM` / `$LC_TERMINAL` / `$TERM` and
 //! emits the appropriate OSC sequence. All writes are best-effort; failures
 //! degrade silently to no notification.
@@ -24,8 +23,7 @@ pub enum NotificationBackend {
 
 impl NotificationBackend {
     /// Auto-detect the backend from the environment.
-    ///
-    /// Matches TS `sendAuto()` behaviour: uses `$TERM_PROGRAM` first, then
+    /// Matches behaviour: uses `$TERM_PROGRAM` first, then
     /// falls back to `$LC_TERMINAL` / `$TERM` for terminals that don't set
     /// `TERM_PROGRAM` (Kitty without its wrapper, Ghostty via SSH, etc.).
     pub fn detect() -> Self {
@@ -45,7 +43,6 @@ impl NotificationBackend {
     }
 
     /// Emit the escape sequence(s) for this backend to `writer`.
-    ///
     /// The TS code wraps OSC sequences for tmux/screen via DCS passthrough
     /// (`\x1bPtmux;\x1b...\x1b\\`). We detect the multiplexer via `$TMUX` /
     /// `$STY` and apply the same wrap here so users running inside tmux or

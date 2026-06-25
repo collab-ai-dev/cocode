@@ -277,9 +277,8 @@ pub fn get_compact_prompt(custom_instructions: Option<&str>) -> String {
 }
 
 /// Build the partial compaction prompt.
-///
-/// `direction`: `Newest` (TS `'from'`) → summarize the *recent* portion, keep
-/// older messages intact. `Oldest` (TS `'up_to'`) → summarize the *earlier*
+/// `direction`: `Newest` → summarize the *recent* portion, keep
+/// older messages intact. `Oldest` → summarize the *earlier*
 /// portion, keep newer messages intact (summary precedes them in the chain).
 pub fn get_partial_compact_prompt(
     custom_instructions: Option<&str>,
@@ -350,7 +349,6 @@ pub fn format_compact_summary(summary: &str) -> String {
 }
 
 /// Build the user-facing summary message shown after compaction.
-///
 /// Caller passes the **already formatted** summary (call
 /// `format_compact_summary` first). The `recent_messages_preserved` flag
 /// adds the "Recent messages are preserved verbatim." line — set it when

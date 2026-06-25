@@ -17,11 +17,10 @@ pub enum PermissionBehavior {
 /// Classifier behavior (same variants as `PermissionBehavior`).
 pub type ClassifierBehavior = PermissionBehavior;
 
-/// Which auto-mode classifier stages run. TS `TwoStageMode`
-/// (`yoloClassifier.ts:1308`).
-///
+/// Which auto-mode classifier stages run. `TwoStageMode`
+/// (yolo classifier).
 /// Controls only *which stages execute and their token budgets* — never the
-/// model. Every mode runs on `ModelRole::Main`, mirroring TS running every
+/// model. Every mode runs on `ModelRole::Main`, running every
 /// mode on `getMainLoopModel()`. Shared between `coco-config`
 /// (`AutoModeConfig`) and `coco-permissions` (`AutoModeRules`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -32,9 +31,9 @@ pub enum ClassifierMode {
     /// on block / unparseable. The default.
     #[default]
     Both,
-    /// Single fast stage: 256 tok, no stop sequence, verdict final. TS `fast`.
+    /// Single fast stage: 256 tok, no stop sequence, verdict final. `fast`.
     Fast,
-    /// Stage 2 only: 4096 tok, no stop sequence. TS `thinking`.
+    /// Stage 2 only: 4096 tok, no stop sequence. `thinking`.
     Thinking,
 }
 
@@ -81,7 +80,6 @@ pub enum PermissionRuleSource {
 // Used by both coco-permissions (rule evaluation) and coco-hooks (if condition).
 
 /// Parse a rule string like `"Bash(git *)"` into tool_pattern + rule_content.
-///
 /// This is a simplified parser for the hook `if` condition syntax. For the
 /// full-featured parser with escape handling, see `coco-permissions::rule_compiler`.
 pub fn parse_rule_pattern(rule_str: &str) -> PermissionRuleValue {
@@ -110,7 +108,6 @@ pub fn parse_rule_pattern(rule_str: &str) -> PermissionRuleValue {
 }
 
 /// Check if a tool name matches a rule's tool pattern.
-///
 /// Supports: exact match, `"*"` wildcard, prefix-wildcard (`"mcp__slack__*"`),
 /// and MCP server-level matching (`"mcp__server"` matches `"mcp__server__tool"`).
 pub fn tool_matches_pattern(pattern: &str, tool_name: &str) -> bool {
@@ -140,7 +137,6 @@ pub fn tool_matches_pattern(pattern: &str, tool_name: &str) -> bool {
 }
 
 /// Check if tool content matches a rule's content pattern.
-///
 /// Supports prefix matching (ending with `*`) and exact matching.
 pub fn content_matches(rule_content: &str, tool_content: &str) -> bool {
     if rule_content == "*" {
@@ -155,7 +151,6 @@ pub fn content_matches(rule_content: &str, tool_content: &str) -> bool {
 }
 
 /// Check if a tool call matches a parsed rule pattern.
-///
 /// Combines `tool_matches_pattern` and `content_matches` for convenience.
 pub fn matches_rule(
     rule: &PermissionRuleValue,
@@ -224,13 +219,11 @@ pub enum PermissionDecisionReason {
 
 /// Result of a tool's own permission opinion (the step-1c slot in
 /// the central evaluator pipeline).
-///
 /// `tool.checkPermissions()` returns
 /// `{ behavior: 'allow' | 'ask' | 'deny', updatedInput?, feedback? }`
 /// or is absent (== passthrough). `Passthrough` is the explicit
 /// "no opinion — defer to rule pipeline" signal. Tools that don't
 /// implement content-specific safety checks return `Passthrough`.
-///
 /// Lives in `coco-types` rather than `coco-permissions` so the
 /// `coco_tool_runtime::Tool::check_permissions` trait method can
 /// reference it without the L4 Tool trait depending on the L3
@@ -240,7 +233,7 @@ pub enum ToolCheckResult {
     /// Tool has no opinion — continue with rule-based checks.
     Passthrough,
     /// Tool explicitly allows this input. `updated_input` carries
-    /// any normalization the tool applied (TS `updatedInput`);
+    /// any normalization the tool applied;
     /// `feedback` carries an optional user-facing rationale that
     /// the evaluator threads onto the resulting `PermissionDecision`.
     Allow {
@@ -248,12 +241,11 @@ pub enum ToolCheckResult {
         feedback: Option<String>,
     },
     /// Tool requires user confirmation for this input.
-    ///
     /// `choices` is `None` for the traditional yes/no dialog. When
     /// `Some`, the TUI renders a multi-choice list instead and the
     /// selected `value` is echoed back to the tool via
     /// `PermissionResolutionDetail` so `execute()` can branch on it.
-    /// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option grid.
+    /// Exit plan mode permission option grid.
     Ask {
         message: String,
         /// Permission updates the frontend may apply when the user picks
@@ -279,7 +271,6 @@ pub enum PermissionAbortReason {
 }
 
 /// One option in a multi-choice permission dialog.
-///
 /// Used by `ToolCheckResult::Ask.choices` and surfaced on the wire via
 /// `PermissionDecision::Ask.choices`. The TUI renders one row per
 /// choice; the picked `value` is echoed back so the tool's `execute()`
@@ -322,15 +313,13 @@ pub struct ExitPlanModeAllowedPrompt {
 }
 
 /// The user's response to an `ExitPlanMode` approval prompt.
-///
 /// The wire `value` strings are the single source of truth for the choice
 /// echoed back through `PermissionDecision::Ask.choices` →
 /// `PermissionResolutionDetail::ExitPlanMode.choice`. Owning the mapping here keeps
 /// the producer (the TUI permission bridge, which builds the choice list) and
 /// the consumer (`ExitPlanModeTool::execute`, which branches on the picked
 /// value) from drifting apart.
-///
-/// Adapted from TS `ExitPlanModePermissionRequest.tsx` `ResponseValue` union.
+/// Response value for the exit-plan-mode permission request.
 /// The two clear-context variants intentionally diverge from the TS strings
 /// (`yes-accept-edits` / `yes-bypass-permissions`): coco appends an explicit
 /// `-clear-context` suffix so every clear variant reads symmetrically against
@@ -443,8 +432,8 @@ pub enum PermissionDecision {
         suggestions: Vec<PermissionUpdate>,
         /// Optional multi-choice payload. When `Some`, the TUI renders
         /// a choice list instead of yes/no; the picked `value` is sent
-        /// back to the tool. TS parity:
-        /// `ExitPlanModePermissionRequest.tsx:691-704` option grid.
+        /// back to the tool.
+        /// Exit plan mode permission option grid.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         choices: Option<Vec<PermissionAskChoice>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -506,14 +495,12 @@ impl PermissionUpdate {
 }
 
 /// Destination for persisting permission updates.
-///
 /// Persistable destinations (`User`/`Project`/`LocalSettings`) write to
 /// disk; in-memory destinations (`Session`/`CliArg`/`Command`) live only
-/// for the running session. TS parity: same split as
+/// for the running session. same split as
 /// `persistPermissionUpdates` in `PermissionUpdate.ts`.
-///
 /// `Command` is reserved for rules contributed by an invoked command or
-/// skill's frontmatter (`allowed-tools:`). TS parity:
+/// skill's frontmatter (`allowed-tools:`).
 /// `alwaysAllowRules.command` populated by `SkillTool` /
 /// `createGetAppStateWithAllowedTools`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -553,8 +540,7 @@ pub struct ToolPermissionContext {
     #[serde(default)]
     pub additional_dirs: HashMap<String, AdditionalWorkingDir>,
     /// Source-specific roots for path-scoped file permission rules.
-    ///
-    /// TS parity: `rootPathForSource()` in `utils/permissions/filesystem.ts`.
+    /// `rootPathForSource()` in `utils/permissions/filesystem.ts`.
     /// Empty falls back to cwd-derived roots for test contexts.
     #[serde(default)]
     pub permission_rule_source_roots: HashMap<PermissionRuleSource, std::path::PathBuf>,
@@ -574,8 +560,8 @@ pub struct ToolPermissionContext {
     pub stripped_dangerous_rules: Option<PermissionRulesBySource>,
     /// Pre-resolved session plan file path — pushed in by the engine so
     /// the permission evaluator can auto-allow writes to it in Plan mode
-    /// without re-deriving the slug. TS parity: `isSessionPlanFile` in
-    /// `utils/permissions/filesystem.ts:245-255`.
+    /// without re-deriving the slug. `isSessionPlanFile` in
+    /// Filesystem permission rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_plan_file: Option<std::path::PathBuf>,
 }

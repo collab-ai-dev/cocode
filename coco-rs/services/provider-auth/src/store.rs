@@ -1,4 +1,4 @@
-//! Provider-scoped credential persistence. `CredentialBackend` mirrors codex's
+//! Provider-scoped credential persistence. `CredentialBackend`
 //! `AuthStorageBackend` (File / Keyring / Auto / Ephemeral). Tokens are redacted
 //! in `Debug`; the file backend writes `0600` atomically (temp + rename).
 

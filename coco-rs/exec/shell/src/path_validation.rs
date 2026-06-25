@@ -32,7 +32,6 @@ fn dangerous_removal_paths() -> Vec<String> {
 }
 
 /// Check if a file path is dangerous for a destructive operation.
-///
 /// Returns Some(reason) if the path is dangerous, None if safe.
 pub fn check_dangerous_path(_command: &str, path: &str, cwd: &str) -> Option<String> {
     let resolved = resolve_path(path, cwd);
@@ -107,7 +106,6 @@ pub fn extract_write_path_targets(command: &str) -> Vec<String> {
 }
 
 // ── Force-ask gates (consumed by BashTool::check_permissions) ──
-//
 // These run BEFORE any allow rule / acceptEdits auto-allow, so a match returns
 // an Ask the model can't override. All pure (plus an FS stat for the bare-repo
 // probe) — no cross-crate dependency, so they stay in `coco-shell` (avoids a
@@ -170,7 +168,7 @@ pub fn has_git_escape_pattern_in_cwd(command: &str, cwd: &str) -> bool {
 }
 
 /// Force-ask if a compound command changes cwd more than once after no-op cwd
-/// changes have been filtered. This mirrors TS's conservative path validation.
+/// changes have been filtered. This matches the conservative path validation.
 pub fn check_multiple_cwd_changes(command: &str, cwd: &str) -> Option<String> {
     let analysis = crate::bash_permissions::analyze_compound_command(command, cwd);
     analysis

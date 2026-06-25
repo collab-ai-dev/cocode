@@ -1,15 +1,13 @@
 /// Tracks permission denials so auto-mode can fall back to prompting when the
 /// agent is stuck in a denial loop.
-///
 /// `shouldFallbackToPrompting` fires on `consecutiveDenials >= 3 ||
 /// totalDenials >= 20`. There is no persistent "tripped" latch — the check
 /// runs fresh after each recorded denial, an allowed action clears the
 /// consecutive streak (`reset_consecutive`), and hitting the total cap resets
 /// both counters (`reset_after_total_limit`).
-///
 /// Lives in `coco-tool-runtime` because it is per-`ToolUseContext` runtime
 /// state (subagent-isolated when `local_denial_tracking` is set — every
-/// subagent/fork gets a fresh one, TS `createSubagentContext` parity;
+/// subagent/fork gets a fresh one, `createSubagentContext` parity;
 /// session-scoped otherwise for the main loop). `coco-permissions` re-exports
 /// the type and operates on it from the auto-mode classifier path.
 #[derive(Debug, Default)]

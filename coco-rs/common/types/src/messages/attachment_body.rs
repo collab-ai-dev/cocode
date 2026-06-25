@@ -38,7 +38,6 @@ pub enum AttachmentBody {
 }
 
 /// Typed structured extras carried alongside an [`AttachmentBody::Api`] body.
-///
 /// Used for kinds that surface both a rendered model-visible prompt
 /// **and** a structured payload that downstream consumers (transcript
 /// persistence, SDK observers, telemetry) want preserved verbatim.
@@ -100,8 +99,7 @@ pub struct MentionSummaryPayload {
     pub items: Vec<MentionSummaryItem>,
 }
 
-/// TS parity: `CompactFileReferenceAttachment`
-/// (`utils/attachments.ts:307-312`).
+/// compact file reference attachment.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CompactFileReferencePayload {
@@ -112,7 +110,6 @@ pub struct CompactFileReferencePayload {
 // ─── Silent payloads (one per silent AttachmentKind) ────────────────────
 
 /// Typed payload for silent attachment kinds.
-///
 /// Variant names map 1:1 to the [`AttachmentKind`](crate::AttachmentKind)
 /// silent variants. Adding a new silent kind requires adding a matching
 /// variant here — enforced by the constructor helpers on
@@ -139,7 +136,6 @@ pub enum SilentPayload {
     EditedImageFile(EditedImageFilePayload),
 }
 
-/// TS parity: `HookCancelledAttachment` (`utils/attachments.ts:396-403`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookCancelledPayload {
@@ -152,7 +148,6 @@ pub struct HookCancelledPayload {
     pub duration_ms: Option<i64>,
 }
 
-/// TS parity: `HookErrorDuringExecutionAttachment` (`utils/attachments.ts:405-414`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookErrorDuringExecutionPayload {
@@ -162,7 +157,6 @@ pub struct HookErrorDuringExecutionPayload {
     pub hook_event: HookEventType,
 }
 
-/// TS parity: `HookNonBlockingErrorAttachment` (`utils/attachments.ts:429+`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookNonBlockingErrorPayload {
@@ -172,7 +166,6 @@ pub struct HookNonBlockingErrorPayload {
     pub hook_event: HookEventType,
 }
 
-/// TS parity: `HookSystemMessageAttachment` (`utils/attachments.ts:388-394`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookSystemMessagePayload {
@@ -182,7 +175,6 @@ pub struct HookSystemMessagePayload {
     pub hook_event: HookEventType,
 }
 
-/// TS parity: `HookPermissionDecisionAttachment` (`utils/attachments.ts:381-386`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookPermissionDecisionPayload {
@@ -202,7 +194,6 @@ pub enum HookPermissionDecision {
     Ask,
 }
 
-/// TS parity: `command_permissions` (`utils/attachments.ts:605-608`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct CommandPermissionsPayload {
@@ -212,8 +203,7 @@ pub struct CommandPermissionsPayload {
     pub model: Option<String>,
 }
 
-/// TS parity: `/goal` status attachment (`goal_status`).
-///
+/// `/goal` status attachment (`goal_status`).
 /// Sentinels (`sentinel: true`) are emitted by `/goal` set/clear and are
 /// ignored by "last achieved goal" lookup. Non-sentinel payloads are emitted
 /// by the Stop-hook evaluator for achieved, failed, and still-unmet checks.
@@ -240,15 +230,13 @@ pub struct GoalStatusPayload {
     pub tokens: Option<i64>,
 }
 
-/// TS parity: `structured_output` (`utils/attachments.ts:639+`,
-/// `services/tools/toolExecution.ts:1276`).
+/// `structured_output` attachment type.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct StructuredOutputPayload {
     pub data: serde_json::Value,
 }
 
-/// TS parity: `dynamic_skill` (`utils/attachments.ts:525+`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DynamicSkillPayload {
@@ -260,7 +248,6 @@ pub struct DynamicSkillPayload {
     pub display_path: String,
 }
 
-/// TS parity: `skill_discovery` (`utils/attachments.ts:538-542`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SkillDiscoveryPayload {
@@ -288,7 +275,6 @@ pub struct SkillDiscoverySkill {
     pub short_id: Option<String>,
 }
 
-/// TS parity: `max_turns_reached` (`query.ts:1508`, `query.ts:1707`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct MaxTurnsReachedPayload {
@@ -298,8 +284,6 @@ pub struct MaxTurnsReachedPayload {
     pub turn_count: i32,
 }
 
-/// TS parity: `AlreadyReadFileAttachment` (`utils/attachments.ts:323-333`).
-///
 /// TS carries the (potentially truncated) file content inline for UI display
 /// even though `normalizeAttachmentForAPI` returns `[]`. coco-rs follows
 /// suit — `content` is the last-known file body used by transcript viewers.
@@ -318,8 +302,6 @@ pub struct AlreadyReadFilePayload {
     pub truncated: bool,
 }
 
-/// TS parity: `edited_image_file` (`utils/attachments.ts:456-460`).
-///
 /// Image bytes can't be diffed textually; the UI renders a marker / thumbnail.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

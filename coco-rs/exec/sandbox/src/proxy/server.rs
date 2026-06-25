@@ -13,7 +13,6 @@ use super::NetworkAskCallback;
 use super::filter::DomainFilter;
 
 /// Combined HTTP CONNECT and SOCKS5 proxy server.
-///
 /// Both servers bind to random available ports and enforce domain-based
 /// filtering via the shared `DomainFilter`. Shut down gracefully via
 /// `stop()` or by cancelling the provided `CancellationToken`.
@@ -27,7 +26,6 @@ pub struct ProxyServer {
 
 impl ProxyServer {
     /// Start HTTP CONNECT and SOCKS5 proxy servers.
-    ///
     /// When `fixed_http_port` or `fixed_socks_port` is `Some`, binds to that
     /// specific port (from `NetworkConfig.http_proxy_port`/`socks_proxy_port`).
     /// Otherwise binds to a random available port.
@@ -39,7 +37,6 @@ impl ProxyServer {
     }
 
     /// Start proxy servers with optional fixed ports.
-    ///
     /// `ask_cb`, when `Some`, is consulted on a denied CONNECT before refusing —
     /// an approving callback (the user said yes) lets the connection through.
     pub async fn start_with_ports(
@@ -156,7 +153,6 @@ async fn run_http_proxy(
 }
 
 /// Handle a single HTTP proxy request (CONNECT or plain HTTP).
-///
 /// Reads the request line, extracts the method and target host, checks
 /// the domain filter and network mode, and either tunnels/proxies the
 /// connection or responds with 403.
@@ -215,7 +211,7 @@ async fn handle_http_connect(
     if !filter.is_allowed(host) {
         // Denied by policy: consult the interactive ask-callback (if installed)
         // before refusing. An approving user converts the deny to a tunnel —
-        // TS `createSandboxAskCallback` "Allow network connection to {host}?".
+        // "Allow network connection to {host}?".
         let approved = match ask_cb {
             Some(cb) => cb(host.to_string()).await,
             None => false,
@@ -308,10 +304,8 @@ const SOCKS5_REPLY_REFUSED: u8 = 0x05;
 const SOCKS5_REPLY_CMD_NOT_SUPPORTED: u8 = 0x07;
 
 /// Handle a single SOCKS5 connection.
-///
 /// Negotiates NO AUTH, reads the CONNECT request, checks the domain filter,
 /// and either tunnels or refuses the connection.
-///
 /// In Limited network mode, SOCKS5 is blocked entirely because HTTP methods
 /// cannot be inspected through SOCKS tunnels.
 async fn handle_socks5(
@@ -421,7 +415,6 @@ async fn handle_socks5(
 }
 
 /// Send a SOCKS5 reply with the given status code.
-///
 /// Uses a minimal reply with a bound address of 0.0.0.0:0.
 async fn send_socks5_reply(client: &mut TcpStream, status: u8) -> anyhow::Result<()> {
     // VER | REP | RSV | ATYP(IPv4) | BND.ADDR(0.0.0.0) | BND.PORT(0)

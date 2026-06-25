@@ -58,7 +58,7 @@ pub fn filter_transcript(messages: &[Arc<Message>]) -> Vec<Arc<Message>> {
 /// part is a Text block whose `.trim()` is empty. ANY non-text block
 /// (Reasoning / ReasoningFile / ToolCall / File / Source / …) makes the
 /// message substantive and keeps it — mirrors
-/// `hasOnlyWhitespaceTextContent` (`utils/messages.ts:4835`), which
+/// Checks for whitespace-only content, which
 /// returns `false` for any non-text block AND for empty content
 /// (`length === 0`). A message like `[Text("  "), Reasoning(..)]` (model
 /// emitted leading whitespace before a thinking block, then the turn was

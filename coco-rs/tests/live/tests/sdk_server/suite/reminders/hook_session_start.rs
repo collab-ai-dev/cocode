@@ -9,10 +9,8 @@
 //! `HookAdditionalContextGenerator` renders it as a
 //! `<system-reminder>` that the model sees.
 //!
-//! TS parity: `processSessionStartHooks('startup')`
-//! (`utils/sessionStart.ts:130-175`) emits
-//! `createAttachmentMessage({type: 'hook_additional_context',
-//! hookEvent: 'SessionStart', content})`.
+//! The hook emits a `hook_additional_context` / `SessionStart`
+//! attachment message with the hook's `additional_context` content.
 
 use anyhow::Result;
 use coco_types::AttachmentKind;

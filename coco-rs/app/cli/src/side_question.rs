@@ -1,5 +1,5 @@
 //! Shared `/btw` side-question fork logic for both the TUI runner and the
-//! SDK runner. Mirrors TS `utils/sideQuestion.ts` (`runSideQuestion` +
+//! SDK runner. (`runSideQuestion` +
 //! `extractSideQuestionResponse`): wrap the question in a tool-less
 //! "lightweight agent" system-reminder, run a one-shot fork that shares the
 //! parent's prompt cache, then flatten the answer out of the per-block
@@ -13,7 +13,7 @@ use coco_types::ForkLabel;
 
 /// Prepended (as a `<system-reminder>`) to every `/btw` question so the fork
 /// model knows it is a separate, tool-less, one-off agent and does not
-/// narrate being "interrupted" or promise follow-up actions. Text mirrors TS
+/// narrate being "interrupted" or promise follow-up actions. Text
 /// `utils/sideQuestion.ts`. Wrapping the user message does not bust the parent
 /// prompt cache — only the cached prefix (system prompt + parent history)
 /// drives the cache key; this question is the uncached suffix.
@@ -38,7 +38,7 @@ Simply answer the question with the information you have.</system-reminder>";
 /// parent's prompt cache, and return the answer text (or a degraded
 /// explanation on tool-attempt / API error / empty response). The `cache`
 /// and `dispatcher` come from the caller's surface — the TUI runtime's
-/// `last_cache_safe_params` or the SDK's persistent engine. Mirrors TS
+/// `last_cache_safe_params` or the SDK's persistent engine.
 /// `runSideQuestion`; the parent conversation is never mutated.
 pub async fn run_side_question_fork(
     cache: &CacheSafeParams,
@@ -55,7 +55,7 @@ pub async fn run_side_question_fork(
     }
 }
 
-/// Flatten the answer out of the fork's result messages. Mirrors TS
+/// Flatten the answer out of the fork's result messages.
 /// `extractSideQuestionResponse`: the provider yields one assistant message
 /// per content block (a thinking block then a text block), so concatenate
 /// the text of EVERY assistant message — not just the last. Falls back to a

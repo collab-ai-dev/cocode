@@ -1,4 +1,4 @@
-//! `/schedule` — create, update, list, or run scheduled remote Claude Code agents. Mirrors claude-code's scheduleRemoteAgents.ts.
+//! `/schedule` — create, update, list, or run scheduled remote agents.
 //! Deferred: live MCP-connector/environment/git-repo/timezone sections (CCR infra, a non-goal) are omitted; static body only.
 
 use coco_types::ToolName;

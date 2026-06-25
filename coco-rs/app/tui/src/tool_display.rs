@@ -233,7 +233,7 @@ fn truncate_spans_to_width(spans: Vec<Span<'static>>, max_width: usize) -> Vec<S
 /// - message→cell derivation — [`crate::transcript::derive::message_to_cells`]
 ///   (kills the `● ToolName(…)` invocation header; the result orphan-renders).
 ///
-/// Mirrors claude-code's `userFacingName() == ""` (tool-use renders `null`;
+/// When `userFacingName()` is empty (tool-use renders `null`;
 /// only the result shows) and codex-rs routing these flows as request-based
 /// interrupts rather than tool-call cells.
 pub(crate) fn tool_is_overlay_driven(tool_name: &str) -> bool {

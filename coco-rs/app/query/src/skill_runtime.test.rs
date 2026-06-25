@@ -720,8 +720,7 @@ async fn test_mcp_skill_skips_shell_expansion() {
 #[tokio::test]
 async fn test_shell_expansion_failure_aborts_invocation() {
     // A denied / failed marker aborts the whole invocation with an
-    // Expansion error (mirrors TS MalformedCommandError — no partial
-    // substitution reaches the model).
+    // Expansion error — no partial substitution reaches the model.
     let skill = sample_skill(
         "diff",
         "diff: !`rm -rf /`",

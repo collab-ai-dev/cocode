@@ -1,8 +1,7 @@
 //! Unicode NFC normalization wrapper.
 //!
 //! TS calls `.normalize('NFC')` at every path computation site
-//! (`memdir/paths.ts:232`, `utils/sessionStoragePortable.ts:341-343`,
-//! `getWorktreePathsPortable.ts:23`). Without NFC, the same logical
+//! Without NFC, the same logical
 //! project path can produce two different on-disk directories on
 //! filesystems that don't normalise themselves (Linux ext4 stores
 //! bytes verbatim; macOS APFS compares NFC-equivalently but stores
@@ -27,7 +26,7 @@ pub fn normalize_nfc(s: &str) -> String {
 /// "‥"), and small full stop (`U+FE52` "﹒") all collapse into ASCII
 /// `.`. Used by path validators to short-circuit Unicode-traversal
 /// attacks that would otherwise pass a literal-codepoint check.
-/// TS `String.prototype.normalize('NFKC')` parity.
+/// Applies Unicode NFKC normalization (equivalent to `String.prototype.normalize('NFKC')`).
 pub fn normalize_nfkc(s: &str) -> String {
     s.nfkc().collect()
 }

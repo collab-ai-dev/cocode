@@ -1,4 +1,4 @@
-//! `/dream` — run the KAIROS auto-dream memory consolidation routine. Mirrors claude-code's dream.ts.
+//! `/dream` — run the KAIROS auto-dream memory consolidation routine.
 //! No upstream dream.ts in checkout (ships as gated .js); coco content migrated as-is.
 
 pub const PROMPT: &str = r#"Run the KAIROS auto-dream memory consolidation routine.

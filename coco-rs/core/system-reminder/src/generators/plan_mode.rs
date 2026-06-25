@@ -5,7 +5,7 @@
 //! - [`PlanModeEnterGenerator`] → `plan_mode` (Full / Sparse cadence)
 //! - [`PlanModeExitGenerator`] → `plan_mode_exit` (one-shot after exit)
 //! - [`PlanModeReentryGenerator`] → `plan_mode_reentry` (one-shot on first
-//!   plan turn after a prior exit)
+//! plan turn after a prior exit)
 //!
 //! Text templates are rendered by `coco_context::render_plan_*`.
 //!
@@ -28,11 +28,9 @@ use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
 
 /// Human turns between successive steady-state plan-mode reminders.
-/// Mirrors TS `PLAN_MODE_ATTACHMENT_CONFIG.TURNS_BETWEEN_ATTACHMENTS`.
 const PLAN_MODE_TURNS_BETWEEN: i32 = 5;
 
 /// Full reminder on every Nth attachment since the last exit (1st, 6th, 11th…).
-/// Mirrors TS `PLAN_MODE_ATTACHMENT_CONFIG.FULL_REMINDER_EVERY_N_ATTACHMENTS`.
 const FULL_REMINDER_EVERY_N: i32 = 5;
 
 // ---------------------------------------------------------------------------
@@ -40,14 +38,13 @@ const FULL_REMINDER_EVERY_N: i32 = 5;
 // ---------------------------------------------------------------------------
 
 /// Emits the steady-state plan-mode reminder while the engine is in plan mode.
-///
 /// Cadence is derived from history (no in-memory throttle):
 /// - Always emit on the first plan-mode turn (no prior attachment in history).
 /// - Otherwise one emission every [`PLAN_MODE_TURNS_BETWEEN`] human turns,
-///   gated on [`GeneratorContext::plan_mode_turns_since_attachment`].
+/// gated on [`GeneratorContext::plan_mode_turns_since_attachment`].
 /// - Full on the 1st/6th/11th… attachment since the last exit (every
-///   [`FULL_REMINDER_EVERY_N`]), derived from
-///   [`GeneratorContext::plan_mode_attachments_since_exit`]; others Sparse.
+/// [`FULL_REMINDER_EVERY_N`]), derived from
+/// [`GeneratorContext::plan_mode_attachments_since_exit`]; others Sparse.
 #[derive(Debug, Default)]
 pub struct PlanModeEnterGenerator;
 
@@ -100,13 +97,11 @@ impl AttachmentGenerator for PlanModeEnterGenerator {
 // ---------------------------------------------------------------------------
 
 /// One-shot `## Exited Plan Mode` banner.
-///
 /// Fires when the engine has set
 /// [`GeneratorContext::needs_plan_mode_exit_attachment`]. That flag is set by
 /// `ExitPlanModeTool` on success and by the engine when it detects an
 /// unannounced plan→non-plan transition. Phase D wiring clears the flag
 /// after the orchestrator consumes it — this generator does not mutate ctx.
-///
 /// No throttle (one-shot per flag set). If the flag somehow stays set across
 /// multiple turns, the generator will keep emitting — the engine is
 /// responsible for clearing it. A stale flag is suppressed while the engine
@@ -157,13 +152,11 @@ impl AttachmentGenerator for PlanModeExitGenerator {
 // ---------------------------------------------------------------------------
 
 /// One-shot "re-entering plan mode" banner.
-///
 /// Fires only when all conditions hold:
 /// - `is_plan_mode` (we're in plan mode this turn)
 /// - `is_plan_reentry` (engine detected a prior exit)
 /// - `plan_exists` (there's an existing plan file to reference)
 /// - `!is_sub_agent` — sub-agents don't re-enter
-///
 /// Produced via the same [`coco_context::render_plan_mode_reminder`] as the
 /// steady-state reminder but with [`ReminderType::Reentry`], which emits
 /// "## Re-entering Plan Mode" text referencing the existing plan file.

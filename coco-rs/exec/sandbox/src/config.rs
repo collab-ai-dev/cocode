@@ -8,10 +8,10 @@
 //!
 //! What stays here is the **runtime/adapter output**:
 //! - [`SandboxConfig`] — what platform wrappers (Seatbelt/bwrap) actually
-//!   consume after the adapter resolves rules + paths.
+//! consume after the adapter resolves rules + paths.
 //! - [`EnforcementLevel`] — runtime enforcement posture.
 //! - [`WritableRoot`] — writable directory + read-only subpath protections,
-//!   with the `.git`-pointer-file detection used by worktrees/submodules.
+//! with the `.git`-pointer-file detection used by worktrees/submodules.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -33,11 +33,9 @@ pub use coco_config::SandboxBypass;
 pub use coco_config::SandboxSettings;
 
 /// Sandbox enforcement level controlling filesystem and network access.
-///
 /// Distinct from [`SandboxMode`] which represents the user's intent
 /// (ReadOnly/WorkspaceWrite/FullAccess). This enum represents the actual
 /// enforcement behavior applied at runtime.
-///
 /// Convert from user-facing mode via `EnforcementLevel::from(sandbox_mode)`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -68,7 +66,6 @@ impl From<SandboxMode> for EnforcementLevel {
 }
 
 /// A writable root directory with read-only subpath protections.
-///
 /// Certain subpaths (e.g., `.git`, the project config dir) remain read-only even when
 /// the parent directory is writable. This prevents the agent from modifying
 /// version control or configuration state within otherwise writable projects.
@@ -83,7 +80,6 @@ pub struct WritableRoot {
 
 impl WritableRoot {
     /// Creates a writable root with default read-only subpaths.
-    ///
     /// If `.git` is a pointer file (git worktrees/submodules), the actual
     /// gitdir is also added to the read-only subpaths (adopted from codex-rs).
     pub fn new(path: impl Into<PathBuf>) -> Self {
@@ -134,7 +130,6 @@ impl WritableRoot {
     }
 
     /// Check if a path is writable under this root.
-    ///
     /// Returns `true` if the path is under this root AND not under any
     /// of the read-only subpaths.
     pub fn is_writable(&self, path: &Path) -> bool {
@@ -151,7 +146,6 @@ impl WritableRoot {
     }
 
     /// Resolve read-only subpaths to absolute paths (root + subpath).
-    ///
     /// Used by platform enforcement (bwrap, Seatbelt) to generate
     /// mount/deny rules with full paths.
     pub fn resolved_readonly_subpaths(&self) -> Vec<PathBuf> {
@@ -163,7 +157,6 @@ impl WritableRoot {
 }
 
 /// Resolve a `.git` pointer file to the actual gitdir path.
-///
 /// Git worktrees and submodules use a `.git` file (not directory) containing
 /// `gitdir: <path>`. Returns the resolved absolute path to the actual gitdir,
 /// or `None` if the file isn't a valid pointer.
@@ -199,7 +192,6 @@ fn default_readonly_subpaths() -> Vec<String> {
 }
 
 /// Configuration for the sandbox runtime (adapter output).
-///
 /// This is the resolved type that platform wrappers consume — distinct from
 /// the user-facing [`SandboxSettings`] (re-exported from `coco-config`).
 /// `SandboxSettings` describes "what the user wrote in settings.json" while
@@ -235,8 +227,8 @@ pub struct SandboxConfig {
     #[serde(default = "default_glob_scan_max_depth")]
     pub glob_scan_max_depth: i32,
     /// Paths to re-allow reading even when shadowed by `denied_read_paths`
-    /// or a permission `Read(/foo)` deny rule. TS parity:
-    /// `entrypoints/sandboxTypes.ts:71-77` — Seatbelt evaluates rules in
+    /// or a permission `Read(/foo)` deny rule.
+    /// Seatbelt evaluates rules in
     /// order so allow rules emitted *after* deny rules win for matching
     /// paths; on Linux bwrap, an overlapping `allow_read` causes the
     /// matching deny to be skipped (bwrap can't precision carve-out a
@@ -253,7 +245,6 @@ pub struct SandboxConfig {
     #[serde(default)]
     pub allow_network: bool,
     /// Whether the network proxy is active (runtime-only, not persisted).
-    ///
     /// Controls seccomp mode selection: `ProxyRouted` when true, `Restricted` when false.
     /// Synced from `SandboxState::network_active()` in the `config()` snapshot method.
     #[serde(skip)]
@@ -262,13 +253,11 @@ pub struct SandboxConfig {
     #[serde(default)]
     pub extra_bind_ro: Vec<PathBuf>,
     /// Allow `com.apple.trustd.agent` mach lookup for Go TLS cert verification.
-    ///
     /// Required for Go programs (gh, gcloud, terraform, kubectl) that verify
     /// TLS certificates through macOS system services rather than bundled CAs.
     #[serde(default)]
     pub weaker_network_isolation: bool,
     /// Allow pseudo-terminal access inside the sandbox (macOS).
-    ///
     /// Defaults to `true`. When `false`, PTY rules are excluded from the
     /// Seatbelt profile, preventing sandboxed commands from allocating TTYs.
     #[serde(default = "default_true")]

@@ -22,27 +22,25 @@ const DEFAULT_BASH_MAX_OUTPUT_BYTES: i64 = 30_000;
 /// Upper cap on Bash output length — larger configured values are clamped
 /// down at `finalize()` time. TS: `utils/shell/outputLimits.ts` —
 /// `BASH_MAX_OUTPUT_UPPER_LIMIT = 150_000`.
-///
 /// Crate-internal: this is a config-resolution detail, not a public API.
 pub(crate) const BASH_MAX_OUTPUT_BYTES_UPPER: i64 = 150_000;
 const DEFAULT_GLOB_TIMEOUT_SECONDS: i32 = 10;
-// TS `withRetry.ts`: DEFAULT_MAX_RETRIES = 10, base delay 500ms.
+// DEFAULT_MAX_RETRIES = 10, base delay 500ms.
 const DEFAULT_MAX_RETRIES: i32 = 10;
 const DEFAULT_RETRY_BASE_DELAY_MS: i64 = 500;
-// #134: TS `getRetryDelay` maxDelayMs default is 32000 (withRetry.ts:533).
+// #134: `getRetryDelay` maxDelayMs default is 32000.
 const DEFAULT_RETRY_MAX_DELAY_MS: i64 = 32_000;
 const DEFAULT_RETRY_JITTER: f64 = 0.25;
-/// 60-second HTTP fetch timeout — matches TS `WebFetchTool/utils.ts:116`
+/// 60-second HTTP fetch timeout
 /// `FETCH_TIMEOUT_MS = 60_000`. Long enough for slow origins, short
 /// enough that the model doesn't stall forever on a stuck fetch.
 const DEFAULT_WEB_FETCH_TIMEOUT_SECS: i64 = 60;
-/// 100K-char extraction budget. Matches TS `utils.ts:128`
+/// 100K-char extraction budget.
 /// `MAX_MARKDOWN_LENGTH = 100_000`. Guards side-query token cost.
 const DEFAULT_WEB_FETCH_MAX_CONTENT_LENGTH: i64 = 100_000;
-/// Default user agent — mirrors TS `Claude-User (...)` so robots.txt
+/// Default user agent — so robots.txt
 /// rules targeting Claude-Code's fetcher apply identically to coco-rs.
-const DEFAULT_WEB_FETCH_USER_AGENT: &str =
-    "Claude-User (claude-code/coco-rs; +https://support.anthropic.com/)";
+const DEFAULT_WEB_FETCH_USER_AGENT: &str = "Claude-User (coco-rs; +https://support.anthropic.com/)";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -244,7 +242,7 @@ impl Default for BashConfig {
             default_timeout_ms: DEFAULT_BASH_TIMEOUT_MS,
             max_timeout_ms: DEFAULT_BASH_MAX_TIMEOUT_MS,
             max_output_bytes: DEFAULT_BASH_MAX_OUTPUT_BYTES,
-            // TS `shouldAutoBackground` defaults ON: a foreground command that
+            // `shouldAutoBackground` defaults ON: a foreground command that
             // hits its timeout is moved to the background rather than killed.
             // Set false to restore hard-kill-on-timeout.
             auto_background_on_timeout: true,
@@ -550,7 +548,6 @@ pub struct PartialMemorySettings {
 }
 
 /// Resolved auto-memory configuration.
-///
 /// Whether the subsystem is **active** is gated upstream by
 /// `Feature::AutoMemory`; this struct only carries internal sub-toggles
 /// and parameters. Sub-toggles for extraction, team memory, auto-dream,
@@ -558,7 +555,6 @@ pub struct PartialMemorySettings {
 /// — there is no separate `*Config` per subsystem (matches the project
 /// convention: one `Feature` gate, all sub-toggles flat in the owning
 /// `*Config`).
-///
 /// Source of truth for `coco_memory::MemoryConfig` (thin adapter).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryConfig {
@@ -597,17 +593,16 @@ pub struct MemoryConfig {
 
     /// Inject the optional "Searching past context" guidance block in
     /// the auto-memory system-prompt section. Off by default, mirroring
-    /// the TS `tengu_coral_fern` GrowthBook gate.
+    /// the `tengu_coral_fern` GrowthBook gate.
     pub searching_past_context_enabled: bool,
 
     /// Free-form policy text appended verbatim to the auto-memory
     /// system-prompt section (after the standard taxonomy /
     /// how-to-save blocks, before the optional searching-past-context
     /// block). `None` or empty after trim ⇒ no extra section.
-    ///
     /// Resolution: `extra_guidelines` setting in `settings.memory`
     /// (string) → env override `COCO_COWORK_MEMORY_EXTRA_GUIDELINES`
-    /// (env wins, mirroring TS `CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES`).
+    /// (env wins).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_guidelines: Option<String>,
 }
@@ -774,20 +769,17 @@ impl MemoryConfig {
         let mut config = Self::resolve_sub_toggles(&settings.merged, env);
 
         // Path overrides — two distinct semantics:
-        //
-        //  • `COCO_MEMORY_PATH_OVERRIDE` (operator): **full path** to the
-        //    personal memory directory. The `<projects>/<slug>/memory/`
-        //    layout is bypassed entirely. TS:
-        //    `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`.
-        //
-        //  • `COCO_REMOTE_MEMORY_DIR` (swarm leader → teammate
-        //    propagation): **base dir** that replaces `<config_home>`
-        //    in the default layout — the per-project slug + `memory/`
-        //    are still appended. Same project on both leader and
-        //    teammate (same canonical git root → same slug) resolves
-        //    to the same final memory dir. TS:
-        //    `CLAUDE_CODE_REMOTE_MEMORY_DIR`.
-        //
+        // • `COCO_MEMORY_PATH_OVERRIDE` (operator): **full path** to the
+        // personal memory directory. The `<projects>/<slug>/memory/`
+        // layout is bypassed entirely. TS:
+        // `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`.
+        // • `COCO_REMOTE_MEMORY_DIR` (swarm leader → teammate
+        // propagation): **base dir** that replaces `<config_home>`
+        // in the default layout — the per-project slug + `memory/`
+        // are still appended. Same project on both leader and
+        // teammate (same canonical git root → same slug) resolves
+        // to the same final memory dir. TS:
+        // `CLAUDE_CODE_REMOTE_MEMORY_DIR`.
         // `memory.directory` is a full-path override and must only come
         // from trusted/operator-controlled settings layers. Project and
         // plugin settings may tune sub-options, but they cannot redirect

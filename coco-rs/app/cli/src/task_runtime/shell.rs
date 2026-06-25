@@ -181,7 +181,6 @@ struct ShellOutcome {
 /// the foreground entry point in `bash.rs::execute`). Streams stdout
 /// + stderr to the per-task disk file in real time so the stall
 /// watchdog observes growth.
-///
 /// W6: applies sandbox wrap (`bwrap` / Seatbelt) when `sandbox_state`
 /// is `Some` and the command isn't excluded by the sandbox settings.
 /// Mirrors `coco_shell::executor::apply_sandbox_wrap` so the
@@ -356,7 +355,7 @@ async fn run_shell_task(
         // this arm is disabled: the timeout no longer kills the child. The fg
         // awaiter is released separately by the auto-detach timer (which fires
         // at the same `timeout_ms`), and the child runs to natural exit in the
-        // background — TS `shouldAutoBackground` parity.
+        // background — `shouldAutoBackground` parity.
         () = tokio::time::sleep(timeout_duration), if request.kill_on_timeout => {
             let _ = child.kill().await;
             WaitOutcome::TimedOut { budget_ms: timeout_ms }

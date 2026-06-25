@@ -52,7 +52,7 @@ pub struct TaskRuntime {
     pub(in crate::task_runtime) disk: Arc<DiskOutputs>,
     /// Always wired. `NoOpNotificationSink` is the default when no
     /// producer attaches — terminal events are silently dropped,
-    /// matching TS sessions that run without a turn loop (headless
+    /// sessions that run without a turn loop (headless
     /// jobs / `--bare` SDK). Production attaches the
     /// `CommandQueueNotificationSink`.
     pub(in crate::task_runtime) notification_sink: NotificationSinkRef,

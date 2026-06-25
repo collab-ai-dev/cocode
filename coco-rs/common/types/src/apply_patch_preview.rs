@@ -4,7 +4,6 @@ use serde::Serialize;
 use crate::ExitPlanModeOutcome;
 
 /// UI-only side channel for bounded display data produced by tools.
-///
 /// This data is for transcript/rendering surfaces only. Provider history and
 /// model-visible tool output must continue to use `ToolResultMessage.message`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -13,8 +12,7 @@ use crate::ExitPlanModeOutcome;
 pub enum ToolDisplayData {
     ApplyPatchPreview(ApplyPatchPreview),
     /// Structured answers for a completed AskUserQuestion exchange, rendered as
-    /// a styled transcript cell (mirrors codex `RequestUserInputResultCell`)
-    /// instead of the raw model-facing prose.
+    /// a styled transcript cell instead of the raw model-facing prose.
     AskUserQuestionResult(AskUserQuestionResult),
     /// Structured UI payload for ExitPlanMode result rendering. The model still
     /// sees the prose rendered from the tool result data.

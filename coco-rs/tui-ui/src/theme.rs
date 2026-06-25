@@ -8,9 +8,7 @@ use ratatui::style::Color;
 use crate::color::ColorCapability;
 use crate::color::adapt_color;
 
-/// Available theme names. Mirrors claude-code's `THEME_NAMES`
-/// (`utils/theme.ts`) one-for-one — no coco-only extras. `Dark` is the
-/// default (TS `config.ts` → `theme: 'dark'`).
+/// Available theme names. `Dark` is the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeName {
     #[default]
@@ -46,7 +44,7 @@ impl ThemeName {
     }
 
     pub fn label(self) -> &'static str {
-        // Friendly names mirroring claude-code's ThemePicker options verbatim.
+        // Friendly names matching the ThemePicker options.
         match self {
             Self::Dark => "Dark mode",
             Self::Light => "Light mode",
@@ -71,7 +69,6 @@ impl ThemeName {
 }
 
 /// Complete color palette for TUI rendering.
-///
 /// Color discipline:
 /// - Avoid Blue for text (hard to read on dark terminals)
 /// - Avoid Yellow for backgrounds (invisible on light terminals)
@@ -204,8 +201,7 @@ impl Theme {
             strikethrough: Color::Rgb(80, 80, 80),
             primary: Color::Rgb(215, 119, 87),
             secondary: Color::Rgb(80, 80, 80),
-            // TS `permission`/`suggestion` periwinkle — TS's pervasive cool
-            // accent; replaces the palette-recolorable `Magenta`.
+            // Periwinkle cool accent; replaces the palette-recolorable `Magenta`.
             accent: Color::Rgb(177, 185, 249),
 
             text: Color::Reset,
@@ -258,16 +254,15 @@ impl Theme {
 
     #[allow(clippy::disallowed_methods)]
     fn light_theme() -> Self {
-        // Explicit-RGB palette mapped to TS `lightTheme` — same discipline as
-        // `dark_theme` (no palette-recolorable ANSI-named UI tokens). Token →
-        // TS light: primary/assistant/heading/table_header = `claude`, accent/
-        // code_inline/focus = `permission` (medium blue), grays = `subtle`/
-        // `inactive`/`promptBorder`; success/warning/error/planMode/selectionBg
-        // verbatim; hyperlink = `briefLabelYou`. Code-syntax keeps GitHub-light.
+        // Explicit-RGB palette (no palette-recolorable ANSI-named UI tokens).
+        // Token mapping: primary/assistant/heading/table_header = brand orange,
+        // accent/code_inline/focus = periwinkle blue, grays = subtle/inactive;
+        // success/warning/error/planMode/selectionBg verbatim;
+        // hyperlink = amber. Code-syntax keeps GitHub-light.
         Self {
             modal_border: Color::Rgb(175, 175, 175),
             panel_border: Color::Rgb(175, 175, 175),
-            // GitHub-light syntax palette (mirrors claude-code's light file
+            // GitHub-light syntax palette (
             // preview, `GITHUB_SCOPES`); keyword BOLD dropped in the renderer.
             code_function: Color::Rgb(121, 93, 163),
             code_type: Color::Rgb(0, 134, 179),
@@ -327,7 +322,7 @@ impl Theme {
 
     #[allow(clippy::disallowed_methods)]
     fn dark_daltonized_theme() -> Self {
-        // TS `darkDaltonizedTheme`: deuteranopia-adjusted brand/accent + every
+        // deuteranopia-adjusted brand/accent + every
         // semantic color, over dark's grays. Code syntax inherits dark's Monokai
         // (TS keeps `MONOKAI_SCOPES` for dark-daltonized).
         let mut theme = Self::dark_theme();
@@ -360,7 +355,7 @@ impl Theme {
 
     #[allow(clippy::disallowed_methods)]
     fn light_daltonized_theme() -> Self {
-        // TS `lightDaltonizedTheme`: deuteranopia-adjusted brand/accent + every
+        // deuteranopia-adjusted brand/accent + every
         // semantic color, over light's grays + GitHub-light syntax.
         let mut theme = Self::light_theme();
         theme.primary = Color::Rgb(255, 153, 51);
@@ -394,17 +389,16 @@ impl Theme {
         Self {
             modal_border: Color::DarkGray,
             panel_border: Color::DarkGray,
-            // ANSI bright-palette syntax (mirrors claude-code's `ANSI_SCOPES`:
+            // ANSI bright-palette syntax (
             // keyword 13, type 14, fn 11, number 12, string 10, comment 8).
             code_function: Color::LightYellow,
             code_type: Color::LightCyan,
             code_operator: Color::DarkGray,
-            code_inline: Color::LightBlue, // = accent/permission (TS codespan, not magenta)
+            code_inline: Color::LightBlue, // = accent/permission periwinkle
             code_bg: None,
             blockquote: Color::DarkGray,
-            // Brand = TS `claude` (ansi:redBright); cool accent = TS `permission`
-            // (ansi:blueBright). Chrome grays keep `DarkGray` (ANSI 8) instead of
-            // TS's `ansi:white` — a gray dim/border reads better than white.
+            // Brand: redBright; cool accent: blueBright. Chrome grays use `DarkGray` (ANSI 8)
+            // instead of `ansi:white` — a gray dim/border reads better than white.
             heading: Color::LightRed,
             hr: Color::DarkGray,
             strikethrough: Color::DarkGray,
@@ -466,12 +460,11 @@ impl Theme {
             code_function: Color::LightYellow,
             code_type: Color::LightCyan,
             code_operator: Color::DarkGray,
-            code_inline: Color::Blue, // = accent/permission (TS codespan, not magenta)
+            code_inline: Color::Blue, // = accent/permission periwinkle
             code_bg: None,
             blockquote: Color::DarkGray,
-            // Brand = TS `claude` (ansi:redBright); cool accent = TS `permission`
-            // (light-ansi uses ansi:blue, not bright). Chrome grays keep
-            // `DarkGray` over TS's `ansi:white` for readability.
+            // Brand: redBright; cool accent: blue (not bright in light-ansi). Chrome
+            // grays use `DarkGray` over `ansi:white` for readability.
             heading: Color::LightRed,
             hr: Color::DarkGray,
             strikethrough: Color::DarkGray,
@@ -528,7 +521,6 @@ impl Theme {
 
 impl Theme {
     /// Quantize every palette color to the terminal's color capability.
-    ///
     /// Under [`ColorCapability::Ansi256`], `Color::Rgb` fields are mapped to the
     /// nearest xterm-256 palette index ([`adapt_color`]) so a 256-color terminal
     /// gets a deterministic mapping instead of the emulator's (often poorer)

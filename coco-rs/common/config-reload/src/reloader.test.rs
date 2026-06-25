@@ -18,7 +18,7 @@ async fn spawn_isolated(home: &std::path::Path) -> RuntimeReloader {
 }
 
 /// Empty-except-Main-model env. The runtime builder requires a
-/// Main model selection (TS parity: multi-provider SDK refuses
+/// Main model selection (the multi-provider SDK refuses
 /// silent defaults — see `runtime.rs:412-428` `no Main model
 /// configured` error). `anthropic/claude-sonnet-4-6` is a
 /// builtin-roster slug so it resolves without needing a custom

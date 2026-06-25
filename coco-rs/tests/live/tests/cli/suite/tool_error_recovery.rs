@@ -9,9 +9,8 @@
 //! didn't fail (the process did). `ToolExecutor` feeds the
 //! result back into the conversation; the next iteration runs normally.
 //!
-//! TS parity: tool errors don't terminate the loop in TS either —
-//! `query.ts:processToolUse` just appends the result and the next
-//! assistant turn proceeds.
+//! Tool errors don't terminate the loop — the result is appended and
+//! the next assistant turn proceeds.
 //!
 //! Distinction from "tool error" (`is_error=true`) — that's reserved
 //! for tool-level failures (schema validation, internal panic). A

@@ -435,7 +435,7 @@ fn test_generate_seatbelt_profile_denied_paths_also_deny_read() {
 
 #[test]
 fn test_generate_seatbelt_profile_allow_read_emits_after_deny() {
-    // TS parity: `allow_read` carve-outs override matching `deny_read` rules.
+    // `allow_read` carve-outs override matching `deny_read` rules.
     // Seatbelt is bottom-to-top last-match-wins, so the allow rule has to
     // appear AFTER the deny rule in the profile text.
     let config = SandboxConfig {

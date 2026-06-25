@@ -54,7 +54,6 @@ impl Stage {
 }
 
 /// User-facing capability gate.
-///
 /// Each variant represents one coarse-grained subsystem switch. Internal
 /// sub-toggles stay inside the corresponding `*Config` struct.
 #[derive(
@@ -89,7 +88,6 @@ pub enum Feature {
     /// `tool_reference` expansion (when the model declares
     /// `Capability::AnthropicToolReference`). Saves a large chunk of
     /// the tools-array token budget on sessions with many MCP tools.
-    ///
     /// When **off**, the `ToolSearch` tool is hidden from the model AND the
     /// deferral filter is short-circuited: every enabled tool gets its full
     /// schema in every request. Choose this when token budget is
@@ -108,7 +106,6 @@ pub enum Feature {
     // Core-subsystem gate (Stable, default=true — opt-out only).
     /// Plan-mode subsystem: the `EnterPlanMode` / `ExitPlanMode` tools and
     /// the plan-mode `<system-reminder>` attachment.
-    ///
     /// **Default on.** Plan mode is a first-class capability; this gate
     /// exists purely so a user who never plans can opt out and reclaim the
     /// reminder tokens + tool schema. When **off**, the two plan-mode tools
@@ -151,7 +148,6 @@ pub enum Feature {
     RunSkillGenerator,
     /// Tool-use-summary side-fork (`ModelRole::Fast`, ≤30-char "git
     /// commit subject" label emitted after each tool batch).
-    ///
     /// **Default off.** This is mobile-app UX polish — every tool-using
     /// turn fires an extra Fast-role blocking call. On reasoning-class
     /// Fast models (DeepSeek V4, Gemini Flash Thinking, …) the small
@@ -170,12 +166,10 @@ pub enum Feature {
     /// Prompt-cache break detection wiring during compaction.
     PromptCacheBreakDetection,
     /// Speculative pre-execution of accepted prompt suggestions.
-    ///
     /// COW overlay filesystem at `<tmp>/speculation/<pid>/<id>/`,
     /// 3-boundary canUseTool (Edit/Write rewrites to overlay; Bash
     /// via shell-parser read-only check; deny default), MAX_TURNS=20
     /// / MAX_MESSAGES=100, accept/abort lifecycle.
-    ///
     /// **Default false** — experimental; high implementation
     /// complexity (overlay COW, 3-boundary classification,
     /// pipelined-suggestion forks). The Phase-1 `Allow{updated_input}`
@@ -206,7 +200,6 @@ impl Feature {
 }
 
 /// Effective set of enabled features for a session.
-///
 /// Intentionally **not** `Default` — callers must opt into either
 /// [`Features::with_defaults`] (registry-defined defaults) or
 /// [`Features::empty`] (no features enabled). The two had identical
@@ -414,7 +407,7 @@ const FEATURES: &[FeatureSpec] = &[
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
-    // Skill / command bundled-feature gates (TS `feature(...)` parity).
+    // Skill / command bundled-feature gates.
     FeatureSpec {
         id: Feature::KairosBrief,
         key: "kairos_brief",

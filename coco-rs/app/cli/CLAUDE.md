@@ -14,7 +14,7 @@ Depends on everything — wires registries, builds model runtime registry, start
 | `sdk_server::StdioTransport` | stdin/stdout NDJSON transport |
 | `sdk_server::QueryEngineRunner` | Bridges `QueryEngine` to SDK control messages |
 | `sdk_server::CliInitializeBootstrap` | Session bootstrap from `initialize` control request |
-| `sdk::ModelUsage` + schemas | SDK wire types (mirrors `coreSchemas.ts`) |
+| `sdk::ModelUsage` + schemas | SDK wire types |
 | `tui_runner::*` | Launches `coco-tui` after bootstrap |
 | `model_factory::*` | Builds `Arc<dyn LanguageModelV4>` from provider/model config |
 | `output::*` | Non-interactive output formatters (text/json/stream-json) |

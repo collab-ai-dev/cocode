@@ -21,14 +21,14 @@
 //!
 //! ## Reset boundaries
 //! - The turn-lifecycle fields rotate with the wire-level lifecycle:
-//!   [`UiEphemeralState::start_turn`] at `TurnStarted`, then
-//!   [`UiEphemeralState::end_turn`] at any terminal turn event. The
-//!   final `total_paused_ms` is preserved in
-//!   [`UiEphemeralState::last_total_paused_ms`] so a stalled paint
-//!   between the terminal event and the next frame still resolves to
-//!   a consistent elapsed value.
+//! [`UiEphemeralState::start_turn`] at `TurnStarted`, then
+//! [`UiEphemeralState::end_turn`] at any terminal turn event. The
+//! final `total_paused_ms` is preserved in
+//! [`UiEphemeralState::last_total_paused_ms`] so a stalled paint
+//! between the terminal event and the next frame still resolves to
+//! a consistent elapsed value.
 //! - `task_completion_timestamps` and `tasks_all_completed_since_ms`
-//!   reset on the per-task diff in the `TaskPanelChanged` handler.
+//! reset on the per-task diff in the `TaskPanelChanged` handler.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -60,7 +60,7 @@ pub(crate) struct RunningTurn {
     /// so the spinner can switch its verb to "Interrupting…"
     /// synchronously on the keypress — decoupled from the slower
     /// async teardown that only clears the turn on the terminal
-    /// `TurnEnded(Interrupted)` event. Mirrors TS `resetLoadingState`
+    /// `TurnEnded(Interrupted)` event.
     /// running on the keypress while `abortController.abort()`
     /// propagates in the background. Auto-cleared when `end_turn`
     /// takes the whole [`RunningTurn`].
@@ -123,13 +123,12 @@ impl UiEphemeralState {
 
     /// Tick the status-indicator pause clock based on the current
     /// `blocked` state. Call from each paint.
-    ///
     /// Semantics:
     /// - No-op when no turn is running (anchor on the type, not on
-    ///   the caller).
+    /// the caller).
     /// - When a blocking prompt becomes active, anchor `pause_started_at`.
     /// - When the prompt closes, fold the paused interval into
-    ///   `total_paused_ms` and clear the anchor.
+    /// `total_paused_ms` and clear the anchor.
     pub(crate) fn tick_pause_clock(&mut self, blocked: bool, now: Instant) {
         let Some(turn) = self.turn.as_mut() else {
             return;

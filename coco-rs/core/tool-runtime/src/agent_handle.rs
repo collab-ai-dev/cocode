@@ -7,15 +7,15 @@
 //!
 //! **Dependency flow**:
 //! ```text
-//! coco-types         (AgentDefinition, AgentIsolation, SubagentType)
-//!     |
-//! coco-tool          (defines async AgentHandle trait, puts Arc<dyn> on ToolUseContext)
-//!     |
-//! coco-tools         (AgentTool/SendMessageTool/TeamCreate/TeamDelete call handle methods)
-//!     |
-//! coco-state         (implements AgentHandle using swarm infrastructure)
-//!     |
-//! coco-executor      (wires implementation into ToolUseContext)
+//! coco-types (AgentDefinition, AgentIsolation, SubagentType)
+//! |
+//! coco-tool (defines async AgentHandle trait, puts Arc<dyn> on ToolUseContext)
+//! |
+//! coco-tools (AgentTool/SendMessageTool/TeamCreate/TeamDelete call handle methods)
+//! |
+//! coco-state (implements AgentHandle using swarm infrastructure)
+//! |
+//! coco-executor (wires implementation into ToolUseContext)
 //! ```
 
 use std::path::PathBuf;
@@ -36,7 +36,6 @@ use coco_types::ToolOverrides;
 use crate::task_list_handle::TeamTaskListRouterRef;
 
 /// Per-spawn safety constraints applied to a forked agent.
-///
 /// Surfaces parent-imposed limits the spawn pipeline must enforce on the
 /// child — turn caps and write-path whitelists for sandboxed subagents
 /// (e.g. memory extraction, auto-dream consolidation). Optional on
@@ -55,21 +54,17 @@ pub struct AgentSpawnConstraints {
 }
 
 /// How the runner should construct the child agent's initial state.
-///
 /// When fork is on AND `subagent_type` is omitted, the runner switches from a
 /// fresh child to a fork that inherits the parent's full conversation context
 /// for prompt-cache sharing. The decision is taken by
 /// [`coco_subagent::is_fork_subagent_active`] at the call site (which also
 /// enforces coordinator-mode and non-interactive-session short-circuits) and
 /// serialised into this enum.
-///
 /// Default is [`SpawnMode::Fresh`] so callers that don't opt in get the
 /// unchanged spawn path.
-///
 /// `#[non_exhaustive]` — future variants (e.g. `Remote` for CCR
 /// dispatch) will be added without a major version bump. Callers must
 /// `match` with a wildcard arm or the explicit `Fresh` / `Fork` arms.
-///
 /// **No `Serialize`/`Deserialize`** — `Fork` carries
 /// `Arc<SubagentRuntimeSnapshot>` which is meaningless across an IPC
 /// boundary (the receiving runtime has its own snapshot). The field is
@@ -86,7 +81,6 @@ pub enum SpawnMode {
     /// prompt, parent message history (with **real** tool results
     /// intact), and parent tool pool, so the child's API request prefix
     /// is byte-identical to the parent's (prompt-cache hit).
-    ///
     /// Runner: [`coco_coordinator::agent_handle::spawn::spawn_subagent`]
     /// matches on this variant and threads `rendered_system_prompt`
     /// into `AgentQueryConfig.system_prompt` verbatim, threads
@@ -94,7 +88,6 @@ pub enum SpawnMode {
     /// has only complete tool_use/result pairs), and wraps
     /// `request.prompt` with [`coco_subagent::build_fork_child_message`]
     /// for `<fork-boilerplate>` recursion-detection.
-    ///
     /// Tool-pool inheritance is decided by
     /// [`AgentSpawnRequest::use_exact_tools`]; fork mode does NOT
     /// carry its own toggle.
@@ -116,7 +109,6 @@ pub enum SpawnMode {
         /// pinning to the parent's exact `(provider, api, model_id,
         /// base_url, wire_api)` regardless of what
         /// `RuntimeConfig::resolve_model_roles()` would return now.
-        ///
         /// The spawn path uses this to populate the env block AND
         /// `AgentQueryConfig.model_selection` for the actual API call;
         /// reading live runtime config would break cache parity.
@@ -137,7 +129,6 @@ pub enum SpawnMode {
 }
 
 /// Request to spawn a subagent.
-///
 /// **Deferred refactor — split into 4 sub-structs**: the type
 /// currently carries 27 fields covering four distinct concerns
 /// (model-visible input, spawn-mode identity, policy/inheritance,
@@ -162,14 +153,13 @@ pub struct AgentSpawnRequest {
     pub subagent_type: Option<String>,
     // `model` and `model_role` deliberately ABSENT from this struct.
     // Both are operator-only static configuration:
-    //   - Per-agent: `.md` frontmatter `model:` / `model_role:` on
-    //     `AgentDefinition` — resolved at spawn time by
-    //     `coco_subagent::resolve_subagent_selection` reading from
-    //     `request.definition`.
-    //   - Internal-fork override: `AgentSpawnConstraints.forced_model_role`
-    //     (memory crate uses this to pin `ModelRole::Memory` on
-    //     extract / dream / session-memory forks).
-    //
+    // - Per-agent: `.md` frontmatter `model:` / `model_role:` on
+    // `AgentDefinition` — resolved at spawn time by
+    // `coco_subagent::resolve_subagent_selection` reading from
+    // `request.definition`.
+    // - Internal-fork override: `AgentSpawnConstraints.forced_model_role`
+    // (memory crate uses this to pin `ModelRole::Memory` on
+    // extract / dream / session-memory forks).
     // The LLM cannot pick either of these — AgentTool's
     // `input_schema()` doesn't expose them. Catalog-only principle:
     // static configuration is the source of truth for model routing.
@@ -182,7 +172,6 @@ pub struct AgentSpawnRequest {
     /// fires [`crate::TaskController::signal_detach`] after `d` ms of
     /// foreground execution; the parent's awaiter unblocks with
     /// `AsyncLaunched` and the engine keeps running detached.
-    ///
     /// `None` = no auto-detach (the default; only explicit user-initiated
     /// `signal_detach` will background the task).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -227,7 +216,7 @@ pub struct AgentSpawnRequest {
     /// Parent session's read-scope working directories (the parent cwd plus
     /// its inherited `additional_dirs`), forwarded so a subagent that runs in
     /// an isolated worktree cwd can still READ the parent project without a
-    /// permission prompt. Mirrors TS `createSubagentContext`, where the child
+    /// permission prompt., where the child
     /// inherits the parent's cwd + `additionalWorkingDirectories`. Read scope
     /// only — writes / bash still evaluate against the worktree cwd + rules.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -238,15 +227,14 @@ pub struct AgentSpawnRequest {
     // coordinator now reads them directly from `AgentDefinition` via
     // `request.definition` when building RunnerConfig / QueryConfig.
     // Single source of truth, no shadowing.
-    //
     // - `effort` → `AgentDefinition.effort`
     // - `use_exact_tools` → `AgentDefinition.use_exact_tools`
     // - `mcp_servers` → `AgentDefinition.mcp_servers` (mapped via
-    //   `AgentMcpServerSpec::name()`)
+    // `AgentMcpServerSpec::name()`)
     // - `disallowed_tools` → `AgentDefinition.disallowed_tools`
     // - `max_turns` → `AgentDefinition.max_turns` (or
-    //   `AgentSpawnConstraints.max_turns` when the constraints layer
-    //   provides a tighter cap — memory forks set this)
+    // `AgentSpawnConstraints.max_turns` when the constraints layer
+    // provides a tighter cap — memory forks set this)
     // - `initial_prompt` → `AgentDefinition.initial_prompt`
     /// Parent's resolved feature gates, threaded through so the
     /// subagent runs with the same Layer 1 set. Skipped at the JSON
@@ -294,7 +282,6 @@ pub struct AgentSpawnRequest {
     /// [`SpawnMode::Fresh`]; switched to [`SpawnMode::Fork`] by the
     /// AgentTool callsite when `coco_subagent::is_fork_subagent_active`
     /// returns true and `subagent_type` is omitted.
-    ///
     /// **Skipped at the JSON boundary** because the runtime form holds
     /// `Arc<SubagentRuntimeSnapshot>` inside `Fork`, which is
     /// meaningless across IPC. AgentTool reconstructs the right
@@ -540,7 +527,6 @@ pub enum AgentSpawnStatus {
 }
 
 /// Trait for agent operations from tools.
-///
 /// Implementations live in the app/state or executor layer. Tools access
 /// this via `ToolUseContext.agent`.
 #[async_trait::async_trait]
@@ -550,7 +536,6 @@ pub trait AgentHandle: Send + Sync {
 
     /// Send a message to another agent by name or ID.
     /// Use `"*"` as target to broadcast to all teammates.
-    ///
     /// Content may be a plain text string or a serialized structured
     /// message (shutdown_request, shutdown_response, plan_approval_response).
     async fn send_message(
@@ -565,7 +550,6 @@ pub trait AgentHandle: Send + Sync {
 
     /// Delete the active team (read from session context) and release
     /// resources. Fails if non-lead members are still active.
-    ///
     /// The team name is taken from `appState.teamContext?.teamName`,
     /// not tool input. Implementations should read their own session
     /// state to resolve the team. Returns a human-readable message.
@@ -575,11 +559,9 @@ pub trait AgentHandle: Send + Sync {
     /// its persisted transcript + metadata sidecar. Triggered by
     /// [`SendMessageTool`] when the target is a stopped task
     /// (auto-resume path).
-    ///
     /// `session_id` scopes the per-agent transcript / metadata
     /// lookup. `prompt` becomes the new user message that drives
     /// the resumed turn.
-    ///
     /// Default impl returns an error so legacy handles (no-op /
     /// test stubs) don't need to override.
     async fn resume_agent(
@@ -592,7 +574,6 @@ pub trait AgentHandle: Send + Sync {
     }
 
     /// Query the status of a background agent.
-    ///
     /// Returns the agent's current status and result if completed.
     async fn query_agent_status(&self, agent_id: &str) -> Result<AgentSpawnResponse, String>;
 

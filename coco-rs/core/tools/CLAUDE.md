@@ -32,7 +32,7 @@
 
 `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate`, `TaskStop`, and
 `TodoWrite` intentionally return `should_defer() = false`, diverging from
-`claude-code-kim`. They are high-frequency plan/todo tools, and keeping them
+upstream. They are high-frequency plan/todo tools, and keeping them
 loaded avoids a ToolSearch round-trip before the first call on weaker
 non-Anthropic providers. `TaskOutput` is the only deferred Task-family tool
 because it is deprecated and low-frequency.
@@ -104,7 +104,7 @@ It should be replaced by the generic session-scoped persistence path.
 
 ### WebSearchTool — client-side backends instead of Anthropic server tool
 
-The upstream claude-code routes search as a passthrough to the Anthropic-only
+The upstream implementation routes search as a passthrough to the Anthropic-only
 `web_search_20250305` server tool: the query is handed to Claude, which runs
 it on Anthropic infrastructure and returns `server_tool_use` +
 `web_search_tool_result` content blocks with inline citations. This is

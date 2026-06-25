@@ -34,7 +34,6 @@ pub enum QueuePriority {
 }
 
 /// A command queued for mid-turn injection.
-///
 /// The `origin` field carries the typed [`QueueOrigin`] tag so the
 /// `queued_command` system-reminder can render
 /// the correct framing per producer (coordinator / task-notification /
@@ -131,7 +130,6 @@ impl QueuedCommand {
 }
 
 /// Thread-safe mid-turn command queue with priority ordering.
-///
 /// Commands enqueued during tool execution are drained between turns.
 /// Slash commands are excluded from mid-turn draining (processed post-turn).
 #[derive(Debug, Clone)]
@@ -155,7 +153,6 @@ impl CommandQueue {
     }
 
     /// Enqueue a command, maintaining priority order with FIFO within same priority.
-    ///
     /// Uses `partition_point` binary search to find the insertion slot in O(log n)
     /// comparisons + O(n) shift, rather than re-sorting the full Vec on every push.
     pub async fn enqueue(&self, command: QueuedCommand) {
@@ -195,7 +192,6 @@ impl CommandQueue {
 
     /// Remove specific commands from the queue by their stable
     /// [`QueuedCommand::id`].
-    ///
     /// `prompt`-based matching used to live here but couldn't tell two
     /// queue entries with identical prompt text apart — the second
     /// would be wrongly removed when the first was drained. The
@@ -246,14 +242,12 @@ impl CommandQueue {
     }
 
     /// Snapshot queued commands for the `queued_command` system-reminder.
-    ///
-    /// TS `getQueuedCommandAttachments` (`attachments.ts:829`) surfaces
+    /// `getQueuedCommandAttachments` () surfaces
     /// drained queue items so the model sees mid-turn injections as
     /// part of its input. The reminder generator wraps each entry via
-    /// `wrapCommandText` (`messages.ts:5496`) — coco-rs threads the
+    /// `wrapCommandText` () — coco-rs threads the
     /// typed [`QueueOrigin`] through so the per-origin framing matches
     /// TS exactly.
-    ///
     /// Slash commands are excluded — they're processed post-turn and
     /// never become reminders.
     pub async fn snapshot_for_reminder(

@@ -112,7 +112,7 @@ fn inline_code_uses_code_inline_token_matching_ts_permission() {
     assert_eq!(code.style.fg, Some(theme.code_inline));
     assert_eq!(
         theme.code_inline, theme.accent,
-        "default inline code mirrors TS `color('permission')`"
+        "default inline code color for permission"
     );
 }
 

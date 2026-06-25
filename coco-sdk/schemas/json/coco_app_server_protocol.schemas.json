@@ -1,7 +1,7 @@
 {
   "$defs": {
     "AgentColorName": {
-      "description": "TS `AgentColorName`. Validated set; unknown values are dropped at parse\ntime with a warning so the runtime never sees an invalid color.",
+      "description": "`AgentColorName`. Validated set; unknown values are dropped at parse\ntime with a warning so the runtime never sees an invalid color.",
       "enum": [
         "red",
         "blue",
@@ -46,7 +46,7 @@
     "AgentMcpServerSpec": {
       "anyOf": [
         {
-          "description": "Reference an existing MCP server by name (TS `string` arm).",
+          "description": "Reference an existing MCP server by name (`string` arm).",
           "type": "string"
         },
         {
@@ -55,7 +55,7 @@
           "type": "object"
         }
       ],
-      "description": "One entry in `AgentDefinition.mcp_servers`. Mirrors the TS union:\neither a `string` (reference to an existing MCP server config) or\nan inline `{name: config}` mapping that stands up a dynamic\nserver scoped to this agent. Inline configs are stored as\n`serde_json::Value` because the underlying `McpServerConfig`\nshape lives in `coco-mcp` (a higher layer that depends on\n`coco-types`); keeping it as opaque JSON avoids a back-edge."
+      "description": "One entry in `AgentDefinition.mcp_servers`:\neither a `string` (reference to an existing MCP server config) or\nan inline `{name: config}` mapping that stands up a dynamic\nserver scoped to this agent. Inline configs are stored as\n`serde_json::Value` because the underlying `McpServerConfig`\nshape lives in `coco-mcp` (a higher layer that depends on\n`coco-types`); keeping it as opaque JSON avoids a back-edge."
     },
     "AgentSource": {
       "description": "Where an agent definition came from. Drives precedence when the same\n`agent_type` is defined in multiple places: later source wins.",
@@ -93,7 +93,7 @@
       ]
     },
     "AgentStreamEvent": {
-      "description": "Agent-loop stream events. Higher-level than `coco_types::StreamEvent`\n(which represents raw LLM inference deltas). Adds:\n- Tool lifecycle states (Queued \u2192 Started \u2192 Completed)\n- MCP tool call tracking\n- Turn-scoped item IDs\n\nInput to `StreamAccumulator`.\nSee `event-system-design.md` Section 1.5.",
+      "description": "Agent-loop stream events. Higher-level than `coco_types::StreamEvent`\n(which represents raw LLM inference deltas). Adds:\n- Tool lifecycle states (Queued \u2192 Started \u2192 Completed)\n- MCP tool call tracking\n- Turn-scoped item IDs\nInput to `StreamAccumulator`.\nSee `event-system-design.md` Section 1.5.",
       "oneOf": [
         {
           "description": "Text content delta from assistant response.",
@@ -188,7 +188,7 @@
           "type": "object"
         },
         {
-          "description": "Tool execution completed with result.\n\n`name` is carried here so StreamAccumulator and TUI consumers can\nreconstruct display state without maintaining their own call_id \u2192 name map.",
+          "description": "Tool execution completed with result.\n`name` is carried here so StreamAccumulator and TUI consumers can\nreconstruct display state without maintaining their own call_id \u2192 name map.",
           "properties": {
             "call_id": {
               "type": "string"
@@ -319,7 +319,7 @@
       "type": "object"
     },
     "AgentsDialogPayload": {
-      "description": "Payload for [`TuiOnlyEvent::OpenAgentsDialog`]. Built by the\n`/agents` slash handler with everything the 2-tab dialog needs\n(Running tab reads `SessionState.subagents` directly, so the\npayload only carries Library data).\n\nTS parity: bundled-only `cli_unpack_pretty/decls/functions/bW4.js`\n(Library tab). The open-source `<AgentsMenu>` exposes the same\nper-row data but routes through a different state machine.",
+      "description": "Payload for [`TuiOnlyEvent::OpenAgentsDialog`]. Built by the\n`/agents` slash handler with everything the 2-tab dialog needs\n(Running tab reads `SessionState.subagents` directly, so the\npayload only carries Library data).\nbundled-only `cli_unpack_pretty/decls/functions/bW4.js`\n(Library tab). The open-source `<AgentsMenu>` exposes the same\nper-row data but routes through a different state machine.",
       "properties": {
         "entries": {
           "description": "All visible agents, source-grouped at dialog-build time so the\nTUI doesn't recompute precedence. Order: User \u2192 Project \u2192\nLocal \u2192 Managed \u2192 Plugin \u2192 Flag \u2192 Built-in. Empty groups are\nomitted.",
@@ -354,7 +354,7 @@
       "type": "object"
     },
     "AlreadyReadFilePayload": {
-      "description": "TS parity: `AlreadyReadFileAttachment` (`utils/attachments.ts:323-333`).\n\nTS carries the (potentially truncated) file content inline for UI display\neven though `normalizeAttachmentForAPI` returns `[]`. coco-rs follows\nsuit \u2014 `content` is the last-known file body used by transcript viewers.",
+      "description": "TS carries the (potentially truncated) file content inline for UI display\neven though `normalizeAttachmentForAPI` returns `[]`. coco-rs follows\nsuit \u2014 `content` is the last-known file body used by transcript viewers.",
       "properties": {
         "content": {
           "default": "",
@@ -382,7 +382,7 @@
       "type": "object"
     },
     "ApiError": {
-      "description": "API error attached to an assistant message.\n\n`error_type` carries the short canonical code TS Claude Code emits\non `AssistantMessage.error` (`max_output_tokens`, `prompt_too_long`,\n`content_filter`, `rate_limited`, `overloaded`, `blocking_limit`,\n`model_error`, \u2026). The C3 death-spiral guard forwards it as the\n`error` field of the StopFailure hook input so hook matchers can\nfilter by specific error type; surfaces in the SDK transcript as\nthe typed equivalent of TS `lastMessage.error`.",
+      "description": "API error attached to an assistant message.\n`error_type` carries the short canonical code\non `AssistantMessage.error` (`max_output_tokens`, `prompt_too_long`,\n`content_filter`, `rate_limited`, `overloaded`, `blocking_limit`,\n`model_error`, \u2026). The C3 death-spiral guard forwards it as the\n`error` field of the StopFailure hook input so hook matchers can\nfilter by specific error type; surfaces in the SDK transcript as\nthe typed equivalent of the `lastMessage.error` wire field.",
       "properties": {
         "error_type": {
           "type": [
@@ -407,7 +407,7 @@
       "type": "object"
     },
     "ApiProvider": {
-      "description": "Active API backend. Matches TS\n`z.enum(['firstParty', 'bedrock', 'vertex', 'foundry'])`.",
+      "description": "Active API backend.",
       "enum": [
         "firstParty",
         "bedrock",
@@ -591,7 +591,6 @@
       "type": "object"
     },
     "AskForApprovalParams": {
-      "description": "Matches TS `SDKControlPermissionRequestSchema` (controlSchemas.ts:108-121).",
       "properties": {
         "agent_id": {
           "type": [
@@ -945,7 +944,7 @@
       ]
     },
     "AttachmentExtras": {
-      "description": "Typed structured extras carried alongside an [`AttachmentBody::Api`] body.\n\nUsed for kinds that surface both a rendered model-visible prompt\n**and** a structured payload that downstream consumers (transcript\npersistence, SDK observers, telemetry) want preserved verbatim.\n`body` carries the rendered prompt; `extras` carries the\nderived-from-structure original data.",
+      "description": "Typed structured extras carried alongside an [`AttachmentBody::Api`] body.\nUsed for kinds that surface both a rendered model-visible prompt\n**and** a structured payload that downstream consumers (transcript\npersistence, SDK observers, telemetry) want preserved verbatim.\n`body` carries the rendered prompt; `extras` carries the\nderived-from-structure original data.",
       "oneOf": [
         {
           "$ref": "#/$defs/SkillDiscoveryPayload",
@@ -990,7 +989,7 @@
       ]
     },
     "AttachmentKind": {
-      "description": "Every TS `Attachment.type` discriminator, plus coco-rs-synthetic\nreminder kinds. 62 variants.\n\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match TS `Attachment.type` exactly, so transcripts round-trip.",
+      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 64 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
       "oneOf": [
         {
           "enum": [
@@ -1046,6 +1045,7 @@
             "hook_non_blocking_error",
             "hook_permission_decision",
             "hook_system_message",
+            "goal_status",
             "structured_output",
             "dynamic_skill",
             "skill_discovery",
@@ -1059,7 +1059,7 @@
         },
         {
           "const": "critical_system_reminder",
-          "description": "User-supplied per-turn critical instruction\n(`toolUseContext.criticalSystemReminder_EXPERIMENTAL`).\n\n**coco-rs dual role**: also serves as the generic carrier kind for\n`coco_messages::create_meta_message` / `create_system_reminder_message`\n(post-Phase-2 drop-in for the old `User{is_meta:true}` shape). The\nreminder-generator path reads `ctx.config.critical_instruction`\nfor the standard case; engine-internal meta injection reuses the\nsame kind because API-visible + UI-hidden wrapped text is exactly\nits visibility profile. Both paths land in `Message::Attachment`\nwith `AttachmentBody::Api(LlmMessage)`.",
+          "description": "User-supplied per-turn critical instruction\n(`toolUseContext.criticalSystemReminder_EXPERIMENTAL`).\n**coco-rs dual role**: also serves as the generic carrier kind for\n`coco_messages::create_meta_message` / `create_system_reminder_message`\n(post-Phase-2 drop-in for the old `User{is_meta:true}` shape). The\nreminder-generator path reads `ctx.config.critical_instruction`\nfor the standard case; engine-internal meta injection reuses the\nsame kind because API-visible + UI-hidden wrapped text is exactly\nits visibility profile. Both paths land in `Message::Attachment`\nwith `AttachmentBody::Api(LlmMessage)`.",
           "type": "string"
         },
         {
@@ -1069,13 +1069,13 @@
         },
         {
           "const": "user_context",
-          "description": "coco-rs per-turn baseline user context (TS `prependUserContext`\n`utils/api.ts:449`, `currentDate` from `context.ts:186`). Injected\nevery turn as an `is_meta` `<system-reminder>` carrying\n`Today's date is <local ISO>.` \u2014 distinct from the one-shot\n[`DateChange`](Self::DateChange) rollover notice.",
+          "description": "coco-rs per-turn baseline user context (`prependUserContext`\nInjected\nevery turn as an `is_meta` `<system-reminder>` carrying\n`Today's date is <local ISO>.` \u2014 distinct from the one-shot\n[`DateChange`](Self::DateChange) rollover notice.",
           "type": "string"
         }
       ]
     },
     "AttachmentMessage": {
-      "description": "Attachment message: `kind` carries the discriminant (60 variants),\n`body` carries the typed payload.\n\n**Invariant**: `kind` and `body` must agree \u2014 e.g. `kind = HookCancelled`\nmust come with `body = Silent(SilentPayload::HookCancelled(..))`. Do **not**\nconstruct via struct literal; use the typed constructor helpers below.",
+      "description": "Attachment message: `kind` carries the discriminant (60 variants),\n`body` carries the typed payload.\n**Invariant**: `kind` and `body` must agree \u2014 e.g. `kind = HookCancelled`\nmust come with `body = Silent(SilentPayload::HookCancelled(..))`. Do **not**\nconstruct via struct literal; use the typed constructor helpers below.",
       "properties": {
         "body": {
           "$ref": "#/$defs/AttachmentBody"
@@ -1191,7 +1191,7 @@
         },
         {
           "const": "interleaved_thinking",
-          "description": "`interleaved-thinking-2025-05-14` beta. Also gates\n`redact-thinking-2026-02-12` (TS `betas.ts:272` reuses the\nsame `modelSupportsISP` predicate for both).",
+          "description": "`interleaved-thinking-2025-05-14` beta. Also gates\n`redact-thinking-2026-02-12` (uses the same `modelSupportsISP`\npredicate for both).",
           "type": "string"
         },
         {
@@ -1201,7 +1201,7 @@
         },
         {
           "const": "adaptive_thinking",
-          "description": "Anthropic adaptive thinking \u2014 server picks effort dynamically.\nGates the convert layer's emission of\n`thinking: {\"type\":\"adaptive\"}` for `ReasoningEffort::Auto`.\nWithout this capability, the convert layer omits the field\nentirely so the server-side default applies (avoids 400 from\nnon-adaptive models that reject the value).\n\nKnown supporting models (Anthropic family): Claude Sonnet 4.6,\nClaude Opus 4.6+, DeepSeek V4 (anthropic-compat).",
+          "description": "Anthropic adaptive thinking \u2014 server picks effort dynamically.\nGates the convert layer's emission of\n`thinking: {\"type\":\"adaptive\"}` for `ReasoningEffort::Auto`.\nWithout this capability, the convert layer omits the field\nentirely so the server-side default applies (avoids 400 from\nnon-adaptive models that reject the value).\nKnown supporting models (Anthropic family): Claude Sonnet 4.6,\nClaude Opus 4.6+, DeepSeek V4 (anthropic-compat).",
           "type": "string"
         },
         {
@@ -1211,12 +1211,12 @@
         },
         {
           "const": "anthropic_tool_reference",
-          "description": "Server-side `tool_reference` expansion (Anthropic beta\n`tool-search-tool-2025-10-19`). When set, the provider's API\nserver expands `{type:\"tool_reference\",tool_name:X}` content\nblocks into inline `<functions>...</functions>` markup before\nthe prompt reaches the model. Lets the client keep the `tools`\narray constant across turns (delayed tools carry\n`defer_loading: true`) and emit references inside\n`tool_result.content` instead of growing the tools list \u2014\npreserving prompt cache prefix across `ToolSearch` discoveries.\n\nProvider-specific (Anthropic-only). The multi-provider default\npath is client-side promotion through\n`ToolAppState::discovered_tool_names`, which costs a cache\nbreak on the tools array but works on every provider.\n\nKnown supporting models: Claude Sonnet 4.5+, Opus 4+, GPT-5\n(anthropic-compat). NOT supported on Haiku 4.5 / 3.5 /\nolder 3-series.",
+          "description": "Server-side `tool_reference` expansion (Anthropic beta\n`tool-search-tool-2025-10-19`). When set, the provider's API\nserver expands `{type:\"tool_reference\",tool_name:X}` content\nblocks into inline `<functions>...</functions>` markup before\nthe prompt reaches the model. Lets the client keep the `tools`\narray constant across turns (delayed tools carry\n`defer_loading: true`) and emit references inside\n`tool_result.content` instead of growing the tools list \u2014\npreserving prompt cache prefix across `ToolSearch` discoveries.\nProvider-specific (Anthropic-only). The multi-provider default\npath is client-side promotion through\n`ToolAppState::discovered_tool_names`, which costs a cache\nbreak on the tools array but works on every provider.\nKnown supporting models: Claude Sonnet 4.5+, Opus 4+, GPT-5\n(anthropic-compat). NOT supported on Haiku 4.5 / 3.5 /\nolder 3-series.",
           "type": "string"
         },
         {
           "const": "client_side_tool_search_promotion",
-          "description": "Provider/model is known to work correctly with coco-rs's\nclient-side `ToolSearch` promotion path (`discovered_tool_names`\n`AppStatePatch` + tools-array growth on the next turn).\n\n**Per-model opt-in**, default **off** for unknown models.\nRationale: a model that doesn't tolerate the growing tools\narray (legacy proxies, local quantized models with strict\nschema cache, \u2026) shouldn't be silently subjected to ToolSearch\n\u2014 eager-loading every tool's full schema on turn 1 is the\nsafe degradation. Set this capability in the registry\n(`builtin_models_partial`) once a model has been validated.\n\nThe runtime activation predicate is:\n```text\ntool_search_active =\n    Feature::ToolSearch\n    && strategy != Eager\n```\nWhen no resolver-supported capability is present, the model lands in the\n\"eager-load every tool, hide ToolSearch\" state regardless of\nthe user's `Feature::ToolSearch` setting.\n\nNo TS analogue \u2014 TS only ships Anthropic-style server expansion and\nblacklists incompatible models via\n`DEFAULT_UNSUPPORTED_MODEL_PATTERNS`. coco-rs needs a positive\ncapability for ClientSideToolSearchPromotion because it works on every\nProvider, so \"default-on\" would mis-fire on local / custom\nmodel deployments that nobody has vetted.",
+          "description": "Provider/model is known to work correctly with coco-rs's\nclient-side `ToolSearch` promotion path (`discovered_tool_names`\n`AppStatePatch` + tools-array growth on the next turn).\n**Per-model opt-in**, default **off** for unknown models.\nRationale: a model that doesn't tolerate the growing tools\narray (legacy proxies, local quantized models with strict\nschema cache, \u2026) shouldn't be silently subjected to ToolSearch\n\u2014 eager-loading every tool's full schema on turn 1 is the\nsafe degradation. Set this capability in the registry\n(`builtin_models_partial`) once a model has been validated.\nThe runtime activation predicate is:\n```text\ntool_search_active =\nFeature::ToolSearch\n&& strategy != Eager\n```\nWhen no resolver-supported capability is present, the model lands in the\n\"eager-load every tool, hide ToolSearch\" state regardless of\nthe user's `Feature::ToolSearch` setting.\nNo TS analogue \u2014 TS only ships Anthropic-style server expansion and\nblacklists incompatible models via\n`DEFAULT_UNSUPPORTED_MODEL_PATTERNS`. coco-rs needs a positive\ncapability for ClientSideToolSearchPromotion because it works on every\nProvider, so \"default-on\" would mis-fire on local / custom\nmodel deployments that nobody has vetted.",
           "type": "string"
         },
         {
@@ -1745,7 +1745,6 @@
       ]
     },
     "CommandPermissionsPayload": {
-      "description": "TS parity: `command_permissions` (`utils/attachments.ts:605-608`).",
       "properties": {
         "allowedTools": {
           "items": {
@@ -1766,7 +1765,7 @@
       "type": "object"
     },
     "CommandSource": {
-      "description": "How a command was loaded.\n\nPayload-carrying variants (`Plugin { name }`, `Mcp { server_name }`)\nensure source and attribution can never disagree. This replaces the\nolder `loaded_from + plugin_name` dual-field layout, which allowed\nnonsensical states (e.g. `loaded_from = Builtin` paired with\n`plugin_name = Some(...)`).",
+      "description": "How a command was loaded.\nPayload-carrying variants (`Plugin { name }`, `Mcp { server_name }`)\nensure source and attribution can never disagree. This replaces the\nolder `loaded_from + plugin_name` dual-field layout, which allowed\nnonsensical states (e.g. `loaded_from = Builtin` paired with\n`plugin_name = Some(...)`).",
       "oneOf": [
         {
           "description": "Hardcoded built-in slash command (e.g. `/help`, `/clear`).",
@@ -1916,7 +1915,7 @@
       ]
     },
     "CompactFileReferencePayload": {
-      "description": "TS parity: `CompactFileReferenceAttachment`\n(`utils/attachments.ts:307-312`).",
+      "description": "compact file reference attachment.",
       "properties": {
         "display_path": {
           "type": "string"
@@ -1932,7 +1931,7 @@
       "type": "object"
     },
     "CompactTrigger": {
-      "description": "How compaction was triggered.\n\nStays in `coco-types` (rather than `coco-messages`) because\n`event::CompactionPhaseParams` references it; the rest of the message\nfamily lives in `coco-messages`.\n\nMirrors the TS taxonomy: manual `/compact`, threshold-based auto, PTL-413\nreactive recovery, gap-based time-based microcompact, session-memory\nshort-circuit (no LLM), and staged context-collapse commit.",
+      "description": "How compaction was triggered.\nStays in `coco-types` (rather than `coco-messages`) because\n`event::CompactionPhaseParams` references it; the rest of the message\nfamily lives in `coco-messages`.\nVariants: manual `/compact`, threshold-based auto, PTL-413\nreactive recovery, gap-based time-based microcompact, session-memory\nshort-circuit (no LLM), and staged context-collapse commit.",
       "enum": [
         "manual",
         "auto",
@@ -1968,7 +1967,7 @@
       "type": "string"
     },
     "CompactionPhase": {
-      "description": "Sub-phase of a compaction in progress (TS `onCompactProgress`).\n\nMirrors the TS phase taxonomy at Tool.ts:150-156:\n  - `HooksStart { hook_type }` for PreCompact / PostCompact / SessionStart\n  - `Summarizing` for the LLM summarizer call\n  - `Done` to clear the spinner",
+      "description": "Sub-phase of a compaction in progress.\nTool execution phase taxonomy:\n- `HooksStart { hook_type }` for PreCompact / PostCompact / SessionStart\n- `Summarizing` for the LLM summarizer call\n- `Done` to clear the spinner",
       "enum": [
         "hooks_start",
         "summarizing",
@@ -2164,7 +2163,7 @@
         "trigger": {
           "$ref": "#/$defs/CompactTrigger",
           "default": "auto",
-          "description": "Which strategy produced this compaction.\n\nMirrors the TS `tengu_compact.trigger` field. Older transcripts\nwithout this field default to `Auto`. Defaulted via serde so\noff-the-wire payloads from older SDK clients keep parsing."
+          "description": "Which strategy produced this compaction.\n`tengu_compact.trigger` field. Older transcripts\nwithout this field default to `Auto`. Defaulted via serde so\noff-the-wire payloads from older SDK clients keep parsing."
         }
       },
       "required": [
@@ -2282,7 +2281,7 @@
       "type": "object"
     },
     "ContextUsageResult": {
-      "description": "Response to `ClientRequest::ContextUsage`.\nMatches TS `SDKControlGetContextUsageResponseSchema` (controlSchemas.ts:205-306).\nSimplified subset \u2014 TS includes a rich breakdown grid that's UI-specific.",
+      "description": "Response to `ClientRequest::ContextUsage`.\nSimplified subset \u2014 TS includes a rich breakdown grid that's UI-specific.",
       "properties": {
         "agents": {
           "items": {
@@ -2456,7 +2455,6 @@
       "type": "object"
     },
     "DynamicSkillPayload": {
-      "description": "TS parity: `dynamic_skill` (`utils/attachments.ts:525+`).",
       "properties": {
         "displayPath": {
           "type": "string"
@@ -2479,7 +2477,7 @@
       "type": "object"
     },
     "EditedImageFilePayload": {
-      "description": "TS parity: `edited_image_file` (`utils/attachments.ts:456-460`).\n\nImage bytes can't be diffed textually; the UI renders a marker / thumbnail.",
+      "description": "Image bytes can't be diffed textually; the UI renders a marker / thumbnail.",
       "properties": {
         "display_path": {
           "description": "Path relative to CWD at creation time.",
@@ -2496,7 +2494,7 @@
       "type": "object"
     },
     "EffortLevel": {
-      "description": "Model effort tier. Matches TS enum `z.enum(['low','medium','high','max'])`.",
+      "description": "Model effort tier.",
       "enum": [
         "low",
         "medium",
@@ -2516,7 +2514,7 @@
       "type": "string"
     },
     "ElicitationCompleteParams": {
-      "description": "Matches TS `SDKElicitationCompleteMessage` (coreSchemas.ts:1779-1792).\n\nEmitted after an MCP server's elicitation request is resolved\n(either submitted or cancelled).",
+      "description": "Emitted after an MCP server's elicitation request is resolved\n(either submitted or cancelled).",
       "properties": {
         "elicitation_id": {
           "type": "string"
@@ -2714,7 +2712,6 @@
       "type": "object"
     },
     "FastModeState": {
-      "description": "Matches TS `FastModeStateSchema` (coreSchemas.ts:1883-1889).",
       "enum": [
         "off",
         "cooldown",
@@ -2782,7 +2779,7 @@
       "type": "object"
     },
     "FilesPersistedParams": {
-      "description": "Matches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).\n\nTS emits this when files are uploaded or persisted (e.g. after a\nsuccessful `filesApi` operation).",
+      "description": "TS emits this when files are uploaded or persisted (e.g. after a\nsuccessful `filesApi` operation).",
       "properties": {
         "failed": {
           "default": [],
@@ -2804,6 +2801,55 @@
       "required": [
         "files",
         "processed_at"
+      ],
+      "type": "object"
+    },
+    "GoalStatusPayload": {
+      "description": "`/goal` status attachment (`goal_status`).\nSentinels (`sentinel: true`) are emitted by `/goal` set/clear and are\nignored by \"last achieved goal\" lookup. Non-sentinel payloads are emitted\nby the Stop-hook evaluator for achieved, failed, and still-unmet checks.",
+      "properties": {
+        "condition": {
+          "type": "string"
+        },
+        "durationMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "failed": {
+          "type": "boolean"
+        },
+        "iterations": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "met": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sentinel": {
+          "type": "boolean"
+        },
+        "tokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "met",
+        "condition"
       ],
       "type": "object"
     },
@@ -2836,7 +2882,7 @@
       "type": "object"
     },
     "HookCallbackParams": {
-      "description": "Invoke an SDK-registered hook callback.\nMatches TS `SDKHookCallbackRequestSchema` (controlSchemas.ts:366-371).\n\nCorrelation is via the **outer** JSON-RPC `request_id` on the\nenvelope \u2014 there is no inner `request_id` field. The SDK replies\nwith a `HookCallbackResult` payload as the synchronous response.",
+      "description": "Invoke an SDK-registered hook callback.\nCorrelation is via the **outer** JSON-RPC `request_id` on the\nenvelope \u2014 there is no inner `request_id` field. The SDK replies\nwith a `HookCallbackResult` payload as the synchronous response.",
       "properties": {
         "callback_id": {
           "type": "string"
@@ -2863,11 +2909,11 @@
       "type": "object"
     },
     "HookCallbackResult": {
-      "description": "Result body for the synchronous JSON-RPC reply to a\n`hook/callback` server request.\n\nCorrelation is via the outer JSON-RPC `request_id` on the response\nenvelope \u2014 there is no inner correlation field. The whole body is\nthe hook output in TS-canonical shape; downstream parsers consume\n`SdkHookOutput` directly via [`HookCallbackResult::output`].",
+      "description": "Result body for the synchronous JSON-RPC reply to a\n`hook/callback` server request.\nCorrelation is via the outer JSON-RPC `request_id` on the response\nenvelope \u2014 there is no inner correlation field. The whole body is\nthe hook output in shape; downstream parsers consume\n`SdkHookOutput` directly via [`HookCallbackResult::output`].",
       "properties": {
         "output": {
           "$ref": "#/$defs/SdkHookOutput",
-          "description": "Hook output in TS-canonical shape (TS `hookJSONOutputSchema`)."
+          "description": "Hook output in shape."
         }
       },
       "required": [
@@ -2877,7 +2923,6 @@
       "type": "object"
     },
     "HookCancelledPayload": {
-      "description": "TS parity: `HookCancelledAttachment` (`utils/attachments.ts:396-403`).",
       "properties": {
         "command": {
           "type": [
@@ -2919,7 +2964,6 @@
       "type": "string"
     },
     "HookErrorDuringExecutionPayload": {
-      "description": "TS parity: `HookErrorDuringExecutionAttachment` (`utils/attachments.ts:405-414`).",
       "properties": {
         "content": {
           "type": "string"
@@ -2943,7 +2987,7 @@
       "type": "object"
     },
     "HookEventType": {
-      "description": "27 hook event types matching TS `HOOK_EVENTS`\n(`src/entrypoints/sdk/coreSchemas.ts:355-383`).\n\nWire format is **PascalCase** (e.g. `\"PreToolUse\"`) \u2014 identical to\nTS settings.json keys. Variant names serialize as-is via serde\ndefault and strum default; do not add `rename_all`.\n\n`#[non_exhaustive]` so future TS additions can land without\nbreaking match exhaustiveness in downstream crates.",
+      "description": "27 hook event types \nEvent type identifiers for hook registration and dispatch.\nWire format is **PascalCase** (e.g. `\"PreToolUse\"`) \u2014 identical to\nTS settings.json keys. Variant names serialize as-is via serde\ndefault and strum default; do not add `rename_all`.\n`#[non_exhaustive]` so future TS additions can land without\nbreaking match exhaustiveness in downstream crates.",
       "enum": [
         "PreToolUse",
         "PostToolUse",
@@ -2976,7 +3020,6 @@
       "type": "string"
     },
     "HookNonBlockingErrorPayload": {
-      "description": "TS parity: `HookNonBlockingErrorAttachment` (`utils/attachments.ts:429+`).",
       "properties": {
         "error": {
           "type": "string"
@@ -3017,7 +3060,6 @@
       "type": "string"
     },
     "HookPermissionDecisionPayload": {
-      "description": "TS parity: `HookPermissionDecisionAttachment` (`utils/attachments.ts:381-386`).",
       "properties": {
         "decision": {
           "$ref": "#/$defs/HookPermissionDecision"
@@ -3037,7 +3079,6 @@
       "type": "object"
     },
     "HookProgressParams": {
-      "description": "Matches TS `SDKHookProgressMessage` (coreSchemas.ts:1616-1629).",
       "properties": {
         "hook_event": {
           "type": "string"
@@ -3069,7 +3110,6 @@
       "type": "object"
     },
     "HookResponseParams": {
-      "description": "Matches TS `SDKHookResponseMessage` (coreSchemas.ts:1631-1646).",
       "properties": {
         "exit_code": {
           "format": "int32",
@@ -3112,7 +3152,7 @@
       "type": "object"
     },
     "HookSpecificOutput": {
-      "description": "Event-specific hook output. Tagged by `hookEventName`.\n\nVariants cover every `HOOK_EVENT` value that can carry structured\nfields back to the agent.\n\nEach variant carries `rename_all = \"camelCase\"` so its inner fields\nmatch the TS canonical wire shape (`permissionDecision`,\n`additionalContext`, `updatedInput`, etc.). The enum-level\n`rename_all` only applies to variant names, not variant fields, so\neach struct-like variant needs its own attribute.",
+      "description": "Event-specific hook output. Tagged by `hookEventName`.\nVariants cover every `HOOK_EVENT` value that can carry structured\nfields back to the agent.\nEach variant carries `rename_all = \"camelCase\"` so its inner fields\nmatch the TS canonical wire shape (`permissionDecision`,\n`additionalContext`, `updatedInput`, etc.). The enum-level\n`rename_all` only applies to variant names, not variant fields, so\neach struct-like variant needs its own attribute.",
       "oneOf": [
         {
           "properties": {
@@ -3460,7 +3500,6 @@
       "type": "object"
     },
     "HookSystemMessagePayload": {
-      "description": "TS parity: `HookSystemMessageAttachment` (`utils/attachments.ts:388-394`).",
       "properties": {
         "content": {
           "type": "string"
@@ -3759,7 +3798,7 @@
       "type": "object"
     },
     "InitializeResult": {
-      "description": "Response to `ClientRequest::Initialize`.\n\nMatches TS `SDKControlInitializeResponseSchema` (controlSchemas.ts:77-95).\nReturned synchronously after the client sends `initialize`; gives the\nclient the full bootstrap context it needs before calling `session/start`.",
+      "description": "Response to `ClientRequest::Initialize`.\nReturned synchronously after the client sends `initialize`; gives the\nclient the full bootstrap context it needs before calling `session/start`.",
       "properties": {
         "_cocoRsProtocolVersion": {
           "default": "",
@@ -4238,7 +4277,7 @@
       ]
     },
     "LocalCommandOutputParams": {
-      "description": "Matches TS `SDKLocalCommandOutputMessage` (coreSchemas.ts:1590-1602).\n\nTS emits this when the user runs a local bash command via the REPL `!`\nprefix (not a tool call). The `content` field is the command output;\nTS types it as the raw output structure (typically stdout/stderr).",
+      "description": "TS emits this when the user runs a local bash command via the REPL `!`\nprefix (not a tool call). The `content` field is the command output;\nTS types it as the raw output structure (typically stdout/stderr).",
       "properties": {
         "content": true
       },
@@ -4281,7 +4320,6 @@
       "type": "object"
     },
     "MaxTurnsReachedPayload": {
-      "description": "TS parity: `max_turns_reached` (`query.ts:1508`, `query.ts:1707`).",
       "properties": {
         "maxTurns": {
           "format": "int32",
@@ -4299,7 +4337,7 @@
       "type": "object"
     },
     "McpConnectionStatus": {
-      "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`:\n`'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`.\n`Disconnected` is a local extension used when the connection manager\nhas no record of a named server.",
+      "description": "MCP server connection state on the wire.\nValues: `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`.\n`Disconnected` is a local extension used when the connection manager\nhas no record of a named server.",
       "oneOf": [
         {
           "enum": [
@@ -4331,7 +4369,7 @@
       "type": "object"
     },
     "McpRouteMessageParams": {
-      "description": "Route an MCP JSON-RPC message to an SDK-hosted server.\n\nCorrelation is via the outer JSON-RPC `request_id` on the envelope \u2014\nno inner `request_id`. The SDK replies with a `McpRouteMessageResult`\npayload carrying the forwarded MCP server's JSON-RPC response.",
+      "description": "Route an MCP JSON-RPC message to an SDK-hosted server.\nCorrelation is via the outer JSON-RPC `request_id` on the envelope \u2014\nno inner `request_id`. The SDK replies with a `McpRouteMessageResult`\npayload carrying the forwarded MCP server's JSON-RPC response.",
       "properties": {
         "message": {
           "description": "The raw JSON-RPC message to forward."
@@ -4347,7 +4385,7 @@
       "type": "object"
     },
     "McpRouteMessageResult": {
-      "description": "Result body for the synchronous JSON-RPC reply to a\n`mcp/routeMessage` server request.\n\nCarries the forwarded JSON-RPC response from the SDK-hosted MCP\nserver verbatim. Correlation is via the outer JSON-RPC\n`request_id` on the response envelope.",
+      "description": "Result body for the synchronous JSON-RPC reply to a\n`mcp/routeMessage` server request.\nCarries the forwarded JSON-RPC response from the SDK-hosted MCP\nserver verbatim. Correlation is via the outer JSON-RPC\n`request_id` on the response envelope.",
       "properties": {
         "message": {
           "description": "JSON-RPC message response from the SDK-hosted MCP server."
@@ -4514,7 +4552,7 @@
       "type": "object"
     },
     "McpStatusResult": {
-      "description": "Response to `ClientRequest::McpStatus`.\nMatches TS `SDKControlMcpStatusResponseSchema` (controlSchemas.ts:165-173).\n\nThe `mcpServers` field is camelCase on the wire to match the TS\nzod schema. Internal Rust uses snake_case for the field name.",
+      "description": "Response to `ClientRequest::McpStatus`.\nThe `mcpServers` field is camelCase on the wire to match the TS\nzod schema. Internal Rust uses snake_case for the field name.",
       "properties": {
         "mcpServers": {
           "items": {
@@ -4792,7 +4830,7 @@
       "type": "object"
     },
     "Message": {
-      "description": "Top-level message enum.\n\nTool-use summaries are intentionally **not** a `Message` variant \u2014\nthey're UI-only polish (mobile-row label generated by the Fast\nmodel post-turn). The engine emits\n[`crate::ServerNotification::ToolUseSummary`] for SDK consumers\nand the TUI side-caches the text without writing it to\n`MessageHistory`. Keeping UI-only data out of the authoritative\ntranscript upholds I-3 from\n`docs/coco-rs/engine-tui-unified-transcript-plan.md`.",
+      "description": "Top-level message enum.\nTool-use summaries are intentionally **not** a `Message` variant \u2014\nthey're UI-only polish (mobile-row label generated by the Fast\nmodel post-turn). The engine emits\n[`crate::ServerNotification::ToolUseSummary`] for SDK consumers\nand the TUI side-caches the text without writing it to\n`MessageHistory`. Keeping UI-only data out of the authoritative\ntranscript upholds I-3 from\n`docs/coco-rs/engine-tui-unified-transcript-plan.md`.",
       "oneOf": [
         {
           "$ref": "#/$defs/UserMessage",
@@ -4961,7 +4999,7 @@
         },
         {
           "const": "slash_command",
-          "description": "Synthesized echo/result of a slash command (`\u276f /cmd` + `\u23bf output`).\nCarried on the `Message::User` envelope; combined with\n`is_visible_in_transcript_only` it mirrors TS's\n`createUserMessage` (model-visible) vs `createCommandInputMessage`\n(transcript-only) split. Drives tag-aware command-pill rendering.",
+          "description": "Synthesized echo/result of a slash command (`\u276f /cmd` + `\u23bf output`).\nCarried on the `Message::User` envelope; combined with\n`is_visible_in_transcript_only` it's\n`createUserMessage` (model-visible) vs `createCommandInputMessage`\n(transcript-only) split. Drives tag-aware command-pill rendering.",
           "type": "string"
         },
         {
@@ -4971,7 +5009,7 @@
         },
         {
           "const": "queued_steering",
-          "description": "User text typed while a turn was in flight (steering), drained from\nthe command queue at a turn boundary. Mirrors TS: the message body is\nthe **raw** user text (fully visible + counted in the transcript);\nthe model-facing \"The user sent a new message while you were working\u2026\"\nframing is applied only at prompt-build time (`app/query`), never\nstored on the message. See `coco_query::helpers::wrap_steering_messages_for_api`.",
+          "description": "User text typed while a turn was in flight (steering), drained from\nthe command queue at a turn boundary. The message body is\nthe **raw** user text (fully visible + counted in the transcript);\nthe model-facing \"The user sent a new message while you were working\u2026\"\nframing is applied only at prompt-build time (`app/query`), never\nstored on the message. See `coco_query::helpers::wrap_steering_messages_for_api`.",
           "type": "string"
         }
       ]
@@ -5011,7 +5049,7 @@
         },
         {
           "const": "plan",
-          "description": "Plan-mode model. Used in two distinct contexts:\n\n1. **Subagent role** \u2014 when the built-in Plan subagent spawns\n   (`SubagentType::Plan \u2192 ModelRole::Plan` in\n   `core/subagent/src/subagent_role.rs:34`), the spawn factory\n   resolves the client via `client_for_role(Plan)`.\n2. **Main-session plan-mode swap** \u2014 when the leader enters\n   `PermissionMode::Plan`, the engine swaps the active client\n   to `client_for_role(Plan)` for the duration of plan mode.\n   TS parity behavioral analogue: `getRuntimeMainLoopModel`'s\n   `opusplan` \u2192 Opus alias swap (`utils/model/model.ts:145-167`).\n   coco-rs encodes this as a generic role slot so it works for\n   any provider, not just Anthropic.\n\nUnconfigured `models.plan` falls back to Main's spec via the\nchain in `runtime.rs:507`, and `client_for_role` short-circuits\nto the cached Main `Arc` \u2014 both call sites degrade cleanly to\n\"no swap\" without spurious cache breaks.",
+          "description": "Plan-mode model. Used in two distinct contexts:\n1. **Subagent role** \u2014 when the built-in Plan subagent spawns\n(`SubagentType::Plan \u2192 ModelRole::Plan` in\n`core/subagent/src/subagent_role.rs:34`), the spawn factory\nresolves the client via `client_for_role(Plan)`.\n2. **Main-session plan-mode swap** \u2014 when the leader enters\n`PermissionMode::Plan`, the engine swaps the active client\nto `client_for_role(Plan)` for the duration of plan mode.\n`getRuntimeMainLoopModel`'s\n`opusplan` \u2192 Opus alias swap.\ncoco-rs encodes this as a generic role slot so it works for\nany provider, not just Anthropic.\nUnconfigured `models.plan` falls back to Main's spec via the\nchain in `runtime.rs:507`, and `client_for_role` short-circuits\nto the cached Main `Arc` \u2014 both call sites degrade cleanly to\n\"no swap\" without spurious cache breaks.",
           "type": "string"
         },
         {
@@ -5023,7 +5061,7 @@
       "title": "ModelRole"
     },
     "ModelRoleChangedParams": {
-      "description": "Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries\nthe resolved binding (model + provider + thinking effort) that the\nTUI applies to `state.session.model_by_role[role]` and, when\n`role == Main`, also to `state.session.{model, provider,\nthinking_effort}` for the status bar.\n\nEmitted by `tui_runner` after applying an in-memory override via\n`SessionRuntime::apply_role_override` / `apply_role_effort`. No\npersistence to settings.json \u2014 that's the user's job.",
+      "description": "Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries\nthe resolved binding (model + provider + thinking effort) that the\nTUI applies to `state.session.model_by_role[role]` and, when\n`role == Main`, also to `state.session.{model, provider,\nthinking_effort}` for the status bar.\nEmitted by `tui_runner` after applying an in-memory override via\n`SessionRuntime::apply_role_override` / `apply_role_effort`. No\npersistence to settings.json \u2014 that's the user's job.",
       "properties": {
         "context_window": {
           "format": "int64",
@@ -5189,7 +5227,7 @@
       "type": "object"
     },
     "PermissionAskChoice": {
-      "description": "One option in a multi-choice permission dialog.\n\nUsed by `ToolCheckResult::Ask.choices` and surfaced on the wire via\n`PermissionDecision::Ask.choices`. The TUI renders one row per\nchoice; the picked `value` is echoed back so the tool's `execute()`\ncan branch on the user's selection.",
+      "description": "One option in a multi-choice permission dialog.\nUsed by `ToolCheckResult::Ask.choices` and surfaced on the wire via\n`PermissionDecision::Ask.choices`. The TUI renders one row per\nchoice; the picked `value` is echoed back so the tool's `execute()`\ncan branch on the user's selection.",
       "properties": {
         "description": {
           "description": "Optional one-line explanation rendered under the label.",
@@ -5223,7 +5261,6 @@
       "type": "string"
     },
     "PermissionDenialInfo": {
-      "description": "Matches TS `SDKPermissionDenialSchema` (coreSchemas.ts:1399-1405).",
       "properties": {
         "tool_input": true,
         "tool_name": {
@@ -5241,7 +5278,7 @@
       "type": "object"
     },
     "PermissionDisplayInput": {
-      "description": "Bounded, UI-ready permission input display.\n\nThis is separate from the raw tool input because approval UIs should\nconsume sanitized display data while keeping `original_input` only for\nupdated-input response construction and permission-rule derivation.",
+      "description": "Bounded, UI-ready permission input display.\nThis is separate from the raw tool input because approval UIs should\nconsume sanitized display data while keeping `original_input` only for\nupdated-input response construction and permission-rule derivation.",
       "oneOf": [
         {
           "properties": {
@@ -5330,7 +5367,7 @@
       "type": "object"
     },
     "PermissionMode": {
-      "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at\n`coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits',\n'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the\ndrifting variants accept legacy snake_case input so old session\ntranscripts deserialize cleanly.",
+      "description": "Permission mode (top-level because it's used by both message and permission modules).\nWire format is camelCase. The serde aliases on the drifting variants accept\nlegacy snake_case input so old session transcripts deserialize cleanly.",
       "oneOf": [
         {
           "enum": [
@@ -5641,7 +5678,7 @@
       ]
     },
     "PermissionUpdateDestination": {
-      "description": "Destination for persisting permission updates.\n\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to\ndisk; in-memory destinations (`Session`/`CliArg`/`Command`) live only\nfor the running session. TS parity: same split as\n`persistPermissionUpdates` in `PermissionUpdate.ts`.\n\n`Command` is reserved for rules contributed by an invoked command or\nskill's frontmatter (`allowed-tools:`). TS parity:\n`alwaysAllowRules.command` populated by `SkillTool` /\n`createGetAppStateWithAllowedTools`.",
+      "description": "Destination for persisting permission updates.\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to\ndisk; in-memory destinations (`Session`/`CliArg`/`Command`) live only\nfor the running session. same split as\n`persistPermissionUpdates` in `PermissionUpdate.ts`.\n`Command` is reserved for rules contributed by an invoked command or\nskill's frontmatter (`allowed-tools:`). \n`alwaysAllowRules.command` populated by `SkillTool` /\n`createGetAppStateWithAllowedTools`.",
       "oneOf": [
         {
           "enum": [
@@ -5678,7 +5715,7 @@
       "type": "object"
     },
     "PermissionsEditorPayload": {
-      "description": "Payload for [`TuiOnlyEvent::OpenPermissionsEditor`]. Built by the\n`/permissions` slash handler (CLI side) with everything the tabbed\nrule editor needs: every file-backed rule keyed by behavior + source,\nevery additional working directory, and the current working directory.\n\nThe TUI cannot read the settings stores itself, so the CLI snapshots\nthem here and re-emits this payload after each persisted edit (the\nopen overlay refreshes in place, mirroring `OpenAgentsDialog`).\n\nTS parity: data backing `<PermissionRuleList>` \u2014\n`getPermissionRules()` + `getAdditionalWorkingDirectories()`.",
+      "description": "Payload for [`TuiOnlyEvent::OpenPermissionsEditor`]. Built by the\n`/permissions` slash handler (CLI side) with everything the tabbed\nrule editor needs: every file-backed rule keyed by behavior + source,\nevery additional working directory, and the current working directory.\nThe TUI cannot read the settings stores itself, so the CLI snapshots\nthem here and re-emits this payload after each persisted edit (the\nopen overlay refreshes in place). Backing data:\n`getPermissionRules()` + `getAdditionalWorkingDirectories()`.",
       "properties": {
         "cwd": {
           "description": "Current working directory \u2014 rendered read-only at the top of the\nWorkspace tab (TS \"Original working directory\").",
@@ -6159,7 +6196,7 @@
       "type": "object"
     },
     "ProviderModelSelection": {
-      "description": "Unresolved provider/model selection from user-facing config.\n\nThis intentionally does not include [`ProviderApi`]: config surfaces\nwrite `provider/model_id`, and the runtime resolves `provider` through\nthe live provider catalog before constructing a runtime slot.",
+      "description": "Unresolved provider/model selection from user-facing config.\nThis intentionally does not include [`ProviderApi`]: config surfaces\nwrite `provider/model_id`, and the runtime resolves `provider` through\nthe live provider catalog before constructing a runtime slot.",
       "properties": {
         "model_id": {
           "type": "string"
@@ -6316,7 +6353,7 @@
       "type": "object"
     },
     "ReasoningMetadataAttachedParams": {
-      "description": "Reasoning aggregates anchored to a specific assistant message.\n\nEmitted by the engine right after `TurnCompleted` when the model\nreported non-zero `reasoning_tokens`. The TUI handler indexes its\n`reasoning_metadata` side-cache by `message_uuid`, eliminating the\nO(n) \"find latest `AssistantThinking` cell\" walk and removing the\nlast vestige of the I-2 exception.",
+      "description": "Reasoning aggregates anchored to a specific assistant message.\nEmitted by the engine right after `TurnCompleted` when the model\nreported non-zero `reasoning_tokens`. The TUI handler indexes its\n`reasoning_metadata` side-cache by `message_uuid`, eliminating the\nO(n) \"find latest `AssistantThinking` cell\" walk and removing the\nlast vestige of the I-2 exception.",
       "properties": {
         "duration_ms": {
           "description": "Token-only reasoning duration in milliseconds. `None` when the\nprovider didn't separate reasoning vs. content time.",
@@ -6367,7 +6404,7 @@
       "type": "object"
     },
     "RequestElicitationParams": {
-      "description": "Forward an MCP server's elicitation request to the SDK client.\n\nThe MCP protocol lets servers ask the user for structured input\n(form fields with a JSON schema). When the bound MCP transport\nfires its `elicitation/create` callback, the SDK server bridges\nit to the connected SDK client via this `ServerRequest`. The\nclient renders a form and returns an [`ElicitationResolveParams`]\npayload as the synchronous JSON-RPC response.",
+      "description": "Forward an MCP server's elicitation request to the SDK client.\nThe MCP protocol lets servers ask the user for structured input\n(form fields with a JSON schema). When the bound MCP transport\nfires its `elicitation/create` callback, the SDK server bridges\nit to the connected SDK client via this `ServerRequest`. The\nclient renders a form and returns an [`ElicitationResolveParams`]\npayload as the synchronous JSON-RPC response.",
       "properties": {
         "elicitation": {
           "description": "JSON serialization of the rmcp `Elicitation`\n(`CreateElicitationRequestParam`): contains the human-readable\n`message` and the requested-field JSON schema."
@@ -6459,7 +6496,7 @@
       "type": "object"
     },
     "RewindDiffStatsPayload": {
-      "description": "Diff stats payload shared by per-row metadata and the selected\nrestore preview event. `file_paths.is_empty()` means \"snapshot\nexists but nothing changed\".\n\n`file_paths` matches `DiffStats.filesChanged: string[]` and is used by the\nconfirm screen to assemble single / two / many-file labels.\n\n# Two semantics, one wire type\n\n`insertions` / `deletions` interpretation depends on which event\ncarries this payload:\n\n- [`TuiOnlyEvent::RewindRowMetadataReady`] \u2014 **forward-time**.\n  `insertions` = lines added between two adjacent user-message\n  checkpoints. Computed via [`FileHistoryState::get_diff_stats_between`]\n  to mirror TS `computeDiffStatsBetweenMessages`\n  (`MessageSelector.tsx:722-765`), which counts `+` lines from\n  `structuredPatch`.\n- [`TuiOnlyEvent::RewindRestorePreviewReady`] \u2014 **rewind-direction**.\n  `insertions` = lines that rewind would add back; `deletions` =\n  lines that rewind would remove. Computed via\n  [`FileHistoryState::get_diff_stats`] to mirror TS\n  `computeDiffStatsForFile` (`fileHistory.ts:705`)'s\n  `diffLines(originalContent, backupContent)` direction.\n\nTS itself returns the same `DiffStats` shape from both call sites\nand lets context disambiguate \u2014 Rust matches that contract.",
+      "description": "Diff stats payload shared by per-row metadata and the selected\nrestore preview event. `file_paths.is_empty()` means \"snapshot\nexists but nothing changed\".\n`file_paths` matches `DiffStats.filesChanged: string[]` and is used by the\nconfirm screen to assemble single / two / many-file labels.\n# Two semantics, one wire type\n`insertions` / `deletions` interpretation depends on which event\ncarries this payload:\n- [`TuiOnlyEvent::RewindRowMetadataReady`] \u2014 **forward-time**.\n`insertions` = lines added between two adjacent user-message\ncheckpoints. Computed via [`FileHistoryState::get_diff_stats_between`]\ncounting `+` lines from `structuredPatch`.\n- [`TuiOnlyEvent::RewindRestorePreviewReady`] \u2014 **rewind-direction**.\n`insertions` = lines that rewind would add back; `deletions` =\nlines that rewind would remove. Computed via\n[`FileHistoryState::get_diff_stats`] with\n`diffLines(originalContent, backupContent)` direction.\nThe same `DiffStats` shape covers both call sites;\ncontext disambiguates the direction.",
       "properties": {
         "deletions": {
           "format": "int64",
@@ -6500,7 +6537,7 @@
       "type": "object"
     },
     "RewindFilesResult": {
-      "description": "Response to `ClientRequest::RewindFiles`.\n\nReports which files would be (or were) restored to the snapshot\nkeyed by `user_message_id`, plus a diff summary.",
+      "description": "Response to `ClientRequest::RewindFiles`.\nReports which files would be (or were) restored to the snapshot\nkeyed by `user_message_id`, plus a diff summary.",
       "properties": {
         "deletions": {
           "default": 0,
@@ -6578,7 +6615,7 @@
       "type": "object"
     },
     "SdkAccountInfo": {
-      "description": "Account + auth info for the logged-in user. Matches TS\n`AccountInfoSchema` at `coreSchemas.ts:1081-1097`. All fields optional\n\u2014 clients that don't sign in get an empty struct.",
+      "description": "Account + auth info for the logged-in user. All fields optional\n\u2014 clients that don't sign in get an empty struct.",
       "properties": {
         "apiKeySource": {
           "type": [
@@ -6752,7 +6789,7 @@
       "type": "object"
     },
     "SdkAgentInfo": {
-      "description": "Available subagent descriptor for `InitializeResult.agents`. Matches\nTS `AgentInfoSchema` at `coreSchemas.ts:1030-1045`.\n\nNamed `SdkAgentInfo` to avoid colliding with `event::AgentInfo`\n(the payload for the `agents/registered` notification, which has a\ndifferent schema \u2014 `description: Option<String>` without `model`).",
+      "description": "Available subagent descriptor for `InitializeResult.agents`.\nNamed `SdkAgentInfo` to avoid colliding with `event::AgentInfo`\n(the payload for the `agents/registered` notification, which has a\ndifferent schema \u2014 `description: Option<String>` without `model`).",
       "properties": {
         "description": {
           "description": "Description of when to use this agent.",
@@ -6845,7 +6882,7 @@
           ]
         },
         "systemMessage": {
-          "description": "Free-form message injected into the conversation as a system\nmessage (visible to model and user). TS parity:\n`syncHookResponseSchema.systemMessage`.",
+          "description": "Free-form message injected into the conversation as a system\nmessage (visible to model and user). \n`syncHookResponseSchema.systemMessage`.",
           "type": [
             "string",
             "null"
@@ -6856,7 +6893,7 @@
       "type": "object"
     },
     "SdkModelInfo": {
-      "description": "Model capability descriptor for `InitializeResult.models`. Matches\nTS `ModelInfoSchema` at `coreSchemas.ts:1047-1079`. The wire uses\n`value` + camelCase capability keys.\n\nNamed `SdkModelInfo` to match the existing re-export name at the\ncrate root and to leave breathing room for other model-info shapes\n(e.g. per-provider config models) elsewhere in the codebase.",
+      "description": "Model capability descriptor for `InitializeResult.models`. The wire uses\n`value` + camelCase capability keys.\nNamed `SdkModelInfo` to match the existing re-export name at the\ncrate root and to leave breathing room for other model-info shapes\n(e.g. per-provider config models) elsewhere in the codebase.",
       "properties": {
         "description": {
           "description": "Short description of the model's capabilities.",
@@ -6955,7 +6992,7 @@
       "type": "object"
     },
     "SdkSlashCommand": {
-      "description": "Slash command descriptor for `InitializeResult.commands`. Matches TS\n`SlashCommandSchema` at `coreSchemas.ts:1016-1028`.\n\nNamed `SdkSlashCommand` to avoid colliding with the existing coco-rs\n`commands` crate notion of a slash command (which has richer\ninternal fields not on the SDK wire).",
+      "description": "Slash command descriptor for `InitializeResult.commands`.\nNamed `SdkSlashCommand` to avoid colliding with the existing coco-rs\n`commands` crate notion of a slash command (which has richer\ninternal fields not on the SDK wire).",
       "properties": {
         "argumentHint": {
           "description": "Argument hint rendered next to the command (e.g. `\"<file>\"`).",
@@ -6996,7 +7033,7 @@
       "type": "object"
     },
     "ServerNotification": {
-      "description": "Protocol-level notifications visible to all consumers.\n\nProtocol notifications across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`local_agent` / `in_process_teammate`), matching TS \u2014 no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` \u00a74.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
+      "description": "Protocol-level notifications visible to all consumers.\n\nProtocol notifications across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`local_agent` / `in_process_teammate`) no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` \u00a74.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
       "oneOf": [
         {
           "description": "New session started.",
@@ -7067,7 +7104,7 @@
           "type": "object"
         },
         {
-          "description": "One Message appended to engine MessageHistory.\n\n`session_id` + `agent_id` envelope (plan \u00a711 F9): merged-timeline\nconsumers (AgentTeams) demux per session/agent off the same event\nstream. `agent_id` is `None` for the main agent; `Some` for\nteammates / subagents. Single-session SDK consumers may ignore\nboth fields (`#[serde(default)]` keeps the wire forward-compat).",
+          "description": "One Message appended to engine MessageHistory.\n`session_id` + `agent_id` envelope (plan \u00a711 F9): merged-timeline\nconsumers (AgentTeams) demux per session/agent off the same event\nstream. `agent_id` is `None` for the main agent; `Some` for\nteammates / subagents. Single-session SDK consumers may ignore\nboth fields (`#[serde(default)]` keeps the wire forward-compat).",
           "properties": {
             "method": {
               "const": "history/messageAppended",
@@ -7465,7 +7502,7 @@
           "type": "object"
         },
         {
-          "description": "Compaction phase progress (TS `onCompactProgress`).\nDrives the spinner text in the TUI / SDK runner so the user\ncan see which sub-phase is active (PreCompact hooks \u2192 summarize\n\u2192 PostCompact hooks \u2192 done).",
+          "description": "Compaction phase progress.\nDrives the spinner text in the TUI / SDK runner so the user\ncan see which sub-phase is active (PreCompact hooks \u2192 summarize\n\u2192 PostCompact hooks \u2192 done).",
           "properties": {
             "method": {
               "const": "context/compactionPhase",
@@ -7567,7 +7604,7 @@
           "type": "object"
         },
         {
-          "description": "Durable plan-item / V1 todo snapshot \u2014 emitted after\n`TaskCreate`/`TaskUpdate`/`TodoWrite` tools mutate state so\nthe TUI can refresh its panel without pulling the store\ndirectly. TS parity: `notifyTasksUpdated` subscriber callback\nin `utils/tasks.ts`.",
+          "description": "Durable plan-item / V1 todo snapshot \u2014 emitted after\n`TaskCreate`/`TaskUpdate`/`TodoWrite` tools mutate state so\nthe TUI can refresh its panel without pulling the store\ndirectly. `notifyTasksUpdated` subscriber callback\nin `utils/tasks.ts`.",
           "properties": {
             "method": {
               "const": "task_panel/changed",
@@ -7584,7 +7621,7 @@
           "type": "object"
         },
         {
-          "description": "Team lead received a plan-approval request from a teammate\n(via mailbox). The TUI surfaces this as a modal overlay.\nTS parity: `ExitPlanModeV2Tool.ts:137-141` teammate request flow.",
+          "description": "Team lead received a plan-approval request from a teammate\n(via mailbox). The TUI surfaces this as a modal overlay.\nTeammate plan-exit request flow.",
           "properties": {
             "method": {
               "const": "plan_approval/requested",
@@ -8271,7 +8308,7 @@
           "type": "object"
         },
         {
-          "description": "Output from a user-executed local command (REPL `!` prefix).\nMatches TS `SDKLocalCommandOutputMessage` (coreSchemas.ts:1590-1602).",
+          "description": "Output from a user-executed local command (REPL `!` prefix).",
           "properties": {
             "method": {
               "const": "localCommand/output",
@@ -8288,7 +8325,7 @@
           "type": "object"
         },
         {
-          "description": "Files persisted to disk (file upload/snapshot completion).\nMatches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).",
+          "description": "Files persisted to disk (file upload/snapshot completion).",
           "properties": {
             "method": {
               "const": "files/persisted",
@@ -8305,7 +8342,7 @@
           "type": "object"
         },
         {
-          "description": "MCP elicitation completed (form submission or cancellation).\nMatches TS `SDKElicitationCompleteMessage` (coreSchemas.ts:1779-1792).",
+          "description": "MCP elicitation completed (form submission or cancellation).",
           "properties": {
             "method": {
               "const": "elicitation/complete",
@@ -8322,7 +8359,7 @@
           "type": "object"
         },
         {
-          "description": "Tool use summary from background haiku summarization.\nMatches TS `SDKToolUseSummaryMessage` (coreSchemas.ts:1769-1777).",
+          "description": "Tool use summary from background haiku summarization.",
           "properties": {
             "method": {
               "const": "tool/useSummary",
@@ -8339,7 +8376,7 @@
           "type": "object"
         },
         {
-          "description": "Tool execution progress (bash/powershell long-running).\nMatches TS `SDKToolProgressMessage` (coreSchemas.ts:1648-1659).\nSent at most once per 30 seconds per `parent_tool_use_id`.",
+          "description": "Tool execution progress (bash/powershell long-running).\nSent at most once per 30 seconds per `parent_tool_use_id`.",
           "properties": {
             "method": {
               "const": "tool/progress",
@@ -8356,7 +8393,7 @@
           "type": "object"
         },
         {
-          "description": "Plugin state changed on disk (manifest added/removed/edited,\n`installed_plugins.json` updated, or settings.json scope toggled).\nCarries a short reason string the UI can surface as a banner.\nTS parity: `useManagePlugins.ts:293-300` adds the \"Plugins\nchanged. Run /reload-plugins to activate.\" notification. Never\ntriggers an auto-reload \u2014 the explicit `/reload-plugins`\ninvocation is what applies the change.",
+          "description": "Plugin state changed on disk (manifest added/removed/edited,\n`installed_plugins.json` updated, or settings.json scope toggled).\nCarries a short reason string the UI can surface as a banner.\nThe \"Plugins\nchanged. Run /reload-plugins to activate.\" notification. Never\ntriggers an auto-reload \u2014 the explicit `/reload-plugins`\ninvocation is what applies the change.",
           "properties": {
             "method": {
               "const": "plugins/changed",
@@ -8387,7 +8424,7 @@
       "description": "Bidirectional control protocol \u2014 server-initiated requests.\n\nThe agent sends these to SDK clients when it needs a decision or input (permission approval, user question, hook callback, MCP routing). The SDK client must reply via the corresponding `ClientRequest` variant.",
       "oneOf": [
         {
-          "description": "Ask the SDK client to approve or deny a tool use.\nMatches TS `SDKControlPermissionRequestSchema` (controlSchemas.ts:108-121).\nExpected response: `ClientRequest::ApprovalResolve`.",
+          "description": "Ask the SDK client to approve or deny a tool use.\nExpected response: `ClientRequest::ApprovalResolve`.",
           "properties": {
             "method": {
               "const": "approval/askForApproval",
@@ -8421,7 +8458,7 @@
           "type": "object"
         },
         {
-          "description": "Route an MCP JSON-RPC message to the SDK-hosted MCP server.\nMatches TS `SDKControlMcpMessageRequestSchema` (controlSchemas.ts:377-381).\nExpected response: `ClientRequest::McpRouteMessageResponse`.",
+          "description": "Route an MCP JSON-RPC message to the SDK-hosted MCP server.\nExpected response: `ClientRequest::McpRouteMessageResponse`.",
           "properties": {
             "method": {
               "const": "mcp/routeMessage",
@@ -8438,7 +8475,7 @@
           "type": "object"
         },
         {
-          "description": "Invoke an SDK-registered hook callback.\nMatches TS `SDKHookCallbackRequestSchema` (controlSchemas.ts:366-371).\nExpected response: `ClientRequest::HookCallbackResponse`.",
+          "description": "Invoke an SDK-registered hook callback.\nExpected response: `ClientRequest::HookCallbackResponse`.",
           "properties": {
             "method": {
               "const": "hook/callback",
@@ -8544,7 +8581,6 @@
       "type": "object"
     },
     "SessionModelUsage": {
-      "description": "Matches TS `ModelUsageSchema` (coreSchemas.ts:17-28).",
       "properties": {
         "cache_creation_input_tokens": {
           "format": "int64",
@@ -8709,7 +8745,7 @@
       "type": "object"
     },
     "SessionReadResult": {
-      "description": "Response to `ClientRequest::SessionRead`.\n\nPhase 2.C.11 returns session metadata only. Message-history\nretrieval (via the JSONL transcript) is a future enhancement \u2014 the\n`messages` / `next_cursor` / `has_more` fields are reserved for\nwhen the transcript reader is wired.",
+      "description": "Response to `ClientRequest::SessionRead`.\nPhase 2.C.11 returns session metadata only. Message-history\nretrieval (via the JSONL transcript) is a future enhancement \u2014 the\n`messages` / `next_cursor` / `has_more` fields are reserved for\nwhen the transcript reader is wired.",
       "properties": {
         "has_more": {
           "default": false,
@@ -8738,7 +8774,7 @@
       "type": "object"
     },
     "SessionResultParams": {
-      "description": "Matches TS `SDKResultMessageSchema` (coreSchemas.ts:1407-1451).\nTS has two subtype variants (success/error) unified here with `is_error` flag.",
+      "description": "TS has two subtype variants (success/error) unified here with `is_error` flag.",
       "properties": {
         "duration_api_ms": {
           "format": "int64",
@@ -8774,7 +8810,7 @@
             "$ref": "#/$defs/SessionModelUsage"
           },
           "default": {},
-          "description": "Per-model usage breakdown (TS `modelUsage: Record<string, ModelUsage>`).",
+          "description": "Per-model usage breakdown.",
           "type": "object"
         },
         "num_api_calls": {
@@ -8843,7 +8879,7 @@
       "type": "object"
     },
     "SessionResumeResult": {
-      "description": "Response to `ClientRequest::SessionResume`.\n\nReturned after the server loads a previously-persisted session\nfrom disk and installs it as the active session. The SDK client\ncan then issue `turn/start` to continue the conversation.",
+      "description": "Response to `ClientRequest::SessionResume`.\nReturned after the server loads a previously-persisted session\nfrom disk and installs it as the active session. The SDK client\ncan then issue `turn/start` to continue the conversation.",
       "properties": {
         "session": {
           "$ref": "#/$defs/SdkSessionSummary"
@@ -8917,7 +8953,7 @@
       "type": "object"
     },
     "SessionStartResult": {
-      "description": "Response to `ClientRequest::SessionStart`.\n\nReturned after the server creates an agent session and emits the\n`session/started` notification. Subsequent ClientRequests\n(turn/start, approval/resolve, etc.) operate on this session.",
+      "description": "Response to `ClientRequest::SessionStart`.\nReturned after the server creates an agent session and emits the\n`session/started` notification. Subsequent ClientRequests\n(turn/start, approval/resolve, etc.) operate on this session.",
       "properties": {
         "session_id": {
           "type": "string"
@@ -8930,7 +8966,7 @@
       "type": "object"
     },
     "SessionStartedParams": {
-      "description": "Matches TS `SDKSystemMessageSchema` with subtype 'init' (coreSchemas.ts:1457-1494).\nSent once at session startup; carries the full bootstrap context the SDK\nconsumer needs to render a UI.",
+      "description": "Sent once at session startup with subtype 'init'; carries the full bootstrap context the SDK\nconsumer needs to render a UI.",
       "properties": {
         "agents": {
           "default": [],
@@ -9303,7 +9339,7 @@
       ]
     },
     "SilentPayload": {
-      "description": "Typed payload for silent attachment kinds.\n\nVariant names map 1:1 to the [`AttachmentKind`](crate::AttachmentKind)\nsilent variants. Adding a new silent kind requires adding a matching\nvariant here \u2014 enforced by the constructor helpers on\n[`AttachmentMessage`](super::AttachmentMessage) +\nthe `silent_kind_round_trips_through_payload` parity test.",
+      "description": "Typed payload for silent attachment kinds.\nVariant names map 1:1 to the [`AttachmentKind`](crate::AttachmentKind)\nsilent variants. Adding a new silent kind requires adding a matching\nvariant here \u2014 enforced by the constructor helpers on\n[`AttachmentMessage`](super::AttachmentMessage) +\nthe `silent_kind_round_trips_through_payload` parity test.",
       "oneOf": [
         {
           "$ref": "#/$defs/HookCancelledPayload",
@@ -9384,6 +9420,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/GoalStatusPayload",
+          "properties": {
+            "type": {
+              "const": "goal_status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/StructuredOutputPayload",
           "properties": {
             "type": {
@@ -9451,7 +9500,6 @@
       ]
     },
     "SkillDiscoveryPayload": {
-      "description": "TS parity: `skill_discovery` (`utils/attachments.ts:538-542`).",
       "properties": {
         "signal": {
           "type": "string"
@@ -9503,7 +9551,7 @@
       "type": "string"
     },
     "SkillLock": {
-      "description": "A non-overridable lock on a skill row in the `/skills` dialog.\nCarries both the originating tier ([`Self::source`]) and the\nforced 4-state value ([`Self::forced_value`]) so downstream\nrenderers don't need to re-derive the value from per-tier maps.\n\nTS mirror: `oT5` returns `{ value, source }` \u2014\n`cli_inner_pretty.js:476885-476893`.",
+      "description": "A non-overridable lock on a skill row in the `/skills` dialog.\nCarries both the originating tier ([`Self::source`]) and the\nforced 4-state value ([`Self::forced_value`]) so downstream\nrenderers don't need to re-derive the value from per-tier maps.",
       "properties": {
         "forced_value": {
           "$ref": "#/$defs/SkillOverrideState"
@@ -9519,7 +9567,7 @@
       "type": "object"
     },
     "SkillLockSource": {
-      "description": "Which precedence layer originated a non-overridable lock on a\nskill's `skill_overrides` state. Mirrors the four `lock.source`\nvalues returned by TS `oT5` (`cli_inner_pretty.js:476885-476893`).\n\nIn precedence order (highest first): [`Self::Policy`] \u2192\n[`Self::Flag`] \u2192 [`Self::Author`] \u2192 [`Self::Plugin`]. A lock means\nthe `/skills` dialog renders `\ud83d\udd12 <label>` for the row and refuses\nto cycle it (Space is a no-op).",
+      "description": "Which precedence layer originated a non-overridable lock on a\nskill's `skill_overrides` state.\nIn precedence order (highest first): [`Self::Policy`] \u2192\n[`Self::Flag`] \u2192 [`Self::Author`] \u2192 [`Self::Plugin`]. A lock means\nthe `/skills` dialog renders `\ud83d\udd12 <label>` for the row and refuses\nto cycle it (Space is a no-op).",
       "oneOf": [
         {
           "const": "policy",
@@ -9544,7 +9592,7 @@
       ]
     },
     "SkillOverrideState": {
-      "description": "Per-skill override state stored under `skill_overrides` in any\nsettings tier. Drives the `/skills` 4-state editor ladder.\n\nWire format is kebab-case (`\"on\"`, `\"name-only\"`,\n`\"user-invocable-only\"`, `\"off\"`) \u2014 JSON settings files round-trip\nwithout translation.",
+      "description": "Per-skill override state stored under `skill_overrides` in any\nsettings tier. Drives the `/skills` 4-state editor ladder.\nWire format is kebab-case (`\"on\"`, `\"name-only\"`,\n`\"user-invocable-only\"`, `\"off\"`) \u2014 JSON settings files round-trip\nwithout translation.",
       "oneOf": [
         {
           "const": "on",
@@ -9594,7 +9642,7 @@
       ]
     },
     "SkillOverridesSaveResult": {
-      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after `SettingsWriter::write_local`.\n\nCarries **no display data** \u2014 TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
+      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after `SettingsWriter::write_local`.\nCarries **no display data** \u2014 TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
       "oneOf": [
         {
           "description": "Write succeeded.",
@@ -9637,7 +9685,7 @@
       "properties": {
         "baseline": {
           "$ref": "#/$defs/SkillOverrideState",
-          "description": "Project-or-user settings resolution, **without** local /\npolicy / flag layers. TS `aT5`. The dialog falls back here\nwhen the user reverts a local override (the save path\nwrites `Value::Null` so the local key is deleted and the\nbaseline resurfaces)."
+          "description": "Project-or-user settings resolution, **without** local /\npolicy / flag layers. `aT5`. The dialog falls back here\nwhen the user reverts a local override (the save path\nwrites `Value::Null` so the local key is deleted and the\nbaseline resurfaces)."
         },
         "current_local": {
           "anyOf": [
@@ -9668,7 +9716,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional lock \u2014 present when this row's state is forced by\na higher-precedence layer. Set by\n`resolve_skill_override_lock` (`oT5` mirror). When set, the\ndialog renders `\ud83d\udd12 <label>` and no-ops on Space."
+          "description": "Optional lock \u2014 present when this row's state is forced by\na higher-precedence layer. Set by\n`resolve_skill_override_lock`. When set, the\ndialog renders `\ud83d\udd12 <label>` and no-ops on Space."
         },
         "name": {
           "description": "Canonical skill name \u2014 what `/<name>` invokes.",
@@ -9696,7 +9744,7 @@
       "type": "object"
     },
     "SkillsDialogPayload": {
-      "description": "Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the\n`/skills` slash handler so the TUI doesn't recompute paths, token\nestimates, or grouping.\n\nTS parity: 2.1.142 `uJ4` (`cli_inner_pretty.js:476909`) \u2014 a flat\neditable list with 4-state override cycling, source labels\ninline, and lock annotations for policy/flag/author/plugin-locked\nrows. The 2.1.88 grouped read-only `SkillsMenu` has been retired.",
+      "description": "Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the\n`/skills` slash handler so the TUI doesn't recompute paths, token\nestimates, or grouping.\n2.1.142 `uJ4` (`cli_inner_pretty.js:476909`) \u2014 a flat\neditable list with 4-state override cycling, source labels\ninline, and lock annotations for policy/flag/author/plugin-locked\nrows. The 2.1.88 grouped read-only `SkillsMenu` has been retired.",
       "properties": {
         "bytes_per_token": {
           "description": "Bytes per token for the current main-role model. The TUI\ndivides [`SkillsDialogEntry::frontmatter_bytes`] by this to\nrender the `~N tok` column. Set to 4 when the host cannot\nresolve a more accurate value \u2014 `bytes/token \u2248 4` is the\nEnglish-text rule-of-thumb fallback.",
@@ -9718,11 +9766,11 @@
       "type": "object"
     },
     "SkillsDialogSource": {
-      "description": "Source group for a skill dialog entry. Collapsed from\n`SettingSource | 'plugin' | 'mcp'` to a closed enum so the wire shape is statically typed.\n\nThe dialog normalises `bundled`/`builtin` \u2192 display label `\"built-in\"`; the\ndialog filter matches against that lowercased label.",
+      "description": "Source group for a skill dialog entry. Collapsed from\n`SettingSource | 'plugin' | 'mcp'` to a closed enum so the wire shape is statically typed.\nThe dialog normalises `bundled`/`builtin` \u2192 display label `\"built-in\"`; the\ndialog filter matches against that lowercased label.",
       "oneOf": [
         {
           "const": "built_in",
-          "description": "Compiled-in bundled skill catalog. TS `bundled` / `builtin`\ncollapsed to a single label (display: `built-in`).",
+          "description": "Compiled-in bundled skill catalog. `bundled` / `builtin`\ncollapsed to a single label (display: `built-in`).",
           "type": "string"
         },
         {
@@ -9732,12 +9780,12 @@
         },
         {
           "const": "user",
-          "description": "`config home/skills/` \u2014 TS `userSettings`.",
+          "description": "`config home/skills/` \u2014 `userSettings`.",
           "type": "string"
         },
         {
           "const": "policy",
-          "description": "Managed enterprise dir \u2014 TS `policySettings`.",
+          "description": "Managed enterprise dir \u2014 `policySettings`.",
           "type": "string"
         },
         {
@@ -9753,7 +9801,7 @@
       ]
     },
     "SlashCommandInfo": {
-      "description": "UI-facing projection of a slash command. The TUI receives a `Vec` of\nthese at startup (and again after `/reload-plugins`) so the\nautocomplete popup and command palette can render and rank without\nreaching into [`CommandBase`] every time.\n\nLives in `coco-types` (rather than `coco-tui`) so it can travel on a\n[`crate::TuiOnlyEvent`] variant \u2014 events are the only path between\nthe agent driver and the TUI, and event payload types must be\nfoundation-layer.",
+      "description": "UI-facing projection of a slash command. The TUI receives a `Vec` of\nthese at startup (and again after `/reload-plugins`) so the\nautocomplete popup and command palette can render and rank without\nreaching into [`CommandBase`] every time.\nLives in `coco-types` (rather than `coco-tui`) so it can travel on a\n[`crate::TuiOnlyEvent`] variant \u2014 events are the only path between\nthe agent driver and the TUI, and event payload types must be\nfoundation-layer.",
       "properties": {
         "aliases": {
           "description": "Alternate names that also match this command. Searched by the\nranker so `/cls` finds `/clear` when `cls` is an alias.",
@@ -9784,7 +9832,7 @@
         "kind": {
           "$ref": "#/$defs/CommandTypeTag",
           "default": "local",
-          "description": "Execution kind. The empty-query ranker treats only\n[`CommandTypeTag::Prompt`] entries as skills eligible for the\n\"recently used\" section \u2014 builtin local commands always sit in\nthe builtin bucket (`cmd.type === 'prompt'` filtering).\n\nDerived from the source [`CommandType`] via\n[`CommandType::tag`] at snapshot time; the projection is\ncentralised there so the enum can't drift."
+          "description": "Execution kind. The empty-query ranker treats only\n[`CommandTypeTag::Prompt`] entries as skills eligible for the\n\"recently used\" section \u2014 builtin local commands always sit in\nthe builtin bucket (`cmd.type === 'prompt'` filtering).\nDerived from the source [`CommandType`] via\n[`CommandType::tag`] at snapshot time; the projection is\ncentralised there so the enum can't drift."
         },
         "name": {
           "description": "Canonical command name without the leading `/`.",
@@ -9803,7 +9851,7 @@
         },
         "usage_score": {
           "default": 0.0,
-          "description": "Recency-decayed usage score precomputed at snapshot time.\nHigher means \"used more recently and/or more often\". TS parity:\n`getSkillUsageScore` in `utils/suggestions/skillUsageTracking.ts`\n\u2014 same 7-day half-life with a 0.1 recency floor.\n\nEmbedded in the snapshot so the TUI ranker never touches disk\non the hot popup path. Updated naturally at the existing\nsnapshot-refresh moments (session start, `/reload-plugins`).\nIntra-session staleness is acceptable \u2014 the rank only governs\nwhich skills float to the top of the empty-query view; users\npick by name regardless.",
+          "description": "Recency-decayed usage score precomputed at snapshot time.\nHigher means \"used more recently and/or more often\". \n`getSkillUsageScore` in `utils/suggestions/skillUsageTracking.ts`\n\u2014 same 7-day half-life with a 0.1 recency floor.\nEmbedded in the snapshot so the TUI ranker never touches disk\non the hot popup path. Updated naturally at the existing\nsnapshot-refresh moments (session start, `/reload-plugins`).\nIntra-session staleness is acceptable \u2014 the rank only governs\nwhich skills float to the top of the empty-query view; users\npick by name regardless.",
           "format": "double",
           "type": "number"
         }
@@ -9814,7 +9862,7 @@
       "type": "object"
     },
     "SlashCommandStatusKind": {
-      "description": "Categorization of a `SlashCommandStatus` payload. Each variant maps to\na `slash.status.*` key in the TUI locale catalog.\n\nWire format intentionally tagged so SDK clients can render their own\nlocalized strings instead of consuming the TUI's English fallback.",
+      "description": "Categorization of a `SlashCommandStatus` payload. Each variant maps to\na `slash.status.*` key in the TUI locale catalog.\nWire format intentionally tagged so SDK clients can render their own\nlocalized strings instead of consuming the TUI's English fallback.",
       "oneOf": [
         {
           "description": "Registered command has no `handler` \u2014 typically a plugin\ncontribution stub that wasn't bridged.",
@@ -9989,7 +10037,7 @@
       "type": "object"
     },
     "StructuredOutputPayload": {
-      "description": "TS parity: `structured_output` (`utils/attachments.ts:639+`,\n`services/tools/toolExecution.ts:1276`).",
+      "description": "`structured_output` attachment type.",
       "properties": {
         "data": true
       },
@@ -10250,7 +10298,7 @@
       "type": "object"
     },
     "SystemMemorySavedMessage": {
-      "description": "Surfaced to the user's transcript when the auto-memory subsystem\nhas just landed new memory writes. TS parity:\n`utils/messages.ts::createMemorySavedMessage(writtenPaths)` +\n`services/autoDream/autoDream.ts:244-247` (which overrides\n`verb` to `\"Improved\"` for dream consolidations vs. the default\n`\"Saved\"` for extract).",
+      "description": "Surfaced to the user's transcript when the auto-memory subsystem\nhas just landed new memory writes. \n(which overrides\n`verb` to `\"Improved\"` for dream consolidations vs. the default\n`\"Saved\"` for extract).",
       "properties": {
         "uuid": {
           "format": "uuid",
@@ -10263,7 +10311,7 @@
         },
         "written_paths": {
           "default": [],
-          "description": "Paths the subagent wrote (or improved). TS `writtenPaths`. Excludes\n`MEMORY.md` \u2014 the index file is mechanical and not user-relevant.",
+          "description": "Paths the subagent wrote (or improved). `writtenPaths`. Excludes\n`MEMORY.md` \u2014 the index file is mechanical and not user-relevant.",
           "items": {
             "type": "string"
           },
@@ -10276,7 +10324,7 @@
       "type": "object"
     },
     "SystemMessage": {
-      "description": "System messages have sub-types for different notification kinds.\nAll system messages are `role: \"user\"` with `is_meta: true` for the API.\n\nWire discriminator is `kind`, matching the rest of the coco-rs\nclosed-set enums (`PermissionRule`, `ContentReplacementRecord`,\n`event::*`). The semantic taxonomy (compact_boundary,\nmicrocompact_boundary, \u2026) matches TS `subtype:` values, but we\ndon't mirror the field name \u2014 see `coco-session::storage` doc for\nthe snake_case wire policy.",
+      "description": "System messages have sub-types for different notification kinds.\nAll system messages are `role: \"user\"` with `is_meta: true` for the API.\nWire discriminator is `kind`, matching the rest of the coco-rs\nclosed-set enums (`PermissionRule`, `ContentReplacementRecord`,\n`event::*`). The semantic taxonomy (compact_boundary,\nmicrocompact_boundary, \u2026) values, but we\ndon't mirror the field name \u2014 see `coco-session::storage` doc for\nthe snake_case wire policy.",
       "oneOf": [
         {
           "$ref": "#/$defs/SystemInformationalMessage",
@@ -10499,7 +10547,7 @@
       "type": "string"
     },
     "SystemMicrocompactBoundaryMessage": {
-      "description": "Micro-compaction boundary marker.\n\nReserved for future use. coco-rs aligns with TS: micro-compaction\n(client-side tool-result clearing + time-based MC) does NOT emit a\nuser-visible boundary message \u2014 it broadcasts a `ContextCompacted`\nevent with `trigger=TimeBased`/`Auto` instead, and the TUI renders\na transient toast (`toast.micro_compaction`) rather than persisting\na boundary in the transcript. The variant stays defined so wire\ntranscripts that include one (e.g. cached-microcompact builds) can\nbe parsed without errors.",
+      "description": "Micro-compaction boundary marker.\nReserved for future use. coco-rs aligns with TS: micro-compaction\n(client-side tool-result clearing + time-based MC) does NOT emit a\nuser-visible boundary message \u2014 it broadcasts a `ContextCompacted`\nevent with `trigger=TimeBased`/`Auto` instead, and the TUI renders\na transient toast (`toast.micro_compaction`) rather than persisting\na boundary in the transcript. The variant stays defined so wire\ntranscripts that include one (e.g. cached-microcompact builds) can\nbe parsed without errors.",
       "properties": {
         "uuid": {
           "format": "uuid",
@@ -10606,7 +10654,7 @@
       "type": "object"
     },
     "TaskActivity": {
-      "description": "Per-tool-invocation activity row for the in-process teammate\nspinner tree (TS `TeammateSpinnerLine.tsx` preview rows).\n\nCarries the tool name and an optional one-line summary; the\ncaller decides how to render. Designed to ride in\n[`TaskProgress::recent_activities`] as a small ring buffer.",
+      "description": "Per-tool-invocation activity row for the in-process teammate\nspinner tree.\nCarries the tool name and an optional one-line summary; the\ncaller decides how to render. Designed to ride in\n[`TaskProgress::recent_activities`] as a small ring buffer.",
       "properties": {
         "summary": {
           "description": "Short, single-line activity descriptor \u2014 typically the first\narg or a file path. `None` when no useful summary is\navailable; the renderer should fall back to `tool_name`.",
@@ -10626,7 +10674,7 @@
       "type": "object"
     },
     "TaskCompletedParams": {
-      "description": "Matches TS `SDKTaskNotificationMessage` (coreSchemas.ts:1694-1713).\nTS calls this `task/notification`; coco-rs uses `task/completed` as the\nwire method for brevity, but fields match TS exactly.",
+      "description": "TS calls this `task/notification`; coco-rs uses `task/completed` as the\nwire method for brevity, but fields match TS exactly.",
       "properties": {
         "output_file": {
           "type": "string"
@@ -10666,7 +10714,7 @@
       "type": "object"
     },
     "TaskCompletionStatus": {
-      "description": "Matches TS `z.enum(['completed', 'failed', 'stopped'])` for task_notification status.",
+      "description": "for task_notification status.",
       "enum": [
         "completed",
         "failed",
@@ -10717,7 +10765,7 @@
       "type": "object"
     },
     "TaskProgressParams": {
-      "description": "Matches TS `SDKTaskProgressMessage` (coreSchemas.ts:1750-1767).\nIn TS, `description` and `usage` are required; other fields optional.\nThe `workflow_progress` field carries the streaming state of local_workflow\ntasks \u2014 a delta batch of workflow state changes.",
+      "description": "In TS, `description` and `usage` are required; other fields optional.\nThe `workflow_progress` field carries the streaming state of local_workflow\ntasks \u2014 a delta batch of workflow state changes.",
       "properties": {
         "agent_type": {
           "description": "Declared subagent type (`Explore`/`Plan`/\u2026), mirrored from the\nprogress slot so the TUI can correct the `local_agent` fallback\nthat `TaskStarted` emits.",
@@ -10736,7 +10784,7 @@
           ]
         },
         "recent_activities": {
-          "description": "Recent tool activities (cap-5 ring buffer). Coordinator-side\nowns push + eviction; the TUI just copies the slice into its\n`SubagentInstance` mirror. TS parity:\n`tasks/LocalAgentTask/LocalAgentTask.tsx:40`\n`MAX_RECENT_ACTIVITIES = 5`. Empty when the task hasn't run a\ntool yet or the producer is a legacy code path.",
+          "description": "Recent tool activities (cap-5 ring buffer). Coordinator-side\nowns push + eviction; the TUI just copies the slice into its\n`SubagentInstance` mirror. \n\n`MAX_RECENT_ACTIVITIES = 5`. Empty when the task hasn't run a\ntool yet or the producer is a legacy code path.",
           "items": {
             "$ref": "#/$defs/TaskActivity"
           },
@@ -10832,7 +10880,7 @@
       "type": "object"
     },
     "TaskStartedParams": {
-      "description": "Matches TS `SDKTaskStartedMessage` (`coreSchemas.ts:1715-1733`)\nplus optional teammate-metadata fields used when\n`task_type == \"in_process_teammate\"`.\n\nTS encodes both teammate and async-subagent spawn through this same\n`task_started` SDK event, discriminated by `task_type` \u2014 the canonical\nstrings live in `Task.ts:6-13`: `\"local_bash\"`, `\"local_agent\"`,\n`\"remote_agent\"`, `\"in_process_teammate\"`, `\"local_workflow\"`,\n`\"monitor_mcp\"`, `\"dream\"`. The teammate-roster rich metadata that TS\nstores in `AppState.teamContext.teammates` rides along as the\noptional fields below so the TUI in coco-rs (no shared store across\nprocesses) can construct the same `SubagentInstance { kind:\nTeammate, ... }` projection on the wire alone.",
+      "description": "plus optional teammate-metadata fields used when\n`task_type == \"in_process_teammate\"`.\nTS encodes both teammate and async-subagent spawn through this same\n`task_started` SDK event, discriminated by `task_type` \u2014 the canonical\nstrings live in : `\"local_bash\"`, `\"local_agent\"`,\n`\"remote_agent\"`, `\"in_process_teammate\"`, `\"local_workflow\"`,\n`\"monitor_mcp\"`, `\"dream\"`. The teammate-roster rich metadata that TS\nstores in `AppState.teamContext.teammates` rides along as the\noptional fields below so the TUI in coco-rs (no shared store across\nprocesses) can construct the same `SubagentInstance { kind:\nTeammate, ... }` projection on the wire alone.",
       "properties": {
         "agent_name": {
           "description": "Bare agent name (e.g. `\"researcher\"`). The fully-qualified\n`name@team` lives in [`Self::task_id`] for teammate rows so the\nexisting task identity machinery doesn't need a second key.",
@@ -10994,7 +11042,7 @@
       "type": "object"
     },
     "ThreadItem": {
-      "description": "Semantic representation of a conversation thread item.\nProduced by `StreamAccumulator` from `AgentStreamEvent` sequences.\nUsed in `ServerNotification::ItemStarted / ItemUpdated / ItemCompleted`.\n\nSee `event-system-design.md` Section 1.6.",
+      "description": "Semantic representation of a conversation thread item.\nProduced by `StreamAccumulator` from `AgentStreamEvent` sequences.\nUsed in `ServerNotification::ItemStarted / ItemUpdated / ItemCompleted`.\nSee `event-system-design.md` Section 1.6.",
       "properties": {
         "details": {
           "$ref": "#/$defs/ThreadItemDetails"
@@ -11015,7 +11063,7 @@
       "type": "object"
     },
     "ThreadItemDetails": {
-      "description": "Tool-specific semantic mapping.\n\nMapping rules (from `event-system-design.md` Section 6.2):\n- Bash \u2192 `CommandExecution`\n- Edit/Write \u2192 `FileChange`\n- WebSearch \u2192 `WebSearch`\n- mcp__* \u2192 `McpToolCall`\n- Agent/Task \u2192 `Subagent`\n- all others \u2192 `ToolCall`\n- text content \u2192 `AgentMessage`\n- thinking \u2192 `Reasoning`\n- errors \u2192 `Error`",
+      "description": "Tool-specific semantic mapping.\nMapping rules (from `event-system-design.md` Section 6.2):\n- Bash \u2192 `CommandExecution`\n- Edit/Write \u2192 `FileChange`\n- WebSearch \u2192 `WebSearch`\n- mcp__* \u2192 `McpToolCall`\n- Agent/Task \u2192 `Subagent`\n- all others \u2192 `ToolCall`\n- text content \u2192 `AgentMessage`\n- thinking \u2192 `Reasoning`\n- errors \u2192 `Error`",
       "oneOf": [
         {
           "description": "Bash tool \u2192 command execution with output.",
@@ -11553,7 +11601,7 @@
       ]
     },
     "ToolDisplayData": {
-      "description": "UI-only side channel for bounded display data produced by tools.\n\nThis data is for transcript/rendering surfaces only. Provider history and\nmodel-visible tool output must continue to use `ToolResultMessage.message`.",
+      "description": "UI-only side channel for bounded display data produced by tools.\nThis data is for transcript/rendering surfaces only. Provider history and\nmodel-visible tool output must continue to use `ToolResultMessage.message`.",
       "oneOf": [
         {
           "properties": {
@@ -11572,7 +11620,7 @@
           "type": "object"
         },
         {
-          "description": "Structured answers for a completed AskUserQuestion exchange, rendered as\na styled transcript cell (mirrors codex `RequestUserInputResultCell`)\ninstead of the raw model-facing prose.",
+          "description": "Structured answers for a completed AskUserQuestion exchange, rendered as\na styled transcript cell instead of the raw model-facing prose.",
           "properties": {
             "data": {
               "$ref": "#/$defs/AskUserQuestionResult"
@@ -11672,7 +11720,7 @@
       ]
     },
     "ToolProgressParams": {
-      "description": "Matches TS `SDKToolProgressMessage` (coreSchemas.ts:1648-1659).\n\nLong-running tool progress (Bash, PowerShell). TS throttles emission to\n\u22641 per 30 seconds per `parent_tool_use_id`. coco-rs StreamAccumulator\nmay emit this independently from `AgentStreamEvent::ToolUseStarted`.",
+      "description": "Long-running tool progress (Bash, PowerShell). TS throttles emission to\n\u22641 per 30 seconds per `parent_tool_use_id`. coco-rs StreamAccumulator\nmay emit this independently from `AgentStreamEvent::ToolUseStarted`.",
       "properties": {
         "elapsed_time_seconds": {
           "format": "double",
@@ -12062,7 +12110,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional typed data for UI renderers.\n\nThis is deliberately not part of provider/model history. The\nmodel-facing `message` remains canonical for tool output."
+          "description": "Optional typed data for UI renderers.\nThis is deliberately not part of provider/model history. The\nmodel-facing `message` remains canonical for tool output."
         },
         "is_error": {
           "default": false,
@@ -12158,7 +12206,7 @@
       "type": "object"
     },
     "ToolUseSummaryParams": {
-      "description": "Matches TS `SDKToolUseSummaryMessage` (coreSchemas.ts:1769-1777).\n\nBackground Haiku-based summary of a batch of tool uses. TS uses this\nto compress verbose tool output before it's displayed or archived.",
+      "description": "Background Haiku-based summary of a batch of tool uses. TS uses this\nto compress verbose tool output before it's displayed or archived.",
       "properties": {
         "preceding_tool_use_ids": {
           "items": {
@@ -12177,10 +12225,10 @@
       "type": "object"
     },
     "TuiOnlyEvent": {
-      "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n\n23 variants (20 from design \u00a74.1 + 3 local extensions).",
+      "description": "TUI-exclusive events.\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n23 variants (20 from design \u00a74.1 + 3 local extensions).",
       "oneOf": [
         {
-          "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.resolution_detail` so the tool's\n`execute()` can branch on the choice. TS parity:\n`ExitPlanModePermissionRequest.tsx:691-704` option grid.\n\n`original_input` carries the raw tool input so the TUI can derive\npath-scoped read permission updates for classic \"always allow\"\napprovals.",
+          "description": "Permission approval overlay needed.\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.resolution_detail` so the tool's\n`execute()` can branch on the choice. \n option grid.\n`original_input` carries the raw tool input so the TUI can derive\npath-scoped read permission updates for classic \"always allow\"\napprovals.",
           "properties": {
             "choices": {
               "items": {
@@ -12258,7 +12306,7 @@
           "type": "object"
         },
         {
-          "description": "AskUserQuestion overlay needed. `input` carries the full tool\ninput dict (the `questions[]` array, etc.) verbatim so the TUI\nrenders the rich multi-question UI (multiSelect, preview, notes)\nmatching TS `AskUserQuestionPermissionRequest.tsx`. The TUI\nechoes the answer payload back via `UserCommand::ApprovalResponse`\nwith `updated_input = Some({...input, answers, annotations})`.",
+          "description": "AskUserQuestion overlay needed. `input` carries the full tool\ninput dict (the `questions[]` array, etc.) verbatim so the TUI\nrenders the rich multi-question UI (multiSelect, preview, notes).\nThe TUI echoes the answer payload back via\n`UserCommand::ApprovalResponse` with\n`updated_input = Some({...input, answers, annotations})`.",
           "properties": {
             "input": true,
             "request_id": {
@@ -12386,7 +12434,7 @@
           "type": "object"
         },
         {
-          "description": "Slash-command catalogue changed \u2014 sent after the seed at session\nstart AND whenever `/reload-plugins` swaps the active\n`CommandRegistry`. The TUI overwrites\n`state.session.available_commands` with this list so the `/`\nautocomplete popup and command palette stay in sync. TS parity:\nthe TS popup re-queries `getCommands()` inline; this implementation pushes\nthe snapshot because the registry lives in the CLI process.",
+          "description": "Slash-command catalogue changed \u2014 sent after the seed at session\nstart AND whenever `/reload-plugins` swaps the active\n`CommandRegistry`. The TUI overwrites\n`state.session.available_commands` with this list so the `/`\nautocomplete popup and command palette stay in sync. \nthe TS popup re-queries `getCommands()` inline; this implementation pushes\nthe snapshot because the registry lives in the CLI process.",
           "properties": {
             "commands": {
               "items": {
@@ -12490,7 +12538,7 @@
           "type": "object"
         },
         {
-          "description": "Open the resume picker inside the running TUI session.\n\nTS parity: `/resume` with no args opens the saved-chat picker;\n`/resume <id-or-name>` bypasses this and resumes directly.",
+          "description": "Open the resume picker inside the running TUI session.\n`/resume` with no args opens the saved-chat picker;\n`/resume <id-or-name>` bypasses this and resumes directly.",
           "properties": {
             "sessions": {
               "items": {
@@ -12510,7 +12558,7 @@
           "type": "object"
         },
         {
-          "description": "Rewind picker per-row metadata, emitted once on picker mount.\n\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) \u2014 the\npicker renders \"\u26a0 No code restore\" for that row.\n`metadata == Some { file_paths: [], .. }` means the snapshot\nexists but nothing changed \u2014 picker renders \"No code changes\".\n\nBundled here so the bounded TUI command channel does not drop individual\nrow events on transcripts with many user messages.",
+          "description": "Rewind picker per-row metadata, emitted once on picker mount.\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) \u2014 the\npicker renders \"\u26a0 No code restore\" for that row.\n`metadata == Some { file_paths: [], .. }` means the snapshot\nexists but nothing changed \u2014 picker renders \"No code changes\".\nBundled here so the bounded TUI command channel does not drop individual\nrow events on transcripts with many user messages.",
           "properties": {
             "rows": {
               "items": {
@@ -12715,7 +12763,7 @@
           "type": "object"
         },
         {
-          "description": "Streaming tool input delta (typing effect).\n\nA tool call's arguments have started streaming (the model began\nemitting the input JSON). Carries the `call_id` and tool `name` so the\nTUI can create a pre-queue \"streaming\" row in the activity strip \u2014 the\n`call_id` matches the later [`AgentStreamEvent::ToolUseQueued`], which\nupgrades the same row with the finalized input once parsing completes.\n\nEmitted by the engine from `StreamEvent::ToolCallStart`. Like\n[`Self::ToolCallDelta`] it is UI-only: the SDK sees the complete input\nat `ToolUseQueued` and does not need the streaming preamble.",
+          "description": "Streaming tool input delta (typing effect).\nA tool call's arguments have started streaming (the model began\nemitting the input JSON). Carries the `call_id` and tool `name` so the\nTUI can create a pre-queue \"streaming\" row in the activity strip \u2014 the\n`call_id` matches the later [`AgentStreamEvent::ToolUseQueued`], which\nupgrades the same row with the finalized input once parsing completes.\nEmitted by the engine from `StreamEvent::ToolCallStart`. Like\n[`Self::ToolCallDelta`] it is UI-only: the SDK sees the complete input\nat `ToolUseQueued` and does not need the streaming preamble.",
           "properties": {
             "call_id": {
               "type": "string"
@@ -12736,7 +12784,7 @@
           "type": "object"
         },
         {
-          "description": "Partial tool-call input JSON fragment, for the live \"typing\" preview in\nthe activity strip. The TUI appends the delta to\n`ToolExecution.streaming_input` and re-derives the primary-argument\npreview (the command for `Bash`, the path for `Read`, \u2026) so the row\nshows arguments filling in before the call is queued.\n\nEmitted by the engine from `StreamEvent::ToolCallDelta` (a different,\ninference-internal type). Kept in `TuiOnlyEvent` rather than\n`AgentStreamEvent` per `event-system-design.md` \u00a73.3: the partial JSON\nserves a purely UI display purpose \u2014 `ToolUseQueued` already contains\nthe complete, re-assembled input, so SDK consumers need not handle the\nfragments.",
+          "description": "Partial tool-call input JSON fragment, for the live \"typing\" preview in\nthe activity strip. The TUI appends the delta to\n`ToolExecution.streaming_input` and re-derives the primary-argument\npreview (the command for `Bash`, the path for `Read`, \u2026) so the row\nshows arguments filling in before the call is queued.\nEmitted by the engine from `StreamEvent::ToolCallDelta` (a different,\ninference-internal type). Kept in `TuiOnlyEvent` rather than\n`AgentStreamEvent` per `event-system-design.md` \u00a73.3: the partial JSON\nserves a purely UI display purpose \u2014 `ToolUseQueued` already contains\nthe complete, re-assembled input, so SDK consumers need not handle the\nfragments.",
           "properties": {
             "call_id": {
               "type": "string"
@@ -12841,7 +12889,7 @@
           "description": "Local slash-command produced a `CommandResult::Text` (or\n`Compact { display_text }`). Surfaced as a system-role chat message\nso it reads inline with the transcript. `text` is the pre-rendered\nbody \u2014 never translated, since it carries the handler's actual\noutput (often command-specific status / git output / prompt\npreview).",
           "properties": {
             "args": {
-              "description": "Raw argument string the user typed (e.g. `sonnet` for\n`/model sonnet`). Threaded into the model-visible echo\n(`\u276f /name args`) so the model sees the full invocation, matching\nTS `formatCommandInput(command, args)`. Empty for argless commands.",
+              "description": "Raw argument string the user typed (e.g. `sonnet` for\n`/model sonnet`). Threaded into the model-visible echo\n(`\u276f /name args`) so the model sees the full invocation.\nEmpty for argless commands.",
               "type": "string"
             },
             "name": {
@@ -12907,7 +12955,7 @@
           "type": "object"
         },
         {
-          "description": "Tell the TUI to open the rewind picker overlay.\n\nEmitted by the slash-command dispatcher when `/rewind` resolves\nthrough the generic `DialogSpec` mapping. The TUI consumes the\ncurrent transcript cells to build the bare picker; preselected\nrewind remains an internal UI command path.",
+          "description": "Tell the TUI to open the rewind picker overlay.\nEmitted by the slash-command dispatcher when `/rewind` resolves\nthrough the generic `DialogSpec` mapping. The TUI consumes the\ncurrent transcript cells to build the bare picker; preselected\nrewind remains an internal UI command path.",
           "properties": {
             "type": {
               "const": "open_rewind_picker",
@@ -12920,7 +12968,7 @@
           "type": "object"
         },
         {
-          "description": "Tell the TUI to open the `/memory` file-picker overlay. The slash\ndispatcher pre-builds entries via\n`coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries`\nand carries them through here so the TUI doesn't recompute paths.\nOn selection the TUI sends an `OpenMemoryFile` command to the CLI\nbridge; the bridge creates the file (`mode wx` semantics), opens\n`$VISUAL || $EDITOR`, and reports the result back as a transcript\nvisible event. On cancel the TUI emits \"Cancelled memory editing\".\nTS parity: `commands/memory/memory.tsx`.",
+          "description": "Tell the TUI to open the `/memory` file-picker overlay. The slash\ndispatcher pre-builds entries via\n`coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries`\nand carries them through here so the TUI doesn't recompute paths.\nOn selection the TUI sends an `OpenMemoryFile` command to the CLI\nbridge; the bridge creates the file (`mode wx` semantics), opens\n`$VISUAL || $EDITOR`, and reports the result back as a transcript\nvisible event. On cancel the TUI emits \"Cancelled memory editing\".",
           "properties": {
             "entries": {
               "items": {
@@ -12957,7 +13005,7 @@
           "type": "object"
         },
         {
-          "description": "`/copy [N]` slash command \u2014 the TUI walks its transcript, picks\nthe Nth-latest assistant message, and either directly copies it\n(when there are no code blocks or `copy_full_response` is on) or\nopens the [`ModalState::CopyPicker`] surface. The CLI runner\nemits this through `dispatch_slash_command`'s `/copy` intercept;\nonly the TUI has the transcript in a render-ready shape.\nTS parity: `commands/copy/copy.tsx`.",
+          "description": "`/copy [N]` slash command \u2014 the TUI walks its transcript, picks\nthe Nth-latest assistant message, and either directly copies it\n(when there are no code blocks or `copy_full_response` is on) or\nopens the [`ModalState::CopyPicker`] surface. The CLI runner\nemits this through `dispatch_slash_command`'s `/copy` intercept;\nonly the TUI has the transcript in a render-ready shape.",
           "properties": {
             "args": {
               "description": "Raw arg string after `/copy`; empty when the user typed\n`/copy` with no argument. The TUI parses it as `usize` and\nsurfaces a usage toast on invalid input.",
@@ -13116,7 +13164,7 @@
           "type": "object"
         },
         {
-          "description": "Result of a prompt-mode `!`-prefixed bash submission. The TUI\nfolds this into a `MessageContent::BashOutput` chat message\nkeyed by the same `user_message_id` as the matching\n`BashInput`. Emitted by the CLI bridge after running the\ncommand via `coco_shell::ShellExecutor`. TS parity:\n`LocalShellTask` completion.",
+          "description": "Result of a prompt-mode `!`-prefixed bash submission. The TUI\nfolds this into a `MessageContent::BashOutput` chat message\nkeyed by the same `user_message_id` as the matching\n`BashInput`. Emitted by the CLI bridge after running the\ncommand via `coco_shell::ShellExecutor`. \n`LocalShellTask` completion.",
           "properties": {
             "exit_code": {
               "description": "Process exit code; non-zero shades the output red.",
@@ -13158,7 +13206,7 @@
           "type": "object"
         },
         {
-          "description": "Tell the TUI to open the tabbed settings panel. Emitted when the slash\ndispatcher resolves `/config` with no args (TS `/config` local-jsx\npanel). Reuses the same overlay as the `Ctrl+,` keybind.",
+          "description": "Tell the TUI to open the tabbed settings panel. Emitted when the slash\ndispatcher resolves `/config` with no args. Reuses the same overlay\nas the `Ctrl+,` keybind.",
           "properties": {
             "type": {
               "const": "open_settings",
@@ -13184,7 +13232,7 @@
           "type": "object"
         },
         {
-          "description": "Tell the TUI to open the `/skills` read-only overlay. The slash\ndispatcher pre-builds the entry list + per-group subtitles so\nthe TUI doesn't recompute paths or token estimates.\n\nTS parity: `commands/skills/skills.tsx` \u2192 `<SkillsMenu>`. Dialog\nis read-only \u2014 Esc to close; selection has no side effects.",
+          "description": "Tell the TUI to open the `/skills` read-only overlay. The slash\ndispatcher pre-builds the entry list + per-group subtitles so\nthe TUI doesn't recompute paths or token estimates.\n`commands/skills/skills.tsx` \u2192 `<SkillsMenu>`. Dialog\nis read-only \u2014 Esc to close; selection has no side effects.",
           "properties": {
             "payload": {
               "$ref": "#/$defs/SkillsDialogPayload"
@@ -13235,7 +13283,7 @@
           "type": "object"
         },
         {
-          "description": "`/permissions` overlay \u2014 opens the tabbed rule editor\n(Allow / Ask / Deny / Workspace). The payload is a CLI-built\nsnapshot of every file-backed rule + additional directory, since\nthe TUI cannot reach the settings stores directly. Re-emitted\nafter each edit so the open overlay refreshes in place. TS parity:\n`commands/permissions/permissions.tsx` \u2192 `<PermissionRuleList>`.",
+          "description": "`/permissions` overlay \u2014 opens the tabbed rule editor\n(Allow / Ask / Deny / Workspace). The payload is a CLI-built\nsnapshot of every file-backed rule + additional directory, since\nthe TUI cannot reach the settings stores directly. Re-emitted\nafter each edit so the open overlay refreshes in place. \n`commands/permissions/permissions.tsx` \u2192 `<PermissionRuleList>`.",
           "properties": {
             "payload": {
               "$ref": "#/$defs/PermissionsEditorPayload"
@@ -13252,7 +13300,7 @@
           "type": "object"
         },
         {
-          "description": "Open the interactive `/add-dir` overlay (no-argument form). The TUI\nshows a directory-path text input; confirm re-dispatches\n`/add-dir <path>` to reuse the validated session-add path. TS parity:\n`commands/add-dir/add-dir.tsx` \u2192 `<AddWorkspaceDirectory>`.",
+          "description": "Open the interactive `/add-dir` overlay (no-argument form). The TUI\nshows a directory-path text input; confirm re-dispatches\n`/add-dir <path>` to reuse the validated session-add path. \n`commands/add-dir/add-dir.tsx` \u2192 `<AddWorkspaceDirectory>`.",
           "properties": {
             "type": {
               "const": "open_add_directory",
@@ -13328,7 +13376,7 @@
       ]
     },
     "TurnEndedParams": {
-      "description": "Terminal event for one logical user-prompt cycle. The\n`outcome` discriminator carries the per-variant payload \u2014\n`stop_reason` lives only on `Completed` where it is\nsemantically meaningful. Other variants self-describe.\n\nPairing contract: every `TurnStartedParams` is followed by\n**at least one** `TurnEndedParams` sharing the same `turn_id`.\nA second `TurnEnded(Interrupted)` MAY follow a terminal outcome\nwhen the user cancel was observed after the engine had already\nreturned \u2014 this is the late-cancel signal the TUI uses to fire\nauto-restore. Consumers should treat the latest `Interrupted`\nevent as authoritative when it follows a same-id terminal.",
+      "description": "Terminal event for one logical user-prompt cycle. The\n`outcome` discriminator carries the per-variant payload \u2014\n`stop_reason` lives only on `Completed` where it is\nsemantically meaningful. Other variants self-describe.\nPairing contract: every `TurnStartedParams` is followed by\n**at least one** `TurnEndedParams` sharing the same `turn_id`.\nA second `TurnEnded(Interrupted)` MAY follow a terminal outcome\nwhen the user cancel was observed after the engine had already\nreturned \u2014 this is the late-cancel signal the TUI uses to fire\nauto-restore. Consumers should treat the latest `Interrupted`\nevent as authoritative when it follows a same-id terminal.",
       "properties": {
         "outcome": {
           "$ref": "#/$defs/TurnOutcome"
@@ -13359,7 +13407,7 @@
       "type": "string"
     },
     "TurnOutcome": {
-      "description": "Discriminated terminal reason. The `Completed` variant is\nthe only one that carries `stop_reason`: the other variants'\nnames ARE the terminal reason.\n\nWire format: `{\"kind\": \"completed\", \"data\": {\"stop_reason\": \"end_turn\"}}` etc.\n\nPer-variant payloads are **named structs** rather than inline\nstruct-variants. This is deliberate: schemars emits `$ref` to the\nnamed struct, which the Python codegen turns into a real Pydantic\nmodel. Inline struct-variants would degrade to `dict[str, Any]` on\nthe Python side \u2014 losing typed access for SDK consumers.",
+      "description": "Discriminated terminal reason. The `Completed` variant is\nthe only one that carries `stop_reason`: the other variants'\nnames ARE the terminal reason.\nWire format: `{\"kind\": \"completed\", \"data\": {\"stop_reason\": \"end_turn\"}}` etc.\nPer-variant payloads are **named structs** rather than inline\nstruct-variants. This is deliberate: schemars emits `$ref` to the\nnamed struct, which the Python codegen turns into a real Pydantic\nmodel. Inline struct-variants would degrade to `dict[str, Any]` on\nthe Python side \u2014 losing typed access for SDK consumers.",
       "oneOf": [
         {
           "description": "Engine decided to terminate the cycle.",
@@ -13483,7 +13531,7 @@
       "type": "object"
     },
     "TurnStartResult": {
-      "description": "Response to `ClientRequest::TurnStart`.\n\n`turn/start` is a fire-and-forget trigger \u2014 the server accepts the\nrequest, spawns the turn as a detached task, and replies immediately\nwith a handle. Progress is delivered via `turn/started`, streaming\ndeltas, and the terminal `turn/ended` notification.",
+      "description": "Response to `ClientRequest::TurnStart`.\n`turn/start` is a fire-and-forget trigger \u2014 the server accepts the\nrequest, spawns the turn as a detached task, and replies immediately\nwith a handle. Progress is delivered via `turn/started`, streaming\ndeltas, and the terminal `turn/ended` notification.",
       "properties": {
         "turn_id": {
           "description": "Opaque turn identifier the client can use to correlate notifications\nand issue `turn/interrupt` for cancellation.",
@@ -13704,7 +13752,7 @@
       "type": "object"
     },
     "WorkflowAgentState": {
-      "description": "Per-agent lifecycle state. Wire strings mirror TS `workflow_agent.state`\n(`start` \u2192 `progress` \u2192 `done`, or `error`). A cache-replay hit is reported\nas `Done` with the sibling `cached: true` flag, not a distinct state.",
+      "description": "Per-agent lifecycle state (`start` \u2192 `progress` \u2192 `done`, or `error`).\nA cache-replay hit is reported\nas `Done` with the sibling `cached: true` flag, not a distinct state.",
       "enum": [
         "start",
         "progress",
@@ -13753,7 +13801,7 @@
         {
           "properties": {
             "agentId": {
-              "description": "Spawned subagent id (TS `agentId`), once running.",
+              "description": "Spawned subagent id, once running.",
               "type": [
                 "string",
                 "null"
@@ -13785,7 +13833,7 @@
               "type": "string"
             },
             "model": {
-              "description": "Resolved model id for the subagent (TS `model`).",
+              "description": "Resolved model id for the subagent.",
               "type": [
                 "string",
                 "null"
@@ -13805,14 +13853,14 @@
               ]
             },
             "promptPreview": {
-              "description": "Truncated preview of the subagent prompt (TS `promptPreview`).",
+              "description": "Truncated preview of the subagent prompt.",
               "type": [
                 "string",
                 "null"
               ]
             },
             "resultPreview": {
-              "description": "Truncated preview of the subagent result (TS `resultPreview`).",
+              "description": "Truncated preview of the subagent result.",
               "type": [
                 "string",
                 "null"

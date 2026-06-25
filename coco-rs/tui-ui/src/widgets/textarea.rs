@@ -7,16 +7,16 @@
 //!
 //! - Modal Vim state (`coco-vim` owns vim semantics via `vim/wiring.rs`).
 //! - `EditorKeymap` / `VimNormalKeymap` dispatch (`coco-tui`'s
-//!   `keybinding_bridge` produces `TuiCommand`s; TextArea only exposes
-//!   verbs).
+//! `keybinding_bridge` produces `TuiCommand`s; TextArea only exposes
+//! verbs).
 //! - `pub fn input(&mut self, event: KeyEvent)` — never call; the bridge
-//!   owns key→verb mapping.
+//! owns key→verb mapping.
 //! - `TextElement` / placeholder ranges (paste pills live at `paste.rs`).
 //! - `StatefulWidgetRef` / viewport scroll (the single-line composer
-//!   doesn't need it yet; multi-line callers can read `wrapped_lines`
-//!   and render themselves).
+//! doesn't need it yet; multi-line callers can read `wrapped_lines`
+//! and render themselves).
 //!
-//! The single-entry kill buffer mirrors codex-rs precisely:
+//! The single-entry kill buffer:
 //! whole-buffer replacement (`set_text`, `take_text`) intentionally keeps
 //! the kill buffer alive so `Ctrl+Y` can recover the user's most recent
 //! `Ctrl+K` even after submit / `/clear` clears the visible draft.
@@ -822,17 +822,16 @@ impl Default for TextArea {
 }
 
 /// Compute wrapped-line byte ranges for `text` at `width` display columns.
-///
 /// - Logical lines (delimited by `\n`) are processed independently. Each
-///   wrapped range's `end` points just past the line's last byte (i.e.
-///   the newline itself, if present, is NOT included — `partition_point`
-///   logic in cursor positioning relies on this).
+/// wrapped range's `end` points just past the line's last byte (i.e.
+/// the newline itself, if present, is NOT included — `partition_point`
+/// logic in cursor positioning relies on this).
 /// - Wrapping is grapheme-aware via `unicode-segmentation` and
-///   display-column-aware via `unicode-width`. CJK fullwidth characters
-///   correctly take 2 columns.
+/// display-column-aware via `unicode-width`. CJK fullwidth characters
+/// correctly take 2 columns.
 /// - `width == 0` degenerates to one range per logical line.
 /// - An empty buffer returns a single `0..0` range so the cursor still
-///   has a valid line to land on.
+/// has a valid line to land on.
 fn compute_wrapped_lines(text: &str, width: u16) -> Vec<Range<usize>> {
     if text.is_empty() {
         // `vec![0..0]` trips the `single_range_in_vec_init` lint (which

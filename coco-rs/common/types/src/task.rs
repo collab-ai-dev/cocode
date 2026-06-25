@@ -7,13 +7,13 @@
 //! The refactor renamed TS's confusing names for Rust clarity. These
 //! are wire-breaking; old transcripts won't deserialize cleanly.
 //!
-//! | Concept              | TS                    | Rust          |
+//! | Concept | TS | Rust |
 //! |----------------------|-----------------------|---------------|
-//! | Backgrounded agent   | `local_agent`         | `bg_agent`    |
-//! | Bash background      | `local_bash`          | `shell`       |
-//! | Local teammate       | `in_process_teammate` | `teammate`    |
-//! | Remote teammate      | `remote_agent`        | `remote_teammate` |
-//! | Dream                | `dream`               | `dream`       |
+//! | Backgrounded agent | `local_agent` | `bg_agent` |
+//! | Bash background | `local_bash` | `shell` |
+//! | Local teammate | `in_process_teammate` | `teammate` |
+//! | Remote teammate | `remote_agent` | `remote_teammate` |
+//! | Dream | `dream` | `dream` |
 //!
 //! "local agent" in TS actually meant "backgrounded subagent task". The
 //! primary REPL is not a task and was never in this taxonomy. Rust
@@ -34,7 +34,6 @@ use serde::Serialize;
 // ─── Backends ──────────────────────────────────────────────────────────
 
 /// Backend that drives a teammate's execution.
-///
 /// `#[non_exhaustive]` — future backends (Wezterm, Kitty, Windows
 /// Terminal panes) can land without a major version bump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -63,7 +62,6 @@ impl BackendType {
 // ─── TeammateRef ───────────────────────────────────────────────────────
 
 /// Identity of an agent participating in a team — `name@team`.
-///
 /// Parsed into a struct so consumers can read the two halves without
 /// re-splitting at every call site. Wire format is the single
 /// `"name@team"` string for round-trip with TS transcripts.
@@ -121,7 +119,6 @@ impl<'de> Deserialize<'de> for TeammateRef {
 /// uniform dispatch shape — consumers that route on what kind of thing
 /// a task represents match on [`TaskIdentity`] rather than re-implementing
 /// the dispatch.
-///
 /// Reserves the [`RemoteTeammate`](Self::RemoteTeammate) slot so future
 /// remote-agent support cannot be added by deleting variants out of the
 /// abstraction — the slot exists today; populating it later won't
@@ -146,8 +143,7 @@ pub enum TaskIdentity<'a> {
 // ─── Progress ──────────────────────────────────────────────────────────
 
 /// Progress snapshot for a running task. TS: `agentToolUtils.ts`
-/// `ProgressTracker` + `LocalAgentTask.tsx:127 AgentProgress`.
-///
+/// Progress tracking for local agent tasks.
 /// Lives on the per-variant extras (BgAgent / Teammate / RemoteTeammate)
 /// because shell + dream tasks have no progress concept; sparse Options
 /// at the base level were the previous design and were hiding the
@@ -186,7 +182,7 @@ pub struct TaskProgress {
     pub last_tool_name: Option<String>,
     /// Most-recent tool activities for this task, capped at the
     /// caller's ring-buffer size (typically 3 — see TS
-    /// `TeammateSpinnerLine.tsx:getMessagePreview`). Newest entries
+    /// Newest entries
     /// are pushed onto the end; clients render in display order
     /// (oldest of the last N first). Empty when the task hasn't
     /// invoked tools yet.
@@ -200,8 +196,7 @@ pub struct TaskProgress {
 }
 
 /// Per-tool-invocation activity row for the in-process teammate
-/// spinner tree (TS `TeammateSpinnerLine.tsx` preview rows).
-///
+/// spinner tree.
 /// Carries the tool name and an optional one-line summary; the
 /// caller decides how to render. Designed to ride in
 /// [`TaskProgress::recent_activities`] as a small ring buffer.
@@ -256,9 +251,9 @@ pub enum TaskType {
 }
 
 impl TaskType {
-    /// TS-canonical wire string for the `task_type` field on the
+    /// wire string for the `task_type` field on the
     /// `task/started`, `task/progress`, and `task/completed` events.
-    /// Pinned to `Task.ts:6-13` — see [`task_type_wire`] for the same
+    /// See [`task_type_wire`] for the same
     /// constants exposed as module items, useful when matching against
     /// `Option<String>` from a deserialized payload.
     pub const fn wire_name(self) -> &'static str {
@@ -273,7 +268,7 @@ impl TaskType {
     }
 }
 
-/// TS-canonical wire-string constants for [`TaskType`]. Use these on
+/// wire-string constants for [`TaskType`]. Use these on
 /// both producer and consumer sides instead of raw string literals —
 /// drift between [`TaskType::wire_name`] and a match arm becomes a
 /// compile error rather than a silent miss.
@@ -305,7 +300,6 @@ impl TaskStatus {
 // ─── Per-variant extras ────────────────────────────────────────────────
 
 /// Backgrounded subagent task sidecar.
-///
 /// Holds variant-owned `progress` and `is_backgrounded` (previously
 /// hoisted to the base, but sparse for shell / teammate / dream).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,7 +312,7 @@ pub struct BgAgentExtras {
     pub is_backgrounded: bool,
     /// True once `TaskOutputTool` reads the terminal output. Stops the
     /// compact reminder re-announcing the same agent. TS:
-    /// `compact.ts:1578` `agent.retrieved`.
+    /// `agent.retrieved` tag.
     #[serde(default)]
     pub retrieved: bool,
     /// UI pin — blocks panel eviction.
@@ -395,10 +389,10 @@ pub enum WorkflowProgressEvent {
         phase_title: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         phase_index: Option<i32>,
-        /// Spawned subagent id (TS `agentId`), once running.
+        /// Spawned subagent id, once running.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_id: Option<String>,
-        /// Resolved model id for the subagent (TS `model`).
+        /// Resolved model id for the subagent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -411,10 +405,10 @@ pub enum WorkflowProgressEvent {
         /// (TS does not use a distinct state for cache hits).
         #[serde(default)]
         cached: bool,
-        /// Truncated preview of the subagent result (TS `resultPreview`).
+        /// Truncated preview of the subagent result.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         result_preview: Option<String>,
-        /// Truncated preview of the subagent prompt (TS `promptPreview`).
+        /// Truncated preview of the subagent prompt.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt_preview: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -429,8 +423,8 @@ pub enum WorkflowProgressEvent {
     },
 }
 
-/// Per-agent lifecycle state. Wire strings mirror TS `workflow_agent.state`
-/// (`start` → `progress` → `done`, or `error`). A cache-replay hit is reported
+/// Per-agent lifecycle state (`start` → `progress` → `done`, or `error`).
+/// A cache-replay hit is reported
 /// as `Done` with the sibling `cached: true` flag, not a distinct state.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -443,7 +437,6 @@ pub enum WorkflowAgentState {
 }
 
 /// Local in-process teammate sidecar.
-///
 /// `agent_ref` is the parsed `name@team` identity — replaces the old
 /// duplicate `agent_id` / `agent_name` / `team_name` fields. Progress
 /// lives here (not on the base) because it's variant-owned.
@@ -500,7 +493,7 @@ impl TeammateExtras {
 
 /// Remote-controlled teammate sidecar. **Reserved variant slot** — no
 /// driver in coco-rs today. The fields below are placeholders informed
-/// by the TS `RemoteAgentTaskState` shape (`sessionId`,
+/// by the `RemoteAgentTaskState` shape (`sessionId`,
 /// `remoteTaskType`, `log: SDKMessage[]`); the variant exists so
 /// every consumer match arm must consider remote teammates rather
 /// than the abstraction being "unified" by deleting the inconvenient
@@ -519,7 +512,6 @@ pub struct RemoteTeammateExtras {
 /// Per-`TaskType` sidecar extras. Rust analog of TS's
 /// `LocalShellTaskState | LocalAgentTaskState | InProcessTeammateTaskState | …`
 /// union.
-///
 /// Wire shape: flattened onto [`TaskStateBase`] via `#[serde(flatten)]`,
 /// dispatched on the parent's `type` discriminator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -686,11 +678,9 @@ impl TaskExtras {
 // ─── TaskStateBase ─────────────────────────────────────────────────────
 
 /// Canonical task row — one per running thing.
-///
 /// Cancellation tokens and watch channels do NOT live here; they live
 /// in a sibling `TaskControl` map on the runtime so this struct stays
 /// pure serializable wire data.
-///
 /// Per-task-type fields (progress, is_backgrounded, retain, command,
 /// agent_ref, …) live in [`TaskExtras`], flattened onto the wire so
 /// the JSON shape matches a discriminated union.

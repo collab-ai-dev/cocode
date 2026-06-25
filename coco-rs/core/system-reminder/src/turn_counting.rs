@@ -12,7 +12,7 @@
 //! - "Assistant turns" exclude thinking-only messages (all-reasoning blocks).
 //! - Stop counting once the matching tool_use is found; return the count.
 //! - A tool never invoked returns the total number of assistant turns in
-//!   history — i.e. "infinitely many turns ago" rounded to session length.
+//! history — i.e. "infinitely many turns ago" rounded to session length.
 //!
 //! [`GeneratorContext`]: crate::GeneratorContext
 
@@ -25,23 +25,18 @@ use coco_types::AttachmentKind;
 use coco_types::ToolName;
 
 /// Task tools whose **invocation resets the task-reminder silence counter**.
-///
 /// Only `TaskCreate` / `TaskUpdate` are treated as "task management activity".
 /// Read-only tools (`TaskGet`/`List`/`Stop`/`Output`) don't count — using
 /// them does not acknowledge new or updated work.
-///
 /// Callers use this constant instead of a hand-rolled array so adding a new
 /// mutation tool in [`ToolName`] flows through automatically.
 pub const TASK_MANAGEMENT_TOOLS: &[ToolName] = &[ToolName::TaskCreate, ToolName::TaskUpdate];
 
 /// Count assistant turns back from the end of history until we find an
 /// assistant message that invoked *any* of `tools`.
-///
 /// Returns the count of assistant turns *before* the matching tool use
 /// (i.e. if the very last assistant turn invoked the tool, returns 0).
-///
 /// Skips thinking-only messages (all-reasoning content blocks).
-///
 /// If the tool is never found, returns the total number of assistant turns
 /// in `messages` (capped at `i32::MAX`). Callers treat this as "infinitely
 /// many turns ago" since any threshold below session length will pass.
@@ -85,12 +80,10 @@ pub fn total_assistant_turns<M: Borrow<Message>>(messages: &[M]) -> i32 {
 }
 
 /// Count **human turns**: non-meta `User` messages in history.
-///
 /// This is the canonical `turn_number` to feed
 /// [`crate::SystemReminderOrchestrator::generate_all`] so plan-mode /
 /// auto-mode throttle cadence is correct: human turns are counted, not LLM
 /// iterations.
-///
 /// Tool-result rounds within one human turn do NOT advance the counter
 /// because they aren't new `User` messages — each tool-call iteration
 /// shares the originating human turn.
@@ -107,10 +100,8 @@ pub fn count_human_turns<M: Borrow<Message>>(messages: &[M]) -> i32 {
 }
 
 /// Count human turns since the most recent attachment of `kind`.
-///
 /// Scans backwards, counts human turns, stops at the marker attachment. If
 /// the marker is absent, returns 0 so reminder logic stays disarmed.
-///
 /// Like [`count_human_turns`], this counts every `Message::User` and relies
 /// on the invariant that reminder-injected content is `Message::Attachment`
 /// and tool results are `Message::ToolResult` — so each `Message::User` is
@@ -135,7 +126,7 @@ pub fn count_human_turns_since_attachment<M: Borrow<Message>>(
 
 /// Like [`count_human_turns_since_attachment`] but distinguishes "no prior
 /// attachment" (`None`) from "0 human turns since the most recent one"
-/// (`Some(0)`). Mirrors TS `getPlanModeAttachmentTurnCount`'s
+/// (`Some(0)`).'s
 /// `{ turnCount, foundPlanModeAttachment }` pair: the caller emits
 /// unconditionally on the first plan/auto turn (`None`) and otherwise gates on
 /// the turn count. This replaces the in-memory throttle's `last_generated_turn`
@@ -162,7 +153,7 @@ pub fn human_turns_since_attachment_opt<M: Borrow<Message>>(
 /// Count attachments of `count_kind` scanning backwards, stopping at the most
 /// recent `reset_kind` marker (exclusive). Used for the plan-mode / auto-mode
 /// Full-vs-Sparse cycle: the Nth attachment since the last exit is Full.
-/// Mirrors TS `countPlanModeAttachmentsSinceLastExit`. Re-entering plan/auto
+///. Re-entering plan/auto
 /// mode (a `reset_kind` exit banner in history) restarts the Full/Sparse
 /// cycle, and compaction naturally resets it too.
 pub fn count_attachments_since_attachment<M: Borrow<Message>>(
@@ -185,7 +176,6 @@ pub fn count_attachments_since_attachment<M: Borrow<Message>>(
 }
 
 /// Count assistant turns since the most recent attachment of `kind`.
-///
 /// Scans backwards, skips thinking-only assistant messages, stops at the
 /// matching reminder attachment. If the marker is absent, returns `i32::MAX`
 /// so the absence of a prior reminder does not suppress the first reminder.

@@ -137,7 +137,6 @@ impl LanguageModel for MockModel {
 // ─── RuntimeConfig + model resolution ────────────────────────────────
 
 /// Derive `RuntimeOverrides` from the parsed CLI flags.
-///
 /// Validates numeric flags up-front so a non-positive value can't
 /// silently propagate down to the budget tracker (where `<=0` would
 /// trigger immediate "budget exhausted" and short-circuit every LLM
@@ -277,7 +276,6 @@ pub fn resolve_main_model(runtime_config: &coco_config::RuntimeConfig) -> Resolv
 /// [`crate::paths::project_output_style_dirs`],
 /// [`crate::paths::managed_output_style_dir`]), and the supplied
 /// plugin sources.
-///
 /// Headless and SDK paths share this helper so a future addition (e.g.,
 /// project-tree ancestor walk) lands in one place. `plugin_sources` are the
 /// plugin-contributed output-style directories (see
@@ -363,7 +361,7 @@ pub fn build_system_prompt_for_model(
     // whichever task tool is actually live. The two are mutually exclusive:
     // TaskV2 on → TaskCreate, off → TodoWrite (see `task_tools.rs::is_enabled`).
     // The default prompt names TaskCreate, so only V1 needs a rewrite. Mirrors
-    // TS `getUsingYourToolsSection`'s `taskToolName = [TaskCreate, TodoWrite]
+    // `getUsingYourToolsSection`'s `taskToolName = [TaskCreate, TodoWrite]
     // .find(enabled)`; `replace` is a no-op for prompts without the bullet.
     let base_instructions: Option<String> = base_instructions.map(|base| {
         if runtime_config.features.enabled(coco_types::Feature::TaskV2) {
@@ -462,19 +460,17 @@ pub fn resolve_startup_permission_state(
 /// Parse `--json-schema` (if set) and register the synthetic
 /// `StructuredOutput` tool against `registry` + a matching Stop
 /// function hook on `hook_registry`.
-///
 /// Only the non-interactive bootstrap (headless print mode / SDK
 /// NDJSON) calls this; TUI must not, by design — the tool is excluded
 /// from `register_all_tools` and only installed through this helper.
-///
 /// Returns `Ok(true)` when the flag was set and both the tool and
 /// Stop hook were registered. Returns `Ok(false)` when the flag was
 /// absent (caller proceeds without structured output). Returns
 /// `Err(_)` when:
-///   - `--json-schema` is not valid JSON
-///   - the parsed value fails JSON-Schema meta-validation
-///   - the Stop function hook fails to register (programmer error —
-///     duplicate id, unsupported event)
+/// - `--json-schema` is not valid JSON
+/// - the parsed value fails JSON-Schema meta-validation
+/// - the Stop function hook fails to register (programmer error —
+/// duplicate id, unsupported event)
 pub fn inject_structured_output_tool_if_requested(
     cli: &Cli,
     registry: &ToolRegistry,
@@ -563,7 +559,6 @@ fn is_sandboxed_env() -> bool {
 // ─── run_chat ────────────────────────────────────────────────────────
 
 /// Outcome of a single headless `coco -p` invocation.
-///
 /// Mirrors the data the binary's `main()` would have printed, but
 /// returns it structured so tests / embeddings can assert on individual
 /// fields.
@@ -655,7 +650,7 @@ pub struct RunChatOptions {
     /// engine's default empty-session-id behavior.
     pub session_id_override: Option<String>,
     /// Stored coordinator/normal mode of the resumed session, used to
-    /// reconcile coordinator mode (TS `matchSessionMode`). `None` = no
+    /// reconcile coordinator mode. `None` = no
     /// resume / no stored mode.
     pub stored_mode: Option<String>,
 }
@@ -667,18 +662,15 @@ pub async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<RunChatOutcome>
 }
 
 /// Drive one headless agent run with explicit options.
-///
 /// Equivalent to `coco -p "<prompt>"` with the same flag plumbing the
 /// binary uses, plus three test-friendly knobs:
-///
 /// - `opts.cwd` — override `std::env::current_dir()` so parallel
-///   embeddings / tests stay isolated.
+/// embeddings / tests stay isolated.
 /// - `opts.cancel` — thread an external [`CancellationToken`] for
-///   mid-run cancellation.
+/// mid-run cancellation.
 /// - `opts.prior_messages` — seed the conversation with a previous
-///   `RunChatOutcome.final_messages`, simulating `--continue` /
-///   `--resume` in-process.
-///
+/// `RunChatOutcome.final_messages`, simulating `--continue` /
+/// `--resume` in-process.
 /// Honors these `Cli` flags end-to-end:
 /// `--models.main`, `--fallback-model`, `--permission-mode`,
 /// `--dangerously-skip-permissions` / `--allow-…`, `--max-turns`,
@@ -883,7 +875,7 @@ pub async fn run_chat_with_options(
     .await?;
 
     // Sandbox hot-reload: re-flow settings.json `sandbox.*` edits into the live
-    // SandboxState on the headless/print path too (TS `sandbox-adapter` covers
+    // SandboxState on the headless/print path too (same path as the TUI covers
     // REPL and print/SDK alike). The task exits when the reloader drops at the
     // end of this function. Held in `_sandbox_reload` for the session lifetime.
     let _sandbox_reload = match (sandbox_reloader.as_ref(), runtime.sandbox_state()) {
@@ -970,7 +962,7 @@ pub async fn run_chat_with_options(
     let mut config = runtime.current_engine_config().await;
     // `coco -p` is a one-shot run with no interactive prompt.
     // `is_non_interactive` drives the session-level side effects (self-fork
-    // suppression, "sdk" label, prompt assembly) — TS `getIsNonInteractiveSession()`.
+    // suppression, "sdk" label, prompt assembly) — .
     config.is_non_interactive = true;
     // `avoid_permission_prompts` is the separate permission concept: with no
     // UI to prompt, the auto-mode classifier's `require_interactive_or_deny`
@@ -1305,7 +1297,7 @@ fn compose_system_prompt(
     output_style: Option<&coco_output_styles::OutputStyleConfig>,
 ) -> Result<String> {
     // 1. Base layer: `--system-prompt` wholly replaces the default
-    //    identity + CLAUDE.md discovery. Otherwise build the default.
+    // identity + CLAUDE.md discovery. Otherwise build the default.
     let additional_dirs = resolve_additional_dirs_display(cli, cwd);
     let mut prompt = if let Some(custom) = cli.system_prompt.as_deref() {
         custom.to_string()
@@ -1327,7 +1319,7 @@ fn compose_system_prompt(
         prompt.push_str(append);
     }
     // 3. Append from `--append-system-prompt-file` (read once, fail
-    //    fast if the file's missing rather than silently dropping).
+    // fast if the file's missing rather than silently dropping).
     if let Some(path) = cli.append_system_prompt_file.as_deref() {
         let body = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("--append-system-prompt-file {path:?}: {e}"))?;

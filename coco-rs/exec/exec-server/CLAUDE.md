@@ -2,12 +2,6 @@
 
 JSON-RPC exec-server for local and remote execution capabilities.
 
-## Source
-
-Ported selectively from `codex-rs/exec-server`. Keep the protocol shape close
-where it helps interop, but do not copy upstream subsystems that Coco does not
-own yet.
-
 ## Capabilities
 
 - `stdio` and loopback-only `ws://IP:PORT` server transports.

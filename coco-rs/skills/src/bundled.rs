@@ -3,18 +3,18 @@
 //! ## Inventory rules
 //!
 //! 1. **Inventory**: matches the upstream bundled skill set exactly. Skills that
-//!    ship only as gated registrations (`feature(...)` calls) are gated here
-//!    via `gated_by: Some(Feature::*)`. Skills that upstream ships as ant-only
-//!    are general-purpose workflows and are registered **unconditionally** here
-//!    (see root `CLAUDE.md` "Always-Enabled General-Purpose Commands").
+//! ship only as gated registrations (`feature(...)` calls) are gated here
+//! via `gated_by: Some(Feature::*)`. Skills that upstream ships as ant-only
+//! are general-purpose workflows and are registered **unconditionally** here
+//! (see root `CLAUDE.md` "Always-Enabled General-Purpose Commands").
 //! 2. **No coco-only extras**: `/commit`, `review-pr`, and `pdf` are not
-//!    bundled skills — `/commit` is a slash command, `review-pr` is covered by
-//!    the review command, and PDF reading is handled by the Read tool. They were
-//!    removed in Round 11.
+//! bundled skills — `/commit` is a slash command, `review-pr` is covered by
+//! the review command, and PDF reading is handled by the Read tool. They were
+//! removed in Round 11.
 //! 3. **Feature flags**: each gated skill maps to a `coco_types::Feature`
-//!    variant — see `features.rs` and `parity-skills-commands-plugins.md §1.3`.
+//! variant — see `features.rs` and `parity-skills-commands-plugins.md §1.3`.
 //! 4. **`disable_model_invocation` / `user_invocable`**: matched per-skill to
-//!    upstream frontmatter.
+//! upstream frontmatter.
 
 use coco_types::Feature;
 use coco_types::ToolName;
@@ -85,15 +85,14 @@ fn bundled(
 }
 
 /// Get all bundled skill definitions.
-///
 /// **Selection logic** (coco-rs drops the ant gate):
 /// - Always-on skills (update-config, keybindings-help, batch) plus the
-///   formerly-ant general-purpose skills (verify, debug, skillify, remember,
-///   simplify, stuck, lorem-ipsum) are returned unconditionally.
+/// formerly-ant general-purpose skills (verify, debug, skillify, remember,
+/// simplify, stuck, lorem-ipsum) are returned unconditionally.
 /// - 7 feature-gated skills (loop, schedule, claude-api, dream, hunter,
-///   claude-in-chrome, run-skill-generator) carry `gated_by: Some(Feature::*)`
-///   and are filtered by `SkillManager::visible(features)` — these remain
-///   gated because they guard real capabilities, not a user-type convention.
+/// claude-in-chrome, run-skill-generator) carry `gated_by: Some(Feature::*)`
+/// and are filtered by `SkillManager::visible(features)` — these remain
+/// gated because they guard real capabilities, not a user-type convention.
 pub fn get_bundled_skills() -> Vec<SkillDefinition> {
     let mut skills: Vec<SkillDefinition> = Vec::new();
 
@@ -203,7 +202,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         skills.push(sk);
 
         // /remember — ant gate dropped, but the auto-memory capability gate is
-        // kept (mirrors TS `isEnabled: isAutoMemoryEnabled()`): the skill audits
+        // kept (): the skill audits
         // auto-memory, so it stays hidden until `Feature::AutoMemory` is enabled.
         // Registered here for catalog parity; `visible()` applies the gate.
         let mut rem = bundled(

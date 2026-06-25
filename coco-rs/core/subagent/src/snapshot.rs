@@ -60,7 +60,7 @@ impl AgentCatalogSnapshot {
 
     /// Active agents in source-load order. Prompt rendering uses this
     /// so the "Available agent types" block matches
-    /// `getActiveAgentsFromList` (loadAgentsDir.ts:193-220).
+    /// Filter to agents active for the current config.
     pub fn active_in_load_order(&self) -> impl Iterator<Item = &AgentDefinition> {
         self.load_order
             .iter()
@@ -71,7 +71,7 @@ impl AgentCatalogSnapshot {
         self.active.len()
     }
 
-    /// Look up an active agent by its `name` (= TS `agentType`; the value the
+    /// Look up an active agent by its `name` (= `agentType`; the value the
     /// model picks from the advertised listing). Keyed on `def.name`, not the
     /// canonicalized `agent_type` — see the `active` field docs.
     pub fn find_active(&self, name: &str) -> Option<&AgentDefinition> {
@@ -86,8 +86,7 @@ impl AgentCatalogSnapshot {
     /// Active agents whose `required_mcp_servers` are all satisfied by
     /// the connected MCP server set. Definitions with no requirements
     /// pass through unchanged. Matching is case-insensitive substring
-    /// (`loadAgentsDir.ts:hasRequiredMcpServers`).
-    ///
+    /// All required MCP servers must be connected.
     /// AgentTool's prompt-rendering layer should use this filter so the
     /// model never sees an agent it can't actually call — pre-filter
     /// gives a better error surface than the execute-time
@@ -111,7 +110,7 @@ impl AgentCatalogSnapshot {
 }
 
 /// Compute the source-load order of active `agent_type`s. Mirrors
-/// `getActiveAgentsFromList` (loadAgentsDir.ts:193-220): iterate sources
+/// Iterate sources
 /// ascending by precedence (built-in → plugin → user → project → flag →
 /// managed), and within a source in load order, recording each name at
 /// its first occurrence (JS `Map` key-insertion position). Names not in

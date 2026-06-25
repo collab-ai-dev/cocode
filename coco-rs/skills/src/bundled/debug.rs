@@ -1,4 +1,4 @@
-//! `/debug` — help diagnose issues in the current session. Mirrors claude-code's debug.ts.
+//! `/debug` — help diagnose issues in the current session.
 
 pub fn prompt() -> String {
     let config_dir = coco_utils_common::COCO_CONFIG_DIR_NAME;

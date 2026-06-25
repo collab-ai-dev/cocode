@@ -1,6 +1,6 @@
 //! Terminal dark/light detection for the `auto` theme setting.
 //!
-//! Mirrors claude-code's `utils/systemTheme.ts`: detection is based on the
+//! System theme detection is based on the
 //! terminal's actual *background* color (an OSC 11 query, performed by the
 //! shell), not the OS appearance — a dark terminal on a light-mode OS still
 //! resolves to dark. The parsed result is cached process-wide so `auto`

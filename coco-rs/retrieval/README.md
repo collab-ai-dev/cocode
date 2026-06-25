@@ -1,6 +1,6 @@
-# Codex Retrieval System
+# coco Retrieval System
 
-Code retrieval system providing intelligent code search for codex-rs.
+Code retrieval system providing intelligent code search for coco-rs.
 
 ## Overview
 
@@ -214,18 +214,18 @@ local = ["local-embeddings", "neural-reranker"]  # All local features
 
 Build with local features:
 ```bash
-cargo build -p codex-retrieval --features local
+cargo build -p coco-retrieval --features local
 ```
 
 ## Configuration
 
-Configuration file: `~/.codex/retrieval.toml` or `{project}/.codex/retrieval.toml`
+Configuration file: `<config_home>/retrieval.toml` or `<workdir>/<config_dir>/retrieval.toml` (workdir wins)
 
 See [QUICKSTART.md](QUICKSTART.md) for complete configuration examples.
 
 ## Logging
 
-Logs are written to `~/.codex/log/retrieval.log`. Use `-v` flags to control verbosity in CLI mode:
+Logs are written to `<config_home>/log/retrieval.log`. Use `-v` flags to control verbosity in CLI mode:
 - `-v` or no flag: info level
 - `-vv`: debug level
 - `-vvv`: trace level

@@ -88,7 +88,6 @@ pub enum ToolName {
     Sleep,
     /// Synthetic tool that captures the model's structured JSON
     /// response and forwards it to the SDK result side-channel.
-    ///
     /// The wire name is `"StructuredOutput"` — matches what the model
     /// sees. Only injected in non-interactive sessions when `--json-schema`
     /// is supplied; never visible in TUI.
@@ -150,17 +149,14 @@ impl ToolName {
     /// Model-aware file-mutation tool resolution — the single rule shared by
     /// every prompt that names a write/edit tool (plan-mode reminder, AgentTool
     /// examples, post-compaction plan reference).
-    ///
     /// There is no per-model table: the answer is derived from what the model
     /// actually has. `native` is the canonical builtin for the operation
     /// (`Write` or `Edit`). The rule:
-    ///
-    /// 1. native tool present  → `native` (Claude family keeps Write/Edit)
+    /// 1. native tool present → `native` (Claude family keeps Write/Edit)
     /// 2. else `apply_patch` present → [`Self::ApplyPatch`] (gpt-5 family swaps
-    ///    native edits for the freeform patch tool; its `*** Add File` /
-    ///    `*** Update File` hunks cover create + edit)
+    /// native edits for the freeform patch tool; its `*** Add File` /
+    /// `*** Update File` hunks cover create + edit)
     /// 3. else → `native` (harmless fallback for degenerate tool sets)
-    ///
     /// Any future model family that follows the same "drop native, add
     /// apply_patch" shape is handled automatically.
     pub fn file_mutation_tool(
@@ -270,11 +266,9 @@ impl FromStr for ToolName {
 }
 
 /// Resolve a legacy tool-name alias to its canonical form.
-///
-/// TS parity: `utils/permissions/permissionRuleParser.ts` —
+/// `utils/permissions/permissionRuleParser.ts` —
 /// `LEGACY_TOOL_NAME_ALIASES`. Used by hook matchers and permission
 /// rule parsing so renamed tools keep matching prior config.
-///
 /// Aliases:
 /// - `Task` → `Agent`
 /// - `RunWorkflow` → `Workflow`
@@ -291,8 +285,7 @@ pub fn normalize_legacy_tool_name(name: &str) -> &str {
 }
 
 /// Reverse lookup: list legacy aliases for a canonical name.
-///
-/// TS parity: `getLegacyToolNames` — used by regex matchers so
+/// `getLegacyToolNames` — used by regex matchers so
 /// `^Task$` keeps matching after the rename to `Agent`.
 pub fn legacy_tool_name_aliases_of(canonical: &str) -> &'static [&'static str] {
     match canonical {
@@ -305,7 +298,6 @@ pub fn legacy_tool_name_aliases_of(canonical: &str) -> &'static [&'static str] {
 }
 
 /// Model-facing shell tool protocol declared by a model entry.
-///
 /// This is intentionally distinct from the runtime shell used to spawn
 /// processes. It answers "which shell tool schema/protocol can this model
 /// consume?", not "which binary should execute commands?".
@@ -319,7 +311,6 @@ pub enum ModelShellToolType {
 }
 
 /// Shell tool exposed to the model for this session.
-///
 /// `Disabled` means no model-facing shell tool is visible, regardless of
 /// whether shell binaries exist locally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -332,12 +323,10 @@ pub enum ActiveShellTool {
 }
 
 /// Tool identity — type-safe for all tool kinds.
-///
 /// Three distinct concepts:
-///   ToolId      = identity ("who am I")         → this enum
-///   ToolName    = built-in tools only (Copy)     → inner enum
-///   ToolPattern = permission match expression    → String ("Bash(git *)", "mcp__slack__*")
-///
+/// ToolId = identity ("who am I") → this enum
+/// ToolName = built-in tools only (Copy) → inner enum
+/// ToolPattern = permission match expression → String ("Bash(git *)", "mcp__slack__*")
 /// Serde: serializes/deserializes as a FLAT STRING via Display/FromStr.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ToolId {
@@ -398,7 +387,6 @@ impl<'de> Deserialize<'de> for ToolId {
 // Wire shape is a flat string ("Read", "mcp__slack__send",
 // "my_plugin_tool"). Skip the auto-derive and emit the String schema
 // so SDK schema consumers don't see a tagged-enum shape.
-//
 // `inline_schema = true` keeps the schemars 0.8 behavior for this kind
 // of String-aliased newtype: parent schemas inline the
 // `{"type": "string"}` shape instead of emitting a `$ref` to a `ToolId`

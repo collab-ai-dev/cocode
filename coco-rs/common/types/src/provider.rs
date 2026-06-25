@@ -45,19 +45,17 @@ impl fmt::Display for ProviderApi {
 pub enum ModelRole {
     Main,
     /// Plan-mode model. Used in two distinct contexts:
-    ///
     /// 1. **Subagent role** — when the built-in Plan subagent spawns
-    ///    (`SubagentType::Plan → ModelRole::Plan` in
-    ///    `core/subagent/src/subagent_role.rs:34`), the spawn factory
-    ///    resolves the client via `client_for_role(Plan)`.
+    /// (`SubagentType::Plan → ModelRole::Plan` in
+    /// `core/subagent/src/subagent_role.rs:34`), the spawn factory
+    /// resolves the client via `client_for_role(Plan)`.
     /// 2. **Main-session plan-mode swap** — when the leader enters
-    ///    `PermissionMode::Plan`, the engine swaps the active client
-    ///    to `client_for_role(Plan)` for the duration of plan mode.
-    ///    TS parity behavioral analogue: `getRuntimeMainLoopModel`'s
-    ///    `opusplan` → Opus alias swap (`utils/model/model.ts:145-167`).
-    ///    coco-rs encodes this as a generic role slot so it works for
-    ///    any provider, not just Anthropic.
-    ///
+    /// `PermissionMode::Plan`, the engine swaps the active client
+    /// to `client_for_role(Plan)` for the duration of plan mode.
+    /// `getRuntimeMainLoopModel`'s
+    /// `opusplan` → Opus alias swap.
+    /// coco-rs encodes this as a generic role slot so it works for
+    /// any provider, not just Anthropic.
     /// Unconfigured `models.plan` falls back to Main's spec via the
     /// chain in `runtime.rs:507`, and `client_for_role` short-circuits
     /// to the cached Main `Arc` — both call sites degrade cleanly to
@@ -122,7 +120,6 @@ impl FromStr for ModelRole {
 }
 
 /// Unresolved provider/model selection from user-facing config.
-///
 /// This intentionally does not include [`ProviderApi`]: config surfaces
 /// write `provider/model_id`, and the runtime resolves `provider` through
 /// the live provider catalog before constructing a runtime slot.
@@ -153,7 +150,6 @@ impl ProviderModelSelection {
 }
 
 /// Runtime model selection for subagents, skills, and teammates.
-///
 /// `Role` and `InheritMain` preserve role-based routing. `Explicit`
 /// carries the full provider/model pair so the execution factory can
 /// resolve the actual runtime slot instead of only changing a display
@@ -276,8 +272,8 @@ pub enum Capability {
     #[serde(rename = "context_1m")]
     Context1m,
     /// `interleaved-thinking-2025-05-14` beta. Also gates
-    /// `redact-thinking-2026-02-12` (TS `betas.ts:272` reuses the
-    /// same `modelSupportsISP` predicate for both).
+    /// `redact-thinking-2026-02-12` (uses the same `modelSupportsISP`
+    /// predicate for both).
     InterleavedThinking,
     /// `context-management-2025-06-27` beta.
     ContextManagement,
@@ -287,7 +283,6 @@ pub enum Capability {
     /// Without this capability, the convert layer omits the field
     /// entirely so the server-side default applies (avoids 400 from
     /// non-adaptive models that reject the value).
-    ///
     /// Known supporting models (Anthropic family): Claude Sonnet 4.6,
     /// Claude Opus 4.6+, DeepSeek V4 (anthropic-compat).
     AdaptiveThinking,
@@ -303,12 +298,10 @@ pub enum Capability {
     /// `defer_loading: true`) and emit references inside
     /// `tool_result.content` instead of growing the tools list —
     /// preserving prompt cache prefix across `ToolSearch` discoveries.
-    ///
     /// Provider-specific (Anthropic-only). The multi-provider default
     /// path is client-side promotion through
     /// `ToolAppState::discovered_tool_names`, which costs a cache
     /// break on the tools array but works on every provider.
-    ///
     /// Known supporting models: Claude Sonnet 4.5+, Opus 4+, GPT-5
     /// (anthropic-compat). NOT supported on Haiku 4.5 / 3.5 /
     /// older 3-series.
@@ -316,7 +309,6 @@ pub enum Capability {
     /// Provider/model is known to work correctly with coco-rs's
     /// client-side `ToolSearch` promotion path (`discovered_tool_names`
     /// `AppStatePatch` + tools-array growth on the next turn).
-    ///
     /// **Per-model opt-in**, default **off** for unknown models.
     /// Rationale: a model that doesn't tolerate the growing tools
     /// array (legacy proxies, local quantized models with strict
@@ -324,17 +316,15 @@ pub enum Capability {
     /// — eager-loading every tool's full schema on turn 1 is the
     /// safe degradation. Set this capability in the registry
     /// (`builtin_models_partial`) once a model has been validated.
-    ///
     /// The runtime activation predicate is:
     /// ```text
     /// tool_search_active =
-    ///     Feature::ToolSearch
-    ///     && strategy != Eager
+    /// Feature::ToolSearch
+    /// && strategy != Eager
     /// ```
     /// When no resolver-supported capability is present, the model lands in the
     /// "eager-load every tool, hide ToolSearch" state regardless of
     /// the user's `Feature::ToolSearch` setting.
-    ///
     /// No TS analogue — TS only ships Anthropic-style server expansion and
     /// blacklists incompatible models via
     /// `DEFAULT_UNSUPPORTED_MODEL_PATTERNS`. coco-rs needs a positive
@@ -379,7 +369,6 @@ pub enum WireApi {
 #[serde(rename_all = "snake_case")]
 pub enum OAuthFlowId {
     /// ChatGPT subscription → `chatgpt.com/backend-api/codex` Responses route.
-    ///
     /// `rename` pins the wire form to `openai_chatgpt`: the default
     /// `rename_all = "snake_case"` would split the acronym into
     /// `open_ai_chat_gpt`, diverging from [`Self::as_str`]. Guarded by

@@ -6,7 +6,7 @@ Per-turn dynamic `<system-reminder>` injection. Owns the entire reminder subsyst
 ## Key Types
 
 - `AttachmentType` — generator variants mapped to discriminators or coco-rs
-  synthetic grouping keys. Grouped by port phase:
+  synthetic grouping keys. Grouped by phase:
   - **Phase A/B/C (11)**: plan-mode trio (`plan_mode` / `plan_mode_exit` / `plan_mode_reentry`), auto-mode pair (`auto_mode` / `auto_mode_exit`), todo/task pair (`todo_reminder` / `task_reminder`), `critical_system_reminder`, `compaction_reminder`, `date_change`, `verify_plan_reminder`.
   - **Phase 1 engine-local (5)**: `ultrathink_effort` / `token_usage` / `budget_usd` / `output_token_usage` / `companion_intro`.
   - **Phase 2 history-diff (3)**: `deferred_tools_delta` / `agent_listing_delta` / `mcp_instructions_delta`.
@@ -55,13 +55,13 @@ src/
 
 ## Key Invariants
 
-- **Logic is canonical**: cadence, text content, and trigger conditions match the original claude-code behavior. Cocode-rs provides the crate shape only.
-- **Human-turn UUID throttle**: plan-mode cadence counts non-meta user messages, not LLM iterations (TS `getPlanModeAttachmentTurnCount`). The engine tracks `last_human_turn_uuid_seen` on `ToolAppState` and advances the throttle counter only on a new UUID; `PlanModeReminder::turn_start_side_effects_only` writes it.
+- **Logic is canonical**: cadence, text content, and trigger conditions are well-defined and stable — see the README catalog for the per-reminder specs.
+- **Human-turn UUID throttle**: plan-mode cadence counts non-meta user messages, not LLM iterations. The engine tracks `last_human_turn_uuid_seen` on `ToolAppState` and advances the throttle counter only on a new UUID; `PlanModeReminder::turn_start_side_effects_only` writes it.
 - **is_meta=true on all reminders**: hidden from UI transcripts, sent to the API wrapped in `<system-reminder>`.
 - **Per-generator timeout**: `SystemReminderConfig::timeout_ms` (default 1000ms). Timed-out generators produce zero reminders; the turn continues.
 - **Typed `ToolName` throughout**: no hand-written tool-name strings in gates or cadence helpers. `TASK_MANAGEMENT_TOOLS` + `count_assistant_turns_since_tool(ToolName::X)` thread typed references through so a `ToolName` rename propagates automatically.
 - **Auto-mode gate**: `is_auto_mode == (mode == Auto) || (mode == Plan && is_auto_classifier_active)`. The engine reads `AutoModeState::is_active()` from `core/permissions` and threads it into `TurnReminderInput`.
-- **Cross-run cadence**: each `run_session_loop` invocation constructs a fresh orchestrator. Engine seeds `ThrottleManager::seed_state` from `app_state.plan_mode_attachment_count` + `turns_since_last_attachment` so cadence survives. Post-emit bookkeeping mirrors the throttle back onto `app_state`.
+- **Cross-run cadence**: each `run_session_loop` invocation constructs a fresh orchestrator. Engine seeds `ThrottleManager::seed_state` from `app_state.plan_mode_attachment_count` + `turns_since_last_attachment` so cadence survives. Post-emit bookkeeping syncs the throttle back onto `app_state`.
 
 ## What this crate does NOT own
 

@@ -1,6 +1,6 @@
 //! `/batch` — research and plan a large change, then execute it in parallel
 //! across 5–30 isolated worktree agents that each open a PR. Mirrors
-//! claude-code's bundled `batch.ts` skill prompt.
+//! `/batch` — run a multi-step batch workflow.
 
 use coco_types::ToolName;
 

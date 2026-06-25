@@ -25,7 +25,7 @@ Tree-sitter AST parsing with tokenizer fallback.
 
 ### Command Summary (`summary/`)
 
-Ported from `codex-rs/shell-command/src/parse_command.rs`. Classifies commands into human-readable categories.
+Classifies commands into human-readable categories.
 
 - `parse_command(argv) -> Vec<CommandSummary>` — classify an argv command
 - `CommandSummary::Read { cmd, name, path }` — file read (cat, head, tail, sed -n, bat, less)
@@ -37,7 +37,7 @@ Handles `bash -lc "..."` recursion, pipeline simplification (strips formatting h
 
 ### Argv Safety Detection (`safety/`)
 
-Ported from `codex-rs/shell-command/src/command_safety/`. Operates on argv arrays.
+Operates on argv arrays.
 
 - `is_known_safe_command(argv)` — whitelist check with per-binary rules:
   - **git**: only read-only subcommands; blocks `-c` config override, `branch -d`

@@ -14,9 +14,9 @@
 //!
 //! [`SettingsWriter::write_local`] takes a [`serde_json::Value`] patch
 //! and deep-merges it into the on-disk JSON. `Value::Null` in the
-//! patch is the **delete sentinel** — TS `B6(mergeIntoSettings)`
-//! does the same: writing `{"skill_overrides": {"foo": null}}` drops
-//! the `foo` key rather than persisting a literal null.
+//! patch is the **delete sentinel**: writing
+//! `{"skill_overrides": {"foo": null}}` drops the `foo` key rather
+//! than persisting a literal null.
 //!
 //! # Atomicity
 //!
@@ -68,17 +68,14 @@ pub enum SettingsWriteError {
 /// Deep-merge `patch` into `project config dir/settings.local.json`,
 /// then rebuild + publish `RuntimeConfig` so the next agent turn
 /// reads the new value without waiting for the file watcher.
-///
 /// Guarantees:
-///
 /// - **Atomic** — partial writes never corrupt the destination
-///   (temp-file + rename pattern).
+/// (temp-file + rename pattern).
 /// - **Delete sentinel** — `Value::Null` in the patch removes the
-///   key instead of persisting a literal null (TS `B6` parity).
+/// key instead of persisting a literal null (`B6` parity).
 /// - **Synchronous publish** — when this call returns `Ok`,
-///   subscribers to [`RuntimePublisher`] have seen the new
-///   snapshot.
-///
+/// subscribers to [`RuntimePublisher`] have seen the new
+/// snapshot.
 /// File IO and rebuild are sync; this function offloads to
 /// `tokio::task::spawn_blocking` so the async caller (e.g. the TUI
 /// dialog handler) doesn't stall the runtime.
@@ -106,7 +103,6 @@ pub async fn write_local_settings(
 // docs reference `LocalSettingsWriter::new(...).write_local(patch)`.
 // New code should prefer the free function above. Will be removed
 // when the few stragglers migrate.
-//
 // Left intentionally; **do not** add new trait methods or new impls.
 // The single-impl trait is YAGNI — kill it once nothing references
 // the type alias.
@@ -178,10 +174,9 @@ fn read_or_default(path: &Path) -> Result<Value, SettingsWriteError> {
     }
 }
 
-/// Deep-merge with the TS `B6` deletion sentinel: a leaf `Value::Null`
+/// Deep-merge with the `B6` deletion sentinel: a leaf `Value::Null`
 /// in `overlay` removes the matching key from `base` (and recursively
 /// prunes empty parent objects).
-///
 /// Differs from [`crate::settings::merge::deep_merge`] which preserves
 /// nulls. We need the delete semantic for `skill_overrides` diff-
 /// against-baseline writes.

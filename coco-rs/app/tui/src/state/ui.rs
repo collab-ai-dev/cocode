@@ -545,7 +545,7 @@ pub enum FocusTarget {
 /// A single composer history entry.
 ///
 /// History is ordered most-recent-first (index 0 = newest), matching
-/// shell / codex / claude-code up-arrow recall. Re-submitting an existing
+/// shell up-arrow recall. Re-submitting an existing
 /// text moves it back to the front rather than creating a duplicate.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {

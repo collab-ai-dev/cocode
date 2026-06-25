@@ -1,7 +1,7 @@
 //! Jaccard similarity ranking for search results.
 //!
 //! Provides symbol-level similarity calculation for better ranking of code search results.
-//! Reference: Continue `core/autocomplete/context/ranking/index.ts:6-36`
+//! Reference: Continue
 
 use std::collections::HashSet;
 

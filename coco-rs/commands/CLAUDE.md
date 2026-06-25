@@ -117,20 +117,19 @@ closes.
 | `/ide` | Static text stub in `ide_handler` | Full behavior: `detectRunningIDEs`, JetBrains/VS Code auto-connect dialogs, MCP cache invalidation. Rust ships the `coco-bridge` crate but the slash command is not wired to it. P2 — wire when bridge UX is finalized. |
 | `/help` | Hardcoded `CATEGORIES` in `handlers/help.rs` | User-installed skills, plugin contributions, and MCP-bridged tools won't appear in `/help` output. P1 — refactor to iterate the live `CommandRegistry`; needs handler-side registry access (currently `CommandHandler::execute_command(&self, args: &str)` doesn't carry one). |
 | `/color` | `dispatch_color` writes only to live `app_state.agent_color` | Choice should persist in the session transcript so it survives restarts. Currently ephemeral. P3 — wire to settings.json or session metadata. |
-| `/diff` | Async overlay handler renders the uncommitted git diff | TS `local-jsx` also shows PER-TURN diffs (file edits the agent made this session). Per-turn view not ported. P3. |
-| `/tasks` (alias `bashes`) | Overlay lists/cancels background tasks | TS `BackgroundTasksDialog` is richer (live output, per-task detail). Functional but thinner. P3. |
-| `/mcp` | Async overlay for list/add/remove/enable/disable | TS mounts a full interactive MCP-management dialog (xaa IDP, add-server wizard). Core ops work; wizard UX thinned. P2. |
-| `/hooks` | Async overlay shows hook configs | TS `HooksConfigMenu` is interactive/editable. coco is read-oriented. P3. |
-| `/sandbox` (file `sandbox-toggle`) | Sync overlay toggles sandbox mode | TS has dynamic per-platform `isHidden`/description + `exclude "pattern"` arg. coco is a simpler mode toggle. P3. |
-| `/doctor` | Async health-check text report | TS `<Doctor>` dialog covers install method + auto-updater status (N/A for coco's distribution). Text report is sufficient; flagged for parity tracking. P3. |
-| `/status` | Sentinel → `runtime.status_report()` text | TS renders the full interactive `<Settings defaultTab='Status'>` panel. coco emits a text status report. P3. |
+| `/diff` | Async overlay handler renders the uncommitted git diff | Per-turn diffs (file edits the agent made this session) not yet implemented. P3. |
+| `/tasks` (alias `bashes`) | Overlay lists/cancels background tasks | Functional but thinner — live output and per-task detail not yet available. P3. |
+| `/mcp` | Async overlay for list/add/remove/enable/disable | Core ops work; interactive wizard UX (xaa IDP, add-server) thinned. P2. |
+| `/hooks` | Async overlay shows hook configs | Read-oriented; interactive editing not yet available. P3. |
+| `/sandbox` (file `sandbox-toggle`) | Sync overlay toggles sandbox mode | Per-platform `isHidden`/description + `exclude "pattern"` arg not yet implemented. P3. |
+| `/doctor` | Async health-check text report | Install-method + auto-updater status not applicable to coco's distribution. Text report is sufficient. P3. |
+| `/status` | Sentinel → `runtime.status_report()` text | coco emits a text status report; interactive settings panel not yet available. P3. |
 
 ## Interactive-only commands (TUI; no SDK/headless path)
 
 `/export`, `/branch` (alias `/fork`), and `/btw` do their real work in the TUI
 runner (`app/cli/tui_runner.rs` dispatch interceptors), not the registry sync
-handler. This **mirrors TS**, where they are `local-jsx` (interactive) commands —
-they don't run meaningfully in headless `-p` mode upstream either. The registry
+handler. These are interactive-only (TUI) commands — they don't run meaningfully in headless `-p` mode. The registry
 handlers (`branch_handler`, `export_handler`) return honest usage guidance for
 the non-interactive surface; `/btw` additionally has an SDK fork path
 (`sdk_runner` + shared `coco_cli::side_question`). Behavior notes:

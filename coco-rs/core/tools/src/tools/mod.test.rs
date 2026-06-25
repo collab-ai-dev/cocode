@@ -87,7 +87,7 @@ fn test_verify_plan_execution_is_not_registered_by_default() {
         registry
             .get_by_name(ToolName::VerifyPlanExecution.as_str())
             .is_none(),
-        "VerifyPlanExecution mirrors TS conditional import and must not be in the default registry"
+        "VerifyPlanExecution must not be in the default registry (it is registered conditionally)"
     );
 }
 

@@ -14,7 +14,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Root configuration for the reminder subsystem.
-///
 /// Serialized form matches the `system_reminder` key under `settings.json`.
 /// All fields are `#[serde(default)]`, so partial configs in user settings
 /// fill missing fields from [`Default`].
@@ -51,44 +50,44 @@ impl Default for SystemReminderConfig {
     }
 }
 
-/// Default per-generator timeout (matches TS `attachments.ts:767`).
+/// Default per-generator timeout ().
 pub const DEFAULT_TIMEOUT_MS: i64 = 1000;
 
-/// Per-reminder enable flags. Matches TS `Attachment.type` variants 1:1.
+/// Per-reminder enable flags. variants 1:1.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AttachmentSettings {
-    /// Plan-mode steady-state reminder (TS `plan_mode`).
+    /// Plan-mode steady-state reminder.
     pub plan_mode: bool,
-    /// Plan-mode exit banner (TS `plan_mode_exit`).
+    /// Plan-mode exit banner.
     pub plan_mode_exit: bool,
-    /// Plan-mode re-entry banner (TS `plan_mode_reentry`).
+    /// Plan-mode re-entry banner.
     pub plan_mode_reentry: bool,
-    /// Auto-mode exit banner (TS `auto_mode_exit`).
+    /// Auto-mode exit banner.
     pub auto_mode_exit: bool,
-    /// TodoWrite nudge reminder (TS `todo_reminder`).
+    /// TodoWrite nudge reminder.
     pub todo_reminder: bool,
-    /// V2 task-tools nudge reminder (TS `task_reminder`).
+    /// V2 task-tools nudge reminder.
     pub task_reminder: bool,
-    /// User-supplied per-turn critical instruction (TS `critical_system_reminder`).
+    /// User-supplied per-turn critical instruction.
     pub critical_system_reminder: bool,
-    /// Auto-mode steady-state reminder (TS `auto_mode`).
+    /// Auto-mode steady-state reminder.
     pub auto_mode: bool,
-    /// Auto-compact enabled nudge (TS `compaction_reminder`).
+    /// Auto-compact enabled nudge.
     pub compaction_reminder: bool,
-    /// Date-change notification (TS `date_change`).
+    /// Date-change notification.
     pub date_change: bool,
-    /// Per-turn baseline user context (TS `prependUserContext`,
-    /// `utils/api.ts:449`). Injects `Today's date is <local ISO>.` every
+    /// Per-turn baseline user context (`prependUserContext`,
+    /// Injects `Today's date is <local ISO>.` every
     /// turn so the model always has the date. On by default.
     pub user_context: bool,
-    /// Legacy verify-plan reminder (TS `verify_plan_reminder`). Deprecated
+    /// Legacy verify-plan reminder. Deprecated
     /// path: emits only when legacy plan verification was explicitly enabled
     /// and `VerifyPlanExecution` is explicitly registered in the active tool
     /// list.
     pub verify_plan_reminder: bool,
 
-    /// Ultrathink reasoning-effort nudge (TS `ultrathink_effort`). **Opt-in**
+    /// Ultrathink reasoning-effort nudge. **Opt-in**
     /// — TS gates on `feature('ULTRATHINK')` + GrowthBook; external builds
     /// default off. Users flip this in `settings.json` to enable keyword-
     /// driven high-effort routing.
@@ -96,105 +95,105 @@ pub struct AttachmentSettings {
     /// Workflow keyword trigger (Claude Code `ultracode`). On by default.
     pub workflow_keyword_request: bool,
 
-    /// Token-usage report (TS `token_usage`). **Opt-in** — TS requires
+    /// Token-usage report. **Opt-in** — TS requires
     /// `CLAUDE_CODE_ENABLE_TOKEN_USAGE_ATTACHMENT` env var. When enabled,
     /// injects `used/total; remaining` every main-thread turn. This value is
     /// *volatile* (cumulative tokens), so it is emitted per-turn and appended
     /// at the tail — the freshest copy always rides the end of context
-    /// (cache-safe, mirrors TS). Deliberately NOT throttled: a turn-throttle
+    /// (cache-safe). Deliberately NOT throttled: a turn-throttle
     /// would leave a stale value buried mid-history during long multi-tool
     /// turns and the model would act on out-of-date numbers.
     pub token_usage: bool,
 
-    /// USD budget report (TS `budget_usd`). Fires whenever
+    /// USD budget report. Fires whenever
     /// `QueryEngineConfig::max_budget_usd` is set. No additional TS gate;
     /// default on so users who set a budget see it without extra config.
     pub budget_usd: bool,
 
-    /// Output-token report (TS `output_token_usage`). **Opt-in** — TS
+    /// Output-token report. **Opt-in** — TS
     /// gates on `feature('TOKEN_BUDGET')`.
     pub output_token_usage: bool,
 
-    /// Companion intro reminder (TS `companion_intro`). **Opt-in** — TS
+    /// Companion intro reminder. **Opt-in** — TS
     /// gates on `feature('BUDDY')` + configured companion. Off by default.
     pub companion_intro: bool,
 
-    /// Deferred-tool-availability delta (TS `deferred_tools_delta`).
+    /// Deferred-tool-availability delta.
     /// Fires when the current tool set differs from the last announced
     /// set. No extra TS feature gate — on by default.
     pub deferred_tools_delta: bool,
 
-    /// Agent-listing delta (TS `agent_listing_delta`). Announces
+    /// Agent-listing delta. Announces
     /// available agent types for the Agent tool. On by default.
     pub agent_listing_delta: bool,
 
-    /// MCP server instructions delta (TS `mcp_instructions_delta`).
+    /// MCP server instructions delta.
     /// Fires when MCP server instructions are added / removed. On by
     /// default.
     pub mcp_instructions_delta: bool,
 
     // ── Phase 3 cross-crate state reminders ──
-    /// Hook success output (TS `hook_success`). On by default.
+    /// Hook success output. On by default.
     pub hook_success: bool,
-    /// Hook blocking error (TS `hook_blocking_error`). On by default.
+    /// Hook blocking error. On by default.
     pub hook_blocking_error: bool,
-    /// Hook additional context (TS `hook_additional_context`). On by default.
+    /// Hook additional context. On by default.
     pub hook_additional_context: bool,
-    /// Hook stopped continuation (TS `hook_stopped_continuation`). On by default.
+    /// Hook stopped continuation. On by default.
     pub hook_stopped_continuation: bool,
-    /// Async hook response (TS `async_hook_response`). On by default.
+    /// Async hook response. On by default.
     pub async_hook_response: bool,
-    /// LSP / IDE diagnostics (TS `diagnostics`). On by default.
+    /// LSP / IDE diagnostics. On by default.
     pub diagnostics: bool,
-    /// Output style reinforcement (TS `output_style`). On by default.
+    /// Output style reinforcement. On by default.
     pub output_style: bool,
-    /// Queued command replay (TS `queued_command`). On by default.
+    /// Queued command replay. On by default.
     pub queued_command: bool,
-    /// Background-task status (TS `task_status`). On by default.
+    /// Background-task status. On by default.
     pub task_status: bool,
-    /// Skill listing (TS `skill_listing`). On by default.
+    /// Skill listing. On by default.
     pub skill_listing: bool,
-    /// Skills invoked this session (TS `invoked_skills`). On by default.
+    /// Skills invoked this session. On by default.
     pub invoked_skills: bool,
-    /// Teammate mailbox (TS `teammate_mailbox`, swarm-gated). On by default.
+    /// Teammate mailbox (`teammate_mailbox`, swarm-gated). On by default.
     pub teammate_mailbox: bool,
-    /// Team context (TS `team_context`, swarm-gated). On by default.
+    /// Team context (`team_context`, swarm-gated). On by default.
     pub team_context: bool,
-    /// Agent pending messages (TS `agent_pending_messages`). On by default.
+    /// Agent pending messages. On by default.
     pub agent_pending_messages: bool,
 
     // ── Phase 4 user-input-tier reminders ──
-    /// At-mentioned file reminder (TS `file` in `userInputAttachments`). On by default.
+    /// At-mentioned file reminder (`file` in `userInputAttachments`). On by default.
     pub at_mentioned_files: bool,
-    /// MCP resource references (TS `mcp_resource`). On by default.
+    /// MCP resource references. On by default.
     pub mcp_resources: bool,
-    /// Agent mention reminder (TS `agent_mention`). On by default.
+    /// Agent mention reminder. On by default.
     pub agent_mentions: bool,
 
     // ── Main-thread IDE reminders ──
-    /// IDE selection reminder (TS `selected_lines_in_ide`). On by default.
+    /// IDE selection reminder. On by default.
     pub ide_selection: bool,
-    /// IDE opened-file reminder (TS `opened_file_in_ide`). On by default.
+    /// IDE opened-file reminder. On by default.
     pub ide_opened_file: bool,
 
-    /// Nested memory injection (TS `nested_memory`). Fires per-turn
+    /// Nested memory injection. Fires per-turn
     /// when @-mention traversal surfaces nested CLAUDE.md files. On by default.
     pub nested_memory: bool,
-    /// Relevant memories (TS `relevant_memories`). Async-prefetched,
+    /// Relevant memories. Async-prefetched,
     /// semantically-ranked memory file contents. On by default.
     pub relevant_memories: bool,
 
     // ── Reminder-native silent attachments (Part 1) ──
-    /// Already-read-file dedup marker (TS `already_read_file`, `normalizeAttachmentForAPI` → `[]`).
+    /// Already-read-file dedup marker (`already_read_file`, `normalizeAttachmentForAPI` → `[]`).
     /// Zero API tokens; metadata (file paths) retained for UI / transcript.
     /// Mirrors the reference `AlreadyReadFile` shape. On by default.
     pub already_read_file: bool,
-    /// Edited-image-file marker (TS `edited_image_file`, `normalizeAttachmentForAPI` → `[]`).
+    /// Edited-image-file marker (`edited_image_file`, `normalizeAttachmentForAPI` → `[]`).
     /// Silent — image diffs aren't text; UI surfaces the path. On by default.
     pub edited_image_file: bool,
 
     // ── Audit-add (May 2026) — model-visible TS attachment.
-    /// Heuristic skill discovery reminder (TS `skill_discovery`). Off by default.
+    /// Heuristic skill discovery reminder. Off by default.
     pub skill_discovery: bool,
 }
 

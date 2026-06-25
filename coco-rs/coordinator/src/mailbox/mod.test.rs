@@ -50,7 +50,7 @@ async fn clear_mailbox_missing_file_is_noop() {
 
     assert!(
         !path.exists(),
-        "clear_mailbox should mirror TS and not create a missing inbox"
+        "clear_mailbox should not create a missing inbox"
     );
 }
 

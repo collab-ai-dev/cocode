@@ -9,7 +9,7 @@
 //! converts the result back to `Ok(())`; `Rejected` (or no bridge
 //! installed) preserves the original error.
 //!
-//! TS parity: Claude Code's sandbox surfaces a "Allow this write?" /
+//! Claude Code's sandbox surfaces a "Allow this write?" /
 //! "Allow this network call?" prompt. This crate keeps the underlying
 //! deny semantics deterministic — the bridge is opt-in and lives at
 //! a clearly-labelled seam, so the threat model stays auditable.
@@ -29,7 +29,6 @@
 use std::sync::Arc;
 
 /// Kind of operation that triggered the deny.
-///
 /// `#[non_exhaustive]` — future operation kinds (subprocess spawn,
 /// network listen, raw socket) can be added without a major-version
 /// bump. Bridge implementations must use a wildcard arm.
@@ -71,7 +70,6 @@ pub struct SandboxApprovalRequest {
 }
 
 /// User decision returned by a bridge.
-///
 /// `#[non_exhaustive]` — future decisions (e.g. `ApproveAndPersist`
 /// for "always allow this path") can be added without a major-version
 /// bump. Callers must use a wildcard arm.
@@ -85,7 +83,6 @@ pub enum SandboxApprovalDecision {
 }
 
 /// Trait for forwarding sandbox deny events to an approval surface.
-///
 /// Async because production approvals typically round-trip through a
 /// UI / IPC channel. The default `NoOpSandboxApprovalBridge` always
 /// rejects — installing it is equivalent to leaving the bridge unset.

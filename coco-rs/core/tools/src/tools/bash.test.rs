@@ -1204,7 +1204,7 @@ mod render_for_model_tests {
         // Explicit `run_in_background: true` returns `{backgroundTaskId,
         // outputPath}` (no stdout). render_for_model must name both the task
         // id and the output path so the model can `Read` the file directly
-        // (mirrors TS BashTool — replaces the deprecated TaskOutput tool).
+        // (replaces the deprecated TaskOutput tool).
         let data = json!({
             "backgroundTaskId": "task-42",
             "outputPath": "/cfg/cache/tasks/sess/task-42.output",
@@ -1486,7 +1486,7 @@ async fn test_bash_check_permissions_common_substitution_not_prompted() {
 
 #[tokio::test]
 async fn test_bash_check_permissions_accept_edits_asks_cd_then_write() {
-    // TS parity: a non-noop cwd change before a filesystem write requires
+    // A non-noop cwd change before a filesystem write requires
     // approval even in acceptEdits mode. `rm`/`mv`/`cp`/`sed` are likewise
     // not blanket-allowed —
     // they route through the dangerous-removal/sed gates and defer to the rule
@@ -1735,7 +1735,7 @@ async fn test_bash_out_of_tree_write_forces_ask() {
     // The Ask must carry an AddDirectories suggestion for the target's parent
     // dir — the only update that unblocks the path gate (it runs before allow
     // rules). This is what lets the TUI render the session/local "always allow"
-    // rows instead of collapsing to approve-once/deny. Mirrors TS addDirectories.
+    // rows instead of collapsing to approve-once/deny.
     let coco_types::ToolCheckResult::Ask { suggestions, .. } = &result else {
         panic!("expected Ask, got {result:?}");
     };

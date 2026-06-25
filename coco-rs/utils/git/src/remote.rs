@@ -31,7 +31,6 @@ pub struct CloneOptions {
 }
 
 /// Shallow-clone `url` into `dest` (created if absent).
-///
 /// `dest` must not already exist as a non-empty directory (git's own
 /// constraint). Callers materializing into a reused path should clear it first.
 pub async fn shallow_clone(
@@ -189,8 +188,7 @@ pub async fn run_git(
 /// Parse an `owner/repo` slug from a git remote URL. Handles the SSH
 /// (`git@host:owner/repo.git`) and HTTPS (`https://host/owner/repo.git`)
 /// forms; returns `None` for shapes without at least two path segments.
-///
-/// TS parity: `utils/git.ts getGithubRepo()` derives the team-memory
+/// `utils/git.ts getGithubRepo()` derives the team-memory
 /// `?repo=` key from `remote.origin.url`.
 pub fn parse_origin_slug(url: &str) -> Option<String> {
     let url = url.trim();
@@ -198,7 +196,7 @@ pub fn parse_origin_slug(url: &str) -> Option<String> {
         // scheme://[user@]host/<path>
         Some((_, rest)) => rest.split_once('/').map(|(_, p)| p)?,
         None => match url.split_once('@') {
-            // [user@]host:<path>  (scp-like SSH)
+            // [user@]host:<path> (scp-like SSH)
             Some((_, rest)) => rest.split_once(':').map(|(_, p)| p)?,
             // host/<path>
             None => url.split_once('/').map(|(_, p)| p).unwrap_or(url),

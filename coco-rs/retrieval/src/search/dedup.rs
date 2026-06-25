@@ -1,7 +1,7 @@
 //! Result deduplication for search results.
 //!
 //! Merges overlapping code chunks from the same file, keeping the highest score.
-//! Reference: Continue `core/autocomplete/context/ranking/index.ts:70-131`
+//! Reference: Continue
 
 use std::cmp::Ordering;
 use std::collections::HashMap;

@@ -2,13 +2,13 @@
 //!
 //! Produces a single ranked list (cap 15) combining agents, file paths,
 //! and MCP resources:
-//!   - agents are scored by Fuse.js with weight 3 on `agentType`, weight 2
-//!     on `displayText` — fuse scores are typically < 0.5 for decent
-//!     matches, so agents dominate the top of the list versus the file
-//!     prefix score (default 0.5)
-//!   - files are pre-scored by nucleo (Rust) and merged below agents
-//!   - MCP resources rank with the agent pool and keep at least one visible
-//!     row when they match but agents fill the cap
+//! - agents are scored by Fuse.js with weight 3 on `agentType`, weight 2
+//! on `displayText` — fuse scores are typically < 0.5 for decent
+//! matches, so agents dominate the top of the list versus the file
+//! prefix score (default 0.5)
+//! - files are pre-scored by nucleo (Rust) and merged below agents
+//! - MCP resources rank with the agent pool and keep at least one visible
+//! row when they match but agents fill the cap
 //!
 //! Rather than re-implement Fuse weighted scoring, we keep provider-local
 //! ordering and merge through one cap layer. Agent rows still rank first,
@@ -20,13 +20,12 @@ use crate::completion::McpResourceCompletion;
 use crate::widgets::suggestion_popup::SuggestionItem;
 use crate::widgets::suggestion_popup::SuggestionMeta;
 
-/// TS `MAX_UNIFIED_SUGGESTIONS` (`unifiedSuggestions.ts:70`).
+/// Max number of unified suggestions to show.
 const MAX_UNIFIED: usize = 15;
 
 /// Build the agent half of the unified popup. Synchronous — agents are
 /// already loaded in `session.available_agents` at session start.
-///
-/// Each row's label embeds the TS `displayText` format `"<name> (agent)"`
+/// Each row's label embeds the `displayText` format `"<name> (agent)"`
 /// so the visual line shows the kind without a separate column. The
 /// `SuggestionMeta::Agent { color }` carries the kind to the row
 /// renderer (icon prefix) and to insertion (which strips the suffix
@@ -74,8 +73,7 @@ pub fn seed_mcp_resource_items(
 }
 
 /// Merge an async file-search result with already-seeded agent items.
-///
-/// Order: agents first (TS parity — agent fuse scores dominate file
+/// Order: agents first (agent fuse scores dominate file
 /// scores), files appended. Total list is capped at [`MAX_UNIFIED`] so
 /// the popup never overflows its vertical slot.
 pub fn merge_file_results(

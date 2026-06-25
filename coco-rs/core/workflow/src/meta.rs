@@ -101,7 +101,7 @@ fn first_named_child(root: Node<'_>) -> Option<Node<'_>> {
 }
 
 /// Resolve `export const meta = <object>` to its object-literal node, requiring
-/// the exact TS `isMetaExport` shape: a `const` lexical declaration with a
+/// the exact `isMetaExport` shape: a `const` lexical declaration with a
 /// single declarator named `meta` whose initializer is an object literal.
 /// `export let/var meta` and multi-declarator forms are rejected.
 fn meta_object_node<'a>(statement: Node<'a>, source: &str) -> Result<Node<'a>> {
@@ -275,7 +275,7 @@ fn workflow_meta_from_value(value: Value) -> Result<WorkflowMeta> {
 }
 
 /// Required string field (`name` / `description`): must be a string with
-/// length > 0. Mirrors TS `validateMetaFields`, which rejects only `length ===
+/// length > 0., which rejects only `length ===
 /// 0` — a whitespace-only value is accepted.
 fn required_string(object: &mut Map<String, Value>, key: &str) -> Result<String> {
     let Some(value) = object.remove(key) else {
@@ -318,7 +318,7 @@ fn optional_any_string(object: &mut Map<String, Value>, key: &str) -> Option<Str
     }
 }
 
-/// Normalize the optional `phases` field, mirroring TS `normalizePhases` (W0p):
+/// Normalize the optional `phases` field (W0p):
 /// anything that isn't an array drops to empty (never an error); each element
 /// is kept only when it is an object with a string `title`; string entries and
 /// missing/non-string titles are silently skipped; `detail`/`model` are kept
@@ -447,7 +447,7 @@ fn unquote_string(raw: &str) -> Result<String> {
 
 /// Decode a JS string/template body (the text between the quotes/backticks)
 /// with JavaScript escape semantics, matching acorn's `cooked` value — so
-/// idiomatic JS escapes valid in claude-code (`\'`, `\xNN`, `\v`, line
+/// idiomatic JS escapes (`\'`, `\xNN`, `\v`, line
 /// continuations, `\<other>` → `<other>`) cook correctly instead of being
 /// rejected by JSON escape rules.
 fn cook_js_string(body: &str) -> Result<String> {

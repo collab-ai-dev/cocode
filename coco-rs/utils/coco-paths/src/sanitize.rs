@@ -2,34 +2,32 @@
 //!
 //! Two sanitizers:
 //! - `sanitize_path` — general-purpose sanitizer used for project paths,
-//!   memory base, and any other arbitrary string used as a directory name.
+//! memory base, and any other arbitrary string used as a directory name.
 //! - `sanitize_agent_type_for_path` — only the `:` separator (used by
-//!   plugin-namespaced agent ids like `my-plugin:my-agent`) is replaced;
-//!   the rest of the agent type is already constrained upstream and passes
-//!   through untouched.
+//! plugin-namespaced agent ids like `my-plugin:my-agent`) is replaced;
+//! the rest of the agent type is already constrained upstream and passes
+//! through untouched.
 
 use crate::djb2::simple_hash;
 
 /// Max length of a sanitized path segment before the djb2 hash suffix
 /// kicks in. TS: `MAX_SANITIZED_LENGTH = 200`
-/// (`utils/sessionStoragePortable.ts:293`).
+/// (NFC-normalized, then slugged).
 pub const MAX_SANITIZED_LENGTH: usize = 200;
 
 /// Sanitize an arbitrary string for use as a single filesystem path
-/// segment, mirroring TS `sanitizePath` exactly.
-///
+/// segment exactly.
 /// Algorithm:
 /// 1. Iterate the input as UTF-16 code units (matching JS string
-///    semantics) and replace every code unit outside `[a-zA-Z0-9]`
-///    with `'-'`. A char outside the BMP (e.g. an emoji) therefore
-///    becomes two `-` chars — same as JS regex behaviour.
+/// semantics) and replace every code unit outside `[a-zA-Z0-9]`
+/// with `'-'`. A char outside the BMP (e.g. an emoji) therefore
+/// becomes two `-` chars — same as JS regex behaviour.
 /// 2. If the result has at most [`MAX_SANITIZED_LENGTH`] bytes
-///    (which equals char count here since every surviving byte is
-///    ASCII), return it.
+/// (which equals char count here since every surviving byte is
+/// ASCII), return it.
 /// 3. Otherwise truncate to [`MAX_SANITIZED_LENGTH`] and append
-///    `-{simple_hash(original_input)}` where `simple_hash` is djb2
-///    formatted base36.
-///
+/// `-{simple_hash(original_input)}` where `simple_hash` is djb2
+/// formatted base36.
 /// Hash strategy note: TS picks `Bun.hash` on Bun and `simpleHash`
 /// (djb2) on Node. We match Node — djb2 is a deterministic pure
 /// function that ports cleanly. Long paths therefore round-trip

@@ -5,12 +5,12 @@
 //!
 //! Architecture:
 //! ```text
-//! ┌─────────────┐  UserCommand   ┌────────────────┐  LLM / tools  ┌────────────┐
-//! │  TUI App    │ ──────────────>│  agent_driver   │ ──────────────>│ QueryEngine│
-//! │  (ratatui)  │ <──────────────│  (tokio task)   │ <──────────────│            │
-//! └─────────────┘ ServerNotif.   └────────────────┘  QueryEvent    └────────────┘
-//!                                       │
-//!                                 FileHistoryState
+//! ┌─────────────┐ UserCommand ┌────────────────┐ LLM / tools ┌────────────┐
+//! │ TUI App │ ──────────────>│ agent_driver │ ──────────────>│ QueryEngine│
+//! │ (ratatui) │ <──────────────│ (tokio task) │ <──────────────│ │
+//! └─────────────┘ ServerNotif. └────────────────┘ QueryEvent └────────────┘
+//! │
+//! FileHistoryState
 //! ```
 
 use std::collections::HashMap;
@@ -52,9 +52,7 @@ use coco_cli::session_bootstrap::install_session_late_binds;
 use crate::Cli;
 
 /// Run the interactive TUI mode.
-///
 /// Spawns agent_driver as background task, runs TUI in foreground.
-///
 /// `resume_plan`: resolved by the binary entry from
 /// `--resume` / `--continue` / `--fork-session` flags. When `Some`,
 /// the runtime is repointed at the source session id and `runtime.history`
@@ -72,11 +70,9 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // `runtime_config` for this session so `RuntimeConfig` is built
     // exactly once at startup. Drop on `_reloader` aborts the spawned
     // task when `run_tui` returns.
-    //
     // Model runtime and sandbox subscribers attach below after
     // SessionRuntime is built, so published snapshots update the live
     // runtime registry without restarting the TUI.
-    //
     // **Reloader spawn failure → fall back to a one-shot static
     // build.** Outside a Tokio runtime `RuntimeReloader::spawn`
     // returns Err; in that case (which shouldn't happen here, but
@@ -651,17 +647,16 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // (builtins + extended + skills + plugin contributions). Without
     // this snapshot the popup silently shows nothing because the field
     // defaults to an empty Vec.
-    //
     // Two seed paths:
-    //   * **Startup (here)** — direct mutation. The event loop hasn't
-    //     started yet, so emitting on `notification_tx` would just
-    //     queue the event behind `App::run()`'s first iteration —
-    //     adds latency without simplifying anything.
-    //   * **Reload (`/reload-plugins`)** — see [`run_reload_plugins`].
-    //     Emits [`TuiOnlyEvent::AvailableCommandsRefreshed`] through
-    //     the same event channel the agent driver uses; the TUI
-    //     handler at `server_notification_handler::tui_only` overwrites
-    //     the slot and re-runs `refresh_suggestions`.
+    // * **Startup (here)** — direct mutation. The event loop hasn't
+    // started yet, so emitting on `notification_tx` would just
+    // queue the event behind `App::run()`'s first iteration —
+    // adds latency without simplifying anything.
+    // * **Reload (`/reload-plugins`)** — see [`run_reload_plugins`].
+    // Emits [`TuiOnlyEvent::AvailableCommandsRefreshed`] through
+    // the same event channel the agent driver uses; the TUI
+    // handler at `server_notification_handler::tui_only` overwrites
+    // the slot and re-runs `refresh_suggestions`.
     {
         let snapshot = command_registry.read().await.snapshot_for_ui();
         app.state_mut().session.available_commands = snapshot;
@@ -889,7 +884,6 @@ fn spawn_config_reload_error_toasts(
 }
 
 /// Agent driver — consumes UserCommands, drives QueryEngine, emits CoreEvents.
-///
 /// Runs as a background tokio task alongside the TUI event loop.
 /// Events flow directly as `CoreEvent` from QueryEngine → TUI (no mapping layer).
 #[allow(clippy::too_many_arguments)]
@@ -2115,7 +2109,6 @@ async fn drain_pending_memory_extraction(runtime: &Arc<crate::session_runtime::S
 /// `JoinHandle` in `active_turn` and continues to recv the next
 /// command — letting `Interrupt` / `Compact` /
 /// `Rewind` / `Shutdown` reach their arms while the engine runs.
-///
 /// All session-scoped Arcs are read out of `runtime` inside the body —
 /// the only data piped in are the per-turn user inputs, the cancel
 /// token, the cross-turn `title_gen_attempted` latch, and the snapshot
@@ -2123,7 +2116,6 @@ async fn drain_pending_memory_extraction(runtime: &Arc<crate::session_runtime::S
 /// uses the same id the rest of the turn observed, not a later
 /// `/clear`-regenerated one).
 /// Outcome of slash-command resolution against `runtime.command_registry`.
-///
 /// `dispatch_slash_command` is the single source of truth for routing
 /// `/foo` regardless of whether the user typed it (`SubmitInput`) or
 /// picked it from the palette (`ExecuteSkill`).
@@ -2143,7 +2135,7 @@ enum SlashOutcome {
     /// Unlike `RunEngine` (which re-queries the main model with the
     /// expanded body), this runs the skill as a subagent via the
     /// installed `SkillHandle` and injects only its result — mirroring
-    /// TS `executeForkedSlashCommand`. `name` is the canonical skill name.
+    /// `executeForkedSlashCommand`. `name` is the canonical skill name.
     RunForkSkill { name: String, args: String },
     /// No command with this name is registered. Caller should fall
     /// through to the existing path (model receives raw text).
@@ -2398,7 +2390,7 @@ async fn dispatch_resume(
 }
 
 /// `/branch` (alias `/fork`) — fork the current conversation at this point
-/// into a NEW session and switch to it live, mirroring TS `commands/branch`.
+/// into a NEW session and switch to it live.
 /// Copies the current transcript to a fresh uuid via `fork_conversation` (the
 /// same primitive `--fork-session` uses), then hydrates the runtime onto the
 /// fork (the same in-session switch `/resume` performs via
@@ -2453,7 +2445,7 @@ async fn dispatch_branch(
             let new_id = plan.session_id.clone();
             let source_id = plan.source_session_id.clone();
             // Derive the fork title: explicit arg, else the first user prompt
-            // (truncated), suffixed " (Branch)" — mirrors TS branch.ts. Done
+            // (truncated), suffixed " (Branch)" — branch.ts. Done
             // BEFORE hydrate moves `plan`.
             let base_title = if custom_title.is_empty() {
                 first_user_prompt_title(&plan.prior_messages)
@@ -2580,7 +2572,6 @@ async fn load_resume_plan_for_target(
 
 /// Case-insensitive exact resolve of `/resume <name>` when the
 /// argument doesn't match any session id directly.
-///
 /// Returns the unique session on a 1-match (after project filtering),
 /// or bails with a diagnostic listing the top-N candidates. The
 /// project filter keeps cross-project matches from leaking into the
@@ -2829,7 +2820,6 @@ fn parse_permissions_mutation(args: &str) -> Option<PermissionsMutation> {
 /// Resolve `/<name> <args>` through the registry and route the result.
 /// What's left for the caller to do after [`handle_slash_outcome`]
 /// has processed an outcome.
-///
 /// The 9 `SlashOutcome::Trigger*` variants and `Handled` all fold to
 /// [`SlashFollowup::Done`] inside the helper — caller has nothing
 /// further to do (TUI may `continue`, palette / SDK may simply
@@ -3196,7 +3186,6 @@ async fn process_queued_history_turn(
 /// command-palette + SDK invocation paths; the typed-input path
 /// substitutes `effective_content` instead so it keeps the outer
 /// `user_message_id` from the original TUI submit.
-///
 /// The active-turn slot is installed inline (locking `active_turn`)
 /// before this returns — callers can immediately start observing
 /// `ActiveTurn` from a peer task without a TOCTOU window.
@@ -3315,7 +3304,7 @@ async fn dispatch_slash_command(
     }
     // `/add-dir` (no arg) opens the interactive directory-input overlay.
     // `/add-dir <path>` falls through to the registry handler, which validates
-    // the path + emits the session-add sentinel. Mirrors TS `add-dir.tsx`:
+    // the path + emits the session-add sentinel.:
     // no-arg → `<AddWorkspaceDirectory>` form, arg → direct validate + add.
     if name == "add-dir" && args.trim().is_empty() {
         let _ = event_tx
@@ -3327,7 +3316,7 @@ async fn dispatch_slash_command(
     // `/export <format>` renders the live conversation history in that format
     // and writes it to a file in the session's original cwd. The sync registry
     // handler has no runtime access (can't reach `MessageHistory`), so the real
-    // export lives here. Mirrors TS `commands/export/export.tsx`.
+    // export lives here..
     if name == "export" {
         if args.trim().is_empty() {
             let _ = event_tx
@@ -3403,7 +3392,7 @@ async fn dispatch_slash_command(
     }
     // Fork-mode skills (`context: fork`) run as a subagent via the
     // installed `SkillHandle`, not by expanding inline into the main loop.
-    // Mirrors TS `processSlashCommand` (`context === 'fork'` →
+    // (`context === 'fork'` →
     // `executeForkedSlashCommand`); the handler path below only renders
     // inline expansions. `cmd.base.name` is canonical so the gate's
     // user-invoked check matches even when the user typed an alias.
@@ -3522,7 +3511,6 @@ async fn dispatch_slash_command(
             // sees it as a compact boundary; the LLM-summarized engine
             // path is unchanged (it's still the entry-point for typed
             // `/compact` from the TUI fast-path).
-            //
             // Truncation of pre-summary rounds is intentionally left to
             // the handler — when no handler emits this today, we err on
             // the side of preserving history rather than dropping it.
@@ -3738,20 +3726,18 @@ fn plan_command_query_after_flip(args: &str) -> Option<&str> {
 }
 
 /// `/plan` dispatch with full session-runtime context.
-///
 /// Typing `/plan` IS the consent to enter plan mode, so the dispatcher
 /// flips state directly via the same dual-write path
 /// `UserCommand::SetPermissionMode` uses (engine_config + app_state)
 /// plus the plan-mode-specific patch (`pre_plan_mode`,
 /// `plan_mode_entry_ms`, `needs_plan_mode_exit_attachment` cleared).
 /// The model never sees a redundant `EnterPlanMode` Yes/No dialog.
-///
 /// Per-arg behaviour:
-/// - `""`         → flip if needed, then show current plan or hint
-/// - `"open"`     → flip if needed, ensure file, launch `$EDITOR`/`vi`
+/// - `""` → flip if needed, then show current plan or hint
+/// - `"open"` → flip if needed, ensure file, launch `$EDITOR`/`vi`
 /// - `<description>` → flip if needed; if state changed, fire a query
-///   with the description; if already in plan mode, ignore the
-///   description and show the plan.
+/// with the description; if already in plan mode, ignore the
+/// description and show the plan.
 async fn dispatch_plan(
     args: &str,
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
@@ -3862,7 +3848,7 @@ async fn dispatch_plan(
 
     // `/plan <description>` —
     // - Flipped to plan mode → fire query with the user input.
-    //   Returns `RunEngine { content: <description> }`.
+    // Returns `RunEngine { content: <description> }`.
     // - Already in plan mode → ignore the description, just show the plan.
     if was_in_plan {
         let content = coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None);
@@ -3907,7 +3893,6 @@ struct ActiveTurn {
 }
 
 /// Always-fires completion signaller for spawned turn tasks.
-///
 /// The main `select!` loop in `run_agent_driver` blocks on
 /// `turn_done_rx.recv()` to drain a completed turn from `active_turn`.
 /// Sending `turn_id` as the last statement of the spawned task only
@@ -3915,7 +3900,6 @@ struct ActiveTurn {
 /// before reaching the send, so the `active_turn` slot stays occupied
 /// with a corpse `JoinHandle` until the next user command forces
 /// `drain_active_turn()` to collect it.
-///
 /// `Drop` runs on both normal scope-exit and panic unwind. `try_send`
 /// is non-blocking and safe in `Drop`; the receiver is drained promptly
 /// so the bounded channel (buffer 16) should never be full in practice.
@@ -3937,7 +3921,6 @@ impl Drop for TurnDoneGuard {
 }
 
 /// Completion signaller for the cross-process teammate inbox pump (gap 1).
-///
 /// Fires the turn's `user_message_id` so the pump (`teammate_inbox_pump`)
 /// can release its serialized wait and inject the next mailbox message.
 /// `Drop` (not a tail send) so the signal fires on normal completion,
@@ -3987,7 +3970,6 @@ enum PendingEditorRequest {
 /// turn (Clear / Compact / Rewind / Shutdown / next SubmitInput).
 /// `AbortAfter` is reserved for explicit process shutdown so a stuck
 /// tool or stream cannot leave the terminal sitting on the exit hint.
-///
 /// Always records `SystemPreempt` as the reason — these callers are
 /// running cleanup work, not honouring a user "stop this turn"
 /// request. `UserCommand::Interrupt` records `UserCancel`; the
@@ -4056,11 +4038,10 @@ async fn run_manual_compact(
 }
 
 /// Run a user-typed fork-mode skill (`/<name>` with `context: fork`) as a
-/// subagent and inject its result into the transcript. Mirrors TS
+/// subagent and inject its result into the transcript.
 /// `executeForkedSlashCommand`: the subagent runs synchronously, its final
 /// text lands as a `<local-command-stdout>` user message, and there is NO
 /// follow-up main-model query.
-///
 /// Drains the in-flight turn first (the subagent runs LLM calls / mutates
 /// shared state) — same contract as `run_manual_compact`.
 async fn run_fork_skill(
@@ -4131,7 +4112,6 @@ async fn run_manual_compact_inner(
 
 /// Run the clear flow. Drains any active turn first since clear mutates
 /// session_id + resets several per-session caches.
-///
 /// Plan I-1 (Authority): emits a wire-visible event after the clear so
 /// the TUI's `TranscriptView` and SDK NDJSON observers stay coherent.
 /// `/clear` rotates session_id → emit
@@ -4157,7 +4137,6 @@ async fn run_clear_conversation(
 /// Force auto-memory consolidation now (skips the three-gate scheduler).
 /// Mirrors the SDK runner's `/dream` short-circuit. Silently no-ops
 /// when `Feature::AutoMemory` is off.
-///
 /// Uses [`coco_memory::DreamService::force`] so the time / session /
 /// scan-throttle gates are bypassed; the PID + mtime CAS lock is still
 /// acquired so this can't race with an in-flight auto-dream.
@@ -4209,7 +4188,7 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
 /// logic with the SDK path via [`crate::side_question`]; the parent
 /// conversation is never mutated. If no parent turn has finalised yet,
 /// falls back to cache params rebuilt from the current transcript, matching
-/// the TS `/btw` fallback path. Degrades only when the fork dispatcher is not
+/// the `/btw` fallback path. Degrades only when the fork dispatcher is not
 /// installed.
 async fn run_side_question(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
@@ -4235,7 +4214,7 @@ async fn run_side_question(
 /// `/export <filename>` runner — renders the live conversation `MessageHistory`
 /// (incl. tool activity) and writes it to a file in the session's original cwd,
 /// then confirms the path. The sync registry handler has no runtime access, so
-/// the real export lives here. Mirrors TS `commands/export/export.tsx`: the arg
+/// the real export lives here.: the arg
 /// is a FILENAME and the file is written under the cwd. coco infers the format
 /// from the extension (`.md`→markdown, `.json`→json, else plain text) — TS
 /// exports plain text only. The no-arg format-picker modal re-enters here with
@@ -4337,7 +4316,6 @@ async fn run_session_rename(
 /// atomically swaps the active `CommandRegistry`. Snapshots taken by
 /// in-flight dispatches stay valid (they hold the prior `Arc`); the
 /// swap is observed by the next dispatch.
-///
 /// After the swap we also push the fresh visible-command list to the
 /// TUI via [`TuiOnlyEvent::AvailableCommandsRefreshed`] so the `/`
 /// autocomplete popup and command palette stop pointing at stale names
@@ -4509,7 +4487,6 @@ async fn run_session_tag(
 }
 
 /// `/permissions allow|deny|reset` dispatch with live-base mutation.
-///
 /// The static registry handler can return text but can't mutate the live
 /// `ToolAppState.permissions` base. This intercepts the three mutating
 /// subcommands so they take real effect — routing allow/deny through
@@ -4518,7 +4495,6 @@ async fn run_session_tag(
 /// no-arg fall through to the registry handler that reads settings.json.
 /// Returns `None` for non-mutating args so the caller falls through.
 /// `/color <name|default>` — set the prompt bar color for this session.
-///
 /// Persists to the live `ToolAppState.agent_color` so the prompt-bar UI
 /// sees the change without a session restart. Returns `None` for the
 /// empty-args case so the registry handler still produces the
@@ -5027,10 +5003,9 @@ async fn process_submit_turn(
 
     // Sole Interrupted emit site for this runner. Fires when either:
     // - the engine observed cancel mid-loop and returned `Ok(cancelled=true)`
-    //   (clean cancel path), or
+    // (clean cancel path), or
     // - the user-cancel raced the engine and arrived after Ok return
-    //   (late-cancel path).
-    //
+    // (late-cancel path).
     // The reason comes from `turn_abort.reason()` — `UserCommand::Interrupt`
     // sets `UserCancel`; `drain_active_turn` sets `SystemPreempt`. When
     // the engine cancelled but the signal somehow stayed unset
@@ -5103,7 +5078,6 @@ async fn maybe_spawn_auto_title(
 }
 
 /// Synchronous TUI-cancel cleanup.
-///
 /// Truncates the runtime history at the target user message and emits
 /// the authoritative `MessageTruncated` event so SDK + TUI observers
 /// converge. Never touches the workspace — file rewind belongs to the
@@ -5158,15 +5132,12 @@ async fn handle_auto_truncate(
 }
 
 /// Explicit `/rewind` command driver — picker-confirmed.
-///
 /// Branches on `restore_type`:
-///
 /// - `Both` / `CodeOnly` — `file_history.rewind()` restores files.
 /// - `Both` / `ConversationOnly` — truncate history and emit
-///   `MessageTruncated`.
+/// `MessageTruncated`.
 /// - `SummarizeFrom` / `SummarizeUpTo` — dispatch to
-///   `handle_summarize_rewind` (partial compaction).
-///
+/// `handle_summarize_rewind` (partial compaction).
 /// Always emits `RewindCompleted` so the TUI dismisses the picker overlay.
 #[allow(clippy::too_many_arguments)]
 async fn handle_rewind(
@@ -5317,7 +5288,6 @@ async fn handle_rewind(
 /// Run `partial_compact_conversation` for SummarizeFrom / SummarizeUpTo
 /// rewind options, replace the agent history with the result, and
 /// emit a TUI signal to mirror the truncation in the display.
-///
 /// Direction mapping: `SummarizeFrom` == `Newest`; `SummarizeUpTo` == `Oldest`.
 async fn handle_summarize_rewind(
     restore_type: &coco_tui::state::RestoreType,
@@ -5414,7 +5384,6 @@ async fn handle_summarize_rewind(
 }
 
 /// Decide whether the driver should fire an auto-title task this turn.
-///
 /// Pure gate function factored out of the driver loop so we can unit
 /// test the precedence without spinning up a real engine. All five
 /// conditions must hold; missing any single one short-circuits.
@@ -5471,27 +5440,24 @@ fn spawn_auto_title_task(runtime: Arc<crate::session_runtime::SessionRuntime>, p
 /// `project config dir/settings.local.json`, refresh the in-process
 /// registry, and notify the TUI so the dialog's toast + `/`
 /// autocomplete pick up the change.
-///
 /// **No user-visible string generation here** — the localized
 /// "Updated N / No changes / Failed: …" toast is rendered by the
 /// TUI from the `SkillOverridesSaved` event payload (the i18n
 /// catalog is anchored at `coco-tui` and can't be reached from
 /// `coco-cli`).
-///
 /// Steps:
-///
 /// - Atomic write to `project config dir/settings.local.json` via
-///   [`coco_config::LocalSettingsWriter::write_local`] — the writer
-///   also republishes `RuntimeConfig` synchronously so the next
-///   agent turn reads the new tiers.
+/// [`coco_config::LocalSettingsWriter::write_local`] — the writer
+/// also republishes `RuntimeConfig` synchronously so the next
+/// agent turn reads the new tiers.
 /// - Rebuild the command registry against the freshly-published
-///   `RuntimeConfig` (NOT the stale snapshot in
-///   `runtime.runtime_config`) so the `off`-overridden skills drop
-///   out of the visible command set.
+/// `RuntimeConfig` (NOT the stale snapshot in
+/// `runtime.runtime_config`) so the `off`-overridden skills drop
+/// out of the visible command set.
 /// - Push `AvailableCommandsRefreshed` so the TUI's `/`
-///   autocomplete updates in the same frame.
+/// autocomplete updates in the same frame.
 /// - Emit `SkillOverridesSaved` so the TUI renders the localized
-///   toast.
+/// toast.
 async fn handle_write_skill_overrides(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
     event_tx: &mpsc::Sender<CoreEvent>,
@@ -5575,7 +5541,6 @@ fn save_error_kind(e: &coco_config::SettingsWriteError) -> coco_types::SkillOver
 /// `CommandQueue` storage. `QueuedImage` carries a base64 payload (the
 /// shape coco-rs uses for system-reminder image attachments) so we
 /// encode once at the bridge and the engine ships it through unchanged.
-///
 /// MIME defaults to `image/png` when missing.
 fn image_data_to_queued(images: &[coco_tui::ImageData]) -> Vec<QueuedImage> {
     use base64::Engine;
@@ -5770,7 +5735,6 @@ fn build_system_message_from_push_kind(kind: coco_tui::SystemPushKind) -> coco_m
 /// the command runs once in the session cwd via [`coco_shell::ShellExecutor`]
 /// and the merged stdout+stderr is folded back into the transcript as a
 /// `MessageContent::BashOutput`.
-///
 /// Output is capped at 200 lines / ~8 KB so a `find /` doesn't fill the
 /// chat scrollback. The TUI's renderer already truncates display to 20
 /// lines (`render_user.rs::BashOutput`) but we keep the wire payload
@@ -5933,15 +5897,13 @@ impl CreateAgentError {
 }
 
 /// Stage the new-agent markdown file ahead of the `$EDITOR` fork.
-///
 /// 1. Resolves the target directory via
-///    [`coco_subagent::resolve_writable_agent_dir`].
+/// [`coco_subagent::resolve_writable_agent_dir`].
 /// 2. Pulls the live catalog snapshot **once** so the colour picker
-///    and the post-write reload share the same view.
+/// and the post-write reload share the same view.
 /// 3. Wraps `create_dir_all` + `write` in `spawn_blocking` so a slow
-///    disk doesn't stall the async runtime.
+/// disk doesn't stall the async runtime.
 /// 4. Refuses to overwrite an existing file.
-///
 /// The caller then hands off to the standard editor flow.
 async fn prepare_agent_create(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
@@ -6017,7 +5979,6 @@ fn build_agent_template(
 /// in-string syntax is the single quote itself, which doubles to
 /// `''`. Control characters and backslashes pass through literally,
 /// dodging the double-quote escape surface entirely.
-///
 /// The wizard's `wizard_input_char` already rejects literal newlines
 /// (`InsertNewline` is unbound) and control characters on the
 /// description step, so by the time text reaches here it's a single
@@ -6514,11 +6475,9 @@ fn provider_display_label(provider: &str) -> String {
 /// [`ServerNotification::ModelRoleChanged`] so the TUI refreshes its
 /// `model_by_role` mirror (and, when `role == Main`, the status-bar
 /// fields).
-///
 /// **No file write.** Users who want the binding to survive across
 /// sessions edit `the global config file::model_roles.<role>.primary` themselves.
 /// The picker is for fast experimentation, not persistence.
-///
 /// Non-Main roles take effect on the next turn that drives that role.
 /// Main effort takes effect immediately; Main model_id changes only
 /// take effect on next session restart — see

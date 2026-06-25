@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_AUTO_BACKGROUND_MS: u64 = 120_000;
 
 /// Typed input for [`AgentTool`].
-///
 /// The model-facing schema is built by the manual
 /// [`AgentTool::input_schema`] override (precise descriptions and enum
 /// lists). This struct only owns the runtime shape used by
@@ -172,11 +171,11 @@ impl Tool for AgentTool {
                     },
                     // Note: NEITHER `model` NOR `model_role` is in the model-facing
                     // schema. Both are operator-only knobs:
-                    //   - `model` (e.g. `openai/gpt-4o`) — set in `.md` frontmatter
-                    //     `model:` field by the author who knows the target provider.
-                    //   - `model_role` (e.g. `Fast`, `Explore`) — set in `.md`
-                    //     frontmatter `model_role:` field or derived from the
-                    //     `subagent_type → ModelRole` built-in mapping.
+                    // - `model` (e.g. `openai/gpt-4o`) — set in `.md` frontmatter
+                    // `model:` field by the author who knows the target provider.
+                    // - `model_role` (e.g. `Fast`, `Explore`) — set in `.md`
+                    // frontmatter `model_role:` field or derived from the
+                    // `subagent_type → ModelRole` built-in mapping.
                     // Why neither is LLM-pickable: `model` requires knowing the
                     // operator's `provider/model_id` config (multi-LLM ⇒ no closed
                     // enum to choose from); `model_role` requires knowing the
@@ -206,18 +205,18 @@ impl Tool for AgentTool {
                         // Model-pickable permission modes for a spawned teammate
                         // (camelCase `PermissionMode` wire values). This is the
                         // SUBSET a teammate may be launched in by the model:
-                        //   - `auto` IS offered — coco-rs ships auto mode (TS
-                        //     feature-gates it; coco supports it, so it stays).
-                        //   - `bubble` is NOT offered: it is an internal mode
-                        //     (the child keeps no session rules and escalates
-                        //     every permission decision to the parent), set by
-                        //     the fork/coordinator machinery, never chosen by the
-                        //     model. TS likewise omits it from the schema and sets
-                        //     it via forkSubagent. `PermissionMode::Bubble` stays
-                        //     in the type for that internal path.
-                        //   - `ask`/`deny` are `PermissionBehavior` values, NOT
-                        //     modes; they would fail to parse and be dropped to
-                        //     the parent mode by `resolve_subagent_mode`.
+                        // - `auto` IS offered — coco-rs ships auto mode (TS
+                        // feature-gates it; coco supports it, so it stays).
+                        // - `bubble` is NOT offered: it is an internal mode
+                        // (the child keeps no session rules and escalates
+                        // every permission decision to the parent), set by
+                        // the fork/coordinator machinery, never chosen by the
+                        // model. TS likewise omits it from the schema and sets
+                        // it via forkSubagent. `PermissionMode::Bubble` stays
+                        // in the type for that internal path.
+                        // - `ask`/`deny` are `PermissionBehavior` values, NOT
+                        // modes; they would fail to parse and be dropped to
+                        // the parent mode by `resolve_subagent_mode`.
                         "enum": [
                             "default", "plan", "dontAsk", "acceptEdits",
                             "bypassPermissions", "auto"
@@ -253,7 +252,7 @@ impl Tool for AgentTool {
             drop.push("run_in_background");
         }
         // `cwd` is never offered to the model. TS exposes it only behind
-        // `feature('KAIROS')` (`AgentTool.tsx:111`); coco-rs has no KAIROS
+        // coco-rs has no KAIROS
         // surface and no product need for the model to choose a spawn cwd —
         // exposing it only enabled the `cwd` × `isolation:"worktree"`
         // mutual-exclusivity rejection (the original failure). Unlike TS's
@@ -269,9 +268,9 @@ impl Tool for AgentTool {
         // live. All three matter only to the team-spawn path: `team_name` selects
         // it, `mode` is honored ONLY there (and only as `Plan` — see `execute`),
         // and `name` is for team addressing (SendMessage, itself
-        // `Feature::AgentTeams`-gated) or as a fork label. Mirror TS's own
+        // `Feature::AgentTeams`-gated) or as a fork label.'s own
         // "omit feature-gated optional fields when the feature is off" pattern
-        // (`AgentTool.tsx:104-124`, the same mechanism that gates `cwd` /
+        // (same mechanism that gates `cwd` /
         // `run_in_background`) and the local `cwd` precedent: hide them from the
         // model-facing schema while keeping them in `runtime_validation_schema`
         // so a hook/permission `updated_input` rewrite can still set them and
@@ -351,14 +350,12 @@ impl Tool for AgentTool {
 
     /// Render the dynamic AgentTool description with the per-agent
     /// listing.
-    ///
     /// Filtering applied (in order):
     /// 1. `allowed_agent_types` from `Agent(...)` permission rule
     /// 2. `required_mcp_servers` against `ready_mcp_servers` (case-
-    ///    insensitive substring) — pre-filter so the model never sees
-    ///    an agent whose MCP servers aren't connected.
+    /// insensitive substring) — pre-filter so the model never sees
+    /// an agent whose MCP servers aren't connected.
     /// 3. Coordinator + fork-mode prompt sections gated by flags.
-    ///
     /// Falls through to the static `description()` when no catalog
     /// snapshot was threaded into `PromptOptions` (e.g. test paths).
     async fn prompt(&self, options: &coco_tool_runtime::PromptOptions) -> String {
@@ -369,7 +366,7 @@ impl Tool for AgentTool {
                 &options.as_description_options(),
             );
         };
-        // Agent types forbidden by an `Agent(<type>)` deny rule. Mirrors TS
+        // Agent types forbidden by an `Agent(<type>)` deny rule.
         // `filterDeniedAgents`: the central evaluator defers these content
         // denies to `AgentTool::execute` (see `find_agent_deny_rule`), so the
         // listing must drop them too — otherwise the model is shown an agent
@@ -404,7 +401,7 @@ impl Tool for AgentTool {
         };
         renderer.full_prompt(&render_opts)
     }
-    /// Mirror TS `AgentTool.isReadOnly() => true` ("delegates permission
+    /// ("delegates permission
     /// checks to its underlying tools"). The spawn itself touches nothing —
     /// the child subagent runs under the inherited permission mode and its
     /// own tool calls (Read/Bash/Edit/…) are each gated there. So the gate
@@ -412,7 +409,6 @@ impl Tool for AgentTool {
     /// on every `Agent(...)` in auto/default mode. Deny rules (`Agent(<type>)`)
     /// still apply: they are evaluated before this read-only fast path and are
     /// also enforced in `execute`.
-    ///
     /// `is_always_read_only` covers the DynTool bridge's partial-input
     /// fallback (`traits.rs`: when the raw `Value` can't deserialize into
     /// `AgentInput`, e.g. streamed/partial input, it reads this constant), so
@@ -593,11 +589,10 @@ impl Tool for AgentTool {
         // user-facing directive in `<fork-boilerplate>` so the worker
         // receives its rules and a downstream recursion guard
         // (`is_in_fork_child`) can detect fork-of-fork.
-        //
         // Team spawns (`name` + `team_name`) are NOT fork-eligible even
         // when `subagent_type` is omitted: a teammate is a distinct,
         // addressable agent, not a cache-shared fork. TS routes the team
-        // branch before fork (`AgentTool.tsx:284-316`); mirror that here
+        // Branch before fork; mirror that here
         // so a `Fork{..} + team_name` shape can never be constructed.
         // Fork eligibility — the single predicate consumed both by the
         // permission-mode resolution and the `spawn_mode` construction below.
@@ -685,28 +680,28 @@ impl Tool for AgentTool {
             .and_then(|(cat, name)| cat.find_active(name).cloned())
             .map(std::sync::Arc::new);
 
-        // Child permission mode, mirroring TS `runAgent.ts:415-433` +
-        // `spawnMultiAgent.ts:215-218`:
-        //   - FORK resolves like an agent declaring `permissionMode: "bubble"`
-        //     (`FORK_AGENT.permissionMode = 'bubble'`, `forkSubagent.ts`): the
-        //     fork child keeps no session rules and bubbles every permission
-        //     decision to the parent terminal.
-        //   - TEAM spawn + model `mode == Plan`: force the teammate into Plan,
-        //     OVERRIDING even a permissive trust parent. This is TS's
-        //     `plan_mode_required: spawnMode === 'plan'` → "don't inherit bypass
-        //     permissions; plan mode takes precedence over bypass for safety"
-        //     (`spawnMultiAgent.ts:215-218`). It is the ONLY model-honored `mode`
-        //     value, and ONLY in the restrictive direction — a leader running in
-        //     bypass/acceptEdits can deliberately spawn a cautious, approval-gated
-        //     teammate. Every OTHER `mode` value is ignored, so the model can
-        //     never escalate a teammate's permission level (closing the prior
-        //     coco bug where `resolve_subagent_mode(Default, Some(Bypass))` handed
-        //     a teammate bypass).
-        //   - Otherwise (ordinary subagent, or team spawn without `mode:"plan"`):
-        //     the child mode comes from `AgentDefinition.permissionMode` (config)
-        //     + parent-trust inheritance; `input.mode` is NOT threaded. Parent
-        //     trust modes (Bypass/AcceptEdits/Auto) take precedence inside
-        //     `resolve_subagent_mode`, exactly as TS does.
+        // Child permission mode +
+        // :
+        // - FORK resolves like an agent declaring `permissionMode: "bubble"`
+        // (`FORK_AGENT.permissionMode = 'bubble'`, `forkSubagent.ts`): the
+        // fork child keeps no session rules and bubbles every permission
+        // decision to the parent terminal.
+        // - TEAM spawn + model `mode == Plan`: force the teammate into Plan,
+        // OVERRIDING even a permissive trust parent. This is TS's
+        // `plan_mode_required: spawnMode === 'plan'` → "don't inherit bypass
+        // permissions; plan mode takes precedence over bypass for safety"
+        // (). It is the ONLY model-honored `mode`
+        // value, and ONLY in the restrictive direction — a leader running in
+        // bypass/acceptEdits can deliberately spawn a cautious, approval-gated
+        // teammate. Every OTHER `mode` value is ignored, so the model can
+        // never escalate a teammate's permission level (closing the prior
+        // coco bug where `resolve_subagent_mode(Default, Some(Bypass))` handed
+        // a teammate bypass).
+        // - Otherwise (ordinary subagent, or team spawn without `mode:"plan"`):
+        // the child mode comes from `AgentDefinition.permissionMode` (config)
+        // + parent-trust inheritance; `input.mode` is NOT threaded. Parent
+        // trust modes (Bypass/AcceptEdits/Auto) take precedence inside
+        // `resolve_subagent_mode`, exactly as TS does.
         let config_mode = resolved_definition
             .as_ref()
             .and_then(|def| def.permission_mode.as_deref())
@@ -730,20 +725,19 @@ impl Tool for AgentTool {
         // no tool filter, no model_role, no `required_mcp_servers` check.
         // Reject upfront with the catalog list so the model corrects
         // itself rather than producing a half-configured spawn.
-        //
         // Three legitimate "no definition" paths skip this guard:
         // - Fork mode (`subagent_type` omitted + fork gate on) — child
-        //   inherits parent's prompt, no AgentDefinition needed.
+        // inherits parent's prompt, no AgentDefinition needed.
         // - Team spawn without type (`name + team_name + no subagent_type`)
-        //   — generic teammates are allowed.
+        // — generic teammates are allowed.
         // - Test context (`ctx.agent_catalog` is `None`) — can't validate
-        //   without a catalog handle.
+        // without a catalog handle.
         if let (Some(catalog), Some(explicit_name)) = (
             ctx.agent_catalog.as_deref(),
             explicit_subagent_type.as_deref(),
         ) && resolved_definition.is_none()
         {
-            // List `def.name` (= TS `agentType` = what the model saw in the
+            // List `def.name` (= `agentType` = what the model saw in the
             // listing and what `find_active` keys on), NOT the canonicalized
             // `def.agent_type` — else an aliased custom agent (`name: explore`)
             // is told to retry with `Explore`, the value that just failed.
@@ -776,7 +770,7 @@ impl Tool for AgentTool {
         // so without the `!is_team_spawn` guard an `Agent(general-purpose)`
         // deny rule (meant to curb ad-hoc subagents) would wrongly reject
         // every untyped teammate. TS scopes the scan to the non-team branch
-        // (`AgentTool.tsx:342-353`, after the team early-return).
+        // After the team early-return.
         if !is_fork
             && !is_team_spawn
             && let Some(denied) =
@@ -867,11 +861,11 @@ impl Tool for AgentTool {
 
         // Run async when any flag requests it, unless background tasks are
         // disabled:
-        //   run_in_background = (run_in_background
-        //                        || selectedAgent.background
-        //                        || isCoordinator
-        //                        || forceAsync)
-        //                       && !isBackgroundTasksDisabled
+        // run_in_background = (run_in_background
+        // || selectedAgent.background
+        // || isCoordinator
+        // || forceAsync)
+        // && !isBackgroundTasksDisabled
         let run_in_background_input = input.run_in_background;
         let definition_forces_background = resolved_definition
             .as_ref()
@@ -888,8 +882,8 @@ impl Tool for AgentTool {
                 || matches!(spawn_mode, coco_tool_runtime::SpawnMode::Fork { .. }));
 
         // Reads `COCO_AUTO_BACKGROUND_TASKS` env var. Two accepted forms:
-        //   - bare truthy (`1` / `true` / `yes`) → DEFAULT_AUTO_BACKGROUND_MS
-        //   - numeric (`90000`) → that many ms
+        // - bare truthy (`1` / `true` / `yes`) → DEFAULT_AUTO_BACKGROUND_MS
+        // - numeric (`90000`) → that many ms
         // Falsy / unset → `None` (no auto-detach).
         // Only applies when the spawn is foreground; background spawns
         // detach immediately via `run_in_background`.
@@ -964,7 +958,6 @@ impl Tool for AgentTool {
             mode: Some(effective_mode),
             // `cwd` is read from the tool input.
             // Mutually-exclusive-with-worktree validation runs above.
-            //
             // The previous five "internal-only knobs" (`effort`,
             // `use_exact_tools`, `mcp_servers`, `disallowed_tools`,
             // `max_turns`, `initial_prompt`) have been removed from
@@ -972,7 +965,7 @@ impl Tool for AgentTool {
             // The coordinator now reads them directly from
             // `request.definition` (the resolved AgentDefinition).
             cwd: requested_cwd,
-            // Read-scope inheritance (TS `createSubagentContext` parity): the
+            // Read-scope inheritance (`createSubagentContext` parity): the
             // child runs in an isolated worktree cwd but should still READ the
             // parent project without prompting, so forward the parent's cwd(s)
             // + its inherited `additional_dirs` as the child's read working
@@ -1151,12 +1144,11 @@ impl Tool for AgentTool {
 
 /// Resolve the `COCO_AUTO_BACKGROUND_TASKS` env var into the
 /// `auto_background_ms` value to thread onto `AgentSpawnRequest`.
-///
 /// Acceptance rules:
 /// - Unset / empty → `None`.
 /// - Numeric (`"90000"`) → `Some(parsed_u64)` — caller-specified ms.
 /// - Truthy non-numeric (`"1"`, `"true"`, `"yes"`, `"on"`) →
-///   `Some(DEFAULT_AUTO_BACKGROUND_MS)` (120 000 ms).
+/// `Some(DEFAULT_AUTO_BACKGROUND_MS)` (120 000 ms).
 /// - Falsy (`"0"`, `"false"`, `"no"`, `"off"`) → `None`.
 fn resolve_auto_background_ms() -> Option<u64> {
     let raw = match std::env::var(coco_config::EnvKey::CocoAutoBackgroundTasks.as_str()) {
@@ -1179,11 +1171,9 @@ fn resolve_auto_background_ms() -> Option<u64> {
 
 /// Fail-fast guard that rejects an AgentTool spawn whose declared
 /// `mcp_servers` aren't all connected yet.
-///
 /// Without this guard, a child declaring `mcp_servers: ["github"]` lands
 /// before its server transitions to `connected` and runs with an empty
 /// tool pool — the request ships, the runner just can't find the tools.
-///
 /// Empty `connected_servers()` (the test `NoOpMcpHandle`) is treated as
 /// "no MCP layer wired" and lets the spawn through, so this guard only
 /// fires in production sessions where the MCP layer is live.

@@ -9,10 +9,10 @@
 //! Two coco-rs-specific high-level fields extend the base schema:
 //!
 //! - `mode`: posture enum (ReadOnly/WorkspaceWrite/FullAccess/ExternalSandbox).
-//!   Distinct from `enabled`: `enabled` is the feature gate, `mode` controls
-//!   the policy applied when the gate is on.
+//! Distinct from `enabled`: `enabled` is the feature gate, `mode` controls
+//! the policy applied when the gate is on.
 //! - `allow_network`: coarse "all or nothing" toggle. Distinct from
-//!   `network.allowed_domains` which is a fine-grained allowlist.
+//! `network.allowed_domains` which is a fine-grained allowlist.
 //!
 //! ## Env overrides
 //!
@@ -37,7 +37,6 @@ use crate::settings::SettingsWithSource;
 use crate::settings::source::SettingSource;
 
 /// Whether sandbox bypass was requested for a specific command.
-///
 /// Used instead of a bare `bool` so callsites are self-documenting:
 /// `is_sandboxed(cmd, SandboxBypass::Requested)` vs `is_sandboxed(cmd, true)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +59,6 @@ impl SandboxBypass {
 }
 
 /// Network access mode controlling HTTP method enforcement.
-///
 /// In `Limited` mode, only safe HTTP methods (GET, HEAD, OPTIONS) are allowed.
 /// CONNECT tunnels and SOCKS5 are blocked (cannot inspect methods through tunnels).
 /// In `Full` mode (default), all methods are permitted.
@@ -98,7 +96,6 @@ pub struct FilesystemConfig {
     pub deny_read: Vec<PathBuf>,
     /// Paths to re-allow reading within `deny_read` regions.
     /// Takes precedence over `deny_read` for matching paths.
-    ///
     #[serde(default)]
     pub allow_read: Vec<PathBuf>,
     /// Allow writing to `.git/config` and `~/.gitconfig`.
@@ -108,18 +105,15 @@ pub struct FilesystemConfig {
     /// paths from `policy_settings` source are honored. User, project,
     /// local, and flag settings `allow_read` entries are ignored.
     /// `deny_read` entries from all sources are still respected.
-    ///
     /// Enforcement requires per-source rule plumbing through
     /// [`crate::SettingsWithSource::sourced_filesystem_allow_read`] —
     /// when the adapter receives flat unsourced rules, the gate degrades
     /// to "all sources contribute" (safe default).
-    ///
     #[serde(default)]
     pub allow_managed_read_paths_only: bool,
 }
 
 /// Network access configuration for the sandbox.
-///
 /// The `denied_domains` and `mode` fields are local extensions that
 /// gracefully degrade when consumed by clients that ignore extra fields.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -153,7 +147,6 @@ pub struct NetworkConfig {
     #[serde(default)]
     pub mitm_proxy: Option<MitmProxyConfig>,
     /// Block connections to non-public IP addresses (SSRF prevention).
-    ///
     /// When enabled, the proxy filter rejects connections to loopback,
     /// private (RFC 1918), link-local, CGNAT, TEST-NET, and other
     /// reserved IP ranges.
@@ -164,12 +157,10 @@ pub struct NetworkConfig {
     /// `policy_settings` are honored. User, project, local, and flag
     /// settings allow-domains are ignored. Denied domains from all
     /// sources are still respected.
-    ///
     /// Enforcement requires per-source rule plumbing through
     /// [`crate::SettingsWithSource::sourced_permission_rules`] — when
     /// the adapter receives flat unsourced rules, the gate degrades to
     /// "all sources contribute" (safe default).
-    ///
     #[serde(default)]
     pub allow_managed_domains_only: bool,
 }
@@ -185,7 +176,6 @@ pub struct MitmProxyConfig {
 }
 
 /// Per-command violation ignore patterns.
-///
 /// Keys are command patterns (or `"*"` for global).
 /// Values are lists of violation operations to ignore.
 pub type IgnoreViolationsConfig = HashMap<String, Vec<String>>;
@@ -201,13 +191,10 @@ pub struct RipgrepConfig {
 }
 
 /// Sandbox settings.
-///
 /// Deserialized directly from `config home/settings.json`'s `sandbox` block;
 /// consumed by both the high-level posture decision (`mode`) and the
 /// platform-specific runtime (filesystem/network/etc.).
-///
 /// # Default
-///
 /// `enabled: false`. When false, commands run unsandboxed. The platform
 /// runtime is constructed lazily and only when `enabled == true` AND the
 /// bootstrap gates pass (supported platform, deps available, etc.).
@@ -226,7 +213,6 @@ pub struct SandboxSettings {
     pub allow_network: bool,
 
     /// Enable sandbox mode.
-    ///
     /// When `false` (default), commands run directly without sandbox wrapping.
     /// When `true`, commands are wrapped with platform-specific sandbox
     /// (Seatbelt on macOS, bubblewrap on Linux).
@@ -250,7 +236,6 @@ pub struct SandboxSettings {
     pub enabled_platforms: Vec<String>,
 
     /// Commands excluded from sandbox wrapping.
-    ///
     /// Supports three pattern types:
     /// - Exact: `"git"` matches `git` and `git <subcommand>`
     /// - Prefix: `"npm:*"` matches `npm` and all subcommands
@@ -352,7 +337,6 @@ impl SandboxSettings {
     }
 
     /// Resolve the effective settings from `Settings` + env-var overrides.
-    ///
     /// `settings.sandbox` is already a fully-defaulted `SandboxSettings`
     /// (every field has a `#[serde(default)]`). This step layers the four
     /// scalar env overrides on top — `mode`, `excluded_commands`,
@@ -389,7 +373,6 @@ impl SandboxSettings {
     }
 
     /// Check if a command should run in sandbox mode.
-    ///
     /// Returns `false` (no sandbox) if:
     /// 1. Sandbox is disabled (`!self.enabled`)
     /// 2. Bypass requested and allowed
@@ -417,13 +400,11 @@ impl SandboxSettings {
 
     /// Check if a command matches any excluded command pattern using BFS
     /// variant expansion.
-    ///
     /// For each command segment, builds variants by:
     /// 1. Original token
     /// 2. Strip leading env assignments (`FOO=bar npm` -> `npm`)
     /// 3. Extract basename (`/usr/bin/npm` -> `npm`)
     /// 4. Strip safe wrappers (`timeout 30 cmd`, `nice -n 5 cmd`, `nohup cmd`)
-    ///
     /// Matches variants against patterns:
     /// - `"cmd:*"` — prefix match (`npm:*` matches `npm install`)
     /// - `"cmd *"` — wildcard glob (`npm run *` matches `npm run build`)
@@ -462,18 +443,16 @@ impl SandboxSettings {
 }
 
 /// Build command variants via BFS expansion for exclusion matching.
-///
 /// Given a command string, produces a set of normalized forms:
 /// 1. The original trimmed command
 /// 2. With leading env assignments stripped (`A=1 B=2 npm install` -> `npm install`)
 /// 3. With the first token replaced by its basename (`/usr/bin/npm install` -> `npm install`)
 /// 4. With one safe wrapper peeled (`timeout 30 cmd` -> `cmd`, `nice -n 5 cmd` -> `cmd`,
-///    `time cmd` / `nohup cmd` -> `cmd`)
-///
+/// `time cmd` / `nohup cmd` -> `cmd`)
 /// Wrapper, env, and basename strippers compose via the BFS queue, so an
 /// interleaved input like `timeout 300 FOO=bar /usr/bin/bazel run` reaches
 /// `bazel run` after multiple iterations — matching the TS fixed-point
-/// loop in `shouldUseSandbox.ts:82-101`.
+/// decision loop.
 fn build_command_variants(command: &str) -> Vec<String> {
     use std::collections::HashSet;
 
@@ -509,7 +488,6 @@ fn build_command_variants(command: &str) -> Vec<String> {
 }
 
 /// Strip leading `KEY=VALUE` assignments from a command.
-///
 /// `FOO=bar BAZ=1 npm install` -> `npm install`
 fn strip_env_prefix(command: &str) -> String {
     let mut rest = command;
@@ -529,7 +507,6 @@ fn strip_env_prefix(command: &str) -> String {
 }
 
 /// Replace the first token of a command with its basename.
-///
 /// `/usr/bin/npm install` -> `npm install`
 /// `./node_modules/.bin/jest test` -> `jest test`
 fn replace_first_token_with_basename(command: &str) -> String {
@@ -549,15 +526,13 @@ fn replace_first_token_with_basename(command: &str) -> String {
 
 /// Peel one leading safe wrapper from `command`. Returns `None` when no
 /// safe wrapper is recognised (so the caller leaves the command alone).
-///
-/// Mirrors the TS `stripSafeWrappers` (`bashPermissions.ts:524`) port
+/// Strips safe wrappers from shell commands. The
 /// scoped to the wrappers we observe in real-world commands —
 /// `timeout`, `time`, `nice`, `nohup`. Each call peels exactly one
 /// wrapper; the BFS in [`build_command_variants`] iterates so chained
 /// wrappers (`nohup timeout 30 cmd`) reach the inner command.
-///
 /// Not a security boundary — `excluded_commands` is a UX feature
-/// (TS comment, `shouldUseSandbox.ts:18-20`). Over-stripping a wrapper
+/// Over-stripping a wrapper
 /// only causes a command to dodge the sandbox; under-stripping is
 /// strictly safer (sandbox engages).
 fn strip_safe_wrapper(command: &str) -> Option<String> {
@@ -681,7 +656,6 @@ fn skip_timeout_flags(s: &str) -> &str {
 }
 
 /// Match a command variant against an exclusion pattern.
-///
 /// Pattern types:
 /// - `"cmd:*"` — colon-prefix: matches `cmd` and `cmd <anything>`
 /// - `"cmd*"` — trailing wildcard: matches anything starting with `cmd`
@@ -709,7 +683,6 @@ fn matches_exclusion_pattern(variant: &str, pattern: &str) -> bool {
 // ============================================================================
 
 /// A permission rule tagged with the [`SettingSource`] it came from.
-///
 /// Used by the sandbox adapter to honor `allow_managed_domains_only` —
 /// when set, only `policy_settings`-sourced rules contribute domains
 /// to the runtime allowlist.
@@ -726,7 +699,6 @@ impl SettingsWithSource {
     /// source-tagged rules. Used by the sandbox adapter to honor
     /// `allow_managed_domains_only` and by the engine config builder
     /// to populate `EngineConfigInput.{allow,deny,ask}_rules`.
-    ///
     /// Walks `per_source: HashMap<SettingSource, Value>` and pulls each
     /// source's raw `permissions/allow`, `permissions/deny`, and
     /// `permissions/ask` arrays via JSON-pointer access. Plugin-

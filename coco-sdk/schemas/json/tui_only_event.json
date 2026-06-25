@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "TuiOnlyEvent",
-  "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n\n23 variants (20 from design §4.1 + 3 local extensions).",
+  "description": "TUI-exclusive events.\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n23 variants (20 from design §4.1 + 3 local extensions).",
   "oneOf": [
     {
-      "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.resolution_detail` so the tool's\n`execute()` can branch on the choice. TS parity:\n`ExitPlanModePermissionRequest.tsx:691-704` option grid.\n\n`original_input` carries the raw tool input so the TUI can derive\npath-scoped read permission updates for classic \"always allow\"\napprovals.",
+      "description": "Permission approval overlay needed.\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.resolution_detail` so the tool's\n`execute()` can branch on the choice. \n option grid.\n`original_input` carries the raw tool input so the TUI can derive\npath-scoped read permission updates for classic \"always allow\"\napprovals.",
       "type": "object",
       "properties": {
         "choices": {
@@ -82,7 +82,7 @@
       ]
     },
     {
-      "description": "AskUserQuestion overlay needed. `input` carries the full tool\ninput dict (the `questions[]` array, etc.) verbatim so the TUI\nrenders the rich multi-question UI (multiSelect, preview, notes)\nmatching TS `AskUserQuestionPermissionRequest.tsx`. The TUI\nechoes the answer payload back via `UserCommand::ApprovalResponse`\nwith `updated_input = Some({...input, answers, annotations})`.",
+      "description": "AskUserQuestion overlay needed. `input` carries the full tool\ninput dict (the `questions[]` array, etc.) verbatim so the TUI\nrenders the rich multi-question UI (multiSelect, preview, notes).\nThe TUI echoes the answer payload back via\n`UserCommand::ApprovalResponse` with\n`updated_input = Some({...input, answers, annotations})`.",
       "type": "object",
       "properties": {
         "input": true,
@@ -210,7 +210,7 @@
       ]
     },
     {
-      "description": "Slash-command catalogue changed — sent after the seed at session\nstart AND whenever `/reload-plugins` swaps the active\n`CommandRegistry`. The TUI overwrites\n`state.session.available_commands` with this list so the `/`\nautocomplete popup and command palette stay in sync. TS parity:\nthe TS popup re-queries `getCommands()` inline; this implementation pushes\nthe snapshot because the registry lives in the CLI process.",
+      "description": "Slash-command catalogue changed — sent after the seed at session\nstart AND whenever `/reload-plugins` swaps the active\n`CommandRegistry`. The TUI overwrites\n`state.session.available_commands` with this list so the `/`\nautocomplete popup and command palette stay in sync. \nthe TS popup re-queries `getCommands()` inline; this implementation pushes\nthe snapshot because the registry lives in the CLI process.",
       "type": "object",
       "properties": {
         "commands": {
@@ -314,7 +314,7 @@
       ]
     },
     {
-      "description": "Open the resume picker inside the running TUI session.\n\nTS parity: `/resume` with no args opens the saved-chat picker;\n`/resume <id-or-name>` bypasses this and resumes directly.",
+      "description": "Open the resume picker inside the running TUI session.\n`/resume` with no args opens the saved-chat picker;\n`/resume <id-or-name>` bypasses this and resumes directly.",
       "type": "object",
       "properties": {
         "sessions": {
@@ -334,7 +334,7 @@
       ]
     },
     {
-      "description": "Rewind picker per-row metadata, emitted once on picker mount.\n\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) — the\npicker renders \"⚠ No code restore\" for that row.\n`metadata == Some { file_paths: [], .. }` means the snapshot\nexists but nothing changed — picker renders \"No code changes\".\n\nBundled here so the bounded TUI command channel does not drop individual\nrow events on transcripts with many user messages.",
+      "description": "Rewind picker per-row metadata, emitted once on picker mount.\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) — the\npicker renders \"⚠ No code restore\" for that row.\n`metadata == Some { file_paths: [], .. }` means the snapshot\nexists but nothing changed — picker renders \"No code changes\".\nBundled here so the bounded TUI command channel does not drop individual\nrow events on transcripts with many user messages.",
       "type": "object",
       "properties": {
         "rows": {
@@ -539,7 +539,7 @@
       ]
     },
     {
-      "description": "Streaming tool input delta (typing effect).\n\nA tool call's arguments have started streaming (the model began\nemitting the input JSON). Carries the `call_id` and tool `name` so the\nTUI can create a pre-queue \"streaming\" row in the activity strip — the\n`call_id` matches the later [`AgentStreamEvent::ToolUseQueued`], which\nupgrades the same row with the finalized input once parsing completes.\n\nEmitted by the engine from `StreamEvent::ToolCallStart`. Like\n[`Self::ToolCallDelta`] it is UI-only: the SDK sees the complete input\nat `ToolUseQueued` and does not need the streaming preamble.",
+      "description": "Streaming tool input delta (typing effect).\nA tool call's arguments have started streaming (the model began\nemitting the input JSON). Carries the `call_id` and tool `name` so the\nTUI can create a pre-queue \"streaming\" row in the activity strip — the\n`call_id` matches the later [`AgentStreamEvent::ToolUseQueued`], which\nupgrades the same row with the finalized input once parsing completes.\nEmitted by the engine from `StreamEvent::ToolCallStart`. Like\n[`Self::ToolCallDelta`] it is UI-only: the SDK sees the complete input\nat `ToolUseQueued` and does not need the streaming preamble.",
       "type": "object",
       "properties": {
         "call_id": {
@@ -560,7 +560,7 @@
       ]
     },
     {
-      "description": "Partial tool-call input JSON fragment, for the live \"typing\" preview in\nthe activity strip. The TUI appends the delta to\n`ToolExecution.streaming_input` and re-derives the primary-argument\npreview (the command for `Bash`, the path for `Read`, …) so the row\nshows arguments filling in before the call is queued.\n\nEmitted by the engine from `StreamEvent::ToolCallDelta` (a different,\ninference-internal type). Kept in `TuiOnlyEvent` rather than\n`AgentStreamEvent` per `event-system-design.md` §3.3: the partial JSON\nserves a purely UI display purpose — `ToolUseQueued` already contains\nthe complete, re-assembled input, so SDK consumers need not handle the\nfragments.",
+      "description": "Partial tool-call input JSON fragment, for the live \"typing\" preview in\nthe activity strip. The TUI appends the delta to\n`ToolExecution.streaming_input` and re-derives the primary-argument\npreview (the command for `Bash`, the path for `Read`, …) so the row\nshows arguments filling in before the call is queued.\nEmitted by the engine from `StreamEvent::ToolCallDelta` (a different,\ninference-internal type). Kept in `TuiOnlyEvent` rather than\n`AgentStreamEvent` per `event-system-design.md` §3.3: the partial JSON\nserves a purely UI display purpose — `ToolUseQueued` already contains\nthe complete, re-assembled input, so SDK consumers need not handle the\nfragments.",
       "type": "object",
       "properties": {
         "call_id": {
@@ -666,7 +666,7 @@
       "type": "object",
       "properties": {
         "args": {
-          "description": "Raw argument string the user typed (e.g. `sonnet` for\n`/model sonnet`). Threaded into the model-visible echo\n(`❯ /name args`) so the model sees the full invocation, matching\nTS `formatCommandInput(command, args)`. Empty for argless commands.",
+          "description": "Raw argument string the user typed (e.g. `sonnet` for\n`/model sonnet`). Threaded into the model-visible echo\n(`❯ /name args`) so the model sees the full invocation.\nEmpty for argless commands.",
           "type": "string"
         },
         "name": {
@@ -731,7 +731,7 @@
       ]
     },
     {
-      "description": "Tell the TUI to open the rewind picker overlay.\n\nEmitted by the slash-command dispatcher when `/rewind` resolves\nthrough the generic `DialogSpec` mapping. The TUI consumes the\ncurrent transcript cells to build the bare picker; preselected\nrewind remains an internal UI command path.",
+      "description": "Tell the TUI to open the rewind picker overlay.\nEmitted by the slash-command dispatcher when `/rewind` resolves\nthrough the generic `DialogSpec` mapping. The TUI consumes the\ncurrent transcript cells to build the bare picker; preselected\nrewind remains an internal UI command path.",
       "type": "object",
       "properties": {
         "type": {
@@ -744,7 +744,7 @@
       ]
     },
     {
-      "description": "Tell the TUI to open the `/memory` file-picker overlay. The slash\ndispatcher pre-builds entries via\n`coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries`\nand carries them through here so the TUI doesn't recompute paths.\nOn selection the TUI sends an `OpenMemoryFile` command to the CLI\nbridge; the bridge creates the file (`mode wx` semantics), opens\n`$VISUAL || $EDITOR`, and reports the result back as a transcript\nvisible event. On cancel the TUI emits \"Cancelled memory editing\".\nTS parity: `commands/memory/memory.tsx`.",
+      "description": "Tell the TUI to open the `/memory` file-picker overlay. The slash\ndispatcher pre-builds entries via\n`coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries`\nand carries them through here so the TUI doesn't recompute paths.\nOn selection the TUI sends an `OpenMemoryFile` command to the CLI\nbridge; the bridge creates the file (`mode wx` semantics), opens\n`$VISUAL || $EDITOR`, and reports the result back as a transcript\nvisible event. On cancel the TUI emits \"Cancelled memory editing\".",
       "type": "object",
       "properties": {
         "entries": {
@@ -781,7 +781,7 @@
       ]
     },
     {
-      "description": "`/copy [N]` slash command — the TUI walks its transcript, picks\nthe Nth-latest assistant message, and either directly copies it\n(when there are no code blocks or `copy_full_response` is on) or\nopens the [`ModalState::CopyPicker`] surface. The CLI runner\nemits this through `dispatch_slash_command`'s `/copy` intercept;\nonly the TUI has the transcript in a render-ready shape.\nTS parity: `commands/copy/copy.tsx`.",
+      "description": "`/copy [N]` slash command — the TUI walks its transcript, picks\nthe Nth-latest assistant message, and either directly copies it\n(when there are no code blocks or `copy_full_response` is on) or\nopens the [`ModalState::CopyPicker`] surface. The CLI runner\nemits this through `dispatch_slash_command`'s `/copy` intercept;\nonly the TUI has the transcript in a render-ready shape.",
       "type": "object",
       "properties": {
         "args": {
@@ -940,7 +940,7 @@
       ]
     },
     {
-      "description": "Result of a prompt-mode `!`-prefixed bash submission. The TUI\nfolds this into a `MessageContent::BashOutput` chat message\nkeyed by the same `user_message_id` as the matching\n`BashInput`. Emitted by the CLI bridge after running the\ncommand via `coco_shell::ShellExecutor`. TS parity:\n`LocalShellTask` completion.",
+      "description": "Result of a prompt-mode `!`-prefixed bash submission. The TUI\nfolds this into a `MessageContent::BashOutput` chat message\nkeyed by the same `user_message_id` as the matching\n`BashInput`. Emitted by the CLI bridge after running the\ncommand via `coco_shell::ShellExecutor`. \n`LocalShellTask` completion.",
       "type": "object",
       "properties": {
         "exit_code": {
@@ -982,7 +982,7 @@
       ]
     },
     {
-      "description": "Tell the TUI to open the tabbed settings panel. Emitted when the slash\ndispatcher resolves `/config` with no args (TS `/config` local-jsx\npanel). Reuses the same overlay as the `Ctrl+,` keybind.",
+      "description": "Tell the TUI to open the tabbed settings panel. Emitted when the slash\ndispatcher resolves `/config` with no args. Reuses the same overlay\nas the `Ctrl+,` keybind.",
       "type": "object",
       "properties": {
         "type": {
@@ -1008,7 +1008,7 @@
       ]
     },
     {
-      "description": "Tell the TUI to open the `/skills` read-only overlay. The slash\ndispatcher pre-builds the entry list + per-group subtitles so\nthe TUI doesn't recompute paths or token estimates.\n\nTS parity: `commands/skills/skills.tsx` → `<SkillsMenu>`. Dialog\nis read-only — Esc to close; selection has no side effects.",
+      "description": "Tell the TUI to open the `/skills` read-only overlay. The slash\ndispatcher pre-builds the entry list + per-group subtitles so\nthe TUI doesn't recompute paths or token estimates.\n`commands/skills/skills.tsx` → `<SkillsMenu>`. Dialog\nis read-only — Esc to close; selection has no side effects.",
       "type": "object",
       "properties": {
         "payload": {
@@ -1059,7 +1059,7 @@
       ]
     },
     {
-      "description": "`/permissions` overlay — opens the tabbed rule editor\n(Allow / Ask / Deny / Workspace). The payload is a CLI-built\nsnapshot of every file-backed rule + additional directory, since\nthe TUI cannot reach the settings stores directly. Re-emitted\nafter each edit so the open overlay refreshes in place. TS parity:\n`commands/permissions/permissions.tsx` → `<PermissionRuleList>`.",
+      "description": "`/permissions` overlay — opens the tabbed rule editor\n(Allow / Ask / Deny / Workspace). The payload is a CLI-built\nsnapshot of every file-backed rule + additional directory, since\nthe TUI cannot reach the settings stores directly. Re-emitted\nafter each edit so the open overlay refreshes in place. \n`commands/permissions/permissions.tsx` → `<PermissionRuleList>`.",
       "type": "object",
       "properties": {
         "payload": {
@@ -1076,7 +1076,7 @@
       ]
     },
     {
-      "description": "Open the interactive `/add-dir` overlay (no-argument form). The TUI\nshows a directory-path text input; confirm re-dispatches\n`/add-dir <path>` to reuse the validated session-add path. TS parity:\n`commands/add-dir/add-dir.tsx` → `<AddWorkspaceDirectory>`.",
+      "description": "Open the interactive `/add-dir` overlay (no-argument form). The TUI\nshows a directory-path text input; confirm re-dispatches\n`/add-dir <path>` to reuse the validated session-add path. \n`commands/add-dir/add-dir.tsx` → `<AddWorkspaceDirectory>`.",
       "type": "object",
       "properties": {
         "type": {
@@ -1121,7 +1121,7 @@
   ],
   "$defs": {
     "AgentColorName": {
-      "description": "TS `AgentColorName`. Validated set; unknown values are dropped at parse\ntime with a warning so the runtime never sees an invalid color.",
+      "description": "`AgentColorName`. Validated set; unknown values are dropped at parse\ntime with a warning so the runtime never sees an invalid color.",
       "type": "string",
       "enum": [
         "red",
@@ -1215,7 +1215,7 @@
       ]
     },
     "AgentsDialogPayload": {
-      "description": "Payload for [`TuiOnlyEvent::OpenAgentsDialog`]. Built by the\n`/agents` slash handler with everything the 2-tab dialog needs\n(Running tab reads `SessionState.subagents` directly, so the\npayload only carries Library data).\n\nTS parity: bundled-only `cli_unpack_pretty/decls/functions/bW4.js`\n(Library tab). The open-source `<AgentsMenu>` exposes the same\nper-row data but routes through a different state machine.",
+      "description": "Payload for [`TuiOnlyEvent::OpenAgentsDialog`]. Built by the\n`/agents` slash handler with everything the 2-tab dialog needs\n(Running tab reads `SessionState.subagents` directly, so the\npayload only carries Library data).\nbundled-only `cli_unpack_pretty/decls/functions/bW4.js`\n(Library tab). The open-source `<AgentsMenu>` exposes the same\nper-row data but routes through a different state machine.",
       "type": "object",
       "properties": {
         "entries": {
@@ -1277,7 +1277,7 @@
       ]
     },
     "CommandSource": {
-      "description": "How a command was loaded.\n\nPayload-carrying variants (`Plugin { name }`, `Mcp { server_name }`)\nensure source and attribution can never disagree. This replaces the\nolder `loaded_from + plugin_name` dual-field layout, which allowed\nnonsensical states (e.g. `loaded_from = Builtin` paired with\n`plugin_name = Some(...)`).",
+      "description": "How a command was loaded.\nPayload-carrying variants (`Plugin { name }`, `Mcp { server_name }`)\nensure source and attribution can never disagree. This replaces the\nolder `loaded_from + plugin_name` dual-field layout, which allowed\nnonsensical states (e.g. `loaded_from = Builtin` paired with\n`plugin_name = Some(...)`).",
       "oneOf": [
         {
           "description": "Hardcoded built-in slash command (e.g. `/help`, `/clear`).",
@@ -1569,7 +1569,7 @@
       ]
     },
     "ContextUsageResult": {
-      "description": "Response to `ClientRequest::ContextUsage`.\nMatches TS `SDKControlGetContextUsageResponseSchema` (controlSchemas.ts:205-306).\nSimplified subset — TS includes a rich breakdown grid that's UI-specific.",
+      "description": "Response to `ClientRequest::ContextUsage`.\nSimplified subset — TS includes a rich breakdown grid that's UI-specific.",
       "type": "object",
       "properties": {
         "agents": {
@@ -1888,7 +1888,7 @@
       ]
     },
     "PermissionAskChoice": {
-      "description": "One option in a multi-choice permission dialog.\n\nUsed by `ToolCheckResult::Ask.choices` and surfaced on the wire via\n`PermissionDecision::Ask.choices`. The TUI renders one row per\nchoice; the picked `value` is echoed back so the tool's `execute()`\ncan branch on the user's selection.",
+      "description": "One option in a multi-choice permission dialog.\nUsed by `ToolCheckResult::Ask.choices` and surfaced on the wire via\n`PermissionDecision::Ask.choices`. The TUI renders one row per\nchoice; the picked `value` is echoed back so the tool's `execute()`\ncan branch on the user's selection.",
       "type": "object",
       "properties": {
         "description": {
@@ -1922,7 +1922,7 @@
       ]
     },
     "PermissionDisplayInput": {
-      "description": "Bounded, UI-ready permission input display.\n\nThis is separate from the raw tool input because approval UIs should\nconsume sanitized display data while keeping `original_input` only for\nupdated-input response construction and permission-rule derivation.",
+      "description": "Bounded, UI-ready permission input display.\nThis is separate from the raw tool input because approval UIs should\nconsume sanitized display data while keeping `original_input` only for\nupdated-input response construction and permission-rule derivation.",
       "oneOf": [
         {
           "type": "object",
@@ -2011,7 +2011,7 @@
       ]
     },
     "PermissionMode": {
-      "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at\n`coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits',\n'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the\ndrifting variants accept legacy snake_case input so old session\ntranscripts deserialize cleanly.",
+      "description": "Permission mode (top-level because it's used by both message and permission modules).\nWire format is camelCase. The serde aliases on the drifting variants accept\nlegacy snake_case input so old session transcripts deserialize cleanly.",
       "oneOf": [
         {
           "type": "string",
@@ -2264,7 +2264,7 @@
       ]
     },
     "PermissionUpdateDestination": {
-      "description": "Destination for persisting permission updates.\n\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to\ndisk; in-memory destinations (`Session`/`CliArg`/`Command`) live only\nfor the running session. TS parity: same split as\n`persistPermissionUpdates` in `PermissionUpdate.ts`.\n\n`Command` is reserved for rules contributed by an invoked command or\nskill's frontmatter (`allowed-tools:`). TS parity:\n`alwaysAllowRules.command` populated by `SkillTool` /\n`createGetAppStateWithAllowedTools`.",
+      "description": "Destination for persisting permission updates.\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to\ndisk; in-memory destinations (`Session`/`CliArg`/`Command`) live only\nfor the running session. same split as\n`persistPermissionUpdates` in `PermissionUpdate.ts`.\n`Command` is reserved for rules contributed by an invoked command or\nskill's frontmatter (`allowed-tools:`). \n`alwaysAllowRules.command` populated by `SkillTool` /\n`createGetAppStateWithAllowedTools`.",
       "oneOf": [
         {
           "type": "string",
@@ -2301,7 +2301,7 @@
       ]
     },
     "PermissionsEditorPayload": {
-      "description": "Payload for [`TuiOnlyEvent::OpenPermissionsEditor`]. Built by the\n`/permissions` slash handler (CLI side) with everything the tabbed\nrule editor needs: every file-backed rule keyed by behavior + source,\nevery additional working directory, and the current working directory.\n\nThe TUI cannot read the settings stores itself, so the CLI snapshots\nthem here and re-emits this payload after each persisted edit (the\nopen overlay refreshes in place, mirroring `OpenAgentsDialog`).\n\nTS parity: data backing `<PermissionRuleList>` —\n`getPermissionRules()` + `getAdditionalWorkingDirectories()`.",
+      "description": "Payload for [`TuiOnlyEvent::OpenPermissionsEditor`]. Built by the\n`/permissions` slash handler (CLI side) with everything the tabbed\nrule editor needs: every file-backed rule keyed by behavior + source,\nevery additional working directory, and the current working directory.\nThe TUI cannot read the settings stores itself, so the CLI snapshots\nthem here and re-emits this payload after each persisted edit (the\nopen overlay refreshes in place). Backing data:\n`getPermissionRules()` + `getAdditionalWorkingDirectories()`.",
       "type": "object",
       "properties": {
         "cwd": {
@@ -2617,7 +2617,7 @@
       ]
     },
     "RewindDiffStatsPayload": {
-      "description": "Diff stats payload shared by per-row metadata and the selected\nrestore preview event. `file_paths.is_empty()` means \"snapshot\nexists but nothing changed\".\n\n`file_paths` matches `DiffStats.filesChanged: string[]` and is used by the\nconfirm screen to assemble single / two / many-file labels.\n\n# Two semantics, one wire type\n\n`insertions` / `deletions` interpretation depends on which event\ncarries this payload:\n\n- [`TuiOnlyEvent::RewindRowMetadataReady`] — **forward-time**.\n  `insertions` = lines added between two adjacent user-message\n  checkpoints. Computed via [`FileHistoryState::get_diff_stats_between`]\n  to mirror TS `computeDiffStatsBetweenMessages`\n  (`MessageSelector.tsx:722-765`), which counts `+` lines from\n  `structuredPatch`.\n- [`TuiOnlyEvent::RewindRestorePreviewReady`] — **rewind-direction**.\n  `insertions` = lines that rewind would add back; `deletions` =\n  lines that rewind would remove. Computed via\n  [`FileHistoryState::get_diff_stats`] to mirror TS\n  `computeDiffStatsForFile` (`fileHistory.ts:705`)'s\n  `diffLines(originalContent, backupContent)` direction.\n\nTS itself returns the same `DiffStats` shape from both call sites\nand lets context disambiguate — Rust matches that contract.",
+      "description": "Diff stats payload shared by per-row metadata and the selected\nrestore preview event. `file_paths.is_empty()` means \"snapshot\nexists but nothing changed\".\n`file_paths` matches `DiffStats.filesChanged: string[]` and is used by the\nconfirm screen to assemble single / two / many-file labels.\n# Two semantics, one wire type\n`insertions` / `deletions` interpretation depends on which event\ncarries this payload:\n- [`TuiOnlyEvent::RewindRowMetadataReady`] — **forward-time**.\n`insertions` = lines added between two adjacent user-message\ncheckpoints. Computed via [`FileHistoryState::get_diff_stats_between`]\ncounting `+` lines from `structuredPatch`.\n- [`TuiOnlyEvent::RewindRestorePreviewReady`] — **rewind-direction**.\n`insertions` = lines that rewind would add back; `deletions` =\nlines that rewind would remove. Computed via\n[`FileHistoryState::get_diff_stats`] with\n`diffLines(originalContent, backupContent)` direction.\nThe same `DiffStats` shape covers both call sites;\ncontext disambiguates the direction.",
       "type": "object",
       "properties": {
         "deletions": {
@@ -2719,7 +2719,7 @@
       ]
     },
     "SkillLock": {
-      "description": "A non-overridable lock on a skill row in the `/skills` dialog.\nCarries both the originating tier ([`Self::source`]) and the\nforced 4-state value ([`Self::forced_value`]) so downstream\nrenderers don't need to re-derive the value from per-tier maps.\n\nTS mirror: `oT5` returns `{ value, source }` —\n`cli_inner_pretty.js:476885-476893`.",
+      "description": "A non-overridable lock on a skill row in the `/skills` dialog.\nCarries both the originating tier ([`Self::source`]) and the\nforced 4-state value ([`Self::forced_value`]) so downstream\nrenderers don't need to re-derive the value from per-tier maps.",
       "type": "object",
       "properties": {
         "forced_value": {
@@ -2735,7 +2735,7 @@
       ]
     },
     "SkillLockSource": {
-      "description": "Which precedence layer originated a non-overridable lock on a\nskill's `skill_overrides` state. Mirrors the four `lock.source`\nvalues returned by TS `oT5` (`cli_inner_pretty.js:476885-476893`).\n\nIn precedence order (highest first): [`Self::Policy`] →\n[`Self::Flag`] → [`Self::Author`] → [`Self::Plugin`]. A lock means\nthe `/skills` dialog renders `🔒 <label>` for the row and refuses\nto cycle it (Space is a no-op).",
+      "description": "Which precedence layer originated a non-overridable lock on a\nskill's `skill_overrides` state.\nIn precedence order (highest first): [`Self::Policy`] →\n[`Self::Flag`] → [`Self::Author`] → [`Self::Plugin`]. A lock means\nthe `/skills` dialog renders `🔒 <label>` for the row and refuses\nto cycle it (Space is a no-op).",
       "oneOf": [
         {
           "description": "`policySettings.skill_overrides[name]` — enterprise-managed.",
@@ -2760,7 +2760,7 @@
       ]
     },
     "SkillOverrideState": {
-      "description": "Per-skill override state stored under `skill_overrides` in any\nsettings tier. Drives the `/skills` 4-state editor ladder.\n\nWire format is kebab-case (`\"on\"`, `\"name-only\"`,\n`\"user-invocable-only\"`, `\"off\"`) — JSON settings files round-trip\nwithout translation.",
+      "description": "Per-skill override state stored under `skill_overrides` in any\nsettings tier. Drives the `/skills` 4-state editor ladder.\nWire format is kebab-case (`\"on\"`, `\"name-only\"`,\n`\"user-invocable-only\"`, `\"off\"`) — JSON settings files round-trip\nwithout translation.",
       "oneOf": [
         {
           "description": "Default — full description in model listing, both user `/` and\nmodel Skill-tool invocation allowed.",
@@ -2810,7 +2810,7 @@
       ]
     },
     "SkillOverridesSaveResult": {
-      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after `SettingsWriter::write_local`.\n\nCarries **no display data** — TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
+      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after `SettingsWriter::write_local`.\nCarries **no display data** — TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
       "oneOf": [
         {
           "description": "Write succeeded.",
@@ -2853,7 +2853,7 @@
       "type": "object",
       "properties": {
         "baseline": {
-          "description": "Project-or-user settings resolution, **without** local /\npolicy / flag layers. TS `aT5`. The dialog falls back here\nwhen the user reverts a local override (the save path\nwrites `Value::Null` so the local key is deleted and the\nbaseline resurfaces).",
+          "description": "Project-or-user settings resolution, **without** local /\npolicy / flag layers. `aT5`. The dialog falls back here\nwhen the user reverts a local override (the save path\nwrites `Value::Null` so the local key is deleted and the\nbaseline resurfaces).",
           "$ref": "#/$defs/SkillOverrideState"
         },
         "current_local": {
@@ -2877,7 +2877,7 @@
           "format": "int64"
         },
         "lock": {
-          "description": "Optional lock — present when this row's state is forced by\na higher-precedence layer. Set by\n`resolve_skill_override_lock` (`oT5` mirror). When set, the\ndialog renders `🔒 <label>` and no-ops on Space.",
+          "description": "Optional lock — present when this row's state is forced by\na higher-precedence layer. Set by\n`resolve_skill_override_lock`. When set, the\ndialog renders `🔒 <label>` and no-ops on Space.",
           "anyOf": [
             {
               "$ref": "#/$defs/SkillLock"
@@ -2912,7 +2912,7 @@
       ]
     },
     "SkillsDialogPayload": {
-      "description": "Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the\n`/skills` slash handler so the TUI doesn't recompute paths, token\nestimates, or grouping.\n\nTS parity: 2.1.142 `uJ4` (`cli_inner_pretty.js:476909`) — a flat\neditable list with 4-state override cycling, source labels\ninline, and lock annotations for policy/flag/author/plugin-locked\nrows. The 2.1.88 grouped read-only `SkillsMenu` has been retired.",
+      "description": "Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the\n`/skills` slash handler so the TUI doesn't recompute paths, token\nestimates, or grouping.\n2.1.142 `uJ4` (`cli_inner_pretty.js:476909`) — a flat\neditable list with 4-state override cycling, source labels\ninline, and lock annotations for policy/flag/author/plugin-locked\nrows. The 2.1.88 grouped read-only `SkillsMenu` has been retired.",
       "type": "object",
       "properties": {
         "bytes_per_token": {
@@ -2934,10 +2934,10 @@
       ]
     },
     "SkillsDialogSource": {
-      "description": "Source group for a skill dialog entry. Collapsed from\n`SettingSource | 'plugin' | 'mcp'` to a closed enum so the wire shape is statically typed.\n\nThe dialog normalises `bundled`/`builtin` → display label `\"built-in\"`; the\ndialog filter matches against that lowercased label.",
+      "description": "Source group for a skill dialog entry. Collapsed from\n`SettingSource | 'plugin' | 'mcp'` to a closed enum so the wire shape is statically typed.\nThe dialog normalises `bundled`/`builtin` → display label `\"built-in\"`; the\ndialog filter matches against that lowercased label.",
       "oneOf": [
         {
-          "description": "Compiled-in bundled skill catalog. TS `bundled` / `builtin`\ncollapsed to a single label (display: `built-in`).",
+          "description": "Compiled-in bundled skill catalog. `bundled` / `builtin`\ncollapsed to a single label (display: `built-in`).",
           "type": "string",
           "const": "built_in"
         },
@@ -2947,12 +2947,12 @@
           "const": "project"
         },
         {
-          "description": "`config home/skills/` — TS `userSettings`.",
+          "description": "`config home/skills/` — `userSettings`.",
           "type": "string",
           "const": "user"
         },
         {
-          "description": "Managed enterprise dir — TS `policySettings`.",
+          "description": "Managed enterprise dir — `policySettings`.",
           "type": "string",
           "const": "policy"
         },
@@ -2969,7 +2969,7 @@
       ]
     },
     "SlashCommandInfo": {
-      "description": "UI-facing projection of a slash command. The TUI receives a `Vec` of\nthese at startup (and again after `/reload-plugins`) so the\nautocomplete popup and command palette can render and rank without\nreaching into [`CommandBase`] every time.\n\nLives in `coco-types` (rather than `coco-tui`) so it can travel on a\n[`crate::TuiOnlyEvent`] variant — events are the only path between\nthe agent driver and the TUI, and event payload types must be\nfoundation-layer.",
+      "description": "UI-facing projection of a slash command. The TUI receives a `Vec` of\nthese at startup (and again after `/reload-plugins`) so the\nautocomplete popup and command palette can render and rank without\nreaching into [`CommandBase`] every time.\nLives in `coco-types` (rather than `coco-tui`) so it can travel on a\n[`crate::TuiOnlyEvent`] variant — events are the only path between\nthe agent driver and the TUI, and event payload types must be\nfoundation-layer.",
       "type": "object",
       "properties": {
         "aliases": {
@@ -2999,7 +2999,7 @@
           ]
         },
         "kind": {
-          "description": "Execution kind. The empty-query ranker treats only\n[`CommandTypeTag::Prompt`] entries as skills eligible for the\n\"recently used\" section — builtin local commands always sit in\nthe builtin bucket (`cmd.type === 'prompt'` filtering).\n\nDerived from the source [`CommandType`] via\n[`CommandType::tag`] at snapshot time; the projection is\ncentralised there so the enum can't drift.",
+          "description": "Execution kind. The empty-query ranker treats only\n[`CommandTypeTag::Prompt`] entries as skills eligible for the\n\"recently used\" section — builtin local commands always sit in\nthe builtin bucket (`cmd.type === 'prompt'` filtering).\nDerived from the source [`CommandType`] via\n[`CommandType::tag`] at snapshot time; the projection is\ncentralised there so the enum can't drift.",
           "$ref": "#/$defs/CommandTypeTag",
           "default": "local"
         },
@@ -3019,7 +3019,7 @@
           ]
         },
         "usage_score": {
-          "description": "Recency-decayed usage score precomputed at snapshot time.\nHigher means \"used more recently and/or more often\". TS parity:\n`getSkillUsageScore` in `utils/suggestions/skillUsageTracking.ts`\n— same 7-day half-life with a 0.1 recency floor.\n\nEmbedded in the snapshot so the TUI ranker never touches disk\non the hot popup path. Updated naturally at the existing\nsnapshot-refresh moments (session start, `/reload-plugins`).\nIntra-session staleness is acceptable — the rank only governs\nwhich skills float to the top of the empty-query view; users\npick by name regardless.",
+          "description": "Recency-decayed usage score precomputed at snapshot time.\nHigher means \"used more recently and/or more often\". \n`getSkillUsageScore` in `utils/suggestions/skillUsageTracking.ts`\n— same 7-day half-life with a 0.1 recency floor.\nEmbedded in the snapshot so the TUI ranker never touches disk\non the hot popup path. Updated naturally at the existing\nsnapshot-refresh moments (session start, `/reload-plugins`).\nIntra-session staleness is acceptable — the rank only governs\nwhich skills float to the top of the empty-query view; users\npick by name regardless.",
           "type": "number",
           "format": "double",
           "default": 0.0
@@ -3030,7 +3030,7 @@
       ]
     },
     "SlashCommandStatusKind": {
-      "description": "Categorization of a `SlashCommandStatus` payload. Each variant maps to\na `slash.status.*` key in the TUI locale catalog.\n\nWire format intentionally tagged so SDK clients can render their own\nlocalized strings instead of consuming the TUI's English fallback.",
+      "description": "Categorization of a `SlashCommandStatus` payload. Each variant maps to\na `slash.status.*` key in the TUI locale catalog.\nWire format intentionally tagged so SDK clients can render their own\nlocalized strings instead of consuming the TUI's English fallback.",
       "oneOf": [
         {
           "description": "Registered command has no `handler` — typically a plugin\ncontribution stub that wasn't bridged.",

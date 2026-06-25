@@ -155,7 +155,7 @@ pub fn traverse_for_file(
     // a conditional rule there is also checked out into the worktree (loaded
     // via Phase 3 / cwd's own dir), so loading the main-repo copy too would
     // double the same guidance at a different path. Mirrors the eager skip
-    // (claudemd.ts:881-884). Phase 3 `nested_dirs` are descendants of cwd
+    //. Phase 3 `nested_dirs` are descendants of cwd
     // (inside the worktree) so they never hit the skip zone.
     let nested = crate::memory_discovery::nested_worktree_roots(cwd);
     for dir in &cwd_level_dirs {

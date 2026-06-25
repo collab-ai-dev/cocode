@@ -202,7 +202,6 @@ pub struct Settings {
     /// `RuntimeConfig.skill_overrides` (a [`crate::SkillOverrideTiers`])
     /// and the three resolvers in `coco-skills::overrides` to compute
     /// effective state correctly.
-    ///
     /// `BTreeMap` so on-disk JSON writes (the `/skills` dialog's save
     /// path in PR3) have deterministic key order — avoids noisy
     /// `git diff` churn on per-tier files committed by users.
@@ -219,10 +218,7 @@ pub struct Settings {
 
     // === Plan mode ===
     /// Plan-mode workflow + Phase-4 prompt variant + per-phase agent
-    /// counts. Port of TS `planModeV2.ts` behaviors:
-    /// `isPlanModeInterviewPhaseEnabled`, `getPewterLedgerVariant`,
-    /// `getPlanModeV2AgentCount`, `getPlanModeV2ExploreAgentCount` —
-    /// but re-rooted on user-visible config instead of GrowthBook /
+    /// counts. Re-rooted on user-visible config instead of GrowthBook /
     /// USER_TYPE=ant gating. See root `CLAUDE.md` "Plan Mode — Skip
     /// Ultraplan" decision row.
     #[serde(default)]
@@ -255,10 +251,10 @@ pub struct Settings {
     #[serde(default)]
     pub strict_plugin_only_customization: StrictPluginOnlyCustomization,
     /// Managed allowlist of approved marketplace names. When non-empty, only
-    /// these marketplaces may be installed from (TS `strictKnownMarketplaces`).
+    /// these marketplaces may be installed from.
     #[serde(default)]
     pub strict_known_marketplaces: Vec<String>,
-    /// Managed denylist of marketplace names (TS `blockedMarketplaces`).
+    /// Managed denylist of marketplace names.
     #[serde(default)]
     pub blocked_marketplaces: Vec<String>,
 
@@ -278,10 +274,8 @@ pub struct Settings {
 /// surfaces (skills/agents/hooks/mcp) to plugin-only sources — user-level
 /// (`config home/*`) and project-level (`.claude/*`) loaders are skipped for the
 /// locked surfaces. Managed (policy) and plugin sources always load.
-///
 /// `true` locks all surfaces; an array locks only the listed surfaces;
 /// absent/false (`Disabled`) locks nothing.
-///
 /// Untagged: the bool variant MUST precede the `Vec` variant so a JSON
 /// boolean deserializes into `AllLocked` rather than failing the array arm.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -316,7 +310,6 @@ pub struct TuiSettings {
 }
 
 /// TUI frame performance logging knobs.
-///
 /// Disabled by default; when enabled, every Nth frame is sampled (an unbiased
 /// healthy-frame baseline — slow-only logs can't answer "what does a normal
 /// frame cost" or give cache hit rates) and frames/stages exceeding the slow
@@ -343,7 +336,6 @@ impl Default for TuiPerformanceSettings {
 }
 
 /// Native scrollback replay cache policy.
-///
 /// Sizes are configured in KiB so real-world tuning from `settings.json` stays
 /// readable. The renderer converts them to bytes with saturating arithmetic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -396,10 +388,8 @@ pub struct StatusLineCommandSettings {
 }
 
 /// Permission rules configuration within settings.
-///
 /// Rules are stored on disk as string arrays matching the TS format:
 /// `{ "permissions": { "allow": ["Bash", "Bash(git *)"], "deny": [...] } }`
-///
 /// Use `coco_permissions::parse_rule_string()` to convert these strings
 /// into typed `PermissionRule` values at load time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -427,8 +417,8 @@ pub struct PermissionsConfig {
 
 impl PermissionsConfig {
     /// Whether the permission risk-explainer is enabled. Default-on, mirroring
-    /// TS `permissionExplainerEnabled !== false` — only an explicit `false`
-    /// disables it.
+    /// Returns `true` unless `permission_explainer_enabled` is explicitly
+    /// set to `false` — only an explicit `false` disables it.
     pub fn explainer_enabled(&self) -> bool {
         self.permission_explainer_enabled != Some(false)
     }
@@ -464,7 +454,7 @@ pub struct PartialLogSettings {
 pub struct AutoModeConfig {
     /// Opt-out switch for the classifier-backed `Auto` permission mode.
     /// `false` (default) keeps `Auto` reachable in the Shift+Tab cycle and
-    /// settable via control; `true` hides it. Mirrors TS `disableAutoMode`
+    /// settable via control; `true` hides it.
     /// (coco-rs has no GrowthBook circuit breaker / model allow-list, so a
     /// settings opt-out is the sole availability gate — auto is on by default).
     pub disabled: bool,
@@ -475,9 +465,8 @@ pub struct AutoModeConfig {
     /// `fast` (single 256-token call), or `thinking` (stage-2 only).
     pub classifier_mode: coco_types::ClassifierMode,
     /// On a transient classifier outage, fail OPEN to a manual prompt
-    /// (interactive) instead of denying. Default `false` = fail closed,
-    /// matching TS's shipped `tengu_iron_gate_closed` default (coco's
-    /// settings-based replacement for that GrowthBook gate).
+    /// (interactive) instead of denying. Default `false` = fail closed
+    /// (settings-based equivalent of the old GrowthBook gate).
     pub classifier_unavailable_fail_open: bool,
 }
 
@@ -510,10 +499,8 @@ pub struct WorktreeConfig {
 }
 
 /// Plan-mode workflow + prompt configuration.
-///
 /// All fields have sensible defaults so users who don't touch their
 /// settings.json get the canonical 5-phase workflow + standard Phase 4.
-///
 /// `Default` is implemented manually (not derived) because the field-level
 /// `#[serde(default = "...")]` annotations do NOT participate in
 /// `#[derive(Default)]`. A `derive(Default)` instance would silently zero
@@ -550,20 +537,17 @@ pub struct PlanModeSettings {
     /// this token count, the engine falls back from the configured
     /// `models.plan` client to the `models.main` client to avoid
     /// truncation.
-    ///
     /// When this token threshold is exceeded, the engine falls back from the
     /// plan-role model to main to avoid truncation. Exposed so multi-LLM
     /// users can tune for their plan-role model's actual context window.
-    ///
     /// Default 200_000. Set to `i64::MAX` to disable fallback; set to 0
     /// to always fall back (effectively disabling plan-mode model swap).
     #[serde(default = "default_plan_model_fallback_threshold")]
     pub plan_model_fallback_threshold_tokens: i64,
     /// Whether the `ExitPlanMode` permission dialog offers a "clear
     /// context" option in addition to the default yes/no choice.
-    ///
     /// TS setting: `settings.showClearContextOnPlanAccept`
-    /// (utils/settings/types.ts:735-740). TS defaults false; coco-rs
+    /// coco-rs
     /// defaults true so implementation can start from a fresh plan by
     /// default. Selecting clear schedules a history clear at the next
     /// turn boundary.
@@ -609,7 +593,6 @@ pub enum PlanModeWorkflow {
 }
 
 /// Session-level auto-behavior configuration.
-///
 /// Toggles for features that run across the session lifecycle, not tied
 /// to any single prompt or turn.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -632,7 +615,6 @@ pub struct SessionSettings {
 /// Backend the session store persists to. `Disk` is the authoritative
 /// default (append-only JSONL under `<memory_base>/projects/`); every
 /// other variant trades durability for something else.
-///
 /// Scope note: this only governs the **main transcript + usage
 /// snapshot**. Local-only sidecars (file-history checkpoints, subagent
 /// transcripts, tool-result blobs) keep their own local-cache policy and
@@ -740,19 +722,17 @@ fn all_setting_sources() -> HashSet<SettingSource> {
 /// Load and merge settings with explicit user / managed paths.
 /// Tests pass TempDir-rooted paths to isolate from the developer's
 /// real `config home/`.
-///
 /// `enabled` is the `--setting-sources`-resolved set. User/Project/Local
 /// layers are skipped when their source is absent from the set; Flag and
 /// Policy ALWAYS load (admin/CLI-controlled, never user-disableable). Pass
 /// [`all_setting_sources`] to load everything.
-///
 /// Merge order (later overrides earlier):
-///   1. Plugin base
-///   2. User global (`user_path`)
-///   3. Project shared (`project config dir/settings.json`)
-///   4. Project local (`project config dir/settings.local.json`)
-///   5. Flag (`--settings file`)
-///   6. Policy (`managed_path`)
+/// 1. Plugin base
+/// 2. User global (`user_path`)
+/// 3. Project shared (`project config dir/settings.json`)
+/// 4. Project local (`project config dir/settings.local.json`)
+/// 5. Flag (`--settings file`)
+/// 6. Policy (`managed_path`)
 pub fn load_settings_with(
     cwd: &std::path::Path,
     flag_settings: Option<&std::path::Path>,

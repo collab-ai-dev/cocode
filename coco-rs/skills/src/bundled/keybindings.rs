@@ -1,4 +1,4 @@
-//! `/keybindings-help` — customize keyboard shortcuts. Mirrors claude-code's keybindings.ts.
+//! `/keybindings-help` — customize keyboard shortcuts.
 //! Reference tables are static snapshots of the keybindings crate; a live generator is deferred.
 
 pub fn prompt() -> String {

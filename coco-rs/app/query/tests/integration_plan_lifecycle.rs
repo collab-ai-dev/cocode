@@ -183,8 +183,7 @@ async fn end_to_end_single_run() {
     // Evidence the plan reminder fired on turn 1: the Full reminder's
     // distinctive workflow heading must appear in final_messages.
     // (We can't use `plan_mode_attachment_count` because the exit
-    // banner on turn 2 resets the cadence counter to 0 — TS parity:
-    // `countPlanModeAttachmentsSinceLastExit` stops counting at exits.)
+    // banner on turn 2 resets the cadence counter to 0.)
     let full_hits = count_attachments_containing(&result.final_messages, "## Plan Workflow");
     assert!(
         full_hits >= 1,
@@ -194,14 +193,13 @@ async fn end_to_end_single_run() {
 
     // ExitPlanMode's live-mode write: app_state should now reflect
     // Default (the restore target when pre_plan_mode was None).
-    // TS parity: ExitPlanModeV2Tool.ts:357-403 flips
-    // `appState.toolPermissionContext.mode` to restoreMode.
+    // ExitPlanMode flips `appState.toolPermissionContext.mode` to restoreMode.
     let guard = app_state.read().await;
     assert_eq!(
         guard.permissions.mode,
         Some(PermissionMode::Default),
         "ExitPlanMode.execute must write restore_mode to \
-         app_state.permission_mode — TS parity with setAppState"
+         app_state.permission_mode"
     );
 }
 
@@ -307,7 +305,7 @@ async fn tool_rounds_do_not_advance_cadence_within_single_human_turn() {
     let result = run_plan_mode_turn(model, params).await;
     assert_eq!(result.response_text, "explored");
 
-    // TS parity: across 5 Read iterations within one human turn, only the
+    // Across 5 Read iterations within one human turn, only the
     // FIRST plan-mode attachment fired. History-derived cadence sees no new
     // human-turn user message across the tool-result rounds, so
     // `human_turns_since_attachment_opt(PlanMode)` stays `Some(0)` and blocks
@@ -511,8 +509,8 @@ async fn reentry_co_emits_with_full_on_next_plan_entry() {
 // writes `app_state.permission_mode = Plan`, the reminder reads it
 // live on the next turn_start, and the plan-mode banner fires.
 //
-// TS parity: ExitPlanModeV2Tool.ts:88-94 sets mode via setAppState;
-// every subsequent `getAppState()` sees Plan. Rust now matches.
+// ExitPlanModeV2Tool sets mode via app_state;
+// every subsequent read sees Plan.
 
 #[tokio::test]
 async fn model_driven_enter_plan_mode_flips_reminder_on_next_turn() {

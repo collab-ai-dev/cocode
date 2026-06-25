@@ -4,32 +4,31 @@
 //! substitutions:
 //!
 //! - tool names (`Agent`, `SendMessage`, `Read`, `Glob`) come from the
-//!   typed [`coco_types::ToolName`] enum so any rename in the runtime
-//!   propagates here automatically;
+//! typed [`coco_types::ToolName`] enum so any rename in the runtime
+//! propagates here automatically;
 //! - the `isolation: "remote"` bullet is gated by
-//!   [`PromptOptions::ant_build`] — coco-rs is a 3p build by default,
-//!   so the bullet is suppressed unless callers opt-in;
+//! [`PromptOptions::ant_build`] — coco-rs is a 3p build by default,
+//! so the bullet is suppressed unless callers opt-in;
 //! - the `getFeatureValue_CACHED_MAY_BE_STALE('tengu_agent_list_attach', …)`
-//!   gate is replaced by an explicit [`PromptOptions::list_via_attachment`]
-//!   bool. The CLI bootstrap reads `COCO_AGENT_LIST_IN_MESSAGES` and
-//!   threads the result here.
+//! gate is replaced by an explicit [`PromptOptions::list_via_attachment`]
+//! bool. The CLI bootstrap reads `COCO_AGENT_LIST_IN_MESSAGES` and
+//! threads the result here.
 //!
 //! Two contracts you should keep stable:
 //!
-//! 1. **Agent line format** (`prompt.ts:43-45`):
-//!    `- {agentType}: {whenToUse} (Tools: {toolsDescription})`
-//! 2. **Tools description branches** (`prompt.ts:15-37`):
-//!    - allow + deny: comma-separated allow-list minus deny-list (or `"None"`)
-//!    - allow only: comma-separated allow-list
-//!    - deny only: `"All tools except {deny-list}"`
-//!    - neither: `"All tools"`
+//! 1. **Agent line format**:
+//! `- {agentType}: {whenToUse} (Tools: {toolsDescription})`
+//! 2. **Tools description branches**:
+//! - allow + deny: comma-separated allow-list minus deny-list (or `"None"`)
+//! - allow only: comma-separated allow-list
+//! - deny only: `"All tools except {deny-list}"`
+//! - neither: `"All tools"`
 
 use coco_types::{AgentDefinition, ToolName};
 
 use crate::snapshot::AgentCatalogSnapshot;
 
 /// Inputs that shape the AgentTool prompt for a given turn.
-///
 /// All fields default to "off" so existing callers keep their previous
 /// shape without opting into newer sections (fork, embedded tools,
 /// teammate variants, attachment listing, ant-only `remote` isolation).
@@ -40,7 +39,7 @@ pub struct PromptOptions {
     pub allowed_agent_types: Option<Vec<String>>,
     /// Agent types denied by an `Agent(<type>)` permission deny rule. These
     /// are dropped from the listing so the model never sees an agent that
-    /// `AgentTool::execute` would reject with a permission error. Mirrors TS
+    /// `AgentTool::execute` would reject with a permission error.
     /// `filterDeniedAgents`. Empty = no deny filtering.
     pub denied_agent_types: Vec<String>,
     /// Pre-filter MCP-required agents whose servers are not yet ready.
@@ -64,7 +63,6 @@ pub struct PromptOptions {
     /// Drops the name / team_name / mode bullet because teammates
     /// cannot spawn other teammates. Ignored when
     /// [`is_in_process_teammate`] is also true.
-    ///
     /// [`is_in_process_teammate`]: Self::is_in_process_teammate
     pub is_teammate: bool,
     /// Inject the agent list into a `<system-reminder>` attachment
@@ -196,7 +194,7 @@ fn visible_to_prompt(def: &AgentDefinition, opts: &PromptOptions) -> bool {
     {
         return false;
     }
-    // Mirror TS `filterDeniedAgents`: drop agents an `Agent(<type>)` deny rule
+    //: drop agents an `Agent(<type>)` deny rule
     // forbids, so the model never sees an agent `AgentTool::execute` rejects.
     if opts.denied_agent_types.iter().any(|t| t == &def.name) {
         return false;

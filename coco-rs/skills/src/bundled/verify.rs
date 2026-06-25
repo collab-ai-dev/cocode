@@ -1,4 +1,4 @@
-//! `/verify` — verify that recent changes are correct and complete. Mirrors claude-code's verify.ts.
+//! `/verify` — verify that recent changes are correct and complete.
 //! Upstream verify/SKILL.md + examples are not in the source checkout; coco's checklist is migrated as-is pending source recovery.
 
 pub const PROMPT: &str = r#"Verify that recent changes are correct and complete. Follow these steps:

@@ -464,8 +464,7 @@ fn should_auto_classify_plan_bridges_only_when_flag_active() {
     use coco_types::PermissionMode;
     use std::sync::Arc;
 
-    // TS parity: `mode === 'plan' && isAutoModeActive()`. Plan bridges to the
-    // classifier ONLY when the narrowly-scoped auto flag is set.
+    // Plan bridges to the classifier ONLY when the narrowly-scoped auto flag is set.
     let inactive = Arc::new(AutoModeState::new());
     assert!(!should_auto_classify(PermissionMode::Plan, Some(&inactive)));
     assert!(!should_auto_classify(PermissionMode::Plan, None));

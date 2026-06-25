@@ -351,8 +351,8 @@ async fn skill_listing_tool_filter_excluding_skill_suppresses() {
     );
 }
 
-/// `active_agent_mentions` mirrors TS `processAgentMentions`: it strips the
-/// `agent-` prefix from the unquoted form and drops mentions that don't
+/// `active_agent_mentions` strips the `agent-` prefix from the unquoted
+/// form and drops mentions that don't
 /// resolve to an active agent type, so the reminder never tells the model to
 /// invoke an agent `AgentTool` would reject as an unknown `subagent_type`.
 #[test]

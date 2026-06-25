@@ -75,7 +75,7 @@ impl InputRenderModel {
                 (format!("/{filter}"), None, false, Some(filter.to_string()))
             } else if is_empty {
                 if has_editable_queue {
-                    // Mirrors TS `usePromptInputPlaceholder`: an empty composer
+                    //: an empty composer
                     // with queued messages hints how to recall them.
                     (t!("input.placeholder_queued").to_string(), None, true, None)
                 } else if let Some(suggestion) = prompt_suggestion {
@@ -104,7 +104,7 @@ impl InputRenderModel {
         };
 
         // No queue/streaming title label: the input box stays clean while a
-        // turn runs (TS parity). The single queued-input affordance is the
+        // turn runs . The single queued-input affordance is the
         // dimmed footer strip (`QueueStatusWidget`), shown only once something
         // is actually queued.
         let title = if !is_streaming && prompt_mode != PromptMode::Normal {
@@ -247,7 +247,7 @@ impl Widget for InputWidget<'_> {
         };
         let lines: Vec<Line> = if model.display_text.contains('\n') {
             // Multi-line composer: one row per hard line break, scrolled to keep
-            // the cursor visible (mirrors TS, whose TextInput grows with content
+            // the cursor visible (, whose TextInput grows with content
             // so recalled multi-message edits show on separate rows). Row 0 wears
             // the indicator; continuation rows align under it. Inline ghost/hint
             // are single-line affordances and are omitted here.

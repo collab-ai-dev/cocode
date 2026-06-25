@@ -14,7 +14,7 @@ Markdown workflow loading: bundled / user / project / plugin / managed / MCP sou
 - `discover_skill_dirs_for_paths(file_paths, cwd)` — walk upward from each file to find nested `.coco/skills/` dirs
 - `discover_dynamic_skills(dir)` — Read/Write/Edit hook for nested discovery
 - `get_skill_paths(config_dir, project_dir)` — managed → user → project order
-- `get_managed_skills_path()` — `/Library/Application Support/ClaudeCode/...` (macOS) or `/etc/claude-code/...`
+- `get_managed_skills_path()` — `/Library/Application Support/coco/...` (macOS) or `/etc/coco/...`
 - `load_skill_from_file()` / `parse_skill_markdown()` — `# Name` heading + YAML frontmatter
 - `inject_skill_listing()` / `generate_skill_tool_prompt()` — 1% context-window budget, 250-char description cap, bundled skills never truncated
 - `expand_braces()` — `*.{ts,tsx}` → `["*.ts","*.tsx"]` for `paths` globs

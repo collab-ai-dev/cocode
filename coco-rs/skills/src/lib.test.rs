@@ -1404,7 +1404,7 @@ fn probe_bare_dir_pattern_matches_files_inside() {
     assert_eq!(
         activated,
         vec!["build-skill"],
-        "TS parity: bare-dir pattern `build` must match `build/foo.rs`"
+        "bare-dir pattern `build` must match `build/foo.rs`"
     );
 }
 

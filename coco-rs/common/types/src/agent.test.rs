@@ -326,9 +326,7 @@ fn test_agent_definition_serde_roundtrip() {
 
 #[test]
 fn test_tool_allow_list_from_frontmatter_matrix() {
-    // TS parity matrix from `parseAgentToolsFromFrontmatter`
-    // (`utils/markdownConfigLoader.ts:113-126`).
-    //
+    // Matrix for `parseAgentToolsFromFrontmatter` input variants.
     // The "missing key" case is *not* exercised here — it bypasses
     // `from_frontmatter` entirely (callers do `.unwrap_or_default()`
     // on `Option<Vec<String>>`, yielding `Wildcard`). All four rows
@@ -346,9 +344,8 @@ fn test_tool_allow_list_from_frontmatter_matrix() {
     assert_eq!(
         ToolAllowList::from_frontmatter(vec![]),
         ToolAllowList::Explicit(vec![]),
-        "tools: [] must preserve as Explicit(empty) — TS parity for \
-         auto-memory injection (loadAgentsDir.ts:455 gates on \
-         `tools !== undefined`, NOT on length > 0)"
+        "tools: [] must preserve as Explicit(empty) — \
+         auto-memory injection gates on tools being defined, NOT on length > 0"
     );
     assert_eq!(
         ToolAllowList::from_frontmatter(vec!["Read".into(), "Edit".into()]),

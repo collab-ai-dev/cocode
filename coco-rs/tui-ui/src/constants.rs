@@ -118,7 +118,7 @@ pub const REWIND_MAX_VISIBLE: i32 = 7;
 /// border + side padding; this leaves room for the marker, suffix
 /// `(N min ago)`, and the visible truncation ellipsis. TS uses
 /// `truncate(messageText, columns - paddingRight=10, true)`
-/// (`MessageSelector.tsx:374, 665`); since coco-rs renders to a
+/// Since coco-rs renders to a
 /// fixed-width body string (no terminal columns available here),
 /// we pin a conservative budget that fits typical 100-col modal
 /// widths without wrapping under ratatui's word-wrap.

@@ -18,7 +18,7 @@
 //! ```
 //!
 //! Directory mode `0o700`. Each file contains the serialized
-//! [`SessionRegistration`] record (camelCase JSON, matching TS on the
+//! [`SessionRegistration`] record (camelCase JSON on the
 //! wire). The dedicated `pids/` subdir means coco's own session JSONL
 //! transcripts under `<memory_base>/projects/<slug>/<sid>.jsonl` —
 //! which can share a parent with `<config_home>/sessions/` in certain

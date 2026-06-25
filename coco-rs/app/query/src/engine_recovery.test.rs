@@ -1019,8 +1019,8 @@ async fn r1_recover_prompt_too_long_exhausted_pushes_synthetic_and_terminates() 
 /// R5 finding: a forked compact agent runs `run_session_loop` with
 /// `query_source_override = Some("compact")`. Its whole purpose is to
 /// shrink the oversized parent history; C15 MUST skip the gate so the
-/// fork actually reaches the provider. TS parity: `query.ts:630-631`
-/// `querySource !== 'compact'`.
+/// fork actually reaches the provider. C15 skips the gate when
+/// `query_source_override == Some("compact")`.
 #[tokio::test]
 async fn r5_check_blocking_limit_skips_compact_fork_even_when_overlimit() {
     let small = ModelInfo {

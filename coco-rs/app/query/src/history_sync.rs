@@ -252,7 +252,7 @@ pub async fn history_replace_and_emit(
 /// continuity, so the standalone [`SystemMessage::UserInterruption`] marker is
 /// redundant and suppressed at the `finalize_user_cancel` call sites. This
 /// matches the TS implementation, which skips `createUserInterruptionMessage`
-/// when `abortController.signal.reason === 'interrupt'` (`query.ts:1046`).
+/// when `abortController.signal.reason === 'interrupt'` ().
 ///
 /// The per-tool `tool_result`s carrying `INTERRUPT_MESSAGE_FOR_TOOL_USE` are
 /// **not** affected — they are required for strict tool_use/tool_result

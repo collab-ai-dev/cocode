@@ -15,10 +15,10 @@
 //! 3. Permission `Read(/path)` deny rules → `SandboxConfig.denied_read_paths`
 //! 4. Permission `WebFetch(domain:HOST)` rules → `SandboxSettings.network.{allowed,denied}_domains`
 //! 5. `SandboxSettings.filesystem.{allow_write, deny_write, deny_read}` paths
-//!    are resolved (`~/x` → home, relative → settings_root) and folded in
-//! 6. CWD + Claude temp dir always writable (mirrors TS line 225)
+//! are resolved (`~/x` → home, relative → settings_root) and folded in
+//! 6. CWD + sandbox temp dir always writable.
 //! 7. Settings.json + `project config dir/skills` always denied write
-//! 8. Worktree main-repo path added as writable when in a worktree (TS line 286)
+//! 8. Worktree main-repo path added as writable when in a worktree.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -40,7 +40,6 @@ const TOOL_WEB_FETCH: &str = "WebFetch";
 const DOMAIN_PREFIX: &str = "domain:";
 
 /// Inputs collected by the CLI / session bootstrap and handed to the adapter.
-///
 /// All paths must be absolute. The adapter does not perform I/O — callers
 /// (e.g., `app/cli/session_runtime`) probe filesystem state up-front and pass
 /// the results in.
@@ -74,20 +73,16 @@ pub struct AdapterInputs<'a> {
     pub worktree_main_repo: Option<&'a Path>,
     /// Per-source view of permission **allow** rules — drives the
     /// `network.allow_managed_domains_only` gate. When `None`, the gate
-    /// degrades to "all sources contribute" (matches TS behavior when
+    /// degrades to "all sources contribute" (behavior when
     /// the flag itself is unset). Production callers (`session_runtime`)
     /// always populate; SDK / test harnesses can omit.
-    ///
-    /// Deny rules are not tagged because TS always honors all-source
-    /// denials regardless of the gate (security floor).
-    ///
-    /// TS parity: `sandbox-adapter.ts:152-164` `shouldAllowManagedDomainsOnly`.
+    /// Deny rules are not tagged because all-source denials are always honored
+    /// regardless of the gate (security floor — `shouldAllowManagedDomainsOnly`).
     pub sourced_permission_allow_rules: Option<&'a [coco_config::SourcedRule]>,
     /// Per-source view of `sandbox.filesystem.allow_read` paths — drives
     /// the `filesystem.allow_managed_read_paths_only` gate. Same `None`
     /// semantics as [`Self::sourced_permission_rules`].
-    ///
-    /// TS parity: `sandbox-adapter.ts:343-347` `shouldAllowManagedReadPathsOnly`.
+    ///  `shouldAllowManagedReadPathsOnly`.
     pub sourced_filesystem_allow_read: Option<&'a [(coco_config::SettingSource, Vec<PathBuf>)]>,
 }
 
@@ -150,15 +145,13 @@ pub fn build_runtime_config(inputs: AdapterInputs<'_>) -> AdapterOutput {
 
 /// Extract `domain:HOST` from `WebFetch(domain:HOST)` rules and fold into
 /// `settings.network.{allowed,denied}_domains`.
-///
-/// TS lines 188–219. When `network.allow_managed_domains_only` is set
+/// When `network.allow_managed_domains_only` is set
 /// AND the caller provided per-source rules, only `policy_settings`-sourced
 /// allow rules contribute domains. Deny rules are honored from all sources
 /// regardless (security floor: enterprise denials must always win).
-///
 /// `sourced_rules` falling back to `None` (test harness / SDK without
 /// source provenance) degrades to "all sources contribute" — matching
-/// TS behavior when the gate is off.
+/// behavior when the gate is off.
 fn fold_webfetch_domains_into_network(
     settings: &mut SandboxSettings,
     allow_rules: &[String],
@@ -170,7 +163,7 @@ fn fold_webfetch_domains_into_network(
     let mut allowed: HashSet<String> = settings.network.allowed_domains.iter().cloned().collect();
     match (policy_only_allow, sourced_allow_rules) {
         (true, Some(rules)) => {
-            // TS `shouldAllowManagedDomainsOnly()` ON: only policy-source
+            // ON: only policy-source
             // allow rules contribute. The flat `allow_rules` list is ignored
             // because we can't determine its source.
             for rule in rules {
@@ -192,8 +185,8 @@ fn fold_webfetch_domains_into_network(
     }
     settings.network.allowed_domains = allowed.into_iter().collect();
 
-    // Deny rules: honored from all sources regardless of the gate (TS
-    // `sandbox-adapter.ts:160-163` — denied domains always respected).
+    // Deny rules: honored from all sources regardless of the gate (
+    //  — denied domains always respected).
     let mut denied: HashSet<String> = settings.network.denied_domains.iter().cloned().collect();
     for rule in deny_rules {
         if let Some(domain) = extract_webfetch_domain(rule) {
@@ -225,7 +218,7 @@ fn collect_writable_roots(
 ) -> Vec<WritableRoot> {
     let mut paths: Vec<PathBuf> = Vec::new();
 
-    // CWD + Claude temp dir always writable (TS line 225).
+    // CWD + sandbox temp dir always writable.
     paths.push(inputs.current_cwd.to_path_buf());
     paths.push(inputs.coco_temp_dir.to_path_buf());
 
@@ -263,7 +256,7 @@ fn collect_deny_write_paths(
 ) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = Vec::new();
 
-    // Settings.json files always denied (TS lines 232–245).
+    // Settings.json files always denied.
     paths.extend(inputs.settings_files.iter().cloned());
 
     // Settings file in current cwd if different from original.
@@ -315,11 +308,10 @@ fn collect_deny_write_paths(
 }
 
 /// Collect deny-read paths from permission Read denies + settings.
-///
 /// Returns `(literal_paths, glob_patterns)`: entries that contain glob
 /// metacharacters (`*`, `?`, `[`) flow through `glob_patterns` and get
 /// expanded at platform-wrap time via [`crate::glob_expansion::expand`];
-/// pure paths flow through `literal_paths` unchanged. Mirrors the
+/// pure paths flow through `literal_paths` unchanged.
 /// codex-rs `glob_scan_max_depth` deny-read behavior.
 fn collect_deny_read_paths(
     inputs: &AdapterInputs<'_>,
@@ -358,17 +350,14 @@ fn collect_deny_read_paths(
 }
 
 /// Collect allow-read carve-out paths from settings.
-///
-/// TS parity: `entrypoints/sandboxTypes.ts:71-77` `allowRead` — paths that
+///  `allowRead` — paths that
 /// re-allow reading even when shadowed by a `deny_read` entry or a
 /// permission `Read(/foo)` deny rule.
-///
 /// When `filesystem.allow_managed_read_paths_only` is set AND the caller
 /// provided per-source data, only `policy_settings`-sourced `allow_read`
 /// entries contribute. Without sourced data the gate degrades to
-/// "all sources contribute" (matches TS when the gate is off).
-///
-/// TS parity: `sandbox-adapter.ts:343-347` `shouldAllowManagedReadPathsOnly`.
+/// "all sources contribute" (behavior when the gate is off).
+///  `shouldAllowManagedReadPathsOnly`.
 fn collect_allow_read_paths(
     inputs: &AdapterInputs<'_>,
     settings: &SandboxSettings,
@@ -378,7 +367,7 @@ fn collect_allow_read_paths(
 
     match (policy_only, inputs.sourced_filesystem_allow_read) {
         (true, Some(groups)) => {
-            // TS `shouldAllowManagedReadPathsOnly()` ON: only policy-source
+            // ON: only policy-source
             // `sandbox.filesystem.allow_read` entries contribute.
             for (source, paths_from_source) in groups {
                 if !matches!(source, coco_config::SettingSource::Policy) {
@@ -412,8 +401,7 @@ fn extract_path_for_tool(rule: &str, tool_name: &str) -> Option<String> {
 }
 
 /// Resolve a path pattern from a permission rule.
-///
-/// Permission-rule conventions (TS `resolvePathPatternForSandbox`):
+/// Permission-rule conventions:
 /// - `//path` → `/path` (absolute from filesystem root)
 /// - `/path` → `<settings_root>/path` (settings-relative)
 /// - `~/path` → home-relative
@@ -431,8 +419,7 @@ pub fn resolve_permission_rule_path(pattern: &str, settings_root: &Path) -> Path
 }
 
 /// Resolve a path from `sandbox.filesystem.*` settings.
-///
-/// Filesystem-settings conventions (TS `resolveSandboxFilesystemPath`,
+/// Filesystem-settings conventions (
 /// fix for #30067): standard path semantics — absolute paths stay absolute,
 /// `~/` is expanded, relative resolves to `settings_root`.
 pub fn resolve_filesystem_path(pattern: &Path, settings_root: &Path) -> PathBuf {
@@ -471,12 +458,10 @@ fn dedup_paths(paths: &mut Vec<PathBuf>) {
 }
 
 /// Whether the sandbox settings indicate network isolation should apply.
-///
-/// TS isolates network whenever the sandbox is enabled and the user has not
+/// Isolates network whenever the sandbox is enabled and the user has not
 /// explicitly opted into open network (`sandbox-adapter.ts` always routes
 /// egress through the per-domain filter when `isSandboxingEnabled()`). The
 /// only opt-out is the coarse `allow_network` toggle.
-///
 /// Network isolation is deliberately decoupled from [`NetworkMode`]:
 /// `NetworkMode` gates *HTTP methods* (Full = all methods, Limited =
 /// GET/HEAD/OPTIONS) and flows into the [`DomainFilter`] when the proxy starts;
@@ -491,8 +476,7 @@ fn network_isolated(settings: &SandboxSettings) -> bool {
 /// Compute paths under `cwd` that look like a planted bare-repo (HEAD,
 /// objects, refs, hooks, config) and DON'T currently exist. Returned list is
 /// scrubbed by [`scrub_bare_repo_files`] after each sandboxed command —
-/// mitigation for anthropics/claude-code#29316.
-///
+/// mitigation for issue #29316.
 /// Existing files are excluded (callers should add them to deny_write_paths
 /// instead).
 pub fn bare_repo_scrub_paths(cwd: &Path, original_cwd: &Path) -> Vec<PathBuf> {
@@ -532,7 +516,6 @@ pub fn scrub_bare_repo_files(paths: &[PathBuf]) {
 }
 
 /// Detect whether `cwd` is a git worktree and return the main repo path.
-///
 /// In a worktree, `<cwd>/.git` is a file containing `gitdir: <main>/.git/worktrees/<name>`.
 /// Returns the main repo path (not its `.git` dir) so callers can add it as a writable root.
 pub fn detect_worktree_main_repo(cwd: &Path) -> Option<PathBuf> {

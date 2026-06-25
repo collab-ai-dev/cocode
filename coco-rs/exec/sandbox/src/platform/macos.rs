@@ -165,7 +165,7 @@ fn generate_seatbelt_profile(
     // matching rule, so emitting `allow_read` carve-outs **after** the deny
     // block lets a more-specific allow win for matching paths while broader
     // deny rules still cover their non-allowed siblings. Matches the TS
-    // shape of `entrypoints/sandboxTypes.ts:71-77` where `allowRead`
+    // `allowRead`
     // takes precedence over `denyRead` for matching paths.
     let writable_root_paths: Vec<std::path::PathBuf> = config
         .writable_roots

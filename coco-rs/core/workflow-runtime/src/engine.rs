@@ -37,12 +37,12 @@ use crate::error::WorkflowRuntimeError;
 use crate::host::WorkflowAgentOpts;
 use crate::host::WorkflowHost;
 
-/// Default per-run wall-clock budget (mirrors TS `WORKFLOW_VM_TIMEOUT_MS`).
+/// Default per-run wall-clock budget ().
 pub const WORKFLOW_VM_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// JS-defined DSL combinators + `budget`, evaluated at context init. `parallel`
 /// is a true barrier (`Promise.allSettled`); `pipeline` flows each item through
-/// all stages independently. Mirrors TS `runtime.ts:931-986`.
+/// all stages independently..
 const DSL_COMBINATORS: &str = r#"(() => {
   globalThis.parallel = async function parallel(funcs) {
     if (!Array.isArray(funcs)) throw new TypeError('parallel() expects an array of functions');
@@ -76,7 +76,6 @@ impl WorkflowEngine {
     /// Run `script` to completion, returning its resolved JSON value. `args` is
     /// exposed to the script as the global `args`; `host` backs `agent()` and
     /// progress; `cancel` + `timeout` bound the run.
-    ///
     /// MUST be awaited on a tokio current-thread runtime inside a `LocalSet`
     /// (the engine is `!Send`).
     pub async fn run(

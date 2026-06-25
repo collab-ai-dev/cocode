@@ -58,7 +58,6 @@ pub mod entry_kind {
 }
 
 /// Token usage for a single transcript entry.
-///
 /// Wire shape is **snake_case JSON** — Rust-native. See module doc
 /// for the cross-implementation policy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -72,16 +71,14 @@ pub struct TranscriptUsage {
 }
 
 /// A transcript message entry (user, assistant, system, attachment).
-///
 /// **Wire format is Rust-native snake_case JSON.** This storage deliberately
-/// does NOT match the original claude-code byte layout — the file content
+/// file content
 /// is semantically equivalent (same UUIDs, same timestamps, same
 /// `tool_use_id`-keyed records, same chain semantics, same metadata
 /// categories) but field names follow Rust convention so we don't
 /// have to maintain `camelCase` serde aliases on every new struct
 /// member. TS-written transcripts must go through
 /// `coco_session::import_ts` to migrate; cross-load is not supported.
-///
 /// `timestamp` is an ISO 8601 / RFC 3339 string — the leaf walk in
 /// `recovery.rs` sorts leaves by lexicographic timestamp, which is
 /// only correct for that format.
@@ -129,7 +126,6 @@ pub struct TranscriptEntry {
 }
 
 /// Metadata entries that live alongside transcript messages in the JSONL.
-///
 /// `type:` discriminator is kebab-case (`custom-title`, `last-prompt`,
 /// `file-history-snapshot`, …) — these drive cross-system tooling that
 /// keys on them; changing them would force re-indexing. Payload field
@@ -175,8 +171,7 @@ pub enum MetadataEntry {
         #[serde(default)]
         is_snapshot_update: bool,
     },
-    /// Staged context-collapse commit (TS `'marble-origami-commit'`).
-    ///
+    /// Staged context-collapse commit.
     /// Persists one committed range so resume can replay the splice.
     /// `payload` is a passthrough JSON blob produced by
     /// `coco_compact::staged::CommitEntry` — keeping it untyped here
@@ -186,7 +181,7 @@ pub enum MetadataEntry {
         #[serde(flatten)]
         payload: serde_json::Value,
     },
-    /// Staged context-collapse snapshot (TS `'marble-origami-snapshot'`).
+    /// Staged context-collapse snapshot.
     /// Last-wins by `sessionId` on resume.
     #[serde(rename = "marble-origami-snapshot")]
     MarbleOrigamiSnapshot {
@@ -273,7 +268,6 @@ pub enum MetadataEntry {
 }
 
 /// One content-replacement record.
-///
 /// Three fields — `kind`, `tool_use_id`, `replacement`. Records are
 /// keyed by `tool_use_id`, which is globally unique within a session.
 /// Wire shape is snake_case, like the rest of the JSONL envelope.
@@ -317,7 +311,6 @@ pub struct ModelCostEntry {
 }
 
 /// Options for appending a batch of conversation messages as one chain.
-///
 /// `starting_parent_uuid` is the already-written prefix parent. Once the
 /// first new message is written, later already-written messages in `messages`
 /// no longer advance the parent. This keeps compact-preserved suffixes from
@@ -344,7 +337,6 @@ pub struct ChainWriteResult {
 
 /// Union of all entry kinds that can appear in a JSONL transcript.
 /// Deserialization tries transcript message first, then metadata.
-//
 // `TranscriptEntry` is ~344 bytes and dominates the enum size; box it so
 // the metadata / unknown variants don't drag every `Vec<Entry>` allocation
 // up to that footprint.
@@ -416,7 +408,6 @@ pub struct TranscriptMetadata {
 /// Per-agent metadata sidecar — written when a background AgentTool
 /// spawn registers, read when the model invokes `agent/resume` to
 /// rehydrate the spawn. Snake_case wire.
-///
 /// Persisted as `<sessions_dir>/<session_id>/subagents/agent-<id>.meta.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentMetadata {
@@ -442,16 +433,13 @@ pub struct AgentMetadata {
 // ---------------------------------------------------------------------------
 
 /// Manages reading and writing JSONL session transcripts.
-///
 /// Path layout (see [`ProjectPaths`]):
-///
 /// ```text
-/// <memory_base>/projects/<sanitize(cwd)>/<session_id>.jsonl                  ← transcript
-/// <memory_base>/projects/<sanitize(cwd)>/<session_id>/subagents/             ← bg agents
-/// <memory_base>/projects/<sanitize(cwd)>/<session_id>/tool-results/          ← persisted blobs
-/// <memory_base>/projects/<sanitize(cwd)>/<session_id>/remote-agents/         ← CCR sidecars
+/// <memory_base>/projects/<sanitize(cwd)>/<session_id>.jsonl ← transcript
+/// <memory_base>/projects/<sanitize(cwd)>/<session_id>/subagents/ ← bg agents
+/// <memory_base>/projects/<sanitize(cwd)>/<session_id>/tool-results/ ← persisted blobs
+/// <memory_base>/projects/<sanitize(cwd)>/<session_id>/remote-agents/ ← CCR sidecars
 /// ```
-///
 /// Construction takes a shared [`Arc<ProjectPaths>`] so every coco-rs
 /// subsystem keyed on the same project (transcript store, memory
 /// store, KAIROS daily log) computes paths from one source of truth.
@@ -498,17 +486,14 @@ impl TranscriptStore {
     }
 
     /// Remove stale files under every session's `tool-results/` artifact dir.
-    ///
     /// Scoped to **this project** (`<project_dir>/{session_id}/tool-results/`).
     /// For cross-project cleanup invoke once per project — typically
     /// the TUI on shutdown calls it for the active project's
     /// [`TranscriptStore`].
-    ///
     /// Direct files under
     /// `tool-results/` and one-level nested tool directories are unlinked when
     /// their file mtime is older than the retention cutoff; then empty tool,
     /// `tool-results`, and session artifact directories are removed best-effort.
-    ///
     /// Returns the number of files removed.
     pub fn cleanup_tool_results_older_than(
         &self,
@@ -583,7 +568,6 @@ impl TranscriptStore {
     }
 
     /// `<project>/<session_id>/` — the per-session artifact root.
-    ///
     /// Tool-result helpers receive this root and append
     /// `tool-results/` themselves.
     pub fn session_artifact_dir(&self, session_id: &str) -> PathBuf {
@@ -643,7 +627,6 @@ impl TranscriptStore {
     /// per-spawn transcript, one JSON line each. Used by
     /// `coco_coordinator::agent_handle_spawn` on bg-spawn
     /// completion to persist the conversation history for resume.
-    ///
     /// Serialises straight from `Message` to the JSONL byte stream —
     /// no `serde_json::Value` intermediate — so the disk-write path
     /// walks the message tree exactly once. Conversation order is
@@ -770,7 +753,6 @@ impl TranscriptStore {
     }
 
     /// Persist a file-history snapshot to the JSONL transcript.
-    ///
     /// `snapshot_json` is the `FileHistorySnapshot`'s serialized JSON
     /// shape (see `coco-context::FileHistorySnapshot`).
     /// `is_snapshot_update == true` means we're rewriting an existing
@@ -794,7 +776,6 @@ impl TranscriptStore {
     }
 
     /// Persist a marble-origami commit entry to the transcript.
-    ///
     /// `payload` is the serialized [`coco_compact::staged::CommitEntry`]
     /// (snake_case).
     pub fn append_marble_origami_commit(
@@ -886,7 +867,6 @@ impl TranscriptStore {
 
     /// Replay file-history snapshots from the transcript JSONL in
     /// conversation-chain order, with `is_snapshot_update` semantics.
-    ///
     /// `chain_message_uuids` is the resolved chain of message UUIDs in
     /// conversation order (typically from
     /// `coco_session::recovery::load_conversation_for_resume`).
@@ -907,7 +887,6 @@ impl TranscriptStore {
     }
 
     /// Load all entries from a transcript file.
-    ///
     /// Skips blank and malformed lines (logged as `Unknown`). Refuses to
     /// read files larger than [`MAX_TRANSCRIPT_READ_BYTES`] to prevent OOM.
     pub fn load_entries(&self, session_id: &str) -> crate::Result<Vec<Entry>> {
@@ -939,7 +918,6 @@ impl TranscriptStore {
     }
 
     /// List sessions in **this project** only, newest first.
-    ///
     /// Walks `<memory_base>/projects/<slug>/*.jsonl`. For cross-project
     /// enumeration (the resume picker), use
     /// [`list_all_sessions`].
@@ -970,7 +948,6 @@ impl TranscriptStore {
 
 /// Build the transcript entries for a conversation chain with prefix-only
 /// dedup, mutating `seen` exactly as the append path does. Pure: no IO.
-///
 /// Both [`TranscriptStore::append_message_chain`] (writes the entries to
 /// the JSONL) and the in-memory backend ([`crate::store::InMemoryStore`])
 /// drive off this, so chain / parent-uuid / dedup semantics stay
@@ -1071,19 +1048,18 @@ fn try_remove_empty_dir(path: &Path) {
 
 /// Walk a conversation chain and reconstruct the file-history snapshot
 /// list to replay on resume:
-///
 /// 1. Index the metadata entries by their OUTER `message_id` (the
-///    JSONL row's field), keeping the LAST entry per outer id.
+/// JSONL row's field), keeping the LAST entry per outer id.
 /// 2. Walk `chain_message_uuids` in conversation order. For each id,
-///    look up its corresponding snapshot. If absent → continue.
+/// look up its corresponding snapshot. If absent → continue.
 /// 3. `is_snapshot_update == false` → push a new snapshot and remember
-///    its position by the INNER `snapshot.messageId` (not the outer
-///    one — `trackEdit` writes update entries whose outer `messageId`
-///    is the **current** turn while the inner `snapshot.messageId`
-///    keeps the original snapshot's id).
+/// its position by the INNER `snapshot.messageId` (not the outer
+/// one — `trackEdit` writes update entries whose outer `messageId`
+/// is the **current** turn while the inner `snapshot.messageId`
+/// keeps the original snapshot's id).
 /// 4. `is_snapshot_update == true` → if an entry exists for the inner
-///    `snapshot.messageId`, overwrite it in place; otherwise treat as
-///    a new append (`existingIndex === undefined` falls through to push).
+/// `snapshot.messageId`, overwrite it in place; otherwise treat as
+/// a new append (`existingIndex === undefined` falls through to push).
 pub fn build_file_history_snapshot_chain(
     entries: &[Entry],
     chain_message_uuids: &[String],
@@ -1239,7 +1215,6 @@ fn load_entries_from_file(path: &Path) -> crate::Result<Vec<Entry>> {
 }
 
 /// Parse a single JSONL line into an [`Entry`].
-///
 /// Dispatch order: parse once into `serde_json::Value`, then route by
 /// the `type` field. Transcript types
 /// (`user`/`assistant`/`system`/`attachment`) go to `TranscriptEntry`;
@@ -1608,17 +1583,15 @@ pub struct ResolvedSessionFile {
 }
 
 /// Locate the transcript file for `session_id`.
-///
 /// Resolution order:
 /// 1. **Direct project lookup**: if `cwd_hint` is `Some`, compute
-///    `ProjectPaths` from that exact cwd and check `<project_dir>/<sid>.jsonl`.
+/// `ProjectPaths` from that exact cwd and check `<project_dir>/<sid>.jsonl`.
 /// 2. **Worktree fallback**: if step 1 missed, shell out to
-///    `git worktree list --porcelain` from `cwd_hint`, slug each
-///    sibling worktree, and probe each one.
+/// `git worktree list --porcelain` from `cwd_hint`, slug each
+/// sibling worktree, and probe each one.
 /// 3. **Global scan**: when `cwd_hint` is `None`, walk
-///    `<memory_base>/projects/*/` and return the first project that
-///    contains the transcript. Used by SDK callers without a cwd.
-///
+/// `<memory_base>/projects/*/` and return the first project that
+/// contains the transcript. Used by SDK callers without a cwd.
 /// Returns `Ok(None)` when no project has the file. I/O errors at
 /// the `read_dir(<projects>)` level propagate; transient stat
 /// failures on individual entries are tolerated.
@@ -1641,7 +1614,7 @@ pub fn resolve_session_file_path(
         }
 
         // 2. Worktree fallback — only fires when (a) direct miss
-        //    and (b) git knows about other worktrees.
+        // and (b) git knows about other worktrees.
         for wt in coco_git::worktree_paths(cwd) {
             if wt == cwd {
                 continue;
@@ -1679,7 +1652,6 @@ pub fn resolve_session_file_path(
 
 /// List every session transcript across **every** project under
 /// `<memory_base>/projects/*/`, newest first.
-///
 /// Used by the resume picker / SDK session enumerator — callers
 /// that only want this-project sessions should go through
 /// [`TranscriptStore::list_sessions`] instead.

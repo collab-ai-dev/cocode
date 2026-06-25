@@ -774,8 +774,8 @@ async fn test_subagent_inherits_parent_deny_via_shared_base() {
 
 #[tokio::test]
 async fn test_subagent_allowed_tools_replace_on_restrict() {
-    // S3 TS parity (runAgent.ts:469-479): when a subagent is restricted via
-    // allowed_tools, the derived ALLOW = parent CliArg-source only + the allowed
+    // When a subagent is restricted via allowed_tools, the derived
+    // ALLOW = parent CliArg-source only + the allowed
     // tools as Session-source; the parent's other allow sources are dropped.
     // deny is always still inherited.
     use coco_types::PermissionBehavior;

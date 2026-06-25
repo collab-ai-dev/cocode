@@ -1,6 +1,6 @@
 //! Pure scheduler core — the I/O-free heart of the cron tick loop.
 //!
-//! Faithful port of the decision logic in TS `utils/cronScheduler.ts`
+//! Decision logic
 //! `check()` + `isRecurringTaskAged()` + `findMissed()`. No clock, no files,
 //! no tokio: the caller passes `now_ms` each tick and performs the side effects
 //! (enqueue the prompt, mark fired / remove) the returned [`DueFire`]s describe.
@@ -49,7 +49,7 @@ pub fn is_recurring_task_aged(t: &CronTiming<'_>, now_ms: i64, max_age_ms: i64) 
 }
 
 /// Per-task next-fire schedule, carried across ticks. `i64::MAX` encodes
-/// "never" (unparseable cron / no match in the next year), matching TS's use
+/// "never" (unparseable cron / no match in the next year).
 /// of `Infinity` in the `nextFireAt` map.
 #[derive(Debug, Default)]
 pub struct CronTickState {
@@ -63,14 +63,13 @@ impl CronTickState {
 
     /// Run one scheduler tick. Mirrors `cronScheduler.ts` `check()`:
     /// - **First sight** of a task: anchor its next fire from
-    ///   `last_fired_at ?? created_at` (recurring) or `created_at` (one-shot),
-    ///   so a task that came due while the process was down still fires once.
+    /// `last_fired_at ?? created_at` (recurring) or `created_at` (one-shot),
+    /// so a task that came due while the process was down still fires once.
     /// - **Due** (`now >= next_fire_at`): emit a [`DueFire`]; reschedule a live
-    ///   recurring task **from `now`** (not from the matched instant — avoids
-    ///   rapid catch-up if a tick was delayed); drop one-shot / aged tasks from
-    ///   the schedule.
+    /// recurring task **from `now`** (not from the matched instant — avoids
+    /// rapid catch-up if a tick was delayed); drop one-shot / aged tasks from
+    /// the schedule.
     /// - **Evict** schedule entries for tasks no longer present.
-    ///
     /// Returns the fires for this tick (at most one per task). The caller owns
     /// the side effects.
     pub fn tick(
@@ -125,7 +124,7 @@ impl CronTickState {
     }
 
     /// Soonest scheduled fire across all known tasks, or `None` if nothing is
-    /// pending (no tasks, or all "never"). Mirrors TS `getNextFireTime`.
+    /// pending (no tasks, or all "never"). .
     pub fn next_fire_time(&self) -> Option<i64> {
         self.next_fire_at
             .values()

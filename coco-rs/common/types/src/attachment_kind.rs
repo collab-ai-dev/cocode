@@ -1,5 +1,5 @@
-//! Full `Attachment` taxonomy — every TS `Attachment.type` in
-//! `src/utils/attachments.ts:440-731` gets a variant here.
+//! Full `Attachment` taxonomy — every `AttachmentKind` variant —
+//! Attachment kind definitions.
 //!
 //! This enum is the **single compile-time source of truth** for how many
 //! distinct TS attachment discriminators exist and how each one is
@@ -22,11 +22,10 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-/// Every TS `Attachment.type` discriminator, plus coco-rs-synthetic
+/// Every `AttachmentKind` discriminator, plus coco-rs-synthetic
 /// reminder kinds. 64 variants.
-///
 /// Wire format is snake_case via `#[serde(rename_all = "snake_case")]`
-/// to match TS `Attachment.type` exactly, so transcripts round-trip.
+/// to match `AttachmentKind` exactly, so transcripts round-trip.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -41,7 +40,6 @@ pub enum AttachmentKind {
     TaskReminder,
     /// User-supplied per-turn critical instruction
     /// (`toolUseContext.criticalSystemReminder_EXPERIMENTAL`).
-    ///
     /// **coco-rs dual role**: also serves as the generic carrier kind for
     /// `coco_messages::create_meta_message` / `create_system_reminder_message`
     /// (post-Phase-2 drop-in for the old `User{is_meta:true}` shape). The
@@ -56,8 +54,8 @@ pub enum AttachmentKind {
     SlashCommandMetadata,
     CompactionReminder,
     DateChange,
-    /// coco-rs per-turn baseline user context (TS `prependUserContext`
-    /// `utils/api.ts:449`, `currentDate` from `context.ts:186`). Injected
+    /// coco-rs per-turn baseline user context (`prependUserContext`
+    /// Injected
     /// every turn as an `is_meta` `<system-reminder>` carrying
     /// `Today's date is <local ISO>.` — distinct from the one-shot
     /// [`DateChange`](Self::DateChange) rollover notice.
@@ -205,9 +203,8 @@ impl AttachmentKind {
     }
 
     /// Does this attachment's body reach the LLM API?
-    ///
-    /// TS parity: kind NOT in `normalizeAttachmentForAPI`-returns-`[]` list
-    /// (`utils/messages.ts:4252-4261`). Hand-maintained match — ORTHOGONAL
+    /// kind NOT in `normalizeAttachmentForAPI`-returns-`[]` list
+    /// Hand-maintained match — ORTHOGONAL
     /// to `renders_in_transcript`. The four quadrants (API × UI) all exist.
     pub const fn is_api_visible(self) -> bool {
         use AttachmentKind::*;
@@ -261,7 +258,7 @@ impl AttachmentKind {
             | PlanFileReference
             | EditedTextFile
             | SkillDiscovery => true,
-            // TS `normalizeAttachmentForAPI` returns `[]` for these. They
+            // `normalizeAttachmentForAPI` returns `[]` for these. They
             // flow through typed attachment events or reminder-native silent
             // metadata, never as model-visible API text.
             AlreadyReadFile
@@ -284,7 +281,6 @@ impl AttachmentKind {
     }
 
     /// How the SDK / session-result layer consumes this attachment.
-    ///
     /// Orthogonal to API visibility and transcript rendering. TS
     /// `QueryEngine.ts` records all attachment messages into mutable
     /// history, but only a few discriminators have special SDK effects:
@@ -300,18 +296,16 @@ impl AttachmentKind {
     }
 
     /// Does this attachment render in the UI transcript?
-    ///
-    /// TS parity: kind NOT in `NULL_RENDERING_ATTACHMENT_TYPES`
-    /// (`components/messages/nullRenderingAttachments.ts:14-49`).
+    /// kind NOT in `NULL_RENDERING_ATTACHMENT_TYPES`
+    /// Silent/null-rendering attachment.
     /// Hand-maintained — ORTHOGONAL to `is_api_visible`.
-    ///
-    /// The `false` branch is the TS `NULL_RENDERING_TYPES` list verbatim;
+    /// The `false` branch is the `NULL_RENDERING_TYPES` list verbatim;
     /// the `true` branch covers everything else that actually renders
     /// (file attachments, tool results, diagnostics, hook errors, etc.).
     pub const fn renders_in_transcript(self) -> bool {
         use AttachmentKind::*;
         match self {
-            // TS `NULL_RENDERING_TYPES` (`nullRenderingAttachments.ts:14-49`).
+            // Null-rendering attachment types.
             HookSuccess
             | HookAdditionalContext
             | HookCancelled
@@ -388,7 +382,6 @@ impl AttachmentKind {
     /// Should this attachment survive compaction? Returns `true` for:
     /// - audit-trail kinds (permission decisions, command permissions)
     /// - any API-hidden + UI-visible kind (preserves user's view of hook events)
-    ///
     /// Everything else (pure reminders that regenerate per-turn, pure silent
     /// dedup markers) is stripped by the compactor.
     pub const fn survives_compaction(self) -> bool {
@@ -491,9 +484,8 @@ impl std::fmt::Display for AttachmentKind {
 }
 
 /// SDK-layer side effect for an attachment kind.
-///
 /// This is not "visible to the model" and not "visible in the TUI"; it is
-/// specifically the TS `QueryEngine` / SDK result special-case surface.
+/// specifically the `QueryEngine` / SDK result special-case surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SdkConsumption {
     /// Recorded to history/transcript only; SDK layer has no special branch.
@@ -520,11 +512,9 @@ pub const fn sdk_consumption_of(kind: AttachmentKind) -> SdkConsumption {
 }
 
 /// How an [`AttachmentKind`] is handled on the Rust side.
-///
 /// Every kind maps to exactly one variant via [`AttachmentKind::coverage`]
 /// — a `match` in [`coverage_of`] that must stay exhaustive. Adding a new
 /// [`AttachmentKind`] variant without assigning coverage fails to compile.
-///
 /// Strings are `&'static str` so callers can route / log / telemetry
 /// without allocating. When a coverage entry points at a generator or
 /// crate, keep the string in sync with the actual name — no runtime
@@ -533,7 +523,6 @@ pub const fn sdk_consumption_of(kind: AttachmentKind) -> SdkConsumption {
 pub enum Coverage {
     /// In-crate reminder, model-visible. `generator` names the
     /// [`AttachmentGenerator`] impl (e.g. `"PlanModeEnterGenerator"`).
-    ///
     /// [`AttachmentGenerator`]: https://docs.rs/coco-system-reminder
     Reminder { generator: &'static str },
     /// In-crate reminder that injects zero API tokens but carries
@@ -546,7 +535,7 @@ pub enum Coverage {
         owner_crate: &'static str,
         note: &'static str,
     },
-    /// TS `normalizeAttachmentForAPI` returns `[]` and coco-rs doesn't
+    /// `normalizeAttachmentForAPI` returns `[]` and coco-rs doesn't
     /// own the variant as a reminder. Event / bookkeeping data belongs
     /// to `owner_crate` (hooks, permissions, tools, …).
     SilentEvent {
@@ -562,12 +551,10 @@ pub enum Coverage {
 }
 
 /// Exhaustive mapping from [`AttachmentKind`] to [`Coverage`].
-///
 /// Every variant **must** appear in this match. Adding an
 /// [`AttachmentKind`] variant without also adding an arm here is a
 /// compile error, which is the point — it forces the author to decide
 /// where the new variant lives before the repo builds.
-///
 /// The return values are themselves checked by the
 /// `coverage_strings_do_not_drift` test: whenever a `generator` field
 /// names a generator that doesn't exist in `core/system-reminder`, that
@@ -801,34 +788,28 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
 /// Cross-crate carrier for `Attachment`-tagged events — the shape that
 /// owning crates produce so the rest of coco-rs (UI / transcript /
 /// telemetry) can route them uniformly.
-///
 /// Designed for the **silent / outside-reminder** half of the
 /// [`AttachmentKind`] taxonomy. The in-crate reminder half
 /// (`Coverage::Reminder` / `Coverage::SilentReminder`) goes through
 /// `coco-system-reminder`'s own `SystemReminder` type instead — that
 /// crate owns the model-visible rendering path.
-///
 /// # Who produces what
-///
 /// Use [`Coverage`] to determine if a kind should be produced here.
 /// Owning crates per [`coverage_of`]:
-///
 /// - `hooks`: `HookCancelled`, `HookErrorDuringExecution`,
-///   `HookNonBlockingError`, `HookSystemMessage`
+/// `HookNonBlockingError`, `HookSystemMessage`
 /// - `core/permissions`: `HookPermissionDecision`
 /// - `commands / permissions`: `CommandPermissions`
 /// - `core/tool-runtime`: `StructuredOutput`
 /// - `skills`: `DynamicSkill`
 /// - `core/context` / `services/compact`: `File`, `Directory`,
-///   `PdfReference`, `CompactFileReference`, `PlanFileReference`,
-///   `EditedTextFile` (note: these are model-visible attachments
-///   owned outside `system-reminder`, not silent events)
-///
+/// `PdfReference`, `CompactFileReference`, `PlanFileReference`,
+/// `EditedTextFile` (note: these are model-visible attachments
+/// owned outside `system-reminder`, not silent events)
 /// # Wire format
-///
-/// `kind` round-trips as the TS `Attachment.type` snake_case string;
+/// `kind` round-trips as the `AttachmentKind` snake_case string;
 /// `payload` is an opaque JSON blob whose shape is per-variant and
-/// validated by the owning crate. `is_meta` mirrors TS `isMeta` on
+/// validated by the owning crate. `is_meta` on
 /// `UserMessage` — `true` for silent / UI-only events, `false` if the
 /// event should also surface in the model-visible transcript.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

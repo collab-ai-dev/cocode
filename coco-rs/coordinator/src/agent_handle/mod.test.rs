@@ -2371,7 +2371,7 @@ async fn test_team_lifecycle_writes_roster_and_blocks_delete_while_active() {
 
 #[tokio::test]
 async fn test_create_team_per_session_dedup_is_in_memory_not_disk() {
-    // TS parity: leader-session dedup is the in-memory `active_team` check on a
+    // Leader-session dedup is the in-memory `active_team` check on a
     // single handle (see `test_team_lifecycle_*`) — there is NO scan of
     // `config home/teams/` by `lead_session_id`. Two independent handles (each its
     // own `active_team`) therefore BOTH succeed with the same leader session
