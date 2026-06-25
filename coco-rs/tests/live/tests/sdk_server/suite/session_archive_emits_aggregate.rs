@@ -9,8 +9,7 @@
 //! clearing the slot. The notification is the SDK's "session is
 //! done" terminator.
 //!
-//! TS parity: `cli/print.ts runHeadless()` emits the same aggregate
-//! at the end of the session.
+//! The aggregate is emitted at the end of the session.
 
 use anyhow::Result;
 use anyhow::anyhow;

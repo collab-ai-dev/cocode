@@ -10,15 +10,13 @@ use crate::ModelRole;
 use crate::ReasoningEffort;
 
 /// Built-in subagent types.
-///
 /// **Case is part of the contract.** TS treats `Explore` / `Plan` as PascalCase
 /// (consumed by the case-sensitive one-shot set in `constants.ts`, by user
 /// permission rules like `Agent(Explore)`, and by the
 /// `tengu_agent_tool_selected` telemetry attribute). The remaining built-ins
 /// (`general-purpose`, `statusline-setup`, `verification`, `coco-guide`)
 /// stay lowercase. See `subagent-refactor-plan.md` § "Naming decision".
-///
-/// TS `claude-code-guide` is renamed to `coco-guide`
+/// coco guide subagent
 /// to match the project identity. Per project policy (no backward-compat
 /// shims) the TS string is not accepted as an alias — only `coco-guide`
 /// (and its `coco_guide` underscore form) parses.
@@ -204,7 +202,7 @@ impl fmt::Display for AgentSource {
 
 // ── Agent Color ──
 
-/// TS `AgentColorName`. Validated set; unknown values are dropped at parse
+/// `AgentColorName`. Validated set; unknown values are dropped at parse
 /// time with a warning so the runtime never sees an invalid color.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -323,19 +321,18 @@ impl FromStr for AgentIsolation {
 
 // ── Agent MCP server spec (string-ref vs inline) ──
 
-/// One entry in `AgentDefinition.mcp_servers`. Mirrors the TS union:
+/// One entry in `AgentDefinition.mcp_servers`:
 /// either a `string` (reference to an existing MCP server config) or
 /// an inline `{name: config}` mapping that stands up a dynamic
 /// server scoped to this agent. Inline configs are stored as
 /// `serde_json::Value` because the underlying `McpServerConfig`
 /// shape lives in `coco-mcp` (a higher layer that depends on
 /// `coco-types`); keeping it as opaque JSON avoids a back-edge.
-///
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AgentMcpServerSpec {
-    /// Reference an existing MCP server by name (TS `string` arm).
+    /// Reference an existing MCP server by name (`string` arm).
     Name(String),
     /// Inline definition `{name: config}` (TS record arm). The map
     /// always carries exactly one entry — the server name → its
@@ -409,7 +406,6 @@ impl FromStr for MemoryScope {
 // ── Model Inheritance ──
 
 /// Where a model setting was resolved from (for inheritance debugging).
-///
 /// Precedence: Param > Definition > Parent (highest to lowest).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -448,38 +444,29 @@ pub struct ModelInheritance {
 ///
 /// - `Wildcard` — the frontmatter omitted `tools:` or declared
 ///   `tools: ['*']`. Semantically: the agent sees every registered
-///   tool (subject to the deny-list and parent narrowing). TS:
-///   `tools === undefined`.
+///   tool (subject to the deny-list and parent narrowing).
 /// - `Explicit(non-empty list)` — the frontmatter declared a finite
 ///   list. The agent sees only those tools (subject to deny-list /
 ///   parent narrowing).
 /// - `Explicit(vec![])` — the frontmatter explicitly declared
 ///   `tools: []`. Semantically: **zero tools** (the agent is
-///   tool-less). TS `parseAgentToolsFromFrontmatter` returns `[]` for
-///   this case so the auto-memory injector at `loadAgentsDir.ts:455`
-///   can promote it to `[Read, Edit, Write]` when `memory:` is set.
-///   The agent-tool renderer collapses `Explicit(vec![])` back to
-///   "All tools" wording, matching TS `getToolsDescription`'s
-///   `allowedTools.length > 0` gate.
-///
-/// TS parity matrix (`utils/markdownConfigLoader.ts:113-126`,
-/// `loadAgentsDir.ts:455-479`):
-///
-/// | Frontmatter        | parsed   | Rust                | Memory injection |
+///   tool-less). The auto-memory injector can promote it to
+///   `[Read, Edit, Write]` when `memory:` is set. The agent-tool
+///   renderer collapses `Explicit(vec![])` back to "All tools" wording.
+/// Parse matrix:
+/// | Frontmatter | parsed | Rust | Memory injection |
 /// |--------------------|----------|---------------------|------------------|
-/// | (key absent)       | undef    | `Wildcard`          | skipped          |
-/// | `tools: ['*']`     | undef    | `Wildcard`          | skipped          |
-/// | `tools: []`        | `[]`     | `Explicit(vec![])`  | runs             |
-/// | `tools: [Read]`    | `[Read]` | `Explicit([Read])`  | runs             |
-///
+/// | (key absent) | undef | `Wildcard` | skipped |
+/// | `tools: ['*']` | undef | `Wildcard` | skipped |
+/// | `tools: []` | `[]` | `Explicit(vec![])` | runs |
+/// | `tools: [Read]` | `[Read]` | `Explicit([Read])` | runs |
 /// Representing the distinction in the type system prevents the next
 /// refactor from confusing "wildcard" with "no tools".
-///
-/// Wire shape: a flat `Vec<String>` mirroring TS JSON. `Wildcard` ↔
-/// `["*"]`; `Explicit(v)` ↔ `v` (including `[]`). Combined with
+/// Wire shape: a flat `Vec<String>`. `Wildcard` ↔ `["*"]`;
+/// `Explicit(v)` ↔ `v` (including `[]`). Combined with
 /// `#[serde(skip_serializing_if = "ToolAllowList::is_wildcard")]` on
 /// `AgentDefinition.allowed_tools`, wildcard agents emit no `tools`
-/// key at all — matching TS `tools: undefined` byte-for-byte.
+/// key at all.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ToolAllowList {
     /// Every registered tool is visible (subject to deny-list +
@@ -492,17 +479,15 @@ pub enum ToolAllowList {
 
 impl ToolAllowList {
     /// Frontmatter-friendly constructor.
-    ///
     /// - `['*']` (single-star sentinel) → [`Self::Wildcard`].
     /// - `[]` (empty list explicitly declared in YAML) →
-    ///   [`Self::Explicit`]`(vec![])`. **Distinct from `Wildcard`**:
-    ///   TS `parseAgentToolsFromFrontmatter` returns `[]` for
-    ///   `tools: []` so the auto-memory injector
-    ///   (`loadAgentsDir.ts:455`) can promote it to `[Read, Edit,
-    ///   Write]` when `memory:` is set. Preserving the empty array
-    ///   here keeps that semantics intact.
+    /// [`Self::Explicit`]`(vec![])`. **Distinct from `Wildcard`**:
+    /// `parseAgentToolsFromFrontmatter` returns `[]` for
+    /// `tools: []` so the auto-memory injector
+    /// can promote it to `[Read, Edit,
+    /// Write]` when `memory:` is set. Preserving the empty array
+    /// here keeps that semantics intact.
     /// - Otherwise → [`Self::Explicit`]`(items)`.
-    ///
     /// "Key absent" (whole field omitted from the YAML) is *not*
     /// distinguishable at this entry point — callers must use
     /// `.unwrap_or_default()` on the `Option<Vec<String>>` returned by
@@ -570,7 +555,7 @@ impl<'de> Deserialize<'de> for ToolAllowList {
 /// Complete agent definition — the declarative spec for a subagent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentDefinition {
-    /// Agent type identity (TS `agentType`).
+    /// Agent type identity.
     pub agent_type: AgentTypeId,
 
     /// Human-readable display name.
@@ -601,7 +586,6 @@ pub struct AgentDefinition {
 
     /// System prompt body (TS markdown body / JSON `prompt`). Distinct from
     /// `initial_prompt`, which is a first-turn user-message prefix.
-    ///
     /// Built-in agents leave this empty and provide a renderer that produces
     /// the prompt at spawn time using the parent context.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -616,8 +600,7 @@ pub struct AgentDefinition {
     /// The lookup is model-relative — the same `ReasoningEffort::High`
     /// resolves to a different `ThinkingLevel` (budget / options) on
     /// each model, but the key itself is enum-typed.
-    ///
-    /// **Why not String + numeric form**: TS `parseEffortValue` over-
+    /// **Why not String + numeric form**: `parseEffortValue` over-
     /// loaded the field with numeric budget values. Rust's downstream
     /// (`thinking_level_for_effort_from`) takes `ReasoningEffort`
     /// directly — there is no consumer for numeric input, so accepting
@@ -641,7 +624,6 @@ pub struct AgentDefinition {
     /// agent declare e.g. `model_role: explore` to ride on the user's
     /// `config home/config.json` Explore role mapping rather than the
     /// generic Subagent role.
-    ///
     /// No TS equivalent — TS historically used model alias strings
     /// directly without a role indirection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -661,7 +643,7 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<AgentMcpServerSpec>,
 
-    /// Starting prompt prefix for the first user turn (TS `initialPrompt`).
+    /// Starting prompt prefix for the first user turn.
     /// **Not** the system prompt — see `system_prompt`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_prompt: Option<String>,
@@ -675,12 +657,12 @@ pub struct AgentDefinition {
     pub disallowed_tools: Vec<String>,
 
     /// Tools this agent is explicitly allowed to use. The enum
-    /// distinguishes `Wildcard` (every registered tool, mirroring TS
+    /// distinguishes `Wildcard` (every registered tool, matching
     /// `tools: undefined` and `tools: ['*']`) from `Explicit(list)` so
     /// the inject site for auto-memory tools can skip wildcards rather
     /// than silently coerce them into `Explicit([Read, Edit, Write])`.
-    /// Skipped at serialize time when `Wildcard` so the JSON byte-matches
-    /// TS `tools: undefined`.
+    /// Skipped at serialize time when `Wildcard` so the JSON emits no
+    /// `tools` key (same as `tools: undefined`).
     #[serde(default, skip_serializing_if = "ToolAllowList::is_wildcard")]
     pub allowed_tools: ToolAllowList,
 
@@ -688,7 +670,7 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<String>,
 
-    /// Validated UI color for this agent type (TS `color`).
+    /// Validated UI color for this agent type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<AgentColorName>,
 
@@ -723,8 +705,8 @@ pub struct AgentDefinition {
     /// `HookDefinition` lives in `coco_hooks` (avoids a back-edge from
     /// types → hooks). When set, the spawn lifecycle registers these
     /// hooks under the spawned agent's id and clears them at
-    /// SubagentStop. TS parity: `loadAgentsDir.ts` reads `hooks` into
-    /// the definition; `runAgent.ts:564-575` calls
+    /// SubagentStop. `loadAgentsDir.ts` reads `hooks` into
+    /// the definition;
     /// `registerFrontmatterHooks(setAppState, agentId, definition.hooks, ...)`.
     /// `Null` ⇒ no per-agent hooks.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
@@ -736,7 +718,7 @@ pub struct AgentDefinition {
     /// (`AgentDefinitionStore`) at load time via a caller-supplied
     /// inspector closure that consults
     /// [`coco_memory::agent_memory_snapshot::check_agent_memory_snapshot`].
-    /// TS parity: `pendingSnapshotUpdate?: string` in
+    /// `pendingSnapshotUpdate?: string` in
     /// `loadAgentsDir.ts` — set when `checkAgentMemorySnapshot` returns
     /// `prompt-update`. Consumed by `/agents show` to flag drifted
     /// agents and (future) by an interactive resync prompt.

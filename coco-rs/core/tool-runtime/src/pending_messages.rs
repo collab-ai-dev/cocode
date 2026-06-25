@@ -15,16 +15,16 @@
 //!   that reads tasks to thread it through, and serialise the queue in
 //!   wire transcripts where it doesn't belong.
 //!
-//! - `tasks/LocalAgentTask/LocalAgentTask.tsx:136` —
+//! -  —
 //!   `pendingMessages: string[]` field on `LocalAgentTaskState`.
-//! - `tasks/LocalAgentTask/LocalAgentTask.tsx:162-167` —
+//! -  —
 //!   `queuePendingMessage(taskId, msg)` appends.
-//! - `tasks/LocalAgentTask/LocalAgentTask.tsx:181-192` —
+//! -  —
 //!   `drainPendingMessages(taskId)` returns + clears.
-//! - `utils/attachments.ts:1085-1101` —
+//! -  —
 //!   `getAgentPendingMessageAttachments` drains and maps to
 //!   `queued_command` attachments.
-//! - `utils/task/framework.ts:82-95` — on `resumeAgentBackground`
+//! -  — on `resumeAgentBackground`
 //!   re-register, `pendingMessages` is carried forward from the
 //!   existing task.
 

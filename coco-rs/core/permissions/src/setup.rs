@@ -12,13 +12,12 @@ use crate::rule_compiler;
 
 /// Compute whether the classifier-backed `Auto` permission mode is available
 /// for this session (the Shift+Tab cycle gate + control-plane entry gate).
-///
 /// Parallel to [`crate::compute_bypass_capability`]. coco-rs intentionally
 /// drops TS's three-part gate (`feature('TRANSCRIPT_CLASSIFIER')` +
 /// `tengu_auto_mode_config` GrowthBook circuit breaker + `modelSupportsAutoMode`
 /// allow-list): there is no GrowthBook here and the classifier subsystem ships
 /// for every provider/model. Auto is therefore **available by default**, gated
-/// only by the `auto_mode.disabled` settings opt-out (mirrors TS
+/// only by the `auto_mode.disabled` settings opt-out (
 /// `disableAutoMode`). A future model-support check would slot in here.
 pub fn compute_auto_mode_capability(settings_disabled: bool) -> bool {
     !settings_disabled
@@ -27,7 +26,6 @@ pub fn compute_auto_mode_capability(settings_disabled: bool) -> bool {
 // ��─ PermissionModeChoice ──
 
 /// User-facing permission mode selection during onboarding or mode-switch.
-///
 /// Maps to `PermissionMode` but uses names that are clearer in an interactive
 /// selection dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,7 +219,6 @@ fn content_matches_dangerous_pattern(content: &str, pattern: &str) -> bool {
 }
 
 /// Check if a Bash permission rule is dangerous for auto mode.
-///
 /// A rule is dangerous if it would auto-allow commands that execute arbitrary
 /// code, bypassing the classifier's safety evaluation.
 pub fn is_dangerous_bash_permission(
@@ -261,7 +258,6 @@ pub fn is_dangerous_bash_permission(
 }
 
 /// Check if a PowerShell permission rule is dangerous for auto mode.
-///
 /// Checks both the original pattern and its `.exe` variant (e.g. "npm run"
 /// also checks "npm.exe run"). Multi-word patterns add `.exe` after the first
 /// word only.
@@ -396,7 +392,6 @@ fn parse_tool_spec(spec: &str) -> (&str, Option<&str>) {
 // ── Default rules ──
 
 /// Generate the default permission rules for a new session.
-///
 /// Default mode grants read-only tools and denies nothing beyond what
 /// mode-based fallthrough handles. The returned rules should be placed
 /// in the `Session` source so they can be overridden by persistent rules.
@@ -422,7 +417,6 @@ pub fn default_session_rules() -> Vec<PermissionRule> {
 }
 
 /// Generate default permission rules for a given permission mode.
-///
 /// Each mode starts with a different baseline of allowed tools:
 /// - **Default / Auto**: read-only tools only.
 /// - **AcceptEdits**: read-only + file editing tools.
@@ -516,13 +510,11 @@ pub struct PermissionConfigError {
 }
 
 /// Validate a full set of permission rules for internal consistency.
-///
 /// Checks for:
 /// - Conflicting allow + deny rules for the same tool from the same source.
 /// - Overly broad rules (e.g. `Bash(*)` in auto mode) detected via
-///   `find_dangerous_classifier_permissions`.
+/// `find_dangerous_classifier_permissions`.
 /// - Invalid rule strings that failed parsing.
-///
 /// Returns a list of problems. An empty list means the config is valid.
 pub fn validate_permission_configuration(
     rules: &[PermissionRule],
@@ -587,7 +579,6 @@ pub fn validate_permission_configuration(
 
 /// Resolve the effective permission mode from settings, CLI override, and
 /// plan-mode toggle.
-///
 /// Priority (high → low):
 /// 1. Plan mode toggle (user switched to plan mode mid-session)
 /// 2. CLI `--permission-mode` flag

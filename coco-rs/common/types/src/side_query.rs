@@ -16,8 +16,7 @@ use serde::Serialize;
 // ── Request ──
 
 /// A side-query request to the LLM.
-///
-/// Deliberately matches the TS `SideQueryOptions` common denominator.
+/// Deliberately matches the common denominator.
 /// Provider-specific details (beta headers, cache control, attribution)
 /// are handled by the implementation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,7 +67,6 @@ pub struct SideQueryRequest {
     /// otherwise the implementation drops the field and any
     /// [`Self::forced_tool`] / [`Self::tools`] path activates as the
     /// multi-LLM fallback.
-    ///
     /// TS analogue: `selectRelevantMemories`'s
     /// `output_format: { type: 'json_schema', schema }`. Provider-
     /// specific wire shapes (Anthropic `output_format` + beta header,
@@ -154,7 +152,6 @@ pub struct SideQueryToolUse {
     /// read this flag and treat it as a wire-level malformed
     /// response — typically by triggering a fallback strategy
     /// instead of consuming the broken tool input.
-    ///
     /// `#[serde(default)]` for backward compat with on-disk
     /// transcripts that pre-date the field.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -234,7 +231,6 @@ impl SideQueryRequest {
     }
 
     /// Query with a JSON-schema structured-output spec.
-    ///
     /// Translated by the side-query implementation into the resolved
     /// provider's structured-output API: OpenAI `response_format.json_schema`,
     /// Gemini `responseSchema`, Anthropic `output_format` (with the
@@ -326,7 +322,6 @@ impl SideQueryResponse {
 /// Parameters that should be **byte-identical** between the parent
 /// session context and a fork's first request to share the parent's
 /// prompt cache when a saved parent request exists.
-///
 /// **Runtime scope**: this is the cross-layer DTO. The slot itself
 /// lives on `coco_query::QueryEngine` (`last_cache_safe_params:
 /// Arc<RwLock<Option<CacheSafeParams>>>`) populated in
@@ -334,7 +329,6 @@ impl SideQueryResponse {
 /// as `/btw` read it via `engine.last_cache_safe_params()` and may
 /// rebuild equivalent params from the current transcript before the
 /// first saved parent request exists.
-///
 /// **Cache-key fields included here**: rendered system prompt, model
 /// id, parent message history. **Excluded**: the live `ToolUseContext`
 /// (non-serializable) — fork callers reconstruct it; tool schema
@@ -343,7 +337,6 @@ impl SideQueryResponse {
 /// `ThinkingLevel`; setting `max_output_tokens` on a fork can clamp
 /// `budget_tokens` and silently break cache parity (TS callers must
 /// avoid that combination, ditto for coco-rs).
-///
 /// All fields are owned strings / values so the slot can be safely
 /// cloned without lifetime entanglement with the parent's per-turn
 /// state.

@@ -1,4 +1,4 @@
-//! `/hunter` — run a deep bug-finding review on the current branch or specified files. Mirrors claude-code's hunter.ts.
+//! `/hunter` — run a deep bug-finding review on the current branch or specified files.
 //! No upstream hunter.ts; coco-authored content migrated as-is.
 
 pub const PROMPT: &str = r#"Run a deep bug-finding review on the current branch or specified files.

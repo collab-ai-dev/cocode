@@ -6,8 +6,8 @@
 //! via `scripts/generate_python.sh`, TypeScript, Go, etc.).
 //!
 //! Usage:
-//!   cargo run -p coco-types --features schema --example export_schema
-//!   cargo run -p coco-types --features schema --example export_schema -- /custom/path
+//! cargo run -p coco-types --features schema --example export_schema
+//! cargo run -p coco-types --features schema --example export_schema -- /custom/path
 //!
 //! ## Bundle composition
 //!
@@ -27,7 +27,7 @@
 //! referenced by any existing union/struct), add it to
 //! `ENTRY_POINTS` instead of sprinkling individual lines elsewhere.
 //!
-//! TS reference: `app-server-protocol/src/export.rs` (454 lines).
+//! JSON schema export for the coco SDK protocol.
 //! This implementation is shorter because the merger replaces the per-variant list.
 
 #[cfg(not(feature = "schema"))]
@@ -71,23 +71,21 @@ fn write_schema<T: JsonSchema>(out_dir: &Path, name: &str) {
 
 #[cfg(feature = "schema")]
 /// Bundle accumulator with explicit-vs-transitive precedence.
-///
 /// Each entry point is registered via `add::<T>(name)` which:
-///   1. inserts T's top-level schema (the metadata-rich
-///      `schema_for!(T)` value, with its embedded `$defs` /
-///      `$schema` stripped) under `name` — marked **explicit**.
-///   2. lifts every entry of the top-level `$defs` flat into the
-///      bundle — marked **transitive**.
-///
+/// 1. inserts T's top-level schema (the metadata-rich
+/// `schema_for!(T)` value, with its embedded `$defs` /
+/// `$schema` stripped) under `name` — marked **explicit**.
+/// 2. lifts every entry of the top-level `$defs` flat into the
+/// bundle — marked **transitive**.
 /// Two precedence rules:
-///   * **Explicit always wins**. When `ProviderApi` is registered
-///     explicitly *and* reached transitively via `ModelSpec.api`,
-///     the richer top-level schema (with `title` etc.) wins; the
-///     leaner transitive copy is silently dropped.
-///   * **First transitive wins**. When two unrelated entries both
-///     reach the same inner type, the schemas are equal in every
-///     case we have observed (schemars is deterministic), so we
-///     keep the first and only flag a real divergence as a conflict.
+/// * **Explicit always wins**. When `ProviderApi` is registered
+/// explicitly *and* reached transitively via `ModelSpec.api`,
+/// the richer top-level schema (with `title` etc.) wins; the
+/// leaner transitive copy is silently dropped.
+/// * **First transitive wins**. When two unrelated entries both
+/// reach the same inner type, the schemas are equal in every
+/// case we have observed (schemars is deterministic), so we
+/// keep the first and only flag a real divergence as a conflict.
 struct BundleBuilder {
     entries: BTreeMap<String, Value>,
     /// Names registered via the explicit top-level path. These
@@ -118,8 +116,8 @@ impl BundleBuilder {
         let mut top = schema_for!(T).to_value();
 
         // 1) Split out `$defs` and shed envelope-level metadata
-        //    (`$schema`) that only makes sense on a standalone schema,
-        //    not on a nested entry inside the bundle.
+        // (`$schema`) that only makes sense on a standalone schema,
+        // not on a nested entry inside the bundle.
         let mut defs = serde_json::Map::new();
         if let Some(obj) = top.as_object_mut() {
             if let Some(Value::Object(map)) = obj.remove("$defs") {
@@ -131,8 +129,8 @@ impl BundleBuilder {
         self.explicit.insert(name.to_string(), ());
 
         // 2) Every transitively-reachable type → bundle[X], marked
-        //    **transitive** (loses to explicit, ties resolved
-        //    first-write-wins with conflict detection).
+        // **transitive** (loses to explicit, ties resolved
+        // first-write-wins with conflict detection).
         for (inner_name, inner_schema) in defs {
             self.insert_transitive(&inner_name, inner_schema);
         }
@@ -166,7 +164,6 @@ impl BundleBuilder {
 /// Walk every `$ref` in the bundle's definitions and return any that
 /// point at a name not present as a top-level definition. Each entry
 /// in the returned map is `(missing_target, [sources_that_referenced_it])`.
-///
 /// Accepts both `#/$defs/...` (schemars 1.x / JSON Schema 2020-12) and
 /// legacy `#/definitions/...` to stay resilient to future settings
 /// changes.
@@ -234,7 +231,6 @@ fn main() {
     println!();
 
     // --- Individual top-level schema files ---
-    //
     // Note: `CoreEvent` itself is NOT exported — it's an in-process dispatch
     // wrapper around Protocol/Stream/Tui and is not meant to cross the wire.
     // The three child enums are the actual wire types.
@@ -253,7 +249,6 @@ fn main() {
     println!();
 
     // --- Bundled schema: all types reachable from any entry point ---
-    //
     // The bundle is the source of truth for cross-language clients
     // (Python is the in-tree consumer; TS/Go/etc. only have this file).
     // Entry points are the smallest set whose transitive `$ref` closure
@@ -308,10 +303,10 @@ fn main() {
     bundle.add::<coco_types::WireApi>("WireApi");
     bundle.add::<coco_types::ApplyPatchToolType>("ApplyPatchToolType");
 
-    // SDK hook callback output — TS-canonical `hookJSONOutputSchema`.
+    // SDK hook callback output — `hookJSONOutputSchema`.
     // Not reachable from `ClientRequest`/`ServerRequest` (responses
     // ride the synchronous JSON-RPC reply path, which isn't a typed
-    // union schema), so each TS-mirrored type is registered explicitly
+    // union schema), so each type is registered explicitly
     // for cross-language SDK codegen. `HookSpecificOutput` is a tagged
     // union; its variant payloads come through transitively.
     bundle.add::<coco_types::SdkHookOutput>("SdkHookOutput");

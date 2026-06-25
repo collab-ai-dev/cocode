@@ -239,7 +239,7 @@ fn verification() -> AgentDefinition {
 /// in here — they belong on the spawn-time prompt assembler, not on
 /// the static catalog entry.
 ///
-/// This agent was originally `claude-code-guide`; this runtime owns the
+/// This runtime owns the
 /// identifier as `coco-guide` (see
 /// [`coco_types::SubagentType::CocoGuide`]).
 fn coco_guide_with(has_embedded_search_tools: bool) -> AgentDefinition {

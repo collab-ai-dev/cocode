@@ -72,7 +72,7 @@ fn input_render_model_empty_default_has_no_placeholder_text() {
 #[test]
 fn input_render_model_queued_placeholder_wins_over_suggestion() {
     // Empty composer + editable queue → the "press up to edit" hint, even when
-    // a prompt suggestion is also present (mirrors TS `usePromptInputPlaceholder`).
+    // a prompt suggestion is also present.
     let input = InputState::new();
 
     let model = InputRenderModel::build(&input, false, Some("Try this prompt"), true, None);
@@ -102,7 +102,7 @@ fn input_render_model_streaming_forces_normal_prompt_and_no_title() {
     assert_eq!(model.prefix_consumed, 0);
     assert_eq!(model.display_text, "! cargo test");
     // Streaming no longer labels the box with a "Queue Input" title — the
-    // input stays clean (TS parity); queued items surface via the footer strip.
+    // input stays clean; queued items surface via the footer strip.
     assert_eq!(model.title, "");
 }
 

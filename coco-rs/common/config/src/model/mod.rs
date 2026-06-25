@@ -32,7 +32,6 @@ use std::collections::HashMap;
 /// Resolved per-model configuration. The on-disk overlay shape is
 /// [`PartialModelInfo`]; this is the post-resolution form with required
 /// fields concrete.
-///
 /// Required fields (`context_window`, `max_output_tokens`) are typed
 /// `PositiveTokens` so that `as u64` casts are unrepresentable in the
 /// downstream call chain — `From<PositiveTokens> for u64` is infallible.
@@ -106,7 +105,6 @@ impl Default for ModelInfo {
     /// `context_window` / `max_output_tokens` values are arbitrary —
     /// they bypass the JSON-boundary validation enforced by
     /// [`ModelInfo::from_partial`].
-    ///
     /// **Production paths must not use `Default::default()`** —
     /// always go through `from_partial(provider, model_id, partial)`
     /// so missing required fields surface as
@@ -143,13 +141,12 @@ impl ModelInfo {
     /// Resolve a `PartialModelInfo` into a complete `ModelInfo`. The
     /// only public path from JSON; surfaces a typed error when a
     /// required field never appeared anywhere in the merge chain.
-    ///
     /// Cross-field invariants enforced here:
     /// - `default_thinking_level` (when set) must match the `.effort`
-    ///   of some entry in `supported_thinking_levels` (when set).
-    ///   The default exists to identify the picker entry to highlight,
-    ///   so an unmatched default would silently degrade `default_thinking()`
-    ///   to `None`.
+    /// of some entry in `supported_thinking_levels` (when set).
+    /// The default exists to identify the picker entry to highlight,
+    /// so an unmatched default would silently degrade `default_thinking()`
+    /// to `None`.
     pub fn from_partial(
         provider: &str,
         model_id: &str,
@@ -239,18 +236,17 @@ impl ModelInfo {
     }
 
     /// Resolve a requested effort to the best matching supported ThinkingLevel.
-    ///
     /// Resolution semantics:
     /// - `Some(non-empty)` — exact-effort match wins; otherwise fall
-    ///   back to the closest declared level by effort distance.
+    /// back to the closest declared level by effort distance.
     /// - `None` (field absent) — pass `requested` through unchanged;
-    ///   the model has not declared its thinking surface, so trust
-    ///   the caller.
+    /// the model has not declared its thinking surface, so trust
+    /// the caller.
     /// - `Some(vec![])` — also passes `requested` through. An
-    ///   explicitly-empty list is treated as "no declared surface,"
-    ///   identical to `None`. If a future caller needs an explicit
-    ///   "thinking unsupported" signal, prefer omitting `Capability::ExtendedThinking`
-    ///   from `capabilities` rather than overloading this field.
+    /// explicitly-empty list is treated as "no declared surface,"
+    /// identical to `None`. If a future caller needs an explicit
+    /// "thinking unsupported" signal, prefer omitting `Capability::ExtendedThinking`
+    /// from `capabilities` rather than overloading this field.
     pub fn resolve_thinking_level(&self, requested: &ThinkingLevel) -> ThinkingLevel {
         match &self.supported_thinking_levels {
             Some(levels) if !levels.is_empty() => levels
@@ -276,7 +272,6 @@ impl PartialEq for ModelInfo {
 }
 
 /// Role -> (primary + fallback chain + fallback policy).
-///
 /// The JSON-facing side uses `RoleSlots<ProviderModelSelection>` (see
 /// `ModelSelectionSettings`); this runtime-facing side stores the
 /// already-resolved `RoleSlots<ModelSpec>`, produced by
@@ -326,7 +321,7 @@ pub struct ModelSelectionSettings {
     pub review: Option<RoleSlots<ProviderModelSelection>>,
     pub hook_agent: Option<RoleSlots<ProviderModelSelection>>,
     pub memory: Option<RoleSlots<ProviderModelSelection>>,
-    /// Forked-agent spawn model (TS `tools/AgentTool/`). Generic role
+    /// Forked-agent spawn model. Generic role
     /// for agent/skill subagent dispatch — distinct from `explore`,
     /// which is the investigative subagent type.
     pub subagent: Option<RoleSlots<ProviderModelSelection>>,

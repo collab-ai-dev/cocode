@@ -3,13 +3,11 @@ use serde::Serialize;
 use strum::Display;
 use strum::IntoStaticStr;
 
-/// 27 hook event types matching TS `HOOK_EVENTS`
-/// (`src/entrypoints/sdk/coreSchemas.ts:355-383`).
-///
+/// 27 hook event types
+/// Event type identifiers for hook registration and dispatch.
 /// Wire format is **PascalCase** (e.g. `"PreToolUse"`) — identical to
 /// TS settings.json keys. Variant names serialize as-is via serde
 /// default and strum default; do not add `rename_all`.
-///
 /// `#[non_exhaustive]` so future TS additions can land without
 /// breaking match exhaustiveness in downstream crates.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -56,7 +54,7 @@ pub enum HookEventType {
 }
 
 impl HookEventType {
-    /// Wire-format identifier for this event (TS `HOOK_EVENTS` literal,
+    /// Wire-format identifier for this event (`HOOK_EVENTS` literal,
     /// e.g. `"PreToolUse"`). Backed by the strum-derived
     /// `IntoStaticStr` impl — single source of truth, no duplication.
     pub fn as_str(self) -> &'static str {
@@ -65,12 +63,10 @@ impl HookEventType {
 }
 
 /// Scope that determines hook priority ordering.
-///
 /// Higher-priority scopes override lower ones. Ordering mirrors the TS
 /// settings layering (`utils/settings/`): Policy is enterprise-managed
 /// and overrides everything user-set; Session is the most-specific
 /// runtime entry; Plugin and Builtin are the broadest defaults.
-///
 /// Numeric ordering on the wire (Ord/PartialOrd) is preserved so
 /// existing code that sorts by `cmp` keeps working — variants are
 /// listed in ascending priority.

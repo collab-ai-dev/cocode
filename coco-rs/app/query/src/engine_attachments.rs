@@ -11,22 +11,22 @@
 //!
 //! Two ends of the pipeline used to be unwired:
 //! 1. The trigger Set was a write-only black hole — populated by tools,
-//!    never drained. This module provides the drain.
+//! never drained. This module provides the drain.
 //! 2. [`crate::reminder_adapters::MemoryAdapter::nested_memories`]
-//!    intentionally returns `Vec::new()` because nested-CLAUDE.md
-//!    discovery is engine-driven (file-read triggers), not state-driven
-//!    (memory store recall). The pending slot is the engine-side
-//!    delivery channel.
+//! intentionally returns `Vec::new()` because nested-CLAUDE.md
+//! discovery is engine-driven (file-read triggers), not state-driven
+//! (memory store recall). The pending slot is the engine-side
+//! delivery channel.
 //!
-//! Dedup is two-gated, mirroring the TS `memoryFilesToAttachments`:
+//! Dedup is two-gated, mirroring the `memoryFilesToAttachments`:
 //! 1. [`QueryEngine::loaded_nested_memory_paths`] — a non-evicting set
-//!    that dedups within a user-prompt cycle. The engine (and this set)
-//!    are rebuilt per cycle, so it does not survive across prompts.
+//! that dedups within a user-prompt cycle. The engine (and this set)
+//! are rebuilt per cycle, so it does not survive across prompts.
 //! 2. The session-persistent [`coco_context::FileReadState`] — survives
-//!    the per-cycle rebuild, so a CLAUDE.md already injected (or already
-//!    Read by a tool) on an earlier prompt is not re-injected when a
-//!    later prompt re-reads the same subtree. This is the gate the TS
-//!    side spells `readFileState.has(path)`.
+//! the per-cycle rebuild, so a CLAUDE.md already injected (or already
+//! Read by a tool) on an earlier prompt is not re-injected when a
+//! later prompt re-reads the same subtree. This is the gate the TS
+//! side spells `readFileState.has(path)`.
 
 use std::path::PathBuf;
 
@@ -41,11 +41,9 @@ impl QueryEngine {
     /// Drain `ctx.nested_memory_attachment_triggers`, traverse each
     /// triggered file's CWD→file slice, and append the resulting
     /// memory entries to `self.pending_nested_memory`.
-    ///
     /// Idempotent across calls within a turn — the trigger Set is
     /// cleared in place, so a second drain at the same site is a no-op.
     /// Safe to call when the Set is empty (early return).
-    ///
     /// `ctx.cwd_override` wins over the process cwd when set, matching
     /// the worktree-isolated subagent contract.
     pub(crate) async fn drain_nested_memory_triggers(&self, ctx: &ToolUseContext) {
@@ -90,7 +88,7 @@ impl QueryEngine {
         // prompt; FileReadState survives the rebuild, so a memory file it
         // already tracks (prior injection or a direct tool Read) is skipped.
         // Snapshot once (LRU-capped, ≤100 paths) to avoid holding the FRS
-        // lock across traversal. Mirrors TS `readFileState.has(path)`.
+        // lock across traversal..
         let frs_seen: std::collections::HashSet<PathBuf> = match self.file_read_state.as_ref() {
             Some(frs_arc) => frs_arc
                 .read()
@@ -282,7 +280,6 @@ impl QueryEngine {
     }
 
     /// Take and clear the engine-side pending nested-memory slot.
-    ///
     /// Called once per turn from
     /// [`crate::engine_turn_reminders`] right before building
     /// `TurnReminderInput`. Returning `Vec::new()` (the common case

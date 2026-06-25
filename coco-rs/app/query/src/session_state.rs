@@ -7,7 +7,7 @@
 //! notifications that violate the "exactly one emission per edge" contract
 //! SDK consumers depend on.
 //!
-//! TS reference: `notifySessionStateChanged()` in `print.ts` guards against
+//! Guards against
 //! re-emitting the same state.
 //!
 //! See `event-system-design.md` §7.2 (SessionStateChanged semantics) and
@@ -21,7 +21,6 @@ use crate::CoreEvent;
 use crate::ServerNotification;
 
 /// Tracks the last emitted session state and emits only on real transitions.
-///
 /// Owned by the session loop. Uses `std::sync::Mutex` rather than `Cell`
 /// because the session loop's future is `Send`-bounded (QueryEngine adapters
 /// box it as `Send`). The mutex is never held across an `.await`, so it
@@ -38,7 +37,6 @@ impl SessionStateTracker {
     }
 
     /// Emit a transition to `new` if it differs from the last observed state.
-    ///
     /// No-op when `tx` is `None` (headless/test callers) or when the new
     /// state matches the previous one.
     pub(crate) async fn transition_to(

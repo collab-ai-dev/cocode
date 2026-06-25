@@ -68,7 +68,7 @@ pub use app_state::ToolAppState;
 // Per-provider rate-limit state (lives on `ToolAppState.rate_limits`).
 pub use rate_limit::RateLimitEntry;
 
-// Attachment taxonomy (full TS `Attachment.type` catalog + coverage)
+// Attachment taxonomy (full `AttachmentKind` catalog + coverage)
 pub use attachment_kind::AttachmentEvent;
 pub use attachment_kind::AttachmentKind;
 pub use attachment_kind::Coverage;
@@ -252,7 +252,7 @@ pub use client_request::TurnStartParams;
 pub use client_request::UpdateEnvParams;
 pub use client_request::UserInputResolveParams;
 
-// SDK hook callback output (TS-canonical wire shape; mirrors
+// SDK hook callback output (stable wire format; mirrors
 // `hookJSONOutputSchema`). Single source of truth for the SDK
 // boundary and for hook orchestration's stdout parser.
 pub use sdk_hook_output::ElicitationAction;
@@ -357,12 +357,10 @@ pub use tool::ActiveShellTool;
 pub use tool::ModelShellToolType;
 
 /// How compaction was triggered.
-///
 /// Stays in `coco-types` (rather than `coco-messages`) because
 /// `event::CompactionPhaseParams` references it; the rest of the message
 /// family lives in `coco-messages`.
-///
-/// Mirrors the TS taxonomy: manual `/compact`, threshold-based auto, PTL-413
+/// Variants: manual `/compact`, threshold-based auto, PTL-413
 /// reactive recovery, gap-based time-based microcompact, session-memory
 /// short-circuit (no LLM), and staged context-collapse commit.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -555,12 +553,8 @@ pub use extended::{
 };
 
 /// Permission mode (top-level because it's used by both message and permission modules).
-///
-/// Wire format is camelCase to match TS `PermissionModeSchema` at
-/// `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits',
-/// 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the
-/// drifting variants accept legacy snake_case input so old session
-/// transcripts deserialize cleanly.
+/// Wire format is camelCase. The serde aliases on the drifting variants accept
+/// legacy snake_case input so old session transcripts deserialize cleanly.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
@@ -605,7 +599,6 @@ impl std::str::FromStr for PermissionMode {
 
 impl PermissionMode {
     /// Next mode when the user presses Shift+Tab.
-    ///
     /// Cycle: `Default → AcceptEdits → [Plan] → [BypassPermissions] → [Auto] → Default`.
     /// Optional modes are skipped when their gate flag is false — `Plan` is
     /// skipped when the `plan_mode` feature is off (`plan_available == false`).

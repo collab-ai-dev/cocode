@@ -1,7 +1,7 @@
 //! Bytes-per-token estimation heuristic.
 //!
 //! Distinct from the catalog: this is a coarse heuristic for sizing
-//! the `/skills` token column. TS `sG(model)` in 2.1.142 hardcodes a
+//! the `/skills` token column. hardcodes a
 //! Claude-vs-other binary split (4 vs 3 bytes/token) via an explicit
 //! id Set; coco-rs uses keyword matching on the Anthropic-branded
 //! family names ("claude", "sonnet", "haiku", "opus") so new model
@@ -21,12 +21,10 @@
 const CLAUDE_KEYWORDS: &[&str] = &["claude", "sonnet", "haiku", "opus"];
 
 /// Estimate how many input bytes correspond to one token for `model_id`.
-///
 /// Returns `4` for Claude-family ids (denser BPE for English text)
 /// and `3` for everything else. Empty id returns the Claude default
-/// (`4`) — TS `sG` does the same so the dialog never divides by zero
+/// (`4`) — so the dialog never divides by zero
 /// before the model selection settles.
-///
 /// The value is used **only** for the visual `~N tok` column in the
 /// `/skills` dialog. Real context-window accounting goes through the
 /// live tokenizer in `services/inference`, never this helper.

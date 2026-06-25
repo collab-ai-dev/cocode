@@ -91,7 +91,6 @@ pub struct QueryParams {
     /// [`crate::cache_convert::to_extra_body`]; non-Anthropic providers
     /// see no caching keys. Adapter (`vercel-ai-anthropic`) owns all
     /// policy interpretation.
-    ///
     /// **Session-stable** account / overage state is NOT carried here —
     /// it lives on the provider's `AnthropicConfig`, set by
     /// `build_anthropic` from `RuntimeConfig.account.*`. See
@@ -109,9 +108,9 @@ pub struct QueryParams {
     /// and any helper call that wants the model to halt on a marker.
     /// Mapping per provider (handled by [`build_call_options`] →
     /// `LanguageModelV4CallOptions.stop_sequences`):
-    ///   * Anthropic → `stop_sequences`
-    ///   * OpenAI Chat / OpenAI-Compatible → `stop`
-    ///   * Gemini → `stopSequences`
+    /// * Anthropic → `stop_sequences`
+    /// * OpenAI Chat / OpenAI-Compatible → `stop`
+    /// * Gemini → `stopSequences`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
     /// Native structured-output spec. Threaded into
@@ -121,7 +120,6 @@ pub struct QueryParams {
     /// `debug!` log so the caller's
     /// `forced_tool` / `tools` path (if any) becomes the multi-LLM
     /// wire format.
-    ///
     /// Per-provider wire shape is owned by the respective
     /// `vercel-ai-*` adapter (OpenAI `response_format.json_schema`,
     /// Gemini `responseSchema`, Anthropic `output_format` or synthetic
@@ -185,12 +183,10 @@ pub struct QueryResult {
 }
 
 /// LLM API client wrapping vercel-ai LanguageModelV4.
-///
 /// Carries a [`ProviderClientFingerprint`] so a turn-boundary
 /// coherence check can detect a stale `Arc<dyn LanguageModelV4>`
 /// after `RuntimeConfig` hot-reload and rebuild without restarting
 /// the process.
-///
 /// **Layer-2 plumbing.** When `model_info` is `Some`,
 /// [`Self::query`] / [`Self::query_stream`] route through
 /// [`build_call_options`] — this is the path that wraps
@@ -241,7 +237,6 @@ impl ApiClient {
     /// [`ProviderClientFingerprint::compute`] so the turn-boundary
     /// coherence check can detect a stale `Arc<dyn LanguageModelV4>`
     /// after hot-reload.
-    ///
     /// `model_info` carries the resolved [`ModelInfo`] for the
     /// (provider, model_id) pair so [`Self::query`] / [`Self::query_stream`]
     /// route through [`build_call_options`] — without this, the
@@ -406,7 +401,6 @@ impl ApiClient {
     /// Resolved [`ModelInfo`] for the underlying client. `None` for
     /// test/mock clients built through the lightweight constructors
     /// that bypass the registry resolution path.
-    ///
     /// Callers that need capability gates (e.g. `engine_prompt`
     /// branching on [`coco_types::Capability::AnthropicToolReference`])
     /// look up through this accessor rather than reaching into the
@@ -422,7 +416,6 @@ impl ApiClient {
     /// thinking blocks). Today only Anthropic — other providers ignore
     /// the field, so callers should fall back to client-side
     /// `coco_compact::micro_compact` instead.
-    ///
     /// Used by `coco-query` to gate whether to encode and attach
     /// `coco_compact::ContextEditStrategy` to outgoing requests.
     #[must_use]
@@ -432,7 +425,6 @@ impl ApiClient {
 
     /// Whether this provider/model pair supports Anthropic-style prompt
     /// cache markers.
-    ///
     /// Two-axis gate: provider family must support the wire shape, and the
     /// resolved model must declare prompt-cache capability.
     /// `None` model info is reserved for tests/mocks, where we stay
@@ -453,12 +445,10 @@ impl ApiClient {
     }
 
     /// Execute a query with retry logic.
-    ///
     /// **Layer-2 plumbing.** Call options are built **once** before the
     /// retry loop and reused across attempts. The detector hash and the
     /// retry body cannot drift because they share the same merged
     /// extra-body map.
-    ///
     /// Mock paths that bypass `build_options_with_extra` (legacy
     /// constructor, `with_default_fingerprint`) skip the merged-extra
     /// snapshot and feed an empty `BTreeMap` to the detector — this
@@ -653,7 +643,6 @@ impl ApiClient {
 
     /// Execute a single query attempt via LanguageModelV4::do_generate()
     /// with pre-built options.
-    ///
     /// `options` is borrowed across retries; per-attempt clones are
     /// avoided. The per-request `abort_signal` passed to `do_generate` is
     /// still `None`: `QueryParams.cancel` interrupts the *retry loop* (the
@@ -738,7 +727,7 @@ impl ApiClient {
         let options = self.build_options(params);
 
         // Open the stream with the same exponential-backoff retry policy as
-        // the blocking `query()` path. TS `withRetry.ts` wraps BOTH blocking
+        // the blocking `query()` path. The retry wrapper covers BOTH blocking
         // and streaming requests; the open fails before any bytes flow, so a
         // transient 429 / 5xx / timeout / connection error is safe to retry
         // here without losing partial output. Reactive-401 refresh is tried
@@ -846,7 +835,7 @@ impl ApiClient {
 
         // No HTTP status. Trust ONLY the adapter's explicit retryability hint:
         // a wrapped connection/timeout error (`APICallError { is_retryable:
-        // true, status: None }`, matching TS `APIConnectionError`) becomes a
+        // true, status: None }`, matching `APIConnectionError`) becomes a
         // retryable NetworkError. An opaque error with no `APICallError` cause
         // carries no transient signal, so it stays a non-retryable
         // `ProviderError` — we must not spin the backoff loop on unknown errors.
@@ -862,7 +851,6 @@ impl ApiClient {
     /// merged flat extra-body map alongside the call options. The
     /// merged map is the canonical input for cache-break detection so
     /// the detector hash and the actual retry body cannot drift.
-    ///
     /// Mock / test path (`model_info == None`) returns
     /// `(direct_construction, BTreeMap::new())` — the empty map
     /// preserves existing behavior for callers that bypass Layer-2.
@@ -1019,7 +1007,6 @@ fn cache_break_reason_bucket(reason: &str) -> &'static str {
 
 /// Build a [`PromptStateInput`] from `(client, params, query_source,
 /// merged_extra)` for the cache-break detector's phase 1.
-///
 /// Provider-agnostic by design: hashes the **post-merge, pre-namespace-wrap**
 /// flat extra map so any new key (cache_strategy, requestedBetas,
 /// agenticQuery, querySource, …) is automatically tracked without
@@ -1027,7 +1014,6 @@ fn cache_break_reason_bucket(reason: &str) -> &'static str {
 /// `is_using_overage`, `cached_mc_enabled`) stay at defaults — those
 /// session-stable bits are caught by [`ProviderClientFingerprint`]
 /// changes, not by the per-call detector hash (design §12.2).
-///
 /// **Layout integration.** When the call options already carry a
 /// `provider_options["prompt_layout"].prompt_hash_inputs` payload (set by
 /// [`crate::prompt_layout::build_prompt_layout_from_prompt`] in
@@ -1184,7 +1170,6 @@ fn collapse_text_parts(parts: &[UserContentPart]) -> String {
 
 /// Canonical-hash the tool list. Returns `(tool_names_in_order,
 /// per_tool_hashes, aggregate_hash)`.
-///
 /// The aggregate is computed by walking `names` in declaration order and
 /// folding each per-tool hash through djb2 — iterating `per_tool.values()`
 /// would be HashMap-order-random and produce non-deterministic aggregates

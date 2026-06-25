@@ -58,11 +58,9 @@ macro_rules! define_status_codes {
         }
     ),* $(,)?) => {
         /// Status codes for error classification.
-        ///
         /// Format: XX_YYY (5-digit)
         /// - XX = Category (00-99)
         /// - YYY = Code within category (000-999)
-        ///
         /// Ranges:
         /// - 00_000: Success
         /// - 01_xxx: Common/Generic errors
@@ -180,7 +178,7 @@ define_status_codes! {
     /// Config file error.
     ConfigFileError = 10_001 => { retryable: false, log_error: false, category: Config },
     /// Skill is disabled by the resolved `skill_overrides` state (`off`).
-    /// TS parity: errorCode 7 from the Skill tool `validateInput`
+    /// errorCode 7 from the Skill tool `validateInput`
     /// (`cli_inner_pretty.js:353581-353590`).
     SkillOverrideOff = 10_002 => { retryable: false, log_error: false, category: Config },
     /// Skill is gated to `user-invocable-only` (either via

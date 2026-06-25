@@ -35,7 +35,6 @@ use coco_tui_ui::engine::terminal::SurfaceFrame;
 use coco_tui_ui::style::UiStyles;
 
 /// Render the retained native-scrollback viewport.
-///
 /// Finalized transcript messages normally live above the viewport in native
 /// scrollback. Compatibility fallback mode renders them inside the retained
 /// viewport instead so terminals without usable scrollback do not drop history.
@@ -155,7 +154,7 @@ fn input_height_for_state(state: &AppState) -> u16 {
     ) {
         return 0;
     }
-    // Grow the composer with its hard line breaks (mirrors TS, whose TextInput
+    // Grow the composer with its hard line breaks (, whose TextInput
     // expands with content) so recalled multi-message edits and multi-line input
     // show on separate rows. Capped at MAX_INPUT_HEIGHT content rows (then the
     // composer scrolls). +2 for the top/bottom borders.
@@ -232,7 +231,6 @@ fn show_status_indicator(state: &AppState) -> bool {
 }
 
 /// Input-token count for the running turn's `↑` segment in the status spinner.
-///
 /// This is the CURRENT turn's prompt size, not the session total: `↓` is this
 /// turn's live output estimate, so `↑` must match per-turn semantics. Input
 /// isn't streamed (no chars/4-style estimate), but the prompt *is* the current
@@ -468,7 +466,6 @@ fn render_live_viewport(
 
 /// Rows to reserve for the active suggestion popup: as many as there are
 /// items, capped at `DEFAULT_MAX_VISIBLE` and by the space below the input.
-///
 /// Sizing to the item count — rather than always reserving the full cap —
 /// keeps the composer's vertical shift proportional to the popup (a 2-item
 /// popup shifts the input ~2 rows, not 10). Mirrors codex's content-based

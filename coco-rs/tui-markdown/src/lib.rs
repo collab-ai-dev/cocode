@@ -932,7 +932,7 @@ impl<'a> Writer<'a> {
     ///
     /// coco's native paint engine has no OSC 8 plumbing — embedding escape
     /// sequences in span content would corrupt width-aware wrapping — so links
-    /// degrade to the terminal-fallback form claude-code uses when hyperlinks
+    /// terminal-fallback form when hyperlinks
     /// are unsupported: the destination is shown. A `mailto:` shows the bare
     /// address; an autolink / bare URL (display text already equal to the
     /// destination) is not duplicated.

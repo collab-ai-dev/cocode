@@ -5,7 +5,7 @@
 //! [`HookInput`] enum's `#[serde(tag = "hook_event_name")]` representation
 //! — it is not a Rust field on the inner structs (one source of truth).
 //!
-//! Field shapes match `coreSchemas.ts`.
+//! Hook input/output shapes for pre/post tool-use events.
 
 use coco_types::HookEventType;
 use serde::Deserialize;

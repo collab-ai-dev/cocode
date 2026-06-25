@@ -63,7 +63,6 @@ pub struct SessionResumeState {
 }
 
 /// Load a conversation from a session transcript for resume.
-///
 /// Reads the JSONL transcript, walks the `parent_uuid` chain backward
 /// from the newest non-sidechain leaf, then reconstructs the message
 /// list in chronological order. Falls back to top-to-bottom read order
@@ -164,11 +163,10 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
     // Find leaves:
     // 1) terminal = entries whose uuid is no one's parent;
     // 2) for each terminal, walk back via parent_uuid to its nearest
-    //    user/assistant ancestor — attachments / system / progress are
-    //    skipped because they can't anchor a turn;
+    // user/assistant ancestor — attachments / system / progress are
+    // skipped because they can't anchor a turn;
     // 3) among the resulting set of valid leaf uuids, pick the latest
-    //    by timestamp using strict `>` (first-wins on tie).
-    //
+    // by timestamp using strict `>` (first-wins on tie).
     // No-parent-links fixture: fall back to disk order so every
     // persisted message round-trips.
     let any_parent_link = !parent_uuids.is_empty();
@@ -596,7 +594,7 @@ pub fn can_resume_session(transcript_path: &Path) -> bool {
 
 /// Fork a conversation — copy the transcript into a new session file,
 /// relabeling every entry's `session_id` to `dest_session_id` so the fork's
-/// entries claim the new session (mirrors TS `createFork`, which rewrites each
+/// entries claim the new session (, which rewrites each
 /// entry's `sessionId`). Message/parent UUIDs are kept verbatim — the chain is
 /// self-consistent within the copied file, and UUIDs are scoped per session.
 /// A line that fails to parse as JSON is copied through unchanged.

@@ -1,5 +1,5 @@
 //! `/export` conversation rendering — turn the live `MessageHistory` into a
-//! Markdown / JSON / plain-text document. Mirrors TS `utils/exportRenderer.tsx`
+//! Markdown / JSON / plain-text document.
 //! (`renderMessagesToPlainText`): the full transcript including tool activity,
 //! since an agentic session is mostly tool use. The file-writing + cwd
 //! resolution lives in `tui_runner::run_export` (it needs the runtime).
@@ -61,8 +61,8 @@ struct ExportEntry {
 }
 
 /// Walk the conversation into export entries — user/assistant/system text,
-/// assistant tool CALLS (name + input), and tool RESULTS — mirroring TS
-/// export, which renders the full transcript including tool activity.
+/// assistant tool CALLS (name + input), and tool RESULTS. The full
+/// transcript including tool activity is exported.
 /// Progress/tombstone messages and empty bodies are skipped.
 fn conversation_entries(messages: &[Arc<coco_messages::Message>]) -> Vec<ExportEntry> {
     let mut out = Vec::new();

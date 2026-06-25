@@ -5,10 +5,10 @@
 //!
 //! **Dependency flow**:
 //! ```text
-//! coco-tool-runtime  (defines AgentQueryEngine trait)
-//!     ↓
+//! coco-tool-runtime (defines AgentQueryEngine trait)
+//! ↓
 //! coco-query (this adapter implements it via QueryEngine)
-//!     ↓
+//! ↓
 //! coco-state (SwarmAgentHandle / InProcessTeammateRunner consumes it)
 //! ```
 
@@ -29,12 +29,10 @@ use crate::engine::QueryEngine;
 use crate::engine::QueryEngineConfig;
 
 /// Factory function type for creating QueryEngine instances.
-///
 /// Each agent query gets a fresh engine with its own config plus a
 /// typed model selection that the factory uses to select the right
 /// runtime source. `InheritMain` defaults to the parent session's model
 /// unless the agent definition specifies a model.
-///
 /// The factory is async because production implementations (see
 /// `app/cli/src/agent_handle_factory.rs`) need to call into the
 /// session runtime's role-client resolver and engine builder, both
@@ -52,7 +50,6 @@ pub type QueryEngineFactory = Arc<
 >;
 
 /// Adapter that wraps QueryEngine to implement AgentQueryEngine.
-///
 /// Each subagent gets its own `QueryEngineAdapter` with a dedicated
 /// QueryEngine instance configured for the agent's model, tools, and budget.
 pub struct QueryEngineAdapter {
@@ -81,14 +78,14 @@ impl AgentQueryEngine for QueryEngineAdapter {
         // Command-source). Seeded into the engine's `live_command_rules`; they
         // never touch the shared app_state base (TS no-op setAppState parity).
         let initial_command_rules = config.extra_permission_rules.clone();
-        // TS `createSubagentContext` + `agentGetAppState` derivation: the
+        // `createSubagentContext` + `agentGetAppState` derivation: the
         // subagent read-through-inherits the parent's shared base (deny/ask/
         // allow/mode), and this layers the per-engine deltas on top.
         let permission_derivation = crate::config::PermissionDerivation {
             // `allowed_tools` is the registry VISIBILITY filter (→ `tool_filter`
             // below), NOT a permission-allow source. TS only does allowedTools
             // replace-on-restrict for the SEPARATE SDK `allowedTools` permission
-            // param (`runAgent.ts:469-479`); the ordinary AgentTool `tools:`
+            // param (); the ordinary AgentTool `tools:`
             // frontmatter only narrows visibility. Deriving allow rules from it
             // both over-permits (auto-allows the listed tools) and under-permits
             // (drops the parent's non-CliArg allow sources). So leave this `None`
@@ -99,7 +96,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // Agent-definition `permissionMode` override (already resolved against
             // parent precedence by `resolve_subagent_mode` at the AgentTool
             // layer). The factory applies it unless the parent's live mode is
-            // Bypass/AcceptEdits/Auto (TS `runAgent.ts:421-427`). Without this the
+            // Bypass/AcceptEdits/Auto. Without this the
             // resolved mode is lost (base.mode = parent's live mode wins).
             mode_override: Some(permission_mode),
             // Parent cwd bridge + inherited read dirs (worktree-isolated child
@@ -169,7 +166,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // we just thread the categorical level (no budget, default
             // options) and let the downstream apply model-relative
             // overrides where they exist.
-            // TS parity (`runAgent.ts:682-684`): a non-fork subagent runs
+            // (): a non-fork subagent runs
             // with thinking DISABLED — only forks (which inherit the
             // parent's exact prompt + tool pool) keep the parent's
             // reasoning. An explicit per-spawn `effort` override still
@@ -366,7 +363,6 @@ impl AgentQueryEngine for QueryEngineAdapter {
         // Fork mode: if the parent surfaced context messages, use
         // `run_with_messages` so the child's first turn sees the
         // parent's history prepended.
-        //
         // Caller-supplied `event_tx` lets bg AgentTool spawns
         // observe live `Stream::TextDelta` events (TaskOutput live
         // streaming). When `None`, fall back to a discarded channel

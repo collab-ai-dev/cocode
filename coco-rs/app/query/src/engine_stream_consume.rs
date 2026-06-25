@@ -3,28 +3,28 @@
 //! ## Owns
 //!
 //! 1. [`WithheldReason`] + [`withhold_reason_for_stop`] — the typed
-//!    enum and the single `StopReason → WithheldReason` mapping the
-//!    `engine_recovery` dispatcher matches on. Variants are
-//!    provider-agnostic: the Anthropic / OpenAI / Google / ByteDance /
-//!    OpenAI-compatible adapters all map their context-overflow /
-//!    output-cap signals to the same `coco_inference::StopReason`
-//!    (re-exported as `coco_messages::StopReason`).
+//! enum and the single `StopReason → WithheldReason` mapping the
+//! `engine_recovery` dispatcher matches on. Variants are
+//! provider-agnostic: the Anthropic / OpenAI / Google / ByteDance /
+//! OpenAI-compatible adapters all map their context-overflow /
+//! output-cap signals to the same `coco_inference::StopReason`
+//! (re-exported as `coco_messages::StopReason`).
 //!
 //! 2. [`StreamOutcome`] + [`StreamConsumed`] — the typed result of
-//!    consuming one LLM stream to completion. Replaces the previous
-//!    bundle of locals (`response_text`, `reasoning_text`,
-//!    `tool_order`, `tool_buffers`, `stream_usage`, `stream_stop_reason`,
-//!    `stream_error`, `turn_snapshot`) that floated through
-//!    `run_session_loop`. The struct's accumulator fields are always
-//!    populated; `outcome` discriminates the three terminal states
-//!    (Finish / Error / Cancel) so the caller's post-stream branch can
-//!    `match` exhaustively.
+//! consuming one LLM stream to completion. Replaces the previous
+//! bundle of locals (`response_text`, `reasoning_text`,
+//! `tool_order`, `tool_buffers`, `stream_usage`, `stream_stop_reason`,
+//! `stream_error`, `turn_snapshot`) that floated through
+//! `run_session_loop`. The struct's accumulator fields are always
+//! populated; `outcome` discriminates the three terminal states
+//! (Finish / Error / Cancel) so the caller's post-stream branch can
+//! `match` exhaustively.
 //!
 //! 3. [`QueryEngine::consume_stream`] — drives the per-turn stream
-//!    loop end-to-end and returns the typed outcome. Extracted from
-//!    `run_session_loop` so the main loop reads as a sequence of
-//!    phase calls (Phase 9 stream consume → post-stream branch)
-//!    rather than embedding 360 LoC of event matching inline.
+//! loop end-to-end and returns the typed outcome. Extracted from
+//! `run_session_loop` so the main loop reads as a sequence of
+//! phase calls (Phase 9 stream consume → post-stream branch)
+//! rather than embedding 360 LoC of event matching inline.
 //!
 //! The Rust split is structurally different from the JS original
 //! (Rust doesn't have JS generators, so the loop is a normal `async fn`),
@@ -64,14 +64,12 @@ use crate::session_state::SessionStateTracker;
 /// event stream pending a recovery attempt. Each variant carries no
 /// payload because the recovery dispatcher reads the assistant message
 /// + the current loop state for everything else it needs.
-///
 /// Provider-agnostic — these variants do **not** name Anthropic /
 /// OpenAI / Google. The provider seam in `vercel-ai-*` normalizes
 /// raw provider signals (`prompt_too_long`, `length`, `content_filter`,
 /// `SAFETY`, `RECITATION`, `imageTooLarge`, …) to the typed
 /// `coco_inference::StopReason` / `coco_inference::InferenceError`
 /// before this layer ever sees them.
-///
 /// `MediaSize` is intentionally not modeled: the TS predicate
 /// (`reactiveCompact?.isWithheldMediaSizeError`) lives in unreleased
 /// `services/compact/reactiveCompact.js`, and vercel-ai exposes no
@@ -83,7 +81,7 @@ use crate::session_state::SessionStateTracker;
 pub(crate) enum WithheldReason {
     /// Input + output exceeded the model context window. Recovery:
     /// reactive compaction (full / micro depending on config) →
-    /// retry. TS parity: `query.ts:1085-1183` PTL recovery; multi-
+    /// retry.  PTL recovery; multi-
     /// provider map: Anthropic `model_context_window_exceeded` finish
     /// reason + HTTP 400 `prompt_too_long`, OpenAI / Google / ByteDance
     /// HTTP 400 `context_length_exceeded`, all unified to
@@ -94,18 +92,16 @@ pub(crate) enum WithheldReason {
     /// `ModelInfo.max_output_tokens` (NOT a hard-coded 64k — that
     /// breaks GPT-4 (4k) and Haiku (1k); Finding N1), phase 2
     /// inject resume nudge up to `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT`
-    /// times. TS parity: `query.ts:1188-1255`.
+    /// times. .
     MaxOutputTokens,
 }
 
 /// Map a typed `StopReason` to a `WithheldReason`, or `None` if the
 /// stream reached a stop reason that needs no recovery decision.
-///
 /// Single source of truth for "what does the recovery dispatcher do
 /// with this stop reason?" — kept in this file so the in-stream loop
 /// and the post-stream dispatcher agree without a sibling-module
 /// invariant.
-///
 /// Note: `StopReason::ContentFilter` (refusal / `SAFETY` / `RECITATION`
 /// / `content_filter`) is NOT a withhold-bucket — refusal is a policy
 /// outcome, not a recoverable provider error. It maps to `None` and
@@ -171,21 +167,19 @@ pub(crate) struct StreamConsumed {
 }
 
 impl QueryEngine {
-    /// Phase 9 (TS parity `query.ts:855-1061`): drive the per-turn LLM
+    /// Phase 9 ( ): drive the per-turn LLM
     /// stream to completion and return the typed [`StreamConsumed`].
     /// Caller branches on the four orthogonal terminal states (clean
     /// Finish / mid-stream Error / Cancel / premature channel close)
     /// via the four `Option` fields + `self.cancel.is_cancelled()`.
-    ///
     /// Generic over the `StreamingHandle`'s closure type so the caller
     /// can pass its concrete `streaming_handle.as_mut()` without
     /// boxing. The bounds are the exact bounds `StreamingHandle`'s
     /// impl carries — copied verbatim from
     /// `core/tool-runtime/src/executor_streaming.rs:90-94`.
-    ///
     /// Side effects: pushes synthetic-error tool_result rows + the
     /// matching assistant_msg on the streaming cancellation race
-    /// (TS parity `query.ts:1015-1028`); emits `ToolUseStarted` for
+    /// ( ); emits `ToolUseStarted` for
     /// every successfully-prepared streaming tool call.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn consume_stream<F, Fut>(
@@ -211,14 +205,11 @@ impl QueryEngine {
         // Accumulate stream state. `tool_order` preserves the order tool
         // calls first appeared (by `ToolInputStart`) so the downstream
         // exec path keeps the same ordering contract as the blocking path.
-        //
         // `response_text` and `reasoning_text` are presentation-only
         // accumulators driven from `StreamEvent::{TextDelta, ReasoningDelta}`:
-        //
         // - `response_text` feeds the Stop hook's `last_assistant_message`
-        //   input, log fields, and `QueryResult.response_text`.
+        // input, log fields, and `QueryResult.response_text`.
         // - `reasoning_text` feeds a log field.
-        //
         // The history-bearing assistant content is reconstructed from
         // `event.snapshot` at `StreamEvent::Finish` — this is the path
         // that preserves per-part `provider_metadata` (Gemini
@@ -341,7 +332,6 @@ impl QueryEngine {
                     // to the StreamingHandle. Safe tools start
                     // executing immediately via tokio::spawn;
                     // unsafe tools queue for commit_flush.
-                    //
                     // ── I1 invariant fix ──
                     // The preparer's early-error paths push
                     // synthetic tool_result rows to history
@@ -350,11 +340,10 @@ impl QueryEngine {
                     // hasn't been committed yet — it lands at the
                     // `Finish` arm below. A naive inline push
                     // produces history of:
-                    //   N:   user/tool_result (synthetic error)
-                    //   N+1: assistant/tool_use(s)
+                    // N: user/tool_result (synthetic error)
+                    // N+1: assistant/tool_use(s)
                     // ...which violates Anthropic's strict
                     // tool_use/tool_result adjacency.
-                    //
                     // Capture the pre-call length, then drain any
                     // pushes after preparation. Successful prep
                     // makes no pushes (the plan is fed to the
@@ -601,14 +590,11 @@ impl QueryEngine {
     /// transcript keeps Anthropic's strict tool_use/tool_result
     /// adjacency, push the drained outcomes, then write the canonical
     /// user-cancel marker.
-    ///
     /// Called from `run_session_loop` immediately after
     /// `consume_stream` returns when `self.cancel.is_cancelled()` is
     /// true. Caller `continue`s the outer turn loop after this
     /// returns so the top-of-loop cancel check builds the proper
     /// `QueryResult { cancelled: true }`.
-    ///
-    /// TS parity: `query.ts:1015-1028`
     /// (`yieldMissingToolResultBlocks` after abort).
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn cancel_epilogue<F, Fut>(
@@ -692,10 +678,9 @@ impl QueryEngine {
         // and stored on the typed marker — downstream renders read the
         // field rather than recomputing from running-tool state. See
         // `engine-tui-unified-transcript-plan.md` §7.2.
-        //
         // Steering exception: on a submit-interrupt the queued user message
         // provides continuity, so skip the redundant standalone marker (TS
-        // `query.ts:1046` parity). The per-tool interrupt `tool_result`s
+        //  parity). The per-tool interrupt `tool_result`s
         // synthesized above are kept (required for tool_use pairing).
         if crate::history_sync::is_steering_interrupt(self.turn_abort.reason()) {
             tracing::debug!(

@@ -50,11 +50,9 @@ pub struct AutoModeContext<'a> {
 }
 
 /// Attempt auto-mode classification for a tool call.
-///
 /// Returns `None` when auto-mode is inactive (caller falls through to the
 /// interactive permission dialog). Returns `Some(decision)` when auto-mode
 /// handled the request.
-//
 // Each parameter carries a distinct piece of caller-side state (rules,
 // state machines, denial cache, classifier callback). Bundling them
 // would just rename the noise — kept individual to preserve clarity.
@@ -77,9 +75,9 @@ where
     Fut: Future<Output = Result<String, String>>,
 {
     // 1. Not auto for THIS call → None (fallthrough to interactive). `auto_active`
-    //    is the per-call decision the caller derives from the permission
-    //    context mode (TS parity), NOT a shared session-global flag — so a
-    //    concurrent engine build can't race the classifier off for a subagent.
+    // is the per-call decision the caller derives from the permission
+    // context mode, NOT a shared session-global flag — so a concurrent
+    // engine build can't race the classifier off for a subagent.
     if !auto_active {
         tracing::debug!(
             tool_name,
@@ -89,17 +87,17 @@ where
     }
 
     // 2. Safe tool allowlist → Allow immediately (skip classifier). Any
-    //    allowed action also clears the consecutive-denial streak so a few
-    //    safe calls between blocks don't trip the fallback.
+    // allowed action also clears the consecutive-denial streak so a few
+    // safe calls between blocks don't trip the fallback.
     if is_safe_tool(tool_name) {
         denial_tracker.reset_consecutive();
         return Some(allow());
     }
 
     // 3. File-modifying tools: path-safety immunity + safe-in-cwd fast path.
-    //    Replaces the old "relative or /tmp → allow" heuristic that
-    //    auto-allowed CWD-escaping traversal and overrode non-classifier-
-    //    approvable safety blocks.
+    // Replaces the old "relative or /tmp → allow" heuristic that
+    // auto-allowed CWD-escaping traversal and overrode non-classifier-
+    // approvable safety blocks.
     if is_file_modifying_tool(tool_name) {
         if let Some(path) = extract_file_modifying_path(tool_name, input) {
             match file_safety_decision(&path, auto_ctx) {
@@ -132,7 +130,7 @@ where
         return Some(allow());
     } else if classify_for_auto_mode(tool_name, input, is_read_only) == AutoModeDecision::Allow {
         // 4. Non-file heuristic fast path (read-only tools, task/plan tools,
-        //    read-only Bash). Allowed → clear the streak.
+        // read-only Bash). Allowed → clear the streak.
         denial_tracker.reset_consecutive();
         return Some(allow());
     }
@@ -142,8 +140,8 @@ where
         classify_yolo_action(messages, tool_name, input, rules, classify_fn, projector).await;
 
     // 6. Classifier could not produce a usable verdict.
-    //    Transcript-too-long is deterministic (retry can't help) → manual
-    //    approval, or abort the turn in headless.
+    // Transcript-too-long is deterministic (retry can't help) → manual
+    // approval, or abort the turn in headless.
     if result.transcript_too_long {
         let message = "Auto-mode classifier transcript exceeded the context window — \
              manual approval required"
@@ -161,11 +159,11 @@ where
             detail: None,
         });
     }
-    //    Transient outage. Default posture is fail closed (deny even in
-    //    interactive mode). The `classifier_unavailable_fail_open` setting
-    //    (default false = fail closed) can opt into fail-open behavior,
-    //    which restores a manual prompt when interactive; headless always
-    //    denies regardless.
+    // Transient outage. Default posture is fail closed (deny even in
+    // interactive mode). The `classifier_unavailable_fail_open` setting
+    // (default false = fail closed) can opt into fail-open behavior,
+    // which restores a manual prompt when interactive; headless always
+    // denies regardless.
     if result.unavailable {
         let avoid_prompts =
             !rules.classifier_unavailable_fail_open || auto_ctx.avoid_permission_prompts;
@@ -307,7 +305,6 @@ fn scan_path(candidate: &str) -> Scan {
 }
 
 /// Decide a file-modifying tool's auto-mode fate from path safety + cwd.
-///
 /// Scans the RAW path first — lexical attacks (`..` traversal, `$VAR` /
 /// backtick shell expansion, `~user` tilde, NTFS ADS) are erased by path
 /// normalization, so they must be caught before resolution. Then, when the

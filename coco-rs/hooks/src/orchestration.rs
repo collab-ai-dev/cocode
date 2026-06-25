@@ -1451,7 +1451,7 @@ pub struct OrchestrationContext {
     /// Glob-style allowlist for HTTP hook URLs from policy settings
     /// (`allowedHttpHookUrls`). `None` = no restriction; `Some(empty)`
     /// = block every HTTP hook; `Some(non-empty)` = URL must match one
-    /// pattern. Parity with `execHttpHook.ts:137-145`. Patterns support
+    /// pattern. Patterns support
     /// `*` as wildcard.
     pub http_url_allowlist: Option<Vec<String>>,
     /// Policy-level env-var allowlist

@@ -56,12 +56,11 @@ pub(super) fn try_render(
                 lines.extend(rendered);
                 return Some(());
             }
-            // One logical message = one `❯` (mirrors TS `HighlightedThinkingText`,
+            // One logical message = one `❯` (,
             // which renders the pointer once and lets the whole multi-line text
             // flow under it). Continuation rows align to the content column with a
             // 2-space gutter, so a recalled multi-message edit reads as a single
             // prompt with line breaks — not several `❯` submissions.
-            //
             // Subtle background tint behind user prompt rows. The background must
             // paint the full row width rather than just the glyphs — the bg must
             // therefore live on the `Line`, not on individual spans.
@@ -90,7 +89,6 @@ pub(super) fn try_render(
             // CONTENT, not collapsed `# [meta]` reminders — the TUI defers
             // meta-ness to the engine's `is_meta_message` (see
             // `presentation::transcript::is_meta`).
-            //
             // Memory injections (nested CLAUDE.md / relevant memories) collapse to
             // a compact `◆ memory · <path>` chip: a width-1 marker aligned to the
             // column-2 gutter, distinct from tool/assistant dots by shape + dim

@@ -1,5 +1,5 @@
 //! The in-VM determinism shim and intrinsic hardening, ported verbatim from
-//! claude-code's `runtime.ts` (`DETERMINISM_SHIM` obf `N0p`@416417,
+//! Determinism shim (
 //! `VM_HARDENING_PROGRAM` obf `KGe`@411340). These are JS programs evaluated in
 //! the workflow context at init — the same technique the reference uses, engine
 //! independent. They are defense-in-depth alongside the *static* AST check in

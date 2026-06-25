@@ -10,13 +10,13 @@
 //! Also exposes:
 //!
 //! * [`KeybindingHandle::tick`] — drive the 1 s chord-timeout from
-//!   the TUI animation/poll loop.
+//! the TUI animation/poll loop.
 //! * [`KeybindingHandle::pending_display`] — `"ctrl+x …"` hint for the
-//!   status bar.
+//! status bar.
 //! * [`KeybindingHandle::display_for`] — render a shortcut hint for an
-//!   action so footer/help text reflects user customizations.
+//! action so footer/help text reflects user customizations.
 //! * [`KeybindingHandle::warnings`] — typed validation issues from the
-//!   most recent load.
+//! most recent load.
 
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -71,7 +71,6 @@ impl KeybindingHandle {
     /// Build a handle from an initial [`KeybindingsLoadResult`] and a
     /// running [`KeybindingsWatcher`]. Spawns a tokio task that
     /// rebuilds the resolver on each hot-reload event.
-    ///
     /// The handle is returned immediately; updates happen in the
     /// background.
     pub fn with_watcher(initial: KeybindingsLoadResult, watcher: &KeybindingsWatcher) -> Self {
@@ -121,7 +120,6 @@ impl KeybindingHandle {
     /// Drive the chord-timeout from the TUI's animation tick. Returns
     /// `true` if a pending chord was just cancelled — the caller
     /// should redraw to clear the status indicator.
-    ///
     /// Cheap when no chord is pending: a read-lock fast path avoids
     /// taking the write lock 4×/sec under the TUI tick interval. Only
     /// upgrades to a write lock when there's actually a pending chord
@@ -209,7 +207,6 @@ fn parse_default_blocks() -> Vec<Keybinding> {
 
 /// Map the coarse TUI [`crate::keybinding_bridge::KeybindingContext`]
 /// to the ordered context stack the resolver expects.
-///
 /// Most-specific first, with `Global` always last so global shortcuts
 /// remain reachable from every context.
 pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
@@ -269,7 +266,7 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
         // `update::background_tasks::intercept` sees them as `Cursor*`.
         BackgroundTasks => vec![KbContext::Global],
         // Task sits between Chat and Global so `ctrl+b` (defaults.rs:200)
-        // resolves while typing in the composer. TS `defaultBindings.ts:181-188`
+        // resolves while typing in the composer.
         // makes the Task context active whenever a backgroundable task exists;
         // we accept it unconditionally because `BackgroundAllTasks` is a no-op
         // when no foreground task is running.

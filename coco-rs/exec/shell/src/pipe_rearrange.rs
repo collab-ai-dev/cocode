@@ -5,7 +5,7 @@
 //! attaches `eval`'s stdin (which is `/dev/null`) to the *last* command in
 //! the pipeline, not the first. `rg` (first command) inherits the parent
 //! shell's stdin from the spawn — an open pipe with no writer — and blocks.
-//! See anthropics/claude-code issues #9189 / #9732.
+//! Pipe rearrangement for safer shell execution.
 //!
 //! Smart approach: parse the command into shell tokens, find the first `|`,
 //! insert `< /dev/null` between the first command and the pipe so the

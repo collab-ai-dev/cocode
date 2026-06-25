@@ -71,13 +71,13 @@ pub use validation::{AgentDefinitionValidator, ValidationDiagnostic, ValidationE
 pub use writable::{next_unused_color, resolve_writable_agent_dir};
 
 /// One-shot built-in agent types — `ONE_SHOT_BUILTIN_AGENT_TYPES`
-/// (`constants.ts:9-12`). **Case-sensitive** — `"explore"`/`"plan"` do not
+/// **Case-sensitive** — `"explore"`/`"plan"` do not
 /// hit. The set short-circuits the SendMessage continuation trailer in
 /// AgentTool result rendering.
 pub const ONE_SHOT_BUILTIN_AGENT_TYPES: &[&str] = &["Explore", "Plan"];
 
 /// Empty-content marker injected by AgentTool when the subagent returned
-/// no text. **Exact** literal (`AgentTool.tsx:1347-1350`).
+/// no text. **Exact** literal.
 pub const EMPTY_AGENT_OUTPUT_MARKER: &str = "(Subagent completed but returned no output.)";
 
 #[cfg(test)]

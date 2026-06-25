@@ -10,21 +10,19 @@ use super::StructuredOutputPayload;
 use crate::AttachmentKind;
 
 /// Result of a tool execution.
-///
 /// **Effect channels**:
 /// - `app_state_patch` — a queued mutation of shared `ToolAppState`
-///   that the executor applies post-execute (serial) or post-batch
-///   (concurrent). Tools MUST NOT mutate shared `ToolAppState` inline
-///   during `execute()` — `ToolUseContext.app_state` is an
-///   [`AppStateReadHandle`](crate::AppStateReadHandle) with no
-///   `.write()` method, so the compiler enforces the discipline.
+/// that the executor applies post-execute (serial) or post-batch
+/// (concurrent). Tools MUST NOT mutate shared `ToolAppState` inline
+/// during `execute()` — `ToolUseContext.app_state` is an
+/// [`AppStateReadHandle`](crate::AppStateReadHandle) with no
+/// `.write()` method, so the compiler enforces the discipline.
 /// - `permission_updates` — declarative permission-rule deltas
-///   (typically `PermissionUpdate::AddRules` with destination
-///   `Command` for skill `allowed-tools`). Applied via the executor's
-///   permission-rule handle so subsequent turns see the new rules.
-///   TS parity: `SkillTool` returns a `contextModifier` that wraps
-///   `getAppState` to inject `alwaysAllowRules.command`.
-///
+/// (typically `PermissionUpdate::AddRules` with destination
+/// `Command` for skill `allowed-tools`). Applied via the executor's
+/// permission-rule handle so subsequent turns see the new rules.
+/// `SkillTool` returns a `contextModifier` that wraps
+/// `getAppState` to inject `alwaysAllowRules.command`.
 /// **SDK structured output**: tools surface `structured_output` by
 /// pushing an `AttachmentMessage::silent_structured_output(...)`
 /// attachment onto [`Self::new_messages`]. The tool-outcome builder
@@ -32,16 +30,13 @@ use crate::AttachmentKind;
 /// There is no dedicated field — that would force every literal
 /// constructor to repeat `structured_output: None,`. Use
 /// [`Self::with_structured_output`] for ergonomic construction.
-///
 /// **UI display data**: tools that have compact, typed display-only
 /// context can attach it via [`Self::with_display_data`]. The
 /// tool-outcome builder copies it onto `ToolResultMessage.display_data`;
 /// it must not replace model-facing output rendered from `data`.
-///
-/// TS parity: `orchestration.ts:queuedContextModifiers` — per-tool
+/// Per-tool
 /// `(ctx) => newCtx` modifiers keyed by `tool_use_id` and applied
 /// after the concurrent batch finishes.
-///
 /// Not `Clone` / `Serialize` / `Deserialize`: the `app_state_patch`
 /// closure can't participate in those traits. `ToolResult<T>` is
 /// always consumed by the executor (applied + converted to
@@ -124,7 +119,7 @@ impl<T> ToolResult<T> {
     /// via [`Self::with_structured_output`] or pushed manually onto
     /// `new_messages`. Returns the data clone of the most-recent
     /// matching attachment so multiple writes in one result behave
-    /// last-writer-wins, matching TS `toolExecution.ts:1272`.
+    /// last-writer-wins semantics.
     pub fn structured_output(&self) -> Option<Value> {
         self.new_messages.iter().rev().find_map(|msg| match msg {
             Message::Attachment(att) if att.kind == AttachmentKind::StructuredOutput => {

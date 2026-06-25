@@ -1,5 +1,4 @@
-//! `/stuck` — get-unstuck coach: diagnose the blocker and propose a different angle. Mirrors claude-code's stuck.ts.
-//! Deliberate divergence: claude-code's /stuck is ant-internal Slack/process tooling; coco ships a generic get-unstuck coach.
+//! `/stuck` — get-unstuck coach: diagnose the blocker and propose a different angle.
 
 pub const PROMPT: &str = r#"You've been called because the user (or an agent) is stuck. Help get unstuck:
 

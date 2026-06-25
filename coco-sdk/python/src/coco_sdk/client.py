@@ -580,8 +580,7 @@ class CocoClient:
     # async-client-request variants of hook + MCP-route replies. They
     # are now dead — `hook/callback` and `mcp/routeMessage` responses
     # ride the synchronous JSON-RPC reply path through
-    # `_handle_server_request` below, mirroring TS
-    # `cli/structuredIO.ts::createHookCallback` exactly.
+    # `_handle_server_request` below.
 
     # ── Session management ───────────────────────────────────────────
 
@@ -882,7 +881,7 @@ class CocoClient:
         callback_id: str | None = None,
     ) -> dict[str, Any]:
         """Coerce a hook handler's return value into the canonical
-        ``SdkHookOutput`` wire shape (camelCase, TS-mirrored).
+        ``SdkHookOutput`` wire shape (camelCase).
 
         ``None`` and unrecognized return types become ``{}`` —
         TS-canonical "no opinion, continue normally". The previous

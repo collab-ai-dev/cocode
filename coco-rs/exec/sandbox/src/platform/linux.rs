@@ -65,7 +65,7 @@ impl SandboxPlatform for LinuxSandbox {
         // Per-command writable binds — shell-executor passes the
         // freshly-allocated tmpdir so the inner command can persist
         // its cwd-tracking file there and the parent can read it.
-        // TS parity: `bashProvider.ts:235-247` sandboxTmpDir.
+        // sandbox temp dir.
         for path in extra_writable_binds {
             let path_str = path.display().to_string();
             bwrap_args.extend(["--bind".to_string(), path_str.clone(), path_str]);
@@ -91,11 +91,10 @@ impl SandboxPlatform for LinuxSandbox {
             .collect();
 
         // Two-stage sandbox pattern:
-        //   Stage 1 (outer): bwrap provides namespace isolation
-        //   Stage 2 (inner): in-process seccomp via arg0 dispatch
-        //
-        // Without seccomp:  bwrap [args] -- <program> <args>
-        // With seccomp:     bwrap [args] -- <coco> --apply-seccomp <mode> -- <program> <args>
+        // Stage 1 (outer): bwrap provides namespace isolation
+        // Stage 2 (inner): in-process seccomp via arg0 dispatch
+        // Without seccomp: bwrap [args] -- <program> <args>
+        // With seccomp: bwrap [args] -- <coco> --apply-seccomp <mode> -- <program> <args>
         *cmd = tokio::process::Command::new(&bwrap_path);
         for arg in &bwrap_args {
             cmd.arg(arg);
@@ -121,7 +120,6 @@ impl SandboxPlatform for LinuxSandbox {
 }
 
 /// Build bubblewrap arguments from the sandbox configuration.
-///
 /// Follows codex-rs mount ordering best practices:
 /// 1. Safety flags and namespace isolation
 /// 2. Base filesystem (read-only root)
@@ -213,7 +211,6 @@ fn build_bwrap_args(config: &SandboxConfig) -> Vec<String> {
     // over each denied path — same trick codex-rs uses for symlink attack
     // mitigation. Globs are expanded under the writable roots first
     // (bounded by `glob_scan_max_depth`).
-    //
     // `allow_read` carve-outs: bwrap can't do precision per-file deny
     // within a directory bind, so if an allow_read path is the same as or
     // a descendant of a deny path, we skip the deny (the broader allow
@@ -277,7 +274,6 @@ fn build_bwrap_args(config: &SandboxConfig) -> Vec<String> {
 }
 
 /// Probe whether `--proc /proc` is available in the current environment.
-///
 /// Some restrictive container runtimes (Docker with `--security-opt=no-new-privileges`,
 /// certain Kubernetes pod security policies) block the proc mount. Adopted from
 /// codex-rs's preflight detection: run a minimal bwrap command and check if it
@@ -318,12 +314,10 @@ fn proc_mount_available() -> bool {
 }
 
 /// Find symlinks within protected subpaths that could be used for escape attacks.
-///
 /// Walks each protected subpath component-by-component (adopted from codex-rs)
 /// to detect symlinks at any depth, not just immediate children. A sandboxed
 /// process could replace a file in a writable area with a symlink pointing
 /// outside the sandbox. Detecting these early lets us mask them with `/dev/null`.
-///
 /// Returns paths that should be masked with /dev/null.
 fn find_attack_symlinks(root: &WritableRoot) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();

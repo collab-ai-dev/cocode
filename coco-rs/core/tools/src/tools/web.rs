@@ -202,7 +202,7 @@ pub(super) fn clear_web_fetch_cache() {
 ///
 /// - Entries containing `/` are **host + path-prefix** entries. For example
 ///   `github.com/anthropics` matches `https://github.com/anthropics` and
-///   `https://github.com/anthropics/claude-code` but NOT
+///   `https://github.com/anthropics/coco` but NOT
 ///   `https://github.com/anthropics-evil/malware`. Segment boundary is
 ///   enforced (exact match or `prefix + /`).
 ///

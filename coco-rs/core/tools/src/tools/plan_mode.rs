@@ -100,7 +100,6 @@ pub fn build_enter_plan_mode_patch(current_mode: PermissionMode) -> coco_types::
 pub struct EnterPlanModeTool;
 
 /// Full prompt text for the model.
-///
 /// The Ant arm and the `USER_TYPE === 'ant'` dispatcher are intentionally NOT
 /// ported (root `CLAUDE.md` "no Ant gates"). Interpolates
 /// `ToolName::AskUserQuestion.as_str()` so a future tool rename
@@ -354,7 +353,6 @@ Remember: DO NOT write or edit any files yet. This is a read-only exploration an
 pub struct ExitPlanModeTool;
 
 /// Full prompt text for the model.
-///
 /// Interpolates `ToolName::AskUserQuestion.as_str()` so a future rename of
 /// the AskUserQuestion tool propagates without a doc edit.
 fn exit_plan_mode_prompt() -> String {
@@ -409,7 +407,6 @@ pub struct ExitPlanAllowedPrompt {
 }
 
 /// Typed input for [`ExitPlanModeTool`].
-///
 /// The only accepted field is `allowedPrompts`. Plan content for display is
 /// carried in [`PermissionRequestDetail`], and approval choices/edits are
 /// carried in `ToolUseContext.permission_resolution_detail`.
@@ -545,7 +542,7 @@ impl Tool for ExitPlanModeTool {
     /// Model-facing spec exposes only `allowedPrompts`. The
     /// `allowedPrompts` item shape (`{ tool: enum["Bash"], prompt }`, both
     /// required) is derived from [`ExitPlanAllowedPrompt`]. The runtime schema
-    /// intentionally permits additional passthrough fields, mirroring TS while
+    /// intentionally permits additional passthrough fields, while
     /// typed execution consumes only `allowedPrompts`.
     async fn tool_spec(
         &self,
@@ -589,7 +586,6 @@ impl Tool for ExitPlanModeTool {
     }
 
     /// Reject if not currently in plan mode.
-    ///
     /// Teammates bypass validation — their AppState may show the leader's mode,
     /// so `isPlanModeRequired()` is the real source of truth for teammates.
     fn validate_input(&self, _input: &ExitPlanModeInput, ctx: &ToolUseContext) -> ValidationResult {
@@ -612,7 +608,6 @@ impl Tool for ExitPlanModeTool {
     }
 
     /// Non-teammate contexts require user confirmation to exit plan mode.
-    ///
     /// Teammates bypass the permission UI entirely. The call() method handles
     /// their behavior: isPlanModeRequired() sends plan_approval_request to
     /// leader, otherwise exits locally.
@@ -685,12 +680,10 @@ impl Tool for ExitPlanModeTool {
             .is_some_and(|t| t.is_enabled(ctx));
 
         // ── Teammate branch — write plan_approval_request to leader inbox ──
-        //
         // If the caller is a teammate whose role requires plan approval, we
         // don't let them exit locally — the plan is serialized and handed off
         // to the team lead via mailbox. The leader sees it, decides, and writes
         // a plan_approval_response back to this teammate's inbox.
-        //
         // Gate on `is_teammate && plan_mode_required`. Voluntary teammates
         // (is_teammate=true but plan_mode_required=false) fall through to the
         // normal exit path — they restore their mode locally just like a
@@ -786,11 +779,9 @@ impl Tool for ExitPlanModeTool {
         // All mode-related writes happen here: flips mode → restoreMode,
         // clears prePlanMode, toggles strippedDangerousRules, and sets the
         // exit banner latches.
-        //
         // Source of truth: `app_state.pre_plan_mode` (set by
         // EnterPlanMode.execute). Fall back to `ctx.permission_context`
         // for callers without app_state.
-        //
         // Auto-mode-exit banner: fires when auto was effectively active
         // during the plan but we're not restoring to Auto. In Rust
         // "auto was active" = `stripped_dangerous_rules.is_some()` OR

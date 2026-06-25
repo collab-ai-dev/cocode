@@ -1,4 +1,4 @@
-//! `/claude-in-chrome` — Chrome browser automation guidance for the claude-in-chrome MCP tools. Mirrors claude-code's claudeInChrome.ts.
+//! `/claude-in-chrome` — Chrome browser automation guidance for the claude-in-chrome MCP tools.
 
 pub const PROMPT: &str = r#"# Claude in Chrome browser automation
 

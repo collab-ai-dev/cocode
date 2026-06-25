@@ -2,10 +2,10 @@
 //!
 //! Owns:
 //! - [`SwarmAgentHandle::spawn_subagent`] — applies worktree isolation,
-//!   resolves the spawn-time identity
-//!   (`coco_subagent::resolve_subagent_selection`), registers user-visible
-//!   LocalAgent tasks in TaskManager, builds the `AgentQueryConfig`, and
-//!   dispatches sync vs background.
+//! resolves the spawn-time identity
+//! (`coco_subagent::resolve_subagent_selection`), registers user-visible
+//! LocalAgent tasks in TaskManager, builds the `AgentQueryConfig`, and
+//! dispatches sync vs background.
 //! - [`spawn_failed`] — tiny shorthand for sync-path early failures.
 //!
 //! Pure-logic helpers live in `core/subagent`. Handoff classification
@@ -22,7 +22,6 @@ use coco_tool_runtime::AgentSpawnStatus;
 use super::SwarmAgentHandle;
 
 /// Build an `OrchestrationContext` for subagent-spawn hook firing.
-///
 /// Standalone so the bg path can build it inside a detached task
 /// without holding `&SwarmAgentHandle`. The hook system's full
 /// feature surface (project_dir resolution, per-session disable
@@ -230,7 +229,6 @@ impl SwarmAgentHandle {
     /// Register frontmatter hooks scoped to this spawn's agent_id.
     /// Returns `true` if any hooks were registered (caller should
     /// arrange `clear_frontmatter_hooks(agent_id)` at SubagentStop).
-    ///
     /// The `def.hooks` field is `serde_json::Value` because the hooks
     /// shape is an event-keyed map of arrays — same as `Settings.hooks`.
     /// We parse via `coco_hooks::load_hooks_from_config` and stamp
@@ -260,7 +258,7 @@ impl SwarmAgentHandle {
                 // `is_agent: true` — subagent termination fires
                 // SubagentStop, not Stop, so frontmatter Stop hooks
                 // need rewriting (parity with TS
-                // registerFrontmatterHooks.ts:38-45).
+                // (registers frontmatter hooks).
                 registry.register_for_agent(agent_id.to_string(), hooks, /*is_agent*/ true);
                 tracing::debug!(
                     agent_type = %def.agent_type,
@@ -283,7 +281,6 @@ impl SwarmAgentHandle {
     }
 
     /// Symmetrical cleanup: drop the per-agent hook bucket.
-    ///
     /// **W6.2 full**: kept (rather than deleted as "dead code")
     /// because the bg path's `tokio::spawn` closure uses
     /// `registry.clear_agent_scope` directly via a cloned Arc, and
@@ -301,14 +298,13 @@ impl SwarmAgentHandle {
     /// Initialise per-agent MCP servers from `def.mcp_servers`. For
     /// each spec:
     /// - `Name(s)` (string-ref): no mutation — we trust the parent's
-    ///   pre-existing connection. The model just sees the server's
-    ///   tools through the inherited `McpHandle`.
+    /// pre-existing connection. The model just sees the server's
+    /// tools through the inherited `McpHandle`.
     /// - `Inline(config)`: call `add_dynamic_server(name, config)` on
-    ///   the handle. Track the new name under `agent_id` so
-    ///   `cleanup_per_agent_mcp` removes only the newly-created ones.
-    ///   Cleanup skips string-ref entries (they point at parent-shared
-    ///   connections that must not be torn down).
-    ///
+    /// the handle. Track the new name under `agent_id` so
+    /// `cleanup_per_agent_mcp` removes only the newly-created ones.
+    /// Cleanup skips string-ref entries (they point at parent-shared
+    /// connections that must not be torn down).
     /// Any inline-add failure logs at warn and continues — a failed
     /// server logs and the agent runs without that one.
     pub(super) async fn initialize_per_agent_mcp(
@@ -375,7 +371,6 @@ impl SwarmAgentHandle {
     /// Tear down dynamically-added MCP servers registered for this
     /// `agent_id`. Mirror of [`Self::initialize_per_agent_mcp`]. No-op
     /// when nothing was tracked.
-    ///
     /// **W6.2 full**: see `clear_frontmatter_hooks` — both detached
     /// spawn paths now do this inline via cloned Arcs. Wrapper kept
     /// for future error-path callers.
@@ -403,7 +398,6 @@ impl SwarmAgentHandle {
     /// `<preloaded-skill name="...">` XML blocks. Missing skills /
     /// missing handle / read errors are logged at debug and silently
     /// dropped — the spawn proceeds with whatever loaded.
-    ///
     /// `read_skill_body` enforces the author / runtime gates so
     /// `disable_model_invocation: true` skills and `off`-overridden
     /// skills are filtered out automatically.
@@ -453,7 +447,6 @@ impl SwarmAgentHandle {
     /// Fire SubagentStop hooks. Errors are logged and swallowed — a
     /// failed stop hook must not gate the spawn's response. Stop hooks
     /// run for completion / failure / cancel.
-    ///
     /// **W6.2 full**: see `clear_frontmatter_hooks` — both detached
     /// spawn paths now invoke `fire_subagent_stop_for_task` directly.
     /// Wrapper kept for early-failure paths that have `&self` in scope.
@@ -492,13 +485,11 @@ impl SwarmAgentHandle {
 }
 
 /// Typed outcome carried on the engine-driver → inline-caller oneshot.
-///
 /// Replaces the previous "drop the channel when handing off to the bg
 /// path" mechanism — that approach made `Err(RecvError)` ambiguous
 /// (true panic vs orderly bg-handoff). With a typed sum the channel
 /// is always sent on; `Err(RecvError)` is now exclusively a panic
 /// signal.
-///
 /// Tokio's oneshot semantics force us to model the "engine completed
 /// but caller already moved on" case explicitly.
 #[derive(Debug)]
@@ -507,7 +498,6 @@ enum EngineOutcome {
     /// response directly. `complete_silent` has already transitioned
     /// the task to its terminal state without pushing a notification
     /// envelope (the model gets the result via the tool result).
-    ///
     /// `AgentSpawnResponse` is ~300 bytes (`Vec<PathBuf>`,
     /// `HashMap<ToolName, i32>`, multiple `Option<String>`); boxing
     /// keeps both variants the same shallow size so the small
@@ -929,21 +919,17 @@ impl SwarmAgentHandle {
         // definition (whether loaded from .md/built-in catalog or
         // synthesized in-process by code-driven forks like the
         // memory crate's extract/dream/session services).
-        //
-        //   model:  definition.model > role-resolved (via ModelSpec)
-        //   role:   definition.model_role > subagent_type → role
-        //         > ModelRole::Subagent
-        //
+        // model: definition.model > role-resolved (via ModelSpec)
+        // role: definition.model_role > subagent_type → role
+        // > ModelRole::Subagent
         // The model-facing AgentTool schema does NOT expose `model`
         // or `model_role` — multi-LLM design rules out LLM-driven
         // model selection (LLM has no awareness of operator's
         // provider/model_id mappings).
-        //
         // The definition flows through `AgentSpawnRequest.definition`,
         // populated either by AgentTool from `ctx.agent_catalog` (LLM
         // path) or by internal callers constructing a synthetic def
         // at spawn time (memory crate forks).
-        //
         // When `definition` is `None` (test contexts), the resolver
         // degrades cleanly to subagent_type→role mapping.
         let agent_type_id: Option<coco_types::AgentTypeId> = request
@@ -957,22 +943,20 @@ impl SwarmAgentHandle {
 
         // Resolve the prior-history + system-prompt pair from the
         // requested spawn mode:
-        //
-        // - Fresh     → no history; system prompt seeded from
-        //               `definition.system_prompt`. Built-ins populate
-        //               this via [`coco_subagent::builtin_prompts`];
-        //               markdown agents via the body of their `.md`
-        //               file. Without this, the child would fall
-        //               through to the engine's generic default
-        //               instead of receiving its role instructions.
-        // - Fork      → parent's pre-rendered system-prompt bytes
-        //               verbatim (cache parity), parent history threaded
-        //               through with real `tool_result` bodies intact.
-        // - Resume    → seed from `definition.system_prompt` like
-        //               Fresh; prior history kept verbatim (NO
-        //               placeholder rewrite — the child needs real
-        //               tool outputs to continue).
-        //
+        // - Fresh → no history; system prompt seeded from
+        // `definition.system_prompt`. Built-ins populate
+        // this via [`coco_subagent::builtin_prompts`];
+        // markdown agents via the body of their `.md`
+        // file. Without this, the child would fall
+        // through to the engine's generic default
+        // instead of receiving its role instructions.
+        // - Fork → parent's pre-rendered system-prompt bytes
+        // verbatim (cache parity), parent history threaded
+        // through with real `tool_result` bodies intact.
+        // - Resume → seed from `definition.system_prompt` like
+        // Fresh; prior history kept verbatim (NO
+        // placeholder rewrite — the child needs real
+        // tool outputs to continue).
         // `preserve_tool_use_results` flips on for Fork and Resume so
         // downstream compaction doesn't strip the inherited results.
         // Resolve cwd + model once — both feed into env_info / CLAUDE.md
@@ -981,21 +965,18 @@ impl SwarmAgentHandle {
             .clone()
             .unwrap_or_else(|| std::path::PathBuf::from(&self.cwd));
         // Model resolution by spawn mode:
-        //
         // - **Fork**: pin to the snapshot's `api_model_name` (carried
-        //   non-optionally inside `SpawnMode::Fork`). The whole point
-        //   of fork is prompt-cache parity; reading live
-        //   `RuntimeConfig` here would silently bust the cache after
-        //   a hot-reload between the parent's last turn and this
-        //   spawn. Used for BOTH env-block rendering AND the actual
-        //   `AgentQueryConfig.model_selection` below — they must agree.
-        //
+        // non-optionally inside `SpawnMode::Fork`). The whole point
+        // of fork is prompt-cache parity; reading live
+        // `RuntimeConfig` here would silently bust the cache after
+        // a hot-reload between the parent's last turn and this
+        // spawn. Used for BOTH env-block rendering AND the actual
+        // `AgentQueryConfig.model_selection` below — they must agree.
         // - **Resume**: rebuild fresh from current runtime. Resume
-        //   restarts a previously-backgrounded agent in a (possibly
-        //   different) process; pinning to a snapshot captured *now*
-        //   at engine bootstrap would conflate "current parent" with
-        //   "original spawn" and is meaningless.
-        //
+        // restarts a previously-backgrounded agent in a (possibly
+        // different) process; pinning to a snapshot captured *now*
+        // at engine bootstrap would conflate "current parent" with
+        // "original spawn" and is meaningless.
         // - **Fresh**: `def.model` > role-resolved primary.
         // Fork pins the model to the parent's captured identity for
         // prompt-cache parity. We carry BOTH the `api_model_name` (for the
@@ -1027,15 +1008,14 @@ impl SwarmAgentHandle {
         // selection feeds BOTH the `<env>` block display AND the engine
         // factory's routing, so the displayed model can never disagree
         // with the one actually resolved.
-        //
         // - **Fork**: pin the parent's exact (provider, model) for
-        //   prompt-cache parity (see `fork_pin` above).
+        // prompt-cache parity (see `fork_pin` above).
         // - **Plan mode (non-fork)**: promote to `ModelRole::Plan` so a
-        //   custom agent called with `mode: plan` reasons on the Plan
-        //   model regardless of its declared role (keeping any explicit
-        //   definition model as the primary).
+        // custom agent called with `mode: plan` reasons on the Plan
+        // model regardless of its declared role (keeping any explicit
+        // definition model as the primary).
         // - **Fresh/Resume**: the spawn-resolved selection
-        //   (`definition.model` > role-resolved).
+        // (`definition.model` > role-resolved).
         let effective_model_selection = if let Some(sel) = fork_model_selection {
             sel
         } else if request.mode == Some(coco_types::PermissionMode::Plan)
@@ -1087,13 +1067,12 @@ impl SwarmAgentHandle {
         // Build the Fresh/Resume system prompt via the shared
         // `coco_context::build_system_prompt` assembler — same code path
         // the leader uses. This restores:
-        //   - <env>...</env> block (Working directory, git repo Y/N,
-        //     Platform, Shell, OS Version, model line, knowledge cutoff)
-        //   - 4 AGENT_NOTES bullets (absolute paths, no emojis, …)
-        //   - CLAUDE.md discovery (gated by `def.omit_claude_md`)
-        //   - Memory block (appended at the correct cache-broken
-        //     position)
-        //
+        // - <env>...</env> block (Working directory, git repo Y/N,
+        // Platform, Shell, OS Version, model line, knowledge cutoff)
+        // - 4 AGENT_NOTES bullets (absolute paths, no emojis, …)
+        // - CLAUDE.md discovery (gated by `def.omit_claude_md`)
+        // - Memory block (appended at the correct cache-broken
+        // position)
         // For `coco-guide` specifically: the agent's static identity is
         // augmented with a per-spawn dynamic context block listing the
         // user's custom skills / agents / MCP servers / plugin commands /
@@ -1180,7 +1159,7 @@ impl SwarmAgentHandle {
         // user turn gets wrapped in `<fork-boilerplate>` XML so the
         // recursion guard ([`coco_subagent::is_in_fork_child`]) can
         // detect fork-of-fork and the worker receives its rules. TS
-        // parity: `forkSubagent.ts::buildChildMessage`.
+        //
         let (system_prompt, fork_context_messages, preserve_tool_use_results, is_fork) =
             match &request.spawn_mode {
                 coco_tool_runtime::SpawnMode::Fork {
@@ -1231,7 +1210,7 @@ impl SwarmAgentHandle {
         // Live transcript: when this spawn drives a periodic AgentSummary
         // timer, hand the child engine a shared, per-turn snapshot of its
         // message history so the timer summarizes the real transcript
-        // (TS `agentSummary.ts` `getAgentTranscript`) rather than the raw
+        // The formatted transcript rather than the raw
         // output buffer. `None` when summaries are off → the engine skips the
         // snapshot push entirely (zero cost on the non-summarized hot path).
         // The same handle flows into `spawn_background` via `query_config`.
@@ -1335,7 +1314,7 @@ impl SwarmAgentHandle {
                         denied.push(name.to_string());
                     }
                 }
-                // Async clamp (TS `filterToolsForAgent` parity): a
+                // Async clamp: a
                 // background subagent is restricted to the async-safe tool
                 // set — every non-async-safe built-in is denied (MCP tools
                 // pass through). Coordinator-mode spawns already narrow via
@@ -1459,7 +1438,6 @@ impl SwarmAgentHandle {
         }
 
         // ── Frontmatter hooks registration ──
-        //
         // Register `def.hooks` under the spawn's agent_id so they're
         // visible to every event firing during this spawn. Cleared at
         // SubagentStop below. No-op when def.hooks is null / hook
@@ -1468,7 +1446,6 @@ impl SwarmAgentHandle {
             self.register_frontmatter_hooks(&agent_id, request.definition.as_deref());
 
         // ── Per-agent MCP servers ──
-        //
         // String-ref entries piggyback on the parent's pre-existing
         // connections; inline `{name: config}` entries get registered
         // as dynamic servers and torn down at SubagentStop.
@@ -1476,7 +1453,6 @@ impl SwarmAgentHandle {
             .await;
 
         // ── Frontmatter skills preload ──
-        //
         // When `def.skills` is non-empty, resolve each skill's body
         // via the installed `SkillHandle` and prepend the loaded
         // contents to the prompt — wrapped in `<preloaded-skill>`
@@ -1487,7 +1463,6 @@ impl SwarmAgentHandle {
             .await;
 
         // ── SubagentStart hook firing ──
-        //
         // Fire user-defined SubagentStart hooks and inject their
         // `additional_contexts` into the child's prompt as a leading
         // system-reminder block.
@@ -1497,11 +1472,11 @@ impl SwarmAgentHandle {
 
         // Fork mode: wrap the decorated directive in the
         // `<fork-boilerplate>...</fork-boilerplate>` envelope so:
-        //   - the worker receives its rules (no-converse, scope-bound,
-        //     report-format).
-        //   - the conversation contains the boilerplate tag so a future
-        //     `is_in_fork_child(parent_messages)` scan blocks recursive
-        //     forking.
+        // - the worker receives its rules (no-converse, scope-bound,
+        // report-format).
+        // - the conversation contains the boilerplate tag so a future
+        // `is_in_fork_child(parent_messages)` scan blocks recursive
+        // forking.
         let effective_prompt = if is_fork {
             coco_subagent::build_fork_child_message(&decorated_prompt)
         } else {
@@ -1513,7 +1488,6 @@ impl SwarmAgentHandle {
         // so the UI panel + TaskList tool see them as Running.
         // Without this, sync agents were invisible — only background
         // agents were tracked.
-        //
         // W6 (Dream registration): when the spawn carries the
         // `AutoDream` fork label, register as `TaskType::Dream`
         // instead of `LocalAgent` so the TUI panel + `TaskList` tool
@@ -1523,7 +1497,6 @@ impl SwarmAgentHandle {
         // compact / agent-summary / speculation) are
         // service-internal and don't surface as user-visible
         // tasks — not registered as user-visible tasks.
-        //
         // The cancel token from `register_*_task` lets `kill_task`
         // propagate into the engine via the `tokio::select!` race
         // below — same mechanism the bg path uses.
@@ -1570,23 +1543,21 @@ impl SwarmAgentHandle {
         // cleanup chain, response build — now lives inside a detached
         // `tokio::spawn` body. The inline caller races a oneshot
         // receiver against the detach signal and external cancel:
-        //
         // - **Oneshot delivery**: engine task finishes, sends the
-        //   built `AgentSpawnResponse`. Inline caller returns it.
-        //   `complete_silent` runs (state only, no notification —
-        //   response goes inline).
+        // built `AgentSpawnResponse`. Inline caller returns it.
+        // `complete_silent` runs (state only, no notification —
+        // response goes inline).
         // - **Detach signal**: external `signal_detach(tid)` (TUI
-        //   Ctrl+B). Inline caller sets the detached flag and
-        //   returns `AsyncLaunched` immediately. Engine task keeps
-        //   running, eventually calls `mark_completed`/`mark_failed`
-        //   on its own (pushes `<task-notification>` envelope).
-        //   This is the "detach but keep running" behavior.
+        // Ctrl+B). Inline caller sets the detached flag and
+        // returns `AsyncLaunched` immediately. Engine task keeps
+        // running, eventually calls `mark_completed`/`mark_failed`
+        // on its own (pushes `<task-notification>` envelope).
+        // This is the "detach but keep running" behavior.
         // - **External cancel** (`kill_task(tid)`): engine task's
-        //   inner select observes the cancel and exits with an Err
-        //   QueryResult. Cleanup still runs in the engine task; the
-        //   final response is `AgentSpawnResponse::Failed`. Inline
-        //   caller receives it via oneshot.
-        //
+        // inner select observes the cancel and exits with an Err
+        // QueryResult. Cleanup still runs in the engine task; the
+        // final response is `AgentSpawnResponse::Failed`. Inline
+        // caller receives it via oneshot.
         // Pre-clone every Arc the engine task needs (so the closure
         // doesn't borrow `&self`). Matches the pattern used by
         // `spawn_background` below.
@@ -1836,7 +1807,6 @@ impl SwarmAgentHandle {
             };
 
             // ── Route based on detached flag ─────────────────────
-            //
             // Two paths, always typed: build an `EngineOutcome` and
             // send via the oneshot. The channel is **never dropped
             // without sending**, so the inline awaiter's `Err(RecvError)`
@@ -1912,16 +1882,13 @@ impl SwarmAgentHandle {
         });
 
         // ── Inline caller: race resp_rx vs detach ────────────────
-        //
         // Three observable inputs map to three branches:
-        //
-        // | Wire                                | Path                                    |
+        // | Wire | Path |
         // |-------------------------------------|-----------------------------------------|
-        // | `Ok(EngineOutcome::CompletedSync)`  | engine ran inline → return its response |
+        // | `Ok(EngineOutcome::CompletedSync)` | engine ran inline → return its response |
         // | `Ok(EngineOutcome::CompletedAfterDetach)` | engine raced detach → AsyncLaunched (bg path pushed notification) |
-        // | `Err(RecvError)`                    | true panic in engine task               |
-        // | `detach.notified()` wins            | external Ctrl+B → AsyncLaunched         |
-        //
+        // | `Err(RecvError)` | true panic in engine task |
+        // | `detach.notified()` wins | external Ctrl+B → AsyncLaunched |
         // The `Err` arm now only fires on a real panic — both completion
         // and detach paths stay observable.
         let task_id_for_async_response = sync_task.as_ref().map(|(id, _)| id.clone());
@@ -1971,7 +1938,6 @@ impl SwarmAgentHandle {
     /// register with `AgentTaskRegistry`, persist transcript
     /// metadata for resume, drain text deltas into the task's output
     /// buffer, and run the periodic AgentSummary timer.
-    ///
     /// Returns `AsyncLaunched` immediately. Worktree isolation is rejected
     /// at this seam so the cleanup contract isn't ambiguous.
     #[allow(clippy::too_many_arguments)]
@@ -2000,7 +1966,6 @@ impl SwarmAgentHandle {
         // (the agent that called AgentTool, not the new
         // subagent's id) so completion notifications route
         // correctly.
-        //
         // PR 1 / W1: bg path uses `AgentRegistration::Background` so
         // the task entry's `is_backgrounded` flag initializes to
         // `true` from creation.

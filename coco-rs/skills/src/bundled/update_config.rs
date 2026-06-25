@@ -1,4 +1,4 @@
-//! `/update-config` — configure settings via settings.json. Mirrors claude-code's updateConfig.ts.
+//! `/update-config` — configure settings via settings.json.
 //! Deferred: the live `## Full Settings JSON Schema` dump (needs schemars on Settings) is omitted.
 
 pub fn prompt() -> String {

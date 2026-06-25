@@ -7,7 +7,7 @@
 //!    mid-turn** (the mock LLM is parked inside an artificial delay so
 //!    we can race against the turn).
 //! 2. The engine drains the queue at end-of-turn into history as a RAW
-//!    `Message::User` tagged `MessageOrigin::QueuedSteering` (mirrors TS:
+//!    `Message::User` tagged `MessageOrigin::QueuedSteering`:
 //!    the steered message IS a user message, stored as the user's plain
 //!    text — no `<system-reminder>`, no framing — so it is fully visible in
 //!    the transcript and counted as a user message).
@@ -319,8 +319,8 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
     );
 
     // ── 2. History stores the steered message as a RAW user message
-    // (`MessageOrigin::QueuedSteering`), NOT a wrapped attachment. Mirrors TS:
-    // the transcript shows the user's plain text; the model-facing framing is
+    // (`MessageOrigin::QueuedSteering`), NOT a wrapped attachment.
+    // The transcript shows the user's plain text; the model-facing framing is
     // applied only at prompt-build time (asserted in section 3).
     let steering_users: Vec<_> = result
         .final_messages

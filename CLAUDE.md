@@ -2,7 +2,6 @@
 
 Multi-provider LLM SDK and CLI. All development in `coco-rs/`.
 
-> `cocode-rs/` and `codex-rs/` in this repo are reference implementations; active development is in `coco-rs/`.
 >
 > **Each crate has its own `CLAUDE.md`** with key types, invariants, and design notes — read it when working in that crate. This root file covers conventions and high-level structure only.
 
@@ -250,8 +249,8 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `shell` | Shell execution with security analysis, destructive warnings, sandbox decisions |
 | `sandbox` | Three modes: None/ReadOnly/Strict (disabled by default) |
 | `process-hardening` | OS-level security (macOS PT_DENY_ATTACH, Linux prctl) |
-| `exec-server` | Minimal `ExecutorFileSystem` trait ported from codex-rs |
-| `apply-patch` | Unified diff/patch with fuzzy matching (ported from codex-rs) |
+| `exec-server` | Minimal `ExecutorFileSystem` trait for local and remote execution |
+| `apply-patch` | Unified diff/patch application with fuzzy matching |
 
 ### Root Modules
 

@@ -1,6 +1,6 @@
 //! Key constants for the coco configuration system.
 //!
-//! Ports relevant values from TS `constants/` directory including context
+//! Constants for context windows, token limits, tool limits, and API parameters
 //! windows, token limits, timeouts, and API URLs.
 
 // ---------------------------------------------------------------------------
@@ -11,7 +11,7 @@
 pub const DEFAULT_MAX_TOOL_CONCURRENCY: i32 = 8;
 
 // ---------------------------------------------------------------------------
-// Context windows (from TS `utils/context.ts`)
+// Context windows
 // ---------------------------------------------------------------------------
 
 /// Default context window size for all models (200k tokens).
@@ -21,7 +21,7 @@ pub const DEFAULT_CONTEXT_WINDOW: i64 = 200_000;
 pub const CONTEXT_WINDOW_1M: i64 = 1_000_000;
 
 // ---------------------------------------------------------------------------
-// Output token limits (from TS `utils/context.ts`)
+// Output token limits
 // ---------------------------------------------------------------------------
 
 // Per-model output-token caps live on `ModelInfo` — see
@@ -31,7 +31,7 @@ pub const CONTEXT_WINDOW_1M: i64 = 1_000_000;
 // (`DEFAULT_MAX_OUTPUT_TOKENS` / `MAX_OUTPUT_TOKENS_DEFAULT` /
 // `MAX_OUTPUT_TOKENS_UPPER_LIMIT` / `COMPACT_MAX_OUTPUT_TOKENS` /
 // `CAPPED_DEFAULT_MAX_TOKENS` / `ESCALATED_MAX_TOKENS`) were TS
-// `claude-code`-era Anthropic-Opus-specific magic numbers that
+// Legacy Anthropic-Opus-specific magic numbers that
 // would mis-cap on smaller models (GPT-4 4k, Haiku 8k, …). Deleted
 // outright — production paths read per-model values via
 // `ModelInfo`, and recovery escalate is now per-model opt-in.
@@ -57,7 +57,7 @@ pub const DEFAULT_IDLE_NOTIF_THRESHOLD_MS: i64 = 60_000;
 pub const DEFAULT_AUTO_COMPACT_PCT: i32 = 90;
 
 // ---------------------------------------------------------------------------
-// Tool result limits (from TS `constants/toolLimits.ts`)
+// Tool result limits
 // ---------------------------------------------------------------------------
 
 /// Default maximum size in characters for tool results before persisting to
@@ -80,7 +80,7 @@ pub const MAX_TOOL_RESULTS_PER_MESSAGE_CHARS: i64 = 200_000;
 pub const TOOL_SUMMARY_MAX_LENGTH: i64 = 50;
 
 // ---------------------------------------------------------------------------
-// API image/PDF limits (from TS `constants/apiLimits.ts`)
+// API image/PDF limits
 // ---------------------------------------------------------------------------
 
 /// Maximum base64-encoded image size (API enforced, 5 MB).
@@ -124,7 +124,7 @@ pub const API_MAX_MEDIA_PER_REQUEST: i32 = 100;
 pub const MAX_SESSION_COST_ENTRIES: usize = 100;
 
 // ---------------------------------------------------------------------------
-// API URLs (from TS `constants/product.ts` and `constants/oauth.ts`)
+// API URLs
 // ---------------------------------------------------------------------------
 
 /// Product website URL.

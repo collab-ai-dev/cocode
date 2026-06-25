@@ -88,9 +88,8 @@ impl McpToolAnnotations {
     ///
     pub fn from_input_schema_meta(input_schema: &Value) -> Self {
         let meta = input_schema.get("_meta");
-        // Both `_meta` flags accept the Anthropic-namespaced key first (compat
-        // with claude-code MCP servers), then a provider-neutral fallback so
-        // non-Anthropic servers can supply them too.
+        // Both `_meta` flags accept the Anthropic-namespaced key first,
+        // then a provider-neutral fallback so non-Anthropic servers can supply them too.
         let always_load = meta
             .and_then(|m| {
                 m.get("anthropic/alwaysLoad")

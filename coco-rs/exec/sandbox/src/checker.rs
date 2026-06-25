@@ -4,14 +4,14 @@
 //! installed (via [`SandboxState::set_approval_bridge`](crate::SandboxState),
 //! propagated through [`SandboxState::permission_checker`](crate::SandboxState)),
 //! the async variant [`PermissionChecker::check_path_async`] consults the bridge
-//! before returning a deny — mirroring TS's interactive "Allow this read/write?"
+//! before returning a deny — 's interactive "Allow this read/write?"
 //! prompt. Without a bridge it is identical to the sync `check_path`.
 //!
 //! Production consumers:
 //! - Read/Write/Edit pre-flight → [`PermissionChecker::check_path_async`]
-//!   (`core/tools/src/tools/sandbox_preflight.rs`).
+//! (`core/tools/src/tools/sandbox_preflight.rs`).
 //! - SDK control channel → `SdkSandboxApprovalBridge`
-//!   (`app/cli/src/sdk_server`), installed onto the live `SandboxState`.
+//! (`app/cli/src/sdk_server`), installed onto the live `SandboxState`.
 //!
 //! Network approval is handled at the egress proxy itself (a `NetworkAskCallback`
 //! built from the installed bridge in `state.rs::build_network_ask_callback`),
@@ -86,12 +86,10 @@ impl PermissionChecker {
     }
 
     /// Checks whether the given path is accessible.
-    ///
     /// Cross-cutting checks (applied before enforcement level logic):
     /// - `denied_read_paths` blocks reads to specific paths
     /// - `deny_write_paths` blocks writes to specific paths
     /// - `allow_git_config` controls write access to git config files
-    ///
     /// Enforcement levels:
     /// - `Disabled`: all paths allowed (cross-cutting checks still apply)
     /// - `ReadOnly`: reads allowed; writes denied
@@ -290,7 +288,6 @@ impl PermissionChecker {
     }
 
     // ── Async (bridge-aware) variants — D7 ──
-    //
     // The static `check_path` / `check_network` keep their existing
     // fail-closed semantics. Callers that want to surface a denied
     // operation through an interactive approval flow call the `_async`
@@ -301,15 +298,14 @@ impl PermissionChecker {
 
     /// Async variant of [`Self::check_path`] that consults the approval
     /// bridge on deny. Behaviour:
-    ///
     /// - No bridge installed → identical to [`Self::check_path`].
     /// - Bridge returns [`SandboxApprovalDecision::Approved`] → caller's
-    ///   `Result` becomes `Ok(())`. The deny was overridden by user
-    ///   consent.
+    /// `Result` becomes `Ok(())`. The deny was overridden by user
+    /// consent.
     /// - Bridge returns [`SandboxApprovalDecision::Rejected`] → preserve
-    ///   the original deny error.
+    /// the original deny error.
     /// - The static gate passing (no deny) → return immediately, no
-    ///   bridge consultation.
+    /// bridge consultation.
     pub async fn check_path_async(&self, path: &Path, write: bool) -> Result<()> {
         match self.check_path(path, write) {
             Ok(()) => Ok(()),
@@ -351,7 +347,6 @@ impl PermissionChecker {
     }
 
     /// Returns true if the path is under any writable root (ignoring subpath restrictions).
-    ///
     /// In `Disabled` mode with no configured roots, returns `true` (everything accessible).
     /// In other modes with no roots, returns `false` (nothing accessible).
     pub fn is_under_any_root(&self, path: &Path) -> bool {

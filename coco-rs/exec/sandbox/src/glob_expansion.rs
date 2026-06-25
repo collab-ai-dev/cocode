@@ -7,7 +7,7 @@
 //! handed to the platform deny list as paths — we have to enumerate
 //! matching files first.
 //!
-//! TS parity: TS delegates this to the closed-source `@anthropic-ai/sandbox-runtime`,
+//! TS delegates this to the closed-source `@anthropic-ai/sandbox-runtime`,
 //! which calls user-configured `sandbox.ripgrep.command` to enumerate
 //! candidate paths and then matches them against the patterns. coco-rs
 //! keeps the expansion in-tree with `globset` + `walkdir`. For the
@@ -33,12 +33,10 @@ pub fn looks_like_glob(pattern: &str) -> bool {
 }
 
 /// Expand `globs` under each `root` up to `max_depth` directory levels.
-///
 /// `max_depth` is interpreted as `WalkDir::max_depth` — `0` disables
 /// expansion entirely (the walker yields only the root). The caller is
 /// responsible for capping `globs.len()` if untrusted input is involved;
 /// here we simply build one `GlobSet` and walk once per root.
-///
 /// On glob compile error the malformed pattern is logged and skipped.
 /// On filesystem walk error the offending entry is skipped (typical
 /// causes: permission denied, broken symlink); enumeration continues.

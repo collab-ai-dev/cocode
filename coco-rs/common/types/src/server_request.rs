@@ -26,18 +26,15 @@ The agent sends these to SDK clients when it needs a decision or input \
 SDK client must reply via the corresponding `ClientRequest` variant.",
     variants = {
         /// Ask the SDK client to approve or deny a tool use.
-        /// Matches TS `SDKControlPermissionRequestSchema` (controlSchemas.ts:108-121).
         /// Expected response: `ClientRequest::ApprovalResolve`.
         "approval/askForApproval" => AskForApproval(AskForApprovalParams),
         /// Ask the user a question via the SDK client (e.g. multiple choice).
         /// Expected response: `ClientRequest::UserInputResolve`.
         "input/requestUserInput" => RequestUserInput(RequestUserInputParams),
         /// Route an MCP JSON-RPC message to the SDK-hosted MCP server.
-        /// Matches TS `SDKControlMcpMessageRequestSchema` (controlSchemas.ts:377-381).
         /// Expected response: `ClientRequest::McpRouteMessageResponse`.
         "mcp/routeMessage" => McpRouteMessage(McpRouteMessageParams),
         /// Invoke an SDK-registered hook callback.
-        /// Matches TS `SDKHookCallbackRequestSchema` (controlSchemas.ts:366-371).
         /// Expected response: `ClientRequest::HookCallbackResponse`.
         "hook/callback" => HookCallback(HookCallbackParams),
         /// Notify the SDK that a previously-sent ServerRequest should be cancelled.
@@ -56,7 +53,6 @@ SDK client must reply via the corresponding `ClientRequest` variant.",
 // Param structs
 // ---------------------------------------------------------------------------
 
-/// Matches TS `SDKControlPermissionRequestSchema` (controlSchemas.ts:108-121).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AskForApprovalParams {
@@ -102,7 +98,6 @@ pub struct RequestUserInputParams {
 }
 
 /// Route an MCP JSON-RPC message to an SDK-hosted server.
-///
 /// Correlation is via the outer JSON-RPC `request_id` on the envelope —
 /// no inner `request_id`. The SDK replies with a `McpRouteMessageResult`
 /// payload carrying the forwarded MCP server's JSON-RPC response.
@@ -115,8 +110,6 @@ pub struct McpRouteMessageParams {
 }
 
 /// Invoke an SDK-registered hook callback.
-/// Matches TS `SDKHookCallbackRequestSchema` (controlSchemas.ts:366-371).
-///
 /// Correlation is via the **outer** JSON-RPC `request_id` on the
 /// envelope — there is no inner `request_id` field. The SDK replies
 /// with a `HookCallbackResult` payload as the synchronous response.
@@ -141,7 +134,6 @@ pub struct ServerCancelRequestParams {
 }
 
 /// Forward an MCP server's elicitation request to the SDK client.
-///
 /// The MCP protocol lets servers ask the user for structured input
 /// (form fields with a JSON schema). When the bound MCP transport
 /// fires its `elicitation/create` callback, the SDK server bridges
@@ -179,8 +171,6 @@ pub struct ConfigReadResult {
 }
 
 /// Response to `ClientRequest::McpStatus`.
-/// Matches TS `SDKControlMcpStatusResponseSchema` (controlSchemas.ts:165-173).
-///
 /// The `mcpServers` field is camelCase on the wire to match the TS
 /// zod schema. Internal Rust uses snake_case for the field name.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -191,9 +181,7 @@ pub struct McpStatusResult {
 }
 
 /// MCP server connection state on the wire.
-///
-/// Matches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`:
-/// `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`.
+/// Values: `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`.
 /// `Disconnected` is a local extension used when the connection manager
 /// has no record of a named server.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -243,7 +231,6 @@ pub struct McpSkippedToolStatus {
 }
 
 /// Response to `ClientRequest::ContextUsage`.
-/// Matches TS `SDKControlGetContextUsageResponseSchema` (controlSchemas.ts:205-306).
 /// Simplified subset — TS includes a rich breakdown grid that's UI-specific.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -357,7 +344,6 @@ pub struct McpSetServersResult {
 }
 
 /// Response to `ClientRequest::RewindFiles`.
-///
 /// Reports which files would be (or were) restored to the snapshot
 /// keyed by `user_message_id`, plus a diff summary.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -390,8 +376,6 @@ pub struct PluginReloadResult {
 }
 
 /// Response to `ClientRequest::Initialize`.
-///
-/// Matches TS `SDKControlInitializeResponseSchema` (controlSchemas.ts:77-95).
 /// Returned synchronously after the client sends `initialize`; gives the
 /// client the full bootstrap context it needs before calling `session/start`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -431,9 +415,7 @@ pub struct InitializeResult {
     pub version: String,
 }
 
-/// Slash command descriptor for `InitializeResult.commands`. Matches TS
-/// `SlashCommandSchema` at `coreSchemas.ts:1016-1028`.
-///
+/// Slash command descriptor for `InitializeResult.commands`.
 /// Named `SdkSlashCommand` to avoid colliding with the existing coco-rs
 /// `commands` crate notion of a slash command (which has richer
 /// internal fields not on the SDK wire).
@@ -449,9 +431,7 @@ pub struct SdkSlashCommand {
     pub argument_hint: String,
 }
 
-/// Available subagent descriptor for `InitializeResult.agents`. Matches
-/// TS `AgentInfoSchema` at `coreSchemas.ts:1030-1045`.
-///
+/// Available subagent descriptor for `InitializeResult.agents`.
 /// Named `SdkAgentInfo` to avoid colliding with `event::AgentInfo`
 /// (the payload for the `agents/registered` notification, which has a
 /// different schema — `description: Option<String>` without `model`).
@@ -467,10 +447,8 @@ pub struct SdkAgentInfo {
     pub model: Option<String>,
 }
 
-/// Model capability descriptor for `InitializeResult.models`. Matches
-/// TS `ModelInfoSchema` at `coreSchemas.ts:1047-1079`. The wire uses
+/// Model capability descriptor for `InitializeResult.models`. The wire uses
 /// `value` + camelCase capability keys.
-///
 /// Named `SdkModelInfo` to match the existing re-export name at the
 /// crate root and to leave breathing room for other model-info shapes
 /// (e.g. per-provider config models) elsewhere in the codebase.
@@ -516,7 +494,7 @@ pub struct SdkModelInfo {
     pub supports_auto_mode: Option<bool>,
 }
 
-/// Model effort tier. Matches TS enum `z.enum(['low','medium','high','max'])`.
+/// Model effort tier.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -527,8 +505,7 @@ pub enum EffortLevel {
     Max,
 }
 
-/// Account + auth info for the logged-in user. Matches TS
-/// `AccountInfoSchema` at `coreSchemas.ts:1081-1097`. All fields optional
+/// Account + auth info for the logged-in user. All fields optional
 /// — clients that don't sign in get an empty struct.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -566,8 +543,7 @@ pub struct SdkAccountInfo {
     pub api_provider: Option<ApiProvider>,
 }
 
-/// Active API backend. Matches TS
-/// `z.enum(['firstParty', 'bedrock', 'vertex', 'foundry'])`.
+/// Active API backend.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -604,7 +580,6 @@ pub struct SessionListResult {
 }
 
 /// Response to `ClientRequest::SessionRead`.
-///
 /// Phase 2.C.11 returns session metadata only. Message-history
 /// retrieval (via the JSONL transcript) is a future enhancement — the
 /// `messages` / `next_cursor` / `has_more` fields are reserved for
@@ -624,7 +599,6 @@ pub struct SessionReadResult {
 }
 
 /// Response to `ClientRequest::SessionResume`.
-///
 /// Returned after the server loads a previously-persisted session
 /// from disk and installs it as the active session. The SDK client
 /// can then issue `turn/start` to continue the conversation.
@@ -635,7 +609,6 @@ pub struct SessionResumeResult {
 }
 
 /// Response to `ClientRequest::SessionStart`.
-///
 /// Returned after the server creates an agent session and emits the
 /// `session/started` notification. Subsequent ClientRequests
 /// (turn/start, approval/resolve, etc.) operate on this session.
@@ -646,7 +619,6 @@ pub struct SessionStartResult {
 }
 
 /// Response to `ClientRequest::TurnStart`.
-///
 /// `turn/start` is a fire-and-forget trigger — the server accepts the
 /// request, spawns the turn as a detached task, and replies immediately
 /// with a handle. Progress is delivered via `turn/started`, streaming

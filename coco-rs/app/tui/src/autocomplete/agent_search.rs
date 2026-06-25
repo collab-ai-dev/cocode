@@ -12,13 +12,12 @@ use coco_types::AgentColorName;
 use coco_types::AgentDefinition;
 
 /// A loaded agent definition projection used for `@` autocomplete.
-///
 /// Carries the minimum the popup needs to render and the insertion path needs
 /// to emit a `(agent)` suffix splice. Full definitions stay in
 /// `coco_subagent::AgentDefinitionStore`; this is a UI-side cache.
 #[derive(Debug, Clone)]
 pub struct AgentInfo {
-    /// User-facing agent name (= TS `agentType`). Embedded in the
+    /// User-facing agent name (= `agentType`). Embedded in the
     /// `"<name> (agent)"` label by [`super::unified::seed_agent_items`].
     pub name: String,
     /// Single-line `whenToUse` description.

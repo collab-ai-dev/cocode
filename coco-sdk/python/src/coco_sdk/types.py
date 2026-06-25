@@ -1,7 +1,7 @@
 """Multi-provider helper types for the Python SDK.
 
 Most names here are **re-exports** of the schema-derived types in
-``coco_sdk.generated.protocol`` — they mirror
+``coco_sdk.generated.protocol`` — sourced from
 ``coco-rs/common/types/src/provider.rs`` (``ProviderApi``,
 ``ModelRole``, ``ModelSpec``, ``Capability``, ``WireApi``,
 ``ApplyPatchToolType``) and ``thinking.rs`` (``ThinkingLevel``,
@@ -74,7 +74,7 @@ class ModelSpec(_GeneratedModelSpec):
 
 
 class ModelAlias(str, Enum):
-    """Provider-agnostic friendly names. Mirrors
+    """Provider-agnostic friendly names matching
     ``coco-rs/common/config/src/model/aliases.rs``.
 
     Hand-written because it lives in the config layer (not

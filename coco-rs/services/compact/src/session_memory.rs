@@ -36,7 +36,7 @@ pub struct SessionMemoryCompactConfig {
     pub auto_compact_threshold: Option<i64>,
     /// Optional max length (chars) for the inlined session memory
     /// content; longer content is truncated and a pointer to the
-    /// memory file is appended (TS `truncateSessionMemoryForCompact`).
+    /// memory file is appended.
     pub max_summary_chars: Option<usize>,
     /// Path to the session memory file, used in the truncation pointer.
     pub session_memory_path: Option<String>,
@@ -61,19 +61,17 @@ const SESSION_MEMORY_TRUNCATION_MARKER: &str =
 
 /// Perform session memory compaction: replace old messages with the session
 /// memory content as a summary, keeping only recent messages.
-///
 /// `last_summarized_message_id` is the uuid of the last assistant message
 /// already covered by `session_memory` — `Some(uuid)` means extraction has
 /// run and the anchor is known; `None` means resumed session (memory exists
 /// from disk but boundary is unknown). When the uuid doesn't appear in
 /// `messages`, returns `Ok(None)` so the caller falls back to LLM-based
 /// compaction.
-///
 /// Returns `None` when:
 /// - Session memory is empty / template-only;
 /// - The kept-tail anchor is unrecoverable;
 /// - The post-compact token count is still ≥ `auto_compact_threshold`
-///   (caller should fall back to LLM-based compaction).
+/// (caller should fall back to LLM-based compaction).
 pub fn compact_session_memory(
     messages: &[Arc<Message>],
     session_memory: &str,
@@ -89,11 +87,11 @@ pub fn compact_session_memory(
     }
 
     // Resolve the last-summarized boundary index:
-    //   - Some + found  → start after that index.
-    //   - Some + not found → bail (caller falls back to LLM).
-    //   - None → resumed session: pretend boundary is just before tail
-    //     so `calculate_messages_to_keep_index` initially keeps no
-    //     messages and only expands enough to hit minimums.
+    // - Some + found → start after that index.
+    // - Some + not found → bail (caller falls back to LLM).
+    // - None → resumed session: pretend boundary is just before tail
+    // so `calculate_messages_to_keep_index` initially keeps no
+    // messages and only expands enough to hit minimums.
     let last_summarized_index: Option<usize> = match last_summarized_message_id {
         Some(target) => {
             let found = messages.iter().position(|m| m.uuid() == Some(&target));
@@ -250,15 +248,13 @@ impl Default for SessionMemoryExtractionThresholds {
 }
 
 /// Pure decision: should the session-memory extractor run this turn?
-///
-///  - **Init** (no prior extract): require ≥ `minimum_message_tokens_to_init`.
-///  - **Update** (prior extract exists): require token-delta ≥
-///    `minimum_tokens_between_update` AND
-///    (`tool_calls_in_last_turn ≥ min_tools_for_update` OR
-///    `tool_calls_in_last_turn == 0`)
-///    The second clause is "tool-bursty turns get extracted; idle
-///    turns also get extracted to capture the resolution".
-///
+/// - **Init** (no prior extract): require ≥ `minimum_message_tokens_to_init`.
+/// - **Update** (prior extract exists): require token-delta ≥
+/// `minimum_tokens_between_update` AND
+/// (`tool_calls_in_last_turn ≥ min_tools_for_update` OR
+/// `tool_calls_in_last_turn == 0`)
+/// The second clause is "tool-bursty turns get extracted; idle
+/// turns also get extracted to capture the resolution".
 /// This is a *pure* decision — the actual extraction (forked agent
 /// LLM call + file write) is owned upstream by `services/SessionMemory/`.
 #[must_use]
@@ -284,7 +280,6 @@ pub fn should_extract_memory(
 }
 
 /// Select which memories to compact when the memory directory grows too large.
-///
 /// Picks the oldest/least-recently-referenced entries first, based on
 /// `last_used` timestamps. Returns entry names sorted by compaction priority
 /// (first = most eligible for removal/merging).
@@ -330,7 +325,6 @@ pub struct MemoryMetadata {
 }
 
 /// Merge similar/overlapping memories into consolidated entries.
-///
 /// Groups memories by their name prefix (the part before the last `_` or `-`)
 /// and merges entries within each group by concatenating their content with
 /// deduplication of identical lines.
@@ -378,11 +372,9 @@ pub fn merge_similar_memories(memories: &[(String, String)]) -> Vec<(String, Str
 // ── Internal helpers ────────────────────────────────────────────────
 
 /// Calculate the starting index for messages to keep after compaction.
-///
 /// Starts from `last_summarized_index + 1` and expands backwards until we
 /// meet both minimum thresholds, or hit the max cap, or hit the floor at
 /// the previous CompactBoundary.
-///
 /// Floor rationale: the preserved-segment chain has a disk discontinuity
 /// at the previous boundary (att[0]→summary shortcut from dedup-skip);
 /// expanding past it would let the loader's tail→head walk bypass inner
@@ -459,7 +451,6 @@ fn calculate_messages_to_keep_index(
 
 /// Detect whether the on-disk session memory file contains only the
 /// extractor's empty template (no actual content yet).
-///
 /// Heuristic: the template uses second-level headings (`## ...`) and a
 /// known trailer; a file with no body lines under any heading is considered
 /// empty. Also recognizes canonical placeholder strings ("No memories yet",
@@ -497,7 +488,6 @@ pub(crate) fn is_session_memory_template_only(content: &str) -> bool {
 
 /// Adjust the keep index to preserve tool_use/tool_result pairs **and**
 /// thinking blocks that share an `AssistantMessage.uuid` with kept rounds.
-///
 /// Step 1 walks backwards including assistant messages that own tool_use
 /// blocks referenced by tool_results in the kept range. Step 2 walks
 /// backwards including assistant messages whose `uuid` matches a kept

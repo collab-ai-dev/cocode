@@ -31,8 +31,7 @@ Constants: `ONE_SHOT_BUILTIN_AGENT_TYPES = ["Explore", "Plan"]` (case-sensitive)
   projectSettings < flagSettings < policySettings`. Same `agent_type` from a
   higher source overrides lower.
 - **Snapshots are deterministic.** `AgentCatalogSnapshot` keys by `def.name`
-  (= TS `agentType` = `frontmatter['name']`; for built-ins this equals the
-  canonical `agent_type`). Every model-facing string (listing, deny filter,
+  (= `frontmatter['name']`; for built-ins this equals the canonical `agent_type`). Every model-facing string (listing, deny filter,
   `find_active` lookup, error surfaces) keys on `def.name` so they stay
   consistent for aliased custom agents. Iteration is alphabetical for stable
   prompt rendering.

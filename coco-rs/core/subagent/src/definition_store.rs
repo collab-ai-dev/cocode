@@ -1,7 +1,7 @@
 //! Central store for agent definitions. Built-ins + per-source loaders feed
 //! the store; `snapshot()` returns an immutable per-turn view.
 //!
-//! `loadAgentsDir.ts:193-221` `getActiveAgentsFromList`.
+//! Active agent definition store.
 //!
 //! Sync-only: `load()` and `reload()` walk the filesystem with `std::fs`.
 //! No tokio, no watcher — `app/state` owns the watcher and calls
@@ -165,7 +165,7 @@ impl AgentSearchPaths {
 /// [`AgentDefinition::memory_scope`]. The scope is used verbatim;
 /// agents without a declared scope skip the inspector call.
 ///
-/// `loadAgentsDir.ts:262-294` calls
+/// Iterates sources and
 /// `checkAgentMemorySnapshot(agentType, scope)` and sets
 /// `pendingSnapshotUpdate` on the definition when the result is
 /// `prompt-update`. The Rust loader does the same lookup but defers
@@ -187,7 +187,7 @@ pub struct AgentDefinitionStore {
     snapshot_inspector: Option<SnapshotInspectorFn>,
     /// When true, post-process every loaded definition to auto-inject
     /// `Read` / `Edit` / `Write` into `allowed_tools` for agents that
-    /// declare a `memory_scope`. `loadAgentsDir.ts:455-467,662-674`
+    /// declare a `memory_scope`.
     /// does this at parse time when `isAutoMemoryEnabled()` is true.
     /// The injection is a no-op for wildcard agents (empty
     /// `allowed_tools` = "use default" in coco-rs) — matches the
@@ -211,7 +211,7 @@ impl AgentDefinitionStore {
     /// Toggle auto-memory tool injection. When `true`, every agent with
     /// a non-empty `allowed_tools` and a declared `memory_scope` has
     /// `Read` / `Edit` / `Write` ensured present in its allow-list at
-    /// load time. `loadAgentsDir.ts:455-467` runs the same transform
+    /// load time.
     /// when `isAutoMemoryEnabled()` is true. Caller (CLI bootstrap)
     /// reads `RuntimeConfig.features.enabled(AutoMemory)` and forwards
     /// the bool here. Off by default so the pure-logic crate doesn't
@@ -268,7 +268,7 @@ impl AgentDefinitionStore {
         // Inode dedup: a symlinked agent file under one source (e.g.
         // `config home/agents/foo.md` -> `<project>/project config dir/agents/foo.md`)
         // would otherwise parse twice and double-count in the source-
-        // precedence map. `loadAgentsDir.ts:159-172` keys the dedup on
+        // precedence map. Keys the dedup on
         // `(dev, ino)`. Same here on Unix; Windows skips because
         // `MetadataExt::dev/ino` aren't portable — Windows users get
         // the path-based sort behaviour we always had.
@@ -325,7 +325,7 @@ impl AgentDefinitionStore {
             }
         }
         // Auto-memory tool injection —
-        // `loadAgentsDir.ts:455-467` runs this when `isAutoMemoryEnabled()`
+        // Runs this when `isAutoMemoryEnabled()`
         // and the agent declares a `memory` scope. Wildcard
         // (empty allow-list) skips the injection because the
         // `tools !== undefined` guard treats wildcard as "all tools
@@ -395,7 +395,7 @@ fn collect_dir(
 
     for path in paths {
         // Skip symlink-equivalent files we already loaded from a
-        // higher-priority source. `loadAgentsDir.ts:159-172`.
+        // higher-priority source.
         if !record_inode_seen(&path, seen_inodes) {
             tracing::debug!(
                 target: "coco_subagent",
@@ -487,7 +487,7 @@ fn load_one(
 /// **`Wildcard` allow-lists are skipped** — the agent already sees every
 /// tool, so injection is meaningless (and the type system, via
 /// [`ToolAllowList::as_explicit_mut`], makes it unrepresentable).
-/// `loadAgentsDir.ts:455-467,662-674`. Idempotent — running the
+/// Idempotent — running the
 /// function repeatedly leaves the tool list unchanged after the first
 /// call, so future re-loads with auto-memory still on don't duplicate
 /// entries.
@@ -500,7 +500,7 @@ fn inject_memory_tools(def: &mut AgentDefinition) {
         // Wildcard — every tool already visible.
         return;
     };
-    // Inject in [Write, Edit, Read] order (loadAgentsDir.ts:458-462,
+    // Inject in [Write, Edit, Read] order (
     // 665-669); keep byte-faithful so the prompt-cache key is stable.
     for tool in [ToolName::Write, ToolName::Edit, ToolName::Read] {
         let name = tool.as_str();

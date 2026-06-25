@@ -1,6 +1,5 @@
 //! Minimal cron expression parsing and next-run calculation.
 //!
-//! Faithful port of the TS `utils/cron.ts`. Supports the standard 5-field
 //! cron subset:
 //!
 //! ```text
@@ -76,7 +75,7 @@ fn expand_field(field: &str, min: u32, max: u32) -> Option<Vec<u32>> {
         }
 
         // range: `N-M` or `N-M/S`. Require a digit before '-' (a leading '-'
-        // means a malformed/negative value, which TS's regex also rejects).
+        // means a malformed/negative value, which would also be invalid in standard cron).
         if let Some(dash) = part.find('-')
             && dash > 0
         {
@@ -149,10 +148,8 @@ pub fn is_valid_cron_expression(expr: &str) -> bool {
 
 /// Compute the next local instant strictly after `from` that matches `fields`,
 /// or `None` if there is no match in the next 366 days.
-///
 /// Standard cron semantics: when both dayOfMonth and dayOfWeek are constrained
 /// (neither is its full range), a date matches if EITHER matches.
-///
 /// The walk steps one real minute at a time on the underlying instant, so DST
 /// is handled naturally: a fixed-hour cron whose target lands in a
 /// spring-forward gap (e.g. `30 2 * * *`) is skipped that day (the local hour
@@ -229,8 +226,7 @@ fn format_local_time(minute: u32, hour: u32) -> String {
 
 /// Human-readable rendering of a cron string. Intentionally narrow: covers
 /// common patterns, falling through to the raw cron string for anything else.
-///
-/// NOTE: the TS `utc` option (for CCR remote triggers, which run on servers in
+/// NOTE: the `utc` option (for CCR remote triggers, which run on servers in
 /// UTC) is intentionally omitted — that path belongs to the deferred
 /// `RemoteTrigger` tool. Local scheduled tasks need only local rendering.
 pub fn cron_to_human(cron: &str) -> String {

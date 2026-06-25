@@ -43,10 +43,9 @@ const TEAMMATE_ESSENTIAL_TOOLS: &[&str] = &[
 ];
 
 /// Tool allow-list for the coordinator lead itself.
-///
 /// This is intentionally name-based so it can run in the registry filter
 /// pipeline before execution lookup. MCP tools are allowed by suffix to
-/// mirror TS' PR-activity subscription affordance.
+///' PR-activity subscription affordance.
 pub fn coordinator_allows_tool_name(name: &str) -> bool {
     matches!(
         name,
@@ -59,7 +58,6 @@ pub fn coordinator_allows_tool_name(name: &str) -> bool {
 }
 
 /// Inject team-essential tools into an explicit teammate tool list.
-///
 /// Wildcard definitions stay unrestricted. Explicit lists are modified
 /// in-place, preserving existing order and appending missing essentials in
 /// the fixed TS order.
@@ -75,7 +73,6 @@ pub fn inject_teammate_essential_tools(allowed_tools: &mut ToolAllowList) {
 }
 
 /// Whether the env var alone says coordinator mode is requested.
-///
 /// The capability gate ([`Feature::AgentTeams`]) is **not** consulted here
 /// — use [`is_coordinator_mode`] for the composed check.
 pub fn is_coordinator_mode_env() -> bool {
@@ -92,7 +89,6 @@ pub fn is_coordinator_mode(features: &Features) -> bool {
 /// when coordinator mode is on or the session is non-interactive — both
 /// are orthogonal exclusions, so callers compose them with the env-only
 /// [`fork::is_fork_enabled`].
-///
 /// `is_non_interactive_session` is supplied by the caller because
 /// detection lives in the bootstrap layer (`coco-cli`), not here.
 pub fn is_fork_subagent_active(features: &Features, is_non_interactive_session: bool) -> bool {
@@ -178,7 +174,6 @@ pub fn session_mode_switch_action(
 
 /// Tool-pool override applied to subagents spawned by the AgentTool when
 /// the coordinator is active.
-///
 /// Returns the **deduplicated, sorted** allowed list — mostly the
 /// [`ASYNC_AGENT_ALLOWED_TOOLS`] set minus [`INTERNAL_WORKER_TOOLS`]. When
 /// `simple_mode` is true, narrows further to the Bash / Read / Edit triplet.
@@ -204,13 +199,11 @@ pub fn worker_tool_pool(simple_mode: bool) -> Vec<&'static str> {
 }
 
 /// Builds the user-context map injected into worker-spawning prompts.
-///
 /// - `mcp_server_names` → the `Workers also have access to MCP tools …`
-///   sentence appended when non-empty.
+/// sentence appended when non-empty.
 /// - `scratchpad_dir` → the scratchpad section appended when both `Some`
-///   and `scratchpad_gate_enabled`. Surfaced as a caller-supplied bool so
-///   we don't reach into a GrowthBook shim that doesn't exist.
-///
+/// and `scratchpad_gate_enabled`. Surfaced as a caller-supplied bool so
+/// we don't reach into a GrowthBook shim that doesn't exist.
 /// Returned map key: `"workerToolsContext"`.
 pub fn coordinator_user_context(
     features: &Features,
@@ -253,7 +246,6 @@ pub fn coordinator_user_context(
 }
 
 /// The full coordinator system prompt.
-///
 /// Tool names come from [`ToolName`] so the schema and prompt can never
 /// drift.
 pub fn coordinator_system_prompt(simple_mode: bool) -> String {

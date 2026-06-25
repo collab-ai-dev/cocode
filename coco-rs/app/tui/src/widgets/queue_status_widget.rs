@@ -2,11 +2,11 @@
 //!
 //! Renders `SessionState::queued_commands` — messages the user typed while the
 //! agent was busy that will process at the next turn boundary — as a multi-line
-//! dimmed list, one `❯ <preview>` per command. Mirrors TS
+//! dimmed list, one `❯ <preview>` per command.
 //! `PromptInputQueuedCommands` (a `flexDirection="column"` box of dimmed user
 //! messages). Capped at [`MAX_ROWS`]; the remainder collapses into a final
 //! "+N more" summary row. The "Press up to edit queued messages" affordance
-//! lives in the input placeholder (TS `usePromptInputPlaceholder`), not here.
+//! lives in the input placeholder, not here.
 
 use std::collections::VecDeque;
 
@@ -35,7 +35,7 @@ impl<'a> QueueStatusWidget<'a> {
         Self { queued, styles }
     }
 
-    /// Rows this strip occupies: one blank top-margin row (TS `marginTop={1}`,
+    /// Rows this strip occupies: one blank top-margin row (
     /// separating the queue from the subagent/spinner panel above) plus one row
     /// per queued command, capped at [`MAX_ROWS`] (the cap row doubles as the
     /// "+N more" summary). Zero when the queue is empty. The sizing pass in
@@ -54,7 +54,7 @@ impl Widget for QueueStatusWidget<'_> {
         if area.height == 0 || self.queued.is_empty() {
             return;
         }
-        // Leading blank row = TS `marginTop={1}` separating the queue from the
+        // Leading blank row separating the queue from the
         // subagent/spinner panel above; the previews paint from the next row.
         let area = Rect {
             y: area.y.saturating_add(1),
@@ -70,7 +70,7 @@ impl Widget for QueueStatusWidget<'_> {
         let overflow = total > MAX_ROWS;
         // On overflow keep MAX_ROWS-1 previews + one summary row.
         let shown = if overflow { MAX_ROWS - 1 } else { total };
-        // Width budget for the preview text after the "  ❯ " prefix.
+        // Width budget for the preview text after the " ❯ " prefix.
         let text_width = (area.width as usize).saturating_sub(4).max(8);
 
         let mut lines: Vec<Line> = Vec::with_capacity(shown + usize::from(overflow));

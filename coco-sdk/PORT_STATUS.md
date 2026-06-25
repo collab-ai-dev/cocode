@@ -1,7 +1,7 @@
-# coco-sdk Port Status
+# coco-sdk Status
 
-This directory was ported from `cocode-sdk/` as part of Phase 2.G of the
-event system refactor. All mechanical renames have been applied:
+This directory was created as part of Phase 2.G of the event system refactor.
+All mechanical renames from the original `cocode-sdk/` naming have been applied:
 
 | Old | New |
 |-----|-----|

@@ -9,7 +9,7 @@
 //! parsing proceeds.
 //!
 //! Mirrors the argv0/self-dispatch convention used by
-//! `@anthropic-ai/sandbox-runtime` (referenced in `sandbox-adapter.ts:351`),
+//! `@anthropic-ai/sandbox-runtime`,
 //! expressed here as an explicit `--apply-*` flag rather than argv0 magic.
 
 use std::ffi::OsString;

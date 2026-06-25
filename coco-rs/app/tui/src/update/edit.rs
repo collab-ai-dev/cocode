@@ -119,7 +119,7 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
         persist_prompt_history(command_tx, text).await;
         // `/exit` (alias `/quit`) shuts down through the same path as the
         // Ctrl+C/Ctrl+D double-press exit, not the registry handler (which only
-        // prints "Exiting…"). Mirrors TS, where /exit funnels into the shared
+        // prints "Exiting…")., where /exit funnels into the shared
         // exit flow.
         if super::is_exit_command(name.as_str()) {
             super::shutdown_via_slash_command(state, command_tx).await;
@@ -197,7 +197,6 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
 }
 
 /// Delete one word backwards from the cursor.
-///
 /// Delegates to `TextArea::delete_backward_word`, which puts the killed
 /// span into the TextArea's kill buffer (yankable via Ctrl+Y).
 pub(super) fn delete_word_backward(state: &mut AppState) {
@@ -205,14 +204,12 @@ pub(super) fn delete_word_backward(state: &mut AppState) {
 }
 
 /// Delete one word forward from the cursor.
-///
 /// Delegates to `TextArea::delete_forward_word` (alt+d / ctrl+delete).
 pub(super) fn delete_word_forward(state: &mut AppState) {
     state.ui.input.textarea.delete_forward_word();
 }
 
 /// Kill from cursor to end of current line (Emacs Ctrl+K).
-///
 /// TextArea owns the single-entry kill buffer; consecutive kills accumulate
 /// readline-style so `Ctrl+Y` recovers the full deleted region.
 pub(super) fn kill_to_end_of_line(state: &mut AppState) {
@@ -257,10 +254,9 @@ pub(super) fn history_up(state: &mut AppState) {
 
 /// Down arrow: recall newer history (toward the live draft) when the
 /// cursor is on the last line, otherwise move the cursor down one line.
-///
 /// When the cursor is already at the live draft (no newer history) and the
 /// draft is empty, a further Down parks focus on the footer background-tasks
-/// pill if any task is running — mirrors TS `PromptInput.handleHistoryDown`
+/// pill if any task is running —
 /// → `selectFooterItem`. Enter then opens the background-tasks dialog.
 pub(super) fn history_down(state: &mut AppState) {
     if !cursor_on_last_line(&state.ui.input) {

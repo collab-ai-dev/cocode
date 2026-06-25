@@ -7,7 +7,6 @@
 use super::session::ProviderUnavailableReason;
 
 /// Permission approval state with tool-specific detail.
-///
 /// Each tool type has a specialized review UI.
 #[derive(Debug, Clone)]
 pub struct PermissionPromptState {
@@ -50,16 +49,16 @@ pub struct PermissionPromptState {
     /// Rendered in the prompt title so the leader sees who is asking;
     /// `None` for the leader's own in-process requests.
     pub worker_badge: Option<coco_types::WorkerBadge>,
-    /// Lazy Ctrl+E risk-explainer panel (TS `PermissionExplanation.tsx`):
+    /// Lazy Ctrl+E risk-explainer panel:
     /// whether the panel is currently expanded.
     pub explanation_visible: bool,
     /// Lazily-fetched LLM risk explanation. Fetched on first Ctrl+E toggle and
-    /// cached so re-toggling doesn't re-query (TS `createExplanationPromise`).
+    /// cached so re-toggling doesn't re-query.
     pub explanation: ExplainerFetch,
     /// Editable "always allow" prefix for shell tools (`Bash` / `PowerShell`).
     /// `Some` only when `show_always_allow` and the tool is a shell command —
     /// seeded with the default `command subcommand:*` / `command:*` / exact rule
-    /// (TS `BashPermissionRequest` editable field). When an allow row is focused
+    /// (`BashPermissionRequest` editable field). When an allow row is focused
     /// the field becomes editable; committing that row writes `Bash(<value>)`
     /// instead of the engine-suggested rule.
     pub prefix_input: Option<PrefixInputState>,
@@ -164,7 +163,6 @@ pub enum RiskLevel {
 }
 
 /// Tool-specific permission review content.
-///
 /// 12 specialized permission request variants.
 #[derive(Debug, Clone)]
 pub enum PermissionDetail {
@@ -389,7 +387,7 @@ pub struct CopyPickerState {
     /// user opens the picker via the "always" path; otherwise at least
     /// one entry (the no-blocks case skips the picker entirely).
     pub code_blocks: Vec<CopyPickerCodeBlock>,
-    /// 0 = latest, 1 = second-to-latest, …  Surfaced in the picker
+    /// 0 = latest, 1 = second-to-latest, … Surfaced in the picker
     /// header so the user knows which turn they're copying.
     pub message_age: usize,
     /// Currently highlighted option.
@@ -558,7 +556,6 @@ pub struct TaskDetailState {
 /// into a per-task detail view. The task rows are derived live from
 /// `SessionState::running_background_tasks`; this struct holds only the
 /// cursor and which layer is showing.
-///
 /// No output-scroll offset yet: the detail view's output is a placeholder
 /// ("No output available") until live shell output is wired through a
 /// TUI↔core round-trip, at which point a `scroll` field returns alongside the
@@ -787,7 +784,7 @@ pub struct ThemePickerState {
 }
 
 /// Interactive `/add-dir` (no-argument) overlay — a single-line directory-path
-/// input with inline validation. Mirrors TS `AddWorkspaceDirectory`: Enter
+/// input with inline validation.: Enter
 /// validates the typed path and, on success, adds it to the session's working
 /// directories; an invalid path keeps the form open with [`Self::error`] set.
 /// Esc cancels. The actual add re-dispatches `/add-dir <path>` so the validated

@@ -219,7 +219,7 @@ impl Tool for WorkflowTool {
     ) -> ToolCheckResult {
         // Rule key: only a *named* workflow with no `scriptPath` has a stable
         // identity. A `scriptPath` (with or without a name) and a bare inline
-        // `script` have none, so they always fall through to Ask — matching TS
+        // `script` have none, so they always fall through to Ask.
         // `ruleKey = input.scriptPath ? undefined : input.name`. This closes
         // the bypass where a `{scriptPath, name}` call could be auto-allowed by
         // an unrelated `Workflow(name)` rule while actually running on-disk code.
@@ -398,7 +398,7 @@ you can also tail the output file to check progress.",
 }
 
 /// The stable rule-matching identity for a workflow invocation: the trimmed
-/// `name` only when no `scriptPath` is present, else `None`. Mirrors TS
+/// `name` only when no `scriptPath` is present, else `None`.
 /// `ruleKey = input.scriptPath ? undefined : input.name`.
 fn workflow_rule_key(input: &WorkflowInput) -> Option<&str> {
     if input
@@ -487,7 +487,7 @@ fn workflow_name_suggestions(name: &str) -> Vec<PermissionUpdate> {
 /// A `Workflow` (or `*`) permission rule whose `rule_content` matches `name`.
 /// Content-less rules deliberately do NOT match: because a workflow runs
 /// arbitrary code, only an explicit `Workflow(name)` rule auto-allows, matching
-/// TS `lookupPermissionRules(...).get(ruleKey)` (which keys solely on
+/// The rule lookup keys solely on
 /// `ruleContent`).
 fn matching_workflow_rule<'a>(
     rules: &'a coco_types::PermissionRulesBySource,

@@ -27,7 +27,7 @@ const MIN_CONTEXT_WINDOW: i64 = 1_000_000;
 const USAGE_NUMERATOR: i64 = 1;
 const USAGE_DENOMINATOR: i64 = 4;
 
-/// Verbatim body from `messages.ts:4139-4147`. The em-dash is intentional.
+/// The em-dash is intentional.
 const BODY: &str = "Auto-compact is enabled. When the context window is nearly full, older messages will be automatically summarized so you can continue working seamlessly. There is no need to stop or rush — you have unlimited context through automatic compaction.";
 
 /// Reassurance reminder for long sessions approaching context capacity.

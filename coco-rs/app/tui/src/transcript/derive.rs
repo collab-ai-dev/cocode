@@ -25,7 +25,6 @@ use super::cells::RenderedCell;
 use super::cells::SystemCellKind;
 
 /// Derive zero or more cells from a single engine `Message`.
-///
 /// Most variants yield exactly one cell. `Message::Assistant` may
 /// yield multiple cells when its content interleaves text / thinking /
 /// tool_use blocks. `Message::Tombstone` yields zero (filtered).
@@ -163,7 +162,7 @@ fn assistant_cells(
                 // dialog) render their own surface; suppress the `● ToolName(…)`
                 // invocation header so only the result/plan shows. The result
                 // cell orphan-renders (see `presentation::transcript` projection),
-                // matching TS `userFacingName() == ""`.
+                // userFacingName() is empty`.
                 if crate::tool_display::tool_is_overlay_driven(&tc.tool_name) {
                     continue;
                 }
@@ -281,7 +280,6 @@ pub(crate) struct ToolResultProjection<'a> {
 /// (`"msg-1"` / `"tool-call-1"`) land on stable cell UUIDs and
 /// downstream lookups (rewind picker, transcript anchor) can fall
 /// back to the same mapping.
-///
 /// **Test-only.** Production code paths now key on parsed `Uuid` from
 /// the wire (e.g. `Cell.message_uuid`); the
 /// fallback v5 derivation exists purely so test fixtures can compare
@@ -453,7 +451,6 @@ pub(crate) mod test_helpers {
     }
 
     // ── Push helpers ─────────────────────────────────────────────────
-    //
     // Fixture-friendly wrappers that push a synthesized engine message
     // straight into `SessionState::transcript`. The production write
     // path (`MessageAppended` → `TranscriptView::on_message_appended`)

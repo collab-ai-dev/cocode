@@ -11,20 +11,20 @@
 //! # Fields fixed by this factory (I6)
 //!
 //! - `thinking_level`, `is_non_interactive`, `max_budget_usd`,
-//!   `total_token_budget`,
-//!   `custom_system_prompt`, `append_system_prompt` — previously hardcoded
-//!   defaults in `engine.rs`. Now mirrored from `QueryEngineConfig`.
+//! `total_token_budget`,
+//! `custom_system_prompt`, `append_system_prompt` — previously hardcoded
+//! defaults in `engine.rs`. Now mirrored from `QueryEngineConfig`.
 //! - `main_loop_model` snapshots the currently-active model. The engine
-//!   passes `ToolContextOverrides.current_model_id` at build time from
-//!   `ModelRuntime::current_model_id()` so post-fallback contexts reflect
-//!   the active slot. Callers that omit the override (tests, legacy single-
-//!   client paths) fall back to `config.model_id`.
+//! passes `ToolContextOverrides.current_model_id` at build time from
+//! `ModelRuntime::current_model_id()` so post-fallback contexts reflect
+//! the active slot. Callers that omit the override (tests, legacy single-
+//! client paths) fall back to `config.model_id`.
 //! - `hook_handle` — plumbed through even when `None` so Phase 3's
-//!   `QueryHookHandle` slots in without a second call-site edit.
+//! `QueryHookHandle` slots in without a second call-site edit.
 //! - Permission-mode-related fields (`mode`, `pre_plan_mode`,
-//!   `stripped_dangerous_rules`) are seeded from live `ToolAppState`
-//!   when present so mid-session mutations (e.g. `EnterPlanMode`) are
-//!   visible on the next batch.
+//! `stripped_dangerous_rules`) are seeded from live `ToolAppState`
+//! when present so mid-session mutations (e.g. `EnterPlanMode`) are
+//! visible on the next batch.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -85,10 +85,8 @@ pub(crate) fn resolve_tool_search_strategy(
 }
 
 /// Immutable inputs needed to build a `ToolUseContext`.
-///
 /// Carries the QueryEngine state relevant to tool execution,
 /// minus per-call overrides (which go through [`ToolContextOverrides`]).
-///
 /// All `Arc`/`Option<Arc<_>>` fields are cheap to clone; the factory keeps them
 /// by value so a caller can construct one factory and reuse it across turns.
 pub(crate) struct ToolContextFactory {
@@ -164,7 +162,6 @@ pub(crate) struct ToolContextFactory {
     /// Per-engine skill-emitted Command-source rule store, shared by
     /// `Arc` with `QueryEngine.live_command_rules` and the
     /// `EngineLiveRulesHandle` installed on the executor.
-    ///
     /// At each batch's `build()`, the factory `read()`s this Arc and
     /// merges its contents into the returned context's
     /// `permission_context.allow_rules[Command]` so the evaluator sees
@@ -183,7 +180,6 @@ pub(crate) struct ToolContextOverrides {
     /// `ctx.progress_tx` and push `ToolProgress` updates; the engine
     /// spawns a drain task that forwards those updates to `event_tx`
     /// as `TuiOnlyEvent::ToolProgress` events.
-    ///
     /// `None` ⇒ tools run without progress reporting.
     pub(crate) progress_tx: Option<coco_tool_runtime::ProgressSender>,
     /// Currently-active model name. Engine passes
@@ -217,7 +213,6 @@ fn merge_rules_by_behavior(
 
 impl ToolContextFactory {
     /// Build a fresh `ToolUseContext` for the next tool batch.
-    ///
     /// Reads permission-mode-related fields from `app_state` when available —
     /// the prior batch's `ExitPlanModeTool` / `EnterPlanModeTool` patches
     /// become visible here without a config reload.
@@ -226,9 +221,8 @@ impl ToolContextFactory {
         // allow/deny/ask + additional_dirs + source_roots) in ONE read-lock
         // acquire, plus the discovered-tool names. Lock discipline: clone out,
         // drop the guard before any `await`. `ToolAppState` is the single live
-        // source of truth (TS `appState.toolPermissionContext`); subagents share
+        // source of truth; subagents share
         // the parent's Arc so they read-through the parent's live rules.
-        //
         // Fallback (no app_state): test/legacy engines derive the base from the
         // config snapshot. (S6 removes the config rule fields once every engine
         // carries an app_state.)
@@ -257,13 +251,13 @@ impl ToolContextFactory {
         }
 
         // Per-engine permission derivation (subagent / fork / teammate): the
-        // Rust analog of TS `createSubagentContext` + `agentGetAppState`. Reads
+        // Rust analog of `createSubagentContext` + `agentGetAppState`. Reads
         // through the shared base (deny/ask already inherited above) and layers
         // the per-engine deltas WITHOUT mutating the shared app_state. `None`
         // for the main session (identity).
         if let Some(deriv) = self.config.permission_derivation.as_ref() {
             // Agent-definition mode override, but never widen past a parent
-            // Bypass/AcceptEdits/Auto (TS `runAgent.ts:421-427`).
+            // Bypass/AcceptEdits/Auto.
             if let Some(om) = deriv.mode_override
                 && !matches!(
                     live_mode,
@@ -277,7 +271,7 @@ impl ToolContextFactory {
             // `allowedTools` replace-on-restrict: keep only the parent's
             // CliArg-source allow + the explicit allowed tools as Session-source
             // allow, dropping the parent's other allow sources. deny/ask remain
-            // fully inherited (TS `runAgent.ts:469-479`).
+            // fully inherited.
             if let Some(replace) = deriv.allowed_tools_replace.as_ref() {
                 let cli_arg = base.allow_rules.remove(&PermissionRuleSource::CliArg);
                 base.allow_rules.clear();
@@ -398,7 +392,7 @@ impl ToolContextFactory {
         // the evaluator-facing `allow_rules` whenever the live mode is Auto.
         // Without this, evaluate.rs step-2 returns Allow on a dangerous allow
         // rule BEFORE the classifier gate in tool_call_preparer.rs — a fail-OPEN
-        // bypass. TS `stripDangerousPermissionsForAutoMode` removes them from
+        // bypass. `stripDangerousPermissionsForAutoMode` removes them from
         // `alwaysAllowRules` on Auto entry; coco-rs applies the same filter at
         // build time keyed on mode, so it is mandatory regardless of which entry
         // path (SDK / bridge / startup / plan-exit) set Auto. `is_ant_user=false`
@@ -616,7 +610,7 @@ impl ToolContextFactory {
             // relative-path-resolving tools (Glob/Grep/Bash) operate
             // inside the worktree. Absolute-path tools ignore this
             // field by design (schema enforces absolute paths),
-            // matching TS behavior where `AsyncLocalStorage`-based
+            // where `AsyncLocalStorage`-based
             // cwd override only affects resolving calls.
             cwd_override: self.config.cwd_override.clone(),
             // Memdir-only write fence for sandboxed subagents (memory
@@ -662,7 +656,7 @@ impl ToolContextFactory {
                 .app_state
                 .as_ref()
                 .map(|arc| AppStateReadHandle::new(arc.clone())),
-            // Per-subagent denial isolation (TS `createSubagentContext`
+            // Per-subagent denial isolation (`createSubagentContext`
             // parity): every subagent — fork OR ordinary — gets its own fresh
             // `DenialTracker`, so one child's consecutive-denial streak cannot
             // trip the SHARED auto-mode circuit breaker for the parent and its

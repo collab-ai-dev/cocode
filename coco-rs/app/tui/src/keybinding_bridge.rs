@@ -3,7 +3,7 @@
 //! Determines the active keybinding context from state, then resolves
 //! key events to commands. Context priority:
 //!
-//!   state > autocomplete > global > input
+//! state > autocomplete > global > input
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -160,7 +160,6 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
     // Autocomplete popup active: Up/Down/Tab/Enter/Esc route to
     // suggestion navigation; all other keys fall through to normal input
     // editing.
-    //
     // Gate on non-empty items — async triggers (File/Symbol) install the
     // query before search results arrive, and we must not hijack arrow
     // keys during that window.
@@ -178,18 +177,16 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
 }
 
 /// Map a key event to a TUI command based on the active context.
-///
 /// Resolution order:
-///
 /// 1. Run the [`coco_keybindings`] resolver against the TS default
-///    bindings. If it fires an action with a TUI handler in
-///    [`crate::keybinding_dispatch`], use it.
+/// bindings. If it fires an action with a TUI handler in
+/// [`crate::keybinding_dispatch`], use it.
 /// 2. If the resolver explicitly consumed the keystroke (chord
-///    cancelled, null unbind), return `None` so it doesn't fall through.
+/// cancelled, null unbind), return `None` so it doesn't fall through.
 /// 3. Otherwise, dispatch through the residual hardcoded arms — only keys
-///    that CANNOT be rebindable defaults (`?`-on-empty-composer, per-surface
-///    navigation maps, readline editing, PageUp/PageDown, F6); every former
-///    "TUI-only shortcut" arm is folded into `coco-keybindings` defaults.
+/// that CANNOT be rebindable defaults (`?`-on-empty-composer, per-surface
+/// navigation maps, readline editing, PageUp/PageDown, F6); every former
+/// "TUI-only shortcut" arm is folded into `coco-keybindings` defaults.
 pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let ctx = active_context(state);
     let (cmd, source) = resolve_key(state, key, ctx);
@@ -285,7 +282,7 @@ fn resolve_key(
     // A stale prompt suggestion must not claim Enter/Tab/Right while a turn is
     // in flight — during a turn those keys belong to steering (Enter queues via
     // SubmitInput). Suggestions are normally cleared on turn start, so this is a
-    // defensive guard; it mirrors TS, where the suggestion affordance is idle
+    // defensive guard; it, where the suggestion affordance is idle
     // while `queryGuard.isActive`.
     if matches!(ctx, KeybindingContext::Chat)
         && key.modifiers == KeyModifiers::NONE
@@ -450,13 +447,12 @@ fn map_autocomplete_key(key: KeyEvent) -> Option<TuiCommand> {
 /// `app:globalSearch`, ctrl+s → `chat:stash`, ctrl+g →
 /// `chat:externalEditor`, shift+tab → `chat:cycleMode`, plus the
 /// platform-primary paste key) were dead code and are simply gone.
-///
 /// What stays, and why it cannot be a binding:
 /// - `?` opens help only on an empty composer; otherwise the key must fall
-///   through to typing. The resolver swallows matched keys outright, so a
-///   binding would eat `?` mid-sentence.
+/// through to typing. The resolver swallows matched keys outright, so a
+/// binding would eat `?` mid-sentence.
 /// - PageUp/PageDown are viewport scrolling — navigation, not a shortcut
-///   (the internal `Scroll` context is not part of the Chat stack).
+/// (the internal `Scroll` context is not part of the Chat stack).
 /// - F6 focus cycling — navigation, same class as the per-surface maps.
 fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
@@ -474,7 +470,7 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     // A turn is in flight for its whole lifecycle (stream + tool/subagent
-    // execution), mirroring TS `queryGuard.isActive`. While it is, Enter must
+    // execution). While it is, Enter must
     // route to `SubmitInput` (which queues/steers) rather than being claimed by
     // the prompt-suggestion arm below.
     let turn_active = state.ui.ephemeral.turn_active();

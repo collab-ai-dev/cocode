@@ -39,7 +39,6 @@ pub struct CompletionInsertion {
 }
 
 /// Which autocomplete trigger produced the active suggestions.
-///
 /// Determines the popup title, the source of suggestion items, and how the
 /// accepted item is substituted back into the input. Kinds map to TS's
 /// unified `@` mention trigger plus the leading `/` slash-command trigger.
@@ -101,7 +100,6 @@ pub struct SlackChannelCompletion {
 }
 
 /// Canonical identity for one completion request.
-///
 /// Async providers echo this key back with their results. The TUI applies
 /// a result only when it exactly matches the active key, so repeated text in
 /// different tokens and stale results from previous generations cannot cross.
@@ -332,16 +330,16 @@ enum DirAccept {
     Drill,
 }
 
-/// How an accepted directory splices into the prompt, mirroring TS
+/// How an accepted directory splices into the prompt,
 /// `useTypeahead`:
-/// - **Enter** in the fuzzy `@` popup (`At`, TS `suggestionType: 'file'`)
-///   finalizes the directory as a mention. Fuzzy search returns the directory
-///   *itself* as a top hit, so re-searching the same token would loop — Enter
-///   must commit, not drill.
+/// - **Enter** in the fuzzy `@` popup (`At`, suggestion type: file)
+/// finalizes the directory as a mention. Fuzzy search returns the directory
+/// *itself* as a top hit, so re-searching the same token would loop — Enter
+/// must commit, not drill.
 /// - Everything else drills: **Tab** (common-prefix progress) and the
-///   path-traversal kinds (`Path` / `Directory`, TS `suggestionType:
-///   'directory'`), whose re-search lists the directory's *contents* and so
-///   makes real progress instead of looping.
+/// path-traversal kinds (`Path` / `Directory`, suggestion type:
+/// 'directory'`), whose re-search lists the directory's *contents* and so
+/// makes real progress instead of looping.
 fn dir_accept_policy(kind: SuggestionKind, mode: AcceptMode) -> DirAccept {
     match (kind, mode) {
         (SuggestionKind::At, AcceptMode::AcceptSelected | AcceptMode::SubmitSelected) => {

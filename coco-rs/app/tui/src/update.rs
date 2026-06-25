@@ -50,7 +50,6 @@ pub(crate) fn route_question_free_text_paste(state: &mut AppState, text: &str) -
 }
 
 /// Apply a TUI command to the state.
-///
 /// Returns `true` if the state changed and a redraw is needed.
 pub async fn handle_command(
     state: &mut AppState,
@@ -341,7 +340,7 @@ pub async fn handle_command(
         // ── Input actions ──
         TuiCommand::SubmitInput => {
             // Steer (queue) whenever a turn is in flight — the whole turn,
-            // not just the token-stream window. Mirrors TS, which gates on
+            // not just the token-stream window., which gates on
             // `queryGuard.isActive` (active for the entire query lifecycle,
             // including tool / subagent execution). Gating on `is_streaming()`
             // here would treat a submit during the post-stream tool/subagent
@@ -763,7 +762,7 @@ pub async fn handle_command(
                 state.ui.focus = FocusTarget::AgentSwitcher;
                 // First press just parks focus on the switcher and lands on the
                 // first agent — there is no synthetic `◯ main`/leader row to
-                // step off (unlike TS `stepTeammateSelection`, which parks on
+                // step off (unlike `stepTeammateSelection`, which parks on
                 // the leader), so entry must select a real agent. Direction is
                 // ignored on entry; once focused, `↑/↓` step from index 0.
                 state.ui.agent_switcher_selected = 0;
@@ -1364,7 +1363,7 @@ async fn apply_exit_effect(
 /// Built-in exit command names (`exit` + its `quit` alias). Typed `/exit`
 /// shuts the REPL down through the SAME path as the Ctrl+C / Ctrl+D
 /// double-press exit — the registry handler only prints "Exiting…" and never
-/// tears the TUI down. Mirrors TS `commands/exit` (`immediate: true` →
+/// tears the TUI down. (`immediate: true` →
 /// `gracefulShutdown`), whose own comment notes /exit, /quit, ctrl+c and
 /// ctrl+d all funnel through one exit path.
 pub(super) fn is_exit_command(name: &str) -> bool {

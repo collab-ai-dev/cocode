@@ -1,6 +1,6 @@
 //! Subagent handoff safety classifier — pure-logic prompt builders.
 //!
-//! `tools/AgentTool/agentToolUtils.ts:classifyHandoffIfNeeded` runs a
+//! Handoff classification for subagent completion.
 //! 2-stage LLM classifier on the subagent's transcript before returning
 //! the result to the parent. Stage 1 (broad triage) flags anything
 //! suspicious; stage 2 (focused review) confirms or clears the flag.
@@ -29,7 +29,7 @@ pub enum HandoffClassification {
 
 /// Whether classification should run for this hand-off. Gates *solely*
 /// on a non-empty transcript — mirrors
-/// `agentToolUtils.ts:411-412` (`const agentTranscript =
+/// Transcript extraction (
 /// buildTranscriptForClassifier(...); if (!agentTranscript) return null`).
 /// Read-only agents and zero-tool turns are NOT exempt; `subagentType`
 /// and `totalToolUseCount` feed analytics only. The feature + auto-mode
@@ -41,7 +41,7 @@ pub fn should_classify(transcript: &str) -> bool {
 /// Hand-off review user message — fed verbatim to the classifier so
 /// it knows the transcript represents a sub-agent returning control to
 /// the main agent (not a fresh tool call). Pulled from
-/// `tools/AgentTool/agentToolUtils.ts:417`. Keep byte-faithful — the
+/// Keep byte-faithful — the
 /// classifier's training surface anchors on this exact phrasing.
 pub const HANDOFF_REVIEW_USER_PROMPT: &str = "Sub-agent has finished and is handing back control to the main agent. \
      Review the sub-agent's work based on the block rules and let the main \
@@ -132,7 +132,7 @@ pub fn parse_classifier_response(text: &str) -> HandoffClassification {
 
 /// Compose the warning payload for a confirmed block.
 /// Mirrors the literal returned by `classifyHandoffIfNeeded` in
-/// `agentToolUtils.ts:476` — keep the wording byte-faithful so model
+/// Keep the wording byte-faithful so model
 /// behaviour around the warning stays consistent. Returns `None` for
 /// safe verdicts (caller passes the sub-agent's output through unchanged).
 ///
@@ -158,13 +158,13 @@ pub fn render_block_message(verdict: &HandoffClassification) -> Option<String> {
 }
 
 /// Warning text returned when the classifier itself was unreachable.
-/// `agentToolUtils.ts:469`. Surfaces as a model-visible hint so the
+/// Surfaces as a model-visible hint so the
 /// parent agent knows the hand-off review didn't run, but still
 /// propagates the sub-agent's output (fail-open).
 pub const UNAVAILABLE_WARNING: &str = "Note: The safety classifier was unavailable when reviewing this sub-agent's work. \
      Please carefully verify the sub-agent's actions and output before acting on them.";
 
-/// `agentToolUtils.ts:404-405` — handoff classification only runs
+/// Handoff classification only runs
 /// when the parent's permission mode is [`PermissionMode::Auto`] AND the
 /// `TRANSCRIPT_CLASSIFIER` feature is on. This crate surfaces the same
 /// gate as a pure predicate so callers don't re-derive it. The
@@ -182,7 +182,7 @@ pub fn handoff_classifier_active(
 /// Strips tool-result bodies (only emits `tool_result` markers) so the
 /// classifier sees actions, not data, and the prompt stays bounded.
 ///
-/// `agentToolUtils.ts:buildTranscriptForClassifier` reads
+/// Reads
 /// `tool_result` blocks out of a user message's content array; coco-rs
 /// stores them as the [`coco_types::messages::Message::ToolResult`]
 /// variant but tags them `[user]` in the summary so the prompt the

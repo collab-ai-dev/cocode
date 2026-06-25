@@ -38,7 +38,6 @@ pub struct SettingsWithErrors {
 // ── Top-level validation ──
 
 /// Validate the merged settings for invalid combinations and constraint violations.
-///
 /// Returns a list of validation errors. An empty vec means the settings are valid.
 pub fn validate_settings(settings: &Settings) -> Vec<ValidationError> {
     let mut errors = Vec::new();
@@ -122,7 +121,6 @@ pub fn validate_settings(settings: &Settings) -> Vec<ValidationError> {
 }
 
 /// Validate provider configurations for safe secret handling.
-///
 /// Flags any provider entry that stores `api_key` in plaintext in
 /// settings.json. Secrets should live in the provider's `env_key` env
 /// var, not in the config file. The partial overlay shape carries
@@ -166,8 +164,7 @@ pub fn validate_providers(settings: &Settings) -> Vec<ValidationError> {
 // ── Permission rule validation ──
 
 /// Validate the permissions configuration: check rule syntax, detect conflicts.
-///
-/// Rules are stored as strings matching TS on-disk format: `"Bash"`, `"Bash(git *)"`.
+/// Rules are stored as strings in the format: `"Bash"`, `"Bash(git *)"`.
 pub fn validate_permission_rules(config: &PermissionsConfig) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
@@ -218,7 +215,6 @@ pub fn validate_permission_rules(config: &PermissionsConfig) -> Vec<ValidationEr
 }
 
 /// Parse a rule string into a PermissionRuleValue (tool_pattern + optional content).
-///
 /// Format: `"ToolName"` or `"ToolName(content)"`.
 fn parse_rule_value_from_string(s: &str) -> PermissionRuleValue {
     if let Some(paren_pos) = s.find('(')
@@ -238,7 +234,7 @@ fn parse_rule_value_from_string(s: &str) -> PermissionRuleValue {
 // ── MCP config validation ──
 
 /// Known hook event types — synced 1:1 with `HookEventType` (coco-types)
-/// and TS `HOOK_EVENTS` (`coreSchemas.ts:355-383`).
+/// and `HOOK_EVENTS`.
 const KNOWN_HOOK_EVENTS: &[&str] = &[
     // Tool lifecycle
     "PreToolUse",
@@ -278,7 +274,6 @@ const KNOWN_HOOK_EVENTS: &[&str] = &[
 ];
 
 /// Validate MCP server configurations for structural correctness.
-///
 /// Checks:
 /// - Server names are non-empty
 /// - No duplicate allowed server names
@@ -376,7 +371,6 @@ pub fn validate_mcp_configs(settings: &Settings) -> Vec<ValidationError> {
 // ── Hooks validation ──
 
 /// Validate hook definitions for structural correctness.
-///
 /// Checks:
 /// - hooks is a JSON object (not array/string/etc.)
 /// - Each key is a known hook event type
@@ -626,7 +620,6 @@ pub fn is_setting_supported(field: &str) -> bool {
 }
 
 /// Filter raw JSON data to remove invalid permission rules, returning warnings.
-///
 /// Prevents one bad rule from poisoning the entire settings file.
 pub fn filter_invalid_permission_rules(
     data: &mut serde_json::Value,
@@ -683,7 +676,6 @@ pub fn filter_invalid_permission_rules(
 }
 
 /// Validate a single permission rule string.
-///
 /// Returns `Ok(())` if valid, `Err(reason)` if invalid.
 pub fn validate_permission_rule_string(rule: &str) -> Result<(), String> {
     if rule.is_empty() || rule.trim().is_empty() {

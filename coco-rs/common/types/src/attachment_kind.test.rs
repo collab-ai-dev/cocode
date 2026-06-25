@@ -107,11 +107,9 @@ fn skill_listing_is_api_visible_but_transcript_hidden() {
     assert!(!AttachmentKind::SkillListing.renders_in_transcript());
 }
 
-/// TS parity guard: every kind listed in
-/// `components/messages/nullRenderingAttachments.ts:14-49` (TS
-/// `NULL_RENDERING_TYPES`) must return `renders_in_transcript() == false`
-/// in coco-rs. If someone adds a kind to the TS list upstream and forgets
-/// the Rust predicate, this test blows up.
+/// Guard: every kind that must not render in the transcript
+/// must return `renders_in_transcript() == false`.
+/// If someone adds a kind and forgets to update the Rust predicate, this test blows up.
 #[test]
 fn renders_in_transcript_matches_ts_null_rendering_list_exact() {
     // Verbatim copy of TS NULL_RENDERING_TYPES snapshot. Keep in sync.
@@ -160,11 +158,10 @@ fn renders_in_transcript_matches_ts_null_rendering_list_exact() {
     }
 }
 
-/// TS parity guard: every kind whose TS `normalizeAttachmentForAPI`
-/// returns `[]` unconditionally must return `is_api_visible() == false`
-/// in coco-rs. Mirrors `utils/messages.ts:4250-4261` + early-return cases
-/// (`dynamic_skill`) + case-less variants that fall through to the
-/// default `return []` (`max_turns_reached` / etc.).
+/// Guard: every kind that must be hidden from the API
+/// must return `is_api_visible() == false`.
+/// Covers early-return cases (`dynamic_skill`) and variants
+/// that fall through to the default API-hidden path (`max_turns_reached` / etc.).
 #[test]
 fn is_api_visible_matches_ts_normalize_attachment_for_api_returns_empty() {
     let ts_api_hidden = [

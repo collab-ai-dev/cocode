@@ -178,10 +178,9 @@ pub(crate) fn permission_styled_content(
 }
 
 /// Compact bottom-prompt projection for `ExitPlanMode`.
-///
 /// The plan body itself is rendered into the live transcript area by
 /// [`exit_plan_pending_history_lines`]. Keeping this prompt to just the
-/// decision rows mirrors codex-rs' "plan in history, actions in bottom pane"
+/// decision rows uses the "plan in history, actions in bottom pane"
 /// layout and keeps the choices visible for long plans.
 pub(crate) fn exit_plan_prompt_lines(
     p: &PermissionPromptState,

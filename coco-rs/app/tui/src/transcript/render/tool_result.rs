@@ -425,7 +425,7 @@ fn push_exit_plan_file_path(
 
 /// Render the approved plan as full markdown, indented under the result header.
 ///
-/// Mirrors claude-code `ExitPlanModeTool/UI.tsx` (`<Markdown>{plan}</Markdown>`
+/// Renders plan content as markdown (
 /// inside `MessageResponse`). Unlike every other tool preview this is **not**
 /// row-capped: the approved plan is the durable record the user scrolls back to
 /// to re-read what was agreed — the ephemeral approval panel is what truncates.

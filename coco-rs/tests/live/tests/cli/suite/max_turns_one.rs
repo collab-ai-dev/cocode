@@ -8,9 +8,8 @@
 //! that into `cancelled=false, budget_exhausted=true` and exits with
 //! `last_continue_reason = None`.
 //!
-//! TS parity: `query.ts` honours `--max-turns` for headless single-shot
-//! execution. coco-rs's CLI suite uses bare-engine harness so no
-//! `--max-turns` flag, just `SessionConfig.max_turns`.
+//! The CLI suite uses a bare-engine harness so no `--max-turns` flag,
+//! just `SessionConfig.max_turns`.
 
 use anyhow::Result;
 

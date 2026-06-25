@@ -1,12 +1,11 @@
 //! Shared `available_models` matching.
 //!
-//! TS parity: `utils/model/modelAllowlist.ts`. The setting distinguishes
+//! `utils/model/modelAllowlist.ts`. The setting distinguishes
 //! absence from an empty list: absent means allow all, empty means deny all.
 
 const FAMILY_ALIASES: &[&str] = &["opus", "sonnet", "haiku"];
 
 /// Return whether `model` is allowed by `available_models`.
-///
 /// `None` means the setting is absent and every model is allowed. `Some([])`
 /// means the setting is present but empty, so no models are allowed.
 pub fn is_model_allowed(model: &str, available_models: Option<&[String]>) -> bool {

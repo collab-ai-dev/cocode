@@ -6,7 +6,7 @@
 //! Notable behaviors:
 //! - `fmt_elapsed_compact` — compact elapsed time formatting
 //! - Width-aware degradation: trim the interrupt hint first, then the
-//!   token block, then the effort suffix.
+//! token block, then the effort suffix.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -22,7 +22,6 @@ use crate::style::UiStyles;
 /// Token-display threshold. Below this elapsed time the token segment
 /// is hidden unless `force_show_tokens` (verbose) is set or a teammate
 /// is actively running.
-///
 /// 30 seconds: short turns don't need the clutter.
 pub const SHOW_TOKENS_AFTER_MS: i64 = 30_000;
 
@@ -38,7 +37,7 @@ const SPINNER_INTERVAL_MS: i64 = 80;
 #[derive(Debug, Clone, Copy)]
 pub struct StatusIndicatorView<'a> {
     /// Random present-participle verb sampled once per turn. TS:
-    /// `Spinner.tsx:166` (`useState` initializer).
+    /// Initial state.
     pub verb: &'a str,
     /// Milliseconds since the turn started. Drives both the spinner
     /// frame and the elapsed display.
@@ -51,7 +50,7 @@ pub struct StatusIndicatorView<'a> {
     /// output usage lives in the footer and information pane.
     pub output_tokens: i64,
     /// `low` / `medium` / `high` — appended as ` with X effort`. None
-    /// means no effort modifier was selected. TS `effort.ts:188-196`.
+    /// means no effort modifier was selected.
     pub effort_level: Option<&'a str>,
     /// Whether to render the `esc to interrupt` hint at the end of
     /// the line. False when the turn is in an uninterruptible state
@@ -62,7 +61,7 @@ pub struct StatusIndicatorView<'a> {
     pub force_show_tokens: bool,
     /// True when at least one teammate is currently running. TS gates
     /// the token block on this in addition to verbose + elapsed
-    /// (`SpinnerAnimationRow.tsx:179`:
+    ///
     /// `verbose || hasRunningTeammates || effectiveElapsedMs > SHOW_TOKENS_AFTER_MS`).
     pub has_running_teammates: bool,
 }

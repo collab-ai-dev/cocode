@@ -6,9 +6,7 @@
 //! returns `Some("- name: desc\n…")` whenever the manager isn't empty,
 //! and the reminder pipeline injects the listing once per session.
 //!
-//! TS parity: `getSkillListingAttachments(ctx)`
-//! (`utils/attachments.ts:875`) reads `ctx.skillManager`. The
-//! complementary `SessionBootstrap.skills` path (covered in the CLI
+//! The complementary `SessionBootstrap.skills` path (covered in the CLI
 //! suite) drives the same reminder kind through a different source —
 //! both must work.
 

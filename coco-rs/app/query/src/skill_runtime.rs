@@ -261,8 +261,8 @@ impl SkillHandle for QuerySkillRuntime {
 
         // In-prompt shell expansion (`` !`cmd` `` / ```` ```! ```` blocks),
         // permission-checked through the parent's Bash handle. Runs for both
-        // inline and fork before the branch below, mirroring TS
-        // `getPromptForCommand` (both paths render shell identically). An
+        // inline and fork before the branch below (both paths render shell
+        // identically). An
         // `Err` (denied / failed) aborts the whole invocation. MCP-sourced
         // skills never run in-prompt shell — remote untrusted code.
         let expanded_prompt = if matches!(skill.source, coco_skills::SkillSource::Mcp { .. }) {

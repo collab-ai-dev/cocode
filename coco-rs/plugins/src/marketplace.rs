@@ -131,7 +131,7 @@ impl MarketplacePlugin {
 
 /// A recommendation surfaced by the hint system.
 ///
-/// Recommends a plugin when a CLI/SDK emits a `<claude-code-hint />` tag
+/// Recommends a plugin when a CLI/SDK emits a `<coco-hint />` tag
 /// referencing a plugin ID.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginRecommendation {

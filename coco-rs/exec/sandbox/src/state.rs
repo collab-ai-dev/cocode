@@ -36,7 +36,6 @@ impl Default for ProxyPorts {
 }
 
 /// Hot-reloadable sandbox configuration fields.
-///
 /// Wrapped in `RwLock` so the `/sandbox` command or settings changes
 /// can update enforcement without re-creating the entire state.
 struct MutableConfig {
@@ -61,7 +60,6 @@ struct MutableConfig {
 }
 
 /// Pre-computed snapshot for per-command sandbox decisions.
-///
 /// Produced by `SandboxState::command_snapshot()` with a single `RwLock` read,
 /// then consumed by the shell executor without further lock acquisitions.
 pub struct CommandSandboxSnapshot {
@@ -84,7 +82,6 @@ pub struct CommandSandboxSnapshot {
 }
 
 /// Runtime sandbox state, shared via `Arc` across the system.
-///
 /// Immutable fields (platform, violations) live directly on the struct.
 /// Mutable fields (enforcement, settings, config) are behind a `RwLock`
 /// to support hot-reload when the user changes sandbox settings mid-session.
@@ -175,7 +172,6 @@ impl SandboxState {
     }
 
     /// Create a new sandbox state.
-    ///
     /// Call `bootstrap::check_enable_gates()` first to determine if sandbox
     /// should be enabled, then construct the state accordingly.
     pub fn new(
@@ -196,7 +192,6 @@ impl SandboxState {
     }
 
     /// Create a sandbox state for external sandbox mode (Docker, CI).
-    ///
     /// Platform wrapping is skipped since the environment is already sandboxed,
     /// but env vars, proxy filtering, and violation tracking still apply.
     pub fn external(
@@ -298,7 +293,6 @@ impl SandboxState {
     }
 
     /// Build a fresh [`PermissionChecker`] from the live config snapshot.
-    ///
     /// Used by tool pre-flight checks (Read/Write/Edit) so SDK consumers
     /// can intercept disallowed file accesses *before* the tool spawns
     /// any I/O — the platform sandboxes (bwrap/Seatbelt) catch the same
@@ -394,7 +388,6 @@ impl SandboxState {
     }
 
     /// Get proxy environment variables for injection into sandboxed commands.
-    ///
     /// Returns the cached env vars computed at `activate_network()` time.
     /// Returns an empty map if the proxy is not active.
     pub fn proxy_env_vars(&self) -> HashMap<String, String> {
@@ -406,7 +399,6 @@ impl SandboxState {
     }
 
     /// Build proxy environment variables for the given ports.
-    ///
     /// Aligned with Claude Code's `f21()` function: sets HTTP, SOCKS, FTP,
     /// Docker, gcloud, gRPC proxy vars and GIT_SSH_COMMAND for SOCKS tunneling.
     fn build_proxy_env_vars(ports: ProxyPorts) -> HashMap<String, String> {
@@ -463,13 +455,11 @@ impl SandboxState {
     }
 
     /// Start the egress proxy and route the sandbox through it.
-    ///
     /// Builds a [`crate::proxy::DomainFilter`] from the configured allow/deny
     /// domain lists, starts the HTTP-CONNECT + SOCKS5 proxy, then activates
     /// network isolation so commands run with the proxy env vars (and, on
     /// Linux, the `proxy_active` seccomp `ProxyRouted` mode). The proxy is
     /// owned by this state and shut down when the state is dropped.
-    ///
     /// Idempotent: a no-op if the proxy is already running. Without this call,
     /// "network isolated" would degrade to "block all network" (Linux
     /// `--unshare-net`) because no egress path exists.
@@ -522,7 +512,6 @@ impl SandboxState {
 
     /// Start the egress proxy AND a Linux netns socat bridge so a
     /// `--unshare-net` sandbox can reach the host proxy.
-    ///
     /// The host proxy listens on `host_*_port` (loopback). A
     /// [`crate::proxy::BridgeManager`] spawns host-side socat processes that
     /// forward bind-mounted UDS sockets → those TCP ports. Inside the netns the
@@ -530,7 +519,6 @@ impl SandboxState {
     /// [`CommandSandboxSnapshot::inner_command_prefix`]) that listens on the
     /// netns-local proxy ports and forwards to the UDS. The proxy env therefore
     /// points at the **inner** (netns-local) ports, not the host ports.
-    ///
     /// Idempotent. Returns `Err` if the proxy or bridge fails to start; the
     /// caller logs and falls closed (network blocked).
     pub async fn start_network_proxy_with_bridge(
@@ -604,12 +592,12 @@ impl SandboxState {
 
     /// Build a [`crate::proxy::NetworkAskCallback`] from the installed approval
     /// bridge, if any. On a denied CONNECT the proxy invokes it to surface
-    /// "Allow network connection to {host}?" (TS `createSandboxAskCallback`)
+    /// "Allow network connection to {host}?"
     /// before refusing; an `Approved` decision lets the connection through.
     /// Returns `None` when no bridge is installed (fail-closed: static refuse),
     /// OR when `allow_managed_domains_only` is set — that policy forbids
     /// interactively widening past the managed allowlist, so denied hosts get a
-    /// static refusal with no prompt (TS `sandbox-adapter.ts` wraps the callback
+    /// static refusal with no prompt (the adapter wraps the callback
     /// to hard-deny under the same policy).
     fn build_network_ask_callback(&self) -> Option<crate::proxy::NetworkAskCallback> {
         if self
@@ -644,7 +632,6 @@ impl SandboxState {
     }
 
     /// Set network isolation as active with the given proxy ports.
-    ///
     /// Pre-computes and caches the proxy environment variables so they
     /// don't need to be re-allocated on every command execution.
     pub fn activate_network(&self, ports: ProxyPorts) {
@@ -728,7 +715,6 @@ impl SandboxState {
     }
 
     /// JSON description of filesystem restrictions for the system prompt.
-    ///
     /// Matches Claude Code's E9z format so the model sees structured
     /// restriction data: `{"read":{...},"write":{...}}`.
     pub fn describe_filesystem(&self) -> String {
@@ -793,7 +779,6 @@ impl SandboxState {
     }
 
     /// JSON description of network restrictions for the system prompt.
-    ///
     /// Matches Claude Code's E9z format: `{"allowedHosts":[...],"deniedHosts":[...]}`.
     pub fn describe_network(&self) -> String {
         let settings = self.settings();
@@ -815,11 +800,9 @@ impl SandboxState {
     }
 
     /// Add a writable root to the sandbox configuration.
-    ///
     /// Used when the agent enters a new worktree or workspace that needs
     /// write access. The writable root uses default read-only subpath
     /// protections (.git, project config dir, .agents).
-    ///
     /// Uses `std::sync::RwLock::write()` (blocking). The lock is held briefly
     /// so this is safe to call from async contexts, but avoid calling while
     /// another task holds the read lock in a tight loop.
@@ -839,8 +822,8 @@ impl SandboxState {
 
     /// Snapshot the current total violation count. Pair with
     /// [`Self::format_violations_since`] to summarize anything that
-    /// landed during a single command's execution. TS parity:
-    /// `annotateStderrWithSandboxFailures` (`sandbox-adapter.ts:961`).
+    /// landed during a single command's execution.
+    /// Sandbox failure annotation.
     pub async fn violations_total_snapshot(&self) -> i32 {
         self.violations.lock().await.total_count()
     }
@@ -848,9 +831,7 @@ impl SandboxState {
     /// Format violations recorded since `prev_total` as a single
     /// `<sandbox_violations>` block, ready to splice into a command's
     /// stderr. Returns `None` when no new non-benign violations occurred.
-    ///
     /// Output shape (one violation per line, kept short for stderr):
-    ///
     /// ```text
     /// <sandbox_violations>
     /// op=file-write-data path=/etc/passwd
@@ -887,19 +868,16 @@ impl SandboxState {
     }
 
     /// Allocate a per-command sandbox tmpdir on the host.
-    ///
     /// The directory is `mkdir`'d under the parent process's `$TMPDIR`
     /// (or `/tmp` fallback) with a unique `coco-sbx-XXXXXX` suffix.
     /// The returned [`tempfile::TempDir`] owns the cleanup — drop it
     /// after `child.wait_with_output()` returns to remove the dir.
-    ///
     /// The path is then handed to:
     /// - [`SandboxPlatform::wrap_command`] via `extra_writable_binds`
-    ///   so the inner process can write inside the sandbox.
+    /// so the inner process can write inside the sandbox.
     /// - The shell provider as `BuildExecOpts.sandbox_tmp_dir` so the
-    ///   inner shell writes its cwd-tracking file there and the
-    ///   provider can inject `TMPDIR` / `COCO_TMPDIR` / `TMPPREFIX`.
-    ///
+    /// inner shell writes its cwd-tracking file there and the
+    /// provider can inject `TMPDIR` / `COCO_TMPDIR` / `TMPPREFIX`.
     /// Returns `None` if `tempfile::tempdir()` fails (extremely
     /// unlikely — would require `/tmp` itself being un-writable).
     pub fn allocate_command_tmp_dir() -> Option<tempfile::TempDir> {
@@ -911,13 +889,11 @@ impl SandboxState {
     }
 
     /// Apply platform sandbox enforcement to a `tokio::process::Command`.
-    ///
     /// One-shot helper that combines `command_snapshot` + platform-wrap so
     /// callers outside the shell crate (PowerShell tool, future custom
     /// runners) don't replicate the snapshot logic. Returns `Ok(false)`
     /// if the command should run unsandboxed (excluded, bypass, sandbox
     /// inactive, etc.); returns `Ok(true)` after the wrap is applied.
-    ///
     /// On platform-wrap failure (e.g., bwrap binary missing at exec
     /// time), returns the [`crate::SandboxError`] — callers should
     /// fail-closed and refuse to spawn the command unsandboxed.
@@ -962,7 +938,6 @@ impl SandboxState {
     }
 
     /// Hot-reload sandbox configuration.
-    ///
     /// Updates enforcement level, settings, and config without re-creating
     /// the entire state. Proxy servers and violation store are preserved.
     /// Called when the user changes sandbox settings via `/sandbox` command.

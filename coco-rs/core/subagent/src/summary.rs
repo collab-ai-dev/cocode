@@ -1,6 +1,6 @@
 //! Subagent transcript summarisation — pure-logic prompt builders (E3).
 //!
-//! `services/AgentSummary/agentSummary.ts::buildSummaryPrompt`.
+//! Agent summary prompt builder.
 //!
 //! This runs *periodically* (every 30 s) during execution to populate
 //! a live `AgentProgress.summary` field shown in the coordinator UI.
@@ -30,7 +30,7 @@
 /// coco-rs we only call once but keep the field for forward
 /// compatibility when the periodic mode lands.
 ///
-/// **Byte-faithful with** `services/AgentSummary/agentSummary.ts::buildSummaryPrompt`
+/// Summary prompt for the agent.
 /// — including the empty-line separation around `prev_line`. Use a
 /// concatenated raw-block layout instead of indented `\` continuations
 /// so leading-whitespace from rustfmt never sneaks into the prompt

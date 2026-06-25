@@ -3,27 +3,27 @@
 //! ## Two query modes
 //!
 //! 1. **Direct selection** — `select:Tool1,Tool2,Tool3` (case-insensitive
-//!    prefix). The model explicitly names the deferred tools it wants
-//!    "unlocked". Comma-separated, whitespace-tolerant. Missing names
-//!    are silently dropped; a name already present in the regular pool
-//!    resolves harmlessly. Returns the resolved subset in `matches`.
+//! prefix). The model explicitly names the deferred tools it wants
+//! "unlocked". Comma-separated, whitespace-tolerant. Missing names
+//! are silently dropped; a name already present in the regular pool
+//! resolves harmlessly. Returns the resolved subset in `matches`.
 //!
 //! 2. **Keyword search** — any other query. Splits on whitespace; tokens
-//!    starting with `+` are *required* (the candidate must match all
-//!    `+terms`); the remaining tokens are *optional* (contribute to the
-//!    score). Score formula:
+//! starting with `+` are *required* (the candidate must match all
+//! `+terms`); the remaining tokens are *optional* (contribute to the
+//! score). Score formula:
 //!
-//!    | Match | Score |
-//!    |---|---|
-//!    | exact part hit (`parts.contains(term)`) | +12 MCP / +10 regular |
-//!    | substring of a part (`part.contains(term)`) | +6 MCP / +5 regular |
-//!    | full-name fallback (`full.contains(term) && score == 0`) | +3 |
-//!    | `search_hint` word-boundary regex hit | +4 |
-//!    | description word-boundary regex hit | +2 |
+//! | Match | Score |
+//! |---|---|
+//! | exact part hit (`parts.contains(term)`) | +12 MCP / +10 regular |
+//! | substring of a part (`part.contains(term)`) | +6 MCP / +5 regular |
+//! | full-name fallback (`full.contains(term) && score == 0`) | +3 |
+//! | `search_hint` word-boundary regex hit | +4 |
+//! | description word-boundary regex hit | +2 |
 //!
-//!    The candidate list is filtered to tools matching ALL required
-//!    terms (when any are supplied) before scoring; ranked descending,
-//!    capped at `max_results`.
+//! The candidate list is filtered to tools matching ALL required
+//! terms (when any are supplied) before scoring; ranked descending,
+//! capped at `max_results`.
 //!
 //! ## Promotion mechanism (multi-provider divergence)
 //!
@@ -36,12 +36,12 @@
 //! `DeferredToolsDeltaGenerator` both observe the patch via
 //! `ToolUseContext::discovered_tool_names`:
 //!
-//!   - **Definitions build** — `ToolRegistry::loaded_tools` upgrades
-//!     discovered deferred tools into the loaded pool, so their full
-//!     schema is sent in the next request (model can invoke them).
-//!   - **Reminder** — `DeferredToolsDeltaGenerator` sees a non-empty
-//!     `added` set in `compute_tools_delta` and emits a
-//!     `<system-reminder>` announcing the new tools.
+//! - **Definitions build** — `ToolRegistry::loaded_tools` upgrades
+//! discovered deferred tools into the loaded pool, so their full
+//! schema is sent in the next request (model can invoke them).
+//! - **Reminder** — `DeferredToolsDeltaGenerator` sees a non-empty
+//! `added` set in `compute_tools_delta` and emits a
+//! `<system-reminder>` announcing the new tools.
 //!
 //! Net effect: the model sees the same "tool became callable next turn"
 //! signal it would on Anthropic, with no provider-specific dependency.
@@ -85,7 +85,6 @@ const PROMPT_LOCATION_HINT: &str = "Deferred tools appear by name in <system-rem
 /// Parse a `select:Tool1,Tool2,...` query into a list of tool names.
 /// Returns `None` if the query isn't in select mode. Whitespace around
 /// each name is trimmed; empty names are dropped.
-///
 /// **Prefix is case-insensitive** — `select:`, `Select:`, `SELECT:` all
 /// trigger select mode (case-insensitive prefix check).
 pub(super) fn parse_select_query(query: &str) -> Option<Vec<String>> {
@@ -108,16 +107,15 @@ pub(super) fn parse_select_query(query: &str) -> Option<Vec<String>> {
 }
 
 /// Tool-name decomposition used for the keyword-scoring path.
-///
-///   - MCP wire-name `mcp__server__action_subaction` → `is_mcp = true`,
-///     `parts = ["server", "action", "subaction"]`, `full = "server
-///     action subaction"`. The `mcp__` prefix is stripped; remaining
-///     `__` are treated as part separators, then each part is further
-///     split on `_`.
-///   - Regular name `CamelCaseTool` → `is_mcp = false`,
-///     `parts = ["camel", "case", "tool"]`, `full = "camel case tool"`.
-///     `[a-z][A-Z]` boundaries are split into separate parts; `_` is
-///     also a separator.
+/// - MCP wire-name `mcp__server__action_subaction` → `is_mcp = true`,
+/// `parts = ["server", "action", "subaction"]`, `full = "server
+/// action subaction"`. The `mcp__` prefix is stripped; remaining
+/// `__` are treated as part separators, then each part is further
+/// split on `_`.
+/// - Regular name `CamelCaseTool` → `is_mcp = false`,
+/// `parts = ["camel", "case", "tool"]`, `full = "camel case tool"`.
+/// `[a-z][A-Z]` boundaries are split into separate parts; `_` is
+/// also a separator.
 #[derive(Debug, Clone)]
 struct ParsedToolName {
     parts: Vec<String>,
@@ -495,10 +493,8 @@ fn build_discovery_patch(matches: &[String]) -> Option<coco_types::AppStatePatch
 }
 
 /// Build the OpenAI Responses `tool_search_output.tools` entries for the
-/// matched tools. Each entry mirrors codex-rs's `LoadableToolSpec::Function`
-/// wire shape: `{type:"function", name, description, strict:false,
-/// defer_loading?:true, parameters}`.
-///
+/// matched tools. Each entry has the shape `{type:"function", name,
+/// description, strict:false, defer_loading?:true, parameters}`.
 /// `strict` is always `false` (matching codex's
 /// `tool_definition_to_responses_api_tool`). `defer_loading:true` is emitted
 /// **only** for tools that are genuinely deferred (`should_defer()`), mirroring
@@ -508,13 +504,11 @@ fn build_discovery_patch(matches: &[String]) -> Option<coco_types::AppStatePatch
 /// This is what lets the OpenAI-native path skip the `discovered_tool_names`
 /// AppStatePatch and keep the client `tools` array cache-stable. Already-loaded
 /// fallback matches (`should_defer() == false`) omit the flag.
-///
 /// Resolution spans `deferred + enabled + all_tools` via
 /// [`matched_tools_for_schema`] so select-mode names that resolve only in the
 /// full pool are surfaced too — symmetric with the client-side `<functions>`
 /// path (previously this searched `deferred + enabled` only and silently
 /// dropped full-pool hits).
-///
 /// Entries are flat `function`s keyed on each tool's **full registered name**
 /// (e.g. `mcp__<server>__<tool>`), NOT codex-style `namespace` groupings.
 /// coco dispatches tool calls by flat qualified name and has no namespace
@@ -580,7 +574,6 @@ pub struct ToolSearchInput {
     /// direct selection, or keywords to search.
     pub query: String,
     /// Maximum number of results to return (default: 5).
-    ///
     /// Accepts `limit` as an alias so models primed on the codex-rs
     /// `tool_search` provider tool (which names this field `limit`) parse
     /// cleanly on the OpenAI-native path.
@@ -590,7 +583,6 @@ pub struct ToolSearchInput {
 
 /// Typed output for [`ToolSearchTool`]. Same wire fields as the
 /// pre-typed `build_envelope` produced.
-///
 /// All fields default so transcript replay / partial fixtures
 /// round-trip via the `DynTool` blanket.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -636,7 +628,6 @@ impl Tool for ToolSearchTool {
     /// the current model resolved to [`coco_tool_runtime::ToolSearchStrategy::Eager`],
     /// or there are no
     /// deferred tools / pending MCP servers to search.
-    ///
     /// Symmetric with [`coco_tool_runtime::ToolRegistry::loaded_tools`]
     /// which short-circuits the `should_defer()` filter on the same
     /// `ToolUseContext::tool_search_active()` predicate, so an
@@ -662,32 +653,27 @@ impl Tool for ToolSearchTool {
     }
 
     /// Render the search envelope into content parts the model sees.
-    ///
     /// **Three emission shapes**, selected by the strategy flags the executor
     /// sets in `out`:
-    ///
     /// 1. **`tool_reference` blocks** (Anthropic, capable models) —
-    ///    one `Custom` part per match carrying
-    ///    `{type:"tool-reference", toolName:X}` under
-    ///    `provider_options.anthropic`. The Anthropic API server
-    ///    expands the block into inline `<functions>` markup before
-    ///    the prompt reaches the model. Client-side `tools` array is
-    ///    NOT modified — cache prefix stays warm across discoveries.
-    ///
+    /// one `Custom` part per match carrying
+    /// `{type:"tool-reference", toolName:X}` under
+    /// `provider_options.anthropic`. The Anthropic API server
+    /// expands the block into inline `<functions>` markup before
+    /// the prompt reaches the model. Client-side `tools` array is
+    /// NOT modified — cache prefix stays warm across discoveries.
     /// 2. **OpenAI native tool list** (OpenAI Responses with
-    ///    `tool_search`, `execution:"client"`) — single JSON text
-    ///    payload mirroring `tool_search_output.tools`; the OpenAI
-    ///    provider lifts this into the native response item.
-    ///    Client-side `tools` array is NOT modified.
-    ///
+    /// `tool_search`, `execution:"client"`) — single JSON text
+    /// payload mirroring `tool_search_output.tools`; the OpenAI
+    /// provider lifts this into the native response item.
+    /// Client-side `tools` array is NOT modified.
     /// 3. **Text list** (every other provider + non-capable Anthropic
-    ///    models) — single `Text` part rendering matched names and
-    ///    explaining schemas arrive next turn. The executor pairs this
-    ///    branch with an `AppStatePatch` that adds matches to
-    ///    `discovered_tool_names`, so the next turn's `tools` array
-    ///    surfaces the schemas client-side. One cache break per
-    ///    discovery, unavoidable without server-side expansion.
-    ///
+    /// models) — single `Text` part rendering matched names and
+    /// explaining schemas arrive next turn. The executor pairs this
+    /// branch with an `AppStatePatch` that adds matches to
+    /// `discovered_tool_names`, so the next turn's `tools` array
+    /// surfaces the schemas client-side. One cache break per
+    /// discovery, unavoidable without server-side expansion.
     /// The empty-match branch is identical across paths (a model that
     /// matched zero tools has no schemas to surface either way), and
     /// Empty-match text: `No matching deferred tools found` +
@@ -961,11 +947,11 @@ impl Tool for ToolSearchTool {
 /// `render_for_model` reads:
 /// - `matches: [String]` — names to surface.
 /// - `pending_mcp_servers: [String]` — non-empty only when the match
-///   list is empty AND an MCP server is mid-handshake (retry hint).
+/// list is empty AND an MCP server is mid-handshake (retry hint).
 /// - `render_as_tool_reference: bool` — set by the executor based on
-///   the current model's `Capability::AnthropicToolReference`.
+/// the current model's `Capability::AnthropicToolReference`.
 /// - `openai_tools: [Value]` — OpenAI Responses-compatible function
-///   specs when using native client-side `tool_search`.
+/// specs when using native client-side `tool_search`.
 async fn build_envelope(
     matches: &[String],
     raw_query: &str,

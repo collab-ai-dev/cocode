@@ -19,7 +19,7 @@ use crate::reserved::normalize_key_for_comparison;
 pub fn generate_template() -> Result<String, serde_json::Error> {
     let mut config = KeybindingsConfig {
         // Re-point if/when coco-rs publishes its own SchemaStore entry.
-        schema: Some("https://www.schemastore.org/claude-code-keybindings.json".to_string()),
+        schema: Some("https://www.schemastore.org/coco-keybindings.json".to_string()),
         docs: Some("https://code.claude.com/docs/en/keybindings".to_string()),
         bindings: default_blocks(),
     };

@@ -124,7 +124,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     Capability::PromptCache,
                     Capability::ContextManagement,
                     Capability::ParallelToolCalls,
-                    // Haiku is on TS `DEFAULT_UNSUPPORTED_MODEL_PATTERNS`
+                    // Haiku is on `DEFAULT_UNSUPPORTED_MODEL_PATTERNS`
                     // so no AnthropicToolReference, but the client-side
                     // path has been validated.
                     Capability::ClientSideToolSearchPromotion,

@@ -295,18 +295,15 @@ pub struct RewindRowMetadata {
 /// - [`TuiOnlyEvent::RewindRowMetadataReady`] — **forward-time**.
 ///   `insertions` = lines added between two adjacent user-message
 ///   checkpoints. Computed via [`FileHistoryState::get_diff_stats_between`]
-///   to mirror TS `computeDiffStatsBetweenMessages`
-///   (`MessageSelector.tsx:722-765`), which counts `+` lines from
-///   `structuredPatch`.
+///   counting `+` lines from `structuredPatch`.
 /// - [`TuiOnlyEvent::RewindRestorePreviewReady`] — **rewind-direction**.
 ///   `insertions` = lines that rewind would add back; `deletions` =
 ///   lines that rewind would remove. Computed via
-///   [`FileHistoryState::get_diff_stats`] to mirror TS
-///   `computeDiffStatsForFile` (`fileHistory.ts:705`)'s
+///   [`FileHistoryState::get_diff_stats`] with
 ///   `diffLines(originalContent, backupContent)` direction.
 ///
-/// TS itself returns the same `DiffStats` shape from both call sites
-/// and lets context disambiguate — Rust matches that contract.
+/// The same `DiffStats` shape covers both call sites;
+/// context disambiguates the direction.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RewindDiffStatsPayload {
@@ -502,12 +499,10 @@ matching `NotificationMethod` discriminant.",
     /// Durable plan-item / V1 todo snapshot — emitted after
     /// `TaskCreate`/`TaskUpdate`/`TodoWrite` tools mutate state so
     /// the TUI can refresh its panel without pulling the store
-    /// directly. TS parity: `notifyTasksUpdated` subscriber callback
-    /// in `utils/tasks.ts`.
+    /// directly.
     "task_panel/changed" => TaskPanelChanged(TaskPanelChangedParams),
     /// Team lead received a plan-approval request from a teammate
     /// (via mailbox). The TUI surfaces this as a modal overlay.
-    /// TS parity: `ExitPlanModeV2Tool.ts:137-141` teammate request flow.
     "plan_approval/requested" => PlanApprovalRequested(PlanApprovalRequestedParams),
     /// Agents killed.
     "agents/killed" => AgentsKilled(AgentsKilledParams),
@@ -649,8 +644,7 @@ matching `NotificationMethod` discriminant.",
     /// Plugin state changed on disk (manifest added/removed/edited,
     /// `installed_plugins.json` updated, or settings.json scope toggled).
     /// Carries a short reason string the UI can surface as a banner.
-    /// TS parity: `useManagePlugins.ts:293-300` adds the "Plugins
-    /// changed. Run /reload-plugins to activate." notification. Never
+    /// Emits a "Plugins changed. Run /reload-plugins to activate." notification. Never
     /// triggers an auto-reload — the explicit `/reload-plugins`
     /// invocation is what applies the change.
     "plugins/changed" => PluginsChanged { reason: String },
@@ -1389,9 +1383,7 @@ pub struct TaskProgressParams {
     pub agent_type: Option<String>,
     /// Recent tool activities (cap-5 ring buffer). Coordinator-side
     /// owns push + eviction; the TUI just copies the slice into its
-    /// `SubagentInstance` mirror. TS parity:
-    /// `tasks/LocalAgentTask/LocalAgentTask.tsx:40`
-    /// `MAX_RECENT_ACTIVITIES = 5`. Empty when the task hasn't run a
+    /// Capped at `MAX_RECENT_ACTIVITIES = 5`. Empty when the task hasn't run a
     /// tool yet or the producer is a legacy code path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recent_activities: Vec<crate::task::TaskActivity>,
@@ -1721,8 +1713,7 @@ pub enum TuiOnlyEvent {
     /// list (e.g. ExitPlanMode's keep/clear/cancel) instead of the
     /// default yes/no buttons. Picked `value` is echoed back via
     /// `UserCommand::ApprovalResponse.resolution_detail` so the tool's
-    /// `execute()` can branch on the choice. TS parity:
-    /// `ExitPlanModePermissionRequest.tsx:691-704` option grid.
+    /// `execute()` can branch on the choice.
     ///
     /// `original_input` carries the raw tool input so the TUI can derive
     /// path-scoped read permission updates for classic "always allow"
@@ -1794,9 +1785,9 @@ pub enum TuiOnlyEvent {
     /// start AND whenever `/reload-plugins` swaps the active
     /// `CommandRegistry`. The TUI overwrites
     /// `state.session.available_commands` with this list so the `/`
-    /// autocomplete popup and command palette stay in sync. TS parity:
-    /// the TS popup re-queries `getCommands()` inline; this implementation pushes
-    /// the snapshot because the registry lives in the CLI process.
+    /// autocomplete popup and command palette stay in sync.
+    /// The registry lives in the CLI process so this pushes a snapshot
+    /// rather than querying inline.
     AvailableCommandsRefreshed {
         commands: Vec<crate::SlashCommandInfo>,
     },
@@ -1820,8 +1811,7 @@ pub enum TuiOnlyEvent {
     /// The requested queued command could not be restored.
     QueuedCommandEditUnavailable { id: String, reason: String },
     /// Open the resume picker inside the running TUI session.
-    ///
-    /// TS parity: `/resume` with no args opens the saved-chat picker;
+    /// `/resume` with no args opens the saved-chat picker;
     /// `/resume <id-or-name>` bypasses this and resumes directly.
     OpenSessionBrowser {
         sessions: Vec<crate::SdkSessionSummary>,
@@ -1971,7 +1961,6 @@ pub enum TuiOnlyEvent {
     /// bridge; the bridge creates the file (`mode wx` semantics), opens
     /// `$VISUAL || $EDITOR`, and reports the result back as a transcript
     /// visible event. On cancel the TUI emits "Cancelled memory editing".
-    /// TS parity: `commands/memory/memory.tsx`.
     OpenMemoryDialog { entries: Vec<MemoryDialogEntry> },
     /// Tell the TUI to open the `/workflow` picker. The CLI dispatcher
     /// builds the registry snapshot from `.coco/workflows` and
@@ -1984,7 +1973,6 @@ pub enum TuiOnlyEvent {
     /// opens the [`ModalState::CopyPicker`] surface. The CLI runner
     /// emits this through `dispatch_slash_command`'s `/copy` intercept;
     /// only the TUI has the transcript in a render-ready shape.
-    /// TS parity: `commands/copy/copy.tsx`.
     CopyCommandRequested {
         /// Raw arg string after `/copy`; empty when the user typed
         /// `/copy` with no argument. The TUI parses it as `usize` and
@@ -2038,8 +2026,7 @@ pub enum TuiOnlyEvent {
     /// folds this into a `MessageContent::BashOutput` chat message
     /// keyed by the same `user_message_id` as the matching
     /// `BashInput`. Emitted by the CLI bridge after running the
-    /// command via `coco_shell::ShellExecutor`. TS parity:
-    /// `LocalShellTask` completion.
+    /// command via `coco_shell::ShellExecutor`.
     BashCommandCompleted {
         /// Shared id of the bash input/output pair so rewind groups them.
         user_message_id: String,
@@ -2066,8 +2053,7 @@ pub enum TuiOnlyEvent {
     /// dispatcher pre-builds the entry list + per-group subtitles so
     /// the TUI doesn't recompute paths or token estimates.
     ///
-    /// TS parity: `commands/skills/skills.tsx` → `<SkillsMenu>`. Dialog
-    /// is read-only — Esc to close; selection has no side effects.
+    /// Dialog is read-only — Esc to close; selection has no side effects.
     OpenSkillsDialog { payload: SkillsDialogPayload },
     /// `/plugin` overlay — opens the tabbed installed / marketplace / errors
     /// manager. The payload is a CLI-built snapshot because the TUI cannot
@@ -2081,13 +2067,11 @@ pub enum TuiOnlyEvent {
     /// (Allow / Ask / Deny / Workspace). The payload is a CLI-built
     /// snapshot of every file-backed rule + additional directory, since
     /// the TUI cannot reach the settings stores directly. Re-emitted
-    /// after each edit so the open overlay refreshes in place. TS parity:
-    /// `commands/permissions/permissions.tsx` → `<PermissionRuleList>`.
+    /// after each edit so the open overlay refreshes in place.
     OpenPermissionsEditor { payload: PermissionsEditorPayload },
     /// Open the interactive `/add-dir` overlay (no-argument form). The TUI
     /// shows a directory-path text input; confirm re-dispatches
-    /// `/add-dir <path>` to reuse the validated session-add path. TS parity:
-    /// `commands/add-dir/add-dir.tsx` → `<AddWorkspaceDirectory>`.
+    /// `/add-dir <path>` to reuse the validated session-add path.
     OpenAddDirectory,
     /// Open the interactive `/export` format picker (no-argument form). The
     /// TUI shows the Markdown/JSON/Text chooser; confirm re-dispatches
@@ -2421,10 +2405,8 @@ pub struct PluginDialogAction {
 /// `/skills` slash handler so the TUI doesn't recompute paths, token
 /// estimates, or grouping.
 ///
-/// TS parity: 2.1.142 `uJ4` (`cli_inner_pretty.js:476909`) — a flat
-/// editable list with 4-state override cycling, source labels
-/// inline, and lock annotations for policy/flag/author/plugin-locked
-/// rows. The 2.1.88 grouped read-only `SkillsMenu` has been retired.
+/// A flat editable list with 4-state override cycling, source labels
+/// inline, and lock annotations for policy/flag/author/plugin-locked rows.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillsDialogPayload {
@@ -2513,9 +2495,7 @@ pub enum SkillsDialogSource {
 /// (Running tab reads `SessionState.subagents` directly, so the
 /// payload only carries Library data).
 ///
-/// TS parity: bundled-only `cli_unpack_pretty/decls/functions/bW4.js`
-/// (Library tab). The open-source `<AgentsMenu>` exposes the same
-/// per-row data but routes through a different state machine.
+/// Carries Library tab data for the agents overlay.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentsDialogPayload {
@@ -2559,10 +2539,8 @@ pub struct AgentsDialogEntry {
 ///
 /// The TUI cannot read the settings stores itself, so the CLI snapshots
 /// them here and re-emits this payload after each persisted edit (the
-/// open overlay refreshes in place, mirroring `OpenAgentsDialog`).
-///
-/// TS parity: data backing `<PermissionRuleList>` —
-/// `getPermissionRules()` + `getAdditionalWorkingDirectories()`.
+/// open overlay refreshes in place).
+/// Backing data: `getPermissionRules()` + `getAdditionalWorkingDirectories()`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PermissionsEditorPayload {

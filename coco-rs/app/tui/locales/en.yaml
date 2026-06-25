@@ -488,7 +488,7 @@ dialog.rewind_confirm_prompt_conv: "Confirm you want to restore the conversation
 dialog.rewind_no_messages_inline: "Nothing to rewind to yet."
 dialog.rewind_in_progress: "Rewinding..."
 dialog.rewind_summarizing: "Summarizing…"
-# TS `DiffStatsText` (MessageSelector.tsx:544+) format: "+X -Y" (no comma, no "lines" suffix).
+#  format: "+X -Y" (no comma, no "lines" suffix).
 dialog.rewind_diff_stats: "%{files} files changed +%{ins} -%{del}"
 dialog.rewind_diff_stats_short: "+%{ins} -%{del}"
 dialog.rewind_diff_files_count: "%{count} files changed"
@@ -502,17 +502,17 @@ dialog.rewind_desc_summarize_up_to: "Preceding messages will be summarized. This
 dialog.rewind_desc_forked: "The conversation will be forked."
 dialog.rewind_desc_unchanged: "The conversation will be unchanged."
 dialog.rewind_desc_code_unchanged: "The code will be unchanged."
-# TS `RestoreCodeConfirmation` (MessageSelector.tsx:535) ─
+#
 #   "The code will be restored {DiffStatsText} in {fileLabel}."
 dialog.rewind_desc_code_will_restore: "The code will be restored: %{stats} in %{label}."
 dialog.rewind_desc_code_no_changes: "The code has not changed (nothing will be restored)."
-# Multi-file labels — TS lines 491-523:
+# Multi-file labels:
 dialog.rewind_files_two: "%{a} and %{b}"
 dialog.rewind_files_many: "%{first} and %{rest} other files"
 # Singular vs plural file count for per-row labels.
 dialog.rewind_diff_file_changed_one: "%{file} changed"
 dialog.rewind_diff_files_changed_many: "%{count} files changed"
-# Virtual current-prompt row label (MessageSelector.tsx:594).
+# Virtual current-prompt row label.
 dialog.rewind_current_prompt: "(current)"
 
 # Help modal — description-only entries.
@@ -677,7 +677,7 @@ chat.thinking_tokens: "~%{count} thinking tok"
 chat.thinking_label: "Thinking"
 chat.thinking_duration: "%{seconds}s"
 chat.thinking_reasoning_tokens: "%{count} reasoning tok"
-# TS parity: `AssistantThinkingMessage.tsx`. `∴` (U+2234) precedes the
+#
 # label, italic + dim. `%{suffix}` is empty by default and carries the
 # duration/token annotation only when in the expanded view.
 chat.thinking_header: "  ∴ Thinking…%{suffix}"
@@ -755,7 +755,7 @@ permission_mode.auto_desc: " — auto-mode classifier in control. Review session
 permission_mode.bubble: "bubble"
 permission_mode.bubble_desc: " — escalating to parent agent for permission decisions."
 
-# Status-bar permission-mode labels. Override modes mirror TS
+# Status-bar permission-mode labels. Override modes matches
 # PromptInputFooterLeftSide (`permissionModeTitle(mode).toLowerCase() + ' on'`).
 # Unlike TS — which hides the indicator in the baseline mode — the app surfaces the
 # baseline as `ask` plus a shift+tab cycle hint, so the gesture is discoverable

@@ -10,10 +10,9 @@
 //! is appended to history as a fresh user message and the next API
 //! call sees it.
 //!
-//! TS parity: `utils/messageQueueManager.ts` enables exactly this
-//! "user types while the LLM is working" UX. The queue is the central
-//! steering mechanism — without it, mid-turn input is impossible. This
-//! test pins the queue → drain → next-turn-prompt path end-to-end.
+//! The queue is the central steering mechanism — without it, mid-turn
+//! input is impossible. This test pins the queue → drain →
+//! next-turn-prompt path end-to-end.
 //!
 //! Test design: turn 1 runs a 3-second Bash sleep. While the engine is
 //! waiting on the child, we inject a `Now`-priority command containing

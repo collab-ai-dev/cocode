@@ -1,4 +1,4 @@
-//! `/simplify` — review changed code for reuse, quality, and efficiency, then fix issues found. Mirrors claude-code's simplify.ts.
+//! `/simplify` — review changed code for reuse, quality, and efficiency, then fix issues found.
 
 use coco_types::ToolName;
 

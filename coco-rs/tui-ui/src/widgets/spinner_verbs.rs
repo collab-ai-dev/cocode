@@ -11,7 +11,7 @@
 //! function that consults `RuntimeConfig` to support user overrides.
 
 /// 186 whimsical present-participle verbs, byte-faithful with
-/// `spinnerVerbs.ts:SPINNER_VERBS`.
+/// .
 pub const SPINNER_VERBS: &[&str] = &[
     "Accomplishing",
     "Actioning",
@@ -205,7 +205,7 @@ pub const SPINNER_VERBS: &[&str] = &[
 ///
 /// Use this from tests where the verb must be reproducible. Production
 /// code should call [`pick_verb_random`] instead — TS samples the verb
-/// randomly per spinner mount (`Spinner.tsx:166`
+/// randomly per spinner mount (
 /// `useState(() => sample(...))`).
 pub fn pick_verb(seed: u64) -> &'static str {
     // 186 entries — `as usize` is safe on every supported target.

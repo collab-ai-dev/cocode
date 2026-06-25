@@ -3,7 +3,7 @@
 Pre/post event interception with scoped priority: Command / Prompt / Http / Agent handlers, SSRF guard, async hook registry, `if` permission-rule conditions, matcher patterns (exact / pipe-separated / regex / glob), dedup + `once` tracking, HTTP URL allowlist + per-hook env-var allowlist, `expectedHookEvent` JSON cross-check.
 
 ## Key Types
-- `HookDefinition` — `event` (`HookEventType`, 27 variants matching TS), `matcher`, `handler`, `priority` (asc), `scope` (Session>Local>Project>User>Builtin), `if_condition`, `once`, `is_async`, `async_rewake`, `status_message`
+- `HookDefinition` — `event` (`HookEventType`, 27 variants), `matcher`, `handler`, `priority` (asc), `scope` (Session>Local>Project>User>Builtin), `if_condition`, `once`, `is_async`, `async_rewake`, `status_message`
 - `HookHandler` — `Command{command,timeout_ms,shell}` / `Prompt{prompt,model,timeout_ms}` / `Http{url,headers,timeout_ms,allowed_env_vars}` / `Agent{prompt,model,timeout_ms}`
 - `FunctionHookPredicate` (trait) — `evaluate(&[Arc<Message>]) -> bool` + `name()`. Implementations are `Send + Sync + Debug` and must be pure. Used by `FunctionHook` (an in-memory hook registered at session bootstrap rather than loaded from settings) to express in-process callbacks like `StructuredOutput` Stop enforcement and Swarm teammate init. Stored on `HookRegistry.function_hooks` (separate from settings-loaded `hooks` because closures cannot `Serialize` / `Deserialize`).
 - `HookEvaluationResult` — `Ok` / `Blocking{reason}` / `Cancelled` / `NonBlockingError{error}` for LLM-driven Prompt/Agent paths

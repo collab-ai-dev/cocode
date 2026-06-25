@@ -1,6 +1,6 @@
 //! Smart chunk collapsing.
 //!
-//! Based on Continue's core/indexing/chunk/code.ts:
+//! Code chunk collapser.
 //! - `getSmartCollapsedChunks()` - Recursive collapsing
 //! - `collapseChildren()` - Child node collapsing
 //! - `collapsedReplacement()` - Replace with `{ ... }`

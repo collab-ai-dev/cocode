@@ -3,13 +3,13 @@
 //! The reminder pipeline is the longest single block of work the agent loop
 //! performs each turn (5 phases, ~500 lines):
 //! 1. Plan-mode side effects that *mutate* `app_state`
-//!    (`turn_start_side_effects_only`).
+//! (`turn_start_side_effects_only`).
 //! 2. Build a [`TurnReminderInput`] from engine state + a fresh
-//!    `app_state` snapshot + per-source [`ReminderSources::materialize`]
-//!    fan-out.
+//! `app_state` snapshot + per-source [`ReminderSources::materialize`]
+//! fan-out.
 //! 3. Run the orchestrator with that input → reminders.
 //! 4. Post-emit bookkeeping: clear stale exit flags, bump cadence counters,
-//!    refresh "last announced" sets for delta-style reminders.
+//! refresh "last announced" sets for delta-style reminders.
 //! 5. Drain the silent attachment inbox + inject reminders into history.
 //!
 //! Owns one method on [`QueryEngine`], [`QueryEngine::run_turn_reminder_pipeline`],
@@ -44,15 +44,14 @@ use crate::engine_helpers::latest_user_input_text;
 use crate::plan_mode_reminder::PlanModeReminder;
 
 /// Per-turn inputs to [`QueryEngine::run_turn_reminder_pipeline`].
-///
 /// Bundles the local-to-`run_session_loop` state the pipeline needs to
 /// thread through. Three flavors:
 /// - `&mut`: state the pipeline mutates (`history`, `plan_reminder`,
-///   `last_user_input_uuid`).
+/// `last_user_input_uuid`).
 /// - `&`: read-only per-turn signals (`orchestrator`, `total_usage`,
-///   `cost_tracker`).
+/// `cost_tracker`).
 /// - by-value: small scalars (`todo_key`, `context_window`,
-///   `effective_window`).
+/// `effective_window`).
 pub(crate) struct TurnReminderContext<'a> {
     pub history: &'a mut MessageHistory,
     pub plan_reminder: &'a mut PlanModeReminder,
@@ -77,18 +76,16 @@ mod tests;
 
 impl QueryEngine {
     /// Run the per-turn system-reminder pipeline.
-    ///
     /// 1. `plan_reminder.turn_start_side_effects_only` (mode reconcile +
-    ///    mailbox + leader-pending). Mutates `app_state` BEFORE the
-    ///    orchestrator reads it below.
+    /// mailbox + leader-pending). Mutates `app_state` BEFORE the
+    /// orchestrator reads it below.
     /// 2. Build [`TurnReminderInput`] from engine state + a fresh
-    ///    `app_state` snapshot + a parallel [`ReminderSources::materialize`].
+    /// `app_state` snapshot + a parallel [`ReminderSources::materialize`].
     /// 3. Run the orchestrator → reminders.
     /// 4. Post-emit bookkeeping: clear stale exit flags, bump plan-mode
-    ///    cadence counters, refresh "last announced" sets for delta
-    ///    reminders.
+    /// cadence counters, refresh "last announced" sets for delta
+    /// reminders.
     /// 5. Drain silent attachments, inject reminders into history.
-    ///
     /// Returns the `app_state` snapshot the caller passes to
     /// [`QueryEngine::build_tool_definitions`] for the same turn — same
     /// permission mode / pre-plan-mode / stripped-rules view the reminders
@@ -119,7 +116,6 @@ impl QueryEngine {
 
         // Phase 2. Build orchestrator input from engine state + current
         // app_state snapshot.
-        //
         // `turn_number` uses **human turns** (non-meta user messages)
         // so plan-mode / auto-mode throttle cadence counts human turns,
         // not LLM iterations. Tool-result rounds within one human turn
@@ -328,7 +324,6 @@ impl QueryEngine {
         // The user's raw prompt text for this turn. Extract from the
         // most-recent non-meta user message's text content; used by
         // both the ultrathink-keyword gate and mention-based reminders.
-        //
         // Only the first tool-loop iteration of a human turn gets a
         // non-null input; subsequent tool-result rounds skip it. Track
         // the last user-message UUID already reminder-scanned so the
@@ -370,7 +365,6 @@ impl QueryEngine {
         // skills / MCP / swarm / IDE / memory) in parallel, with
         // per-source timeout + error-to-default.
         // Empty `ReminderSources` → all defaults.
-        //
         // Resolve relative paths against cwd so they match the absolute
         // keys used by `FileReadState` (populated by `mention_resolver`
         // and the Read tool). Without this, the AlreadyReadFile silent
@@ -557,7 +551,7 @@ impl QueryEngine {
             // point; cumulative session count comes from usage.
             output_tokens_turn: 0,
             output_tokens_session: total_usage.output_tokens.total,
-            // Mirrors claude-code's output_config.task_budget.total — set
+            // Set
             // programmatically via QueryEngineConfig (no CLI flag in TS).
             // `None` keeps the output_token_usage reminder dormant.
             output_token_budget: self.config.output_token_budget,
@@ -658,7 +652,6 @@ impl QueryEngine {
         // Phase 4. Post-emit bookkeeping on app_state. Writing AFTER the
         // orchestrator read ensures we don't clear a flag whose
         // reminder got throttled (so it can fire next turn).
-        //
         // Covers the one-shot flags consumed by the generators that fired
         // (PlanModeExit / AutoModeExit / PlanModeReentry) plus the delta
         // baselines. Plan/auto reminder cadence is no longer mirrored here —
@@ -763,18 +756,17 @@ impl QueryEngine {
 }
 
 /// Resolve the `@agent-…` mentions in this turn's user input into
-/// `agent_mention` reminder entries, mirroring TS `processAgentMentions`:
-///
+/// `agent_mention` reminder entries:
 /// - strip the `agent-` prefix via first-occurrence replace (TS
-///   `mention.replace('agent-', '')`) so the unquoted form (`@agent-Explore` →
-///   `"Explore"`) and the quoted form (`@"Explore (agent)"`, already
-///   suffix-stripped by `process_user_input` → `"Explore"`) both normalize to
-///   the bare type, and
+/// `mention.replace('agent-', '')`) so the unquoted form (`@agent-Explore` →
+/// `"Explore"`) and the quoted form (`@"Explore (agent)"`, already
+/// suffix-stripped by `process_user_input` → `"Explore"`) both normalize to
+/// the bare type, and
 /// - drop any mention that doesn't resolve to an active agent type
-///   (`active_agents` = the wired catalog's `def.name`s, the same set
-///   `AgentTool::execute` validates `subagent_type` against), so the reminder
-///   never tells the model to invoke an agent the spawn would reject as an
-///   unknown `subagent_type`. The runtime guard stays as a backstop.
+/// (`active_agents` = the wired catalog's `def.name`s, the same set
+/// `AgentTool::execute` validates `subagent_type` against), so the reminder
+/// never tells the model to invoke an agent the spawn would reject as an
+/// unknown `subagent_type`. The runtime guard stays as a backstop.
 fn active_agent_mentions(
     mentions: &[coco_context::user_input::Mention],
     active_agents: &[String],
@@ -812,7 +804,7 @@ fn workflow_keyword_reminder_message() -> Message {
     ))
 }
 
-/// Faithful port of claude-code's `matchKeyword` (obf `hho`,
+/// Keyword matcher (
 /// cli_inner_pretty.js:464214-464253), specialized to the `ultracode` keyword.
 /// Returns true iff the keyword appears as bare prose: not inside a masked
 /// code/quote/bracket span and not glued to a path/flag character. Operates
@@ -869,7 +861,7 @@ fn contains_unmasked_workflow_keyword(input: &str) -> bool {
 }
 
 /// Pass 1 of `matchKeyword`: a depth-1 delimiter scan recording the masked
-/// `[start, end)` spans (code spans, quotes, bracket pairs). Mirrors TS
+/// `[start, end)` spans (code spans, quotes, bracket pairs).
 /// @464222-464237 — first-close (NOT balanced nesting), the `[[` span reset,
 /// the `<`/`'` open guards, and the apostrophe-in-contraction close guard.
 fn workflow_keyword_masked_spans(chars: &[char]) -> Vec<(usize, usize)> {
@@ -940,14 +932,12 @@ fn is_word_char(c: char) -> bool {
 
 /// Tool names the assistant successfully invoked since the previous
 /// human turn:
-///
 /// - Slice messages from the most recent user message to the end —
-///   that's "this human turn".
+/// that's "this human turn".
 /// - In that slice, harvest `tool_call_id → tool_name` from every
-///   assistant `ToolCall` block, and `tool_use_id → !is_error` from
-///   every `ToolResultMessage`.
+/// assistant `ToolCall` block, and `tool_use_id → !is_error` from
+/// every `ToolResultMessage`.
 /// - Return the unique set of tool names whose result was non-error.
-///
 /// Empty when no human turn has happened yet (no Message::User in
 /// history) or no tool produced a non-error result. Order is
 /// unspecified — the recall ranker uses set membership only.

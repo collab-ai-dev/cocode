@@ -68,7 +68,7 @@ pub(crate) struct ActivitySpan {
     pub(crate) bold: bool,
     /// Per-agent badge color. When `Some`, the renderer tints this span
     /// with the agent's assigned color instead of the `tone` foreground
-    /// (TS `AgentProgressLine` parity). `None` ⇒ plain `tone` styling.
+    /// (`AgentProgressLine` parity). `None` ⇒ plain `tone` styling.
     pub(crate) color: Option<coco_types::AgentColorName>,
 }
 
@@ -177,7 +177,7 @@ pub(crate) fn turn_activity_view(state: &AppState, width: u16) -> TurnActivityVi
         // No separate "Activity / Tools:" panel for ordinary single-agent tool
         // runs — in-flight tools render inline in the transcript as
         // `● Tool(args) (elapsed)` plus the bottom status spinner (codex /
-        // claude-code parity). The panel survives only for a stream stall
+        // The panel survives only for a stream stall
         // (warning) and the swarm / task surfaces handled above.
         TurnActivityView::Surface(limit_surface_rows(activity_surface(state), width))
     } else {
@@ -441,7 +441,7 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         };
         // Lead with the kind badge (`Explore: …`, `@name@team: …`) so the
         // type reads first and the descriptions stay left-aligned under it.
-        // Tint the badge with its assigned color (TS `AgentProgressLine`
+        // Tint the badge with its assigned color (`AgentProgressLine`
         // parity); falls back to Dim when unset.
         let mut spans = vec![
             ActivitySpan::tone(row_prefix, ActivityTone::Dim),

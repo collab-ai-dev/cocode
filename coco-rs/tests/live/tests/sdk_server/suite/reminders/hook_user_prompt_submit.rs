@@ -7,10 +7,7 @@
 //! sync hook buffer; the first reminder pass drains the buffer and the
 //! `HookSuccessGenerator` renders it.
 //!
-//! TS parity: `executeUserPromptSubmitHooks` in
-//! `utils/processUserInput/processUserInput.ts:182-263`. The
-//! `hook_success` render gate (TS `messages.ts:4099-4115`
-//! `normalizeAttachmentForAPI`) only emits text for SessionStart /
+//! The `hook_success` render gate only emits text for SessionStart /
 //! UserPromptSubmit; this test exercises the latter.
 
 use anyhow::Result;

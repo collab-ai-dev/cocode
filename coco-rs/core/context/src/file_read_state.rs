@@ -82,11 +82,9 @@ impl FileReadEntry {
 }
 
 /// Session-level cache of file read states.
-///
 /// Tracks every file read by tools (`Read`, `Edit`, `Write`) and @mentions
 /// with their content and modification time for deduplication and change
 /// detection.
-///
 /// `read_input_ranges` stores the literal `(offset, limit)` the model
 /// passed on a Read call, separately from `FileReadEntry::range`, which
 /// stores whether the cached content is a full file or a line range.
@@ -96,7 +94,7 @@ impl FileReadEntry {
 /// identical call can dedup-match exactly.
 // `Clone` is load-bearing: a fork engine deep-clones the parent's
 // `FileReadState` into a fresh `Arc<RwLock<>>` so the fork's reads/edits
-// can't pollute the parent's dedup cache (mirrors TS
+// can't pollute the parent's dedup cache (
 // `createSubagentContext`, which clones `readFileState` per fork). Plain
 // owned data — a cheap structural clone.
 #[derive(Debug, Default, Clone)]
@@ -198,7 +196,6 @@ impl FileReadState {
     /// i.e. the model already has the current content and a re-inject
     /// would be redundant. Feeds `AlreadyReadFileGenerator` in
     /// `coco-system-reminder` for Part 1 silent-dedup reminders.
-    ///
     /// Paths not in the cache are excluded (no way to prove "already
     /// read" without a prior read). Paths whose mtime diverges are also
     /// excluded (content changed → content loader should re-inject).
@@ -239,7 +236,6 @@ impl FileReadState {
     }
 
     /// Snapshot all entries ordered by access recency (most recent last).
-    ///
     /// Captures pre-compact state. Used by compact to snapshot before clearing,
     /// so post-compact file restoration can re-inject the most recently accessed files.
     pub fn snapshot_by_recency(&self) -> Vec<(PathBuf, FileReadEntry)> {

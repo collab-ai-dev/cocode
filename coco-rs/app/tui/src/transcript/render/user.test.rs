@@ -69,7 +69,7 @@ fn multiline_user_text_renders_single_chevron_with_aligned_continuation() {
     // A recalled multi-message edit lands as ONE user message with embedded
     // newlines. It must read as one prompt: the `❯` appears once on the first
     // row; continuation rows align to the content column with a 2-space gutter
-    // (mirrors TS `HighlightedThinkingText`, which renders the pointer once).
+    // (the `❯` pointer renders once, continuation rows use the content column gutter).
     let lines = render_user(&user_cell(
         "使用中文\n详细",
         Some(MessageOrigin::QueuedSteering),

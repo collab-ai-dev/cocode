@@ -10,8 +10,8 @@
 //! - [`session`] — `initialize`, `session/*`, event forwarding + aggregation
 //! - [`turn`] — `turn/*`, `*/resolve`, `cancelRequest`
 //! - [`runtime`] — `setModel` / `setPermissionMode` / `setThinking` /
-//!   `updateEnv` / `stopTask` / `context/usage` / `plugin/reload` /
-//!   `config/applyFlags`
+//! `updateEnv` / `stopTask` / `context/usage` / `plugin/reload` /
+//! `config/applyFlags`
 //! - [`config`] — `config/read` + `config/value/write`
 //! - [`mcp`] — `mcp/status` / `mcp/setServers` / `mcp/reconnect` / `mcp/toggle`
 //! - [`rewind`] — `control/rewindFiles`
@@ -66,7 +66,6 @@ pub const DEFAULT_SDK_MODEL: &str = "claude-opus-4-6";
 pub const DEFAULT_SDK_FAST_MODEL: &str = "claude-sonnet-4-6";
 
 /// RAII cleanup for a pending `send_server_request` entry.
-///
 /// The `send_server_request` function registers a oneshot sender in
 /// `SdkServerState.pending_server_requests` before writing the request
 /// to the transport. On the happy path, `resolve_server_request` removes
@@ -74,7 +73,6 @@ pub const DEFAULT_SDK_FAST_MODEL: &str = "claude-sonnet-4-6";
 /// wraps the await in `tokio::select!` with a cancel token and the cancel
 /// branch fires), the future is dropped mid-await — without this guard,
 /// the entry would leak in the HashMap until state drop.
-///
 /// The guard holds a reference to the pending map and uses synchronous
 /// `try_lock` in its `Drop` impl. If the mutex is contended at drop time
 /// (another task is mid-write), the entry leaks — but that's a very
@@ -108,24 +106,21 @@ impl Drop for PendingRequestGuard<'_> {
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Abstraction over how the SDK server executes a single turn.
-///
 /// The sdk_server module doesn't depend on `coco-query`, so the dispatch
 /// layer stays pure. In production, the CLI entry point wires a concrete
 /// runner that spawns a `QueryEngine`. Tests inject mock runners that
 /// emit scripted events.
 pub trait TurnRunner: Send + Sync {
     /// Run a single turn.
-    ///
     /// - `params`: the `turn/start` parameters from the client.
     /// - `handoff`: the narrow subset of `SessionHandle` the runner needs
-    ///   (id, cwd, model, shared history). Stats and other per-session
-    ///   state deliberately stay on the server-side slot to avoid an
-    ///   O(history) deep clone per turn.
+    /// (id, cwd, model, shared history). Stats and other per-session
+    /// state deliberately stay on the server-side slot to avoid an
+    /// O(history) deep clone per turn.
     /// - `event_tx`: the channel on which CoreEvents must be emitted.
-    ///   The dispatcher's notification forwarder reads from this channel
-    ///   and writes JsonRpc notifications to the transport.
+    /// The dispatcher's notification forwarder reads from this channel
+    /// and writes JsonRpc notifications to the transport.
     /// - `cancel`: cancellation token. `turn/interrupt` triggers this.
-    ///
     /// Returning `Ok(())` signals a clean turn completion. Returning an
     /// error causes the server to emit a `turn/failed` notification (future)
     /// and log the error.
@@ -160,7 +155,6 @@ impl TurnRunner for NotImplementedRunner {
 }
 
 /// Narrow per-turn view of an active session handed to a [`TurnRunner`].
-///
 /// Holds only what the runner actually reads — session metadata used for
 /// logging / `QueryEngineConfig`, plus the `Arc`-wrapped shared history so
 /// the runner can thread messages across turns without taking ownership
@@ -176,7 +170,7 @@ pub struct TurnHandoff {
     /// Session-scoped shared state. Attached to every turn's engine
     /// via `with_app_state` so plan-mode cadence + live permission
     /// mode propagate across turns AND mid-session mode toggles
-    /// reach the engine. TS parity: `appState` is session-lifetime.
+    /// reach the engine. `appState` is session-lifetime.
     pub app_state: Arc<RwLock<coco_types::ToolAppState>>,
     /// Session-scoped permission-mode override set by
     /// `control/setPermissionMode`. Used by `sdk_runner::run_turn`
@@ -191,14 +185,12 @@ pub struct TurnHandoff {
 // ---------------------------------------------------------------------------
 
 /// Provides the data fields that `InitializeResult` advertises to SDK clients.
-///
 /// `InitializeResult` is a cross-cutting bundle pulling from 5+ subsystems
 /// (commands, agents, auth/account, config, rate-limit state). Rather than
 /// plumbing each source through `SdkServerState` as a separate field, the
 /// server takes one trait object that encapsulates all of them. The concrete
 /// impl lives in `coco-cli` where every source is already imported; tests
 /// can substitute a mock.
-///
 /// All accessors are `async` so implementations can do blocking I/O (agent
 /// markdown walks, auth resolution) without forcing every caller to move
 /// to spawn_blocking at the trait boundary.
@@ -258,7 +250,6 @@ pub struct SdkServerState {
     /// Pending ServerRequests (server→client) awaiting a
     /// `JsonRpcMessage::Response` or `JsonRpcMessage::Error` reply.
     /// Keyed by the server-issued `RequestId`.
-    ///
     /// Populated by [`SdkServerState::send_server_request`] when an
     /// outbound request is written to the transport; drained by the
     /// dispatcher's `handle_message` when the matching response arrives.
@@ -300,7 +291,6 @@ pub struct SdkServerState {
     /// requires `&mut self` while `connect`/`disconnect` only need
     /// `&self`. The Mutex serializes both kinds of access — fine for
     /// these infrequent runtime-control operations.
-    ///
     /// When `None`, the MCP lifecycle handlers respond with
     /// `INVALID_REQUEST` ("MCP manager not enabled").
     pub mcp_manager: RwLock<Option<Arc<Mutex<coco_mcp::McpConnectionManager>>>>,
@@ -311,7 +301,7 @@ pub struct SdkServerState {
     pub initialize_bootstrap: RwLock<Option<Arc<dyn InitializeBootstrap>>>,
     /// Whether the SDK client opted into per-spawn periodic
     /// AgentSummary timers via `initialize { agentProgressSummaries: true }`.
-    /// TS parity: `bootstrap/state.ts:1077` `getSdkAgentProgressSummariesEnabled`.
+    ///  `getSdkAgentProgressSummariesEnabled`.
     /// Default `false`. session/start copies this onto the new
     /// session's `ToolAppState.agent_progress_summaries_enabled`.
     pub agent_progress_summaries_enabled: std::sync::atomic::AtomicBool,
@@ -322,8 +312,7 @@ pub struct SdkServerState {
     /// killswitch). Consulted by `handle_set_permission_mode` to
     /// reject SDK-originated bypass requests mid-session when the
     /// flag was not passed.
-    ///
-    /// TS parity: `cli/print.ts:4588-4600` — mid-session SDK switches
+    ///  — mid-session SDK switches
     /// to `bypassPermissions` are rejected with an explicit error
     /// when `isBypassPermissionsModeAvailable` is false.
     pub bypass_permissions_available: std::sync::atomic::AtomicBool,
@@ -337,14 +326,10 @@ pub struct SdkServerState {
     /// wire a runtime.
     pub session_runtime: RwLock<Option<Arc<crate::session_runtime::SessionRuntime>>>,
 
-    /// Agent definitions pushed via `initialize.agents` (TS
-    /// `controlSchemas.ts:68 z.record(z.string(),
-    /// AgentDefinitionSchema)`). Stashed here at `initialize` time and
+    /// Agent definitions pushed via `initialize.agents`
+    /// (`z.record(z.string(), AgentDefinitionSchema)`). Stashed here at `initialize` time and
     /// drained when the per-session `AgentDefinitionStore` is built so
-    /// SDK-supplied agents land in the catalog as `AgentSource::FlagSettings`
-    /// entries (TS parity: `parseAgentsFromJson(_, 'flagSettings')` at
-    /// `cli/print.ts:4382`).
-    ///
+    /// SDK-supplied agents land in the catalog as `AgentSource::FlagSettings` entries.
     /// `RwLock` (not `Mutex`) because `agents()` in `CliInitializeBootstrap`
     /// reads concurrently with other initialize-time accessors.
     pub pending_sdk_agents: RwLock<Vec<coco_types::AgentDefinition>>,
@@ -408,7 +393,6 @@ impl SdkServerState {
 
     /// Register an expected `approval/resolve`. Returns the receiver the
     /// agent-side code should `await` to get the client's decision.
-    ///
     /// Callers are responsible for sending the matching `AskForApproval`
     /// ServerRequest to the client.
     pub async fn register_approval(
@@ -438,18 +422,16 @@ impl SdkServerState {
 
     /// Issue an outbound ServerRequest on the provided transport and
     /// await the matching response.
-    ///
     /// Generates a fresh monotonically-decreasing `RequestId` (starting
     /// at -1), registers an oneshot in `pending_server_requests`, writes
     /// the `JsonRpcRequest` onto the transport, and awaits the receiver.
     /// The dispatcher's inbound-message handler wakes the receiver when
     /// the client replies with a matching `Response`/`Error`.
-    ///
     /// Returns:
     /// - `Ok(JsonRpcMessage::Response(r))` — client replied successfully
     /// - `Ok(JsonRpcMessage::Error(e))` — client replied with an error
     /// - `Err(...)` — transport send failed or the oneshot was dropped
-    ///   (e.g. the transport closed before the client replied)
+    /// (e.g. the transport closed before the client replied)
     pub async fn send_server_request(
         &self,
         transport: &Arc<dyn SdkTransport>,
@@ -473,7 +455,6 @@ impl SdkServerState {
         // caller wrapped us in a `tokio::select!` and the cancel branch
         // fired. Without this, cancelled approvals would leak an entry
         // in `pending_server_requests` until state drop.
-        //
         // The guard uses `try_lock` in its sync `Drop` impl. If the
         // mutex is contended at drop time, the entry leaks — but that's
         // a very narrow window (only contended while another caller is
@@ -543,7 +524,6 @@ impl SdkServerState {
     /// Deliver an inbound `Response`/`Error` to the pending server
     /// request with the matching `request_id`, if any. Called by the
     /// dispatcher when it reads a message from the transport.
-    ///
     /// Returns `true` if the message was routed to a pending request;
     /// `false` if no match was found (the client is replying to a
     /// request we don't have — usually a protocol confusion, logged
@@ -655,7 +635,7 @@ pub struct SessionHandle {
     /// the session write-lock for the whole turn.
     pub history: Arc<Mutex<Vec<std::sync::Arc<coco_messages::Message>>>>,
 
-    /// Session-scoped `ToolAppState` — TS parity:
+    /// Session-scoped `ToolAppState` —
     /// `appState.toolPermissionContext` and the plan-mode latches.
     /// Created once at session/start, attached to every turn's engine
     /// via `with_app_state`, and mutated by
@@ -704,7 +684,6 @@ impl SessionHandle {
 
 /// Aggregated per-session stats, mirrored from per-turn `SessionResult`
 /// notifications emitted by `QueryEngine::run_with_events`.
-///
 /// Each field accumulates across every `turn/start` call in the session.
 /// `session/archive` packages this into a single outbound `SessionResult`.
 #[derive(Debug, Clone, Default)]
@@ -771,7 +750,6 @@ impl HandlerResult {
 }
 
 /// Route a `ClientRequest` to its handler and return the result.
-///
 /// The dispatch is exhaustive — adding a new variant to `ClientRequest`
 /// fails compilation here, enforcing that every method has a handler.
 pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) -> HandlerResult {

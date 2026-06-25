@@ -24,7 +24,7 @@ pub(crate) enum ToolExecutionBranch {
     Return(Box<QueryResult>),
 }
 
-/// #3 / TS query.ts:1566 `toolUseBlocks.some(b => b.name === SLEEP_TOOL_NAME)`:
+/// #3 /  `toolUseBlocks.some(b => b.name === SLEEP_TOOL_NAME)`:
 /// did the just-executed batch include a Sleep tool? Gates the
 /// `later`-priority command-queue drain at the turn boundary.
 fn tool_batch_ran_sleep(tool_calls: &[ToolCallPart]) -> bool {

@@ -125,6 +125,7 @@ class AttachmentKind(str, Enum):
     hook_non_blocking_error = 'hook_non_blocking_error'
     hook_permission_decision = 'hook_permission_decision'
     hook_system_message = 'hook_system_message'
+    goal_status = 'goal_status'
     structured_output = 'structured_output'
     dynamic_skill = 'dynamic_skill'
     skill_discovery = 'skill_discovery'
@@ -545,7 +546,7 @@ class WorkflowAgentState(str, Enum):
 # Union type aliases
 # ---------------------------------------------------------------------------
 
-# One entry in `AgentDefinition.mcp_servers`. Mirrors the TS union:
+# One entry in `AgentDefinition.mcp_servers`:
 AgentMcpServerSpec = str | dict[str, Any]
 
 # Assistant message content parts.
@@ -570,7 +571,7 @@ PermissionRequestDetail = dict[str, Any]
 RequestId = int | str
 
 # Typed payload for silent attachment kinds.
-SilentPayload = Union["HookCancelledPayload", "HookErrorDuringExecutionPayload", "HookNonBlockingErrorPayload", "HookSystemMessagePayload", "HookPermissionDecisionPayload", "CommandPermissionsPayload", "StructuredOutputPayload", "DynamicSkillPayload", "MaxTurnsReachedPayload", "AlreadyReadFilePayload", "EditedImageFilePayload"]
+SilentPayload = Union["HookCancelledPayload", "HookErrorDuringExecutionPayload", "HookNonBlockingErrorPayload", "HookSystemMessagePayload", "HookPermissionDecisionPayload", "CommandPermissionsPayload", "GoalStatusPayload", "StructuredOutputPayload", "DynamicSkillPayload", "MaxTurnsReachedPayload", "AlreadyReadFilePayload", "EditedImageFilePayload"]
 
 # System messages have sub-types for different notification kinds.
 SystemMessage = Union["SystemInformationalMessage", "SystemApiErrorMessage", "SystemCompactBoundaryMessage", "SystemMicrocompactBoundaryMessage", "SystemLocalCommandMessage", "SystemPermissionRetryMessage", "SystemBridgeStatusMessage", "SystemMemorySavedMessage", "SystemAwaySummaryMessage", "SystemAgentsKilledMessage", "SystemApiMetricsMessage", "SystemStopHookSummaryMessage", "SystemTurnDurationMessage", "SystemScheduledTaskFireMessage", "SystemContextUsageMessage", "SystemUserInterruptionMessage"]
@@ -3306,6 +3307,16 @@ class FilePart(BaseModel):
     media_type: str = Field(alias='mediaType')
     filename: str | None = None
     provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
+
+class GoalStatusPayload(BaseModel):
+    condition: str
+    met: bool
+    duration_ms: int | None = Field(default=None, alias='durationMs')
+    failed: bool = False
+    iterations: int | None = None
+    reason: str | None = None
+    sentinel: bool = False
+    tokens: int | None = None
 
 class HookCallbackMatcher(BaseModel):
     hook_callback_ids: list[str]

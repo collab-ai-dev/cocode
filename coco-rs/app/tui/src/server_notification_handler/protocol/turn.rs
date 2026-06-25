@@ -76,7 +76,6 @@ pub(super) fn clear_session_boundary_state(state: &mut AppState) {
 
 /// Handle `TurnCompleted`: finalize usage, flush streaming buffer into the
 /// message list, prune completed tools.
-///
 /// Dispatcher for the unified `TurnEnded` event. Routes to one of five
 /// per-outcome handlers; preserves the auto-restore path on `Interrupted`
 /// (see `on_turn_interrupted_outcome`). Pairs 1:1 with `TurnStarted`.
@@ -103,7 +102,6 @@ pub(super) fn on_turn_ended(
 
 /// `TurnEnded(Completed)` handler. Folds usage, end-of-turn UI state,
 /// notifications, and tool-execution cleanup.
-///
 /// Does NOT handle auto-restore — that lives in
 /// [`on_turn_interrupted_outcome`]. `Completed` fires only on natural
 /// turn end; cancel paths take the `Interrupted` branch.
@@ -182,7 +180,6 @@ fn on_turn_completed_outcome(state: &mut AppState, p: &coco_types::TurnEndedPara
 /// Handle `TurnEnded(Interrupted)`: clear streaming state, surface the
 /// banner, and run auto-restore when the cancel was user-initiated AND
 /// the idle guards + lossless-tail predicate hold.
-///
 /// Corresponds to the `.finally` block that fires after
 /// `abortController.abort('user-cancel')` resolves the query.
 pub(super) fn on_turn_interrupted_outcome(
@@ -214,11 +211,11 @@ pub(super) fn on_turn_interrupted_outcome(
     let user_cancel = matches!(abort_reason, coco_types::TurnAbortReason::UserCancel);
 
     // Auto-restore is gated on:
-    // - reason == UserCancel  (treat None/legacy senders as non-user-initiated — conservative)
-    // - empty input            (`inputValueRef.current === ''`)
-    // - empty queue            (`getCommandQueueLength() === 0`)
-    // - no active surface      (not viewing a teammate task, no modal up)
-    // - lossless tail          (`messagesAfterAreOnlySynthetic`)
+    // - reason == UserCancel (treat None/legacy senders as non-user-initiated — conservative)
+    // - empty input (`inputValueRef.current === ''`)
+    // - empty queue (`getCommandQueueLength() === 0`)
+    // - no active surface (not viewing a teammate task, no modal up)
+    // - lossless tail (`messagesAfterAreOnlySynthetic`)
     // Predicates walk the engine-authoritative cell list directly.
     let cells = state.session.transcript.cells();
     let mut auto_restored = false;
@@ -243,7 +240,6 @@ pub(super) fn on_turn_interrupted_outcome(
     // Skipped when auto-restore truncated to the last user prompt: the
     // prompt is now back in the input and adding "you interrupted yourself"
     // would be noise.
-    //
     // The engine's `finalize_user_cancel` pushes a typed
     // `SystemMessage::UserInterruption` with the authoritative
     // `for_tool_use`; the MessageAppended event populates `transcript`,
@@ -257,7 +253,6 @@ pub(super) fn on_turn_interrupted_outcome(
 /// regenerates `conversation_id` so the next turn starts a fresh cache
 /// key, and clears UI state that no longer corresponds to a real
 /// conversation tail.
-///
 /// Dispatches `UserCommand::Rewind { mode: AutoRestore }` directly via
 /// `command_tx.try_send`. The engine truncates its authoritative
 /// history and emits `ServerNotification::MessageTruncated`, keeping
@@ -332,7 +327,7 @@ fn apply_auto_restore(
 /// `TurnEnded(Failed)` handler. Engine-level failure: clear streaming
 /// state and drop in-flight tool widgets. The user-facing error renders
 /// inline in the transcript — the engine appends a `SystemMessage::ApiError`
-/// row (`⚠ <error>`) before emitting this event (TS `SystemAPIErrorMessage`
+/// row (`⚠ <error>`) before emitting this event (`SystemAPIErrorMessage`
 /// parity), so this handler raises neither a toast nor a blocking modal.
 fn on_turn_failed_outcome(state: &mut AppState, error: &coco_types::ErrorPayload) -> bool {
     state.session.set_busy(false);

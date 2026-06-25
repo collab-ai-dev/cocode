@@ -7,10 +7,10 @@ sent verbatim to the model.
 
 ## Source
 
-TS: `claude-code-kim/src/constants/prompts.ts:766-770` — the `notes`
+The `notes`
 array passed to `enhanceSystemPromptWithEnvDetails` on the subagent
 path. TS appends this block immediately after the `<env>...</env>`
-section; coco-rs mirrors that placement via the `custom_append` slot
+section; coco-rs uses the `custom_append` slot
 in `coco_context::build_system_prompt`.
 
 ## Bullets — line-by-line

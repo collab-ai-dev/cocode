@@ -80,7 +80,6 @@ impl DeferredToolCompletionBuffer {
 }
 
 /// Convert between the two-name alias for `AssistantContent`.
-///
 /// `coco_messages::AssistantContent` and `coco_llm_types::AssistantContentPart`
 /// are the same type re-exported under two aliases (see `coco-types` re-export
 /// section). This wrapper exists only to make the conversion intent explicit.
@@ -91,9 +90,7 @@ pub(crate) fn convert_to_assistant_content(part: AssistantContentPart) -> Assist
 /// Drain queued commands up to `max_priority` from `queue` into `history` as
 /// user messages, then emit one `CommandDequeued{id}` per drained item plus
 /// a `QueueStateChanged{queued: remaining}` summary.
-///
 /// Shared by the mid-turn `Now`-only checkpoint and the end-of-turn full drain.
-///
 /// The TUI's local queued-commands display
 /// (`SessionState::queued_commands`) keys off the per-item `CommandDequeued`
 /// for ordered removal, with `QueueStateChanged` as a count reconciliation
@@ -139,12 +136,11 @@ pub async fn drain_command_queue_into_history(
 }
 
 /// Convert a drained [`QueuedCommand`] into the history `Message` that
-/// represents it, mirroring TS: a **human** steering message becomes a
+/// represents it, : a **human** steering message becomes a
 /// first-class [`Message::User`] carrying the **raw** text (fully visible in
 /// the transcript and counted as a user message); every other origin
 /// (coordinator / task-notification / channel) stays a model-only
 /// [`AttachmentKind::QueuedCommand`] attachment.
-///
 /// For the human case the model-facing "The user sent a new message while you
 /// were working…" framing is **not** baked here — it is applied at prompt-build
 /// time by [`wrap_steering_messages_for_api`], so the stored message stays raw.
@@ -180,10 +176,9 @@ pub fn queued_command_to_user_message(cmd: &QueuedCommand) -> Message {
 }
 
 /// Apply the model-facing steering wrapper to every [`MessageOrigin::QueuedSteering`]
-/// user message, returning an API-bound view. Mirrors TS, which wraps queued
+/// user message, returning an API-bound view., which wraps queued
 /// commands only at API-serialization time (`wrapCommandText` in the
 /// `queued_command` attachment case) while the stored message keeps the raw text.
-///
 /// CoW: only steering messages are rebuilt; every other entry keeps its `Arc`.
 /// The wrapped text is `<system-reminder>`-prefixed, so the downstream
 /// [`coco_messages::smoosh_system_reminder_into_tool_result`] folds it into the
@@ -226,26 +221,21 @@ fn wrap_steering_llm_message(raw: &LlmMessage) -> LlmMessage {
 
 /// Convert a [`QueuedCommand`] drained from the queue into a model-bound
 /// `AttachmentMessage` of kind [`AttachmentKind::QueuedCommand`].
-///
 /// Used for non-human queue origins (coordinator / task-notification /
 /// channel) whose framing is model-only and which never surface as a user
 /// message. Human steering goes through [`queued_command_to_user_message`].
-///
 /// Two-step wrapping:
-///
 /// 1. [`wrap_command_text`] adds origin-specific framing prose
-///    ("The user sent a new message while you were working:" /
-///    "The coordinator sent a message…" / etc.).
+/// ("The user sent a new message while you were working:" /
+/// "The coordinator sent a message…" / etc.).
 /// 2. [`wrap_in_system_reminder`] wraps the result in
-///    `<system-reminder>…</system-reminder>` so the model recognises
-///    the entry as a system-injected interruption rather than a fresh
-///    user message.
-///
+/// `<system-reminder>…</system-reminder>` so the model recognises
+/// the entry as a system-injected interruption rather than a fresh
+/// user message.
 /// Image attachments (mid-turn screenshot pastes) ride along as
 /// additional `UserContentPart`s after the wrapped text, appending
 /// image blocks after the text. Only the text gets the
 /// system-reminder wrap; image bytes ride alongside untouched.
-///
 /// Lands as `Message::Attachment` with `kind = QueuedCommand`. The
 /// kind threads through to UI rendering
 /// (`AttachmentKind::renders_in_transcript`) and to the API
@@ -272,7 +262,6 @@ pub fn queued_command_to_attachment(cmd: &QueuedCommand) -> Message {
 }
 
 /// Whether the current budget state warrants forcing another turn.
-///
 /// Continue when under 90% of budget AND not in diminishing-returns
 /// territory (continuation_count < 3).
 pub(crate) fn should_continue_for_budget(budget: &BudgetTracker) -> bool {
@@ -294,7 +283,6 @@ pub(crate) fn budget_pct_used(budget: &BudgetTracker) -> i32 {
 }
 
 /// Build the user-facing assistant message for an abnormal-stop_reason turn.
-///
 /// Returned message has empty content (the partial real response was
 /// already pushed) and `api_error.message` carrying the human-readable
 /// explanation. `ContextWindowExceeded` is a first-class variant
@@ -398,11 +386,9 @@ pub(crate) fn extract_last_assistant_text(history: &MessageHistory) -> String {
 }
 
 /// Complete a committed tool call with a model-visible error result.
-///
 /// JSON parse failures never reach this helper because they are dropped before
 /// the assistant message is committed. Every committed early-return path should
 /// use this so the stream event and history pair stay in sync.
-///
 /// **Streaming-mode note (I1 ordering).** In the streaming agent loop, the
 /// assistant message is committed *after* this helper runs (when the stream
 /// hits `Finish`). For multi-tool streams where one call passes preparation
@@ -454,7 +440,6 @@ pub(crate) async fn complete_tool_call_with_error_mode(
 }
 
 /// Complete a tool call with a NON-error result carrying user feedback.
-///
 /// Used when the user redirects an interactive tool rather than denying it —
 /// e.g. AskUserQuestion's "Chat about this" / "Skip interview". The feedback
 /// still reaches the model (so it re-engages), but the transcript renders it as
@@ -505,7 +490,6 @@ pub(crate) async fn complete_tool_call_clarification(
 /// Build a typed early-return outcome so the streaming agent loop can surface
 /// staged preparation results via
 /// [`StreamingHandle::feed_plan(ToolCallPlan::EarlyOutcome(...))`].
-///
 /// `error_kind` is carried from the exact source branch. Non-error
 /// clarification feedback, such as AskUserQuestion redirect text, passes
 /// `None` so `ToolUseCompleted.is_error` remains false.

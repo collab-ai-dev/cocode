@@ -1,4 +1,4 @@
-//! `/claude-api` — reference for building applications with the Claude API or Anthropic SDK. Mirrors claude-code's claudeApi.ts.
+//! `/claude-api` — reference for building applications with the Claude API or Anthropic SDK.
 //! Deferred: the full claude-api doc tree (~247KB of bundled .md, vendored via the files/extraction seam) is not yet ported.
 
 pub const PROMPT: &str = r#"You are helping the user build applications with the Claude API or Anthropic SDK.

@@ -6,7 +6,7 @@
 
 /// Plugin-hint recommendation dialog state.
 ///
-/// Surfaced when a CLI/SDK emits a `<claude-code-hint />` tag referencing a
+/// Surfaced when a CLI/SDK emits a `<coco-hint />` tag referencing a
 /// plugin and the pre-store gate passed. Show-once per plugin. The user
 /// picks install / dismiss / disable-all.
 #[derive(Debug, Clone)]

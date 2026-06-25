@@ -4,12 +4,12 @@
 //! than extending `surface_payloads.rs`
 //! (already 1289 LoC) per the workspace's "no files > 1600 LoC" rule.
 //! Data sources:
-//!   - **Library**: snapshot of `coco_subagent::AgentDefinitionStore`
-//!     projected to `LibraryRow`, grouped by `AgentSource`. Refreshed on
-//!     dialog open and after every CRUD operation.
-//!   - **Running**: lives on `SessionState.subagents` (already mirrored
-//!     by the background-pills bar). Read directly at render time —
-//!     dialog state only holds the cursor position.
+//! - **Library**: snapshot of `coco_subagent::AgentDefinitionStore`
+//! projected to `LibraryRow`, grouped by `AgentSource`. Refreshed on
+//! dialog open and after every CRUD operation.
+//! - **Running**: lives on `SessionState.subagents` (already mirrored
+//! by the background-pills bar). Read directly at render time —
+//! dialog state only holds the cursor position.
 //!
 //! The dialog title is `"Agents"` (a static label rendered above the
 //! tab strip — NOT a third tab). Tabs are `"Running"` and `"Library"`.
@@ -126,7 +126,6 @@ pub enum LibraryToastKind {
 /// `confirm`, then a `UserCommand::CreateAgent` dispatch writes the
 /// markdown file and the CLI bridge opens it in `$EDITOR` for further
 /// tuning.
-///
 /// Per the A3 折中 choice: minimal inline form for create (so a
 /// new-agent flow stays in-dialog), `$EDITOR` for edit (less code,
 /// power-user-friendly). The wizard intentionally does NOT collect
@@ -159,7 +158,6 @@ pub struct CreateWizardState {
 /// the wizard's Name and Description steps so the user can insert /
 /// delete anywhere in the input — replacement for the previous
 /// append-only `String` field.
-///
 /// Cursor is tracked as a **char count** rather than a byte index so
 /// the public API stays UTF-8-safe (each method converts to a byte
 /// index at the boundary).
@@ -264,7 +262,6 @@ impl WizardTextField {
 /// Typed wizard error. The renderer maps the variant to a localized
 /// string — compile-time exhaustiveness ensures new variants land in
 /// the catalog alongside the code that surfaces them.
-///
 /// Note: the CLI bridge's `prepare_agent_create` may also fail
 /// (permission denied, disk full, …) but those land on a toast via
 /// `TuiOnlyEvent::PromptEditorFailed` — they never bind into a
@@ -327,7 +324,6 @@ impl Default for CreateWizardState {
 }
 
 /// Wizard step. Linear forward / back via Enter / Esc.
-///
 /// Four steps: `Name` → `Description` → `Source` → `Confirm`, so the
 /// user can review inputs before the irreversible filesystem write.
 /// Tools / model / memory are left to `$EDITOR` per the A3 折中
@@ -413,14 +409,12 @@ pub fn validate_agent_name(name: &str) -> Result<(), WizardError> {
 /// and the CLI bridge (`tui_runner.rs::prepare_agent_create`) call
 /// this with their respective `cwd` / `config_home` snapshots so the
 /// two stay in lock-step.
-///
 /// Returns the absolute target path, or a typed `WizardError` for
 /// the surfaces the wizard knows how to render:
-///   - [`WizardError::NonWritableSource`] when the source isn't one
-///     of User / Project,
-///   - [`WizardError::AlreadyExists`] when a markdown file at the
-///     target path is already present on disk.
-///
+/// - [`WizardError::NonWritableSource`] when the source isn't one
+/// of User / Project,
+/// - [`WizardError::AlreadyExists`] when a markdown file at the
+/// target path is already present on disk.
 /// Filesystem I/O is restricted to a single `path.exists()` call —
 /// the caller is responsible for `create_dir_all` + `write` since
 /// those want the async / blocking-pool wrapper.
@@ -479,7 +473,7 @@ pub struct AgentsDialogState {
     /// renders a `Delete <name>? (y/n)` prompt and swallows nav until
     /// the user confirms (`y`/Enter → dispatch) or cancels (`n`/Esc).
     /// Guards the destructive `DeleteAgentFile` command behind explicit
-    /// confirmation (TS parity: `AgentsMenu` `delete-confirm` mode).
+    /// confirmation (`AgentsMenu` `delete-confirm` mode).
     pub pending_delete: Option<PathBuf>,
 }
 

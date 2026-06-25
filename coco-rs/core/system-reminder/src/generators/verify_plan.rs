@@ -33,7 +33,6 @@ use coco_types::ToolName;
 
 const TURNS_BETWEEN_REMINDERS: i32 = 10;
 
-/// Verbatim body from `messages.ts:4247`.
 fn body() -> String {
     format!(
         "You have completed implementing the plan. Please call the \"{}\" tool directly (NOT the Agent tool or an agent) to verify that all plan items were completed correctly.",

@@ -141,7 +141,7 @@ fn test_plan_mode_tools_allowed() {
     );
 }
 
-// ── Agent spawn mirrors TS isReadOnly=true → auto-allowed ──
+// ── Agent spawn: isReadOnly=true → auto-allowed ──
 
 #[test]
 fn test_agent_spawn_is_read_only_allowed_in_auto_mode() {

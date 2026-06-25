@@ -8,17 +8,15 @@
 //! resolvers in `coco-skills` need to inspect independently:
 //!
 //! - `policy` / `flag` → non-overridable **locks**
-//! - `project` / `user` → editable **baseline** (TS `aT5(name) =
-//!   projectSettings.skill_overrides[name] ?? userSettings
-//!   .skill_overrides[name]`)
+//! - `project` / `user` → editable **baseline**
 //! - `local` → user's `/skills` dialog writes land here; diff against
-//!   the baseline determines what gets persisted
+//! the baseline determines what gets persisted
 //!
 //! `RuntimeConfig` therefore exposes [`SkillOverrideTiers`] —
 //! five independent maps preserved per-tier — instead of the merged
 //! single map you would get from naive `Settings` merge.
 //!
-//! TS parity: `oT5` (`cli_inner_pretty.js:476885-476893`) reads each
+//! `oT5` (`cli_inner_pretty.js:476885-476893`) reads each
 //! tier individually via `v8("policySettings")?.skillOverrides`,
 //! `v8("flagSettings")?.skillOverrides`, etc. The resolution rules
 //! live in `coco-skills::overrides` (`oT5`, `aT5`, `st` mirrors).
@@ -40,21 +38,19 @@ use serde_json::Value;
 use crate::settings::SettingSource;
 
 /// Per-tier `skill_overrides` maps preserved without merging.
-///
 /// Populated at [`crate::RuntimeConfig`] build time from
 /// `SettingsWithSource::per_source` raw JSON. Each map is keyed by
 /// skill name; absent keys are equivalent to "no opinion from this
 /// tier."
-///
 /// The plugin tier from coco-rs's six-layer `SettingSource` is not
 /// represented here — plugin-contributed skills get their lock via
 /// [`coco_types::SkillLockSource::Plugin`] computed from the skill's
 /// `SkillSource::Plugin` variant, not from a settings layer.
 #[derive(Debug, Clone, Default)]
 pub struct SkillOverrideTiers {
-    /// Highest-precedence lock layer. TS `policySettings`.
+    /// Highest-precedence lock layer. `policySettings`.
     pub policy: BTreeMap<String, SkillOverrideState>,
-    /// CLI-flag override lock layer. TS `flagSettings`.
+    /// CLI-flag override lock layer. `flagSettings`.
     pub flag: BTreeMap<String, SkillOverrideState>,
     /// Project shared `project config dir/settings.json`. Editable baseline
     /// (used by the dialog's diff-against-baseline save).

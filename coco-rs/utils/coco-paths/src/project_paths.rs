@@ -5,22 +5,22 @@
 //!
 //! | path | TS source | purpose |
 //! |---|---|---|
-//! | `<slug>/`                                           | `memdir/paths.ts:229` | project dir |
-//! | `<slug>/<sid>.jsonl`                                | `sessionStorage.ts:202-225` | transcript |
+//! | `<slug>/`                                           |  | project dir |
+//! | `<slug>/<sid>.jsonl`                                |  | transcript |
 //! | `<slug>/<sid>/`                                     | (artifact root)               | session dir |
-//! | `<slug>/<sid>/subagents/agent-<id>.jsonl`           | `sessionStorage.ts:247-258` | bg agent transcript |
-//! | `<slug>/<sid>/subagents/<subdir>/agent-<id>.jsonl`  | `sessionStorage.ts:247-258` | workflows/{runId} variant |
-//! | `<slug>/<sid>/subagents/agent-<id>.meta.json`       | `sessionStorage.ts:260-262` | bg agent sidecar |
-//! | `<slug>/<sid>/remote-agents/remote-agent-<tid>.meta.json` | `sessionStorage.ts:305-318` | CCR remote task sidecar |
-//! | `<slug>/<sid>/tool-results/`                        | `toolResultStorage.ts:104-106` | persisted tool blobs |
+//! | `<slug>/<sid>/subagents/agent-<id>.jsonl`           |  | bg agent transcript |
+//! | `<slug>/<sid>/subagents/<subdir>/agent-<id>.jsonl`  |  | workflows/{runId} variant |
+//! | `<slug>/<sid>/subagents/agent-<id>.meta.json`       |  | bg agent sidecar |
+//! | `<slug>/<sid>/remote-agents/remote-agent-<tid>.meta.json` |  | CCR remote task sidecar |
+//! | `<slug>/<sid>/tool-results/`                        |  | persisted tool blobs |
 //! | `<slug>/<sid>/session-memory/summary.md`            | `services/SessionMemory/sessionMemory.ts` | per-session notes |
 //! | `<slug>/<sid>/usage.json`                            | (coco-rs) | per-session usage snapshot |
-//! | `<slug>/memory/`                                    | `memdir/paths.ts:231` | personal auto-memory |
-//! | `<slug>/memory/MEMORY.md`                           | `memdir/paths.ts:257-259` | personal index |
-//! | `<slug>/memory/team/`                               | `memdir/teamMemPaths.ts:84-94` | team auto-memory root |
-//! | `<slug>/memory/team/MEMORY.md`                      | `memdir/teamMemPaths.ts:90-94` | team index |
-//! | `<slug>/memory/logs/YYYY/MM/YYYY-MM-DD.md`          | `memdir/paths.ts:246-251` | KAIROS daily log |
-//! | `<slug>/memory/.consolidate-lock`                   | `services/autoDream/consolidationLock.ts:22` | auto-dream lock |
+//! | `<slug>/memory/`                                    |  | personal auto-memory |
+//! | `<slug>/memory/MEMORY.md`                           |  | personal index |
+//! | `<slug>/memory/team/`                               |  | team auto-memory root |
+//! | `<slug>/memory/team/MEMORY.md`                      |  | team index |
+//! | `<slug>/memory/logs/YYYY/MM/YYYY-MM-DD.md`          |  | KAIROS daily log |
+//! | `<slug>/memory/.consolidate-lock`                   |  | auto-dream lock |
 //!
 //! Construction is cheap (one NFC pass and one linear sanitize) and
 //! every accessor is an infallible `join`. Share via `Arc` when the

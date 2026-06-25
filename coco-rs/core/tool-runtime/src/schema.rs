@@ -371,7 +371,7 @@ macro_rules! impl_runtime_schema {
 /// the error text without depending on `jsonschema` directly.
 ///
 /// Each variant maps onto a `formatZodValidationError`
-/// (`utils/toolErrors.ts:66-130`) output line.
+/// Tool error output line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaIssue {
     /// Required field is missing from the input. `path` is the

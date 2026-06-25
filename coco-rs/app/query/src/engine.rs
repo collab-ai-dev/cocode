@@ -43,11 +43,10 @@ use crate::engine_result::make_query_result;
 /// Last-compact tracker for `RecompactionInfo` population. Set by
 /// `try_full_compact` after a successful compact and read by the next
 /// compaction to derive `is_recompaction` / `turns_since_previous`.
-///
 /// Read directly, no subtraction needed:
 /// - `run_id` — UUID generated per compact.
 /// - `turn_counter` — resets to 0 on each compact, bumped +1 per
-///   subsequent turn at `engine_finalize_turn.rs`.
+/// subsequent turn at `engine_finalize_turn.rs`.
 #[derive(Debug, Clone)]
 pub(crate) struct LastCompactState {
     /// Turns elapsed since the previous compact. `0` immediately after
@@ -61,7 +60,6 @@ pub(crate) struct LastCompactState {
 }
 
 /// The query engine — orchestrates multi-turn agent conversations.
-///
 /// Fields are `pub(crate)` so the impl block can be split across sibling
 /// modules (`engine_builder`, `engine_session`, `engine_compaction`, …)
 /// without leaking internal state to the public API. External callers see
@@ -94,7 +92,6 @@ pub struct QueryEngine {
     /// so the summary surfaces to SDK consumers as a
     /// `ServerNotification::ToolUseSummary` just before the next API
     /// call.
-    ///
     /// `Arc<Mutex>` (not session-loop local) because the spawn site
     /// (`finalize_turn_post_tools`) and await site (`run_session_loop`
     /// iteration top) sit on different `&self` boundaries; the lock
@@ -189,19 +186,17 @@ pub struct QueryEngine {
     /// Every turn's `ToolContextFactory::build` reads this Arc and
     /// merges contents into `ToolPermissionContext.allow_rules` under
     /// [`coco_types::PermissionRuleSource::Command`]:
-    ///
     /// - **Within one user message** — every turn's
-    ///   `ToolContextFactory::build` reads this Arc and merges its
-    ///   contents into `ToolPermissionContext.allow_rules` under
-    ///   [`coco_types::PermissionRuleSource::Command`], so a skill
-    ///   invoked on turn N's auto-allow rules are honored on turn N+1.
+    /// `ToolContextFactory::build` reads this Arc and merges its
+    /// contents into `ToolPermissionContext.allow_rules` under
+    /// [`coco_types::PermissionRuleSource::Command`], so a skill
+    /// invoked on turn N's auto-allow rules are honored on turn N+1.
     /// - **Across user messages** — the engine drops, the Arc count
-    ///   goes to zero, the next user message's engine starts with a
-    ///   fresh empty store.
+    /// goes to zero, the next user message's engine starts with a
+    /// fresh empty store.
     /// - **Subagent forks** — each forked engine builds its own
-    ///   Arc; rules emitted inside a subagent skill cannot leak to
-    ///   the parent.
-    ///
+    /// Arc; rules emitted inside a subagent skill cannot leak to
+    /// the parent.
     /// Shared by `Arc` with [`Self::permission_rule_handle`] (which
     /// writes into it) and with the per-batch `ToolContextFactory`
     /// (which reads it for the merge). See `engine_live_rules` module.
@@ -227,7 +222,6 @@ pub struct QueryEngine {
     /// via [`Self::last_cache_safe_params`]. The slot lives and dies with
     /// the per-turn engine; `/clear` drops the observing handle at the
     /// runtime layer (see `SessionRuntime::clear_conversation`).
-    ///
     /// `Arc<RwLock<...>>` so observers (TUI status, transcript recorder)
     /// can read the slot without contending with the engine's writer side.
     pub(crate) last_cache_safe_params:
@@ -257,8 +251,8 @@ pub struct QueryEngine {
     pub(crate) task_handle: Option<coco_tool_runtime::BackgroundTaskHandleRef>,
     /// Persistent task-list store (V2, `TaskCreate`/`TaskUpdate`/etc.).
     /// `None` resolves to `NoOpTaskListHandle` — the V2 tools then
-    /// return errors on write, matching TS's "no store configured"
-    /// behavior. Install via [`Self::with_task_list`].
+    /// return errors on write ("no store configured"). Install via
+    /// [`Self::with_task_list`].
     pub(crate) task_list: Option<coco_tool_runtime::TaskListHandleRef>,
     /// Router for switching leader task tools onto a team task list.
     pub(crate) team_task_list_router: Option<coco_tool_runtime::TeamTaskListRouterRef>,
@@ -274,7 +268,6 @@ pub struct QueryEngine {
     /// (hooks, permissions, commands, core/tool-runtime, skills). Drained at the
     /// head of each outer-loop iteration so the `Message::Attachment`
     /// entries land in history before prompt build.
-    ///
     /// Sender cloned to [`Self::attachment_emitter`] for plumbing into
     /// owner crates; receiver is drained by `drain_attachment_inbox`.
     pub(crate) attachment_tx: tokio::sync::mpsc::UnboundedSender<coco_messages::AttachmentMessage>,
@@ -406,7 +399,6 @@ pub struct QueryEngine {
     /// at end-of-batch. Consumed by `engine_turn_reminders` right before
     /// building `TurnReminderInput` — the generator renders these into
     /// `<system-reminder>Contents of {path}:\n\n{content}</system-reminder>`.
-    ///
     /// Populated by the trigger drain; bypasses the no-op
     /// [`crate::reminder_adapters::MemoryAdapter::nested_memories`].
     pub(crate) pending_nested_memory: std::sync::Arc<
@@ -438,13 +430,11 @@ pub struct QueryEngine {
 
 impl QueryEngine {
     /// Run the multi-turn agent loop.
-    ///
     /// `cycle_turn_id` is the per-cycle wire id supplied by the
     /// runner; it's used on every `TurnEnded` emission this function
     /// makes (Completed / Interrupted / MaxTurnsReached /
     /// BudgetExhausted). `None` only when the caller didn't pass an
     /// `event_tx` — in that case no wire emit happens.
-    ///
     /// Returns `(Result<QueryResult>, TokenUsage)`. The second tuple
     /// element is the accumulated token usage at the moment the
     /// loop exited — populated even on `Err` so the caller can
@@ -490,8 +480,8 @@ impl QueryEngine {
         total_usage: &mut TokenUsage,
     ) -> Result<QueryResult, coco_error::BoxedError> {
         // ── Loop state, grouped by lifecycle — see `engine_loop_state.rs`
-        //    for the field-by-field rationale and `init_loop_state` for
-        //    the bundled construction site.
+        // for the field-by-field rationale and `init_loop_state` for
+        // the bundled construction site.
         let (mut acc, mut turn_state, mut services, consts) = self
             .init_loop_state(turn_messages, &event_tx, history)
             .await;
@@ -505,10 +495,8 @@ impl QueryEngine {
                 // execution started for the current turn. See
                 // `engine-tui-unified-transcript-plan.md` §7.1 /
                 // `history_sync::finalize_user_cancel`.
-                //
                 // Steering exception: on a submit-interrupt the queued user
                 // message provides continuity, so skip the redundant standalone
-                // marker (TS `query.ts:1046` parity). See `is_steering_interrupt`.
                 if crate::history_sync::is_steering_interrupt(self.turn_abort.reason()) {
                     tracing::debug!(
                         "finalize_user_cancel: skipped standalone marker (submit-interrupt steering)"
@@ -709,7 +697,7 @@ impl QueryEngine {
                 crate::engine_recovery::BlockingLimitDecision::Proceed => {}
             }
 
-            // Pre-API image-size guard (TS `validateImagesForAPI`): reject an
+            // Pre-API image-size guard: reject an
             // oversized image before the wire with a clear "please resize" error
             // instead of a raw provider 400. Terminal — the image can't be
             // auto-shrunk here.
@@ -1090,12 +1078,10 @@ impl QueryEngine {
 /// Rebuild the assistant `Vec<AssistantContentPart>` plus the
 /// `Vec<ToolCallPart>` view of completed tool calls from a per-turn
 /// snapshot produced by `coco-inference::process_stream_with_config`.
-///
 /// Walks `snapshot.parts` in emission order so the resulting vector
 /// preserves the original text↔reasoning↔tool sequence (matters for
 /// Gemini-3, which interleaves freely). Each part carries its own
 /// `provider_metadata` — signatures and equivalents round-trip verbatim.
-///
 /// Tool-call filter: include when `is_input_complete || is_complete`.
 /// Some providers (and the synthetic mock helper) only emit
 /// `ToolInputStart`/`Delta`/`End` without the canonical `ToolCall(tc)`
@@ -1226,7 +1212,6 @@ async fn consume_pending_plan_mode_clear_context(
 
 /// Per-run side-channel collectors filled at emission sites so finalize
 /// doesn't need to scan history.
-///
 /// `structured_output` is set when a tool returns `with_structured_output(...)`
 /// (via `UnstampedToolCallOutcome.structured_output`). `max_turns_reached` is
 /// set when the engine hits the configured `max_turns` cap. Both feed

@@ -186,7 +186,7 @@ fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
 }
 
 /// Resolve a named workflow to `(path, source)` by matching the parsed
-/// `meta.name` of each on-disk script — mirroring TS `resolveNamedWorkflow`
+/// `meta.name` of each on-disk script —
 /// over the `getAllWorkflows` registry, NOT the filename stem (a saved workflow
 /// `My Build` is slugified to `my-build.js` yet invoked by its `meta.name`).
 /// `.cocode/workflows` is searched before `.claude/workflows`; within a dir,
@@ -201,7 +201,7 @@ fn resolve_named_workflow(cwd: &Path, name: &str) -> Option<(PathBuf, String)> {
 }
 
 /// The available workflow names (parsed `meta.name`), de-duplicated and sorted,
-/// for the not-found error — matches TS `getAllWorkflows(cwd).map(w => w.name)`
+/// for the not-found error
 /// with a `(none)` sentinel when empty.
 fn available_workflows_message(cwd: &Path) -> String {
     let mut names: Vec<String> = scan_workflow_registry(cwd)

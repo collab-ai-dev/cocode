@@ -50,7 +50,6 @@ pub(crate) fn max_structured_output_retries() -> u32 {
 }
 
 /// Why the loop is continuing instead of exiting.
-///
 /// Enables tests to verify recovery paths fired without inspecting
 /// message contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,15 +78,14 @@ pub enum ContinueReason {
 /// `ToolContextFactory::build` on top of the shared live base (read-through
 /// from the parent's `ToolAppState`), producing the engine's
 /// `ToolPermissionContext` without ever mutating the shared base.
-///
-/// `deny`/`ask`/`mode` are inherited from the base read-through (TS parity).
+/// `deny`/`ask`/`mode` are inherited from the base read-through.
 /// This struct only carries the per-engine *deltas*.
 #[derive(Debug, Clone, Default)]
 pub struct PermissionDerivation {
-    /// TS `allowedTools` replace-on-restrict. When `Some`, the derived allow
+    /// `allowedTools` replace-on-restrict. When `Some`, the derived allow
     /// map keeps ONLY the parent's `CliArg`-source rules plus these (as
     /// `Session`-source), dropping the parent's other allow sources. `None`
-    /// inherits the parent's full allow set. Mirrors `runAgent.ts:469-479`.
+    /// inherits the parent's full allow set. Mirrors .
     pub allowed_tools_replace: Option<Vec<PermissionRule>>,
     /// Optional per-agent mode override (agent-definition `permissionMode`).
     /// Does not override parent `Bypass`/`AcceptEdits`/`Auto`.
@@ -108,7 +106,6 @@ pub struct QueryEngineConfig {
     /// across every API call in this loop invocation). Drives
     /// [`crate::budget::BudgetTracker`]'s 90% nudge / diminishing-returns
     /// stop logic. `None` = unbounded.
-    ///
     /// Per-call `max_output_tokens` is **not** in this struct — it lives
     /// on each model's [`coco_config::ModelInfo::max_output_tokens`] (the
     /// baseline) and [`coco_config::ModelInfo::max_output_tokens_escalate`]
@@ -130,7 +127,6 @@ pub struct QueryEngineConfig {
     /// Permission mode for tool execution.
     pub permission_mode: PermissionMode,
     /// Whether this session may transition into `BypassPermissions`.
-    ///
     /// Static capability set once at session bootstrap from the CLI
     /// (`--dangerously-skip-permissions` OR `--allow-dangerously-skip-permissions`)
     /// and policy killswitch. Threaded into
@@ -146,7 +142,7 @@ pub struct QueryEngineConfig {
     pub max_budget_usd: Option<f64>,
     /// Per-turn output-token budget surfaced to the model via the
     /// `output_token_usage` reminder (`turn / budget · session`). Mirrors
-    /// claude-code's `output_config.task_budget.total` — a programmatic/SDK
+    /// The `output_config.task_budget.total` — a programmatic/SDK
     /// param with no CLI flag in TS. `None` (default) leaves the reminder
     /// dormant. Informational only here; API-side enforcement
     /// (Anthropic `task-budgets` beta) is a separate provider concern.
@@ -208,7 +204,6 @@ pub struct QueryEngineConfig {
     /// + `allowedTools` replace-on-restrict + extra read dirs + mode override).
     pub permission_derivation: Option<PermissionDerivation>,
     /// Working directory override for this session's tool calls.
-    ///
     /// When `Some(path)`, [`ToolContextFactory`](crate::tool_context::ToolContextFactory)
     /// installs the path onto every `ToolUseContext.cwd_override` so
     /// file/shell/search tools that honor the override (Glob, Grep,
@@ -216,7 +211,6 @@ pub struct QueryEngineConfig {
     /// against it. Absolute-path tools (Read, Write, Edit,
     /// NotebookEdit) are unaffected by construction — they enforce
     /// absolute paths in their schema.
-    ///
     /// Phase 6 Workstream C: subagents launched with
     /// `isolation: "worktree"` receive a `cwd_override` pointing at
     /// the freshly-created worktree path via this field on their
@@ -367,12 +361,10 @@ pub struct QueryEngineConfig {
     /// (auto agent_id, query_depth bump, allowed_write_roots fence,
     /// isolated callback handles). `None` ⇒ standard parent-shared
     /// semantics (default).
-    ///
     /// The `clone_file_read_state` flag is honored at engine-build time
     /// (`SessionRuntime::build_engine_from_config_with_persistence` installs
     /// a deep-cloned `FileReadState` so the clone isn't repeated per-call);
     /// the remaining fields apply at per-call `ToolUseContext` construction.
-    ///
     /// Stored as `Arc` so threading it onto every per-call
     /// `ToolUseContext` is a cheap pointer-copy.
     pub fork_isolation: Option<std::sync::Arc<crate::fork_context::ForkContextOverrides>>,
@@ -466,7 +458,6 @@ impl QueryEngineConfig {
 }
 
 /// One-shot bootstrap data for `SessionStarted` emission.
-///
 /// Collected by the CLI layer at session start and handed to the engine so it
 /// can emit a single `CoreEvent::Protocol(ServerNotification::SessionStarted)`
 /// with full context before the first turn.

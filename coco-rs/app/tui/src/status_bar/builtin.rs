@@ -16,11 +16,9 @@ use crate::transcript::cells::CellKind;
 use crate::transcript::cells::RenderedCell;
 
 /// The built-in status bar is a one-to-three-line block:
-///
 /// 1. model · effort · tokens · cache · context · transcript counts (always)
 /// 2. permission mode (`▸▸ auto mode on`) · background-task pill
 /// 3. working-directory basename · `git:(branch)`
-///
 /// Lines 2 and 3 are emitted only when they have content, so the bar collapses
 /// to a single row in the default state and grows to the full three rows in a
 /// real session (a permission mode set + a working dir). [`built_in_line_count`]
@@ -295,12 +293,10 @@ fn permission_and_tasks_line(state: &AppState) -> Vec<StatusSpan> {
 /// `⏯` (play/pause) for the baseline `ask` mode, `⏸` for plan, `▸▸` (fast-forward)
 /// for the auto-proceed modes. The cycle hint is appended uniformly in
 /// [`permission_and_tasks_line`].
-///
 /// Glyphs are chosen for cross-platform coverage: `⏵`/`⏵⏵` (U+23F5) lacks a
 /// glyph in most Linux monospace fonts and renders as tofu boxes, so the
 /// fast-forward look uses `▸▸` (U+25B8, Geometric Shapes — universally covered)
 /// and the play glyph uses `⏯` (U+23EF, same media-control family as `⏸`).
-///
 /// Override-mode tones match TS: auto → warning (yellow), bypass/dont-ask →
 /// error (red); the baseline stays dim.
 fn permission_mode_status(mode: PermissionMode) -> Option<(&'static str, String, StatusTone)> {
@@ -322,7 +318,7 @@ fn permission_mode_status(mode: PermissionMode) -> Option<(&'static str, String,
     Some((symbol, t!(key).to_string(), tone))
 }
 
-/// TS `getPillLabel` port, extended for local workflows: "1 agent",
+/// `getPillLabel` port, extended for local workflows: "1 agent",
 /// "2 shells", "1 workflow", or "1 agent · 2 shells · 1 workflow".
 /// Counts only running tasks; `None` when nothing is running.
 pub(crate) fn background_pill_label(state: &AppState) -> Option<String> {

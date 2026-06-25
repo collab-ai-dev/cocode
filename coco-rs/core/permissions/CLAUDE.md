@@ -96,8 +96,7 @@ Settings rules reach the evaluator via three layers:
    `ToolUseContext.permission_context` per turn (built in
    `app/query::tool_context::ToolContextFactory`).
 
-Persistence chain (TS `applyPermissionUpdate` →
-`persistPermissionUpdates`):
+Persistence chain:
 - `app/tui::update::overlay::approve_all` (the dialog "Always Allow"
   action) builds a `PermissionUpdate::AddRules { destination: Session }`
   and forwards it on `UserCommand::ApprovalResponse.permission_updates`.

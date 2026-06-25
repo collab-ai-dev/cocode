@@ -118,7 +118,7 @@ async fn drain_command_queue_into_history_leaves_slash_commands_queued() {
 }
 
 // ── Steering: human queued commands become raw user messages; the
-// model-facing wrapper is applied only at prompt-build (mirrors TS).
+// model-facing wrapper is applied only at prompt-build.
 
 fn msg_text(m: &Message) -> String {
     coco_messages::wrapping::extract_text_from_message(m)

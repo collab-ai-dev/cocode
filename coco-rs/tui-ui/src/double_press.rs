@@ -1,6 +1,6 @@
 //! Generic time-based double-press tracker.
 //!
-//! Models the TS `useDoublePress` hook (`src/hooks/useDoublePress.ts`):
+//! Double-press detection logic:
 //! each call to [`DoublePressTracker::poll`] is either the first press in
 //! a window (caller arms a prompt + performs the first-press action) or
 //! the second press completing the window (caller fires the double-press
@@ -10,7 +10,7 @@
 //! Generic over `K` so the same primitive serves both Esc rewind
 //! (`DoublePressTracker<()>`) and Ctrl+C / Ctrl+D exit
 //! (`DoublePressTracker<ExitKey>`). Pressing key `B` while `A` is armed
-//! re-arms with `B`, matching TS [`ExitState`] semantics — only one
+//! re-arms with `B` — only one
 //! "press again" prompt can be visible at a time.
 //!
 //! `K` is bounded on `Copy + PartialEq` because the tracker stores the
@@ -59,7 +59,6 @@ impl<K: Copy + PartialEq> DoublePressTracker<K> {
     /// Register a key press at `now`. Reads-and-writes the internal
     /// state atomically: caller never has to worry about ordering with
     /// any "track timestamp before dispatch" code path.
-    ///
     /// Re-arming with a *different* key resets the previous arm —
     /// pressing Ctrl+D while Ctrl+C is armed produces `First` (for
     /// Ctrl+D), not `Double`.

@@ -26,7 +26,6 @@ pub fn create_user_message(text: &str) -> Message {
 }
 
 /// Create a user message from text with a caller-supplied UUID.
-///
 /// Used by the TUI submit path so the UUID minted at user-input time is the
 /// same one the engine, file-history snapshots, JSONL transcript, and rewind
 /// picker see.
@@ -45,7 +44,6 @@ pub fn create_user_message_with_uuid(uuid: Uuid, text: &str) -> Message {
 }
 
 /// Create the clear-context plan-implementation seed message.
-///
 /// Same shape as [`create_user_message`] (model-visible user text) but tagged
 /// `MessageOrigin::PlanImplementation` so the TUI renders it as a compact
 /// chip instead of echoing the entire plan as a `❯` input wall. The body
@@ -66,7 +64,6 @@ pub fn create_plan_implementation_message(text: &str) -> Message {
 }
 
 /// Create a user message with mixed content parts (text + images).
-///
 /// Used when the user input includes @-mentioned images or pasted images
 /// alongside text. The provider layer (e.g. Anthropic) already handles
 /// `UserContentPart::File` with image/* media types.
@@ -90,7 +87,6 @@ pub fn create_user_message_with_parts_and_uuid(uuid: Uuid, parts: Vec<UserConten
 }
 
 /// Create a system-injected meta message (hidden from UI, visible to model).
-///
 /// Lands as `Message::Attachment` with [`CriticalSystemReminder`] kind —
 /// the generic carrier for system-injected text whose content goes to the
 /// model but shouldn't surface in the UI transcript as a "user" message.
@@ -112,8 +108,7 @@ pub fn create_info_message(title: &str, message: &str) -> Message {
 }
 
 /// Create a display-only API/stream error row for the transcript.
-///
-/// Rendered inline by the TUI as a `⚠ <error>` row (mirrors TS Claude Code's
+/// Rendered inline by the TUI as a `⚠ <error>` row ( Claude Code's
 /// `SystemAPIErrorMessage`). `normalize_messages_for_api` drops every
 /// `SystemMessage` variant except `LocalCommand`, so this never reaches the
 /// model — it is pure transcript provenance for a failed turn.
@@ -204,7 +199,6 @@ pub fn create_error_tool_result(
 
 /// Create a tool result message from a sequence of typed content
 /// parts (text + images + documents).
-///
 /// Used by the executor when a tool's [`Tool::render_for_model`]
 /// returns more than a single Text part — e.g. `FileReadTool` reading
 /// a PNG returns one [`ToolResultContentPart::FileData`] block. The
@@ -212,13 +206,11 @@ pub fn create_error_tool_result(
 /// is the canonical multimodal carrier; provider crates already know
 /// how to translate it (Anthropic / Gemini 3+ pass through; OpenAI /
 /// OpenAI-Compatible degrade non-Text parts to a visible text marker).
-///
 /// Sibling of [`create_tool_result_message`], which takes a single
 /// `&str` and stays the fast path for tools that just return
 /// formatted text. The two paths produce semantically identical
 /// `Message::ToolResult` envelopes — only the `output` variant
 /// differs (`Text` / `ErrorText` vs `Content`).
-///
 /// `is_error` rides on the outer `ToolResultPart.is_error` flag (the
 /// `Content` enum variant has no explicit error form).
 pub fn create_tool_result_message_with_parts(
@@ -274,7 +266,6 @@ pub fn create_progress_message(tool_use_id: &str, data: serde_json::Value) -> Me
 
 /// Literal text content for a Ctrl+C cancellation marker that lives in
 /// the message history.
-///
 /// Rendered specially as the dim "Interrupted · What should Claude do instead?" row.
 pub const INTERRUPT_MESSAGE: &str = "[Request interrupted by user]";
 
@@ -337,7 +328,6 @@ pub fn create_permission_denied_message(tool_name: &str, reason: &str) -> Messag
 }
 
 /// Create an assistant error message with an attached API error.
-///
 /// `error_type` is the short error code (`max_output_tokens`,
 /// `prompt_too_long`, `content_filter`, `blocking_limit`, …) used by
 /// hook matchers and the C3 death-spiral guard. Pass `None` only when

@@ -52,7 +52,7 @@ pub async fn run() -> Result<()> {
 
     // Variant 1: bare /rewind. Overlay opens with 4 rows = 3 real + 1
     // synthetic anchor. Default selection is the synthetic anchor (so
-    // Enter dismisses without rewinding — TS parity).
+    // Enter dismisses without rewinding).
     harness.submit("/rewind").await;
     let overlay = match harness.state.ui.modal.as_ref() {
         Some(ModalState::Rewind(r)) => r.clone(),

@@ -1,9 +1,4 @@
-//! SDK hook callback output — TS-canonical wire shape.
-//!
-//! TS reference: `src/entrypoints/sdk/coreSchemas.ts` —
-//! `hookJSONOutputSchema`, `syncHookResponseSchema`,
-//! `asyncHookResponseSchema`, `hookSpecificOutputSchema`,
-//! `permissionRequestDecisionSchema`.
+//! SDK hook callback output — stable wire format.
 //!
 //! The wire shape is a single flat object whose `async` field
 //! discriminates between async-mode (further fields ignored except
@@ -11,14 +6,10 @@
 //! a `{}` response means "no opinion, continue normally". The
 //! per-event `hookSpecificOutput` discriminates on `hookEventName`.
 //!
-//! **No translation layer.** The Rust runtime, the SDK wire, and the
-//! TS reference all use this exact same shape — the hook orchestrator
-//! consumes it directly via [`crate::HookSpecificOutput`].
-//!
-//! Fields use camelCase on the wire to match TS / Python SDK output.
-//! `#[serde(alias = "snake_case")]` is allowed where coco-rs's older
-//! shell-hook JSON stdout format used snake_case so the parser stays
-//! bidirectional, but the canonical emission is always camelCase.
+//! Fields use camelCase on the wire. `#[serde(alias = "snake_case")]`
+//! is allowed where coco-rs's older shell-hook JSON stdout format used
+//! snake_case so the parser stays bidirectional, but the canonical
+//! emission is always camelCase.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -41,7 +32,7 @@ pub struct SdkHookOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub async_timeout: Option<i64>,
 
-    // ── Sync-mode fields (TS `syncHookResponseSchema`) ───────────────
+    // ── Sync-mode fields ───────────────
     /// Stop the agent loop after this turn when `Some(false)`.
     /// Pair with `stopReason` for the visible message.
     #[serde(default, rename = "continue", skip_serializing_if = "Option::is_none")]
@@ -65,7 +56,7 @@ pub struct SdkHookOutput {
     pub reason: Option<String>,
 
     /// Free-form message injected into the conversation as a system
-    /// message (visible to model and user). TS parity:
+    /// message (visible to model and user).
     /// `syncHookResponseSchema.systemMessage`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_message: Option<String>,
@@ -91,7 +82,6 @@ pub enum HookDecision {
 // `z.enum(['allow', 'deny'])`. Both call sites (hook output and silent
 // attachment payload) want the same 2-variant decision, so there is
 // **one** enum across the whole workspace.
-//
 // Re-exported by `lib.rs` under the same name — consumers can import
 // either path.
 
@@ -107,10 +97,8 @@ pub enum ElicitationAction {
 }
 
 /// Event-specific hook output. Tagged by `hookEventName`.
-///
 /// Variants cover every `HOOK_EVENT` value that can carry structured
 /// fields back to the agent.
-///
 /// Each variant carries `rename_all = "camelCase"` so its inner fields
 /// match the TS canonical wire shape (`permissionDecision`,
 /// `additionalContext`, `updatedInput`, etc.). The enum-level
@@ -260,21 +248,19 @@ pub enum PermissionRequestDecision {
 
 /// Result body for the synchronous JSON-RPC reply to a
 /// `hook/callback` server request.
-///
 /// Correlation is via the outer JSON-RPC `request_id` on the response
 /// envelope — there is no inner correlation field. The whole body is
-/// the hook output in TS-canonical shape; downstream parsers consume
+/// the hook output in shape; downstream parsers consume
 /// `SdkHookOutput` directly via [`HookCallbackResult::output`].
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HookCallbackResult {
-    /// Hook output in TS-canonical shape (TS `hookJSONOutputSchema`).
+    /// Hook output in shape.
     pub output: SdkHookOutput,
 }
 
 /// Result body for the synchronous JSON-RPC reply to a
 /// `mcp/routeMessage` server request.
-///
 /// Carries the forwarded JSON-RPC response from the SDK-hosted MCP
 /// server verbatim. Correlation is via the outer JSON-RPC
 /// `request_id` on the response envelope.

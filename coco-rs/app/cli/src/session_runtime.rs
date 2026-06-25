@@ -4,13 +4,13 @@
 //! runner (`sdk_server::sdk_runner::QueryEngineRunner`) both need to:
 //!
 //! 1. Construct ~12 per-session subsystem state objects at startup
-//!    (`FileReadState`, `SessionMemoryService`, `HookRegistry`,
-//!    `CompactionObserverRegistry`, `FileHistoryState`, `ToolAppState`,
-//!    history Mutex, …).
+//! (`FileReadState`, `SessionMemoryService`, `HookRegistry`,
+//! `CompactionObserverRegistry`, `FileHistoryState`, `ToolAppState`,
+//! history Mutex, …).
 //! 2. Per-turn, build a `QueryEngine` by chaining ~11 `.with_*` calls
-//!    that install those subsystems on the engine.
+//! that install those subsystems on the engine.
 //! 3. On `/clear`, perform a full reset (SessionEnd hooks → drop
-//!    caches → regen session id → SessionStart hooks).
+//! caches → regen session id → SessionStart hooks).
 //!
 //! Before this module existed, both runners had their own copies of
 //! steps 1+2+3 — the SDK copy had drifted to ~30% completeness and 7
@@ -64,7 +64,6 @@ use crate::Cli;
 
 /// `FileHistorySnapshotSink` that writes via [`TranscriptStore`]. Lives
 /// here because both runners need to install it on `FileHistoryState`.
-///
 /// **Deliberately bypasses the `SessionStore` backend trait** and
 /// constructs a concrete disk [`TranscriptStore`] directly: file-history
 /// checkpoints are a low-frequency, local-only convenience (rewind / disk
@@ -73,7 +72,6 @@ use crate::Cli;
 /// (`docs/coco-rs/session-storage-backend-design.md` §3.4). So even under
 /// a non-`Disk` `session.backend` they stay on disk; there's nothing to
 /// gain from routing them through the swappable boundary.
-///
 /// `session_id` is shared via `Arc<std::sync::RwLock<String>>` so
 /// `SessionRuntime::clear_conversation` can swap it in place without
 /// rebuilding the sink. Without this, a `/clear` regen would leave the
@@ -246,7 +244,6 @@ fn config_change_source_for_kind(
 
 /// Populate a `HookRegistry` from the current `RuntimeConfig` snapshot
 /// + the plugin directories rooted at `config_home`/`cwd`.
-///
 /// Used both at session bootstrap (`SessionRuntime::new`) and at
 /// `/hooks reload` time (`SessionRuntime::reload_hooks`). Settings
 /// sources are loaded in lowest-precedence-first order so the registry
@@ -371,9 +368,8 @@ enum EnginePersistenceMode {
 /// Build the live permission base (S1) for the main session's `ToolAppState`
 /// from the loaded rule maps + mode + dirs + source roots. This is the single
 /// seeding shape used at bootstrap, `/clear` re-seed, and the headless/SDK
-/// entry — so the live store (the TS `appState.toolPermissionContext` mirror,
-/// the ONLY permission source the factory reads each batch) always starts from
-/// the same source.
+/// entry — so the live store (the ONLY permission source the factory
+/// reads each batch) always starts from the same source.
 pub(crate) fn live_permissions(
     mode: PermissionMode,
     allow_rules: coco_types::PermissionRulesBySource,
@@ -417,7 +413,6 @@ fn thinking_level_for_effort_from(
 
 /// In-memory binding for a single [`ModelRole`] that overrides the
 /// `RuntimeConfig.model_roles` entry for the lifetime of one session.
-///
 /// Populated by the TUI model picker (`UserCommand::SetModelRole` →
 /// [`SessionRuntime::apply_role_override`]) and Ctrl+T thinking cycle
 /// (`UserCommand::SetThinkingLevel` →
@@ -510,11 +505,9 @@ pub struct SessionRuntime {
     /// cycle (`UserCommand::SetThinkingLevel`). Layered ABOVE
     /// `runtime_config.model_roles` — [`Self::resolve_role`] checks
     /// overrides first, falls back to the runtime config map second.
-    ///
     /// **Not persisted.** Model-role changes via the TUI are session-local;
     /// users who want a binding to survive across sessions edit
     /// `the global config file::model_roles.<role>.primary` themselves.
-    ///
     /// Cleared on `Drop` (i.e. session end) via the natural `Arc`
     /// lifecycle. `/clear` keeps overrides — the conversation reset is
     /// orthogonal to model-role bindings.
@@ -639,7 +632,6 @@ pub struct SessionRuntime {
     /// Teammate-scoped live permission-rule overlay, injected onto every
     /// main-session engine's `QueryEngineConfig.live_permission_rules` (which
     /// `ToolContextFactory` merges each batch, post-derivation).
-    ///
     /// Since the main-session permission base now lives in `ToolAppState`
     /// (read-through + mutated by `apply_permission_updates_everywhere`), this
     /// overlay is NO LONGER the main-session in-cycle mechanism. It survives as
@@ -770,7 +762,6 @@ pub struct SessionRuntime {
     /// which calls [`QueryEngine::with_command_queue`]. Internally
     /// `Arc`-backed so `Clone` is cheap — every engine instance shares
     /// the same backing storage with the runtime and any other holder.
-    ///
     /// Teammate messages and task notifications also flow through this
     /// queue (with `QueueOrigin::Coordinator` /
     /// `QueueOrigin::TaskNotification`) — no separate `Inbox` type;
@@ -884,7 +875,6 @@ impl SessionRuntime {
         let project_paths = crate::paths::project_paths(&cwd);
 
         // ── Auto-memory runtime ──
-        //
         // Built once per session, gated on `Feature::AutoMemory`. The
         // runtime owns the three services (extract / dream / session
         // memory) plus the recall ranker state. We hand it the
@@ -894,7 +884,6 @@ impl SessionRuntime {
         // `AgentHandle` so the forked extraction / dream subagents
         // spawn against the same swarm runtime that user-facing
         // `Agent` tool spawns use.
-        //
         // The handle starts as `NoOpAgentHandle`; the SDK / TUI
         // runner calls `MemoryRuntime::install_agent` once the real
         // `SwarmAgentHandle` is built. Recall + system-prompt
@@ -1138,7 +1127,6 @@ impl SessionRuntime {
             );
 
         // ── Session-scoped CWD state ──
-        //
         // Frozen anchor + live tracker. The live tracker is
         // threaded through every `ToolUseContext` so BashTool can
         // read it as the spawn cwd and write back `new_cwd` after
@@ -1150,7 +1138,6 @@ impl SessionRuntime {
         ));
 
         // ── Session-scoped shell provider ──
-        //
         // Build once at session start so the provider keeps the same
         // resolved shell binary and session-scoped `/env` store across all
         // shell-tool invocations. Bash additionally keeps snapshot watch +
@@ -1347,14 +1334,12 @@ impl SessionRuntime {
         ));
 
         // ── Agent definition catalog ──
-        //
         // Build the per-session [`AgentDefinitionStore`] once at startup
         // so AgentTool's dynamic prompt sees the same set the SDK
         // `initialize.agents` listing returns. The snapshot inspector
         // wires `pending_snapshot_update` per definition so `/agents show`
         // can flag drift without each consumer re-running the
         // `check_agent_memory_snapshot` IO.
-        //
         // Errors / missing dirs are non-fatal: the store keeps the
         // built-in roster and the per-turn engine reads the resulting
         // (mostly built-in) catalog. Snapshot is reload-able via
@@ -1499,15 +1484,12 @@ impl SessionRuntime {
     /// in-memory catalog snapshot. Subsequent per-turn engines built
     /// via [`Self::wire_engine`] pick up the new snapshot; engines
     /// already in flight keep the snapshot they captured at wire time.
-    ///
     /// Borrow a stable pointer to the active agent catalog snapshot.
-    ///
     /// The returned `Arc` is a pointer clone — readers continue to
     /// observe the snapshot they cloned even if [`reload_agent_catalog`]
     /// swaps in a new one mid-read. Callers (TUI bootstrap, `/agents`
     /// renderer) should re-call this for each fresh read rather than
     /// caching the result long-term.
-    ///
     /// Uses the `RwLock<Arc<...>>` pattern to make `reload_agent_catalog`
     /// an atomic swap with no observer drift.
     pub async fn agent_catalog_snapshot(&self) -> Arc<coco_subagent::AgentCatalogSnapshot> {
@@ -1557,7 +1539,6 @@ impl SessionRuntime {
     /// Replace the set of SDK-supplied agent definitions used by every
     /// future catalog (re)load. Called by the SDK `initialize` handler
     /// when the client pushes `initialize.agents`.
-    ///
     /// Triggers an immediate `reload_agent_catalog()` so the new agents
     /// land in the active snapshot before the next `turn/start` (the
     /// engine snapshots the catalog when wiring per-turn).
@@ -1585,7 +1566,6 @@ impl SessionRuntime {
 
     /// Session-scoped attachment emitter for producers outside the
     /// per-turn engine (TUI slash commands, swarm forwarders, …).
-    ///
     /// Each `emit()` enqueues a typed `AttachmentMessage` (typically
     /// silent-* variants) onto the session channel. The engine drains
     /// at the head of each outer-loop turn via
@@ -1596,7 +1576,6 @@ impl SessionRuntime {
     }
 
     /// The tool registry shared by every engine instance.
-    ///
     /// Callers that need to register or deregister tools at runtime (e.g.
     /// the SDK MCP lifecycle handlers) use this to mutate the registry
     /// via its interior-mutability API.
@@ -1646,7 +1625,6 @@ impl SessionRuntime {
     /// `McpConnectionManager` and bump the reconnect key. Called from
     /// `/reload-plugins` (and after install / delisting) so a plugin
     /// enable/disable flows into the MCP layer.
-    ///
     /// Reconciles the live MCP set against the currently-enabled plugins:
     /// servers from now-disabled/uninstalled plugins (the `plugin:` namespace)
     /// are unregistered + their tools deregistered; newly-enabled servers are
@@ -1841,7 +1819,6 @@ impl SessionRuntime {
     /// Seed the transcript dedup set with uuids that are already
     /// persisted on disk. Called on resume / fork so the first
     /// post-load turn doesn't re-write the loaded messages.
-    ///
     /// MUST clear the dedup set first. In-TUI `/resume` reuses the
     /// runtime, so without the clear the prior session's UUIDs leak
     /// into the new session and any colliding new write gets silently
@@ -1858,7 +1835,6 @@ impl SessionRuntime {
     /// Reconstruct Level 2 tool-result replacement state from the
     /// restored messages plus transcript content-replacement records.
     /// Called on resume/fork before the first resumed turn.
-    ///
     /// `agent_id` MUST be the runtime's current agent_id (None for
     /// main-thread sessions, Some for subagents). The transcript
     /// content-replacement records are stamped with `agent_id` at
@@ -1945,7 +1921,6 @@ impl SessionRuntime {
     /// `runtime_config.model_roles`. Returns `None` only when the role
     /// is not configured anywhere (model picker / engine consumers
     /// already guard on this via the Main fallback chain).
-    ///
     /// Used by [`Self::current_engine_config`] to project the active
     /// Main effort onto `QueryEngineConfig.thinking_level`.
     pub async fn resolve_role(&self, role: ModelRole) -> Option<RoleOverride> {
@@ -1968,7 +1943,6 @@ impl SessionRuntime {
     /// override layers above `runtime_config.model_roles` and is NOT
     /// persisted to the global config file — re-bind on every session via the
     /// picker, or edit settings to make the change durable.
-    ///
     /// For `role == Main` this also rewrites
     /// `engine_config.{model_id, thinking_level}` so UI and tool
     /// context mirrors see the new identity on the next turn.
@@ -2017,7 +1991,6 @@ impl SessionRuntime {
     /// Update only the `effort` on an existing role override, preserving
     /// the spec. The Main role's `engine_config.thinking_level` is
     /// rewritten so the next turn picks up the change.
-    ///
     /// When the role has no prior override, the current
     /// `runtime_config.model_roles` spec is captured and stored
     /// alongside the new effort so subsequent reads see a consistent
@@ -2145,7 +2118,6 @@ impl SessionRuntime {
     /// rules never graduate into the live `ToolAppState.permissions` base, so
     /// there is nothing to reconcile/dedup against — the previous base-dedup
     /// step keyed off the now-deleted config rule maps and is gone.
-    ///
     /// Called from every main-session build path (TUI `build_engine_with_turn_abort`
     /// and SDK/headless `build_engine_from_config_with_persistence`) so the
     /// in-cycle approval mechanism is uniform across transports. NOT called for
@@ -2158,15 +2130,13 @@ impl SessionRuntime {
     /// shared by every transport (TUI dialog, SDK approval reply, headless
     /// permission-prompt tool). Lands the rules in both places they must
     /// reach so in-cycle and cross-cycle behavior stays aligned:
-    ///
     /// 1. the live `ToolAppState.permissions` base — the single authoritative
-    ///    source the factory reads each batch (shared by Arc with the in-flight
-    ///    engine + subagents/forks), so the approval is visible THIS cycle on
-    ///    the next batch (e.g. an `Edit(...)` grant then satisfies a same-cycle
-    ///    Read via the "edit access implies read" branch) AND across cycles;
+    /// source the factory reads each batch (shared by Arc with the in-flight
+    /// engine + subagents/forks), so the approval is visible THIS cycle on
+    /// the next batch (e.g. an `Edit(...)` grant then satisfies a same-cycle
+    /// Read via the "edit access implies read" branch) AND across cycles;
     /// 2. disk, for destinations that persist (User/Project/Local).
-    ///
-    /// This is coco-rs's analog of TS `applyPermissionUpdate` +
+    /// This is coco-rs's analog of `applyPermissionUpdate` +
     /// `setToolPermissionContext`.
     pub async fn apply_permission_updates_everywhere(
         &self,
@@ -2179,7 +2149,6 @@ impl SessionRuntime {
         // single authoritative source the factory reads each batch, shared by
         // Arc with subagents/forks. This is both the in-cycle (the in-flight
         // engine re-reads it next batch) and cross-cycle home for the rule. The
-        // Rust analog of TS `setToolPermissionContext(applyPermissionUpdate(...))`.
         {
             let mut guard = self.app_state.write().await;
             coco_permissions::apply_permission_updates_to_live(&mut guard.permissions, updates);
@@ -2319,7 +2288,6 @@ impl SessionRuntime {
     /// forwarders — call `enqueue` on this handle to inject mid-turn
     /// steering messages. Returned by reference; callers `.clone()` if
     /// they need an owned `Arc`-backed handle.
-    ///
     /// Teammate messages and task notifications use the same queue
     /// with `QueueOrigin::Coordinator` / `QueueOrigin::TaskNotification`.
     pub fn command_queue(&self) -> &CommandQueue {
@@ -2342,7 +2310,6 @@ impl SessionRuntime {
     /// Build a closure that materialises an
     /// [`coco_hooks::orchestration::OrchestrationContext`] tied to the
     /// current session's identity / cwd / disable flags.
-    ///
     /// Used by detached hook firings (e.g. the `Elicitation` /
     /// `ElicitationResult` wrapper around `SendElicitation`, the
     /// FileChanged file watcher) that need a context built from inside
@@ -2383,7 +2350,6 @@ impl SessionRuntime {
     /// `QueryEngineConfig`. Used by SDK paths whose per-turn config
     /// fields (model, session_id, max_*) come from the
     /// `turn/start` request and override the runtime defaults.
-    ///
     /// `app_state_override` lets the caller pin a specific
     /// `ToolAppState` Arc — SDK passes `Some(handoff.app_state)` so
     /// per-session app state and the compaction observers built from
@@ -2434,7 +2400,6 @@ impl SessionRuntime {
         // Gated to the main session (`MainSession` + no `agent_id`): subagents
         // and forks keep their own isolated config-cloned rules — they must not
         // share or reconcile the main session's overlay.
-        //
         // `config` is owned and local — the `mut` is confined to this block so
         // the rest of the function sees an immutable binding. The only shared
         // state touched is the overlay Arc, serialized by its `RwLock` inside
@@ -2453,7 +2418,7 @@ impl SessionRuntime {
         // give the child a *deep clone* of the parent's `FileReadState`
         // instead of the shared Arc `wire_engine` installs. The fork then
         // sees the parent's already-seen ids (cache parity preserved) but
-        // its own reads/edits can't pollute the parent's cache. Mirrors TS
+        // its own reads/edits can't pollute the parent's cache.
         // `createSubagentContext`, which clones `readFileState` per fork.
         let isolate_file_read_state = config
             .fork_isolation
@@ -2480,7 +2445,6 @@ impl SessionRuntime {
     /// single source of truth for "what subsystems an engine needs" —
     /// both runners route through this so a new subsystem only needs
     /// adding here, not in two transport-specific spots.
-    ///
     /// `app_state_override`: when `Some`, this Arc is what the engine
     /// gets via `with_app_state`, AND it's what the compaction
     /// observers reset on `notify_all`. When `None`, falls back to the
@@ -2773,11 +2737,10 @@ impl SessionRuntime {
     }
 
     /// Run a user-typed fork-mode skill (`/<name>`) through the installed
-    /// `SkillHandle`, mirroring TS `executeForkedSlashCommand`: the skill
+    /// `SkillHandle`: the skill
     /// body runs as a subagent and its final text is returned for the
     /// caller to inject as a `<local-command-stdout>` block — no follow-up
     /// main-model query.
-    ///
     /// The gate marks the skill as user-invoked (`typed_slashes_in_turn`),
     /// so it bypasses the `disable_model_invocation` author lock and the
     /// `user-invocable-only` override. Inheritance is taken from the live
@@ -2954,31 +2917,27 @@ impl SessionRuntime {
     }
 
     /// Reset all per-session subsystems and adopt a new session id.
-    ///
     /// Used by SDK `session/start` to flip from an archived session to
     /// a fresh one without rebuilding the entire `SessionRuntime`.
     /// Caller-owned state (`SessionHandle.history`,
     /// `SessionHandle.app_state` per the SDK protocol) is created fresh
     /// by the caller; this method only refreshes runtime-owned state
     /// keyed on session_id.
-    ///
     /// What gets reset:
     /// - `runtime.session_id` → `new_session_id`
     /// - `runtime.engine_config.session_id` (next per-turn engine sees it)
     /// - `runtime.session_memory_service` (`set_session_id` + cache wipe)
     /// - `runtime.file_read_state` (LRU cleared so prior session's
-    ///   @mention dedup doesn't leak)
+    /// @mention dedup doesn't leak)
     /// - `runtime.file_history_sink_session_id` Arc (next snapshot
-    ///   targets new session's transcript jsonl)
+    /// targets new session's transcript jsonl)
     /// - cache-break detectors on registry-owned model runtimes
-    ///   (baseline drop on first new-session call won't false-positive)
-    ///
+    /// (baseline drop on first new-session call won't false-positive)
     /// Fire SessionStart hooks with the given `source` string ("startup",
     /// "resume", "compact", "clear"). Output flows into the shared
     /// `sync_hook_buffer` so it surfaces as `hook_*` reminders on the
     /// Fire SessionStart hooks for the given source. The result is buffered
     /// into `sync_hook_buffer` to surface as reminders on the next turn.
-    ///
     /// Runners call this once at session bootstrap (TUI / SDK) so the
     /// first turn's reminder pass picks up the events. Failure is
     /// logged + tolerated; no panic on hook misconfig.
@@ -3081,7 +3040,6 @@ impl SessionRuntime {
     }
 
     /// Fire Setup hooks (`Maintenance` at bootstrap, `Init` at `coco init`).
-    ///
     /// Output is fire-and-forget — Setup is observability-only (no blocking,
     /// no continuation signals). Failure is logged.
     pub async fn fire_setup_hooks(&self, trigger: coco_hooks::orchestration::SetupTrigger) {
@@ -3236,7 +3194,6 @@ impl SessionRuntime {
     }
 
     /// Fire CwdChanged hooks.
-    ///
     /// Callers must capture the old cwd before mutating
     /// `std::env::current_dir`. Surfacing the helper lets ad-hoc
     /// cwd-mutating code paths (worktree exit, SDK setCwd control) wire
@@ -3343,7 +3300,6 @@ impl SessionRuntime {
     /// stream and fires the corresponding `ConfigChange` hook for each event.
     /// Returns the [`tokio::task::JoinHandle`] so the caller can hold it for
     /// the session lifetime; dropping it aborts the watcher.
-    ///
     /// `cancel` lets callers terminate the watcher proactively
     /// (typically the session-level [`Self::cancel`] token); when the
     /// broadcast channel closes (reloader dropped), the loop exits on
@@ -3378,8 +3334,7 @@ impl SessionRuntime {
 
     /// What stays:
     /// - `hook_registry`, `tools`, `client` (and Arc identity), other
-    ///   process-level resources — these are correctly cross-session.
-    ///
+    /// process-level resources — these are correctly cross-session.
     /// Distinct from `clear_conversation`: that fires SessionEnd /
     /// SessionStart hooks and performs the full `/clear` flow.
     /// This method skips both — SDK `session/archive` is the hook
@@ -3400,7 +3355,6 @@ impl SessionRuntime {
     }
 
     /// Repoint every session-id-keyed subsystem at `new_session_id`.
-    ///
     /// Both `start_new_session` (SDK `session/start`) and the full
     /// `/clear` path call this so the swap stays in lockstep:
     /// `runtime.session_id`, `engine_config.session_id`,
@@ -3473,14 +3427,12 @@ impl SessionRuntime {
     /// set (`load_enabled_plugins`) are constructed each call; resolution
     /// order matches the original bootstrap
     /// (`commands::build_command_registry`).
-    ///
     /// Uses the frozen [`Self::runtime_config`] snapshot — fine for
     /// the user-initiated `/reload-plugins` path where settings
     /// haven't been mutated. Callers that just wrote to
     /// `settings.local.json` must use [`Self::reload_plugins_with`]
     /// to pass the freshly-republished `RuntimeConfig` (otherwise
     /// the registry rebuild reads stale `skill_overrides` tiers).
-    ///
     /// Returns the count of registered commands in the new registry
     /// so the caller can show the user a confirmation.
     pub async fn reload_plugins(&self, cwd: &std::path::Path) -> usize {
@@ -3557,19 +3509,17 @@ impl SessionRuntime {
 
     /// Reload the live `HookRegistry` from the latest `RuntimeConfig`
     /// snapshot (settings + plugin hooks). Triggered by `/hooks reload`.
-    ///
     /// Atomic semantics:
     /// - Settings hooks (User/Project/Local/Flag/Policy scopes) and
-    ///   plugin hooks are both rebuilt.
+    /// plugin hooks are both rebuilt.
     /// - `fired_once` set is **preserved** so a `once` hook that
-    ///   already fired this session doesn't re-fire after reload.
+    /// already fired this session doesn't re-fire after reload.
     /// - Per-agent `agent_scoped` hook layer is **preserved** — those are
-    ///   owned by the coordinator's spawn lifecycle, not by settings.
+    /// owned by the coordinator's spawn lifecycle, not by settings.
     /// - Slash commands run only at turn boundaries (the dispatch loop
-    ///   in `tui_runner` `drain_active_turn`s before invoking them),
-    ///   so PreToolUse/PostToolUse for an in-flight call cannot see
-    ///   different hook sets.
-    ///
+    /// in `tui_runner` `drain_active_turn`s before invoking them),
+    /// so PreToolUse/PostToolUse for an in-flight call cannot see
+    /// different hook sets.
     /// Returns the count of hooks now registered.
     pub async fn reload_hooks(&self) -> Result<usize> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| self.config_home.clone());
@@ -3626,7 +3576,6 @@ impl SessionRuntime {
     /// Full `/clear` reset: SessionEnd hooks → drop subsystem caches →
     /// regen session id → SessionStart hooks (whose result messages seed
     /// the new transcript).
-    ///
     /// `/clear` has one behavior: full reset, regardless of arguments.
     pub async fn clear_conversation(&self) -> Result<()> {
         // Step 1: SessionEnd hooks fire BEFORE the reset, with the bounded
@@ -3761,13 +3710,11 @@ impl SessionRuntime {
 
 /// Construct an `Arc<SandboxState>` for the active session, or return `None`
 /// when sandbox is disabled / unavailable.
-///
 /// Returns `Ok(None)` when:
 /// - `Feature::Sandbox` is off, or
 /// - mode is `FullAccess`, or
 /// - bootstrap gates fail AND `sandbox.fail_if_unavailable` is `false`
-///   (commands will run unsandboxed; user gets a startup banner).
-///
+/// (commands will run unsandboxed; user gets a startup banner).
 /// Returns `Err` when bootstrap gates fail AND
 /// `sandbox.fail_if_unavailable` is `true` — the caller propagates this
 /// so coco exits before the REPL starts.
@@ -3941,7 +3888,6 @@ pub(crate) async fn build_sandbox_state(
 /// Settings / definition files denied write inside the sandbox, so a sandboxed
 /// command cannot rewrite its own permission rules, disable the sandbox, or
 /// inject agents.
-///
 /// MUST be the single source for both the bootstrap (`build_sandbox_state`) and
 /// the hot-reload (`sandbox_reload::reapply_sandbox`) paths — passing `&[]` on
 /// reload silently re-opened the self-permission escape after the first

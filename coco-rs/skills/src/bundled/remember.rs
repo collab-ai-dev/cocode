@@ -1,5 +1,5 @@
-//! `/remember` — review auto-memory entries and propose promotions / cleanup across memory layers. Mirrors claude-code's remember.ts.
-//! Tier A: no coco tool-name interpolation. Replaces coco's prior remember workflow with claude-code's Memory Review audit.
+//! `/remember` — review auto-memory entries and propose promotions / cleanup across memory layers.
+//! Tier A: no coco tool-name interpolation. Runs the Memory Review audit.
 
 pub const PROMPT: &str = r#"# Memory Review
 

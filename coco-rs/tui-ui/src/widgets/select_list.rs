@@ -1,5 +1,5 @@
 //! Generic, domain-free single-select list — the reusable core shared by
-//! pickers (theme, and future menus). Mirrors claude-code's `Select<T>`: the
+//! pickers (theme, and future menus). The
 //! caller supplies items plus the focused index, and this renders a `❯` focus
 //! cursor, an optional `✔` active marker, optional numbering, and a scroll
 //! window that keeps the focused row visible. No `AppState`, no i18n — just
@@ -46,7 +46,7 @@ impl SelectItem {
 /// Presentation knobs for [`render_select_list`].
 #[derive(Debug, Clone)]
 pub struct SelectListStyle {
-    /// Prefix each row with `"{n}. "` (1-based), mirroring TS `Select`.
+    /// Prefix each row with `"{n}. "` (1-based).
     pub numbered: bool,
     /// Max rows shown at once; longer lists scroll to keep the focus visible.
     pub visible_count: usize,
@@ -103,7 +103,7 @@ pub fn render_select_list(
                 ));
             }
 
-            // TS `ListItem` row colors: the active (applied) row is `success`,
+            // Row colors: the active (applied) row is `success`,
             // the focused row is `accent`, everything else is body text. No
             // bold — emphasis comes from color + the cursor glyph.
             let label_color = if item.active {

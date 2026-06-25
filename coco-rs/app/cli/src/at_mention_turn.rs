@@ -26,7 +26,6 @@ use coco_messages::Message;
 use coco_tui::ImageData;
 
 /// Output of the per-turn user-input resolution pipeline.
-///
 /// Field order is the injection order: the user message first
 /// (carrying the prompt + any clipboard images), then per-attachment
 /// system-reminder messages with file/image/dir content, then any
@@ -56,15 +55,14 @@ pub struct ResolvedTurnInputs {
 const MAX_DIR_ENTRIES: i32 = 1000;
 
 /// Run the full mention-resolution pipeline for a user turn.
-///
 /// Steps:
 /// 1. `coco_context::process_user_input` — extract `@` mentions.
 /// 2. `coco_context::resolve_mentions` — load file content / resolve
-///    directory listings, with `FileReadState` dedup.
+/// directory listings, with `FileReadState` dedup.
 /// 3. `coco_context::detect_changed_files` — find files modified since
-///    last seen.
+/// last seen.
 /// 4. Build the user message (text + optional image parts) with
-///    `user_uuid`, then per-attachment reminder messages.
+/// `user_uuid`, then per-attachment reminder messages.
 pub async fn resolve_turn_inputs(
     content: &str,
     images: &[ImageData],
@@ -135,7 +133,6 @@ pub async fn resolve_turn_inputs_text_only(
 
 /// Concatenate the inputs into a `Vec<Message>` in order:
 /// `user_message` → file/image/dir reminders → changed-file notes.
-///
 /// Engine callers pass the result to [`engine.run_with_messages`].
 pub fn build_messages_for_turn(inputs: &ResolvedTurnInputs) -> Vec<Message> {
     let mut messages = Vec::with_capacity(
@@ -149,12 +146,10 @@ pub fn build_messages_for_turn(inputs: &ResolvedTurnInputs) -> Vec<Message> {
 
 /// Convert a resolved `@`-mention attachment into the model-visible
 /// system-reminder messages.
-///
 /// Produces *two* messages per attachment: a synthetic `tool_use`
 /// narration + `tool_result` wrapped in `<system-reminder>`. The image
 /// branch keeps the image block unwrapped because `<system-reminder>`
 /// only wraps text blocks.
-///
 /// Returning a `Vec` (vs the previous `Option`) lets us emit the
 /// exact two-message shape; callers `flat_map` the results.
 pub fn attachment_to_messages(att: &Attachment) -> Vec<Message> {
@@ -192,7 +187,7 @@ pub fn attachment_to_messages(att: &Attachment) -> Vec<Message> {
             ]
         }
         Attachment::Directory(d) => {
-            // Mirror TS `messages.ts` directory case: `ls <quoted-abs-path>`
+            // directory case: `ls <quoted-abs-path>`
             // with the absolute path (on-demand shell-quoting in the command —
             // bare when no metachars — and the bare path in the description).
             let quoted_path = coco_shell::shell_quoting::quote_posix(&[d.path.as_str()]);
@@ -214,7 +209,6 @@ pub fn attachment_to_messages(att: &Attachment) -> Vec<Message> {
 
 /// Build the display-only `@`-mention summary attachment — one compact row
 /// per resolved file / directory / image / PDF.
-///
 /// Returns `None` when nothing displayable resolved. The model-visible content
 /// is injected separately by [`attachment_to_messages`]; this attachment has a
 /// `Unit` body and is dropped from the API request, existing purely so the

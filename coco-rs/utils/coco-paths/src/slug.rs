@@ -15,7 +15,6 @@ use crate::sanitize::sanitize_path;
 
 /// A sanitised, NFC-normalised project slug suitable for use as a
 /// single filesystem directory name.
-///
 /// Cheap to construct (one NFC pass + one linear scan) and `Clone`,
 /// so callers can pass it around freely.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -25,11 +24,10 @@ impl ProjectSlug {
     /// Build a slug from a project path — typically the canonical
     /// git root (so linked worktrees share one slug), falling back
     /// to the cwd itself when not inside a git repo.
-    ///
     /// `to_string_lossy` substitutes `\u{FFFD}` for non-UTF-8 bytes;
     /// since `sanitize_path` collapses every non-alphanumeric byte
     /// to `-` anyway, lossy decoding is observationally equivalent
-    /// to TS `path.normalize` on the same input.
+    /// on the same input.
     pub fn for_path(project_path: &Path) -> Self {
         let raw = project_path.to_string_lossy();
         let nfc = normalize_nfc(&raw);

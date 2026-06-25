@@ -47,7 +47,7 @@ fn test_resolve_structured_image_keeps_pill_and_carries_bytes() {
     let mut mgr = PasteManager::new();
     let pill = mgr.add_image_data(vec![1, 2, 3], "image/png".to_string());
     let resolved = mgr.resolve_structured(&format!("{pill} what is this?"));
-    // The `[Image #N]` placeholder survives inline (mirrors TS); bytes ship
+    // The `[Image #N]` placeholder survives inline; bytes ship
     // separately for the image content block.
     assert_eq!(resolved.text, "[Image #1] what is this?");
     assert_eq!(resolved.images.len(), 1);

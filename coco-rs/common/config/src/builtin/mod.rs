@@ -45,7 +45,7 @@ use crate::provider::ProviderConfig;
 
 /// Default base instructions used when a `ModelInfo` declares neither
 /// `base_instructions` nor `base_instructions_file`. Lives at
-/// `instructions/default_prompt.md` (aligned with the claude-code TS
+/// `instructions/default_prompt.md` (the default system prompt
 /// source) and is reused by both the runtime SP-fallback path and the
 /// DeepSeek builtin catalog.
 const DEFAULT_BASE_INSTRUCTIONS_TEMPLATE: &str =

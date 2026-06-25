@@ -62,7 +62,7 @@
   },
   "$defs": {
     "PermissionMode": {
-      "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at\n`coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits',\n'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the\ndrifting variants accept legacy snake_case input so old session\ntranscripts deserialize cleanly.",
+      "description": "Permission mode (top-level because it's used by both message and permission modules).\nWire format is camelCase. The serde aliases on the drifting variants accept\nlegacy snake_case input so old session transcripts deserialize cleanly.",
       "oneOf": [
         {
           "type": "string",

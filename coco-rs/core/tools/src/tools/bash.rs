@@ -28,7 +28,6 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// Typed input for [`BashTool`].
-///
 /// The model-facing schema is built by the manual [`BashTool::input_schema`]
 /// override — four user-visible fields, intentionally omitting
 /// `_simulatedSedEdit` (internal; populated by the
@@ -78,21 +77,18 @@ fn default_timeout_ms(config: &coco_config::ToolConfig) -> u64 {
 }
 
 /// Long-form tool description shown to the model.
-///
 /// Conditional sections based on runtime config (sandbox config dump,
 /// undercover guidance, per-user git skill references,
 /// embedded-search-tool variants) are intentionally omitted because:
-///
-///   1. They depend on runtime feature flags coco-rs doesn't currently
-///      model (isUndercover, hasEmbeddedSearchTools).
-///   2. The sandbox config dump leaks /private/tmp paths into the
-///      prompt cache key — coco-rs doesn't have a sandbox manager that
-///      emits config to the prompt.
-///   3. The git commit/PR section is ~80 lines of skill-specific
-///      guidance that's only relevant when /commit, /commit-push-pr
-///      skills are loaded — coco-rs has its own skill discovery
-///      pipeline.
-///
+/// 1. They depend on runtime feature flags coco-rs doesn't currently
+/// model (isUndercover, hasEmbeddedSearchTools).
+/// 2. The sandbox config dump leaks /private/tmp paths into the
+/// prompt cache key — coco-rs doesn't have a sandbox manager that
+/// emits config to the prompt.
+/// 3. The git commit/PR section is ~80 lines of skill-specific
+/// guidance that's only relevant when /commit, /commit-push-pr
+/// skills are loaded — coco-rs has its own skill discovery
+/// pipeline.
 /// Included: the avoid-native-commands list, tool-preference items,
 /// multi-command parallelism guidance, git safety bullets,
 /// timeout/run_in_background notes, sleep-avoidance guidance, and the
@@ -198,7 +194,6 @@ Important:
 - View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments";
 
 /// Resolve the active [`SandboxState`] for a tool invocation.
-///
 /// Returns the state when (a) the `Sandbox` feature is enabled and
 /// (b) the bootstrap layer installed an `Arc<SandboxState>` on the
 /// context. Otherwise returns `None`, leaving the executor to spawn
@@ -212,7 +207,6 @@ fn active_sandbox_state(ctx: &ToolUseContext) -> Option<std::sync::Arc<SandboxSt
 }
 
 /// Working directory for Bash force-ask path gates.
-///
 /// Mirrors the executor spawn cwd so permission analysis and execution observe
 /// the same current directory.
 async fn bash_gate_cwd(ctx: &ToolUseContext) -> String {
@@ -223,7 +217,6 @@ async fn bash_gate_cwd(ctx: &ToolUseContext) -> String {
 }
 
 /// Effective max Bash output byte budget.
-///
 /// Clamp to `[0, BASH_MAX_OUTPUT_BYTES_UPPER]` is enforced by
 /// `BashConfig::finalize()` at config-resolution time — this helper
 /// just normalizes the (already non-negative) value to `usize`.
@@ -236,7 +229,7 @@ fn max_output_bytes(config: &coco_config::ToolConfig) -> usize {
 /// the path gate — it runs inside the tool at evaluator step-1 and returns
 /// before any allow/Edit rule, so a `Bash(cmd:*)` or `Edit(dir/**)` rule can't
 /// help; only widening `additional_dirs` lets the same command pass next time.
-/// Mirrors TS `pathValidation.ts` `getDirectoryForPath(blockedPath)` →
+/// `getDirectoryForPath(blockedPath)` →
 /// `addDirectories`. Target is resolved exactly like the gate's own
 /// `is_path_within_allowed_dirs` (tilde + relative + lexical-normalize).
 fn out_of_dir_suggestion(target: &str, cwd: &str) -> Vec<coco_types::PermissionUpdate> {
@@ -260,7 +253,6 @@ fn out_of_dir_suggestion(target: &str, cwd: &str) -> Vec<coco_types::PermissionU
 
 /// Bash tool -- executes shell commands via bash -c.
 /// Captures stdout, stderr, and exit code.
-///
 /// Supports `run_in_background: true` to spawn the command as a background
 /// task. The task ID is returned immediately and the model is notified
 /// asynchronously when the command completes via task-notification XML.
@@ -387,7 +379,6 @@ impl Tool for BashTool {
     /// Read-only fast path. Commands on the allowlist (`cat`, `ls`, `grep`,
     /// `git log`, `docker ps`, etc.) get auto-approved upstream and batched as
     /// concurrency-safe, avoiding the permission UI for routine inspection.
-    ///
     /// Delegates to `coco_shell::read_only::is_read_only_command` which wraps the
     /// 40+ safe-command allowlist + conditional safety rules for git/sed/find/rg/etc.
     fn is_read_only(&self, input: &BashInput) -> bool {
@@ -408,7 +399,7 @@ impl Tool for BashTool {
         is_read_only_command(&input.command)
     }
 
-    /// Concurrency-safe iff read-only, matching TS Bash. Foreground Bash still
+    /// Concurrency-safe iff read-only. Foreground Bash still
     /// writes a cwd checkpoint after completion; concurrent read-only cwd
     /// changes use final-completer-wins session cwd updates, as in TS.
     fn is_concurrency_safe(&self, input: &BashInput) -> bool {
@@ -657,19 +648,18 @@ impl Tool for BashTool {
     }
 
     /// Render the structured `data` envelope into model-visible content parts.
-    ///
     /// Branches:
     /// 1. **structuredContent present** (image stdout): decode each block
-    ///    into a `FileData` (image) part. This is what enables Anthropic /
-    ///    Gemini 3+ to actually see image bytes captured by `cat foo.png`.
+    /// into a `FileData` (image) part. This is what enables Anthropic /
+    /// Gemini 3+ to actually see image bytes captured by `cat foo.png`.
     /// 2. **Text path**: build a single Text part by joining
-    ///    `[processedStdout, errorMessage, exitTail, backgroundInfo]` with
-    ///    `\n`, skipping empty pieces. `processedStdout` strips leading
-    ///    blank-only lines + trims trailing whitespace. A backgrounded
-    ///    command carries `backgroundTaskId` + `outputPath`, so the
-    ///    `backgroundInfo` line names both — matching TS so the model can
-    ///    `Read` the output file. Oversized text output is persisted by the
-    ///    query-level generic Level 1 tool-result pipeline, not by Bash.
+    /// `[processedStdout, errorMessage, exitTail, backgroundInfo]` with
+    /// `\n`, skipping empty pieces. `processedStdout` strips leading
+    /// blank-only lines + trims trailing whitespace. A backgrounded
+    /// command carries `backgroundTaskId` + `outputPath`, so the
+    /// `backgroundInfo` line names both so the model can
+    /// `Read` the output file. Oversized text output is persisted by the
+    /// query-level generic Level 1 tool-result pipeline, not by Bash.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
         // Branch 1: image stdout — decode the structuredContent envelope
         // into FileData parts so multimodal-capable providers see the
@@ -792,7 +782,6 @@ impl Tool for BashTool {
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
         // ── R7-T11: _simulatedSedEdit short-circuit ──
-        //
         // The BashTool input schema accepts an internal `_simulatedSedEdit:
         // { filePath, newContent }` field that the SedEditPermissionRequest
         // TUI dialog populates when the user reviews a `sed -i ...` command
@@ -800,7 +789,6 @@ impl Tool for BashTool {
         // dialog does the actual sed-against-original computation and hands
         // BashTool the precomputed `newContent` so what the user previewed
         // is exactly what gets written.
-        //
         // The field is **deliberately omitted** from `input_schema()` so
         // the model can never see it as a valid input. The upstream executor
         // SHOULD also strip incoming `_simulatedSedEdit` payloads before
@@ -826,11 +814,10 @@ impl Tool for BashTool {
         let run_in_background = input.run_in_background;
 
         // R6-T18: sandbox decision:
-        //   1. If sandbox not globally enabled → unsandboxed
-        //   2. If `dangerouslyDisableSandbox` and bypass allowed → unsandboxed
-        //   3. If command matches an excluded pattern → unsandboxed
-        //   4. Otherwise → sandboxed
-        //
+        // 1. If sandbox not globally enabled → unsandboxed
+        // 2. If `dangerouslyDisableSandbox` and bypass allowed → unsandboxed
+        // 3. If command matches an excluded pattern → unsandboxed
+        // 4. Otherwise → sandboxed
         // Decision evaluation lives on `SandboxState::command_snapshot`;
         // this site only resolves whether sandboxing is reachable at all
         // (feature gate + bootstrap supplied the state) and forwards the
@@ -849,31 +836,25 @@ impl Tool for BashTool {
         }
 
         // Permission pipeline.
-        //
         // Stage 1 — read-only fast path. Already handled by `is_read_only()`
         // at the trait level; the upstream permission evaluator auto-allows
         // read-only commands and batches them with other concurrency-safe tools.
-        //
         // Stage 2 — security analysis. `check_security` runs the full
         // `coco_shell_parser` analyzer suite (29 quote/heredoc-aware
         // validators). ALL analyzer-caught risks (eval, IFS=, backtick
         // substitution, brace expansion, comment/quote desync, …) map to
         // `SecuritySeverity::Ask` and pass through to the normal permission
         // prompt below.
-        //
         // `check_security` retains only TWO coco-rs-specific `Deny` checks for
         // genuinely-catastrophic constructs with no legitimate use here: raw
         // control / zero-width characters and `/proc/*/environ` access. Those
         // hard-fail without prompting (a DELIBERATE divergence we keep because
         // they are near-always obfuscation/secret-exfiltration attempts).
-        //
         // User-configured deny rules and path validation are a different
         // concern from the pattern checks here.
-        //
         // Read-only commands skip the security check to avoid false positives
         // on harmless `grep 'foo`bar'` patterns with metacharacters inside
         // quoted strings.
-        //
         // NOTE: destructive-command detection is intentionally NOT a block.
         // It is a purely informational advisory — it never affects permission
         // logic. The `coco_shell::destructive::get_destructive_warning`
@@ -907,9 +888,8 @@ impl Tool for BashTool {
         // - Always spawn through `spawn_shell_task`.
         // - `run_in_background: true` → return `{backgroundTaskId, outputPath}`.
         // - Otherwise → race terminal/detach/cancel/auto-detach inside
-        //   `tool.execute`, compose either fg-shape `{stdout, exitCode,
-        //   interrupted}` or bg-shape `{backgroundTaskId, outputPath, ...}`.
-        //
+        // `tool.execute`, compose either fg-shape `{stdout, exitCode,
+        // interrupted}` or bg-shape `{backgroundTaskId, outputPath, ...}`.
         // Tests / minimal embeddings without a TaskRuntime fall back
         // to the legacy ShellExecutor path (`execute_foreground`).
         // W6: TaskRuntime now supports sandbox wrap (sandbox params
@@ -942,27 +922,24 @@ impl Tool for BashTool {
 }
 
 /// W3: unified fg/bg execution path via TaskRuntime.
-///
 /// Always spawns through `spawn_shell_task` (the same primitive bg
 /// used). The fg/bg distinction is purely about which `tool.execute`
 /// arm wins the `select!`:
-///
 /// - `run_in_background: true` → return `{backgroundTaskId, outputPath}`
-///   immediately (one `output_file_path` await, no command await).
+/// immediately (one `output_file_path` await, no command await).
 /// - `run_in_background: false` → race four signals:
-///   1. `ctx.abort.cancelled()` (Ctrl+C / explicit kill) → return
-///      `ToolError::Cancelled`.
-///   2. `terminal_signal.await_terminal()` → read disk via
-///      `read_terminal_outputs` and return fg-shape result.
-///   3. `detach.notified()` → external `signal_detach` (TUI Ctrl+B or
-///      another co-routine) → return bg-shape result; task keeps
-///      running.
-///   4. Auto-detach timer (when `auto_background_on_timeout` config is set;
-///      see `ASSISTANT_BLOCKING_BUDGET_MS = 15_000`) → same as (3), but the
-///      timer records `DetachSource::AssistantAuto` before notifying. The
-///      detach arm in (3) observes the notification and stamps
-///      `assistantAutoBackgrounded`.
-///
+/// 1. `ctx.abort.cancelled()` (Ctrl+C / explicit kill) → return
+/// `ToolError::Cancelled`.
+/// 2. `terminal_signal.await_terminal()` → read disk via
+/// `read_terminal_outputs` and return fg-shape result.
+/// 3. `detach.notified()` → external `signal_detach` (TUI Ctrl+B or
+/// another co-routine) → return bg-shape result; task keeps
+/// running.
+/// 4. Auto-detach timer (when `auto_background_on_timeout` config is set;
+/// see `ASSISTANT_BLOCKING_BUDGET_MS = 15_000`) → same as (3), but the
+/// timer records `DetachSource::AssistantAuto` before notifying. The
+/// detach arm in (3) observes the notification and stamps
+/// `assistantAutoBackgrounded`.
 /// This replaces both the old `execute_background` and the D5 re-run
 /// path on foreground timeout — the previous code re-spawned the
 /// command after timeout, duplicating side effects of `npm publish` /
@@ -1052,7 +1029,7 @@ async fn execute_via_task_runtime(
     // Bg path: return now. The task runs detached, will push a
     // `<task-notification>` envelope on terminal. The result carries the
     // task id + the on-disk output path so the model can `Read` the file
-    // directly (mirrors TS BashTool).
+    // directly ( BashTool).
     if run_in_background {
         let output_path = background_output_path(task_handle, &task_id).await;
         return Ok(ToolResult {
@@ -1220,7 +1197,6 @@ async fn execute_foreground(
     // through to the shell executor. When `sandbox_state` is `Some` and
     // the per-command snapshot says `should_wrap`, the executor calls
     // `SandboxPlatform::wrap_command` before spawning the child.
-    //
     // Snapshot the violation count *before* spawning so we can splice
     // anything that landed during this command into stderr.
     let violations_baseline = if let Some(state) = &sandbox_state {
@@ -1298,20 +1274,17 @@ async fn execute_foreground(
     }
 
     // ── B4.2: auto-background-on-timeout ──
-    //
     // On foreground timeout, the intended behavior is to convert the running
     // process into a background task (process keeps running, detached from
     // the fg await). This requires the shell executor to support process
     // handle transfer, which coco-rs's current `ShellExecutor` does not.
-    //
     // Until that architectural change lands, we fall back to a
     // safer-but-weaker behavior: on timeout, return an error that
     // **explicitly recommends** retrying with `run_in_background=true`.
     // The structured payload tells the model:
-    //   - the command did time out (not a different error)
-    //   - a task_handle is available so bg retry is possible
-    //   - the original command + timeout so the retry is trivial
-    //
+    // - the command did time out (not a different error)
+    // - a task_handle is available so bg retry is possible
+    // - the original command + timeout so the retry is trivial
     // This is strictly an error-message improvement — we don't risk
     // double-execution of side-effectful commands by re-spawning on
     // the tool's behalf. Re-spawn would happen only if the model
@@ -1341,7 +1314,7 @@ async fn execute_foreground(
     // `extract_cwd_from_output`). Truncate that for the inline view.
     let stdout = truncate_output(cmd_result.stdout.as_bytes(), max_bytes);
 
-    // Claude Code hints protocol: CLIs/SDKs emit a `<claude-code-hint />`
+    // Hints protocol: CLIs/SDKs emit a `<coco-hint />`
     // tag to stderr (merged into stdout here). Scan, record for the TUI's
     // pending-hint dialog to surface, then strip so the model never sees
     // the tag — a zero-token side channel. Stripping runs unconditionally
@@ -1363,11 +1336,9 @@ async fn execute_foreground(
         .unwrap_or(cmd_result.stdout.as_bytes());
 
     // R5-T14 + R6-T17 + R7-T12: structured output envelope:
-    //
-    //   { stdout, stderr, exitCode, interrupted, isImage?,
-    //     backgroundTaskId?, structuredContent?, persistedOutputPath?,
-    //     persistedOutputSize? }
-    //
+    // { stdout, stderr, exitCode, interrupted, isImage?,
+    // backgroundTaskId?, structuredContent?, persistedOutputPath?,
+    // persistedOutputSize? }
     // `interrupted` is sourced from the shell executor's own `interrupted`
     // flag, which is set when the ctx cancel token fires and the child
     // process is killed. That's distinct from a timeout (the executor sets
@@ -1379,17 +1350,16 @@ async fn execute_foreground(
     }
 
     // R7-T12 fields:
-    //
     // 1. `isImage`: detect from stdout magic bytes when e.g. `cat image.png`
-    //    returns binary image data, so the UI can render it inline.
+    // returns binary image data, so the UI can render it inline.
     // 2. `structuredContent`: when stdout IS an image, attach a base64
-    //    multimodal block so the model receives the actual pixels.
-    //    For text output, structuredContent is omitted (the plain
-    //    `stdout` field is enough).
+    // multimodal block so the model receives the actual pixels.
+    // For text output, structuredContent is omitted (the plain
+    // `stdout` field is enough).
     // 3. Oversized text output is handled by the generic query-level
-    //    Tool Result Budget pipeline. Bash keeps the structured
-    //    envelope focused on stdout/stderr/exit status and does not
-    //    write model-visible temp files.
+    // Tool Result Budget pipeline. Bash keeps the structured
+    // envelope focused on stdout/stderr/exit status and does not
+    // write model-visible temp files.
     let is_image = is_likely_image_bytes(raw_stdout_bytes_for_detection);
     let structured_content = if is_image {
         Some(build_image_block(raw_stdout_bytes_for_detection))
@@ -1420,7 +1390,7 @@ async fn execute_foreground(
     })
 }
 
-/// Strip `<claude-code-hint />` tags from bash stdout and best-effort
+/// Strip `<coco-hint />` tags from bash stdout and best-effort
 /// record any plugin hints for the TUI's pending-hint dialog. Returns the
 /// stripped stdout (what the model sees). Recording failures (disk I/O,
 /// policy lookups) are swallowed — they must never affect the tool result.
@@ -1437,13 +1407,12 @@ pub(crate) fn maybe_strip_and_record_hints(stdout: String, command: &str) -> Str
 /// Detect whether a byte buffer is a known image format from its magic
 /// bytes. Used by the UI to render the result as an inline image
 /// rather than attempting to display raw bytes as text.
-///
 /// Recognized formats (order = check priority):
-///  - PNG: `89 50 4E 47 0D 0A 1A 0A`
-///  - JPEG: `FF D8 FF`
-///  - GIF: `47 49 46 38` (`GIF8`, both 87a and 89a)
-///  - WebP: `52 49 46 46` ... `57 45 42 50` (`RIFF`...`WEBP`)
-///  - BMP: `42 4D` (`BM`)
+/// - PNG: `89 50 4E 47 0D 0A 1A 0A`
+/// - JPEG: `FF D8 FF`
+/// - GIF: `47 49 46 38` (`GIF8`, both 87a and 89a)
+/// - WebP: `52 49 46 46` ... `57 45 42 50` (`RIFF`...`WEBP`)
+/// - BMP: `42 4D` (`BM`)
 pub(crate) fn is_likely_image_bytes(bytes: &[u8]) -> bool {
     if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
         return true;
@@ -1471,7 +1440,6 @@ pub(crate) fn is_likely_image_bytes(bytes: &[u8]) -> bool {
 /// receives the correct content type. Used to populate the
 /// `structuredContent` field of the BashTool result envelope when
 /// stdout is an image.
-///
 /// Each magic-byte check mirrors `is_likely_image_bytes` exactly,
 /// including the BMP `len() > 14` length gate, so direct callers
 /// can't accidentally tag a 2-byte `b"BM"` payload as a BMP image.
@@ -1508,25 +1476,23 @@ fn build_image_block(bytes: &[u8]) -> Value {
 /// endings. Used by the `_simulatedSedEdit` short-circuit in
 /// `BashTool::execute` so that what the user previewed in the
 /// SedEditPermissionRequest dialog is exactly what hits disk.
-///
 /// Behavior:
-///   1. Resolve the absolute path (`canonicalize` with a fallback to
-///      the input path).
-///   2. Read the original file metadata to detect encoding + line
-///      endings — sed preserves both.
-///   3. ENOENT → return a sed-formatted error message via stderr,
-///      `exitCode: 1`, never throw. The model sees a normal Bash
-///      result with the sed CLI's "No such file or directory" text.
-///   4. Track file history before mutating (matches `track_file_edit`
-///      called from FileEditTool/FileWriteTool).
-///   5. Write the new content with the detected encoding + line
-///      endings (NOT the LF-always policy used by FileWriteTool —
-///      sed is an in-place edit and must round-trip the format).
-///   6. Update `FileReadState` so subsequent edits/writes don't trip
-///      the read-before-write check, and so the file_unchanged dedup
-///      cache is still consistent.
-///   7. Return `{ stdout: "", stderr: "", exitCode: 0, interrupted: false }`.
-///
+/// 1. Resolve the absolute path (`canonicalize` with a fallback to
+/// the input path).
+/// 2. Read the original file metadata to detect encoding + line
+/// endings — sed preserves both.
+/// 3. ENOENT → return a sed-formatted error message via stderr,
+/// `exitCode: 1`, never throw. The model sees a normal Bash
+/// result with the sed CLI's "No such file or directory" text.
+/// 4. Track file history before mutating (matches `track_file_edit`
+/// called from FileEditTool/FileWriteTool).
+/// 5. Write the new content with the detected encoding + line
+/// endings (NOT the LF-always policy used by FileWriteTool —
+/// sed is an in-place edit and must round-trip the format).
+/// 6. Update `FileReadState` so subsequent edits/writes don't trip
+/// the read-before-write check, and so the file_unchanged dedup
+/// cache is still consistent.
+/// 7. Return `{ stdout: "", stderr: "", exitCode: 0, interrupted: false }`.
 /// `sed_input` must be a JSON object with string `filePath` and string
 /// `newContent` fields. Missing/wrong-type fields surface as
 /// `InvalidInput` errors.
@@ -1617,7 +1583,6 @@ async fn apply_sed_edit(
 /// Truncate output head-only: keep the first `max_bytes` chars and append
 /// `\n\n... [N lines truncated] ...` where N counts the lines dropped from
 /// the tail (newlines after the cut, +1).
-///
 /// Char boundaries are respected so truncation never yields invalid UTF-8.
 fn truncate_output(bytes: &[u8], max_bytes: usize) -> String {
     let s = String::from_utf8_lossy(bytes);

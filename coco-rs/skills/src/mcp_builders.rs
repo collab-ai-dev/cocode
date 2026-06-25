@@ -34,7 +34,7 @@ use coco_types::ModelRole;
 
 /// Wire-shape input emitted by an MCP server for one skill.
 ///
-/// Mirrors what `services/mcp/client.ts::fetchMcpSkillsForClient` reads
+/// reads
 /// off an MCP resource: server identity, the resource URI, optional MCP
 /// metadata (name / description), and the raw markdown body (with
 /// optional frontmatter). The builder consumes this and returns a fully

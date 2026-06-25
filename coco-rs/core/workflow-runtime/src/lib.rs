@@ -1,6 +1,6 @@
 //! JavaScript runtime for Dynamic Workflows.
 //!
-//! Mirrors claude-code's `node:vm`-based execution model using an embedded
+//! Sandboxed JavaScript workflow execution using an embedded
 //! QuickJS engine (`rquickjs`): a sandboxed context per run, the DSL globals
 //! (`agent`/`parallel`/`pipeline`/`phase`/`log`/`workflow` + `args`/`budget`),
 //! a runtime determinism shim, and intrinsic hardening. See
@@ -41,7 +41,7 @@ pub fn eval_smoke() -> Result<i32, rquickjs::Error> {
 }
 
 /// Install the runtime determinism shim + intrinsic hardening into a context,
-/// matching claude-code's per-context init (hardening first, then the
+/// per-context init (hardening first, then the
 /// determinism shim).
 pub fn install_sandbox(ctx: &Ctx<'_>) -> Result<(), rquickjs::Error> {
     ctx.eval::<(), _>(sandbox::HARDENING_PROGRAM)?;

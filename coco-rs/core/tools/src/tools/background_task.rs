@@ -2,8 +2,8 @@
 //! path. A backgrounded command's result carries `backgroundTaskId` +
 //! `outputPath`, and the model-facing notice names both so the model can
 //! `Read` the output file directly instead of reaching for the deprecated
-//! TaskOutput tool. Mirrors TS BashTool `backgroundInfo`
-//! (`BashTool.tsx:607-616`) — the path is `getTaskOutputPath(taskId)` there,
+//! TaskOutput tool. BashTool `backgroundInfo`
+//! Background task output persistence.
 //! the deterministic `{session_dir}/{task_id}.output` location here.
 
 use serde_json::Value;

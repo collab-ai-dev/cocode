@@ -54,20 +54,20 @@ Models will be cached in `~/.cache/fastembed/` by default.
 
 ## Step 3: Create Configuration
 
-Create configuration file at `~/.codex/retrieval.toml`:
+Create configuration file at `<config_home>/retrieval.toml`:
 
 ```bash
-mkdir -p ~/.codex
+mkdir -p <config_home>
 ```
 
 ### Minimal Local Configuration
 
 ```toml
-# ~/.codex/retrieval.toml
+# <config_home>/retrieval.toml
 # Minimal local config - no external API dependencies
 
 enabled = true
-data_dir = "~/.codex/retrieval"
+data_dir = "<config_home>/retrieval"
 
 # Embedding: Local fastembed (auto-downloads on first use)
 [embedding]
@@ -106,11 +106,11 @@ damping_factor = 0.85
 ### Remote API Configuration (OpenAI)
 
 ```toml
-# ~/.codex/retrieval.toml
+# <config_home>/retrieval.toml
 # Remote config - requires API keys
 
 enabled = true
-data_dir = "~/.codex/retrieval"
+data_dir = "<config_home>/retrieval"
 
 # Embedding: OpenAI API
 [embedding]
@@ -148,14 +148,14 @@ export COHERE_API_KEY="..."
 ## Step 4: Build with Local Features
 
 ```bash
-cd codex-rs
+cd coco-rs
 
 # Build with all local features
-cargo build -p codex-retrieval --features local
+cargo build -p coco-retrieval --features local
 
 # Or build specific features
-cargo build -p codex-retrieval --features local-embeddings
-cargo build -p codex-retrieval --features neural-reranker
+cargo build -p coco-retrieval --features local-embeddings
+cargo build -p coco-retrieval --features neural-reranker
 ```
 
 ## Step 5: Verify Setup
@@ -469,7 +469,7 @@ For low-memory systems:
 
 If you change embedding models, you must re-index:
 ```bash
-rm -rf ~/.codex/retrieval
+rm -rf <config_home>/retrieval
 # Re-run indexing
 ```
 
@@ -486,10 +486,10 @@ ollama serve &
 ollama pull qwen3:0.6b
 
 # 3. Create config
-mkdir -p ~/.codex
-cat > ~/.codex/retrieval.toml << 'EOF'
+mkdir -p <config_home>
+cat > <config_home>/retrieval.toml << 'EOF'
 enabled = true
-data_dir = "~/.codex/retrieval"
+data_dir = "<config_home>/retrieval"
 
 [embedding]
 provider = "fastembed"
@@ -516,8 +516,8 @@ map_tokens = 1024
 EOF
 
 # 4. Build
-cd codex-rs
-cargo build -p codex-retrieval --features local
+cd coco-rs
+cargo build -p coco-retrieval --features local
 
 # 5. Verify
 curl http://localhost:11434/api/tags
