@@ -54,6 +54,14 @@ pub fn journal_path_for_output(output_path: &std::path::Path) -> Option<PathBuf>
     Some(output_path.with_extension("journal.jsonl"))
 }
 
+/// The persisted-script path that sits alongside a run's `.output` file:
+/// `<task_id>.workflow.js`. Mirrors the write site in the task runtime's
+/// `register_workflow_task`, which persists each invocation's source so a later
+/// `resumeFromRunId` can re-run the AUTHORITATIVE on-disk source.
+pub fn script_path_for_output(output_path: &std::path::Path) -> PathBuf {
+    output_path.with_extension("workflow.js")
+}
+
 /// Compute the resume cache key: `"<VERSION>:" + hex(sha256(phase \0 prompt \0
 /// canonical_opts))`. Mirrors CC's `journalKey`.
 pub fn journal_key(key: &AgentCacheKey) -> String {
@@ -150,7 +158,16 @@ impl WorkflowJournal {
         {
             Ok(mut file) => {
                 use tokio::io::AsyncWriteExt;
-                if let Err(error) = file.write_all(line.as_bytes()).await {
+                // `write_all` only guarantees the bytes are *scheduled* on the
+                // blocking pool; `flush` awaits the in-flight write so a
+                // subsequent read-back (a cross-run resume hydrating this
+                // journal) is guaranteed to observe the line. Without the flush
+                // the hydrate races the write under full-suite load.
+                let write = async {
+                    file.write_all(line.as_bytes()).await?;
+                    file.flush().await
+                };
+                if let Err(error) = write.await {
                     tracing::warn!(
                         target: "coco::workflow",
                         %error,

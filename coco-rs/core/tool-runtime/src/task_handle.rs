@@ -340,6 +340,20 @@ pub trait TaskHandle: Send + Sync {
         Vec::new()
     }
 
+    /// Resolve a workflow run id (`wf_…`) to its `local_workflow` task row, if
+    /// one exists in this session. Used by the Workflow tool's resume path to
+    /// (a) reject a resume of a still-running run (errorCode 3) and (b) locate
+    /// the prior run's persisted script + journal. Resume is same-session only,
+    /// so this only consults the in-session task registry.
+    async fn find_workflow_task_by_run_id(&self, run_id: &str) -> Option<TaskStateBase> {
+        self.list_tasks().await.into_iter().find(|state| {
+            state
+                .extras
+                .local_workflow_extras()
+                .is_some_and(|extras| extras.run_id == run_id)
+        })
+    }
+
     async fn subscribe_terminal(&self, _task_id: &str) -> Option<TerminalSignal> {
         None
     }

@@ -66,6 +66,124 @@ impl TaskHandle for RecordingTaskHandle {
     }
 }
 
+/// A task-handle mock that exposes a single canned `local_workflow` row so the
+/// resume path can be exercised (run_id → task lookup, errorCode-3 precedence).
+struct ResumeLookupTaskHandle {
+    row: coco_types::TaskStateBase,
+}
+
+fn workflow_row(
+    task_id: &str,
+    run_id: &str,
+    status: coco_types::TaskStatus,
+    output_file: Option<&str>,
+) -> coco_types::TaskStateBase {
+    coco_types::TaskStateBase {
+        id: task_id.to_string(),
+        status,
+        notified: false,
+        description: "wf".to_string(),
+        tool_use_id: None,
+        start_time: 0,
+        end_time: None,
+        total_paused_ms: None,
+        output_file: output_file.map(str::to_string),
+        output_offset: 0,
+        extras: coco_types::TaskExtras::local_workflow(
+            run_id.to_string(),
+            Some("wf".to_string()),
+            None,
+        ),
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskHandle for ResumeLookupTaskHandle {
+    async fn list_tasks(&self) -> Vec<coco_types::TaskStateBase> {
+        vec![self.row.clone()]
+    }
+
+    async fn output_file_path(&self, task_id: &str) -> Option<PathBuf> {
+        self.row
+            .output_file
+            .as_deref()
+            .filter(|_| task_id == self.row.id)
+            .map(PathBuf::from)
+    }
+}
+
+#[tokio::test]
+async fn workflow_resume_of_running_run_rejects_with_taskstop_hint() {
+    // errorCode-3: a resume whose run id maps to a still-running local_workflow
+    // task is rejected before any launch, with the TaskStop hint.
+    let tool = WorkflowTool;
+    let mut ctx = ToolUseContext::test_default();
+    let handle = Arc::new(ResumeLookupTaskHandle {
+        row: workflow_row(
+            "wtask01",
+            "wf_running01",
+            coco_types::TaskStatus::Running,
+            None,
+        ),
+    });
+    let task_handle: coco_tool_runtime::TaskHandleRef = handle;
+    ctx.task_handle = Some(task_handle);
+
+    let input = WorkflowInput {
+        resume_from_run_id: Some("wf_running01".to_string()),
+        ..WorkflowInput::default()
+    };
+    let err = tool.execute(input, &ctx).await.unwrap_err();
+    match err {
+        ToolError::InvalidInput {
+            message,
+            error_code,
+        } => {
+            assert_eq!(
+                error_code.as_deref(),
+                Some(super::WorkflowValidationCode::ResumeRunning.as_str())
+            );
+            assert!(message.contains("is still running"));
+            assert!(message.contains("task wtask01"));
+            assert!(message.contains("TaskStop"));
+        }
+        other => panic!("expected InvalidInput with ResumeRunning code, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn workflow_resume_of_unknown_run_rejects_same_session_only() {
+    // A run id with no matching in-session row cannot be resumed (same-session
+    // only) — surfaced as a typed source error, not a launch.
+    let tool = WorkflowTool;
+    let mut ctx = ToolUseContext::test_default();
+    let handle = Arc::new(ResumeLookupTaskHandle {
+        row: workflow_row(
+            "wtask01",
+            "wf_known001",
+            coco_types::TaskStatus::Completed,
+            None,
+        ),
+    });
+    let task_handle: coco_tool_runtime::TaskHandleRef = handle;
+    ctx.task_handle = Some(task_handle);
+
+    let input = WorkflowInput {
+        resume_from_run_id: Some("wf_absent001".to_string()),
+        ..WorkflowInput::default()
+    };
+    let err = tool.execute(input, &ctx).await.unwrap_err();
+    match err {
+        ToolError::InvalidInput { error_code, .. } => {
+            assert_eq!(
+                error_code.as_deref(),
+                Some(super::WorkflowValidationCode::SourceError.as_str())
+            );
+        }
+        other => panic!("expected InvalidInput with SourceError code, got {other:?}"),
+    }
+}
+
 #[test]
 fn workflow_tool_identity_and_alias_match_contract() {
     let tool = WorkflowTool;

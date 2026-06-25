@@ -79,7 +79,7 @@ Globals available to the script:\n\
 - `pipeline(items, ...stages)` — flow each item independently through all stages; a stage gets `(prev, item, index)`.\n\
 - `phase(title)` / `log(message)` — emit progress.\n\
 - `args` — the value passed as the `args` parameter; `budget` — the token budget.\n\n\
-Provide the source via `scriptPath`, `name` (loaded from {dirs}), or an inline `script`; `resumeFromRunId` is accepted for compatibility but not available.\n\
+Provide the source via `scriptPath`, `name` (loaded from {dirs}), or an inline `script`. Pass `resumeFromRunId` to resume a prior (stopped or finished) run in this session: completed `agent()` results replay from the prior run's journal instead of re-spawning. The prior run's on-disk script is authoritative on resume.\n\
 The workflow runs in the BACKGROUND: this returns immediately with a taskId, and progress + the final result arrive via task notifications.",
         dirs = coco_workflow::workflow_dirs_hint()
     )
@@ -307,36 +307,76 @@ impl Tool for WorkflowTool {
         input: Self::Input,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Self::Output>, ToolError> {
-        if input
+        let resume_run_id = input
             .resume_from_run_id
             .as_deref()
-            .is_some_and(|id| !id.trim().is_empty())
-        {
-            return Err(ToolError::execution_failed(
-                "Workflow resume is not available in this build yet.",
-            ));
-        }
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
 
-        // Resolve + parse the source. A parse/source failure is a real error
-        // (TS errorCodes 1/2/4), surfaced before any launch.
-        let source_input = coco_workflow::WorkflowSourceInput {
-            script_path: input.script_path.as_ref().map(PathBuf::from),
-            name: input.name.clone(),
-            script: input.script.clone(),
-            cwd: ctx.cwd_override.clone(),
+        // Resolve the run to resume (if any): map the prior `wf_…` run id to its
+        // `local_workflow` task row. The on-disk script + journal hang off that
+        // row's output path. Resume is same-session only, so this only consults
+        // the in-session task registry.
+        let resume = match resume_run_id {
+            Some(run_id) => Some(self.resolve_resume(run_id, ctx).await?),
+            None => None,
         };
-        let (spec, script) = coco_workflow::resolve_workflow_source(source_input)
-            .and_then(|spec| {
-                let check_determinism =
-                    matches!(spec.kind, coco_workflow::WorkflowSourceKind::Inline)
-                        || (input.script.is_some() && input.script_path.is_some());
-                coco_workflow::parse_workflow_script(&spec.source, check_determinism)
-                    .map(|script| (spec, script))
-            })
-            .map_err(|error| {
-                ToolError::execution_failed(format!("Workflow was not launched: {error}"))
-            })?;
 
+        // Source resolution differs for resume vs fresh:
+        // - Resume: the prior run's ON-DISK script is authoritative; any inbound
+        //   `script`/`name`/`scriptPath` is ignored (replay must run identical
+        //   source or the cache keys diverge).
+        // - Fresh: resolve + parse the inbound source. A parse/source failure is
+        //   a real error (TS errorCodes 1/2/4), surfaced before any launch.
+        let (script, persisted_source, source_path, run_id, resume_journal_source) = match resume {
+            Some(resumed) => {
+                let script = coco_workflow::parse_workflow_script(&resumed.source, true).map_err(
+                    |error| {
+                        ToolError::execution_failed(format!(
+                            "Workflow resume was not launched: {error}"
+                        ))
+                    },
+                )?;
+                (
+                    script,
+                    resumed.source,
+                    None,
+                    // Reuse the resumed run's identity so the new run's journal
+                    // continues the prior run's replay lineage.
+                    resumed.run_id,
+                    Some(resumed.journal_path),
+                )
+            }
+            None => {
+                let source_input = coco_workflow::WorkflowSourceInput {
+                    script_path: input.script_path.as_ref().map(PathBuf::from),
+                    name: input.name.clone(),
+                    script: input.script.clone(),
+                    cwd: ctx.cwd_override.clone(),
+                };
+                let (spec, script) = coco_workflow::resolve_workflow_source(source_input)
+                    .and_then(|spec| {
+                        let check_determinism =
+                            matches!(spec.kind, coco_workflow::WorkflowSourceKind::Inline)
+                                || (input.script.is_some() && input.script_path.is_some());
+                        coco_workflow::parse_workflow_script(&spec.source, check_determinism)
+                            .map(|script| (spec, script))
+                    })
+                    .map_err(|error| {
+                        ToolError::execution_failed(format!("Workflow was not launched: {error}"))
+                    })?;
+                (
+                    script,
+                    spec.source,
+                    spec.source_path,
+                    generate_workflow_run_id(),
+                    None,
+                )
+            }
+        };
+
+        // Launch requires a background runtime. Checked after source resolution
+        // so a source/parse error (TS errorCodes 1/2/4) still surfaces first.
         let Some(task_handle) = ctx.task_handle.clone() else {
             return Err(ToolError::execution_failed(
                 "Background tasks are unavailable; cannot launch workflow.",
@@ -344,7 +384,6 @@ impl Tool for WorkflowTool {
         };
 
         let task_id = coco_types::generate_task_id(TaskType::LocalWorkflow);
-        let run_id = generate_workflow_run_id();
         let workflow_name = Some(script.meta.name.clone());
         let cancel = tokio_util::sync::CancellationToken::new();
 
@@ -358,8 +397,8 @@ impl Tool for WorkflowTool {
                     workflow_name: workflow_name.clone(),
                     prompt: None,
                     tool_use_id: ctx.tool_use_id.clone(),
-                    script: spec.source.clone(),
-                    source_path: spec.source_path.clone(),
+                    script: persisted_source,
+                    source_path,
                 },
                 cancel.clone(),
             )
@@ -370,18 +409,19 @@ impl Tool for WorkflowTool {
 
         // Resume journal: results are recorded alongside the run's `.output`
         // file (`<task_id>.journal.jsonl`) so a future `resumeFromRunId` can
-        // replay completed `agent()` results. We hydrate from that same path up
-        // front: on a brand-new run the file does not exist yet (empty cache,
-        // identical to a fresh journal), but if this exact task is re-launched
-        // its prior results replay. (Cross-run `resumeFromRunId` launch — mapping
-        // an arbitrary prior run id to its journal — is not yet wired; see the
-        // hard reject above.)
+        // replay completed `agent()` results. The cache is hydrated up front:
+        // - Cross-run resume hydrates from the PRIOR run's journal
+        //   (`resume_journal_source`) and appends to this new run's journal.
+        // - A fresh run hydrates from its own (not-yet-existing) journal: empty
+        //   cache, identical to a fresh journal, with same-task crash recovery
+        //   for free.
         let journal_path = output_path
             .as_deref()
             .and_then(workflow_journal::journal_path_for_output);
-        let journal = std::sync::Arc::new(match journal_path {
-            Some(path) => workflow_journal::WorkflowJournal::resumed(&path, Some(path.clone())),
-            None => workflow_journal::WorkflowJournal::new(None),
+        let hydrate_source = resume_journal_source.or_else(|| journal_path.clone());
+        let journal = std::sync::Arc::new(match hydrate_source {
+            Some(source) => workflow_journal::WorkflowJournal::resumed(&source, journal_path),
+            None => workflow_journal::WorkflowJournal::new(journal_path),
         });
 
         // Launch the engine on a dedicated thread (it is `!Send`); run the
@@ -442,6 +482,87 @@ you can also tail the output file to check progress.",
             text,
             provider_options: None,
         }]
+    }
+}
+
+/// A prior workflow run located for `resumeFromRunId`. Carries the AUTHORITATIVE
+/// on-disk source and the prior run's journal path so the replay cache hydrates
+/// from completed `agent()` results.
+struct ResolvedResume {
+    /// Reused run id (`wf_…`) so the new run continues the prior replay lineage.
+    run_id: String,
+    /// The prior run's persisted script source (`<task_id>.workflow.js`).
+    source: String,
+    /// The prior run's `journal.jsonl`, hydrated into the new run's cache.
+    journal_path: PathBuf,
+}
+
+impl WorkflowTool {
+    /// Resolve a `resumeFromRunId` to its prior run's on-disk script + journal,
+    /// enforcing the errorCode-3 precedence: a still-running run must be stopped
+    /// first. Same-session only — the lookup consults the in-session registry.
+    async fn resolve_resume(
+        &self,
+        run_id: &str,
+        ctx: &ToolUseContext,
+    ) -> Result<ResolvedResume, ToolError> {
+        let Some(task_handle) = ctx.task_handle.as_ref() else {
+            return Err(ToolError::execution_failed(
+                "Background tasks are unavailable; cannot resume workflow.",
+            ));
+        };
+        let Some(prior) = task_handle.find_workflow_task_by_run_id(run_id).await else {
+            // No matching run in this session: resume is same-session only, so
+            // there is nothing to replay. Surface a clear, typed source error.
+            return Err(ToolError::InvalidInput {
+                message: format!(
+                    "Workflow {run_id} was not found in this session; resume is same-session only."
+                ),
+                error_code: Some(WorkflowValidationCode::SourceError.as_str().to_string()),
+            });
+        };
+
+        // errorCode-3: a still-running run must be stopped before resuming.
+        if !prior.status.is_terminal() {
+            return Err(ToolError::InvalidInput {
+                message: format!(
+                    "Workflow {run_id} is still running (task {tid}). Stop it first with \
+                     {stop}({{taskId:\"{tid}\"}}) before resuming.",
+                    tid = prior.id,
+                    stop = ToolName::TaskStop.as_str(),
+                ),
+                error_code: Some(WorkflowValidationCode::ResumeRunning.as_str().to_string()),
+            });
+        }
+
+        // The prior run's script + journal hang off its output path
+        // (`<task_id>.output` → `<task_id>.workflow.js` / `.journal.jsonl`).
+        let output_path = task_handle.output_file_path(&prior.id).await.ok_or_else(|| {
+            ToolError::execution_failed(format!(
+                "Workflow {run_id}: prior run output path is unavailable; cannot locate its script."
+            ))
+        })?;
+        let script_path = workflow_journal::script_path_for_output(&output_path);
+        let source = tokio::fs::read_to_string(&script_path)
+            .await
+            .map_err(|error| {
+                ToolError::execution_failed(format!(
+                    "Workflow {run_id}: failed to read prior run script {path}: {error}",
+                    path = script_path.display(),
+                ))
+            })?;
+        let journal_path =
+            workflow_journal::journal_path_for_output(&output_path).ok_or_else(|| {
+                ToolError::execution_failed(format!(
+                    "Workflow {run_id}: prior run journal path could not be derived."
+                ))
+            })?;
+
+        Ok(ResolvedResume {
+            run_id: run_id.to_string(),
+            source,
+            journal_path,
+        })
     }
 }
 
