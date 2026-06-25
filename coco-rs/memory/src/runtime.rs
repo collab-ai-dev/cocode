@@ -588,9 +588,13 @@ impl MemoryRuntime {
         use crate::prompt::build_system_prompt_section;
         use crate::store::truncate_entrypoint_content;
 
+        // `isTeamMemoryEnabled` precedence inversion: a mounted store
+        // (non-empty `memory_stores`) enables team recall outright, before
+        // the `team_memory_enabled` toggle is consulted.
+        let team_recall = self.config.is_team_recall_enabled();
         let variant = if self.config.kairos_mode {
             SystemPromptVariant::Kairos
-        } else if self.config.team_memory_enabled {
+        } else if team_recall {
             SystemPromptVariant::Combined
         } else {
             SystemPromptVariant::Auto
@@ -603,9 +607,7 @@ impl MemoryRuntime {
                 "failed to create personal memory directory before prompt render"
             );
         }
-        if self.config.team_memory_enabled
-            && let Err(e) = tokio::fs::create_dir_all(&self.directories.team).await
-        {
+        if team_recall && let Err(e) = tokio::fs::create_dir_all(&self.directories.team).await {
             tracing::debug!(
                 target: "coco_memory::runtime",
                 path = %self.directories.team.display(),
@@ -672,6 +674,7 @@ impl MemoryRuntime {
             self.config.searching_past_context_enabled,
             transcript_dir,
             self.config.extra_guidelines.as_deref(),
+            &self.config.memory_stores,
         ))
     }
 
