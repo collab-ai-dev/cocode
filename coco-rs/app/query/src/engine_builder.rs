@@ -205,6 +205,24 @@ impl QueryEngine {
             .ok()
     }
 
+    /// The configured context window clamped to the active model's
+    /// authoritative max (`ModelInfo.context_window`).
+    ///
+    /// `QueryEngineConfig.context_window` is a plain `i64` that a
+    /// settings override (`COCO_COMPACT_AUTO_WINDOW`) or a stale config
+    /// can push above what the model actually supports. This is the
+    /// generic "model-card max wins" clamp (the latch is provider-neutral —
+    /// any Anthropic-billing clamp-back lives in `vercel-ai-anthropic`).
+    /// Feeds the auto-compact / reactive threshold helpers so they never
+    /// reason about a window the model can't honor.
+    pub(crate) fn clamped_context_window(&self) -> i64 {
+        let model_max = self
+            .runtime_snapshot()
+            .and_then(|snapshot| snapshot.model_info)
+            .map(|info| i64::from(info.context_window));
+        coco_compact::clamp_to_model_max(self.config.context_window, model_max)
+    }
+
     pub(crate) async fn notify_model_compaction(&self, query_source: &str) {
         if let Ok(runtime) = self
             .model_runtimes

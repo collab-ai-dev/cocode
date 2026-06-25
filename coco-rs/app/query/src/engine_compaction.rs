@@ -460,7 +460,7 @@ impl QueryEngine {
         // wouldn't actually shrink below the line.
         let sm_cfg = &self.config.compact.session_memory;
         let auto_threshold = coco_compact::auto_compact_threshold(
-            self.config.context_window,
+            self.clamped_context_window(),
             self.config.max_output_tokens,
             &self.config.compact.auto,
         );
@@ -793,6 +793,16 @@ impl QueryEngine {
             return Err("compact_summary_aborted: cancelled".to_string());
         }
 
+        // Compaction-source attribution for fallback telemetry. The
+        // summarize call routes through the shared `Role(Main)` runtime,
+        // so a `FallbackSwitched` event emitted here is indistinguishable
+        // from a main-loop fallback unless we tag the query source. CC
+        // emits `tengu_model_fallback_triggered { query_source: "compact" }`;
+        // coco-rs's native shape is a `query_source` span/event field on
+        // the existing `FallbackSwitched` carrier (see
+        // `common/otel/CLAUDE.md` standard field names).
+        let query_source = self.query_source_label().to_string();
+
         let mut prompt = coco_messages::normalize_messages_for_api(&attempt.context_messages);
         prompt.push(LlmMessage::user_text(&attempt.summary_request));
 
@@ -862,7 +872,10 @@ impl QueryEngine {
                     let summary = summary_res?;
                     break Ok(coco_compact::CompactSummaryResponse { summary });
                 }
-                ModelRuntimeQueryOutcome::Retry { .. } => continue,
+                ModelRuntimeQueryOutcome::Retry { events } => {
+                    log_compact_fallback_events(&query_source, &events);
+                    continue;
+                }
                 ModelRuntimeQueryOutcome::Failed { error, .. } => break Err(error.to_string()),
             }
         }
@@ -1444,7 +1457,7 @@ impl QueryEngine {
         // Auto-compact threshold mirrors the gate we already evaluated
         // above, recomputed here for the analytics-aligned struct.
         let auto_threshold = coco_compact::auto_compact_threshold(
-            self.config.context_window,
+            self.clamped_context_window(),
             self.config.max_output_tokens,
             &self.config.compact.auto,
         );
@@ -1840,6 +1853,57 @@ fn extract_compact_summary_from_messages(
     }
 
     Ok(chunks.join("\n"))
+}
+
+/// One compaction-attributed model-fallback record. The runtime's
+/// `FallbackSwitched` event already carries the `ModelRuntimeSource`
+/// (`Role(Main)` for compaction), but that source is shared with the main
+/// loop — the `query_source` label is what makes a *compaction* fallback
+/// distinguishable in telemetry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompactFallbackRecord<'a> {
+    query_source: &'a str,
+    from_model_id: &'a str,
+    to_model_id: &'a str,
+}
+
+/// Project the runtime events emitted during a summarize call into the
+/// compaction-attributed fallback records (only `FallbackSwitched` carries
+/// a model switch worth attributing). Pure so the attribution is testable
+/// without exercising the live runtime.
+fn compact_fallback_records<'a>(
+    query_source: &'a str,
+    events: &'a [coco_inference::ModelRuntimeEvent],
+) -> Vec<CompactFallbackRecord<'a>> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            coco_inference::ModelRuntimeEvent::FallbackSwitched {
+                from_model_id,
+                to_model_id,
+                ..
+            } => Some(CompactFallbackRecord {
+                query_source,
+                from_model_id: from_model_id.as_str(),
+                to_model_id: to_model_id.as_str(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Emit compaction-source attribution for any model fallback that fired
+/// during a summarize call, using the standard `query_source` field name
+/// (see `common/otel/CLAUDE.md`).
+fn log_compact_fallback_events(query_source: &str, events: &[coco_inference::ModelRuntimeEvent]) {
+    for record in compact_fallback_records(query_source, events) {
+        warn!(
+            query_source = record.query_source,
+            from_model_id = record.from_model_id,
+            to_model_id = record.to_model_id,
+            "model fallback triggered during compaction summarize"
+        );
+    }
 }
 
 fn extract_compact_summary_from_content(content: &[AssistantContent]) -> Result<String, String> {

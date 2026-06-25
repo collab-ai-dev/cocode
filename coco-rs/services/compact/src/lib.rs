@@ -35,6 +35,7 @@ pub use auto_trigger::TimeBasedTrigger;
 pub use auto_trigger::apply_context_window_override;
 pub use auto_trigger::auto_compact_threshold;
 pub use auto_trigger::calculate_token_warning_state;
+pub use auto_trigger::clamp_to_model_max;
 pub use auto_trigger::effective_context_window;
 pub use auto_trigger::evaluate_time_based_trigger;
 pub use auto_trigger::is_auto_compact_enabled;

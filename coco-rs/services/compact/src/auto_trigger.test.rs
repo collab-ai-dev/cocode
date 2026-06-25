@@ -210,3 +210,39 @@ fn test_evaluate_time_based_trigger() {
     };
     assert!(evaluate_time_based_trigger(&disabled, now, Some(now - 90 * 60_000), true).is_none());
 }
+
+#[test]
+fn test_clamp_to_model_max_caps_oversized_window() {
+    // Configured window exceeds the model's authoritative max → clamped down.
+    assert_eq!(clamp_to_model_max(1_000_000, Some(CTX)), CTX);
+}
+
+#[test]
+fn test_clamp_to_model_max_keeps_smaller_window() {
+    // Configured window already under the model max → unchanged.
+    assert_eq!(clamp_to_model_max(128_000, Some(CTX)), 128_000);
+}
+
+#[test]
+fn test_clamp_to_model_max_unknown_max_passes_through() {
+    // No model max known → configured value passes through untouched.
+    assert_eq!(clamp_to_model_max(1_000_000, None), 1_000_000);
+    // Non-positive model max is ignored (never widens, never zeroes).
+    assert_eq!(clamp_to_model_max(1_000_000, Some(0)), 1_000_000);
+    assert_eq!(clamp_to_model_max(1_000_000, Some(-1)), 1_000_000);
+}
+
+#[test]
+fn test_clamp_to_model_max_then_override_min_wins() {
+    // The override and the model-max clamp compose: the tightest bound wins.
+    // model_max = 200K caps the configured 1M; an even tighter 180K override
+    // then applied via `apply_context_window_override` wins.
+    let clamped = clamp_to_model_max(1_000_000, Some(CTX));
+    assert_eq!(clamped, CTX);
+    assert_eq!(
+        apply_context_window_override(clamped, Some(180_000)),
+        180_000
+    );
+    // When the override is larger than the model max, the model max stays.
+    assert_eq!(apply_context_window_override(clamped, Some(500_000)), CTX);
+}

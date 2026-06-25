@@ -166,7 +166,7 @@ impl QueryEngine {
         let drop_target = coco_compact::reactive::calculate_drop_target(
             pre_tokens,
             &coco_compact::ReactiveCompactConfig {
-                context_window: self.config.context_window,
+                context_window: self.clamped_context_window(),
                 max_output_tokens: self.config.max_output_tokens,
                 ..Default::default()
             },
@@ -653,9 +653,10 @@ impl QueryEngine {
         // Collapse-aware guard: when staged_compact is active it owns
         // the threshold ladder, so proactive autocompact suppresses.
         let collapse_active = self.is_collapse_active();
+        let clamped_context_window = self.clamped_context_window();
         let auto_compact_needed = coco_compact::should_auto_compact_guarded_with_collapse(
             estimated_tokens,
-            self.config.context_window,
+            clamped_context_window,
             self.config.max_output_tokens,
             auto_cfg,
             coco_compact::CompactQuerySource::Other,
@@ -665,7 +666,7 @@ impl QueryEngine {
             tracing::debug!(
                 target: "coco_query::compact_decision",
                 estimated_tokens,
-                context_window = self.config.context_window,
+                context_window = clamped_context_window,
                 collapse_active,
                 "auto-compact check: not needed"
             );
@@ -710,7 +711,7 @@ impl QueryEngine {
 
             let still_over_threshold = coco_compact::should_auto_compact_guarded_with_collapse(
                 post_micro_tokens,
-                self.config.context_window,
+                clamped_context_window,
                 self.config.max_output_tokens,
                 auto_cfg,
                 coco_compact::CompactQuerySource::Other,
