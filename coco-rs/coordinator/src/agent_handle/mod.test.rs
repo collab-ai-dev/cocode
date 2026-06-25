@@ -682,6 +682,7 @@ async fn test_classifier_passes_through_when_side_query_unconfigured() {
         output_tokens: 25,
         tool_use_count: 3,
         cancelled: false,
+        structured_output: None,
     };
     let out = handle
         .classify_handoff_if_needed("general-purpose", &qr)
@@ -727,6 +728,7 @@ async fn test_classifier_skips_on_empty_transcript() {
         output_tokens: 25,
         tool_use_count: 3,
         cancelled: false,
+        structured_output: None,
     };
     let out = handle.classify_handoff_if_needed("Explore", &qr).await;
     assert_eq!(out.as_deref(), Some("explored result"));
@@ -754,6 +756,7 @@ async fn test_classifier_skips_in_non_auto_mode() {
         output_tokens: 25,
         tool_use_count: 3,
         cancelled: false,
+        structured_output: None,
     };
     let out = super::handoff::classify_handoff_inline(
         "general-purpose",
@@ -787,6 +790,7 @@ async fn test_classifier_runs_for_read_only_agent_with_transcript() {
         output_tokens: 25,
         tool_use_count: 0, // zero tools — still classified (gate is transcript)
         cancelled: false,
+        structured_output: None,
     };
     let out = handle
         .classify_handoff_if_needed("Explore", &qr)
@@ -814,6 +818,7 @@ async fn test_classifier_unavailable_prepends_warning() {
         output_tokens: 25,
         tool_use_count: 2,
         cancelled: false,
+        structured_output: None,
     };
     let out = handle
         .classify_handoff_if_needed("general-purpose", &qr)
@@ -848,6 +853,7 @@ async fn test_classifier_short_circuits_on_stage1_safe() {
         output_tokens: 25,
         tool_use_count: 3,
         cancelled: false,
+        structured_output: None,
     };
     let out = handle
         .classify_handoff_if_needed("general-purpose", &qr)
@@ -881,6 +887,7 @@ async fn test_classifier_blocks_when_verdict_is_blocked() {
         output_tokens: 25,
         tool_use_count: 5,
         cancelled: false,
+        structured_output: None,
     };
     let out = handle
         .classify_handoff_if_needed("general-purpose", &qr)
@@ -984,6 +991,7 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
                 output_tokens: 50,
                 tool_use_count: 3,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -1038,6 +1046,7 @@ async fn test_spawn_subagent_sync_classifier_respects_permission_mode() {
                 output_tokens: 5,
                 tool_use_count: 2,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -1107,6 +1116,7 @@ async fn test_spawn_subagent_sync_drains_stream_events_to_task_registry() {
                 output_tokens: 0,
                 tool_use_count: 1,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -1191,6 +1201,7 @@ async fn test_drain_fills_task_activity_summary_from_tool_input() {
                 output_tokens: 0,
                 tool_use_count: 1,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -1367,6 +1378,7 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
                 output_tokens: 11,
                 tool_use_count: 0,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -1550,6 +1562,7 @@ async fn test_spawn_subagent_parent_abort_cancels_foreground() {
                 output_tokens: 0,
                 tool_use_count: 0,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -1645,6 +1658,7 @@ async fn test_spawn_subagent_async() {
                 output_tokens: 20,
                 tool_use_count: 0,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -1877,6 +1891,7 @@ async fn test_spawn_subagent_fresh_threads_definition_system_prompt() {
                 output_tokens: 0,
                 tool_use_count: 0,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -1944,6 +1959,7 @@ async fn test_spawn_subagent_threads_definition_allowed_tools() {
                 output_tokens: 0,
                 tool_use_count: 0,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -2017,6 +2033,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
                 output_tokens: 0,
                 tool_use_count: 0,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -2032,20 +2049,22 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
         ..Default::default() // ToolAllowList::Wildcard
     });
 
-    // Default mode: the full universal block is denied.
+    // Default mode at a shallow depth: the universal block is denied, but
+    // `Agent` is still ALLOWED (nested spawning is gated by depth, not the
+    // base block), so the child can spawn one level deeper.
     handle
         .spawn_agent(AgentSpawnRequest {
             prompt: "do work".into(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(wildcard_def.clone()),
             session_id: "test-session".into(),
+            child_query_depth: 1,
             ..Default::default()
         })
         .await
         .unwrap();
     let default_denied = denied.lock().await.clone().expect("engine ran");
     for blocked in [
-        "Agent",
         "AskUserQuestion",
         "TaskOutput",
         "TaskStop",
@@ -2057,8 +2076,31 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
             "universal block must deny {blocked}; got {default_denied:?}"
         );
     }
+    assert!(
+        !default_denied.iter().any(|d| d == "Agent"),
+        "Agent must be allowed below the depth limit; got {default_denied:?}"
+    );
 
-    // Plan mode: ExitPlanMode is re-admitted; the rest stay blocked.
+    // At the depth limit, `Agent` is denied so the leaf cannot spawn deeper.
+    handle
+        .spawn_agent(AgentSpawnRequest {
+            prompt: "do work".into(),
+            subagent_type: Some("general-purpose".into()),
+            definition: Some(wildcard_def.clone()),
+            session_id: "test-session".into(),
+            child_query_depth: coco_subagent::SUBAGENT_DEPTH_LIMIT,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let leaf_denied = denied.lock().await.clone().expect("engine ran");
+    assert!(
+        leaf_denied.iter().any(|d| d == "Agent"),
+        "Agent must be denied at the depth limit; got {leaf_denied:?}"
+    );
+
+    // Plan mode at the depth limit: ExitPlanMode is re-admitted; Agent (and
+    // the rest of the block) stay blocked.
     handle
         .spawn_agent(AgentSpawnRequest {
             prompt: "do work".into(),
@@ -2066,6 +2108,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
             definition: Some(wildcard_def),
             mode: Some(coco_types::PermissionMode::Plan),
             session_id: "test-session".into(),
+            child_query_depth: coco_subagent::SUBAGENT_DEPTH_LIMIT,
             ..Default::default()
         })
         .await
@@ -2077,7 +2120,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
     );
     assert!(
         plan_denied.iter().any(|d| d == "Agent"),
-        "plan mode still blocks Agent; got {plan_denied:?}"
+        "plan mode still blocks Agent at the depth limit; got {plan_denied:?}"
     );
 }
 
@@ -2571,6 +2614,7 @@ async fn test_subagent_start_hook_injects_additional_context() {
                 output_tokens: 0,
                 tool_use_count: 0,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -2661,6 +2705,7 @@ async fn test_subagent_start_hook_no_context_leaves_prompt_unchanged() {
                 output_tokens: 0,
                 tool_use_count: 0,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -2721,6 +2766,7 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
                 output_tokens: 0,
                 tool_use_count: 0,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }
@@ -2799,6 +2845,7 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
                 output_tokens: 0,
                 tool_use_count: 0,
                 cancelled: false,
+                structured_output: None,
             })
         }
     }

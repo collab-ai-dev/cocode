@@ -53,6 +53,10 @@ pub struct SubagentInheritance {
     /// `disallowed_tools` is intersected with this via
     /// [`ToolFilter::narrow_with`].
     pub parent_tool_filter: Option<ToolFilter>,
+    /// Invoking engine's query-tracking depth. A fork-mode skill subagent
+    /// is a sibling (not a nested level), so it runs at this same depth
+    /// — the skill runtime threads it through unchanged.
+    pub parent_query_depth: i32,
 }
 
 impl Default for SubagentInheritance {
@@ -64,6 +68,7 @@ impl Default for SubagentInheritance {
             tool_overrides: None,
             active_shell_tool: ActiveShellTool::Disabled,
             parent_tool_filter: None,
+            parent_query_depth: 0,
         }
     }
 }

@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
+use tokio::sync::Semaphore;
+
 use coco_tool_runtime::AgentCompletionPayload;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnRequest;
@@ -43,6 +45,26 @@ pub(crate) struct WorkflowSpawnContext {
     pub workflow_abort: coco_tool_runtime::TurnAbortSignal,
 }
 
+/// Ceiling on the local workflow executor width (CC `min(16, …)`).
+const WORKFLOW_CONCURRENCY_CEILING: usize = 16;
+/// Floor on the local workflow executor width (CC `max(2, …)`).
+const WORKFLOW_CONCURRENCY_FLOOR: usize = 2;
+/// Cores held back as headroom when sizing the executor (CC `cpus - 2`).
+const WORKFLOW_CONCURRENCY_HEADROOM: usize = 2;
+
+/// Local workflow concurrency width: `min(16, max(2, cpus - 2))` (CC parity).
+/// A FIFO counting semaphore of this width admits each `agent()` dispatch, so
+/// `parallel()`/`pipeline()` still fire every thunk but only this many run at
+/// once.
+fn workflow_local_concurrency() -> usize {
+    let available = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(4)
+        .saturating_sub(WORKFLOW_CONCURRENCY_HEADROOM);
+    // FLOOR <= CEILING by construction, so clamp cannot panic.
+    available.clamp(WORKFLOW_CONCURRENCY_FLOOR, WORKFLOW_CONCURRENCY_CEILING)
+}
+
 struct WorkflowRunHost {
     agent: AgentHandleRef,
     task_handle: TaskHandleRef,
@@ -50,6 +72,8 @@ struct WorkflowRunHost {
     main_handle: tokio::runtime::Handle,
     spawn_ctx: WorkflowSpawnContext,
     budget_spent_tokens: AtomicI64,
+    /// FIFO counting semaphore bounding concurrent subagent spawns.
+    semaphore: Arc<Semaphore>,
 }
 
 impl WorkflowRunHost {
@@ -96,6 +120,12 @@ impl WorkflowRunHost {
             definition,
             is_non_interactive: true,
             parent_turn_abort: Some(ctx.workflow_abort.clone()),
+            // `agent(prompt, {schema})` forces the StructuredOutput contract:
+            // the spawn driver registers `StructuredOutputTool` + a forcing
+            // Stop hook on the child and routes the captured tool-call input
+            // back through `AgentSpawnResponse.structured_output`. The
+            // schema-blob `Value` is the sanctioned passthrough exception.
+            output_schema: opts.schema.clone().map(std::sync::Arc::new),
             ..Default::default()
         })
     }
@@ -148,6 +178,14 @@ impl WorkflowHost for WorkflowRunHost {
     ) -> Result<WorkflowAgentResult, String> {
         let request = self.build_request(prompt, &opts)?;
         let agent = self.agent.clone();
+        // Bound concurrent subagent spawns: each agent() call queues on the
+        // shared FIFO semaphore. Held across the spawn await; released on return.
+        let _permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| format!("workflow concurrency semaphore closed: {e}"))?;
         // Spawn on the main runtime (the agent system runs there); await the
         // result from this dedicated engine thread.
         let response = self
@@ -158,12 +196,19 @@ impl WorkflowHost for WorkflowRunHost {
 
         match response.status {
             AgentSpawnStatus::Completed => {
+                // Structured-output contract: when the spawn carried a schema,
+                // the subagent was forced to call the `StructuredOutput` tool
+                // and the schema-validated tool-call input is surfaced on
+                // `response.structured_output`. Use it directly. Fall back to
+                // parsing the final text as JSON only when the captured value
+                // is absent (e.g. the retry cap was hit) — last resort so
+                // behaviour never regresses below the old text-parse path.
                 let text = response.result.unwrap_or_default();
-                // With a schema the subagent emits JSON as its final text;
-                // parse it, else return the raw text as a string value.
                 let value = if opts.schema.is_some() {
-                    serde_json::from_str::<serde_json::Value>(&text)
-                        .unwrap_or(serde_json::Value::String(text))
+                    response.structured_output.unwrap_or_else(|| {
+                        serde_json::from_str::<serde_json::Value>(&text)
+                            .unwrap_or(serde_json::Value::String(text))
+                    })
                 } else {
                     serde_json::Value::String(text)
                 };
@@ -206,6 +251,11 @@ impl WorkflowHost for WorkflowRunHost {
         self.budget_spent_tokens
             .fetch_add(tokens, Ordering::Relaxed);
     }
+
+    fn budget_exhausted(&self) -> bool {
+        self.budget_total_tokens()
+            .is_some_and(|total| total > 0 && self.budget_spent_tokens() >= total)
+    }
 }
 
 /// Launch the workflow engine on a dedicated OS thread (the engine is `!Send`).
@@ -233,6 +283,7 @@ pub(crate) fn spawn_workflow_engine(
                 main_handle,
                 spawn_ctx,
                 budget_spent_tokens: AtomicI64::new(0),
+                semaphore: Arc::new(Semaphore::new(workflow_local_concurrency())),
             });
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()

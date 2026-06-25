@@ -21,23 +21,14 @@ fn test_for_label_conservative_defaults() {
 }
 
 #[test]
-fn test_child_query_depth_increments() {
+fn test_child_query_depth_inherits_parent() {
+    // A fork is a sibling, not a nested level: its depth equals the
+    // parent's depth (no +1).
     let mut o = ForkContextOverrides::for_label(ForkLabel::ExtractMemories);
     o.parent_query_depth = 0;
-    assert_eq!(o.child_query_depth(), 1);
+    assert_eq!(o.child_query_depth(), 0);
     o.parent_query_depth = 5;
-    assert_eq!(o.child_query_depth(), 6);
-}
-
-#[test]
-fn test_child_query_depth_caps_at_16() {
-    let mut o = ForkContextOverrides::for_label(ForkLabel::AutoDream);
-    o.parent_query_depth = 100;
-    assert_eq!(
-        o.child_query_depth(),
-        16,
-        "depth must cap to prevent runaway recursion"
-    );
+    assert_eq!(o.child_query_depth(), 5);
 }
 
 #[test]

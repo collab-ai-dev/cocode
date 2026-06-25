@@ -369,6 +369,9 @@ impl SkillHandle for QuerySkillRuntime {
                     // Skill forks share the parent cwd (no worktree isolation),
                     // so no extra read-scope dirs to inherit.
                     inherited_read_dirs: Vec::new(),
+                    // Skill forks are siblings — they run at the invoker's
+                    // depth, not one level deeper.
+                    child_query_depth: inherit.parent_query_depth,
                     max_turns: None,
                     context_window: None,
                     prompt_cache: None,
@@ -428,6 +431,8 @@ impl SkillHandle for QuerySkillRuntime {
                     cancel: None,
                     // Skill forks don't run the AgentSummary timer.
                     live_transcript: None,
+                    // Skill forks never force a structured-output contract.
+                    output_schema: None,
                 };
 
                 tracing::info!(

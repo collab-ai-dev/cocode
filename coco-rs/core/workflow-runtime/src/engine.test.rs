@@ -61,6 +61,61 @@ impl WorkflowHost for FakeHost {
     fn record_agent_tokens(&self, tokens: i64) {
         self.budget_spent.fetch_add(tokens, Ordering::Relaxed);
     }
+
+    fn budget_exhausted(&self) -> bool {
+        self.budget_total
+            .is_some_and(|total| total > 0 && self.budget_spent_tokens() >= total)
+    }
+}
+
+/// A host that records the maximum number of concurrently in-flight `run_agent`
+/// calls and serializes admission through a semaphore of a fixed `cap`, exactly
+/// mirroring `WorkflowRunHost`'s host-side concurrency gate.
+struct ConcurrencyHost {
+    semaphore: Arc<tokio::sync::Semaphore>,
+    in_flight: AtomicI64,
+    max_in_flight: AtomicI64,
+}
+
+impl ConcurrencyHost {
+    fn new(cap: usize) -> Self {
+        Self {
+            semaphore: Arc::new(tokio::sync::Semaphore::new(cap)),
+            in_flight: AtomicI64::new(0),
+            max_in_flight: AtomicI64::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl WorkflowHost for ConcurrencyHost {
+    async fn run_agent(
+        &self,
+        prompt: String,
+        _opts: WorkflowAgentOpts,
+    ) -> Result<WorkflowAgentResult, String> {
+        let _permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| format!("semaphore closed: {e}"))?;
+        let current = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_in_flight.fetch_max(current, Ordering::SeqCst);
+        // Yield so concurrent admissions interleave before we release.
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        Ok(WorkflowAgentResult {
+            value: serde_json::Value::String(format!("ran: {prompt}")),
+            model: None,
+            tokens: Some(1),
+            tool_calls: Some(0),
+            duration_ms: Some(1),
+        })
+    }
+
+    fn push_progress(&self, _event: WorkflowProgressEvent) {}
 }
 
 fn run(
@@ -198,5 +253,96 @@ fn determinism_shim_applies_inside_the_engine() {
 fn nondeterministic_static_aside_runtime_blocks_date_now() {
     let host = Arc::new(FakeHost::default());
     let err = run(host, "return Date.now();", serde_json::Value::Null).expect_err("should reject");
+    assert!(matches!(err, crate::WorkflowRuntimeError::Script { .. }));
+}
+
+/// Run the engine against any host (not just `FakeHost`).
+fn run_with_host(
+    host: Arc<dyn WorkflowHost>,
+    script: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, crate::WorkflowRuntimeError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("rt");
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&runtime, async move {
+        WorkflowEngine::run(
+            script.to_string(),
+            args,
+            host,
+            CancellationToken::new(),
+            Duration::from_secs(10),
+        )
+        .await
+    })
+}
+
+#[test]
+fn parallel_admission_never_exceeds_semaphore_cap() {
+    let cap = 3usize;
+    let host = Arc::new(ConcurrencyHost::new(cap));
+    // 20 thunks, far more than the cap of 3. parallel() fires all thunks; the
+    // host-side semaphore must keep concurrent run_agent calls <= cap.
+    let script = r#"
+        const funcs = [];
+        for (let i = 0; i < 20; i++) funcs.push(() => agent("p" + i));
+        return await parallel(funcs);
+    "#;
+    let result = run_with_host(host.clone(), script, serde_json::Value::Null).expect("run");
+    let arr = result.as_array().expect("array result");
+    assert_eq!(arr.len(), 20);
+    assert!(arr.iter().all(serde_json::Value::is_string));
+    let max = host.max_in_flight.load(Ordering::SeqCst);
+    assert!(max >= 1, "at least one agent should have run");
+    assert!(
+        max <= cap as i64,
+        "max in-flight {max} exceeded semaphore cap {cap}"
+    );
+}
+
+#[test]
+fn agent_call_at_or_over_budget_rejects_to_null_in_parallel() {
+    // total = 5, spent = 5 → budget_exhausted() is true, so every agent()
+    // throws before spawning, degrading each parallel slot to null.
+    let host = Arc::new(FakeHost {
+        budget_total: Some(5),
+        ..FakeHost::default()
+    });
+    host.budget_spent.store(5, Ordering::Relaxed);
+    let script = r#"return await parallel([() => agent("a"), () => agent("b")]);"#;
+    let result = run_with_host(host, script, serde_json::Value::Null).expect("run");
+    assert_eq!(result, serde_json::json!([null, null]));
+}
+
+#[test]
+fn budget_exhausts_mid_run_and_later_agent_rejects() {
+    // total = 15, each agent spends 10. First agent succeeds (spent 0 < 15),
+    // raising spent to 10; second agent succeeds (10 < 15) raising spent to 20;
+    // third agent is gated (20 >= 15) and rejects → null in the parallel batch.
+    let host = Arc::new(FakeHost {
+        budget_total: Some(15),
+        ..FakeHost::default()
+    });
+    let script = r#"
+        await agent("first");
+        await agent("second");
+        return await parallel([() => agent("third")]);
+    "#;
+    let result = run_with_host(host, script, serde_json::Value::Null).expect("run");
+    assert_eq!(result, serde_json::json!([null]));
+}
+
+#[test]
+fn parallel_rejects_oversized_array() {
+    let host = Arc::new(FakeHost::default());
+    // WORKFLOW_ARRAY_CAP + 1 thunks → RangeError thrown synchronously.
+    let script = r#"
+        const funcs = [];
+        for (let i = 0; i <= 4096; i++) funcs.push(() => agent("x"));
+        return await parallel(funcs);
+    "#;
+    let err = run_with_host(host, script, serde_json::Value::Null).expect_err("should reject");
     assert!(matches!(err, crate::WorkflowRuntimeError::Script { .. }));
 }

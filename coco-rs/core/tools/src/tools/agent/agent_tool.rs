@@ -1034,11 +1034,20 @@ impl Tool for AgentTool {
             // `<tool-use-id>` tag was missing.
             tool_use_id: ctx.tool_use_id.clone(),
             invoking_agent_id: ctx.agent_id.as_ref().map(|a| a.as_str().to_string()),
+            // The spawned child RUNS one level deeper than this engine
+            // (main loop = 0 ⇒ a top-level spawn runs at depth 1). The
+            // universal subagent deny-list gates the `Agent` tool once
+            // this reaches `coco_subagent::SUBAGENT_DEPTH_LIMIT`.
+            child_query_depth: ctx.query_depth + 1,
             // Thread the parent turn's abort signal so a foreground subagent
             // is cancelled when the user interrupts the turn (e.g. ESC),
             // instead of running to completion detached. See the field doc
             // on `AgentSpawnRequest`.
             parent_turn_abort: Some(ctx.abort.turn_signal()),
+            // Model-invoked AgentTool spawns never force a structured-output
+            // contract — only workflow `agent(prompt, {schema})` calls set
+            // this. The AgentTool input schema deliberately doesn't expose it.
+            output_schema: None,
         };
 
         let request_description = request.description.clone();

@@ -2760,6 +2760,9 @@ impl SessionRuntime {
             tool_overrides: Some(cfg.tool_overrides.clone()),
             active_shell_tool: cfg.active_shell_tool,
             parent_tool_filter: None,
+            // A fork-mode skill subagent is a sibling — it runs at the
+            // invoker's depth, not one level deeper.
+            parent_query_depth: cfg.query_depth,
         };
         let gate = coco_tool_runtime::SkillGateContext {
             overrides: cfg.skill_overrides.clone(),

@@ -302,3 +302,59 @@ async fn test_adapter_defers_to_factory_default_when_role_none() {
         "InheritMain must flow verbatim so the factory applies its default",
     );
 }
+
+#[test]
+fn output_schema_defaults_none_and_is_settable() {
+    let cfg = AgentQueryConfig::default();
+    assert!(cfg.output_schema.is_none());
+    let cfg = AgentQueryConfig {
+        output_schema: Some(Arc::new(serde_json::json!({ "type": "object" }))),
+        ..Default::default()
+    };
+    assert!(cfg.output_schema.is_some());
+}
+
+#[test]
+fn install_structured_output_registers_tool_on_child_registry() {
+    // The load-bearing part of `install_structured_output`: cloning the
+    // parent's tool handles into a fresh per-spawn registry and adding the
+    // compiled StructuredOutput tool. Asserts the child tool set includes
+    // StructuredOutput while a baseline tool carries over.
+    let parent = Arc::new(coco_tool_runtime::ToolRegistry::new());
+    coco_tools::register_core_tools(&parent);
+    assert!(
+        parent.get_by_name("StructuredOutput").is_none(),
+        "StructuredOutput is never default-registered",
+    );
+
+    let child = Arc::new(coco_tool_runtime::ToolRegistry::new());
+    for tool in parent.all() {
+        child.register(tool);
+    }
+    coco_tools::register_structured_output_tool(
+        &child,
+        serde_json::json!({
+            "type": "object",
+            "properties": { "answer": { "type": "string" } },
+            "required": ["answer"]
+        }),
+    )
+    .expect("valid schema registers");
+
+    assert!(child.get_by_name("StructuredOutput").is_some());
+    // A baseline core tool carried over from the parent.
+    assert!(child.get_by_name("Read").is_some());
+    // Parent registry is untouched — no leakage.
+    assert!(parent.get_by_name("StructuredOutput").is_none());
+}
+
+#[test]
+fn install_structured_output_rejects_invalid_schema() {
+    let child = Arc::new(coco_tool_runtime::ToolRegistry::new());
+    // A non-object root schema fails StructuredOutput meta-validation.
+    let err = coco_tools::register_structured_output_tool(
+        &child,
+        serde_json::json!({ "type": "not-a-real-type" }),
+    );
+    assert!(err.is_err());
+}

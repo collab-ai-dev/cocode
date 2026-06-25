@@ -105,6 +105,15 @@ pub struct AgentQueryConfig {
     /// work does not kill the teammate lifecycle.
     #[serde(skip)]
     pub cancel: Option<CancellationToken>,
+    /// Query-tracking depth this child engine RUNS at (= parent's
+    /// `ToolUseContext.query_depth + 1`). Threaded from
+    /// [`AgentSpawnRequest::child_query_depth`] so the child carries its
+    /// own depth; the adapter stamps it onto the child
+    /// `QueryEngineConfig.query_depth` and the universal subagent
+    /// deny-list gates the `Agent` tool once it reaches
+    /// `coco_subagent::SUBAGENT_DEPTH_LIMIT`. Main loop = 0.
+    #[serde(default)]
+    pub child_query_depth: i32,
     /// Maximum turns for this query.
     pub max_turns: Option<i32>,
     /// Context window size (tokens). Defaults to model's max.
@@ -311,6 +320,17 @@ pub struct AgentQueryConfig {
     /// is skipped at the JSON boundary like [`Self::event_tx`].
     #[serde(skip)]
     pub live_transcript: Option<crate::LiveTranscript>,
+
+    /// User-supplied JSON Schema that forces this child to emit its final
+    /// answer via the synthetic `StructuredOutput` tool. Threaded from
+    /// [`AgentSpawnRequest::output_schema`]. When `Some`, the adapter
+    /// registers a per-spawn `StructuredOutputTool` + a `StructuredOutput`
+    /// Stop-enforcement hook on the child engine and routes the captured
+    /// tool-call input into [`AgentQueryResult::structured_output`].
+    /// `serde_json::Value` is the sanctioned schema-blob passthrough; skipped
+    /// at the JSON boundary like the other in-process-only fields.
+    #[serde(skip)]
+    pub output_schema: Option<Arc<serde_json::Value>>,
 }
 
 impl Default for AgentQueryConfig {
@@ -331,6 +351,7 @@ impl Default for AgentQueryConfig {
             permission_prompt_policy: PermissionPromptPolicy::FailClosed,
             inherited_read_dirs: Vec::new(),
             cancel: None,
+            child_query_depth: 0,
             max_turns: None,
             context_window: None,
             prompt_cache: None,
@@ -365,6 +386,7 @@ impl Default for AgentQueryConfig {
             require_can_use_tool: false,
             fork_label: None,
             live_transcript: None,
+            output_schema: None,
         }
     }
 }
@@ -406,6 +428,12 @@ pub struct AgentQueryResult {
     /// Whether the agent was cancelled.
     #[serde(default)]
     pub cancelled: bool,
+    /// Structured-output captured from the child's `StructuredOutput` tool
+    /// call. Populated only when the query carried an
+    /// [`AgentQueryConfig::output_schema`] and the child produced a
+    /// schema-valid structured output. `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<serde_json::Value>,
 }
 
 /// Trait for executing multi-turn agent queries.

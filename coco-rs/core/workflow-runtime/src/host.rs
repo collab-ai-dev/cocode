@@ -72,4 +72,13 @@ pub trait WorkflowHost: Send + Sync + 'static {
 
     /// Record tokens consumed by a completed child agent.
     fn record_agent_tokens(&self, _tokens: i64) {}
+
+    /// Whether the token budget is exhausted: a positive `total` is set and the
+    /// spent total has reached it. The engine consults this *before* each
+    /// `agent()` call and throws when true, so the next call rejects (degrading
+    /// its `parallel`/`pipeline` slot to `null`). In-flight agents finish and
+    /// their results are preserved.
+    fn budget_exhausted(&self) -> bool {
+        false
+    }
 }

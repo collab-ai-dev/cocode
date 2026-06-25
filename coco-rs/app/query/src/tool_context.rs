@@ -682,13 +682,16 @@ impl ToolContextFactory {
                 .fork_isolation
                 .as_ref()
                 .map(|_| uuid::Uuid::new_v4().to_string()),
-            // Query-tracking depth: parent depth + 1 (capped at 16).
+            // Query-tracking depth. A fork inherits the parent's depth
+            // (sibling, not a nested level) via `child_query_depth()`; a
+            // plain spawn carries `config.query_depth`, which the spawn
+            // path stamped to `parent + 1` at the spawn boundary.
             query_depth: self
                 .config
                 .fork_isolation
                 .as_ref()
                 .map(|iso| iso.child_query_depth())
-                .unwrap_or(0),
+                .unwrap_or(self.config.query_depth),
         };
 
         if ctx.tool_search_supported() {
