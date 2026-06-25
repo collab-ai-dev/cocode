@@ -1,6 +1,7 @@
 //! Teammate lifecycle — model fallback, init hooks, mode snapshot,
 //! leader permission bridge, and spawn orchestration helpers.
 
+use std::sync::OnceLock;
 use std::sync::RwLock;
 
 use crate::config::TeammateMode;
@@ -67,8 +68,13 @@ pub fn resolve_teammate_model(
 
 // ── Teammate Mode Snapshot (teammateModeSnapshot.ts) ──
 
-/// Captured teammate mode snapshot (frozen for session duration).
-static MODE_SNAPSHOT: RwLock<Option<TeammateMode>> = RwLock::new(None);
+/// Captured teammate mode snapshot — write-once, frozen for the session.
+///
+/// CC snapshots the mode ONCE at startup (`ALn` / `Ec("teammateMode")`) so a
+/// settings hot-reload can't change the spawn backend mid-session. A
+/// `OnceLock` enforces that write-once contract: the first
+/// [`capture_teammate_mode_snapshot`] wins; subsequent captures are ignored.
+static MODE_SNAPSHOT: OnceLock<TeammateMode> = OnceLock::new();
 /// CLI override for teammate mode.
 static CLI_MODE_OVERRIDE: RwLock<Option<TeammateMode>> = RwLock::new(None);
 
@@ -84,22 +90,20 @@ pub fn get_cli_teammate_mode_override() -> Option<TeammateMode> {
     CLI_MODE_OVERRIDE.read().ok().and_then(|g| *g)
 }
 
-/// Capture the teammate mode at startup (frozen for session).
+/// Capture the teammate mode at startup (frozen for the session). Write-once:
+/// the first capture wins and a later capture (e.g. from a config hot-reload)
+/// is silently ignored, matching CC's one-time snapshot.
 pub fn capture_teammate_mode_snapshot(config_mode: TeammateMode) {
     let mode = get_cli_teammate_mode_override().unwrap_or(config_mode);
-    if let Ok(mut guard) = MODE_SNAPSHOT.write() {
-        *guard = Some(mode);
-    }
+    let _ = MODE_SNAPSHOT.set(mode);
 }
 
-/// Get the captured teammate mode. The `capture_*` setter is wired only in
-/// tests, so production always hits this fall-through — it must default to
-/// `InProcess` (CC `DEFAULT_TEAMMATE_MODE`), not `Auto`.
+/// Get the captured teammate mode. Falls through to `InProcess` (CC
+/// `DEFAULT_TEAMMATE_MODE`) when capture never ran — keeps the unset case safe.
 pub fn get_teammate_mode_from_snapshot() -> TeammateMode {
     MODE_SNAPSHOT
-        .read()
-        .ok()
-        .and_then(|g| *g)
+        .get()
+        .copied()
         .unwrap_or(TeammateMode::InProcess)
 }
 

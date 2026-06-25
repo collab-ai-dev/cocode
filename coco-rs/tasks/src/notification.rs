@@ -140,7 +140,9 @@ pub fn render(n: &TaskNotification) -> String {
                 }
                 TerminalStatus::Killed => summary.push_str(" was stopped"),
             }
-            render_terminal(n, *status, &summary, None, None, None)
+            render_terminal(
+                n, *status, &summary, None, None, None, /*agent_note*/ false,
+            )
         }
         NotificationKind::AgentTerminal {
             status,
@@ -166,11 +168,17 @@ pub fn render(n: &TaskNotification) -> String {
                 result.as_deref(),
                 usage.as_ref(),
                 worktree.as_ref(),
+                /*agent_note*/ true,
             )
         }
         NotificationKind::Stall { output_tail } => render_stall(n, output_tail),
     }
 }
+
+/// Model-contract note appended to agent task-notifications (not shell). CC adds
+/// the same note so the model understands a notification can recur: the agent
+/// comes to rest, the user resumes it, and the same task-id notifies again.
+pub const TASK_NOTIFICATION_RECUR_NOTE: &str = "A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.";
 
 fn render_terminal(
     n: &TaskNotification,
@@ -179,6 +187,7 @@ fn render_terminal(
     result: Option<&str>,
     usage: Option<&TaskUsage>,
     worktree: Option<&Worktree>,
+    agent_note: bool,
 ) -> String {
     let mut xml = String::with_capacity(384);
     xml.push_str("<task-notification>\n");
@@ -210,6 +219,9 @@ fn render_terminal(
             ));
         }
         xml.push_str("</worktree>");
+    }
+    if agent_note {
+        xml.push_str(&format!("\n<note>{TASK_NOTIFICATION_RECUR_NOTE}</note>"));
     }
     xml.push_str("\n</task-notification>");
     xml

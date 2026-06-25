@@ -6,10 +6,12 @@
 //! 3. Environment variables (legacy/fallback)
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use coco_config::EnvKey;
 use coco_config::env;
 use coco_types::TaskStateBase;
 
@@ -120,6 +122,86 @@ pub fn get_dynamic_team_context() -> Option<DynamicTeamContext> {
     DYNAMIC_CONTEXT.read().ok().and_then(|g| g.clone())
 }
 
+// ── Inherited-env Identity (tier-3, one-shot) ──
+
+/// Cached snapshot of the inherited `COCO_*` identity env vars.
+///
+/// CC reads `CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME` once at module load and
+/// `delete`s it from `process.env`, caching the value at module scope so a
+/// teammate's own children (grandchildren) never inherit it. coco-rs mirrors
+/// that here: [`consume_inherited_env_identity`] reads all five identity vars
+/// into this `OnceLock` **before** removing them, and the tier-3 getters
+/// prefer the cache when populated.
+#[derive(Debug, Default)]
+struct InheritedEnvIdentity {
+    agent_id: Option<String>,
+    agent_name: Option<String>,
+    team_name: Option<String>,
+    color: Option<String>,
+    plan_mode_required: bool,
+}
+
+/// One-shot snapshot of the inherited identity env vars (None until
+/// [`consume_inherited_env_identity`] runs).
+static INHERITED_ENV: OnceLock<InheritedEnvIdentity> = OnceLock::new();
+
+/// Identity env keys consumed (cached then removed) on teammate startup.
+const CONSUMED_IDENTITY_ENV_KEYS: [EnvKey; 5] = [
+    AGENT_ID_ENV_VAR,
+    AGENT_NAME_ENV_VAR,
+    TEAM_NAME_ENV_VAR,
+    TEAMMATE_COLOR_ENV_VAR,
+    PLAN_MODE_REQUIRED_ENV_VAR,
+];
+
+/// Consume the inherited `COCO_*` identity env vars exactly once: cache their
+/// values at module scope, then `remove_var` each so a teammate's own children
+/// (grandchildren) don't inherit a stale identity. Idempotent — the `OnceLock`
+/// guarantees the read+remove runs at most once per process.
+///
+/// Call this at teammate process startup (the single teammate-detection site).
+/// The leader path may also call it harmlessly: with no identity env set, the
+/// cache stores `None`s and removes nothing.
+///
+/// MUST cache before removing (the `OnceLock::get_or_init` body reads env into
+/// the snapshot, and only after the snapshot is built do we drop the env vars).
+pub fn consume_inherited_env_identity() {
+    INHERITED_ENV.get_or_init(|| {
+        // Cache first.
+        let snapshot = InheritedEnvIdentity {
+            agent_id: env::env_opt(AGENT_ID_ENV_VAR),
+            agent_name: env::env_opt(AGENT_NAME_ENV_VAR),
+            team_name: env::env_opt(TEAM_NAME_ENV_VAR),
+            color: env::env_opt(TEAMMATE_COLOR_ENV_VAR),
+            plan_mode_required: env::is_env_truthy(PLAN_MODE_REQUIRED_ENV_VAR),
+        };
+        // Then remove, so grandchildren don't inherit the identity. CC scopes
+        // identity to the immediate child; this matches that.
+        //
+        // SAFETY: `std::env::remove_var` is not thread-safe. This runs once at
+        // teammate process startup (the teammate-detection site, before the
+        // engine/TUI worker threads that read env are spawned) and is guarded
+        // by the `OnceLock` so concurrent callers observe a single mutation.
+        unsafe {
+            for key in CONSUMED_IDENTITY_ENV_KEYS {
+                std::env::remove_var(key.as_str());
+            }
+        }
+        snapshot
+    });
+}
+
+/// Tier-3 string getter: prefer the consumed one-shot cache, else live env.
+fn inherited_env_string(
+    key: EnvKey,
+    pick: fn(&InheritedEnvIdentity) -> Option<&String>,
+) -> Option<String> {
+    if let Some(cached) = INHERITED_ENV.get() {
+        return pick(cached).cloned();
+    }
+    env::env_opt(key)
+}
+
 // ── Identity Resolution (3-tier) ──
 
 /// Get the current agent ID (3-tier priority).
@@ -132,8 +214,8 @@ pub fn get_agent_id() -> Option<String> {
     if let Some(ctx) = get_dynamic_team_context() {
         return Some(ctx.agent_id);
     }
-    // Tier 3: env var (cross-process fallback).
-    env::env_opt(AGENT_ID_ENV_VAR)
+    // Tier 3: inherited env (one-shot cache → live env fallback).
+    inherited_env_string(AGENT_ID_ENV_VAR, |c| c.agent_id.as_ref())
 }
 
 /// Get the current agent display name (3-tier priority).
@@ -144,7 +226,7 @@ pub fn get_agent_name() -> Option<String> {
     if let Some(ctx) = get_dynamic_team_context() {
         return Some(ctx.agent_name);
     }
-    env::env_opt(AGENT_NAME_ENV_VAR)
+    inherited_env_string(AGENT_NAME_ENV_VAR, |c| c.agent_name.as_ref())
 }
 
 /// Get the current team name (3-tier priority: task-local → dynamic → env).
@@ -159,7 +241,7 @@ pub fn get_team_name() -> Option<String> {
     if let Some(ctx) = get_dynamic_team_context() {
         return Some(ctx.team_name);
     }
-    env::env_opt(TEAM_NAME_ENV_VAR)
+    inherited_env_string(TEAM_NAME_ENV_VAR, |c| c.team_name.as_ref())
 }
 
 /// Get the parent session ID.
@@ -186,7 +268,7 @@ pub fn get_teammate_color() -> Option<String> {
     if let Some(ctx) = get_dynamic_team_context() {
         return ctx.color;
     }
-    env::env_opt(TEAMMATE_COLOR_ENV_VAR)
+    inherited_env_string(TEAMMATE_COLOR_ENV_VAR, |c| c.color.as_ref())
 }
 
 /// Check if plan mode is required.
@@ -196,6 +278,9 @@ pub fn is_plan_mode_required() -> bool {
     }
     if let Some(ctx) = get_dynamic_team_context() {
         return ctx.plan_mode_required;
+    }
+    if let Some(cached) = INHERITED_ENV.get() {
+        return cached.plan_mode_required;
     }
     env::is_env_truthy(PLAN_MODE_REQUIRED_ENV_VAR)
 }

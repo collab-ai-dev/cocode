@@ -548,6 +548,12 @@ pub struct TaskNotificationUsage {
     pub duration_ms: i64,
 }
 
+/// Model-contract note appended to agent / teammate task-notifications. CC adds
+/// the same note in `enqueueAgentNotification` so the model understands a
+/// notification can recur: an agent comes to rest, the user resumes it, and the
+/// same task-id notifies again.
+pub const TASK_NOTIFICATION_RECUR_NOTE: &str = "A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.";
+
 /// Render a [`TaskNotification`] as XML. Whitespace and tag order match
 /// the documented format so the assistant's pattern match succeeds.
 pub fn render_task_notification(n: &TaskNotification<'_>) -> String {
@@ -569,6 +575,7 @@ pub fn render_task_notification(n: &TaskNotification<'_>) -> String {
         out.push_str(&format!("  <duration_ms>{}</duration_ms>\n", u.duration_ms));
         out.push_str("</usage>\n");
     }
+    out.push_str(&format!("<note>{TASK_NOTIFICATION_RECUR_NOTE}</note>\n"));
     out.push_str("</task-notification>");
     out
 }

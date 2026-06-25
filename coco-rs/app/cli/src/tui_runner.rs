@@ -63,6 +63,17 @@ use crate::Cli;
 pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     let cwd = std::env::current_dir()?;
 
+    // One-shot consume the inherited `COCO_*` identity env (team name, agent
+    // id/name/color, plan-mode). CC reads its `CLAUDE_INTERNAL_ASSISTANT_*`
+    // analog once at module load and `delete`s it so a teammate's own children
+    // (grandchildren) never inherit the identity. Done FIRST, at process
+    // bootstrap (single-threaded, before any identity resolution below), so the
+    // cache is populated before the env vars are removed — later
+    // `resolve_teammate_identity()` calls read the cache, not the (now-removed)
+    // env. Harmless for the leader: its identity env is unset, so nothing is
+    // cached or removed.
+    coco_coordinator::identity::consume_inherited_env_identity();
+
     // Spawn the hot-reload loop FIRST. The reloader watches the four
     // settings layers + `providers.json` / `models.json` and publishes
     // a fresh `Arc<RuntimeConfig>` via `RuntimePublisher` on debounced
@@ -101,6 +112,16 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     };
     coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
     coco_cli::startup_profile::mark("config_resolved");
+
+    // Freeze the resolved teammate spawn mode ONCE for the session (CC's
+    // `teammateModeSnapshot`). A later settings hot-reload republishes
+    // `runtime_config` but the snapshot is write-once, so the spawn backend
+    // can't change mid-session. The CLI override (if any) wins inside the
+    // capture.
+    coco_coordinator::teammate::capture_teammate_mode_snapshot(
+        runtime_config.agent_teams.teammate_mode.into(),
+    );
+
     // Capture a fresh ConfigChange receiver from the reloader (when
     // available) so the SessionRuntime can drive the `ConfigChange`
     // hook on every settings/catalog file change. Borrowed before

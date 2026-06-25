@@ -83,12 +83,15 @@ fn test_mode_snapshot_default() {
 }
 
 #[test]
-fn test_mode_snapshot_capture() {
+fn test_mode_snapshot_capture_is_write_once() {
+    // First capture wins (write-once OnceLock).
     capture_teammate_mode_snapshot(TeammateMode::Tmux);
     assert_eq!(get_teammate_mode_from_snapshot(), TeammateMode::Tmux);
 
-    // Reset
+    // A second capture (e.g. a config hot-reload) is ignored — the snapshot
+    // stays frozen at the first value, NOT the fall-through default.
     capture_teammate_mode_snapshot(TeammateMode::Auto);
+    assert_eq!(get_teammate_mode_from_snapshot(), TeammateMode::Tmux);
 }
 
 #[test]
@@ -99,15 +102,9 @@ fn test_cli_mode_override() {
         Some(TeammateMode::InProcess)
     );
 
-    // Capture should use CLI override
+    // Capture should use CLI override (which wins over the config mode).
     capture_teammate_mode_snapshot(TeammateMode::Tmux);
     assert_eq!(get_teammate_mode_from_snapshot(), TeammateMode::InProcess);
-
-    // Clean up
-    if let Ok(mut guard) = super::CLI_MODE_OVERRIDE.write() {
-        *guard = None;
-    }
-    capture_teammate_mode_snapshot(TeammateMode::Auto);
 }
 
 // ── Spawn Helpers ──
