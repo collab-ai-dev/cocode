@@ -89,6 +89,32 @@ fn test_build_system_prompt_with_rules_and_xml_format() {
     assert!(prompt.contains("Your ENTIRE response MUST begin with <block>"));
 }
 
+#[test]
+fn test_build_system_prompt_includes_destructive_git_and_iac_carveouts() {
+    // The hardcoded BLOCK section must enumerate the 2.1.183 auto-mode
+    // destructive-git working-tree commands and the IaC `destroy` family,
+    // independent of user-configured rules.
+    let prompt = build_classifier_system_prompt(&AutoModeRules::default());
+    for needle in [
+        "git reset --hard",
+        "git checkout -- .",
+        "git restore .",
+        "git clean -fd[x]",
+        "git stash drop",
+        "git commit --amend",
+        "terraform destroy",
+        "pulumi destroy",
+        "cdk destroy",
+        "terragrunt destroy",
+        "Shared-Resource-Destruction",
+    ] {
+        assert!(
+            prompt.contains(needle),
+            "classifier prompt missing carve-out: {needle}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_classify_safe_tool_skips_llm() {
     let result = classify_yolo_action(
