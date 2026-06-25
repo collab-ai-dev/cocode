@@ -228,48 +228,38 @@ async fn main() -> Result<()> {
                 println!("Daemon mode is not yet fully implemented.");
                 return Ok(());
             }
-            Commands::Ps => {
+            Commands::Ps { json, all } => {
                 let config_home = global_config::config_home();
-                let count = coco_session::count_concurrent_sessions(&config_home);
-                let dir = config_home.join("sessions");
-                println!("Live coco sessions ({count} total):");
-                match std::fs::read_dir(&dir) {
-                    Ok(entries) => {
-                        let mut found = 0;
-                        for entry in entries.flatten() {
-                            let name_os = entry.file_name();
-                            let name = name_os.to_string_lossy();
-                            let Some(stem) = name.strip_suffix(".json") else {
-                                continue;
-                            };
-                            let Ok(pid) = stem.parse::<u32>() else {
-                                continue;
-                            };
-                            if let Ok(Some(rec)) =
-                                coco_session::read_session_registration(&config_home, pid)
-                            {
-                                found += 1;
-                                let kind = serde_json::to_value(rec.kind)
-                                    .ok()
-                                    .and_then(|v| v.as_str().map(str::to_owned))
-                                    .unwrap_or_else(|| "?".into());
-                                println!(
-                                    "  pid={pid:<6} kind={kind:<14} sid={} cwd={}",
-                                    rec.session_id,
-                                    rec.cwd.display(),
-                                );
-                            }
-                        }
-                        if found == 0 {
-                            println!("  (none)");
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        println!("  (none)");
-                    }
-                    Err(e) => {
-                        eprintln!("warning: failed to read {}: {e}", dir.display());
-                    }
+                // Live PID sweep (fixes the historic `sessions/` vs
+                // `sessions/pids/` directory bug — `collect_ps_entries`
+                // routes through the registry's own dir helper), then
+                // merge durable terminal records from the JobStore so
+                // done/failed/stopped can be reported.
+                let entries = bin_handlers::ps::collect_with_jobs(&config_home, *all);
+                if *json {
+                    println!("{}", serde_json::to_string_pretty(&entries)?);
+                    return Ok(());
+                }
+                println!("Live coco sessions ({} total):", entries.len());
+                if entries.is_empty() {
+                    println!("  (none)");
+                }
+                for e in &entries {
+                    let kind = serde_json::to_value(e.kind)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| "?".into());
+                    let state = serde_json::to_value(e.state)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| "?".into());
+                    let name = e.name.as_deref().unwrap_or("-");
+                    println!(
+                        "  pid={:<6} kind={kind:<14} state={state:<8} name={name:<20} sid={} cwd={}",
+                        e.pid,
+                        e.session_id,
+                        e.cwd.display(),
+                    );
                 }
                 return Ok(());
             }

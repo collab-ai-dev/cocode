@@ -8,13 +8,18 @@ pub mod storage;
 pub mod store;
 pub mod title_generator;
 
+pub use concurrent_sessions::PsEntry;
+pub use concurrent_sessions::PsViewState;
 pub use concurrent_sessions::SessionKind;
 pub use concurrent_sessions::SessionRegistration;
 pub use concurrent_sessions::SessionRegistry;
 pub use concurrent_sessions::SessionStatus;
+pub use concurrent_sessions::TerminalJobOutcome;
+pub use concurrent_sessions::collect_ps_entries;
 pub use concurrent_sessions::count_concurrent_sessions;
 pub use concurrent_sessions::is_bg_session;
 pub use concurrent_sessions::read_registration as read_session_registration;
+pub use concurrent_sessions::view_state;
 pub use error::SessionError;
 pub use history::HistoryEntry;
 pub use history::PromptHistory;

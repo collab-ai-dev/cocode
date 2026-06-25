@@ -427,7 +427,14 @@ pub enum Commands {
     Daemon,
 
     /// List running background sessions.
-    Ps,
+    Ps {
+        /// Emit a JSON array (for scripting; no TTY required).
+        #[arg(long)]
+        json: bool,
+        /// Include process-less terminal entries (completed / failed).
+        #[arg(long)]
+        all: bool,
+    },
 
     /// Show logs from a background session.
     Logs {

@@ -245,3 +245,133 @@ fn registration_json_wire_format_is_camel_case() {
     assert_eq!(obj.get("kind").unwrap(), "daemon-worker");
     assert_eq!(obj.get("status").unwrap(), "idle");
 }
+
+// ── `coco ps` view-state mapper ───────────────────────────────────
+
+fn reg(
+    pid: u32,
+    started_at: i64,
+    status: Option<SessionStatus>,
+    waiting_for: Option<&str>,
+) -> SessionRegistration {
+    SessionRegistration {
+        pid,
+        session_id: format!("sid-{pid}"),
+        cwd: PathBuf::from("/work"),
+        started_at,
+        kind: SessionKind::Bg,
+        entrypoint: None,
+        name: None,
+        bridge_session_id: None,
+        updated_at: None,
+        status,
+        waiting_for: waiting_for.map(str::to_string),
+    }
+}
+
+#[test]
+fn view_state_busy_is_working() {
+    let r = reg(1, 0, Some(SessionStatus::Busy), Some("compile"));
+    // Busy wins even over a waiting_for hint.
+    assert_eq!(view_state(&r, /*live*/ true, None), PsViewState::Working);
+}
+
+#[test]
+fn view_state_waiting_is_blocked() {
+    let r = reg(1, 0, Some(SessionStatus::Waiting), None);
+    assert_eq!(view_state(&r, true, None), PsViewState::Blocked);
+}
+
+#[test]
+fn view_state_waiting_for_is_blocked() {
+    let r = reg(1, 0, Some(SessionStatus::Idle), Some("user-input"));
+    assert_eq!(view_state(&r, true, None), PsViewState::Blocked);
+}
+
+#[test]
+fn view_state_dead_without_job_is_stopped() {
+    let r = reg(1, 0, None, None);
+    assert_eq!(view_state(&r, /*live*/ false, None), PsViewState::Stopped);
+}
+
+#[test]
+fn view_state_idle_live_is_working() {
+    let r = reg(1, 0, Some(SessionStatus::Idle), None);
+    assert_eq!(view_state(&r, true, None), PsViewState::Working);
+}
+
+#[test]
+fn view_state_terminal_job_maps_outcomes() {
+    let r = reg(1, 0, None, None);
+    assert_eq!(
+        view_state(&r, false, Some(TerminalJobOutcome::Done)),
+        PsViewState::Done
+    );
+    assert_eq!(
+        view_state(&r, false, Some(TerminalJobOutcome::Failed)),
+        PsViewState::Failed
+    );
+    assert_eq!(
+        view_state(&r, false, Some(TerminalJobOutcome::Stopped)),
+        PsViewState::Stopped
+    );
+}
+
+#[test]
+fn view_state_busy_overrides_terminal_job() {
+    // A live busy worker outranks a stale terminal job record.
+    let r = reg(1, 0, Some(SessionStatus::Busy), None);
+    assert_eq!(
+        view_state(&r, true, Some(TerminalJobOutcome::Done)),
+        PsViewState::Working
+    );
+}
+
+#[test]
+fn collect_ps_entries_surfaces_self_and_redacts_name() {
+    let cfg = TempDir::new().unwrap();
+    let our_pid = std::process::id();
+
+    // The self pid is always live. Seed a name carrying a secret.
+    let mut self_reg = reg(our_pid, 2000, Some(SessionStatus::Busy), None);
+    self_reg.name = Some("nightly sk-ant-api03-AABBCCDDEEFFGGHHIIJJKK".into());
+    write_pid_file(
+        cfg.path(),
+        our_pid,
+        &serde_json::to_string(&self_reg).unwrap(),
+    );
+
+    let entries = collect_ps_entries(cfg.path(), /*include_all*/ false);
+    assert_eq!(entries.len(), 1);
+    let e = &entries[0];
+    assert_eq!(e.pid, our_pid);
+    assert_eq!(e.id, e.session_id);
+    assert_eq!(e.state, PsViewState::Working);
+    // Secret in the name must be redacted.
+    let name = e.name.as_deref().unwrap();
+    assert!(!name.contains("sk-ant-api03"), "name not redacted: {name}");
+}
+
+#[test]
+fn collect_ps_entries_default_drops_swept_stale() {
+    let cfg = TempDir::new().unwrap();
+    // A stale dead pid file is swept by the shared sweep, so it never
+    // appears regardless of --all. Self pid is not written, so the
+    // result is empty.
+    let stale_pid = 99_999_998u32;
+    let stale = reg(stale_pid, 100, None, None);
+    write_pid_file(
+        cfg.path(),
+        stale_pid,
+        &serde_json::to_string(&stale).unwrap(),
+    );
+
+    let default = collect_ps_entries(cfg.path(), /*include_all*/ false);
+    let all = collect_ps_entries(cfg.path(), /*include_all*/ true);
+    // On non-WSL the dead file is unlinked; neither view surfaces it.
+    let on_wsl = std::env::var("WSL_DISTRO_NAME").is_ok();
+    if !on_wsl {
+        assert!(default.iter().all(|e| e.pid != stale_pid));
+        assert!(all.iter().all(|e| e.pid != stale_pid));
+    }
+}

@@ -14,6 +14,7 @@ coco-messages.workspace = true
 coco-config.workspace = true
 coco-paths.workspace = true
 coco-git.workspace = true
+coco-secret-redact.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

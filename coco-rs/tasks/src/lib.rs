@@ -17,6 +17,7 @@
 
 mod error;
 pub mod handle_impls;
+pub mod job_store;
 pub mod notification;
 pub mod reminder_source;
 pub mod running;
@@ -26,6 +27,8 @@ pub mod todos;
 
 pub use error::Result;
 pub use error::TasksError;
+pub use job_store::JobState;
+pub use job_store::JobStore;
 
 // Re-export the canonical surface so callers don't have to pierce the
 // module tree for every type.
