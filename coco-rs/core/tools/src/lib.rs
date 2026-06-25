@@ -37,13 +37,11 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(WebFetchTool));
     registry.register(Arc::new(WebSearchTool));
 
-    // Agent, Workflow & Team (6)
+    // Agent, Workflow & Team (4)
     registry.register(Arc::new(AgentTool));
     registry.register(Arc::new(WorkflowTool));
     registry.register(Arc::new(SkillTool));
     registry.register(Arc::new(SendMessageTool));
-    registry.register(Arc::new(TeamCreateTool));
-    registry.register(Arc::new(TeamDeleteTool));
 
     // Task Management (7)
     registry.register(Arc::new(TaskCreateTool));

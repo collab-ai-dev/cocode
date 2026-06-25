@@ -16,8 +16,12 @@ use crate::constants::SWARM_VIEW_WINDOW_NAME;
 use crate::constants::TMUX_COMMAND;
 use crate::types::BackendType;
 
-/// Delay for shell initialization after creating a pane (ms).
-const PANE_SHELL_INIT_DELAY_MS: u64 = 200;
+/// Benign holding process every pane is created running. A pane must start
+/// with a placeholder that never exits on its own so the later
+/// `respawn-pane -k` is the *only* thing that ever puts a real process in the
+/// pane — replacing the racy `send-keys … Enter` + shell-init sleep, which
+/// also leaked the relaunch command as visible keystrokes.
+const PANE_HOLD_COMMAND: &str = "cat";
 
 /// Tmux pane backend.
 pub struct TmuxBackend {
@@ -122,8 +126,9 @@ impl PaneBackend for TmuxBackend {
     }
 
     async fn send_command_to_pane(&self, pane_id: &PaneId, command: &str) -> crate::Result<()> {
-        self.run(&["send-keys", "-t", pane_id, command, "Enter"])
-            .await?;
+        super::assert_no_control_chars(command)?;
+        self.run(&remain_on_exit_args(pane_id)).await?;
+        self.run(&respawn_pane_args(pane_id, command)).await?;
         Ok(())
     }
 
@@ -271,18 +276,39 @@ impl TmuxBackend {
         color: AgentColorName,
         is_first: bool,
     ) -> crate::Result<CreatePaneResult> {
+        // `-d` keeps focus on the leader (no keystroke leak); `-- cat` runs the
+        // benign holding process so the later `respawn-pane -k` deterministically
+        // replaces it.
         let split_args = if is_first {
             // First teammate: horizontal split, 70% right
-            vec!["split-window", "-h", "-p", "70", "-P", "-F", "#{pane_id}"]
+            vec![
+                "split-window",
+                "-d",
+                "-h",
+                "-p",
+                "70",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "--",
+                PANE_HOLD_COMMAND,
+            ]
         } else {
             // Subsequent: vertical split in the right region
-            vec!["split-window", "-v", "-P", "-F", "#{pane_id}"]
+            vec![
+                "split-window",
+                "-d",
+                "-v",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "--",
+                PANE_HOLD_COMMAND,
+            ]
         };
 
         let output = self.run(&split_args).await?;
         let pane_id = output.trim().to_string();
-
-        tokio::time::sleep(std::time::Duration::from_millis(PANE_SHELL_INIT_DELAY_MS)).await;
 
         // Set border color and title
         let _ = self.set_pane_border_color(&pane_id, color).await;
@@ -342,11 +368,14 @@ impl TmuxBackend {
                             let output = self
                                 .run(&[
                                     "split-window",
+                                    "-d",
                                     "-t",
                                     &swarm_window,
                                     "-P",
                                     "-F",
                                     "#{pane_id}",
+                                    "--",
+                                    PANE_HOLD_COMMAND,
                                 ])
                                 .await?;
                             output.trim().to_string()
@@ -357,6 +386,7 @@ impl TmuxBackend {
                     let output = self
                         .run(&[
                             "new-window",
+                            "-d",
                             "-t",
                             SWARM_SESSION_NAME,
                             "-n",
@@ -364,6 +394,8 @@ impl TmuxBackend {
                             "-P",
                             "-F",
                             "#{pane_id}",
+                            "--",
+                            PANE_HOLD_COMMAND,
                         ])
                         .await?;
                     let _ = self.enable_pane_border_status(Some(&swarm_window)).await;
@@ -383,6 +415,8 @@ impl TmuxBackend {
                         "-P",
                         "-F",
                         "#{pane_id}",
+                        "--",
+                        PANE_HOLD_COMMAND,
                     ])
                     .await?;
                 // Enable per-window pane titles now that the swarm window exists.
@@ -394,17 +428,18 @@ impl TmuxBackend {
             let output = self
                 .run(&[
                     "split-window",
+                    "-d",
                     "-t",
                     &swarm_window,
                     "-P",
                     "-F",
                     "#{pane_id}",
+                    "--",
+                    PANE_HOLD_COMMAND,
                 ])
                 .await?;
             output.trim().to_string()
         };
-
-        tokio::time::sleep(std::time::Duration::from_millis(PANE_SHELL_INIT_DELAY_MS)).await;
 
         // Mirror the leader path: colored border + titled border, then tile
         // the swarm window. All ops route through `self.run`, which in external
@@ -439,6 +474,38 @@ impl TmuxBackend {
 }
 
 // ── Tmux Helpers ──
+
+/// `set-option` argv that arms the pane to stay open (showing the error) if
+/// the relaunched command exits non-zero — a crashed teammate leaves a visible
+/// dead pane instead of vanishing. `-p` scopes the option to this pane only.
+fn remain_on_exit_args(pane_id: &str) -> [&str; 6] {
+    [
+        "set-option",
+        "-p",
+        "-t",
+        pane_id,
+        "remain-on-exit",
+        "failed",
+    ]
+}
+
+/// `respawn-pane -k` argv. `-k` kills the pane's current process (the `cat`
+/// holder) and exec's the command in its place — no shell prompt to race, no
+/// readline buffer to leak into. The command is the shell one-liner from
+/// `build_teammate_command` (`cd X && env… cmd`), so host it under a fresh
+/// non-interactive `sh -c` (no rc-file, no prompt, no line editor).
+fn respawn_pane_args<'a>(pane_id: &'a str, command: &'a str) -> [&'a str; 8] {
+    [
+        "respawn-pane",
+        "-k",
+        "-t",
+        pane_id,
+        "--",
+        "sh",
+        "-c",
+        command,
+    ]
+}
 
 /// Run a tmux command and return stdout.
 async fn run_tmux(args: &[&str]) -> crate::Result<String> {

@@ -111,11 +111,7 @@ pub fn classify_auto_mode_extended(ctx: &AutoModeInput<'_>) -> AutoModeDecision 
     // read-only (`AgentTool::is_read_only() == true`; it delegates permission
     // checks to the subagent's own tool calls), so it is auto-allowed before
     // this list via the read-only fast path in `classify_auto_mode_extended`.
-    const TEAM_TOOLS: &[&str] = &[
-        ToolName::SendMessage.as_str(),
-        ToolName::TeamCreate.as_str(),
-        ToolName::TeamDelete.as_str(),
-    ];
+    const TEAM_TOOLS: &[&str] = &[ToolName::SendMessage.as_str()];
     if TEAM_TOOLS.contains(&name) {
         return AutoModeDecision::NeedsPrompt {
             reason: format!("{name} mutates shared team state"),

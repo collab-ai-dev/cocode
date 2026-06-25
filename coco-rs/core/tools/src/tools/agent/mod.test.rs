@@ -4,7 +4,6 @@ use coco_tool_runtime::AgentHandle;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnResponse;
 use coco_tool_runtime::AgentSpawnStatus;
-use coco_tool_runtime::CreateTeamResult;
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use pretty_assertions::assert_eq;
@@ -16,8 +15,6 @@ use super::*;
 struct MockAgentHandle {
     spawn_result: tokio::sync::Mutex<Option<Result<AgentSpawnResponse, String>>>,
     send_result: tokio::sync::Mutex<Option<Result<String, String>>>,
-    team_create_result: tokio::sync::Mutex<Option<Result<CreateTeamResult, String>>>,
-    team_delete_result: tokio::sync::Mutex<Option<Result<String, String>>>,
 }
 
 struct ConnectedMcpHandle {
@@ -87,8 +84,6 @@ impl MockAgentHandle {
         Self {
             spawn_result: tokio::sync::Mutex::new(Some(result)),
             send_result: tokio::sync::Mutex::new(None),
-            team_create_result: tokio::sync::Mutex::new(None),
-            team_delete_result: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -96,26 +91,6 @@ impl MockAgentHandle {
         Self {
             spawn_result: tokio::sync::Mutex::new(None),
             send_result: tokio::sync::Mutex::new(Some(result)),
-            team_create_result: tokio::sync::Mutex::new(None),
-            team_delete_result: tokio::sync::Mutex::new(None),
-        }
-    }
-
-    fn with_team_create(result: Result<CreateTeamResult, String>) -> Self {
-        Self {
-            spawn_result: tokio::sync::Mutex::new(None),
-            send_result: tokio::sync::Mutex::new(None),
-            team_create_result: tokio::sync::Mutex::new(Some(result)),
-            team_delete_result: tokio::sync::Mutex::new(None),
-        }
-    }
-
-    fn with_team_delete(result: Result<String, String>) -> Self {
-        Self {
-            spawn_result: tokio::sync::Mutex::new(None),
-            send_result: tokio::sync::Mutex::new(None),
-            team_create_result: tokio::sync::Mutex::new(None),
-            team_delete_result: tokio::sync::Mutex::new(Some(result)),
         }
     }
 }
@@ -141,29 +116,6 @@ impl AgentHandle for MockAgentHandle {
                 message,
                 recipients: Vec::new(),
                 routing: None,
-            }),
-            Some(Err(e)) => Err(e),
-            None => Err("no mock result".into()),
-        }
-    }
-
-    async fn create_team(
-        &self,
-        _request: coco_tool_runtime::CreateTeamRequest,
-    ) -> Result<CreateTeamResult, String> {
-        self.team_create_result
-            .lock()
-            .await
-            .take()
-            .unwrap_or(Err("no mock result".into()))
-    }
-
-    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
-        match self.team_delete_result.lock().await.take() {
-            Some(Ok(message)) => Ok(coco_tool_runtime::DeleteTeamResult {
-                success: true,
-                message,
-                team_name: None,
             }),
             Some(Err(e)) => Err(e),
             None => Err("no mock result".into()),
@@ -248,15 +200,6 @@ impl AgentHandle for CapturingAgentHandle {
         _: &str,
         _: Option<&str>,
     ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
-        Err("unused".into())
-    }
-    async fn create_team(
-        &self,
-        _: coco_tool_runtime::CreateTeamRequest,
-    ) -> Result<CreateTeamResult, String> {
-        Err("unused".into())
-    }
-    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
         Err("unused".into())
     }
     // resume_agent uses the trait default impl.
@@ -901,6 +844,9 @@ async fn test_agent_tool_omitted_subagent_type_for_team_spawn_stays_untyped() {
     let mut ctx = ToolUseContext::test_default();
     ctx.agent = handle.clone();
     enable_agent_teams(&mut ctx);
+    // Routing keys on the implicit session team (`ctx.team_name`); the
+    // `team_name` PARAM below is ignored (deprecated wire-compat field).
+    ctx.team_name = Some("alpha".into());
 
     let result = <AgentTool as DynTool>::execute(
         &AgentTool,
@@ -937,6 +883,9 @@ async fn test_agent_tool_team_spawn_model_mode_does_not_escalate() {
     let mut ctx = ToolUseContext::test_default();
     ctx.agent = handle.clone();
     enable_agent_teams(&mut ctx);
+    // Routing keys on the implicit session team; the `team_name` PARAM
+    // is ignored.
+    ctx.team_name = Some("alpha".into());
     // Pin a NON-trust parent: `test_default` runs in a permissive mode, where an
     // inherited bypass would be indistinguishable from an escalated one. With a
     // Default parent, a `mode:"bypassPermissions"` that leaked through would show
@@ -986,6 +935,9 @@ async fn test_agent_tool_team_spawn_plan_mode_forced_over_permissive_parent() {
     let mut ctx = ToolUseContext::test_default();
     ctx.agent = handle.clone();
     enable_agent_teams(&mut ctx);
+    // Routing keys on the implicit session team; the `team_name` PARAM
+    // is ignored.
+    ctx.team_name = Some("alpha".into());
     // Permissive (trust) parent — would normally win in `resolve_subagent_mode`.
     ctx.permission_context.mode = coco_types::PermissionMode::AcceptEdits;
 
@@ -1043,9 +995,17 @@ async fn test_agent_tool_uses_active_team_when_team_name_omitted() {
     assert_eq!(result.data["team_name"], "active-team");
 }
 
+/// With AgentTeams DISABLED there is no implicit team, so a `name`d spawn
+/// is NOT classified as a team spawn (CC: `implicitTeam = enabled ?
+/// teamContext : undefined`). It routes as an ordinary subagent — `name`
+/// is just a label — never the team-spawn path. The runtime team context
+/// (`ctx.team_name`) is ignored when the feature is off.
 #[tokio::test]
-async fn test_agent_tool_rejects_team_spawn_when_agent_teams_disabled() {
+async fn test_agent_tool_name_without_agent_teams_is_ordinary_subagent() {
+    let handle = Arc::new(CapturingAgentHandle::default());
     let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    // AgentTeams intentionally NOT enabled; team context present but moot.
     ctx.team_name = Some("active-team".into());
 
     let result = <AgentTool as DynTool>::execute(
@@ -1057,12 +1017,20 @@ async fn test_agent_tool_rejects_team_spawn_when_agent_teams_disabled() {
         }),
         &ctx,
     )
-    .await;
-    let err = result.expect_err("agent teams gate must reject teammate spawn");
-    assert!(
-        format!("{err}").contains("Agent Teams is not available"),
-        "unexpected error: {err}"
-    );
+    .await
+    .unwrap();
+    assert_eq!(result.data["status"], "completed");
+
+    let request = handle
+        .last_request
+        .lock()
+        .await
+        .clone()
+        .expect("captured request");
+    // Not a team spawn: the implicit team is unavailable with teams off, so
+    // the spawn carries no team name and gets a default subagent type.
+    assert_eq!(request.team_name, None);
+    assert_eq!(request.subagent_type.as_deref(), Some("general-purpose"));
 }
 
 #[tokio::test]
@@ -1241,15 +1209,6 @@ impl AgentHandle for ShutdownRecordingHandle {
         _summary: Option<&str>,
     ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
         Err("send_message must not be called for structured shutdown messages".into())
-    }
-    async fn create_team(
-        &self,
-        _r: coco_tool_runtime::CreateTeamRequest,
-    ) -> Result<CreateTeamResult, String> {
-        Err("unused".into())
-    }
-    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
-        Err("unused".into())
     }
     async fn query_agent_status(&self, _a: &str) -> Result<AgentSpawnResponse, String> {
         Err("unused".into())
@@ -1824,15 +1783,6 @@ impl AgentHandle for ResumeRecordingHandle {
             routing: Some("mailbox".into()),
         })
     }
-    async fn create_team(
-        &self,
-        _: coco_tool_runtime::CreateTeamRequest,
-    ) -> Result<CreateTeamResult, String> {
-        Err("not expected".into())
-    }
-    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
-        Err("not expected".into())
-    }
     async fn query_agent_status(&self, _: &str) -> Result<AgentSpawnResponse, String> {
         Err("not expected".into())
     }
@@ -2032,100 +1982,6 @@ async fn test_send_message_terminal_non_bg_agent_does_not_resume() {
             "follow up".to_string(),
             Some("follow up".to_string())
         ))
-    );
-}
-
-// ── TeamCreateTool tests ──
-
-#[tokio::test]
-async fn test_team_create_empty_name_rejected() {
-    let ctx = ToolUseContext::test_default();
-    let result = <TeamCreateTool as DynTool>::execute(
-        &TeamCreateTool,
-        serde_json::json!({"team_name": ""}),
-        &ctx,
-    )
-    .await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn test_team_create_success() {
-    let mut ctx = ctx_with_agent(MockAgentHandle::with_team_create(Ok(CreateTeamResult {
-        team_name: "alpha".into(),
-        lead_agent_id: "team-lead@alpha".into(),
-        team_file_path: std::path::PathBuf::from("/tmp/teams/alpha/config.json"),
-    })));
-    ctx.session_id_for_history = Some("session-1".into());
-    let result = <TeamCreateTool as DynTool>::execute(
-        &TeamCreateTool,
-        serde_json::json!({"team_name": "alpha"}),
-        &ctx,
-    )
-    .await
-    .unwrap();
-    assert_eq!(result.data["team_name"], "alpha");
-    assert_eq!(
-        result.data["team_file_path"],
-        "/tmp/teams/alpha/config.json"
-    );
-}
-
-#[tokio::test]
-async fn test_team_create_model_schema_uses_ts_agent_type_field() {
-    let coco_tool_runtime::ToolSpec::Function(spec) = <TeamCreateTool as DynTool>::tool_spec(
-        &TeamCreateTool,
-        &coco_tool_runtime::SchemaContext::default(),
-        &coco_tool_runtime::PromptOptions::default(),
-    )
-    .await
-    else {
-        panic!("TeamCreate must be a function tool");
-    };
-    let props = spec.parameters["properties"]
-        .as_object()
-        .expect("TeamCreate schema properties");
-    assert!(
-        props.contains_key("agent_type"),
-        "TeamCreate must expose TS-compatible `agent_type`"
-    );
-    assert!(
-        !props.contains_key("leader_agent_type"),
-        "internal Rust field name must not leak into the model schema"
-    );
-}
-
-// ── TeamDeleteTool tests ──
-
-#[tokio::test]
-async fn test_team_delete_empty_input_accepted() {
-    // The input schema has no fields — empty input passes through to the
-    // handle, which resolves the team from the active session context.
-    // Without a side-channel mock here the underlying call returns an
-    // error; we just verify the schema doesn't reject empty input upfront.
-    let ctx = ToolUseContext::test_default();
-    let result =
-        <TeamDeleteTool as DynTool>::execute(&TeamDeleteTool, serde_json::json!({}), &ctx).await;
-    // The default `NoOpAgentHandle` returns an error; the schema-level
-    // accept is what we're verifying, so we only assert the failure
-    // mode is downstream (handle, not input parsing).
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn test_team_delete_success() {
-    let ctx = ctx_with_agent(MockAgentHandle::with_team_delete(Ok(
-        "Cleaned up directories and worktrees for team \"alpha\"".into(),
-    )));
-    let result = <TeamDeleteTool as DynTool>::execute(&TeamDeleteTool, serde_json::json!({}), &ctx)
-        .await
-        .unwrap();
-    assert_eq!(result.data["success"], true);
-    assert!(
-        result.data["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("alpha")
     );
 }
 

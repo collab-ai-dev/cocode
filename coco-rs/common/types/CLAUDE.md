@@ -8,7 +8,7 @@ this crate stays unchanged. Guarded by `scripts/check-vercel-ai-seam.sh`.
 
 ## Key Types
 
-Tool / Agent identity: `ToolName` (43 builtin variants, Copy), `ToolId` (Builtin/Mcp/Custom, flat-string serde), `SubagentType` (7 builtin variants), `AgentTypeId`, `ToolProgress`.
+Tool / Agent identity: `ToolName` (44 builtin variants, Copy), `ToolId` (Builtin/Mcp/Custom, flat-string serde), `SubagentType` (7 builtin variants), `AgentTypeId`, `ToolProgress`.
 
 Permission: `PermissionMode` (camelCase wire), `PermissionBehavior`, `PermissionRule`, `PermissionRuleSource`, `PermissionDecision`, `PermissionDecisionReason`, `ToolPermissionContext`.
 

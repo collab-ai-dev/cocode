@@ -36,6 +36,20 @@ pub struct BackendDetectionResult {
     pub needs_it2_setup: bool,
 }
 
+/// Reject any command containing a control character before it reaches a
+/// terminal pane. Defense-in-depth: even though backends now `exec` the
+/// command rather than typing it, a control char embedded in a name / cwd /
+/// model value must never reach the pane. `char::is_control()` covers
+/// Unicode Cc (C0 + C1 + DEL); no regex dependency.
+pub fn assert_no_control_chars(command: &str) -> crate::Result<()> {
+    if let Some(c) = command.chars().find(|c| c.is_control()) {
+        return Err(crate::CoordinatorError::ControlCharInPaneCommand {
+            code_point: c as u32,
+        });
+    }
+    Ok(())
+}
+
 // ── PaneBackend Trait ──
 
 /// Interface for pane management backends (tmux, iTerm2).

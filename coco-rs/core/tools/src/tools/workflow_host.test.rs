@@ -119,9 +119,6 @@ async fn run_agent_uses_captured_structured_output() {
     use coco_tool_runtime::AgentSpawnRequest;
     use coco_tool_runtime::AgentSpawnResponse;
     use coco_tool_runtime::AgentSpawnStatus;
-    use coco_tool_runtime::CreateTeamRequest;
-    use coco_tool_runtime::CreateTeamResult;
-    use coco_tool_runtime::DeleteTeamResult;
     use coco_tool_runtime::TeamMessageDispatchResult;
     use coco_workflow_runtime::WorkflowHost;
 
@@ -151,15 +148,6 @@ async fn run_agent_uses_captured_structured_output() {
             _content: &str,
             _summary: Option<&str>,
         ) -> Result<TeamMessageDispatchResult, String> {
-            Err("unused".into())
-        }
-        async fn create_team(
-            &self,
-            _request: CreateTeamRequest,
-        ) -> Result<CreateTeamResult, String> {
-            Err("unused".into())
-        }
-        async fn delete_team(&self) -> Result<DeleteTeamResult, String> {
             Err("unused".into())
         }
         async fn query_agent_status(&self, _agent_id: &str) -> Result<AgentSpawnResponse, String> {
@@ -192,9 +180,6 @@ async fn run_agent_falls_back_to_text_parse_without_capture() {
     use coco_tool_runtime::AgentSpawnRequest;
     use coco_tool_runtime::AgentSpawnResponse;
     use coco_tool_runtime::AgentSpawnStatus;
-    use coco_tool_runtime::CreateTeamRequest;
-    use coco_tool_runtime::CreateTeamResult;
-    use coco_tool_runtime::DeleteTeamResult;
     use coco_tool_runtime::TeamMessageDispatchResult;
     use coco_workflow_runtime::WorkflowHost;
 
@@ -222,15 +207,6 @@ async fn run_agent_falls_back_to_text_parse_without_capture() {
             _content: &str,
             _summary: Option<&str>,
         ) -> Result<TeamMessageDispatchResult, String> {
-            Err("unused".into())
-        }
-        async fn create_team(
-            &self,
-            _request: CreateTeamRequest,
-        ) -> Result<CreateTeamResult, String> {
-            Err("unused".into())
-        }
-        async fn delete_team(&self) -> Result<DeleteTeamResult, String> {
             Err("unused".into())
         }
         async fn query_agent_status(&self, _agent_id: &str) -> Result<AgentSpawnResponse, String> {

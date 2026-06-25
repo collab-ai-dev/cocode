@@ -731,8 +731,6 @@ fn is_read_only_tool(tool_name: &str) -> bool {
         ToolName::ExitPlanMode.as_str(),
         ToolName::VerifyPlanExecution.as_str(),
         // Swarm coordination (internal state, no external effects)
-        ToolName::TeamCreate.as_str(),
-        ToolName::TeamDelete.as_str(),
         ToolName::SendMessage.as_str(),
         // Scheduling read-only
         ToolName::CronList.as_str(),

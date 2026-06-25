@@ -18,15 +18,6 @@ use crate::types::TeamManager;
 use crate::types::TeamMember;
 
 #[derive(Debug, Clone)]
-pub struct CreateTeamResult {
-    pub team_name: String,
-    pub lead_agent_id: String,
-    pub task_list_id: String,
-    pub team_file_path: std::path::PathBuf,
-    pub team_file: TeamFile,
-}
-
-#[derive(Debug, Clone)]
 pub struct SpawnMemberRequest {
     pub desired_name: String,
     pub team_name: String,
@@ -63,19 +54,15 @@ pub struct SetMemberActiveRequest {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct DeleteTeamRequest;
-
+/// Outcome of the implicit session-team bootstrap.
 #[derive(Debug, Clone)]
-pub enum DeleteTeamResult {
-    NoTeam,
-    Blocked {
-        team_name: String,
-        names: Vec<String>,
-    },
-    Deleted {
-        team_name: String,
-    },
+pub enum InitializeSessionTeamResult {
+    /// A team file was written and the session team was made active.
+    Created { team_name: String },
+    /// The team already existed on disk; reused without clobbering.
+    AlreadyExists { team_name: String },
+    /// The leader already had an active team; no-op.
+    AlreadyActive { team_name: String },
 }
 
 /// Roster owner shared by `SwarmAgentHandle` and future coordinator
@@ -98,96 +85,69 @@ impl TeamRosterStore {
             .map(|m| m.team_name().to_string())
     }
 
-    pub async fn create_team(
+    /// Bootstrap the implicit session team (`session-<id[:8]>`).
+    ///
+    /// Idempotent (mirrors the upstream read-existing short-circuit):
+    /// - If the leader already has an active team, no-op.
+    /// - If the team directory already exists on disk (resumed session),
+    ///   reuse it without clobbering — read it back, set it active, and
+    ///   re-route the team task-list.
+    /// - Otherwise write the leader-only roster, set it active, and route
+    ///   the team task-list.
+    pub async fn initialize_session_team(
         &self,
-        request: coco_tool_runtime::CreateTeamRequest,
-    ) -> Result<CreateTeamResult, String> {
+        request: coco_tool_runtime::InitializeSessionTeamRequest,
+    ) -> Result<InitializeSessionTeamResult, String> {
         if let Some(manager) = self.active_team.read().await.as_ref() {
-            return Err(format!(
-                "Cannot create team '{}': leader already has active team '{}'",
-                request.requested_name,
-                manager.team_name()
-            ));
+            return Ok(InitializeSessionTeamResult::AlreadyActive {
+                team_name: manager.team_name().to_string(),
+            });
         }
         if request.leader_session_id.trim().is_empty() {
-            return Err("TeamCreate requires a non-empty leader session id".to_string());
+            return Err(
+                "session-team bootstrap requires a non-empty leader session id".to_string(),
+            );
         }
-        // Leader-session dedup is the in-memory `active_team` check above
-        // (one team per leader). We do NOT
-        // scan `config home/teams/` by `lead_session_id`: a disk scan reads every
-        // *other* live `coco` process's team files (and races their create /
-        // delete), coupling independent sessions for no benefit — a session
-        // owns exactly one process, whose `active_team` is the authority.
 
-        let team_name = unique_team_name(&request.requested_name);
-        let lead_agent_id = format!("{TEAM_LEAD_NAME}@{team_name}");
+        let team_name = request.team_name;
         let task_list_id = crate::types::sanitize_name(&team_name);
-        let now = chrono::Utc::now().timestamp_millis();
-        let team_file = TeamFile {
-            name: team_name.clone(),
-            description: request.description,
-            created_at: now,
-            lead_agent_id: lead_agent_id.clone(),
-            lead_session_id: Some(request.leader_session_id),
-            hidden_pane_ids: Vec::new(),
-            team_allowed_paths: request
-                .allowed_paths
-                .into_iter()
-                .map(|p| TeamAllowedPath {
-                    path: p.path,
-                    tool_name: p.tool_name,
-                    added_by: p.added_by,
-                    added_at: p.added_at,
-                })
-                .collect(),
-            members: vec![TeamMember {
-                agent_id: lead_agent_id.clone(),
-                name: TEAM_LEAD_NAME.to_string(),
-                agent_type: Some(
-                    request
-                        .leader_agent_type
-                        .unwrap_or_else(|| "team-lead".to_string()),
-                ),
-                model: request.leader_model,
-                prompt: None,
-                color: None,
-                plan_mode_required: false,
-                joined_at: now,
-                tmux_pane_id: String::new(),
-                cwd: request.cwd.display().to_string(),
-                worktree_path: None,
-                session_id: None,
-                subscriptions: Vec::new(),
-                backend_type: Some(BackendType::InProcess),
-                is_active: true,
-                mode: None,
-            }],
+
+        // Read-existing short-circuit: a resumed session re-bootstrapping
+        // its team must not clobber a teammate's roster view.
+        let existing = team_file::read_team_file(&team_name)
+            .map_err(|e| format!("Failed to read team '{team_name}': {e}"))?;
+        let (team_file, already_existed) = match existing {
+            Some(tf) => (tf, true),
+            None => {
+                let tf = build_session_team_file(LeaderTeamSpec {
+                    team_name: team_name.clone(),
+                    description: None,
+                    leader_session_id: request.leader_session_id,
+                    leader_agent_type: request.leader_agent_type,
+                    leader_model: request.leader_model,
+                    cwd: request.cwd.display().to_string(),
+                    allowed_paths: Vec::new(),
+                });
+                team_file::write_team_file(&team_name, &tf)
+                    .map_err(|e| format!("Failed to create session team '{team_name}': {e}"))?;
+                (tf, false)
+            }
         };
 
-        team_file::write_team_file(&team_name, &team_file)
-            .map_err(|e| format!("Failed to create team '{team_name}': {e}"))?;
-        let team_file_path = team_file::get_team_file_path(&team_name);
-        if let Some(router) = request.task_list_router {
-            if let Err(e) = router.route_team_task_list(&task_list_id).await {
-                let _ = team_file::cleanup_team_directories(&team_name);
-                return Err(format!(
-                    "Failed to route task tools to team task list '{task_list_id}': {e}"
-                ));
-            }
-        } else {
-            let _ = team_file::cleanup_team_directories(&team_name);
-            return Err("TeamCreate requires a team task-list router".to_string());
+        if let Some(router) = request.task_list_router
+            && let Err(e) = router.route_team_task_list(&task_list_id).await
+        {
+            return Err(format!(
+                "Failed to route task tools to team task list '{task_list_id}': {e}"
+            ));
         }
 
-        *self.active_team.write().await =
-            Some(TeamManager::new(team_name.clone(), team_file.clone()));
+        *self.active_team.write().await = Some(TeamManager::new(team_name.clone(), team_file));
 
-        Ok(CreateTeamResult {
-            team_name,
-            lead_agent_id,
-            task_list_id,
-            team_file_path,
-            team_file,
+        Ok(if already_existed {
+            InitializeSessionTeamResult::AlreadyExists { team_name }
+        } else {
+            InitializeSessionTeamResult::Created { team_name }
         })
     }
 
@@ -422,54 +382,60 @@ impl TeamRosterStore {
             .map(|m| m.name)
             .collect()
     }
+}
 
-    /// Delete the active team.
-    /// `notifier` is the session's task-list handle (when available). On
-    /// the success path — and only when the team's task-list directory was
-    /// actually removed — it fires a "tasks changed" notification so any
-    /// in-process subscriber refreshes its view. The notification fires
-    /// only on successful directory removal (never on failure). A `None`
-    /// notifier (or a
-    /// failed tasks-dir removal) skips the notification.
-    pub async fn delete_team(
-        &self,
-        _request: DeleteTeamRequest,
-        notifier: Option<&dyn coco_tool_runtime::TaskListHandle>,
-    ) -> Result<DeleteTeamResult, String> {
-        let Some(team_name) = self.active_team_name().await else {
-            return Ok(DeleteTeamResult::NoTeam);
-        };
-        let non_lead = self.running_non_lead_members().await;
-        if !non_lead.is_empty() {
-            let names = non_lead.into_iter().map(|m| m.name).collect();
-            return Ok(DeleteTeamResult::Blocked { team_name, names });
-        }
-        let outcome = team_file::cleanup_team_directories(&team_name)
-            .map_err(|e| format!("Failed to delete team '{team_name}': {e}"))?;
-        // Success path only: notify iff the task-list dir was removed.
-        if outcome.tasks_dir_removed
-            && let Some(notifier) = notifier
-        {
-            notifier.notify_change().await;
-        }
-        *self.active_team.write().await = None;
-        Ok(DeleteTeamResult::Deleted { team_name })
+/// Inputs for the deterministic leader-only [`TeamFile`] build used by
+/// `initialize_session_team` (the implicit session-team bootstrap).
+/// Carries only the leader's own coordinates — the sole member of a
+/// freshly-created team is always the team lead.
+struct LeaderTeamSpec {
+    team_name: String,
+    description: Option<String>,
+    leader_session_id: String,
+    leader_agent_type: Option<String>,
+    leader_model: Option<String>,
+    cwd: String,
+    allowed_paths: Vec<TeamAllowedPath>,
+}
+
+/// Build the leader-only [`TeamFile`] (name `TEAM_LEAD_NAME`,
+/// `backend_type` InProcess, `is_active` true) for the implicit
+/// session-team bootstrap.
+fn build_session_team_file(spec: LeaderTeamSpec) -> TeamFile {
+    let lead_agent_id = format!("{TEAM_LEAD_NAME}@{}", spec.team_name);
+    let now = chrono::Utc::now().timestamp_millis();
+    TeamFile {
+        name: spec.team_name,
+        description: spec.description,
+        created_at: now,
+        lead_agent_id: lead_agent_id.clone(),
+        lead_session_id: Some(spec.leader_session_id),
+        hidden_pane_ids: Vec::new(),
+        team_allowed_paths: spec.allowed_paths,
+        members: vec![TeamMember {
+            agent_id: lead_agent_id,
+            name: TEAM_LEAD_NAME.to_string(),
+            agent_type: Some(
+                spec.leader_agent_type
+                    .unwrap_or_else(|| "team-lead".to_string()),
+            ),
+            model: spec.leader_model,
+            prompt: None,
+            color: None,
+            plan_mode_required: false,
+            joined_at: now,
+            tmux_pane_id: String::new(),
+            cwd: spec.cwd,
+            worktree_path: None,
+            session_id: None,
+            subscriptions: Vec::new(),
+            backend_type: Some(BackendType::InProcess),
+            is_active: true,
+            mode: None,
+        }],
     }
 }
 
-fn unique_team_name(requested_name: &str) -> String {
-    if !team_file::get_team_dir(requested_name).exists() {
-        return requested_name.to_string();
-    }
-    for _ in 0..100 {
-        let candidate = coco_context::generate_word_slug();
-        if !team_file::get_team_dir(&candidate).exists() {
-            return candidate;
-        }
-    }
-    format!(
-        "{}-{}",
-        coco_context::generate_word_slug(),
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    )
-}
+#[cfg(test)]
+#[path = "roster_store.test.rs"]
+mod tests;

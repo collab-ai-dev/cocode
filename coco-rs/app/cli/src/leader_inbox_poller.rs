@@ -50,8 +50,8 @@ const TEAM_LEAD_NAME: &str = "team-lead";
 
 /// Spawn the continuous leader inbox poller. Returns the `JoinHandle` the
 /// caller holds for the session lifetime (drop / abort stops it). No-ops
-/// each tick until the session has an active team (post-`TeamCreate`) and a
-/// registered leader approval queue.
+/// each tick until the session has an active team (the implicit session
+/// team bootstrapped at startup) and a registered leader approval queue.
 pub fn spawn(runtime: Arc<SessionRuntime>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // tool_use_ids already dispatched to the leader UI — dedup so a
@@ -96,10 +96,44 @@ pub async fn install_leader(
         // This session is itself a teammate, not the leader.
         return;
     }
+    let engine_config = runtime.current_engine_config().await;
+    // Implicit-team bootstrap gate (CC `Sl() && !xr() && !agentId`): a
+    // non-interactive (`-p`) session owns no implicit team. The AgentTeams
+    // + teammate-identity gates above cover the other two predicates.
+    if !engine_config.is_non_interactive {
+        bootstrap_session_team(&runtime, &engine_config).await;
+    }
     if let Some(bridge) = bridge {
         crate::leader_permission::register(bridge).await;
     }
     spawn(runtime);
+}
+
+/// Create the implicit session team (`session-<id[:8]>`) deterministically
+/// at startup, mirroring CC's `initializeSessionTeam`. Non-fatal: any
+/// failure is logged and swallowed so a swarm-init error never blocks
+/// REPL boot.
+async fn bootstrap_session_team(
+    runtime: &SessionRuntime,
+    engine_config: &coco_query::QueryEngineConfig,
+) {
+    let Some(handle) = runtime.current_agent_handle().await else {
+        return;
+    };
+    let session_id = runtime.current_session_id().await;
+    let team_name = coco_coordinator::session_team::session_team_name(&session_id);
+    let leader_model = (!engine_config.model_id.is_empty()).then(|| engine_config.model_id.clone());
+    let request = coco_tool_runtime::InitializeSessionTeamRequest {
+        team_name,
+        leader_session_id: session_id,
+        leader_agent_type: None,
+        leader_model,
+        cwd: runtime.original_cwd.clone(),
+        task_list_router: runtime.current_team_task_list_router().await,
+    };
+    if let Err(e) = handle.initialize_session_team(request).await {
+        tracing::warn!(error = %e, "implicit session-team bootstrap failed (non-fatal)");
+    }
 }
 
 async fn poll_once(runtime: &SessionRuntime, dispatched: &mut HashSet<String>) {

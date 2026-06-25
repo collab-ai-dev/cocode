@@ -191,9 +191,9 @@ fn render_known(
         AskUserQuestion => render_ask_user_question(cx, display_data, output, lines),
         // ── Everything else → structured default (pretty JSON / text) ──
         ExitPlanMode => render_exit_plan_mode(cx, display_data, output, lines),
-        Agent | Workflow | Skill | SendMessage | TeamCreate | TeamDelete | TaskCreate | TaskGet
-        | TaskList | TaskUpdate | TaskStop | TaskOutput | EnterPlanMode | VerifyPlanExecution
-        | EnterWorktree | ExitWorktree | ToolSearch | Config | SendUserMessage | Lsp | McpAuth
+        Agent | Workflow | Skill | SendMessage | TaskCreate | TaskGet | TaskList | TaskUpdate
+        | TaskStop | TaskOutput | EnterPlanMode | VerifyPlanExecution | EnterWorktree
+        | ExitWorktree | ToolSearch | Config | SendUserMessage | Lsp | McpAuth
         | ListMcpResources | ReadMcpResource | CronCreate | CronDelete | CronList
         | ScheduleWakeup | Monitor | RemoteTrigger | Sleep | StructuredOutput => {
             render_structured_default(cx, output, lines)

@@ -4,8 +4,7 @@ use crate::types::{TeamFile, TeamMember};
 use coco_tool_runtime::AgentHandle;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnStatus;
-use coco_tool_runtime::CreateTeamRequest;
-use coco_tool_runtime::CreateTeamResult;
+use coco_tool_runtime::InitializeSessionTeamRequest;
 use coco_tool_runtime::TaskHandle;
 use coco_tool_runtime::TaskListHandleRef;
 use coco_tool_runtime::TeamTaskListRouter;
@@ -571,26 +570,25 @@ impl TeamTaskListRouter for TestTaskListRouter {
     }
 }
 
-fn create_team_request(name: &str) -> CreateTeamRequest {
-    create_team_request_with_session(name, &format!("session-{}", uuid::Uuid::new_v4().simple()))
-}
-
-fn create_team_request_with_session(name: &str, leader_session_id: &str) -> CreateTeamRequest {
-    CreateTeamRequest {
-        requested_name: name.to_string(),
-        description: None,
+fn session_team_request(name: &str) -> InitializeSessionTeamRequest {
+    InitializeSessionTeamRequest {
+        team_name: name.to_string(),
+        leader_session_id: format!("session-{}", uuid::Uuid::new_v4().simple()),
         leader_agent_type: None,
-        leader_agent_id: None,
-        leader_session_id: leader_session_id.to_string(),
-        cwd: std::path::PathBuf::from("/tmp"),
-        allowed_paths: Vec::new(),
         leader_model: Some("test-model".to_string()),
+        cwd: std::path::PathBuf::from("/tmp"),
         task_list_router: Some(Arc::new(TestTaskListRouter)),
     }
 }
 
-async fn create_team(handle: &SwarmAgentHandle, name: &str) -> CreateTeamResult {
-    handle.create_team(create_team_request(name)).await.unwrap()
+/// Bootstrap the implicit session team for a test handle. Mirrors the
+/// startup `initialize_session_team` path the production code uses now that
+/// the model-facing `TeamCreate` tool is gone.
+async fn create_team(handle: &SwarmAgentHandle, name: &str) {
+    handle
+        .initialize_session_team(session_team_request(name))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1716,7 +1714,7 @@ async fn test_spawn_teammate() {
             .unwrap()
             .contains(&format!("researcher@{team_name}"))
     );
-    let _ = handle.delete_team().await;
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
 }
 
 #[tokio::test]
@@ -1806,7 +1804,7 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
          call count = {}",
         calls.load(Ordering::SeqCst),
     );
-    let _ = handle.delete_team().await;
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
 }
 
 #[tokio::test]
@@ -2195,7 +2193,7 @@ async fn test_spawn_teammate_uses_base_system_prompt_when_no_initial_prompt() {
         observed.contains("Agent Teammate Communication"),
         "teammate prompt must include team addendum; got: {observed}"
     );
-    let _ = handle.delete_team().await;
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
 }
 
 #[tokio::test]
@@ -2273,7 +2271,7 @@ async fn test_spawn_teammate_forwards_runner_query_options() {
     assert_eq!(observed.mcp_servers, vec!["github"]);
     assert_eq!(observed.disallowed_tools, vec!["Bash"]);
     assert_eq!(observed.model_role, Some(coco_types::ModelRole::Main));
-    let _ = handle.delete_team().await;
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
 }
 
 #[tokio::test]
@@ -2292,44 +2290,17 @@ async fn test_send_message_no_team() {
 }
 
 #[tokio::test]
-async fn test_create_and_delete_team() {
-    let _teams = isolate_teams_dir().await;
-    let handle = create_test_handle();
-    let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
-    let _ = crate::team_file::cleanup_team_directories(&team_name);
-
-    // Create
-    let result = handle.create_team(create_team_request(&team_name)).await;
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().team_name, team_name);
-
-    // Delete
-    let result = handle.delete_team().await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn test_team_lifecycle_writes_roster_and_blocks_delete_while_active() {
+async fn test_team_lifecycle_writes_roster_and_spawns_teammate() {
     let _teams = isolate_teams_dir().await;
     let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
     let _ = crate::team_file::cleanup_team_directories(&team_name);
 
     let handle = create_test_handle();
-    let created = create_team(&handle, &team_name).await;
-    assert_eq!(created.team_name, team_name);
-
-    let duplicate = handle
-        .create_team(create_team_request("another-team"))
-        .await;
-    assert!(
-        duplicate
-            .expect_err("second active team must be rejected")
-            .contains("already has active team"),
-    );
+    create_team(&handle, &team_name).await;
 
     let team_file = crate::team_file::read_team_file(&team_name)
         .unwrap()
-        .expect("team file must exist after TeamCreate");
+        .expect("team file must exist after session-team bootstrap");
     assert_eq!(team_file.name, team_name);
     assert_eq!(team_file.members.len(), 1);
     assert_eq!(team_file.members[0].name, crate::constants::TEAM_LEAD_NAME);
@@ -2393,78 +2364,7 @@ async fn test_team_lifecycle_writes_roster_and_blocks_delete_while_active() {
         "broadcast must write to teammate mailbox"
     );
 
-    let delete = handle.delete_team().await;
-    let delete = delete.expect("blocked delete returns a normal result");
-    assert!(!delete.success);
-    assert!(delete.message.contains("active members: researcher"));
-
-    handle
-        .roster_store
-        .rollback_member(&team_name, &agent_id)
-        .await
-        .unwrap();
-    let deleted = handle.delete_team().await.unwrap();
-    assert!(deleted.success);
-    assert_eq!(deleted.team_name.as_deref(), Some(team_name.as_str()));
-    assert!(
-        !crate::team_file::get_team_dir(&team_name).exists(),
-        "team directory must be cleaned up"
-    );
-}
-
-#[tokio::test]
-async fn test_create_team_per_session_dedup_is_in_memory_not_disk() {
-    // Leader-session dedup is the in-memory `active_team` check on a
-    // single handle (see `test_team_lifecycle_*`) — there is NO scan of
-    // `config home/teams/` by `lead_session_id`. Two independent handles (each its
-    // own `active_team`) therefore BOTH succeed with the same leader session
-    // id; a disk scan would have failed the second and, worse, coupled
-    // unrelated `coco` processes through the shared teams dir.
-    let _teams = isolate_teams_dir().await;
-    let session_id = format!("session-{}", uuid::Uuid::new_v4().simple());
-    let first_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
-    let second_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
-
-    let first_handle = create_test_handle();
-    first_handle
-        .create_team(create_team_request_with_session(&first_name, &session_id))
-        .await
-        .expect("first team create succeeds");
-
-    let second_handle = create_test_handle();
-    second_handle
-        .create_team(create_team_request_with_session(&second_name, &session_id))
-        .await
-        .expect("a separate handle is not blocked by another handle's team (no disk dedup)");
-
-    let _ = first_handle.delete_team().await;
-    let _ = second_handle.delete_team().await;
-}
-
-#[tokio::test]
-async fn test_create_team_uses_unique_name_when_requested_dir_exists() {
-    let _teams = isolate_teams_dir().await;
-    let base = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
-    let _ = crate::team_file::cleanup_team_directories(&base);
-    std::fs::create_dir_all(crate::team_file::get_team_dir(&base)).unwrap();
-
-    let handle = create_test_handle();
-    let created = handle
-        .create_team(create_team_request(&base))
-        .await
-        .unwrap();
-    assert_ne!(created.team_name, base);
-    assert!(!created.team_name.ends_with("-2"));
-    assert!(
-        crate::team_file::read_team_file(&created.team_name)
-            .unwrap()
-            .is_some(),
-        "unique team file should be written under {}",
-        created.team_name
-    );
-
-    let _ = handle.delete_team().await;
-    let _ = crate::team_file::cleanup_team_directories(&base);
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
 }
 
 #[tokio::test]
@@ -2941,129 +2841,4 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
     // Pinned system prompt — verbatim from the snapshot.
     let observed_system = captured.captured_system.lock().await.clone().unwrap();
     assert_eq!(observed_system, "PARENT SYSTEM PROMPT");
-}
-
-/// The team's task-list directory under `config_home()/tasks`, matching
-/// what `cleanup_team_directories` removes and what `TaskListStore::open`
-/// materializes. Used by the delete-notify tests below.
-fn team_tasks_dir(team_name: &str) -> std::path::PathBuf {
-    let task_list_id = crate::types::sanitize_name(team_name);
-    coco_config::global_config::config_home()
-        .join("tasks")
-        .join(coco_tasks::task_list::sanitize_path_component(
-            &task_list_id,
-        ))
-}
-
-#[tokio::test]
-async fn test_delete_team_notifies_task_list_subscriber_on_success() {
-    let _teams = isolate_teams_dir().await;
-    // After deleting the team (and its task-list dir), a subscriber on
-    // the wired task-list store must observe the change notification.
-    let mut handle = create_test_handle();
-    let team_name = format!("agentteam-notify-{}", uuid::Uuid::new_v4().simple());
-    let _ = crate::team_file::cleanup_team_directories(&team_name);
-
-    create_team(&handle, &team_name).await;
-
-    // Wire a real disk-backed store at the same path cleanup removes, and
-    // materialize the dir so the removal actually succeeds (→ notify).
-    let tasks_root = coco_config::global_config::config_home().join("tasks");
-    let task_list_id = crate::types::sanitize_name(&team_name);
-    let store = coco_tasks::TaskListStore::open(&tasks_root, &task_list_id).unwrap();
-    let tasks_dir = team_tasks_dir(&team_name);
-    std::fs::create_dir_all(&tasks_dir).unwrap();
-    std::fs::write(tasks_dir.join("t.json"), "{}").unwrap();
-
-    let mut rx = store.subscribe_changes();
-    handle.set_task_list(store.clone() as TaskListHandleRef);
-
-    let result = handle.delete_team().await;
-    assert!(result.is_ok(), "delete_team failed: {result:?}");
-    assert!(!tasks_dir.exists(), "task-list dir should be removed");
-
-    assert!(
-        rx.try_recv().is_ok(),
-        "subscriber must observe a tasks-changed notification after successful delete",
-    );
-
-    let _ = crate::team_file::cleanup_team_directories(&team_name);
-}
-
-/// Whether the process is actually bound by Unix directory permissions.
-/// Root / `CAP_DAC_OVERRIDE` bypass them, which would make the 0o500-based
-/// removal-failure simulation below succeed instead of fail. Probe the real
-/// behavior rather than guess at the uid (portable across Linux/macOS).
-#[cfg(unix)]
-fn unix_dir_perms_enforced() -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    let dir =
-        std::env::temp_dir().join(format!("coco-perm-probe-{}", uuid::Uuid::new_v4().simple()));
-    let inner = dir.join("inner");
-    if std::fs::create_dir_all(&inner).is_err() {
-        return true;
-    }
-    let _ = std::fs::write(inner.join("f"), "x");
-    let _ = std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o500));
-    let enforced = std::fs::remove_dir_all(&inner).is_err();
-    let _ = std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o700));
-    let _ = std::fs::remove_dir_all(&dir);
-    enforced
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn test_delete_team_does_not_notify_when_tasks_dir_removal_fails() {
-    let _teams = isolate_teams_dir().await;
-    // Force the removal to fail (non-empty dir with no write permission →
-    // its child can't be unlinked) and assert no notification fires.
-    use std::os::unix::fs::PermissionsExt;
-
-    // Privileged environments (root / CAP_DAC_OVERRIDE) bypass the 0o500
-    // permission this simulation relies on, so the removal would succeed and
-    // the premise can't hold — skip rather than assert a false failure.
-    if !unix_dir_perms_enforced() {
-        return;
-    }
-
-    let mut handle = create_test_handle();
-    let team_name = format!("agentteam-nonotify-{}", uuid::Uuid::new_v4().simple());
-    let _ = crate::team_file::cleanup_team_directories(&team_name);
-
-    create_team(&handle, &team_name).await;
-
-    let tasks_root = coco_config::global_config::config_home().join("tasks");
-    let task_list_id = crate::types::sanitize_name(&team_name);
-    let store = coco_tasks::TaskListStore::open(&tasks_root, &task_list_id).unwrap();
-
-    // Materialize the dir with a child, then strip write perm so
-    // `remove_dir_all` fails unlinking the child.
-    let tasks_dir = team_tasks_dir(&team_name);
-    std::fs::create_dir_all(&tasks_dir).unwrap();
-    std::fs::write(tasks_dir.join("t.json"), "{}").unwrap();
-    std::fs::set_permissions(&tasks_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
-
-    let mut rx = store.subscribe_changes();
-    handle.set_task_list(store.clone() as TaskListHandleRef);
-
-    // delete_team swallows the tasks-dir failure (best-effort) and returns
-    // Ok; the notification must NOT fire because the removal failed.
-    let result = handle.delete_team().await;
-    assert!(
-        result.is_ok(),
-        "delete_team should still succeed: {result:?}"
-    );
-
-    assert!(
-        matches!(
-            rx.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ),
-        "no notification must fire when the tasks-dir removal fails",
-    );
-
-    // Restore perms so the dir can be cleaned up.
-    let _ = std::fs::set_permissions(&tasks_dir, std::fs::Permissions::from_mode(0o700));
-    let _ = std::fs::remove_dir_all(&tasks_dir);
-    let _ = crate::team_file::cleanup_team_directories(&team_name);
 }

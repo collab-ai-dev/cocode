@@ -384,8 +384,8 @@ const FEATURES: &[FeatureSpec] = &[
         key: "agent_teams",
         stage: Stage::Experimental {
             name: "Agent Teams",
-            menu_description: "Create persistent teams and spawn addressable teammates (TeamCreate / TeamDelete / SendMessage plus Agent team parameters)",
-            announcement: "Agent teams enabled — use TeamCreate and Agent(...) team parameters to spawn teammates.",
+            menu_description: "Spawn addressable teammates into the session team (Agent({name:...}) plus SendMessage coordination)",
+            announcement: "Agent teams enabled — spawn teammates with Agent({name:...}) and coordinate via SendMessage.",
         },
         default_enabled: false,
     },

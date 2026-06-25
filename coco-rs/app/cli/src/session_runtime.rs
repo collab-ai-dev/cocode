@@ -2531,7 +2531,7 @@ impl SessionRuntime {
             engine = engine.with_session_memory_service(svc.clone());
         }
         // Install the real swarm-backed AgentHandle so AgentTool /
-        // SendMessageTool / TeamCreateTool reach the swarm runtime
+        // SendMessageTool reach the swarm runtime
         // on every engine instance.
         engine = engine.with_agent_handle(self.swarm_agent_handle.clone());
         // Install the per-engine sync-hook-event buffer so the
