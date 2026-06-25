@@ -143,10 +143,13 @@ fn keybindings_not_user_invocable() {
 }
 
 #[test]
-fn loop_is_always_user_invocable() {
+fn loop_is_gated_by_agent_triggers() {
+    // `/loop` shares the AGENT_TRIGGERS gate with the cron / scheduler tools it
+    // drives, so the skill and its tools appear/disappear together (matches
+    // upstream `feature('AGENT_TRIGGERS')`). The gate defaults on.
     let skills = get_bundled_skills();
     let l = skills.iter().find(|s| s.name == "loop").unwrap();
-    assert_eq!(l.gated_by, None);
+    assert_eq!(l.gated_by, Some(Feature::AgentTriggers));
     assert_eq!(l.aliases, vec!["proactive"]);
     assert_eq!(
         l.description,
@@ -620,42 +623,32 @@ fn visible_filters_by_features() {
     let manager = crate::SkillManager::new();
     register_bundled(&manager);
 
-    let no_features = Features::empty();
-    let visible_empty_skills = manager.visible(&no_features);
-    let visible_empty: Vec<&str> = visible_empty_skills
-        .iter()
-        .map(|s| s.name.as_str())
-        .collect();
-    // Even with no features enabled, ungated skills appear — including the
-    // formerly-ant general-purpose skills.
-    assert!(visible_empty.contains(&"update-config"));
-    assert!(visible_empty.contains(&"verify"));
-    // /loop is always registered; dynamic/default-prompt sub-modes are
-    // configured separately.
-    assert!(visible_empty.contains(&"loop"));
-    // Feature-gated skills should NOT appear.
-    assert!(!visible_empty.contains(&"dream"));
+    // No features enabled: ungated skills appear (incl. formerly-ant
+    // general-purpose ones); /loop is gated on AGENT_TRIGGERS so it is hidden.
+    let visible_empty = manager.visible(&Features::empty());
+    assert!(visible_empty.iter().any(|s| s.name == "update-config"));
+    assert!(visible_empty.iter().any(|s| s.name == "verify"));
+    assert!(!visible_empty.iter().any(|s| s.name == "loop"));
+    assert!(!visible_empty.iter().any(|s| s.name == "dream"));
 
-    let visible_default_skills = manager.visible(&Features::with_defaults());
-    let visible_default: Vec<&str> = visible_default_skills
-        .iter()
-        .map(|s| s.name.as_str())
-        .collect();
-    assert!(
-        visible_default.contains(&"loop"),
-        "default features should expose /loop"
-    );
+    // Default features enable AGENT_TRIGGERS, so /loop ships visible out of the
+    // box; remote-only `schedule` (AGENT_TRIGGERS_REMOTE) stays hidden.
+    let visible_default = manager.visible(&Features::with_defaults());
+    assert!(visible_default.iter().any(|s| s.name == "loop"));
+    assert!(!visible_default.iter().any(|s| s.name == "schedule"));
 
-    let mut features = Features::empty();
-    features.enable(Feature::KairosDream);
-    let visible_some_skills = manager.visible(&features);
-    let visible_some: Vec<&str> = visible_some_skills
-        .iter()
-        .map(|s| s.name.as_str())
-        .collect();
-    assert!(visible_some.contains(&"loop"));
-    assert!(visible_some.contains(&"dream"));
-    assert!(!visible_some.contains(&"hunter")); // not enabled
+    // An unrelated feature does not expose /loop.
+    let mut dream_only = Features::empty();
+    dream_only.enable(Feature::KairosDream);
+    let visible_dream = manager.visible(&dream_only);
+    assert!(!visible_dream.iter().any(|s| s.name == "loop"));
+    assert!(visible_dream.iter().any(|s| s.name == "dream"));
+    assert!(!visible_dream.iter().any(|s| s.name == "hunter")); // not enabled
+
+    // Explicitly enabling AGENT_TRIGGERS exposes /loop even from an empty base.
+    let mut cron = Features::empty();
+    cron.enable(Feature::AgentTriggers);
+    assert!(manager.visible(&cron).iter().any(|s| s.name == "loop"));
 }
 
 #[test]

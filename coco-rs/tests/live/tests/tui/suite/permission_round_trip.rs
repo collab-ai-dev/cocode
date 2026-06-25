@@ -69,6 +69,7 @@ fn force_ask_hook() -> HookDefinition {
         is_async: false,
         async_rewake: false,
         status_message: None,
+        managed_by: None,
     }
 }
 

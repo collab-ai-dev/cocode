@@ -967,13 +967,10 @@ mod seam_tests {
         );
         // Gated skills/commands MUST NOT appear when features are off.
         // `/dream` and `/summary` are gated on Feature::AutoMemory in
-        // `register_ts_parity_handlers`; the rest are skill-only and serve
-        // as the gate test.
-        assert!(
-            reg.get("loop").is_some(),
-            "/loop is always registered; its sub-modes are configured separately"
-        );
+        // `register_ts_parity_handlers`; `/loop` is gated on
+        // Feature::AgentTriggers; the rest are skill-only gate tests.
         for missing in [
+            "loop",
             "schedule",
             "claude-api",
             "hunter",
@@ -991,6 +988,7 @@ mod seam_tests {
         // Enable the relevant features and confirm they show up.
         let mut features = Features::empty();
         features
+            .enable(coco_types::Feature::AgentTriggers)
             .enable(coco_types::Feature::AgentTriggersRemote)
             .enable(coco_types::Feature::BuildingClaudeApps)
             .enable(coco_types::Feature::AutoMemory);

@@ -421,11 +421,16 @@ const FEATURES: &[FeatureSpec] = &[
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
+    // Local cron / `/loop` scheduling (CronCreate/Delete/List, ScheduleWakeup,
+    // Monitor). GA upstream (`feature('AGENT_TRIGGERS')` + `tengu_kairos_cron`
+    // default-true), so it ships ON. Opt out via `features.agent_triggers = false`
+    // (mirrors `CLAUDE_CODE_DISABLE_CRON`). `/loop` is gated on this same flag so
+    // the skill and its tools appear/disappear together.
     FeatureSpec {
         id: Feature::AgentTriggers,
         key: "agent_triggers",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::AgentTriggersRemote,

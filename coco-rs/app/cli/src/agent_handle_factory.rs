@@ -284,7 +284,7 @@ pub async fn build_agent_team_wiring(
             .with_loop_context(coco_query::skill_runtime::LoopSkillContext {
                 project_root: runtime.original_cwd.clone(),
                 cwd: runtime.current_cwd.clone(),
-                config: (*runtime.runtime_config).loop_config.clone(),
+                config: runtime.runtime_config.loop_config.clone(),
                 remote_schedule_enabled: runtime
                     .runtime_config
                     .features

@@ -204,96 +204,46 @@ impl TurnRunner for QueryEngineRunner {
                 .await;
 
             if let Some(request) = coco_commands::parse_goal_sentinel(&prompt) {
-                match request {
-                    coco_commands::GoalCommandRequest::Status => {
-                        let goal = handoff.app_state.read().await.active_goal.clone();
-                        let text = match goal {
-                            Some(goal) => crate::goal_command::format_active_goal_status(&goal),
-                            None => {
-                                let history = history_handle.lock().await;
-                                match crate::goal_command::find_last_achieved_goal(&history) {
-                                    Some(goal) => {
-                                        crate::goal_command::format_achieved_goal_status(&goal)
-                                    }
-                                    None => "No goal set. Usage: `/goal <condition>`".to_string(),
-                                }
-                            }
-                        };
-                        sdk_append_slash_text(&history_handle, &event_tx, "goal", "", &text).await;
-                        return Ok(());
-                    }
-                    coco_commands::GoalCommandRequest::Clear => {
-                        let removed = crate::goal_command::remove_all_goal_hooks(&runtime);
-                        let active_condition = {
-                            let mut state = handoff.app_state.write().await;
-                            state.active_goal.take().map(|goal| goal.condition)
-                        };
-                        let condition = active_condition.or_else(|| {
-                            removed
-                                .iter()
-                                .find_map(crate::goal_command::prompt_from_hook)
-                        });
-                        let text = match condition {
-                            Some(condition) => {
-                                sdk_append_goal_status(
-                                    &history_handle,
-                                    &event_tx,
-                                    crate::goal_command::goal_status_sentinel(
-                                        true,
-                                        condition.clone(),
-                                    ),
-                                )
-                                .await;
-                                format!("Goal cleared: {condition}")
-                            }
-                            None => "No goal set".to_string(),
-                        };
-                        sdk_append_slash_text(&history_handle, &event_tx, "goal", "clear", &text)
+                let args = crate::goal_command::goal_display_args(&request).to_string();
+                let gate = crate::goal_command::GoalGate {
+                    hooks_restricted: current_engine_config.disable_all_hooks
+                        || current_engine_config.allow_managed_hooks_only,
+                    // SDK is non-interactive; the trust gate is deliberately skipped.
+                    trust_rejected: false,
+                };
+                let tokens_at_start = runtime.session_usage_snapshot().await.totals.output_tokens;
+                let history_snapshot = history_handle.lock().await.clone();
+                let outcome = crate::goal_command::resolve_goal_request(
+                    request,
+                    &handoff.app_state,
+                    &runtime.hook_registry(),
+                    &history_snapshot,
+                    tokens_at_start,
+                    gate,
+                )
+                .await;
+
+                match outcome {
+                    crate::goal_command::GoalOutcome::Text(text) => {
+                        sdk_append_slash_text(&history_handle, &event_tx, "goal", &args, &text)
                             .await;
                         return Ok(());
                     }
-                    coco_commands::GoalCommandRequest::Set { condition } => {
-                        if current_engine_config.disable_all_hooks
-                            || current_engine_config.allow_managed_hooks_only
-                        {
-                            sdk_append_slash_text(
-                                &history_handle,
-                                &event_tx,
-                                "goal",
-                                &condition,
-                                crate::goal_command::HOOKS_GATE_MESSAGE,
-                            )
+                    crate::goal_command::GoalOutcome::StatusThenText { status, text } => {
+                        sdk_append_goal_status(&history_handle, &event_tx, status).await;
+                        sdk_append_slash_text(&history_handle, &event_tx, "goal", &args, &text)
                             .await;
-                            return Ok(());
-                        }
-                        let tokens_at_start =
-                            runtime.session_usage_snapshot().await.totals.output_tokens;
-                        crate::goal_command::remove_all_goal_hooks(&runtime);
-                        {
-                            let mut state = handoff.app_state.write().await;
-                            state.active_goal = Some(crate::goal_command::active_goal(
-                                condition.clone(),
-                                tokens_at_start,
-                            ));
-                        }
-                        sdk_append_goal_status(
-                            &history_handle,
-                            &event_tx,
-                            crate::goal_command::goal_status_sentinel(false, condition.clone()),
-                        )
-                        .await;
-                        runtime
-                            .hook_registry()
-                            .register(crate::goal_command::managed_goal_hook(condition.clone()));
-                        sdk_append_slash_text(
-                            &history_handle,
-                            &event_tx,
-                            "goal",
-                            &condition,
-                            &format!("Goal set: {condition}"),
-                        )
-                        .await;
-                        prompt = crate::goal_command::build_goal_kickoff_prompt(&condition);
+                        return Ok(());
+                    }
+                    crate::goal_command::GoalOutcome::SetAndRun {
+                        status,
+                        text,
+                        kickoff,
+                    } => {
+                        sdk_append_goal_status(&history_handle, &event_tx, status).await;
+                        sdk_append_slash_text(&history_handle, &event_tx, "goal", &args, &text)
+                            .await;
+                        prompt = kickoff;
                     }
                 }
             }

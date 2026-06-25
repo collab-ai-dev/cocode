@@ -11,15 +11,20 @@ use std::sync::Arc;
 fn test_register_all_tools_count() {
     let registry = ToolRegistry::new();
     crate::register_all_tools(&registry);
-    // 42 = 40 baseline + ApplyPatchTool (gated to gpt-5 family via
-    // ToolOverrides) + Workflow (gated by Feature::Workflow).
-    // ToolOverrides; registered universally so the layer-2 filter
-    // can surface it when the model declares it as extra).
-    // `StructuredOutputTool` is intentionally **not** in the baseline:
-    // it's conditionally injected via `register_structured_output_tool`
-    // only when the non-interactive bootstrap parses `--json-schema`
-    // (`specialTools` excludes it).
-    assert_eq!(registry.len(), 42, "expected 42 tools registered");
+    // 44 statically-registered built-ins. Registration is universal; the
+    // 5-layer filter gates per-tool visibility by feature/model/context
+    // (e.g. ApplyPatch by ToolOverrides, Workflow by Feature::Workflow, the
+    // scheduling tools by Feature::AgentTriggers). Composition:
+    //   8 file (Bash/Read/Write/Edit/Glob/Grep/NotebookEdit/ApplyPatch)
+    // + 2 web + 6 agent/orchestration (Agent/Workflow/Skill/SendMessage/
+    //   TeamCreate/TeamDelete) + 7 task/todo + 4 plan/worktree
+    // + 5 util (AskUserQuestion/ToolSearch/Config/SendUserMessage/Lsp)
+    // + 3 mcp + 6 scheduling (Cron{Create,Delete,List}/ScheduleWakeup/
+    //   Monitor/RemoteTrigger) + 3 shell/repl (PowerShell/Repl/Sleep).
+    // `StructuredOutputTool` (conditionally injected via
+    // `register_structured_output_tool` when `--json-schema` is parsed) and
+    // dynamic `McpTool`s are intentionally excluded from this baseline.
+    assert_eq!(registry.len(), 44, "expected 44 tools registered");
 }
 
 #[test]
@@ -137,18 +142,42 @@ fn kairos_brief_and_proactive_features_expose_their_tools() {
 }
 
 #[test]
-fn local_scheduling_tools_are_hidden_by_default() {
+fn local_scheduling_tools_track_agent_triggers_gate() {
     let registry = ToolRegistry::new();
     crate::register_all_tools(&registry);
-    let mut ctx = ToolUseContext::test_default();
-    ctx.features = Arc::new(Features::with_defaults());
 
-    let visible: HashSet<String> = registry
-        .loaded_tools(&ctx)
+    // Default-on: AGENT_TRIGGERS ships enabled, so the cron tools are exposed
+    // out of the box. Monitor additionally needs a background task handle —
+    // see `agent_triggers_feature_exposes_local_scheduling_tools`.
+    let mut ctx_on = ToolUseContext::test_default();
+    ctx_on.features = Arc::new(Features::with_defaults());
+    let visible_on: HashSet<String> = registry
+        .loaded_tools(&ctx_on)
         .into_iter()
         .map(|tool| tool.name().to_string())
         .collect();
+    for name in [
+        ToolName::CronCreate,
+        ToolName::CronDelete,
+        ToolName::CronList,
+        ToolName::ScheduleWakeup,
+    ] {
+        assert!(
+            visible_on.contains(name.as_str()),
+            "AGENT_TRIGGERS is default-on, so {name:?} is exposed by default"
+        );
+    }
+    assert!(!visible_on.contains(ToolName::Monitor.as_str()));
 
+    // Opt-out: with AGENT_TRIGGERS off the cron tools disappear (mirrors
+    // CLAUDE_CODE_DISABLE_CRON).
+    let mut ctx_off = ToolUseContext::test_default();
+    ctx_off.features = Arc::new(Features::empty());
+    let visible_off: HashSet<String> = registry
+        .loaded_tools(&ctx_off)
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
     for name in [
         ToolName::CronCreate,
         ToolName::CronDelete,
@@ -157,8 +186,8 @@ fn local_scheduling_tools_are_hidden_by_default() {
         ToolName::Monitor,
     ] {
         assert!(
-            !visible.contains(name.as_str()),
-            "local scheduling should require Feature::AgentTriggers for {name:?}"
+            !visible_off.contains(name.as_str()),
+            "disabling AGENT_TRIGGERS hides {name:?}"
         );
     }
 }
