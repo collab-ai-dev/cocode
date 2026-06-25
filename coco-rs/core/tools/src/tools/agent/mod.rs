@@ -1,4 +1,4 @@
-//! Agent / Skill / SendMessage / TeamCreate / TeamDelete tools.
+//! Agent / Skill / SendMessage tools.
 //!
 //! One submodule per tool, all sitting under this
 //! `agent/` parent so the existing `pub mod agent;` re-export in
@@ -18,13 +18,10 @@
 pub mod agent_tool;
 pub mod send_message_tool;
 pub mod skill_tool;
-pub mod team_tools;
 
 pub use agent_tool::AgentTool;
 pub use send_message_tool::SendMessageTool;
 pub use skill_tool::SkillTool;
-pub use team_tools::TeamCreateTool;
-pub use team_tools::TeamDeleteTool;
 
 #[cfg(test)]
 #[path = "mod.test.rs"]

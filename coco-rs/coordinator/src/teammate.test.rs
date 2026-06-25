@@ -75,9 +75,10 @@ fn test_resolve_teammate_model_missing_config_uses_main_role() {
 
 #[test]
 fn test_mode_snapshot_default() {
-    // Without capture, returns Auto
+    // Without capture, the fall-through default is InProcess. Other tests
+    // share this global, so only assert when the snapshot is genuinely unset.
     let mode = get_teammate_mode_from_snapshot();
-    // May be Auto or previously set value (global state)
+    // May be InProcess (unset) or a previously captured value (global state).
     let _ = mode;
 }
 

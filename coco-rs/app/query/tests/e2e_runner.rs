@@ -47,8 +47,6 @@ use coco_tools::GrepTool;
 use coco_tools::ReadTool;
 use coco_tools::SendMessageTool;
 use coco_tools::SkillTool;
-use coco_tools::TeamCreateTool;
-use coco_tools::TeamDeleteTool;
 use coco_tools::WriteTool;
 use coco_types::PermissionMode;
 use serde::Deserialize;
@@ -389,8 +387,6 @@ fn extended_tools() -> Arc<ToolRegistry> {
     registry.register(Arc::new(AgentTool));
     registry.register(Arc::new(SkillTool));
     registry.register(Arc::new(SendMessageTool));
-    registry.register(Arc::new(TeamCreateTool));
-    registry.register(Arc::new(TeamDeleteTool));
     Arc::new(registry)
 }
 
@@ -721,10 +717,6 @@ scenario_test!(
     "skill_then_file_chain.json"
 );
 scenario_test!(test_scenario_agent_skill_mixed, "agent_skill_mixed.json");
-scenario_test!(
-    test_scenario_team_create_send_message,
-    "team_create_send_message.json"
-);
 
 // Compact scenarios
 scenario_test!(test_scenario_compact_no_trigger, "compact_no_trigger.json");

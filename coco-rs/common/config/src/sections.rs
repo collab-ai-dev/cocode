@@ -45,9 +45,9 @@ const DEFAULT_WEB_FETCH_USER_AGENT: &str = "Claude-User (coco-rs; +https://suppo
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TeammateMode {
-    #[default]
     Auto,
     Tmux,
+    #[default]
     InProcess,
 }
 
@@ -86,7 +86,7 @@ pub struct AgentTeamsConfig {
 impl Default for AgentTeamsConfig {
     fn default() -> Self {
         Self {
-            teammate_mode: TeammateMode::Auto,
+            teammate_mode: TeammateMode::InProcess,
             default_model_role: ModelRole::Main,
             agent_type_model_roles: HashMap::new(),
             default_model: None,

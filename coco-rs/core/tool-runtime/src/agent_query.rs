@@ -196,7 +196,7 @@ pub struct AgentQueryConfig {
     #[serde(default)]
     pub preserve_tool_use_results: bool,
     /// Whether this agent runs as a swarm teammate (spawned via
-    /// `TeamCreate`). Controls ExitPlanMode teammate
+    /// `Agent({name:...})`). Controls ExitPlanMode teammate
     /// branch + bypass-permission behavior.
     #[serde(default)]
     pub is_teammate: bool,

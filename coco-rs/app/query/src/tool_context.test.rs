@@ -506,15 +506,6 @@ async fn test_factory_installs_custom_agent_handle() {
                 routing: None,
             })
         }
-        async fn create_team(
-            &self,
-            _request: coco_tool_runtime::CreateTeamRequest,
-        ) -> Result<coco_tool_runtime::CreateTeamResult, String> {
-            Err("marker".into())
-        }
-        async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
-            Err("marker".into())
-        }
         // resume_agent uses the trait default impl.
         async fn query_agent_status(&self, _agent_id: &str) -> Result<AgentSpawnResponse, String> {
             Err("marker".into())

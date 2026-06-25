@@ -77,6 +77,9 @@ pub mod identity;
 pub mod inprocess_backend;
 pub mod prompt;
 pub mod roster_store;
+/// Implicit session-team bootstrap (`session-<id[:8]>` naming + the
+/// deterministic leader-only roster written at CLI startup).
+pub mod session_team;
 pub mod spawn;
 pub mod teammate;
 

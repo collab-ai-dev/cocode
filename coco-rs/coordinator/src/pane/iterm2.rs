@@ -148,6 +148,7 @@ impl PaneBackend for ITermBackend {
     }
 
     async fn send_command_to_pane(&self, pane_id: &PaneId, command: &str) -> crate::Result<()> {
+        super::assert_no_control_chars(command)?;
         let args = if pane_id.is_empty() {
             vec!["session", "run", command]
         } else {

@@ -41,8 +41,6 @@ use coco_tool_runtime::AgentRunKind;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnResponse;
 use coco_tool_runtime::AgentSpawnStatus;
-use coco_tool_runtime::CreateTeamRequest;
-use coco_tool_runtime::CreateTeamResult;
 use coco_tool_runtime::ToolRegistry;
 use coco_types::LlmModelSelection;
 use coco_types::PermissionMode;
@@ -106,14 +104,6 @@ impl AgentHandle for TestAgentHandle {
         _summary: Option<&str>,
     ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
         Err("send_message unused in TestAgentHandle".to_string())
-    }
-
-    async fn create_team(&self, _request: CreateTeamRequest) -> Result<CreateTeamResult, String> {
-        Err("create_team unused in TestAgentHandle".to_string())
-    }
-
-    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
-        Err("delete_team unused in TestAgentHandle".to_string())
     }
 
     async fn query_agent_status(&self, _agent_id: &str) -> Result<AgentSpawnResponse, String> {

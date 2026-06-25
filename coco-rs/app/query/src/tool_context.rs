@@ -445,6 +445,20 @@ impl ToolContextFactory {
             &live_permission_rules,
             PermissionBehavior::Ask,
         );
+        // Resolve this session's team for `ctx.team_name`. A teammate
+        // process gets its identity from the spawner's env
+        // (`COCO_TEAM_NAME`); a leader has no such env but owns the
+        // implicit session team, whose live name is the coordinator
+        // roster via the agent handle (the same source
+        // `engine_loop_state` uses for the mailbox path). Env wins so a
+        // teammate's own identity is never shadowed by a stale roster.
+        let team_name = match env::env_opt(EnvKey::CocoTeamName) {
+            Some(team) => Some(team),
+            None => match self.agent_handle.as_ref() {
+                Some(handle) => handle.active_team_name().await,
+                None => None,
+            },
+        };
         let mut ctx = ToolUseContext {
             tools: self.tools.clone(),
             main_loop_model,
@@ -488,7 +502,7 @@ impl ToolContextFactory {
             // is `COCO_*` — see swarm_constants.
             agent_name: env::env_opt(EnvKey::CocoAgentName)
                 .or_else(|| self.config.agent_id.clone()),
-            team_name: env::env_opt(EnvKey::CocoTeamName),
+            team_name,
             plan_verify_execution: self.config.plan_mode_settings.verify_execution,
             // `isPlanModeInterviewPhaseEnabled()` is settings-only
             // (no Growthbook, no env var). Drives the EnterPlanMode

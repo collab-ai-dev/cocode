@@ -45,7 +45,6 @@ use crate::identity::get_team_name;
 use crate::mailbox::TeammateMessage;
 use crate::mailbox::write_to_mailbox;
 use crate::roster_store::CommitMemberRequest;
-use crate::roster_store::DeleteTeamRequest;
 use crate::roster_store::SpawnMemberRequest;
 use crate::roster_store::TeamRosterStore;
 use crate::runner::InProcessAgentRunner;
@@ -100,7 +99,6 @@ pub struct SwarmAgentHandle {
     /// teammates poll this after mailbox messages so unclaimed team tasks
     /// become work prompts without going through a separate mirror.
     task_list: Option<coco_tool_runtime::TaskListHandleRef>,
-    task_list_router: Option<coco_tool_runtime::TeamTaskListRouterRef>,
     /// Per-agent transcript persistence. When installed, bg AgentTool
     /// spawns write `AgentSpawnMetadata` at registration and the full
     /// message history to `agent-<id>.jsonl` on completion. `resume_agent`
@@ -198,7 +196,6 @@ impl SwarmAgentHandle {
             side_query: None,
             task_registry,
             task_list: None,
-            task_list_router: None,
             transcript_store: None,
             cwd,
             runtime_config: Arc::new(ArcSwap::from(runtime_config)),
@@ -236,10 +233,6 @@ impl SwarmAgentHandle {
 
     pub fn set_task_list(&mut self, handle: coco_tool_runtime::TaskListHandleRef) {
         self.task_list = Some(handle);
-    }
-
-    pub fn set_team_task_list_router(&mut self, router: coco_tool_runtime::TeamTaskListRouterRef) {
-        self.task_list_router = Some(router);
     }
 
     /// Install the MCP handle used for per-agent dynamic server
@@ -980,60 +973,23 @@ impl AgentHandle for SwarmAgentHandle {
         })
     }
 
-    async fn create_team(
+    async fn initialize_session_team(
         &self,
-        request: coco_tool_runtime::CreateTeamRequest,
-    ) -> Result<coco_tool_runtime::CreateTeamResult, String> {
-        let result = self.roster_store.create_team(request).await?;
-        Ok(coco_tool_runtime::CreateTeamResult {
-            team_name: result.team_name,
-            lead_agent_id: result.lead_agent_id,
-            team_file_path: result.team_file_path,
-        })
-    }
-
-    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
-        // When no team is active, return success with a "nothing to clean
-        // up" message (idempotent). Pass the session task-list handle so
-        // the roster store can fire a "tasks changed" notification on the
-        // success path. At this point the route still points at the team
-        // list; the notification reaches its subscribers before
-        // `clear_team_task_list_route` restores the session list below.
-        let result = self
-            .roster_store
-            .delete_team(DeleteTeamRequest, self.task_list.as_deref())
-            .await?;
+        request: coco_tool_runtime::InitializeSessionTeamRequest,
+    ) -> Result<(), String> {
+        let result = self.roster_store.initialize_session_team(request).await?;
         match result {
-            crate::roster_store::DeleteTeamResult::NoTeam => {
-                Ok(coco_tool_runtime::DeleteTeamResult {
-                    success: true,
-                    message: "No active team to delete".to_string(),
-                    team_name: None,
-                })
+            crate::roster_store::InitializeSessionTeamResult::Created { team_name } => {
+                tracing::info!(team = %team_name, "initialized implicit session team");
             }
-            crate::roster_store::DeleteTeamResult::Blocked { team_name, names } => {
-                Ok(coco_tool_runtime::DeleteTeamResult {
-                    success: false,
-                    message: format!("Cannot delete team: active members: {}", names.join(", ")),
-                    team_name: Some(team_name),
-                })
+            crate::roster_store::InitializeSessionTeamResult::AlreadyExists { team_name } => {
+                tracing::debug!(team = %team_name, "reused existing session team");
             }
-            crate::roster_store::DeleteTeamResult::Deleted { team_name } => {
-                if let Some(router) = &self.task_list_router {
-                    router
-                        .clear_team_task_list_route()
-                        .await
-                        .map_err(|e| format!("Failed to restore session task list: {e}"))?;
-                }
-                Ok(coco_tool_runtime::DeleteTeamResult {
-                    success: true,
-                    message: format!(
-                        "Cleaned up directories and worktrees for team \"{team_name}\""
-                    ),
-                    team_name: Some(team_name),
-                })
+            crate::roster_store::InitializeSessionTeamResult::AlreadyActive { team_name } => {
+                tracing::debug!(team = %team_name, "session team already active");
             }
         }
+        Ok(())
     }
 
     async fn active_team_name(&self) -> Option<String> {

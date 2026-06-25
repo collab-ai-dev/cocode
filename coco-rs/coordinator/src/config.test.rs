@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_teammate_mode_default() {
-    assert_eq!(TeammateMode::default(), TeammateMode::Auto);
+    assert_eq!(TeammateMode::default(), TeammateMode::InProcess);
 }
 
 #[test]
@@ -23,7 +23,7 @@ fn test_teammate_mode_serde() {
 #[test]
 fn test_team_config_default() {
     let config = TeamConfig::default();
-    assert_eq!(config.teammate_mode, TeammateMode::Auto);
+    assert_eq!(config.teammate_mode, TeammateMode::InProcess);
     assert_eq!(config.default_model_role, coco_types::ModelRole::Main);
     assert!(config.agent_type_model_roles.is_empty());
     assert!(config.show_spinner_tree);

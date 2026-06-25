@@ -92,13 +92,15 @@ pub fn capture_teammate_mode_snapshot(config_mode: TeammateMode) {
     }
 }
 
-/// Get the captured teammate mode.
+/// Get the captured teammate mode. The `capture_*` setter is wired only in
+/// tests, so production always hits this fall-through — it must default to
+/// `InProcess` (CC `DEFAULT_TEAMMATE_MODE`), not `Auto`.
 pub fn get_teammate_mode_from_snapshot() -> TeammateMode {
     MODE_SNAPSHOT
         .read()
         .ok()
         .and_then(|g| *g)
-        .unwrap_or(TeammateMode::Auto)
+        .unwrap_or(TeammateMode::InProcess)
 }
 
 // ── Leader Permission Bridge (leaderPermissionBridge.ts) ──

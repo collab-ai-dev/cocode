@@ -34,6 +34,11 @@ pub enum CoordinatorError {
 
     #[error("teammate not found: {name}")]
     TeammateNotFound { name: String },
+
+    #[error(
+        "Refusing to send command containing control character U+{code_point:04X} to terminal pane"
+    )]
+    ControlCharInPaneCommand { code_point: u32 },
 }
 
 impl CoordinatorError {
@@ -68,6 +73,7 @@ impl ErrorExt for CoordinatorError {
             Self::SubprocessFailed { .. } => StatusCode::External,
             Self::LockFailed { .. } => StatusCode::IoError,
             Self::TeammateNotFound { .. } => StatusCode::FileNotFound,
+            Self::ControlCharInPaneCommand { .. } => StatusCode::InvalidArguments,
             Self::Generic { .. } => StatusCode::Internal,
         }
     }

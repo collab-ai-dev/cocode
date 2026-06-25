@@ -52,8 +52,9 @@ struct ExitPlanModeOutput {
     /// Absolute path to the session's plan file.
     #[serde(skip_serializing_if = "Option::is_none")]
     file_path: Option<String>,
-    /// Hint that the TeamCreate tool is available — surfaced as a hint
-    /// in the approval message to encourage swarm-based implementation.
+    /// Hint that agent teams are available — surfaced in the approval
+    /// message to encourage parallelizing implementation across teammates
+    /// spawned via `Agent({name:...})`.
     #[serde(skip_serializing_if = "Option::is_none")]
     has_task_tool: Option<bool>,
     /// True when the CCR UI edited the plan via `input.plan` before exit.
@@ -674,10 +675,10 @@ impl Tool for ExitPlanModeTool {
             tracing::warn!("Failed to persist edited plan to {path}: {e}");
         }
 
-        let has_task_tool = ctx
-            .tools
-            .get_by_name(ToolName::TeamCreate.as_str())
-            .is_some_and(|t| t.is_enabled(ctx));
+        // Agent teams are available when the feature is on — an implicit
+        // session team is bootstrapped at startup, so teammate spawning via
+        // `Agent({name:...})` is always reachable without a lifecycle tool.
+        let has_task_tool = ctx.features.enabled(coco_types::Feature::AgentTeams);
 
         // ── Teammate branch — write plan_approval_request to leader inbox ──
         // If the caller is a teammate whose role requires plan approval, we
@@ -874,7 +875,7 @@ impl Tool for ExitPlanModeTool {
                 .map(|path| format!("\n\nPlan file path: {path}"))
                 .unwrap_or_default();
             let team_hint = if has_task_tool {
-                "\n\nIf this plan can be broken down into multiple independent tasks, consider using TeamCreate to parallelize the work."
+                "\n\nIf this plan can be broken down into multiple independent tasks, consider spawning teammates with Agent({name:...}) to parallelize the work."
             } else {
                 ""
             };
@@ -1051,7 +1052,7 @@ impl ExitPlanModeTool {
 
         let team_hint = if out.has_task_tool.unwrap_or(false) {
             "\n\nIf this plan can be broken down into multiple independent tasks, \
-             consider using the TeamCreate tool to create a team and parallelize \
+             consider spawning teammates with Agent({name:...}) to parallelize \
              the work."
         } else {
             ""

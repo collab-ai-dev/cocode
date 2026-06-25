@@ -52,15 +52,13 @@ pub use web::WebFetchTool;
 pub use web::WebSearchTool;
 pub use workflow::WorkflowTool;
 
-// Agent & Team (5) — schema/validation/result-formatting wrappers only.
+// Agent & Team (3) — schema/validation/result-formatting wrappers only.
 // The catalog (definitions, prompt, filter, fork, transcript) lives in
 // `coco-subagent`; the spawn lifecycle lives in `app/state/swarm` (and
 // will move to the future `root/coordinator` crate in PR #3).
 pub use agent::AgentTool;
 pub use agent::SendMessageTool;
 pub use agent::SkillTool;
-pub use agent::TeamCreateTool;
-pub use agent::TeamDeleteTool;
 
 // Task Management (7)
 pub use task_tools::TaskCreateTool;

@@ -4,8 +4,7 @@
 //! orchestrator: the system prompt teaches it to delegate to async workers,
 //! `<task-notification>` XML is the read-back channel, and the worker tool
 //! pool is restricted to [`crate::filter::ASYNC_AGENT_ALLOWED_TOOLS`] minus
-//! a small "internal" set (TeamCreate / TeamDelete / SendMessage /
-//! SyntheticOutput).
+//! a small "internal" set (SendMessage / SyntheticOutput).
 //!
 //! All public functions here are **pure**: they read `coco_config::EnvKey`
 //! values and the caller-supplied [`coco_types::Features`] gate, then build
@@ -26,16 +25,12 @@ use crate::fork;
 /// Tools that workers must NOT see even though they're in the
 /// async-allowed pool.
 const INTERNAL_WORKER_TOOLS: &[&str] = &[
-    ToolName::TeamCreate.as_str(),
-    ToolName::TeamDelete.as_str(),
     ToolName::SendMessage.as_str(),
     ToolName::StructuredOutput.as_str(),
 ];
 
 const TEAMMATE_ESSENTIAL_TOOLS: &[&str] = &[
     ToolName::SendMessage.as_str(),
-    ToolName::TeamCreate.as_str(),
-    ToolName::TeamDelete.as_str(),
     ToolName::TaskCreate.as_str(),
     ToolName::TaskGet.as_str(),
     ToolName::TaskList.as_str(),

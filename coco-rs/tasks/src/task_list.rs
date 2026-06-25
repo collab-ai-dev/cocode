@@ -122,7 +122,7 @@ const LOCK_MAX_BACKOFF_MS: u64 = 100;
 /// 1. `COCO_TASK_LIST_ID` env (explicit override)
 /// 2. In-process teammate's team name
 /// 3. `COCO_TEAM_NAME` env (process-based teammate)
-/// 4. Leader team name (set via `TeamCreateTool`)
+/// 4. Leader team name (the implicit session team)
 /// 5. Session id fallback
 pub fn resolve_task_list_id(
     teammate_team: Option<&str>,

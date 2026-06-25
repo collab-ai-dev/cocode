@@ -18,6 +18,29 @@ use serde::{Deserialize, Serialize};
 /// truthy but doesn't carry a numeric value (120 000 ms).
 pub const DEFAULT_AUTO_BACKGROUND_MS: u64 = 120_000;
 
+/// Resolve the implicit session team for spawn routing. The session owns
+/// exactly one team (seeded at startup); the `team_name` tool PARAM is
+/// ignored. Returns the runtime team context only when AgentTeams is on.
+/// CC: `implicitTeam = isAgentSwarmsEnabled() ? appState.teamContext : undefined`.
+fn resolve_implicit_team(agent_teams_enabled: bool, ctx_team_name: Option<&str>) -> Option<String> {
+    if agent_teams_enabled {
+        ctx_team_name.map(str::to_string)
+    } else {
+        None
+    }
+}
+
+/// Classify a spawn as a teammate spawn. CC:
+/// `if (implicitTeam && name && !isFork) -> spawnTeammate`. A named spawn
+/// while fork mode is active routes as a fork, not a teammate.
+fn classify_team_spawn(
+    implicit_team: Option<&str>,
+    requested_name: Option<&str>,
+    is_fork_spawn: bool,
+) -> bool {
+    implicit_team.is_some() && requested_name.is_some() && !is_fork_spawn
+}
+
 /// Typed input for [`AgentTool`].
 /// The model-facing schema is built by the manual
 /// [`AgentTool::input_schema`] override (precise descriptions and enum
@@ -48,7 +71,9 @@ pub struct AgentInput {
     /// SendMessage({to: name}) while running.
     #[serde(default)]
     pub name: Option<String>,
-    /// Team name for spawning. Uses current team context if omitted.
+    /// Deprecated; ignored. The session has a single implicit team. Kept
+    /// for wire-compat — routing sources the team from the runtime team
+    /// context (`ctx.team_name`), never this field.
     #[serde(default)]
     pub team_name: Option<String>,
     /// Permission mode for spawned teammate. Typed as
@@ -198,7 +223,7 @@ impl Tool for AgentTool {
                     },
                     "team_name": {
                         "type": "string",
-                        "description": "Team name for spawning. Uses current team context if omitted."
+                        "description": "Deprecated; ignored. The session has a single implicit team."
                     },
                     "mode": {
                         "type": "string",
@@ -552,13 +577,28 @@ impl Tool for AgentTool {
         }
 
         let explicit_subagent_type = input.subagent_type.clone();
-        let resolved_team_name = input
-            .team_name
-            .clone()
-            .filter(|s| !s.is_empty())
-            .or_else(|| ctx.team_name.clone());
         let requested_name = input.name.clone().filter(|s| !s.is_empty());
-        let is_team_spawn = resolved_team_name.is_some() && requested_name.is_some();
+        // Implicit team: the session owns exactly one team, seeded at
+        // startup (`session-<id[:8]>`). The `team_name` PARAM is ignored
+        // — routing keys on the runtime-owned team context existing.
+        let implicit_team = resolve_implicit_team(
+            ctx.features.enabled(coco_types::Feature::AgentTeams),
+            ctx.team_name.as_deref(),
+        );
+        // Fork eligibility is computed BEFORE the team classification so a
+        // named spawn while fork mode is active routes as a fork, not a
+        // teammate (CC orders the team branch on `!isFork`). The single
+        // predicate consumed both by the permission-mode resolution and
+        // the `spawn_mode` construction below.
+        let is_fork_spawn = explicit_subagent_type.is_none()
+            && coco_subagent::is_fork_subagent_active(&ctx.features, ctx.is_non_interactive);
+        // CC: `if (implicitTeam && name && !isFork) -> spawnTeammate`.
+        let is_team_spawn = classify_team_spawn(
+            implicit_team.as_deref(),
+            requested_name.as_deref(),
+            is_fork_spawn,
+        );
+        let resolved_team_name = implicit_team;
 
         if is_team_spawn && !ctx.features.enabled(coco_types::Feature::AgentTeams) {
             return Err(ToolError::ExecutionFailed {
@@ -589,17 +629,11 @@ impl Tool for AgentTool {
         // user-facing directive in `<fork-boilerplate>` so the worker
         // receives its rules and a downstream recursion guard
         // (`is_in_fork_child`) can detect fork-of-fork.
-        // Team spawns (`name` + `team_name`) are NOT fork-eligible even
-        // when `subagent_type` is omitted: a teammate is a distinct,
-        // addressable agent, not a cache-shared fork. TS routes the team
-        // Branch before fork; mirror that here
-        // so a `Fork{..} + team_name` shape can never be constructed.
-        // Fork eligibility — the single predicate consumed both by the
-        // permission-mode resolution and the `spawn_mode` construction below.
-        let is_fork_spawn = explicit_subagent_type.is_none()
-            && !is_team_spawn
-            && coco_subagent::is_fork_subagent_active(&ctx.features, ctx.is_non_interactive);
-
+        // Team spawns (`name` while the implicit team is present) are NOT
+        // fork-eligible: a teammate is a distinct, addressable agent, not
+        // a cache-shared fork. `is_team_spawn` already excludes
+        // `is_fork_spawn`, so a `Fork{..}` + teammate shape can never be
+        // constructed (the team branch is classified first, above).
         let spawn_mode = if is_fork_spawn {
             let Some(rendered_system_prompt) = ctx.rendered_system_prompt.clone() else {
                 return Err(ToolError::ExecutionFailed {
@@ -1235,3 +1269,7 @@ fn find_agent_deny_rule<'a>(
             && r.value.rule_content.as_deref() == Some(agent_type)
     })
 }
+
+#[cfg(test)]
+#[path = "agent_tool.test.rs"]
+mod tests;

@@ -69,17 +69,6 @@ impl AgentHandle for SlowHandle {
         Err("unused".into())
     }
 
-    async fn create_team(
-        &self,
-        _request: coco_tool_runtime::CreateTeamRequest,
-    ) -> Result<coco_tool_runtime::CreateTeamResult, String> {
-        Err("unused".into())
-    }
-
-    async fn delete_team(&self) -> Result<coco_tool_runtime::DeleteTeamResult, String> {
-        Err("unused".into())
-    }
-
     async fn resume_agent(
         &self,
         _agent_id: &str,

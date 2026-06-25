@@ -2,7 +2,7 @@
 //!
 //! The handle owns the in-process runner + team manager + worktree
 //! manager and is the single seam through which `AgentTool` /
-//! `SendMessage` / `TeamCreate` / `TeamDelete` reach the coordinator.
+//! `SendMessage` reach the coordinator.
 //! Today the only other implementation is `NoOpAgentHandle` (returns
 //! "not available in this context" for every call), used only before
 //! bootstrap late-binding or in narrow test fixtures.
@@ -187,9 +187,6 @@ pub async fn build_agent_team_wiring(
 
     if let Some(task_list) = runtime.current_task_list().await {
         handle.set_task_list(task_list);
-    }
-    if let Some(router) = runtime.current_team_task_list_router().await {
-        handle.set_team_task_list_router(router);
     }
 
     // Per-agent transcript store for `SwarmAgentHandle::resume_agent`.

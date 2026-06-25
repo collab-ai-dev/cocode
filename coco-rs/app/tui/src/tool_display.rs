@@ -150,8 +150,6 @@ pub fn tool_name_tone(tool_name: &str) -> ToolNameTone {
         | ToolName::TaskUpdate
         | ToolName::TaskStop
         | ToolName::SendMessage
-        | ToolName::TeamCreate
-        | ToolName::TeamDelete
         | ToolName::Config
         | ToolName::CronCreate
         | ToolName::CronDelete

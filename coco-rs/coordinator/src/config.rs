@@ -11,11 +11,12 @@
 #[serde(rename_all = "kebab-case")]
 pub enum TeammateMode {
     /// Auto-detect: try tmux/iTerm2 first, fall back to in-process.
-    #[default]
     Auto,
     /// Force tmux backend.
     Tmux,
-    /// Force in-process backend.
+    /// Force in-process backend. Default — operators opt into panes via
+    /// settings.json (`auto` / `tmux`).
+    #[default]
     InProcess,
 }
 
@@ -68,7 +69,7 @@ fn default_model_role() -> coco_types::ModelRole {
 impl Default for TeamConfig {
     fn default() -> Self {
         Self {
-            teammate_mode: TeammateMode::Auto,
+            teammate_mode: TeammateMode::InProcess,
             default_model_role: coco_types::ModelRole::Main,
             agent_type_model_roles: std::collections::HashMap::new(),
             show_spinner_tree: true,

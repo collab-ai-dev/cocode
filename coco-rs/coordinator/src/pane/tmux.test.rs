@@ -41,8 +41,59 @@ fn test_tmux_backend_external_properties() {
 }
 
 #[test]
-fn test_pane_shell_init_delay() {
-    assert_eq!(PANE_SHELL_INIT_DELAY_MS, 200);
+fn test_pane_hold_command() {
+    // The benign holding process every pane is created running so the later
+    // `respawn-pane -k` is the only thing that puts a real process in the pane.
+    assert_eq!(PANE_HOLD_COMMAND, "cat");
+}
+
+#[tokio::test]
+async fn test_send_command_to_pane_rejects_control_chars() {
+    use crate::pane::PaneBackend;
+
+    let backend = TmuxBackend::new(/*is_native*/ true);
+    // BEL (U+0007) embedded in the command must be rejected before any tmux
+    // subprocess runs — defense-in-depth against a leaked terminal escape.
+    let err = backend
+        .send_command_to_pane(&"%0".to_string(), "echo hi\x07")
+        .await
+        .expect_err("control char must be rejected");
+    assert!(
+        err.to_string().contains("U+0007"),
+        "error should name the offending code point, got: {err}"
+    );
+}
+
+#[test]
+fn test_respawn_pane_argv_shape() {
+    // The injection mechanism: arm `remain-on-exit failed`, then
+    // `respawn-pane -k … -- sh -c <command>`. Replaces the old
+    // `send-keys … Enter`.
+    assert_eq!(
+        remain_on_exit_args("%3"),
+        ["set-option", "-p", "-t", "%3", "remain-on-exit", "failed"]
+    );
+    assert_eq!(
+        respawn_pane_args("%3", "cd /w && claude"),
+        [
+            "respawn-pane",
+            "-k",
+            "-t",
+            "%3",
+            "--",
+            "sh",
+            "-c",
+            "cd /w && claude",
+        ]
+    );
+}
+
+#[test]
+fn test_assert_no_control_chars_accepts_teammate_one_liner() {
+    // The real teammate command shape (cd … && env… cmd) is all printable —
+    // it must pass the guard untouched.
+    crate::pane::assert_no_control_chars("cd /work && FOO=1 claude --models.main=x")
+        .expect("printable one-liner must pass");
 }
 
 /// L3 of the agent-teams E2E plan (`docs/coco-rs/agentteam-e2e-test-design.md`):

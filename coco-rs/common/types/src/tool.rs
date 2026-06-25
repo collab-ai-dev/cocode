@@ -38,13 +38,11 @@ pub enum ToolName {
     // Web (2)
     WebFetch,
     WebSearch,
-    // Agent, Workflow & Team (6)
+    // Agent, Workflow & Team (4)
     Agent,
     Workflow,
     Skill,
     SendMessage,
-    TeamCreate,
-    TeamDelete,
     // Task Management (7)
     TaskCreate,
     TaskGet,
@@ -111,8 +109,6 @@ impl ToolName {
             Self::Workflow => "Workflow",
             Self::Skill => "Skill",
             Self::SendMessage => "SendMessage",
-            Self::TeamCreate => "TeamCreate",
-            Self::TeamDelete => "TeamDelete",
             Self::TaskCreate => "TaskCreate",
             Self::TaskGet => "TaskGet",
             Self::TaskList => "TaskList",
@@ -228,8 +224,6 @@ impl FromStr for ToolName {
             "Workflow" | "RunWorkflow" => Ok(Self::Workflow),
             "Skill" => Ok(Self::Skill),
             "SendMessage" => Ok(Self::SendMessage),
-            "TeamCreate" => Ok(Self::TeamCreate),
-            "TeamDelete" => Ok(Self::TeamDelete),
             "TaskCreate" => Ok(Self::TaskCreate),
             "TaskGet" => Ok(Self::TaskGet),
             "TaskList" => Ok(Self::TaskList),

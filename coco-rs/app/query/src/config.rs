@@ -236,7 +236,7 @@ pub struct QueryEngineConfig {
     /// SubAgent text variant. `None` = this engine IS the main session.
     pub agent_id: Option<String>,
     /// Set when this engine runs AS a swarm teammate (spawned via
-    /// `TeamCreate` + in-process runner). Lifted to a config flag so
+    /// `Agent({name:...})` + in-process runner). Lifted to a config flag so
     /// `ToolUseContext.is_teammate` is set correctly without reading
     /// task-local state at every tool call.
     pub is_teammate: bool,

@@ -42,8 +42,6 @@ fn worker_tool_pool_simple_returns_three_tools_sorted() {
 fn worker_tool_pool_full_excludes_internal_worker_tools() {
     let pool = worker_tool_pool(false);
     // Internal-only tools must not leak to workers.
-    assert!(!pool.contains(&"TeamCreate"));
-    assert!(!pool.contains(&"TeamDelete"));
     assert!(!pool.contains(&"SendMessage"));
     assert!(!pool.contains(&"SyntheticOutput"));
     // Expected staples are present.
