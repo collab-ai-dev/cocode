@@ -33,6 +33,7 @@ pub mod verify_plan_execution;
 pub mod web;
 pub mod workflow;
 mod workflow_host;
+mod workflow_journal;
 pub mod worktree;
 pub mod write;
 pub(crate) mod write_permissions;

@@ -28,14 +28,6 @@ pub enum WorkflowRuntimeError {
         location: Location,
     },
 
-    /// The script exceeded its wall-clock budget.
-    #[snafu(display("workflow timed out after {timeout:?}"))]
-    Timeout {
-        timeout: std::time::Duration,
-        #[snafu(implicit)]
-        location: Location,
-    },
-
     /// The run was cancelled (user stop / parent abort).
     #[snafu(display("workflow cancelled"))]
     Cancelled {
@@ -49,7 +41,6 @@ impl ErrorExt for WorkflowRuntimeError {
         match self {
             Self::Setup { .. } => StatusCode::Internal,
             Self::Script { .. } => StatusCode::InvalidArguments,
-            Self::Timeout { .. } => StatusCode::Timeout,
             Self::Cancelled { .. } => StatusCode::Cancelled,
         }
     }

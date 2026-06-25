@@ -220,6 +220,38 @@ fn workflow_validate_input_accepts_ts_fields_and_rejects_bad_resume() {
     assert!(!tool.validate_input(&invalid, &ctx).is_valid());
 }
 
+#[test]
+fn workflow_validation_code_round_trips_wire_strings() {
+    use super::WorkflowValidationCode;
+    assert_eq!(WorkflowValidationCode::SourceError.as_str(), "source_error");
+    assert_eq!(WorkflowValidationCode::MetaParse.as_str(), "meta_parse");
+    assert_eq!(WorkflowValidationCode::Determinism.as_str(), "determinism");
+    assert_eq!(
+        WorkflowValidationCode::ResumeRunning.as_str(),
+        "resume_running"
+    );
+}
+
+#[test]
+fn workflow_missing_source_carries_typed_source_error_code() {
+    use super::WorkflowValidationCode;
+    use coco_tool_runtime::ValidationResult;
+
+    let tool = WorkflowTool;
+    let ctx = ToolUseContext::test_default();
+    // No script / name / scriptPath → SourceError.
+    let result = tool.validate_input(&WorkflowInput::default(), &ctx);
+    match result {
+        ValidationResult::Invalid { error_code, .. } => {
+            assert_eq!(
+                error_code.as_deref(),
+                Some(WorkflowValidationCode::SourceError.as_str())
+            );
+        }
+        ValidationResult::Valid => panic!("expected an invalid result with a typed code"),
+    }
+}
+
 fn allow_rule(tool_pattern: &str, rule_content: Option<&str>) -> PermissionRule {
     PermissionRule {
         source: PermissionRuleSource::Session,

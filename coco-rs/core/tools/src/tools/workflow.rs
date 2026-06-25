@@ -33,6 +33,38 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::workflow_host;
+use super::workflow_journal;
+
+/// Typed validation-failure code threaded into [`ValidationResult::invalid_with_code`].
+/// Mirrors CC's numeric `errorCode` taxonomy (source / parse / determinism /
+/// resume-still-running) without leaking a magic string at each call site.
+/// `.as_str()` returns the stable wire code the UI / classifier consumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowValidationCode {
+    /// Missing or oversized source: no script/name/scriptPath, or an inline
+    /// script that exceeds the byte cap. CC `errorCode 1`.
+    SourceError,
+    /// `export const meta` / script parse failure. CC `errorCode 2`.
+    MetaParse,
+    /// Non-deterministic source (`Date.now()` / `Math.random()` / `new Date()`).
+    /// CC `errorCode 4`.
+    Determinism,
+    /// Resume rejected because a workflow with the same run id is still
+    /// running and must be stopped first. CC `errorCode 3`. Used by the
+    /// resume work; defined now for completeness.
+    ResumeRunning,
+}
+
+impl WorkflowValidationCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SourceError => "source_error",
+            Self::MetaParse => "meta_parse",
+            Self::Determinism => "determinism",
+            Self::ResumeRunning => "resume_running",
+        }
+    }
+}
 
 /// Model-facing tool prompt: the workflow DSL contract. Lookup directories are
 /// interpolated from [`coco_workflow::workflow_dirs_hint`] so the config-dir
@@ -186,7 +218,7 @@ impl Tool for WorkflowTool {
         if !has_script && !has_name && !has_script_path {
             return ValidationResult::invalid_with_code(
                 "Workflow requires one of script, name, or scriptPath.",
-                "source_error",
+                WorkflowValidationCode::SourceError.as_str(),
             );
         }
         if let Some(script) = input.script.as_ref()
@@ -197,7 +229,7 @@ impl Tool for WorkflowTool {
                     "Workflow inline script exceeds {} bytes.",
                     coco_workflow::MAX_WORKFLOW_SOURCE_BYTES
                 ),
-                "source_error",
+                WorkflowValidationCode::SourceError.as_str(),
             );
         }
         if let Some(run_id) = input.resume_from_run_id.as_deref()
@@ -206,7 +238,7 @@ impl Tool for WorkflowTool {
         {
             return ValidationResult::invalid_with_code(
                 "resumeFromRunId must match ^wf_[a-z0-9-]{6,}$.",
-                "source_error",
+                WorkflowValidationCode::SourceError.as_str(),
             );
         }
         ValidationResult::Valid
@@ -333,10 +365,24 @@ impl Tool for WorkflowTool {
             )
             .await;
 
-        let output_file = task_handle
-            .output_file_path(&task_id)
-            .await
-            .map(|path| path.display().to_string());
+        let output_path = task_handle.output_file_path(&task_id).await;
+        let output_file = output_path.as_ref().map(|path| path.display().to_string());
+
+        // Resume journal: results are recorded alongside the run's `.output`
+        // file (`<task_id>.journal.jsonl`) so a future `resumeFromRunId` can
+        // replay completed `agent()` results. We hydrate from that same path up
+        // front: on a brand-new run the file does not exist yet (empty cache,
+        // identical to a fresh journal), but if this exact task is re-launched
+        // its prior results replay. (Cross-run `resumeFromRunId` launch — mapping
+        // an arbitrary prior run id to its journal — is not yet wired; see the
+        // hard reject above.)
+        let journal_path = output_path
+            .as_deref()
+            .and_then(workflow_journal::journal_path_for_output);
+        let journal = std::sync::Arc::new(match journal_path {
+            Some(path) => workflow_journal::WorkflowJournal::resumed(&path, Some(path.clone())),
+            None => workflow_journal::WorkflowJournal::new(None),
+        });
 
         // Launch the engine on a dedicated thread (it is `!Send`); run the
         // body (meta stripped), exposing `args` from the tool input.
@@ -360,8 +406,10 @@ impl Tool for WorkflowTool {
                 agent_catalog: ctx.agent_catalog.clone(),
                 total_token_budget: ctx.total_token_budget,
                 workflow_abort: coco_tool_runtime::TurnAbortSignal::from_token(cancel.clone()),
+                cwd: ctx.cwd_override.clone(),
             },
             tokio::runtime::Handle::current(),
+            journal,
         );
 
         Ok(ToolResult::data(WorkflowLaunchResult {
