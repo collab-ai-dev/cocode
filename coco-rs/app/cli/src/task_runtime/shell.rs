@@ -61,6 +61,7 @@ impl TaskRuntime {
                 status: TaskStatus::Running,
                 cancel: cancel.clone(),
                 invoking_agent: request.issuing_agent.clone(),
+                workflow_run_id: String::new(),
                 workflow_name: None,
                 workflow_prompt: None,
                 shell_extras: Some(shell_extras),

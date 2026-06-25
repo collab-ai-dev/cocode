@@ -54,6 +54,7 @@ async fn create_with_status(
         status,
         cancel: tokio_util::sync::CancellationToken::new(),
         invoking_agent: None,
+        workflow_run_id: String::new(),
         workflow_name: None,
         workflow_prompt: None,
         shell_extras: None,

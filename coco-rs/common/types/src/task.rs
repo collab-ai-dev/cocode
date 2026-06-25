@@ -358,6 +358,11 @@ pub struct DreamExtras {}
 /// Local workflow task sidecar.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalWorkflowExtras {
+    /// Run id (`wf_…`) of this workflow invocation. Recorded so a later
+    /// `resumeFromRunId` can map an arbitrary prior run back to its task row
+    /// (and thus its persisted script + journal). Same-session only.
+    #[serde(default)]
+    pub run_id: String,
     /// Workflow display name, when known from script metadata or input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_name: Option<String>,
@@ -666,12 +671,25 @@ impl TaskExtras {
         Self::Dream(DreamExtras::default())
     }
 
-    pub fn local_workflow(workflow_name: Option<String>, prompt: Option<String>) -> Self {
+    pub fn local_workflow(
+        run_id: String,
+        workflow_name: Option<String>,
+        prompt: Option<String>,
+    ) -> Self {
         Self::LocalWorkflow(LocalWorkflowExtras {
+            run_id,
             workflow_name,
             prompt,
             ..LocalWorkflowExtras::default()
         })
+    }
+
+    pub fn local_workflow_extras(&self) -> Option<&LocalWorkflowExtras> {
+        if let Self::LocalWorkflow(e) = self {
+            Some(e)
+        } else {
+            None
+        }
     }
 }
 

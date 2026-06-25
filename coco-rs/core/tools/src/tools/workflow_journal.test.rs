@@ -5,6 +5,7 @@ use pretty_assertions::assert_eq;
 use super::WorkflowJournal;
 use super::journal_key;
 use super::journal_path_for_output;
+use super::script_path_for_output;
 
 fn key(prompt: &str, phase: Option<&str>) -> AgentCacheKey {
     let opts = WorkflowAgentOpts {
@@ -87,6 +88,57 @@ fn journal_path_sits_alongside_output() {
         journal,
         std::path::PathBuf::from("/x/cache/tasks/sess/w_abc.journal.jsonl")
     );
+}
+
+#[test]
+fn script_path_sits_alongside_output() {
+    let out = std::path::Path::new("/x/cache/tasks/sess/w_abc.output");
+    assert_eq!(
+        script_path_for_output(out),
+        std::path::PathBuf::from("/x/cache/tasks/sess/w_abc.workflow.js")
+    );
+}
+
+#[tokio::test]
+async fn cross_run_resume_hydrates_prior_journal_into_a_new_run_journal() {
+    // Step 4 launch semantics: a cross-run resume reads the PRIOR run's journal
+    // (source) and continues appending to a NEW run's journal (target). Prior
+    // results replay; the diverged tail's new results land in the new journal,
+    // leaving the prior journal untouched.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prior = dir.path().join("prior.journal.jsonl");
+    let new_run = dir.path().join("new.journal.jsonl");
+
+    // Prior run completed one agent() result.
+    let live = WorkflowJournal::new(Some(prior.clone()));
+    let k1 = key("first", Some("Plan"));
+    live.record(&k1, &serde_json::json!("prior-result")).await;
+
+    // Resume: hydrate from the prior journal, append to the new run's journal.
+    let resumed = WorkflowJournal::resumed(&prior, Some(new_run.clone()));
+    assert_eq!(
+        resumed.lookup(&k1).await,
+        Some(serde_json::json!("prior-result")),
+        "prior result replays from the source journal"
+    );
+    // A diverged-tail result records into the NEW journal.
+    let k2 = key("second", Some("Plan"));
+    resumed.record(&k2, &serde_json::json!("tail-result")).await;
+
+    // The new run's journal now hydrates both (prior replay + new tail).
+    let reopened = WorkflowJournal::resumed(&new_run, Some(new_run.clone()));
+    assert_eq!(
+        reopened.lookup(&k2).await,
+        Some(serde_json::json!("tail-result"))
+    );
+
+    // The prior journal was not mutated: it still only knows the first result.
+    let prior_reopened = WorkflowJournal::resumed(&prior, Some(prior.clone()));
+    assert_eq!(
+        prior_reopened.lookup(&k1).await,
+        Some(serde_json::json!("prior-result"))
+    );
+    assert_eq!(prior_reopened.lookup(&k2).await, None);
 }
 
 #[tokio::test]

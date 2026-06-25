@@ -252,7 +252,7 @@ impl TestAgentTaskRegistry {
             coco_types::TaskType::BgAgent => coco_types::TaskExtras::bg_agent_default(),
             coco_types::TaskType::Dream => coco_types::TaskExtras::dream(),
             coco_types::TaskType::LocalWorkflow => {
-                coco_types::TaskExtras::local_workflow(None, None)
+                coco_types::TaskExtras::local_workflow(String::new(), None, None)
             }
             coco_types::TaskType::Teammate | coco_types::TaskType::RemoteTeammate => {
                 panic!("insert_task: teammate rows must go through insert_teammate_task")

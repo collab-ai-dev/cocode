@@ -119,6 +119,9 @@ pub struct TaskCreateRequest {
     pub status: TaskStatus,
     pub cancel: CancellationToken,
     pub invoking_agent: Option<String>,
+    /// Workflow run id (`wf_…`) for `TaskType::LocalWorkflow`. Empty for
+    /// other task types.
+    pub workflow_run_id: String,
     pub workflow_name: Option<String>,
     pub workflow_prompt: Option<String>,
     /// Pre-populated shell extras for `TaskType::Shell`. Ignored for
@@ -443,9 +446,11 @@ impl TaskManager {
                 Some(shell) => TaskExtras::Shell(shell),
                 None => TaskExtras::shell_default(),
             },
-            TaskType::LocalWorkflow => {
-                TaskExtras::local_workflow(request.workflow_name.clone(), request.workflow_prompt)
-            }
+            TaskType::LocalWorkflow => TaskExtras::local_workflow(
+                request.workflow_run_id.clone(),
+                request.workflow_name.clone(),
+                request.workflow_prompt,
+            ),
             TaskType::Teammate => {
                 panic!(
                     "create_task called with TaskType::Teammate — use create_teammate_task instead"

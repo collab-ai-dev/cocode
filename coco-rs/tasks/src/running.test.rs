@@ -53,6 +53,7 @@ async fn create_with_status(
         status,
         cancel: tokio_util::sync::CancellationToken::new(),
         invoking_agent: None,
+        workflow_run_id: String::new(),
         workflow_name: None,
         workflow_prompt: None,
         shell_extras: None,
@@ -253,6 +254,7 @@ async fn create_task_emits_started_with_tool_use_id() {
         status: TaskStatus::Running,
         cancel: tokio_util::sync::CancellationToken::new(),
         invoking_agent: None,
+        workflow_run_id: String::new(),
         workflow_name: None,
         workflow_prompt: None,
         shell_extras: None,
@@ -285,6 +287,7 @@ async fn push_workflow_progress_emits_cumulative_task_progress() {
         status: TaskStatus::Running,
         cancel: tokio_util::sync::CancellationToken::new(),
         invoking_agent: None,
+        workflow_run_id: "wf_ship01".to_string(),
         workflow_name: Some("ship".to_string()),
         workflow_prompt: None,
         shell_extras: None,
@@ -328,6 +331,38 @@ async fn push_workflow_progress_emits_cumulative_task_progress() {
         }
         other => panic!("expected TaskProgress, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn local_workflow_run_id_round_trips_on_the_task_record() {
+    // The `wf_…` run id supplied at creation is stored on the row's
+    // LocalWorkflowExtras so a later `resumeFromRunId` can map it back to the
+    // task (and thus its persisted script + journal).
+    let mgr = TaskManager::new();
+    let id = coco_types::generate_task_id(TaskType::LocalWorkflow);
+    mgr.create_task(TaskCreateRequest {
+        task_id: id.clone(),
+        task_type: TaskType::LocalWorkflow,
+        description: "ship".to_string(),
+        output_file: Some("/tmp/wf.out".to_string()),
+        tool_use_id: None,
+        is_backgrounded: true,
+        status: TaskStatus::Running,
+        cancel: tokio_util::sync::CancellationToken::new(),
+        invoking_agent: None,
+        workflow_run_id: "wf_roundtrip01".to_string(),
+        workflow_name: Some("ship".to_string()),
+        workflow_prompt: None,
+        shell_extras: None,
+    })
+    .await;
+
+    let state = mgr.get(&id).await.expect("workflow row present");
+    let extras = state
+        .extras
+        .local_workflow_extras()
+        .expect("local_workflow extras");
+    assert_eq!(extras.run_id, "wf_roundtrip01");
 }
 
 #[tokio::test]
