@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ServerNotification",
-  "description": "Protocol-level notifications visible to all consumers.\n\nProtocol notifications across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`local_agent` / `in_process_teammate`) no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
+  "description": "Protocol-level notifications visible to all consumers.\n\nProtocol notifications across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`local_agent` / `in_process_teammate`), matching TS — no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` §4.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
   "oneOf": [
     {
       "description": "New session started.",
@@ -72,7 +72,7 @@
       ]
     },
     {
-      "description": "One Message appended to engine MessageHistory.\n`session_id` + `agent_id` envelope (plan §11 F9): merged-timeline\nconsumers (AgentTeams) demux per session/agent off the same event\nstream. `agent_id` is `None` for the main agent; `Some` for\nteammates / subagents. Single-session SDK consumers may ignore\nboth fields (`#[serde(default)]` keeps the wire forward-compat).",
+      "description": "One Message appended to engine MessageHistory.\n\n`session_id` + `agent_id` envelope (plan §11 F9): merged-timeline\nconsumers (AgentTeams) demux per session/agent off the same event\nstream. `agent_id` is `None` for the main agent; `Some` for\nteammates / subagents. Single-session SDK consumers may ignore\nboth fields (`#[serde(default)]` keeps the wire forward-compat).",
       "type": "object",
       "properties": {
         "method": {
@@ -470,7 +470,7 @@
       ]
     },
     {
-      "description": "Compaction phase progress.\nDrives the spinner text in the TUI / SDK runner so the user\ncan see which sub-phase is active (PreCompact hooks → summarize\n→ PostCompact hooks → done).",
+      "description": "Compaction phase progress (TS `onCompactProgress`).\nDrives the spinner text in the TUI / SDK runner so the user\ncan see which sub-phase is active (PreCompact hooks → summarize\n→ PostCompact hooks → done).",
       "type": "object",
       "properties": {
         "method": {
@@ -572,7 +572,7 @@
       ]
     },
     {
-      "description": "Durable plan-item / V1 todo snapshot — emitted after\n`TaskCreate`/`TaskUpdate`/`TodoWrite` tools mutate state so\nthe TUI can refresh its panel without pulling the store\ndirectly. `notifyTasksUpdated` subscriber callback\nin `utils/tasks.ts`.",
+      "description": "Durable plan-item / V1 todo snapshot — emitted after\n`TaskCreate`/`TaskUpdate`/`TodoWrite` tools mutate state so\nthe TUI can refresh its panel without pulling the store\ndirectly.",
       "type": "object",
       "properties": {
         "method": {
@@ -589,7 +589,7 @@
       ]
     },
     {
-      "description": "Team lead received a plan-approval request from a teammate\n(via mailbox). The TUI surfaces this as a modal overlay.\nTeammate plan-exit request flow.",
+      "description": "Team lead received a plan-approval request from a teammate\n(via mailbox). The TUI surfaces this as a modal overlay.",
       "type": "object",
       "properties": {
         "method": {
@@ -1276,7 +1276,7 @@
       ]
     },
     {
-      "description": "Output from a user-executed local command (REPL `!` prefix).",
+      "description": "Output from a user-executed local command (REPL `!` prefix).\nMatches TS `SDKLocalCommandOutputMessage` (coreSchemas.ts:1590-1602).",
       "type": "object",
       "properties": {
         "method": {
@@ -1293,7 +1293,7 @@
       ]
     },
     {
-      "description": "Files persisted to disk (file upload/snapshot completion).",
+      "description": "Files persisted to disk (file upload/snapshot completion).\nMatches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).",
       "type": "object",
       "properties": {
         "method": {
@@ -1310,7 +1310,7 @@
       ]
     },
     {
-      "description": "MCP elicitation completed (form submission or cancellation).",
+      "description": "MCP elicitation completed (form submission or cancellation).\nMatches TS `SDKElicitationCompleteMessage` (coreSchemas.ts:1779-1792).",
       "type": "object",
       "properties": {
         "method": {
@@ -1327,7 +1327,7 @@
       ]
     },
     {
-      "description": "Tool use summary from background haiku summarization.",
+      "description": "Tool use summary from background haiku summarization.\nMatches TS `SDKToolUseSummaryMessage` (coreSchemas.ts:1769-1777).",
       "type": "object",
       "properties": {
         "method": {
@@ -1344,7 +1344,7 @@
       ]
     },
     {
-      "description": "Tool execution progress (bash/powershell long-running).\nSent at most once per 30 seconds per `parent_tool_use_id`.",
+      "description": "Tool execution progress (bash/powershell long-running).\nMatches TS `SDKToolProgressMessage` (coreSchemas.ts:1648-1659).\nSent at most once per 30 seconds per `parent_tool_use_id`.",
       "type": "object",
       "properties": {
         "method": {
@@ -1361,7 +1361,7 @@
       ]
     },
     {
-      "description": "Plugin state changed on disk (manifest added/removed/edited,\n`installed_plugins.json` updated, or settings.json scope toggled).\nCarries a short reason string the UI can surface as a banner.\nThe \"Plugins\nchanged. Run /reload-plugins to activate.\" notification. Never\ntriggers an auto-reload — the explicit `/reload-plugins`\ninvocation is what applies the change.",
+      "description": "Plugin state changed on disk (manifest added/removed/edited,\n`installed_plugins.json` updated, or settings.json scope toggled).\nCarries a short reason string the UI can surface as a banner.\nEmits a \"Plugins changed. Run /reload-plugins to activate.\" notification. Never\ntriggers an auto-reload — the explicit `/reload-plugins`\ninvocation is what applies the change.",
       "type": "object",
       "properties": {
         "method": {
@@ -2140,7 +2140,7 @@
       ]
     },
     "CompactionPhase": {
-      "description": "Sub-phase of a compaction in progress.\nTool execution phase taxonomy:\n- `HooksStart { hook_type }` for PreCompact / PostCompact / SessionStart\n- `Summarizing` for the LLM summarizer call\n- `Done` to clear the spinner",
+      "description": "Sub-phase of a compaction in progress (TS `onCompactProgress`).\n\nMirrors the TS phase taxonomy at Tool.ts:150-156:\n  - `HooksStart { hook_type }` for PreCompact / PostCompact / SessionStart\n  - `Summarizing` for the LLM summarizer call\n  - `Done` to clear the spinner",
       "type": "string",
       "enum": [
         "hooks_start",
@@ -2282,7 +2282,7 @@
           "format": "int32"
         },
         "trigger": {
-          "description": "Which strategy produced this compaction.\n`tengu_compact.trigger` field. Older transcripts\nwithout this field default to `Auto`. Defaulted via serde so\noff-the-wire payloads from older SDK clients keep parsing.",
+          "description": "Which strategy produced this compaction.\n\nMirrors the TS `tengu_compact.trigger` field. Older transcripts\nwithout this field default to `Auto`. Defaulted via serde so\noff-the-wire payloads from older SDK clients keep parsing.",
           "$ref": "#/$defs/CompactTrigger",
           "default": "auto"
         }
@@ -2613,7 +2613,7 @@
       ]
     },
     "ElicitationCompleteParams": {
-      "description": "Emitted after an MCP server's elicitation request is resolved\n(either submitted or cancelled).",
+      "description": "Matches TS `SDKElicitationCompleteMessage` (coreSchemas.ts:1779-1792).\n\nEmitted after an MCP server's elicitation request is resolved\n(either submitted or cancelled).",
       "type": "object",
       "properties": {
         "elicitation_id": {
@@ -2767,6 +2767,7 @@
       ]
     },
     "FastModeState": {
+      "description": "Matches TS `FastModeStateSchema` (coreSchemas.ts:1883-1889).",
       "type": "string",
       "enum": [
         "off",
@@ -2834,7 +2835,7 @@
       ]
     },
     "FilesPersistedParams": {
-      "description": "TS emits this when files are uploaded or persisted (e.g. after a\nsuccessful `filesApi` operation).",
+      "description": "Matches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).\n\nTS emits this when files are uploaded or persisted (e.g. after a\nsuccessful `filesApi` operation).",
       "type": "object",
       "properties": {
         "failed": {
@@ -2964,7 +2965,7 @@
       ]
     },
     "HookEventType": {
-      "description": "27 hook event types \nEvent type identifiers for hook registration and dispatch.\nWire format is **PascalCase** (e.g. `\"PreToolUse\"`) — identical to\nTS settings.json keys. Variant names serialize as-is via serde\ndefault and strum default; do not add `rename_all`.\n`#[non_exhaustive]` so future TS additions can land without\nbreaking match exhaustiveness in downstream crates.",
+      "description": "27 hook event types\nEvent type identifiers for hook registration and dispatch.\nWire format is **PascalCase** (e.g. `\"PreToolUse\"`) — identical to\nTS settings.json keys. Variant names serialize as-is via serde\ndefault and strum default; do not add `rename_all`.\n`#[non_exhaustive]` so future TS additions can land without\nbreaking match exhaustiveness in downstream crates.",
       "type": "string",
       "enum": [
         "PreToolUse",
@@ -3056,6 +3057,7 @@
       ]
     },
     "HookProgressParams": {
+      "description": "Matches TS `SDKHookProgressMessage` (coreSchemas.ts:1616-1629).",
       "type": "object",
       "properties": {
         "hook_event": {
@@ -3087,6 +3089,7 @@
       ]
     },
     "HookResponseParams": {
+      "description": "Matches TS `SDKHookResponseMessage` (coreSchemas.ts:1631-1646).",
       "type": "object",
       "properties": {
         "exit_code": {
@@ -3474,7 +3477,7 @@
       ]
     },
     "LocalCommandOutputParams": {
-      "description": "TS emits this when the user runs a local bash command via the REPL `!`\nprefix (not a tool call). The `content` field is the command output;\nTS types it as the raw output structure (typically stdout/stderr).",
+      "description": "Matches TS `SDKLocalCommandOutputMessage` (coreSchemas.ts:1590-1602).\n\nTS emits this when the user runs a local bash command via the REPL `!`\nprefix (not a tool call). The `content` field is the command output;\nTS types it as the raw output structure (typically stdout/stderr).",
       "type": "object",
       "properties": {
         "content": true
@@ -3911,7 +3914,7 @@
       ]
     },
     "ModelRoleChangedParams": {
-      "description": "Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries\nthe resolved binding (model + provider + thinking effort) that the\nTUI applies to `state.session.model_by_role[role]` and, when\n`role == Main`, also to `state.session.{model, provider,\nthinking_effort}` for the status bar.\nEmitted by `tui_runner` after applying an in-memory override via\n`SessionRuntime::apply_role_override` / `apply_role_effort`. No\npersistence to settings.json — that's the user's job.",
+      "description": "Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries\nthe resolved binding (model + provider + thinking effort) that the\nTUI applies to `state.session.model_by_role[role]` and, when\n`role == Main`, also to `state.session.{model, provider,\nthinking_effort}` for the status bar.\n\nEmitted by `tui_runner` after applying an in-memory override via\n`SessionRuntime::apply_role_override` / `apply_role_effort`. No\npersistence to settings.json — that's the user's job.",
       "type": "object",
       "properties": {
         "context_window": {
@@ -3973,6 +3976,7 @@
       }
     },
     "PermissionDenialInfo": {
+      "description": "Matches TS `SDKPermissionDenialSchema` (coreSchemas.ts:1399-1405).",
       "type": "object",
       "properties": {
         "tool_input": true,
@@ -4304,7 +4308,7 @@
       ]
     },
     "ReasoningMetadataAttachedParams": {
-      "description": "Reasoning aggregates anchored to a specific assistant message.\nEmitted by the engine right after `TurnCompleted` when the model\nreported non-zero `reasoning_tokens`. The TUI handler indexes its\n`reasoning_metadata` side-cache by `message_uuid`, eliminating the\nO(n) \"find latest `AssistantThinking` cell\" walk and removing the\nlast vestige of the I-2 exception.",
+      "description": "Reasoning aggregates anchored to a specific assistant message.\n\nEmitted by the engine right after `TurnCompleted` when the model\nreported non-zero `reasoning_tokens`. The TUI handler indexes its\n`reasoning_metadata` side-cache by `message_uuid`, eliminating the\nO(n) \"find latest `AssistantThinking` cell\" walk and removing the\nlast vestige of the I-2 exception.",
       "type": "object",
       "properties": {
         "duration_ms": {
@@ -4403,6 +4407,7 @@
       ]
     },
     "SessionModelUsage": {
+      "description": "Matches TS `ModelUsageSchema` (coreSchemas.ts:17-28).",
       "type": "object",
       "properties": {
         "cache_creation_input_tokens": {
@@ -4541,7 +4546,7 @@
       ]
     },
     "SessionResultParams": {
-      "description": "TS has two subtype variants (success/error) unified here with `is_error` flag.",
+      "description": "Matches TS `SDKResultMessageSchema` (coreSchemas.ts:1407-1451).\nTS has two subtype variants (success/error) unified here with `is_error` flag.",
       "type": "object",
       "properties": {
         "duration_api_ms": {
@@ -4574,7 +4579,7 @@
           "default": false
         },
         "model_usage": {
-          "description": "Per-model usage breakdown.",
+          "description": "Per-model usage breakdown (TS `modelUsage: Record<string, ModelUsage>`).",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/SessionModelUsage"
@@ -4634,7 +4639,7 @@
       ]
     },
     "SessionStartedParams": {
-      "description": "Sent once at session startup with subtype 'init'; carries the full bootstrap context the SDK\nconsumer needs to render a UI.",
+      "description": "Matches TS `SDKSystemMessageSchema` with subtype 'init' (coreSchemas.ts:1457-1494).\nSent once at session startup; carries the full bootstrap context the SDK\nconsumer needs to render a UI.",
       "type": "object",
       "properties": {
         "agents": {
@@ -5511,7 +5516,7 @@
       ]
     },
     "SystemMemorySavedMessage": {
-      "description": "Surfaced to the user's transcript when the auto-memory subsystem\nhas just landed new memory writes. \n(which overrides\n`verb` to `\"Improved\"` for dream consolidations vs. the default\n`\"Saved\"` for extract).",
+      "description": "Surfaced to the user's transcript when the auto-memory subsystem\nhas just landed new memory writes.\n(which overrides\n`verb` to `\"Improved\"` for dream consolidations vs. the default\n`\"Saved\"` for extract).",
       "type": "object",
       "properties": {
         "uuid": {
@@ -5887,7 +5892,7 @@
       ]
     },
     "TaskCompletedParams": {
-      "description": "TS calls this `task/notification`; coco-rs uses `task/completed` as the\nwire method for brevity, but fields match TS exactly.",
+      "description": "Matches TS `SDKTaskNotificationMessage` (coreSchemas.ts:1694-1713).\nTS calls this `task/notification`; coco-rs uses `task/completed` as the\nwire method for brevity, but fields match TS exactly.",
       "type": "object",
       "properties": {
         "output_file": {
@@ -5927,7 +5932,7 @@
       ]
     },
     "TaskCompletionStatus": {
-      "description": "for task_notification status.",
+      "description": "Matches TS `z.enum(['completed', 'failed', 'stopped'])` for task_notification status.",
       "type": "string",
       "enum": [
         "completed",
@@ -5978,7 +5983,7 @@
       ]
     },
     "TaskProgressParams": {
-      "description": "In TS, `description` and `usage` are required; other fields optional.\nThe `workflow_progress` field carries the streaming state of local_workflow\ntasks — a delta batch of workflow state changes.",
+      "description": "Matches TS `SDKTaskProgressMessage` (coreSchemas.ts:1750-1767).\nIn TS, `description` and `usage` are required; other fields optional.\nThe `workflow_progress` field carries the streaming state of local_workflow\ntasks — a delta batch of workflow state changes.",
       "type": "object",
       "properties": {
         "agent_type": {
@@ -5998,7 +6003,7 @@
           ]
         },
         "recent_activities": {
-          "description": "Recent tool activities (cap-5 ring buffer). Coordinator-side\nowns push + eviction; the TUI just copies the slice into its\n`SubagentInstance` mirror. \n\n`MAX_RECENT_ACTIVITIES = 5`. Empty when the task hasn't run a\ntool yet or the producer is a legacy code path.",
+          "description": "Recent tool activities (cap-5 ring buffer). Coordinator-side\nowns push + eviction; the TUI just copies the slice into its\nCapped at `MAX_RECENT_ACTIVITIES = 5`. Empty when the task hasn't run a\ntool yet or the producer is a legacy code path.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/TaskActivity"
@@ -6093,7 +6098,7 @@
       ]
     },
     "TaskStartedParams": {
-      "description": "plus optional teammate-metadata fields used when\n`task_type == \"in_process_teammate\"`.\nTS encodes both teammate and async-subagent spawn through this same\n`task_started` SDK event, discriminated by `task_type` — the canonical\nstrings live in : `\"local_bash\"`, `\"local_agent\"`,\n`\"remote_agent\"`, `\"in_process_teammate\"`, `\"local_workflow\"`,\n`\"monitor_mcp\"`, `\"dream\"`. The teammate-roster rich metadata that TS\nstores in `AppState.teamContext.teammates` rides along as the\noptional fields below so the TUI in coco-rs (no shared store across\nprocesses) can construct the same `SubagentInstance { kind:\nTeammate, ... }` projection on the wire alone.",
+      "description": "Matches TS `SDKTaskStartedMessage` (`coreSchemas.ts:1715-1733`)\nplus optional teammate-metadata fields used when\n`task_type == \"in_process_teammate\"`.\n\nTS encodes both teammate and async-subagent spawn through this same\n`task_started` SDK event, discriminated by `task_type` — the canonical\nstrings live in `Task.ts:6-13`: `\"local_bash\"`, `\"local_agent\"`,\n`\"remote_agent\"`, `\"in_process_teammate\"`, `\"local_workflow\"`,\n`\"monitor_mcp\"`, `\"dream\"`. The teammate-roster rich metadata that TS\nstores in `AppState.teamContext.teammates` rides along as the\noptional fields below so the TUI in coco-rs (no shared store across\nprocesses) can construct the same `SubagentInstance { kind:\nTeammate, ... }` projection on the wire alone.",
       "type": "object",
       "properties": {
         "agent_name": {
@@ -6229,7 +6234,7 @@
       ]
     },
     "ThreadItem": {
-      "description": "Semantic representation of a conversation thread item.\nProduced by `StreamAccumulator` from `AgentStreamEvent` sequences.\nUsed in `ServerNotification::ItemStarted / ItemUpdated / ItemCompleted`.\nSee `event-system-design.md` Section 1.6.",
+      "description": "Semantic representation of a conversation thread item.\nProduced by `StreamAccumulator` from `AgentStreamEvent` sequences.\nUsed in `ServerNotification::ItemStarted / ItemUpdated / ItemCompleted`.\n\nSee `event-system-design.md` Section 1.6.",
       "type": "object",
       "properties": {
         "details": {
@@ -6249,7 +6254,7 @@
       ]
     },
     "ThreadItemDetails": {
-      "description": "Tool-specific semantic mapping.\nMapping rules (from `event-system-design.md` Section 6.2):\n- Bash → `CommandExecution`\n- Edit/Write → `FileChange`\n- WebSearch → `WebSearch`\n- mcp__* → `McpToolCall`\n- Agent/Task → `Subagent`\n- all others → `ToolCall`\n- text content → `AgentMessage`\n- thinking → `Reasoning`\n- errors → `Error`",
+      "description": "Tool-specific semantic mapping.\n\nMapping rules (from `event-system-design.md` Section 6.2):\n- Bash → `CommandExecution`\n- Edit/Write → `FileChange`\n- WebSearch → `WebSearch`\n- mcp__* → `McpToolCall`\n- Agent/Task → `Subagent`\n- all others → `ToolCall`\n- text content → `AgentMessage`\n- thinking → `Reasoning`\n- errors → `Error`",
       "oneOf": [
         {
           "description": "Bash tool → command execution with output.",
@@ -6850,7 +6855,7 @@
       ]
     },
     "ToolProgressParams": {
-      "description": "Long-running tool progress (Bash, PowerShell). TS throttles emission to\n≤1 per 30 seconds per `parent_tool_use_id`. coco-rs StreamAccumulator\nmay emit this independently from `AgentStreamEvent::ToolUseStarted`.",
+      "description": "Matches TS `SDKToolProgressMessage` (coreSchemas.ts:1648-1659).\n\nLong-running tool progress (Bash, PowerShell). TS throttles emission to\n≤1 per 30 seconds per `parent_tool_use_id`. coco-rs StreamAccumulator\nmay emit this independently from `AgentStreamEvent::ToolUseStarted`.",
       "type": "object",
       "properties": {
         "elapsed_time_seconds": {
@@ -7336,7 +7341,7 @@
       ]
     },
     "ToolUseSummaryParams": {
-      "description": "Background Haiku-based summary of a batch of tool uses. TS uses this\nto compress verbose tool output before it's displayed or archived.",
+      "description": "Matches TS `SDKToolUseSummaryMessage` (coreSchemas.ts:1769-1777).\n\nBackground Haiku-based summary of a batch of tool uses. TS uses this\nto compress verbose tool output before it's displayed or archived.",
       "type": "object",
       "properties": {
         "preceding_tool_use_ids": {
@@ -7385,7 +7390,7 @@
       ]
     },
     "TurnEndedParams": {
-      "description": "Terminal event for one logical user-prompt cycle. The\n`outcome` discriminator carries the per-variant payload —\n`stop_reason` lives only on `Completed` where it is\nsemantically meaningful. Other variants self-describe.\nPairing contract: every `TurnStartedParams` is followed by\n**at least one** `TurnEndedParams` sharing the same `turn_id`.\nA second `TurnEnded(Interrupted)` MAY follow a terminal outcome\nwhen the user cancel was observed after the engine had already\nreturned — this is the late-cancel signal the TUI uses to fire\nauto-restore. Consumers should treat the latest `Interrupted`\nevent as authoritative when it follows a same-id terminal.",
+      "description": "Terminal event for one logical user-prompt cycle. The\n`outcome` discriminator carries the per-variant payload —\n`stop_reason` lives only on `Completed` where it is\nsemantically meaningful. Other variants self-describe.\n\nPairing contract: every `TurnStartedParams` is followed by\n**at least one** `TurnEndedParams` sharing the same `turn_id`.\nA second `TurnEnded(Interrupted)` MAY follow a terminal outcome\nwhen the user cancel was observed after the engine had already\nreturned — this is the late-cancel signal the TUI uses to fire\nauto-restore. Consumers should treat the latest `Interrupted`\nevent as authoritative when it follows a same-id terminal.",
       "type": "object",
       "properties": {
         "outcome": {
@@ -7416,7 +7421,7 @@
       "type": "string"
     },
     "TurnOutcome": {
-      "description": "Discriminated terminal reason. The `Completed` variant is\nthe only one that carries `stop_reason`: the other variants'\nnames ARE the terminal reason.\nWire format: `{\"kind\": \"completed\", \"data\": {\"stop_reason\": \"end_turn\"}}` etc.\nPer-variant payloads are **named structs** rather than inline\nstruct-variants. This is deliberate: schemars emits `$ref` to the\nnamed struct, which the Python codegen turns into a real Pydantic\nmodel. Inline struct-variants would degrade to `dict[str, Any]` on\nthe Python side — losing typed access for SDK consumers.",
+      "description": "Discriminated terminal reason. The `Completed` variant is\nthe only one that carries `stop_reason`: the other variants'\nnames ARE the terminal reason.\n\nWire format: `{\"kind\": \"completed\", \"data\": {\"stop_reason\": \"end_turn\"}}` etc.\n\nPer-variant payloads are **named structs** rather than inline\nstruct-variants. This is deliberate: schemars emits `$ref` to the\nnamed struct, which the Python codegen turns into a real Pydantic\nmodel. Inline struct-variants would degrade to `dict[str, Any]` on\nthe Python side — losing typed access for SDK consumers.",
       "oneOf": [
         {
           "description": "Engine decided to terminate the cycle.",

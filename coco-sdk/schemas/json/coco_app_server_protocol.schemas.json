@@ -93,7 +93,7 @@
       ]
     },
     "AgentStreamEvent": {
-      "description": "Agent-loop stream events. Higher-level than `coco_types::StreamEvent`\n(which represents raw LLM inference deltas). Adds:\n- Tool lifecycle states (Queued \u2192 Started \u2192 Completed)\n- MCP tool call tracking\n- Turn-scoped item IDs\nInput to `StreamAccumulator`.\nSee `event-system-design.md` Section 1.5.",
+      "description": "Agent-loop stream events. Higher-level than `coco_types::StreamEvent`\n(which represents raw LLM inference deltas). Adds:\n- Tool lifecycle states (Queued \u2192 Started \u2192 Completed)\n- MCP tool call tracking\n- Turn-scoped item IDs\n\nInput to `StreamAccumulator`.\nSee `event-system-design.md` Section 1.5.",
       "oneOf": [
         {
           "description": "Text content delta from assistant response.",
@@ -188,7 +188,7 @@
           "type": "object"
         },
         {
-          "description": "Tool execution completed with result.\n`name` is carried here so StreamAccumulator and TUI consumers can\nreconstruct display state without maintaining their own call_id \u2192 name map.",
+          "description": "Tool execution completed with result.\n\n`name` is carried here so StreamAccumulator and TUI consumers can\nreconstruct display state without maintaining their own call_id \u2192 name map.",
           "properties": {
             "call_id": {
               "type": "string"
@@ -319,7 +319,7 @@
       "type": "object"
     },
     "AgentsDialogPayload": {
-      "description": "Payload for [`TuiOnlyEvent::OpenAgentsDialog`]. Built by the\n`/agents` slash handler with everything the 2-tab dialog needs\n(Running tab reads `SessionState.subagents` directly, so the\npayload only carries Library data).\nbundled-only `cli_unpack_pretty/decls/functions/bW4.js`\n(Library tab). The open-source `<AgentsMenu>` exposes the same\nper-row data but routes through a different state machine.",
+      "description": "Payload for [`TuiOnlyEvent::OpenAgentsDialog`]. Built by the\n`/agents` slash handler with everything the 2-tab dialog needs\n(Running tab reads `SessionState.subagents` directly, so the\npayload only carries Library data).\n\nCarries Library tab data for the agents overlay.",
       "properties": {
         "entries": {
           "description": "All visible agents, source-grouped at dialog-build time so the\nTUI doesn't recompute precedence. Order: User \u2192 Project \u2192\nLocal \u2192 Managed \u2192 Plugin \u2192 Flag \u2192 Built-in. Empty groups are\nomitted.",
@@ -1967,7 +1967,7 @@
       "type": "string"
     },
     "CompactionPhase": {
-      "description": "Sub-phase of a compaction in progress.\nTool execution phase taxonomy:\n- `HooksStart { hook_type }` for PreCompact / PostCompact / SessionStart\n- `Summarizing` for the LLM summarizer call\n- `Done` to clear the spinner",
+      "description": "Sub-phase of a compaction in progress (TS `onCompactProgress`).\n\nMirrors the TS phase taxonomy at Tool.ts:150-156:\n  - `HooksStart { hook_type }` for PreCompact / PostCompact / SessionStart\n  - `Summarizing` for the LLM summarizer call\n  - `Done` to clear the spinner",
       "enum": [
         "hooks_start",
         "summarizing",
@@ -2163,7 +2163,7 @@
         "trigger": {
           "$ref": "#/$defs/CompactTrigger",
           "default": "auto",
-          "description": "Which strategy produced this compaction.\n`tengu_compact.trigger` field. Older transcripts\nwithout this field default to `Auto`. Defaulted via serde so\noff-the-wire payloads from older SDK clients keep parsing."
+          "description": "Which strategy produced this compaction.\n\nMirrors the TS `tengu_compact.trigger` field. Older transcripts\nwithout this field default to `Auto`. Defaulted via serde so\noff-the-wire payloads from older SDK clients keep parsing."
         }
       },
       "required": [
@@ -2514,7 +2514,7 @@
       "type": "string"
     },
     "ElicitationCompleteParams": {
-      "description": "Emitted after an MCP server's elicitation request is resolved\n(either submitted or cancelled).",
+      "description": "Matches TS `SDKElicitationCompleteMessage` (coreSchemas.ts:1779-1792).\n\nEmitted after an MCP server's elicitation request is resolved\n(either submitted or cancelled).",
       "properties": {
         "elicitation_id": {
           "type": "string"
@@ -2712,6 +2712,7 @@
       "type": "object"
     },
     "FastModeState": {
+      "description": "Matches TS `FastModeStateSchema` (coreSchemas.ts:1883-1889).",
       "enum": [
         "off",
         "cooldown",
@@ -2779,7 +2780,7 @@
       "type": "object"
     },
     "FilesPersistedParams": {
-      "description": "TS emits this when files are uploaded or persisted (e.g. after a\nsuccessful `filesApi` operation).",
+      "description": "Matches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).\n\nTS emits this when files are uploaded or persisted (e.g. after a\nsuccessful `filesApi` operation).",
       "properties": {
         "failed": {
           "default": [],
@@ -2987,7 +2988,7 @@
       "type": "object"
     },
     "HookEventType": {
-      "description": "27 hook event types \nEvent type identifiers for hook registration and dispatch.\nWire format is **PascalCase** (e.g. `\"PreToolUse\"`) \u2014 identical to\nTS settings.json keys. Variant names serialize as-is via serde\ndefault and strum default; do not add `rename_all`.\n`#[non_exhaustive]` so future TS additions can land without\nbreaking match exhaustiveness in downstream crates.",
+      "description": "27 hook event types\nEvent type identifiers for hook registration and dispatch.\nWire format is **PascalCase** (e.g. `\"PreToolUse\"`) \u2014 identical to\nTS settings.json keys. Variant names serialize as-is via serde\ndefault and strum default; do not add `rename_all`.\n`#[non_exhaustive]` so future TS additions can land without\nbreaking match exhaustiveness in downstream crates.",
       "enum": [
         "PreToolUse",
         "PostToolUse",
@@ -3079,6 +3080,7 @@
       "type": "object"
     },
     "HookProgressParams": {
+      "description": "Matches TS `SDKHookProgressMessage` (coreSchemas.ts:1616-1629).",
       "properties": {
         "hook_event": {
           "type": "string"
@@ -3110,6 +3112,7 @@
       "type": "object"
     },
     "HookResponseParams": {
+      "description": "Matches TS `SDKHookResponseMessage` (coreSchemas.ts:1631-1646).",
       "properties": {
         "exit_code": {
           "format": "int32",
@@ -4277,7 +4280,7 @@
       ]
     },
     "LocalCommandOutputParams": {
-      "description": "TS emits this when the user runs a local bash command via the REPL `!`\nprefix (not a tool call). The `content` field is the command output;\nTS types it as the raw output structure (typically stdout/stderr).",
+      "description": "Matches TS `SDKLocalCommandOutputMessage` (coreSchemas.ts:1590-1602).\n\nTS emits this when the user runs a local bash command via the REPL `!`\nprefix (not a tool call). The `content` field is the command output;\nTS types it as the raw output structure (typically stdout/stderr).",
       "properties": {
         "content": true
       },
@@ -5061,7 +5064,7 @@
       "title": "ModelRole"
     },
     "ModelRoleChangedParams": {
-      "description": "Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries\nthe resolved binding (model + provider + thinking effort) that the\nTUI applies to `state.session.model_by_role[role]` and, when\n`role == Main`, also to `state.session.{model, provider,\nthinking_effort}` for the status bar.\nEmitted by `tui_runner` after applying an in-memory override via\n`SessionRuntime::apply_role_override` / `apply_role_effort`. No\npersistence to settings.json \u2014 that's the user's job.",
+      "description": "Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries\nthe resolved binding (model + provider + thinking effort) that the\nTUI applies to `state.session.model_by_role[role]` and, when\n`role == Main`, also to `state.session.{model, provider,\nthinking_effort}` for the status bar.\n\nEmitted by `tui_runner` after applying an in-memory override via\n`SessionRuntime::apply_role_override` / `apply_role_effort`. No\npersistence to settings.json \u2014 that's the user's job.",
       "properties": {
         "context_window": {
           "format": "int64",
@@ -5261,6 +5264,7 @@
       "type": "string"
     },
     "PermissionDenialInfo": {
+      "description": "Matches TS `SDKPermissionDenialSchema` (coreSchemas.ts:1399-1405).",
       "properties": {
         "tool_input": true,
         "tool_name": {
@@ -5278,7 +5282,7 @@
       "type": "object"
     },
     "PermissionDisplayInput": {
-      "description": "Bounded, UI-ready permission input display.\nThis is separate from the raw tool input because approval UIs should\nconsume sanitized display data while keeping `original_input` only for\nupdated-input response construction and permission-rule derivation.",
+      "description": "Bounded, UI-ready permission input display.\n\nThis is separate from the raw tool input because approval UIs should\nconsume sanitized display data while keeping `original_input` only for\nupdated-input response construction and permission-rule derivation.",
       "oneOf": [
         {
           "properties": {
@@ -5678,7 +5682,7 @@
       ]
     },
     "PermissionUpdateDestination": {
-      "description": "Destination for persisting permission updates.\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to\ndisk; in-memory destinations (`Session`/`CliArg`/`Command`) live only\nfor the running session. same split as\n`persistPermissionUpdates` in `PermissionUpdate.ts`.\n`Command` is reserved for rules contributed by an invoked command or\nskill's frontmatter (`allowed-tools:`). \n`alwaysAllowRules.command` populated by `SkillTool` /\n`createGetAppStateWithAllowedTools`.",
+      "description": "Destination for persisting permission updates.\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to\ndisk; in-memory destinations (`Session`/`CliArg`/`Command`) live only\nfor the running session. same split as\n`persistPermissionUpdates` in `PermissionUpdate.ts`.\n`Command` is reserved for rules contributed by an invoked command or\nskill's frontmatter (`allowed-tools:`).\n`alwaysAllowRules.command` populated by `SkillTool` /\n`createGetAppStateWithAllowedTools`.",
       "oneOf": [
         {
           "enum": [
@@ -5715,7 +5719,7 @@
       "type": "object"
     },
     "PermissionsEditorPayload": {
-      "description": "Payload for [`TuiOnlyEvent::OpenPermissionsEditor`]. Built by the\n`/permissions` slash handler (CLI side) with everything the tabbed\nrule editor needs: every file-backed rule keyed by behavior + source,\nevery additional working directory, and the current working directory.\nThe TUI cannot read the settings stores itself, so the CLI snapshots\nthem here and re-emits this payload after each persisted edit (the\nopen overlay refreshes in place). Backing data:\n`getPermissionRules()` + `getAdditionalWorkingDirectories()`.",
+      "description": "Payload for [`TuiOnlyEvent::OpenPermissionsEditor`]. Built by the\n`/permissions` slash handler (CLI side) with everything the tabbed\nrule editor needs: every file-backed rule keyed by behavior + source,\nevery additional working directory, and the current working directory.\n\nThe TUI cannot read the settings stores itself, so the CLI snapshots\nthem here and re-emits this payload after each persisted edit (the\nopen overlay refreshes in place).\nBacking data: `getPermissionRules()` + `getAdditionalWorkingDirectories()`.",
       "properties": {
         "cwd": {
           "description": "Current working directory \u2014 rendered read-only at the top of the\nWorkspace tab (TS \"Original working directory\").",
@@ -6353,7 +6357,7 @@
       "type": "object"
     },
     "ReasoningMetadataAttachedParams": {
-      "description": "Reasoning aggregates anchored to a specific assistant message.\nEmitted by the engine right after `TurnCompleted` when the model\nreported non-zero `reasoning_tokens`. The TUI handler indexes its\n`reasoning_metadata` side-cache by `message_uuid`, eliminating the\nO(n) \"find latest `AssistantThinking` cell\" walk and removing the\nlast vestige of the I-2 exception.",
+      "description": "Reasoning aggregates anchored to a specific assistant message.\n\nEmitted by the engine right after `TurnCompleted` when the model\nreported non-zero `reasoning_tokens`. The TUI handler indexes its\n`reasoning_metadata` side-cache by `message_uuid`, eliminating the\nO(n) \"find latest `AssistantThinking` cell\" walk and removing the\nlast vestige of the I-2 exception.",
       "properties": {
         "duration_ms": {
           "description": "Token-only reasoning duration in milliseconds. `None` when the\nprovider didn't separate reasoning vs. content time.",
@@ -6496,7 +6500,7 @@
       "type": "object"
     },
     "RewindDiffStatsPayload": {
-      "description": "Diff stats payload shared by per-row metadata and the selected\nrestore preview event. `file_paths.is_empty()` means \"snapshot\nexists but nothing changed\".\n`file_paths` matches `DiffStats.filesChanged: string[]` and is used by the\nconfirm screen to assemble single / two / many-file labels.\n# Two semantics, one wire type\n`insertions` / `deletions` interpretation depends on which event\ncarries this payload:\n- [`TuiOnlyEvent::RewindRowMetadataReady`] \u2014 **forward-time**.\n`insertions` = lines added between two adjacent user-message\ncheckpoints. Computed via [`FileHistoryState::get_diff_stats_between`]\ncounting `+` lines from `structuredPatch`.\n- [`TuiOnlyEvent::RewindRestorePreviewReady`] \u2014 **rewind-direction**.\n`insertions` = lines that rewind would add back; `deletions` =\nlines that rewind would remove. Computed via\n[`FileHistoryState::get_diff_stats`] with\n`diffLines(originalContent, backupContent)` direction.\nThe same `DiffStats` shape covers both call sites;\ncontext disambiguates the direction.",
+      "description": "Diff stats payload shared by per-row metadata and the selected\nrestore preview event. `file_paths.is_empty()` means \"snapshot\nexists but nothing changed\".\n\n`file_paths` matches `DiffStats.filesChanged: string[]` and is used by the\nconfirm screen to assemble single / two / many-file labels.\n\n# Two semantics, one wire type\n\n`insertions` / `deletions` interpretation depends on which event\ncarries this payload:\n\n- [`TuiOnlyEvent::RewindRowMetadataReady`] \u2014 **forward-time**.\n  `insertions` = lines added between two adjacent user-message\n  checkpoints. Computed via [`FileHistoryState::get_diff_stats_between`]\n  counting `+` lines from `structuredPatch`.\n- [`TuiOnlyEvent::RewindRestorePreviewReady`] \u2014 **rewind-direction**.\n  `insertions` = lines that rewind would add back; `deletions` =\n  lines that rewind would remove. Computed via\n  [`FileHistoryState::get_diff_stats`] with\n  `diffLines(originalContent, backupContent)` direction.\n\nThe same `DiffStats` shape covers both call sites;\ncontext disambiguates the direction.",
       "properties": {
         "deletions": {
           "format": "int64",
@@ -6882,7 +6886,7 @@
           ]
         },
         "systemMessage": {
-          "description": "Free-form message injected into the conversation as a system\nmessage (visible to model and user). \n`syncHookResponseSchema.systemMessage`.",
+          "description": "Free-form message injected into the conversation as a system\nmessage (visible to model and user).\n`syncHookResponseSchema.systemMessage`.",
           "type": [
             "string",
             "null"
@@ -7033,7 +7037,7 @@
       "type": "object"
     },
     "ServerNotification": {
-      "description": "Protocol-level notifications visible to all consumers.\n\nProtocol notifications across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`local_agent` / `in_process_teammate`) no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` \u00a74.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
+      "description": "Protocol-level notifications visible to all consumers.\n\nProtocol notifications across 20 categories. Subagent lifecycle (spawn / progress / completion / background transition) rides on `task/started`, `task/progress`, and `task/completed` with `task_type` discriminating (`local_agent` / `in_process_teammate`), matching TS \u2014 no dedicated `subagent/*` family. See `event-system-design.md` Section 2 and `engine-tui-unified-transcript-plan.md` \u00a74.1 for the history lifecycle category. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
       "oneOf": [
         {
           "description": "New session started.",
@@ -7104,7 +7108,7 @@
           "type": "object"
         },
         {
-          "description": "One Message appended to engine MessageHistory.\n`session_id` + `agent_id` envelope (plan \u00a711 F9): merged-timeline\nconsumers (AgentTeams) demux per session/agent off the same event\nstream. `agent_id` is `None` for the main agent; `Some` for\nteammates / subagents. Single-session SDK consumers may ignore\nboth fields (`#[serde(default)]` keeps the wire forward-compat).",
+          "description": "One Message appended to engine MessageHistory.\n\n`session_id` + `agent_id` envelope (plan \u00a711 F9): merged-timeline\nconsumers (AgentTeams) demux per session/agent off the same event\nstream. `agent_id` is `None` for the main agent; `Some` for\nteammates / subagents. Single-session SDK consumers may ignore\nboth fields (`#[serde(default)]` keeps the wire forward-compat).",
           "properties": {
             "method": {
               "const": "history/messageAppended",
@@ -7502,7 +7506,7 @@
           "type": "object"
         },
         {
-          "description": "Compaction phase progress.\nDrives the spinner text in the TUI / SDK runner so the user\ncan see which sub-phase is active (PreCompact hooks \u2192 summarize\n\u2192 PostCompact hooks \u2192 done).",
+          "description": "Compaction phase progress (TS `onCompactProgress`).\nDrives the spinner text in the TUI / SDK runner so the user\ncan see which sub-phase is active (PreCompact hooks \u2192 summarize\n\u2192 PostCompact hooks \u2192 done).",
           "properties": {
             "method": {
               "const": "context/compactionPhase",
@@ -7604,7 +7608,7 @@
           "type": "object"
         },
         {
-          "description": "Durable plan-item / V1 todo snapshot \u2014 emitted after\n`TaskCreate`/`TaskUpdate`/`TodoWrite` tools mutate state so\nthe TUI can refresh its panel without pulling the store\ndirectly. `notifyTasksUpdated` subscriber callback\nin `utils/tasks.ts`.",
+          "description": "Durable plan-item / V1 todo snapshot \u2014 emitted after\n`TaskCreate`/`TaskUpdate`/`TodoWrite` tools mutate state so\nthe TUI can refresh its panel without pulling the store\ndirectly.",
           "properties": {
             "method": {
               "const": "task_panel/changed",
@@ -7621,7 +7625,7 @@
           "type": "object"
         },
         {
-          "description": "Team lead received a plan-approval request from a teammate\n(via mailbox). The TUI surfaces this as a modal overlay.\nTeammate plan-exit request flow.",
+          "description": "Team lead received a plan-approval request from a teammate\n(via mailbox). The TUI surfaces this as a modal overlay.",
           "properties": {
             "method": {
               "const": "plan_approval/requested",
@@ -8308,7 +8312,7 @@
           "type": "object"
         },
         {
-          "description": "Output from a user-executed local command (REPL `!` prefix).",
+          "description": "Output from a user-executed local command (REPL `!` prefix).\nMatches TS `SDKLocalCommandOutputMessage` (coreSchemas.ts:1590-1602).",
           "properties": {
             "method": {
               "const": "localCommand/output",
@@ -8325,7 +8329,7 @@
           "type": "object"
         },
         {
-          "description": "Files persisted to disk (file upload/snapshot completion).",
+          "description": "Files persisted to disk (file upload/snapshot completion).\nMatches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).",
           "properties": {
             "method": {
               "const": "files/persisted",
@@ -8342,7 +8346,7 @@
           "type": "object"
         },
         {
-          "description": "MCP elicitation completed (form submission or cancellation).",
+          "description": "MCP elicitation completed (form submission or cancellation).\nMatches TS `SDKElicitationCompleteMessage` (coreSchemas.ts:1779-1792).",
           "properties": {
             "method": {
               "const": "elicitation/complete",
@@ -8359,7 +8363,7 @@
           "type": "object"
         },
         {
-          "description": "Tool use summary from background haiku summarization.",
+          "description": "Tool use summary from background haiku summarization.\nMatches TS `SDKToolUseSummaryMessage` (coreSchemas.ts:1769-1777).",
           "properties": {
             "method": {
               "const": "tool/useSummary",
@@ -8376,7 +8380,7 @@
           "type": "object"
         },
         {
-          "description": "Tool execution progress (bash/powershell long-running).\nSent at most once per 30 seconds per `parent_tool_use_id`.",
+          "description": "Tool execution progress (bash/powershell long-running).\nMatches TS `SDKToolProgressMessage` (coreSchemas.ts:1648-1659).\nSent at most once per 30 seconds per `parent_tool_use_id`.",
           "properties": {
             "method": {
               "const": "tool/progress",
@@ -8393,7 +8397,7 @@
           "type": "object"
         },
         {
-          "description": "Plugin state changed on disk (manifest added/removed/edited,\n`installed_plugins.json` updated, or settings.json scope toggled).\nCarries a short reason string the UI can surface as a banner.\nThe \"Plugins\nchanged. Run /reload-plugins to activate.\" notification. Never\ntriggers an auto-reload \u2014 the explicit `/reload-plugins`\ninvocation is what applies the change.",
+          "description": "Plugin state changed on disk (manifest added/removed/edited,\n`installed_plugins.json` updated, or settings.json scope toggled).\nCarries a short reason string the UI can surface as a banner.\nEmits a \"Plugins changed. Run /reload-plugins to activate.\" notification. Never\ntriggers an auto-reload \u2014 the explicit `/reload-plugins`\ninvocation is what applies the change.",
           "properties": {
             "method": {
               "const": "plugins/changed",
@@ -8581,6 +8585,7 @@
       "type": "object"
     },
     "SessionModelUsage": {
+      "description": "Matches TS `ModelUsageSchema` (coreSchemas.ts:17-28).",
       "properties": {
         "cache_creation_input_tokens": {
           "format": "int64",
@@ -8774,7 +8779,7 @@
       "type": "object"
     },
     "SessionResultParams": {
-      "description": "TS has two subtype variants (success/error) unified here with `is_error` flag.",
+      "description": "Matches TS `SDKResultMessageSchema` (coreSchemas.ts:1407-1451).\nTS has two subtype variants (success/error) unified here with `is_error` flag.",
       "properties": {
         "duration_api_ms": {
           "format": "int64",
@@ -8810,7 +8815,7 @@
             "$ref": "#/$defs/SessionModelUsage"
           },
           "default": {},
-          "description": "Per-model usage breakdown.",
+          "description": "Per-model usage breakdown (TS `modelUsage: Record<string, ModelUsage>`).",
           "type": "object"
         },
         "num_api_calls": {
@@ -8966,7 +8971,7 @@
       "type": "object"
     },
     "SessionStartedParams": {
-      "description": "Sent once at session startup with subtype 'init'; carries the full bootstrap context the SDK\nconsumer needs to render a UI.",
+      "description": "Matches TS `SDKSystemMessageSchema` with subtype 'init' (coreSchemas.ts:1457-1494).\nSent once at session startup; carries the full bootstrap context the SDK\nconsumer needs to render a UI.",
       "properties": {
         "agents": {
           "default": [],
@@ -9551,7 +9556,7 @@
       "type": "string"
     },
     "SkillLock": {
-      "description": "A non-overridable lock on a skill row in the `/skills` dialog.\nCarries both the originating tier ([`Self::source`]) and the\nforced 4-state value ([`Self::forced_value`]) so downstream\nrenderers don't need to re-derive the value from per-tier maps.",
+      "description": "A non-overridable lock on a skill row in the `/skills` dialog.\nCarries both the originating tier ([`Self::source`]) and the\nforced 4-state value ([`Self::forced_value`]) so downstream\nrenderers don't need to re-derive the value from per-tier maps.\n\nTS mirror: `oT5` returns `{ value, source }` \u2014\n`cli_inner_pretty.js:476885-476893`.",
       "properties": {
         "forced_value": {
           "$ref": "#/$defs/SkillOverrideState"
@@ -9567,7 +9572,7 @@
       "type": "object"
     },
     "SkillLockSource": {
-      "description": "Which precedence layer originated a non-overridable lock on a\nskill's `skill_overrides` state.\nIn precedence order (highest first): [`Self::Policy`] \u2192\n[`Self::Flag`] \u2192 [`Self::Author`] \u2192 [`Self::Plugin`]. A lock means\nthe `/skills` dialog renders `\ud83d\udd12 <label>` for the row and refuses\nto cycle it (Space is a no-op).",
+      "description": "Which precedence layer originated a non-overridable lock on a\nskill's `skill_overrides` state. Mirrors the four `lock.source`\nvalues returned by TS `oT5` (`cli_inner_pretty.js:476885-476893`).\n\nIn precedence order (highest first): [`Self::Policy`] \u2192\n[`Self::Flag`] \u2192 [`Self::Author`] \u2192 [`Self::Plugin`]. A lock means\nthe `/skills` dialog renders `\ud83d\udd12 <label>` for the row and refuses\nto cycle it (Space is a no-op).",
       "oneOf": [
         {
           "const": "policy",
@@ -9592,7 +9597,7 @@
       ]
     },
     "SkillOverrideState": {
-      "description": "Per-skill override state stored under `skill_overrides` in any\nsettings tier. Drives the `/skills` 4-state editor ladder.\nWire format is kebab-case (`\"on\"`, `\"name-only\"`,\n`\"user-invocable-only\"`, `\"off\"`) \u2014 JSON settings files round-trip\nwithout translation.",
+      "description": "Per-skill override state stored under `skill_overrides` in any\nsettings tier. Drives the `/skills` 4-state editor ladder.\n\nWire format is kebab-case (`\"on\"`, `\"name-only\"`,\n`\"user-invocable-only\"`, `\"off\"`) \u2014 JSON settings files round-trip\nwithout translation.",
       "oneOf": [
         {
           "const": "on",
@@ -9642,7 +9647,7 @@
       ]
     },
     "SkillOverridesSaveResult": {
-      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after `SettingsWriter::write_local`.\nCarries **no display data** \u2014 TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
+      "description": "Outcome of a `/skills` dialog save dispatch. CLI bridge populates\nthis after `SettingsWriter::write_local`.\n\nCarries **no display data** \u2014 TUI owns toast text generation and\nstashes the pre-write `total_edits` count on its own state\nbefore dispatching. CLI only reports success vs typed failure.",
       "oneOf": [
         {
           "description": "Write succeeded.",
@@ -9685,7 +9690,7 @@
       "properties": {
         "baseline": {
           "$ref": "#/$defs/SkillOverrideState",
-          "description": "Project-or-user settings resolution, **without** local /\npolicy / flag layers. `aT5`. The dialog falls back here\nwhen the user reverts a local override (the save path\nwrites `Value::Null` so the local key is deleted and the\nbaseline resurfaces)."
+          "description": "Project-or-user settings resolution, **without** local /\npolicy / flag layers. TS `aT5`. The dialog falls back here\nwhen the user reverts a local override (the save path\nwrites `Value::Null` so the local key is deleted and the\nbaseline resurfaces)."
         },
         "current_local": {
           "anyOf": [
@@ -9716,7 +9721,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional lock \u2014 present when this row's state is forced by\na higher-precedence layer. Set by\n`resolve_skill_override_lock`. When set, the\ndialog renders `\ud83d\udd12 <label>` and no-ops on Space."
+          "description": "Optional lock \u2014 present when this row's state is forced by\na higher-precedence layer. Set by\n`resolve_skill_override_lock` (`oT5` mirror). When set, the\ndialog renders `\ud83d\udd12 <label>` and no-ops on Space."
         },
         "name": {
           "description": "Canonical skill name \u2014 what `/<name>` invokes.",
@@ -9744,7 +9749,7 @@
       "type": "object"
     },
     "SkillsDialogPayload": {
-      "description": "Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the\n`/skills` slash handler so the TUI doesn't recompute paths, token\nestimates, or grouping.\n2.1.142 `uJ4` (`cli_inner_pretty.js:476909`) \u2014 a flat\neditable list with 4-state override cycling, source labels\ninline, and lock annotations for policy/flag/author/plugin-locked\nrows. The 2.1.88 grouped read-only `SkillsMenu` has been retired.",
+      "description": "Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the\n`/skills` slash handler so the TUI doesn't recompute paths, token\nestimates, or grouping.\n\nA flat editable list with 4-state override cycling, source labels\ninline, and lock annotations for policy/flag/author/plugin-locked rows.",
       "properties": {
         "bytes_per_token": {
           "description": "Bytes per token for the current main-role model. The TUI\ndivides [`SkillsDialogEntry::frontmatter_bytes`] by this to\nrender the `~N tok` column. Set to 4 when the host cannot\nresolve a more accurate value \u2014 `bytes/token \u2248 4` is the\nEnglish-text rule-of-thumb fallback.",
@@ -9766,11 +9771,11 @@
       "type": "object"
     },
     "SkillsDialogSource": {
-      "description": "Source group for a skill dialog entry. Collapsed from\n`SettingSource | 'plugin' | 'mcp'` to a closed enum so the wire shape is statically typed.\nThe dialog normalises `bundled`/`builtin` \u2192 display label `\"built-in\"`; the\ndialog filter matches against that lowercased label.",
+      "description": "Source group for a skill dialog entry. Collapsed from\n`SettingSource | 'plugin' | 'mcp'` to a closed enum so the wire shape is statically typed.\n\nThe dialog normalises `bundled`/`builtin` \u2192 display label `\"built-in\"`; the\ndialog filter matches against that lowercased label.",
       "oneOf": [
         {
           "const": "built_in",
-          "description": "Compiled-in bundled skill catalog. `bundled` / `builtin`\ncollapsed to a single label (display: `built-in`).",
+          "description": "Compiled-in bundled skill catalog. TS `bundled` / `builtin`\ncollapsed to a single label (display: `built-in`).",
           "type": "string"
         },
         {
@@ -9780,12 +9785,12 @@
         },
         {
           "const": "user",
-          "description": "`config home/skills/` \u2014 `userSettings`.",
+          "description": "`config home/skills/` \u2014 TS `userSettings`.",
           "type": "string"
         },
         {
           "const": "policy",
-          "description": "Managed enterprise dir \u2014 `policySettings`.",
+          "description": "Managed enterprise dir \u2014 TS `policySettings`.",
           "type": "string"
         },
         {
@@ -9851,7 +9856,7 @@
         },
         "usage_score": {
           "default": 0.0,
-          "description": "Recency-decayed usage score precomputed at snapshot time.\nHigher means \"used more recently and/or more often\". \n`getSkillUsageScore` in `utils/suggestions/skillUsageTracking.ts`\n\u2014 same 7-day half-life with a 0.1 recency floor.\nEmbedded in the snapshot so the TUI ranker never touches disk\non the hot popup path. Updated naturally at the existing\nsnapshot-refresh moments (session start, `/reload-plugins`).\nIntra-session staleness is acceptable \u2014 the rank only governs\nwhich skills float to the top of the empty-query view; users\npick by name regardless.",
+          "description": "Recency-decayed usage score precomputed at snapshot time.\nHigher means \"used more recently and/or more often\".\n`getSkillUsageScore` in `utils/suggestions/skillUsageTracking.ts`\n\u2014 same 7-day half-life with a 0.1 recency floor.\nEmbedded in the snapshot so the TUI ranker never touches disk\non the hot popup path. Updated naturally at the existing\nsnapshot-refresh moments (session start, `/reload-plugins`).\nIntra-session staleness is acceptable \u2014 the rank only governs\nwhich skills float to the top of the empty-query view; users\npick by name regardless.",
           "format": "double",
           "type": "number"
         }
@@ -9862,7 +9867,7 @@
       "type": "object"
     },
     "SlashCommandStatusKind": {
-      "description": "Categorization of a `SlashCommandStatus` payload. Each variant maps to\na `slash.status.*` key in the TUI locale catalog.\nWire format intentionally tagged so SDK clients can render their own\nlocalized strings instead of consuming the TUI's English fallback.",
+      "description": "Categorization of a `SlashCommandStatus` payload. Each variant maps to\na `slash.status.*` key in the TUI locale catalog.\n\nWire format intentionally tagged so SDK clients can render their own\nlocalized strings instead of consuming the TUI's English fallback.",
       "oneOf": [
         {
           "description": "Registered command has no `handler` \u2014 typically a plugin\ncontribution stub that wasn't bridged.",
@@ -10298,7 +10303,7 @@
       "type": "object"
     },
     "SystemMemorySavedMessage": {
-      "description": "Surfaced to the user's transcript when the auto-memory subsystem\nhas just landed new memory writes. \n(which overrides\n`verb` to `\"Improved\"` for dream consolidations vs. the default\n`\"Saved\"` for extract).",
+      "description": "Surfaced to the user's transcript when the auto-memory subsystem\nhas just landed new memory writes.\n(which overrides\n`verb` to `\"Improved\"` for dream consolidations vs. the default\n`\"Saved\"` for extract).",
       "properties": {
         "uuid": {
           "format": "uuid",
@@ -10674,7 +10679,7 @@
       "type": "object"
     },
     "TaskCompletedParams": {
-      "description": "TS calls this `task/notification`; coco-rs uses `task/completed` as the\nwire method for brevity, but fields match TS exactly.",
+      "description": "Matches TS `SDKTaskNotificationMessage` (coreSchemas.ts:1694-1713).\nTS calls this `task/notification`; coco-rs uses `task/completed` as the\nwire method for brevity, but fields match TS exactly.",
       "properties": {
         "output_file": {
           "type": "string"
@@ -10714,7 +10719,7 @@
       "type": "object"
     },
     "TaskCompletionStatus": {
-      "description": "for task_notification status.",
+      "description": "Matches TS `z.enum(['completed', 'failed', 'stopped'])` for task_notification status.",
       "enum": [
         "completed",
         "failed",
@@ -10765,7 +10770,7 @@
       "type": "object"
     },
     "TaskProgressParams": {
-      "description": "In TS, `description` and `usage` are required; other fields optional.\nThe `workflow_progress` field carries the streaming state of local_workflow\ntasks \u2014 a delta batch of workflow state changes.",
+      "description": "Matches TS `SDKTaskProgressMessage` (coreSchemas.ts:1750-1767).\nIn TS, `description` and `usage` are required; other fields optional.\nThe `workflow_progress` field carries the streaming state of local_workflow\ntasks \u2014 a delta batch of workflow state changes.",
       "properties": {
         "agent_type": {
           "description": "Declared subagent type (`Explore`/`Plan`/\u2026), mirrored from the\nprogress slot so the TUI can correct the `local_agent` fallback\nthat `TaskStarted` emits.",
@@ -10784,7 +10789,7 @@
           ]
         },
         "recent_activities": {
-          "description": "Recent tool activities (cap-5 ring buffer). Coordinator-side\nowns push + eviction; the TUI just copies the slice into its\n`SubagentInstance` mirror. \n\n`MAX_RECENT_ACTIVITIES = 5`. Empty when the task hasn't run a\ntool yet or the producer is a legacy code path.",
+          "description": "Recent tool activities (cap-5 ring buffer). Coordinator-side\nowns push + eviction; the TUI just copies the slice into its\nCapped at `MAX_RECENT_ACTIVITIES = 5`. Empty when the task hasn't run a\ntool yet or the producer is a legacy code path.",
           "items": {
             "$ref": "#/$defs/TaskActivity"
           },
@@ -10880,7 +10885,7 @@
       "type": "object"
     },
     "TaskStartedParams": {
-      "description": "plus optional teammate-metadata fields used when\n`task_type == \"in_process_teammate\"`.\nTS encodes both teammate and async-subagent spawn through this same\n`task_started` SDK event, discriminated by `task_type` \u2014 the canonical\nstrings live in : `\"local_bash\"`, `\"local_agent\"`,\n`\"remote_agent\"`, `\"in_process_teammate\"`, `\"local_workflow\"`,\n`\"monitor_mcp\"`, `\"dream\"`. The teammate-roster rich metadata that TS\nstores in `AppState.teamContext.teammates` rides along as the\noptional fields below so the TUI in coco-rs (no shared store across\nprocesses) can construct the same `SubagentInstance { kind:\nTeammate, ... }` projection on the wire alone.",
+      "description": "Matches TS `SDKTaskStartedMessage` (`coreSchemas.ts:1715-1733`)\nplus optional teammate-metadata fields used when\n`task_type == \"in_process_teammate\"`.\n\nTS encodes both teammate and async-subagent spawn through this same\n`task_started` SDK event, discriminated by `task_type` \u2014 the canonical\nstrings live in `Task.ts:6-13`: `\"local_bash\"`, `\"local_agent\"`,\n`\"remote_agent\"`, `\"in_process_teammate\"`, `\"local_workflow\"`,\n`\"monitor_mcp\"`, `\"dream\"`. The teammate-roster rich metadata that TS\nstores in `AppState.teamContext.teammates` rides along as the\noptional fields below so the TUI in coco-rs (no shared store across\nprocesses) can construct the same `SubagentInstance { kind:\nTeammate, ... }` projection on the wire alone.",
       "properties": {
         "agent_name": {
           "description": "Bare agent name (e.g. `\"researcher\"`). The fully-qualified\n`name@team` lives in [`Self::task_id`] for teammate rows so the\nexisting task identity machinery doesn't need a second key.",
@@ -11042,7 +11047,7 @@
       "type": "object"
     },
     "ThreadItem": {
-      "description": "Semantic representation of a conversation thread item.\nProduced by `StreamAccumulator` from `AgentStreamEvent` sequences.\nUsed in `ServerNotification::ItemStarted / ItemUpdated / ItemCompleted`.\nSee `event-system-design.md` Section 1.6.",
+      "description": "Semantic representation of a conversation thread item.\nProduced by `StreamAccumulator` from `AgentStreamEvent` sequences.\nUsed in `ServerNotification::ItemStarted / ItemUpdated / ItemCompleted`.\n\nSee `event-system-design.md` Section 1.6.",
       "properties": {
         "details": {
           "$ref": "#/$defs/ThreadItemDetails"
@@ -11063,7 +11068,7 @@
       "type": "object"
     },
     "ThreadItemDetails": {
-      "description": "Tool-specific semantic mapping.\nMapping rules (from `event-system-design.md` Section 6.2):\n- Bash \u2192 `CommandExecution`\n- Edit/Write \u2192 `FileChange`\n- WebSearch \u2192 `WebSearch`\n- mcp__* \u2192 `McpToolCall`\n- Agent/Task \u2192 `Subagent`\n- all others \u2192 `ToolCall`\n- text content \u2192 `AgentMessage`\n- thinking \u2192 `Reasoning`\n- errors \u2192 `Error`",
+      "description": "Tool-specific semantic mapping.\n\nMapping rules (from `event-system-design.md` Section 6.2):\n- Bash \u2192 `CommandExecution`\n- Edit/Write \u2192 `FileChange`\n- WebSearch \u2192 `WebSearch`\n- mcp__* \u2192 `McpToolCall`\n- Agent/Task \u2192 `Subagent`\n- all others \u2192 `ToolCall`\n- text content \u2192 `AgentMessage`\n- thinking \u2192 `Reasoning`\n- errors \u2192 `Error`",
       "oneOf": [
         {
           "description": "Bash tool \u2192 command execution with output.",
@@ -11720,7 +11725,7 @@
       ]
     },
     "ToolProgressParams": {
-      "description": "Long-running tool progress (Bash, PowerShell). TS throttles emission to\n\u22641 per 30 seconds per `parent_tool_use_id`. coco-rs StreamAccumulator\nmay emit this independently from `AgentStreamEvent::ToolUseStarted`.",
+      "description": "Matches TS `SDKToolProgressMessage` (coreSchemas.ts:1648-1659).\n\nLong-running tool progress (Bash, PowerShell). TS throttles emission to\n\u22641 per 30 seconds per `parent_tool_use_id`. coco-rs StreamAccumulator\nmay emit this independently from `AgentStreamEvent::ToolUseStarted`.",
       "properties": {
         "elapsed_time_seconds": {
           "format": "double",
@@ -12206,7 +12211,7 @@
       "type": "object"
     },
     "ToolUseSummaryParams": {
-      "description": "Background Haiku-based summary of a batch of tool uses. TS uses this\nto compress verbose tool output before it's displayed or archived.",
+      "description": "Matches TS `SDKToolUseSummaryMessage` (coreSchemas.ts:1769-1777).\n\nBackground Haiku-based summary of a batch of tool uses. TS uses this\nto compress verbose tool output before it's displayed or archived.",
       "properties": {
         "preceding_tool_use_ids": {
           "items": {
@@ -12225,10 +12230,10 @@
       "type": "object"
     },
     "TuiOnlyEvent": {
-      "description": "TUI-exclusive events.\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n23 variants (20 from design \u00a74.1 + 3 local extensions).",
+      "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n\n23 variants (20 from design \u00a74.1 + 3 local extensions).",
       "oneOf": [
         {
-          "description": "Permission approval overlay needed.\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.resolution_detail` so the tool's\n`execute()` can branch on the choice. \n option grid.\n`original_input` carries the raw tool input so the TUI can derive\npath-scoped read permission updates for classic \"always allow\"\napprovals.",
+          "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.resolution_detail` so the tool's\n`execute()` can branch on the choice.\n\n`original_input` carries the raw tool input so the TUI can derive\npath-scoped read permission updates for classic \"always allow\"\napprovals.",
           "properties": {
             "choices": {
               "items": {
@@ -12306,7 +12311,7 @@
           "type": "object"
         },
         {
-          "description": "AskUserQuestion overlay needed. `input` carries the full tool\ninput dict (the `questions[]` array, etc.) verbatim so the TUI\nrenders the rich multi-question UI (multiSelect, preview, notes).\nThe TUI echoes the answer payload back via\n`UserCommand::ApprovalResponse` with\n`updated_input = Some({...input, answers, annotations})`.",
+          "description": "AskUserQuestion overlay needed. `input` carries the full tool\ninput dict (the `questions[]` array, etc.) verbatim so the TUI\nrenders the rich multi-question UI (multiSelect, preview, notes)\nmatching TS `AskUserQuestionPermissionRequest.tsx`. The TUI\nechoes the answer payload back via `UserCommand::ApprovalResponse`\nwith `updated_input = Some({...input, answers, annotations})`.",
           "properties": {
             "input": true,
             "request_id": {
@@ -12434,7 +12439,7 @@
           "type": "object"
         },
         {
-          "description": "Slash-command catalogue changed \u2014 sent after the seed at session\nstart AND whenever `/reload-plugins` swaps the active\n`CommandRegistry`. The TUI overwrites\n`state.session.available_commands` with this list so the `/`\nautocomplete popup and command palette stay in sync. \nthe TS popup re-queries `getCommands()` inline; this implementation pushes\nthe snapshot because the registry lives in the CLI process.",
+          "description": "Slash-command catalogue changed \u2014 sent after the seed at session\nstart AND whenever `/reload-plugins` swaps the active\n`CommandRegistry`. The TUI overwrites\n`state.session.available_commands` with this list so the `/`\nautocomplete popup and command palette stay in sync.\nThe registry lives in the CLI process so this pushes a snapshot\nrather than querying inline.",
           "properties": {
             "commands": {
               "items": {
@@ -12558,7 +12563,7 @@
           "type": "object"
         },
         {
-          "description": "Rewind picker per-row metadata, emitted once on picker mount.\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) \u2014 the\npicker renders \"\u26a0 No code restore\" for that row.\n`metadata == Some { file_paths: [], .. }` means the snapshot\nexists but nothing changed \u2014 picker renders \"No code changes\".\nBundled here so the bounded TUI command channel does not drop individual\nrow events on transcripts with many user messages.",
+          "description": "Rewind picker per-row metadata, emitted once on picker mount.\n\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) \u2014 the\npicker renders \"\u26a0 No code restore\" for that row.\n`metadata == Some { file_paths: [], .. }` means the snapshot\nexists but nothing changed \u2014 picker renders \"No code changes\".\n\nBundled here so the bounded TUI command channel does not drop individual\nrow events on transcripts with many user messages.",
           "properties": {
             "rows": {
               "items": {
@@ -12763,7 +12768,7 @@
           "type": "object"
         },
         {
-          "description": "Streaming tool input delta (typing effect).\nA tool call's arguments have started streaming (the model began\nemitting the input JSON). Carries the `call_id` and tool `name` so the\nTUI can create a pre-queue \"streaming\" row in the activity strip \u2014 the\n`call_id` matches the later [`AgentStreamEvent::ToolUseQueued`], which\nupgrades the same row with the finalized input once parsing completes.\nEmitted by the engine from `StreamEvent::ToolCallStart`. Like\n[`Self::ToolCallDelta`] it is UI-only: the SDK sees the complete input\nat `ToolUseQueued` and does not need the streaming preamble.",
+          "description": "Streaming tool input delta (typing effect).\n\nA tool call's arguments have started streaming (the model began\nemitting the input JSON). Carries the `call_id` and tool `name` so the\nTUI can create a pre-queue \"streaming\" row in the activity strip \u2014 the\n`call_id` matches the later [`AgentStreamEvent::ToolUseQueued`], which\nupgrades the same row with the finalized input once parsing completes.\n\nEmitted by the engine from `StreamEvent::ToolCallStart`. Like\n[`Self::ToolCallDelta`] it is UI-only: the SDK sees the complete input\nat `ToolUseQueued` and does not need the streaming preamble.",
           "properties": {
             "call_id": {
               "type": "string"
@@ -12784,7 +12789,7 @@
           "type": "object"
         },
         {
-          "description": "Partial tool-call input JSON fragment, for the live \"typing\" preview in\nthe activity strip. The TUI appends the delta to\n`ToolExecution.streaming_input` and re-derives the primary-argument\npreview (the command for `Bash`, the path for `Read`, \u2026) so the row\nshows arguments filling in before the call is queued.\nEmitted by the engine from `StreamEvent::ToolCallDelta` (a different,\ninference-internal type). Kept in `TuiOnlyEvent` rather than\n`AgentStreamEvent` per `event-system-design.md` \u00a73.3: the partial JSON\nserves a purely UI display purpose \u2014 `ToolUseQueued` already contains\nthe complete, re-assembled input, so SDK consumers need not handle the\nfragments.",
+          "description": "Partial tool-call input JSON fragment, for the live \"typing\" preview in\nthe activity strip. The TUI appends the delta to\n`ToolExecution.streaming_input` and re-derives the primary-argument\npreview (the command for `Bash`, the path for `Read`, \u2026) so the row\nshows arguments filling in before the call is queued.\n\nEmitted by the engine from `StreamEvent::ToolCallDelta` (a different,\ninference-internal type). Kept in `TuiOnlyEvent` rather than\n`AgentStreamEvent` per `event-system-design.md` \u00a73.3: the partial JSON\nserves a purely UI display purpose \u2014 `ToolUseQueued` already contains\nthe complete, re-assembled input, so SDK consumers need not handle the\nfragments.",
           "properties": {
             "call_id": {
               "type": "string"
@@ -12889,7 +12894,7 @@
           "description": "Local slash-command produced a `CommandResult::Text` (or\n`Compact { display_text }`). Surfaced as a system-role chat message\nso it reads inline with the transcript. `text` is the pre-rendered\nbody \u2014 never translated, since it carries the handler's actual\noutput (often command-specific status / git output / prompt\npreview).",
           "properties": {
             "args": {
-              "description": "Raw argument string the user typed (e.g. `sonnet` for\n`/model sonnet`). Threaded into the model-visible echo\n(`\u276f /name args`) so the model sees the full invocation.\nEmpty for argless commands.",
+              "description": "Raw argument string the user typed (e.g. `sonnet` for\n`/model sonnet`). Threaded into the model-visible echo\n(`\u276f /name args`) so the model sees the full invocation, matching\nTS `formatCommandInput(command, args)`. Empty for argless commands.",
               "type": "string"
             },
             "name": {
@@ -12955,7 +12960,7 @@
           "type": "object"
         },
         {
-          "description": "Tell the TUI to open the rewind picker overlay.\nEmitted by the slash-command dispatcher when `/rewind` resolves\nthrough the generic `DialogSpec` mapping. The TUI consumes the\ncurrent transcript cells to build the bare picker; preselected\nrewind remains an internal UI command path.",
+          "description": "Tell the TUI to open the rewind picker overlay.\n\nEmitted by the slash-command dispatcher when `/rewind` resolves\nthrough the generic `DialogSpec` mapping. The TUI consumes the\ncurrent transcript cells to build the bare picker; preselected\nrewind remains an internal UI command path.",
           "properties": {
             "type": {
               "const": "open_rewind_picker",
@@ -13164,7 +13169,7 @@
           "type": "object"
         },
         {
-          "description": "Result of a prompt-mode `!`-prefixed bash submission. The TUI\nfolds this into a `MessageContent::BashOutput` chat message\nkeyed by the same `user_message_id` as the matching\n`BashInput`. Emitted by the CLI bridge after running the\ncommand via `coco_shell::ShellExecutor`. \n`LocalShellTask` completion.",
+          "description": "Result of a prompt-mode `!`-prefixed bash submission. The TUI\nfolds this into a `MessageContent::BashOutput` chat message\nkeyed by the same `user_message_id` as the matching\n`BashInput`. Emitted by the CLI bridge after running the\ncommand via `coco_shell::ShellExecutor`.",
           "properties": {
             "exit_code": {
               "description": "Process exit code; non-zero shades the output red.",
@@ -13206,7 +13211,7 @@
           "type": "object"
         },
         {
-          "description": "Tell the TUI to open the tabbed settings panel. Emitted when the slash\ndispatcher resolves `/config` with no args. Reuses the same overlay\nas the `Ctrl+,` keybind.",
+          "description": "Tell the TUI to open the tabbed settings panel. Emitted when the slash\ndispatcher resolves `/config` with no args (TS `/config` local-jsx\npanel). Reuses the same overlay as the `Ctrl+,` keybind.",
           "properties": {
             "type": {
               "const": "open_settings",
@@ -13232,7 +13237,7 @@
           "type": "object"
         },
         {
-          "description": "Tell the TUI to open the `/skills` read-only overlay. The slash\ndispatcher pre-builds the entry list + per-group subtitles so\nthe TUI doesn't recompute paths or token estimates.\n`commands/skills/skills.tsx` \u2192 `<SkillsMenu>`. Dialog\nis read-only \u2014 Esc to close; selection has no side effects.",
+          "description": "Tell the TUI to open the `/skills` read-only overlay. The slash\ndispatcher pre-builds the entry list + per-group subtitles so\nthe TUI doesn't recompute paths or token estimates.\n\nDialog is read-only \u2014 Esc to close; selection has no side effects.",
           "properties": {
             "payload": {
               "$ref": "#/$defs/SkillsDialogPayload"
@@ -13283,7 +13288,7 @@
           "type": "object"
         },
         {
-          "description": "`/permissions` overlay \u2014 opens the tabbed rule editor\n(Allow / Ask / Deny / Workspace). The payload is a CLI-built\nsnapshot of every file-backed rule + additional directory, since\nthe TUI cannot reach the settings stores directly. Re-emitted\nafter each edit so the open overlay refreshes in place. \n`commands/permissions/permissions.tsx` \u2192 `<PermissionRuleList>`.",
+          "description": "`/permissions` overlay \u2014 opens the tabbed rule editor\n(Allow / Ask / Deny / Workspace). The payload is a CLI-built\nsnapshot of every file-backed rule + additional directory, since\nthe TUI cannot reach the settings stores directly. Re-emitted\nafter each edit so the open overlay refreshes in place.",
           "properties": {
             "payload": {
               "$ref": "#/$defs/PermissionsEditorPayload"
@@ -13300,7 +13305,7 @@
           "type": "object"
         },
         {
-          "description": "Open the interactive `/add-dir` overlay (no-argument form). The TUI\nshows a directory-path text input; confirm re-dispatches\n`/add-dir <path>` to reuse the validated session-add path. \n`commands/add-dir/add-dir.tsx` \u2192 `<AddWorkspaceDirectory>`.",
+          "description": "Open the interactive `/add-dir` overlay (no-argument form). The TUI\nshows a directory-path text input; confirm re-dispatches\n`/add-dir <path>` to reuse the validated session-add path.",
           "properties": {
             "type": {
               "const": "open_add_directory",
@@ -13376,7 +13381,7 @@
       ]
     },
     "TurnEndedParams": {
-      "description": "Terminal event for one logical user-prompt cycle. The\n`outcome` discriminator carries the per-variant payload \u2014\n`stop_reason` lives only on `Completed` where it is\nsemantically meaningful. Other variants self-describe.\nPairing contract: every `TurnStartedParams` is followed by\n**at least one** `TurnEndedParams` sharing the same `turn_id`.\nA second `TurnEnded(Interrupted)` MAY follow a terminal outcome\nwhen the user cancel was observed after the engine had already\nreturned \u2014 this is the late-cancel signal the TUI uses to fire\nauto-restore. Consumers should treat the latest `Interrupted`\nevent as authoritative when it follows a same-id terminal.",
+      "description": "Terminal event for one logical user-prompt cycle. The\n`outcome` discriminator carries the per-variant payload \u2014\n`stop_reason` lives only on `Completed` where it is\nsemantically meaningful. Other variants self-describe.\n\nPairing contract: every `TurnStartedParams` is followed by\n**at least one** `TurnEndedParams` sharing the same `turn_id`.\nA second `TurnEnded(Interrupted)` MAY follow a terminal outcome\nwhen the user cancel was observed after the engine had already\nreturned \u2014 this is the late-cancel signal the TUI uses to fire\nauto-restore. Consumers should treat the latest `Interrupted`\nevent as authoritative when it follows a same-id terminal.",
       "properties": {
         "outcome": {
           "$ref": "#/$defs/TurnOutcome"
@@ -13407,7 +13412,7 @@
       "type": "string"
     },
     "TurnOutcome": {
-      "description": "Discriminated terminal reason. The `Completed` variant is\nthe only one that carries `stop_reason`: the other variants'\nnames ARE the terminal reason.\nWire format: `{\"kind\": \"completed\", \"data\": {\"stop_reason\": \"end_turn\"}}` etc.\nPer-variant payloads are **named structs** rather than inline\nstruct-variants. This is deliberate: schemars emits `$ref` to the\nnamed struct, which the Python codegen turns into a real Pydantic\nmodel. Inline struct-variants would degrade to `dict[str, Any]` on\nthe Python side \u2014 losing typed access for SDK consumers.",
+      "description": "Discriminated terminal reason. The `Completed` variant is\nthe only one that carries `stop_reason`: the other variants'\nnames ARE the terminal reason.\n\nWire format: `{\"kind\": \"completed\", \"data\": {\"stop_reason\": \"end_turn\"}}` etc.\n\nPer-variant payloads are **named structs** rather than inline\nstruct-variants. This is deliberate: schemars emits `$ref` to the\nnamed struct, which the Python codegen turns into a real Pydantic\nmodel. Inline struct-variants would degrade to `dict[str, Any]` on\nthe Python side \u2014 losing typed access for SDK consumers.",
       "oneOf": [
         {
           "description": "Engine decided to terminate the cycle.",

@@ -1153,7 +1153,7 @@
       ]
     },
     "PermissionUpdateDestination": {
-      "description": "Destination for persisting permission updates.\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to\ndisk; in-memory destinations (`Session`/`CliArg`/`Command`) live only\nfor the running session. same split as\n`persistPermissionUpdates` in `PermissionUpdate.ts`.\n`Command` is reserved for rules contributed by an invoked command or\nskill's frontmatter (`allowed-tools:`). \n`alwaysAllowRules.command` populated by `SkillTool` /\n`createGetAppStateWithAllowedTools`.",
+      "description": "Destination for persisting permission updates.\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to\ndisk; in-memory destinations (`Session`/`CliArg`/`Command`) live only\nfor the running session. same split as\n`persistPermissionUpdates` in `PermissionUpdate.ts`.\n`Command` is reserved for rules contributed by an invoked command or\nskill's frontmatter (`allowed-tools:`).\n`alwaysAllowRules.command` populated by `SkillTool` /\n`createGetAppStateWithAllowedTools`.",
       "oneOf": [
         {
           "type": "string",

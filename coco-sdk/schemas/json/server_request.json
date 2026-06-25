@@ -205,7 +205,7 @@
       ]
     },
     "HookEventType": {
-      "description": "27 hook event types \nEvent type identifiers for hook registration and dispatch.\nWire format is **PascalCase** (e.g. `\"PreToolUse\"`) \u2014 identical to\nTS settings.json keys. Variant names serialize as-is via serde\ndefault and strum default; do not add `rename_all`.\n`#[non_exhaustive]` so future TS additions can land without\nbreaking match exhaustiveness in downstream crates.",
+      "description": "27 hook event types\nEvent type identifiers for hook registration and dispatch.\nWire format is **PascalCase** (e.g. `\"PreToolUse\"`) \u2014 identical to\nTS settings.json keys. Variant names serialize as-is via serde\ndefault and strum default; do not add `rename_all`.\n`#[non_exhaustive]` so future TS additions can land without\nbreaking match exhaustiveness in downstream crates.",
       "type": "string",
       "enum": [
         "PreToolUse",
