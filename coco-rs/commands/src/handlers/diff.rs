@@ -128,10 +128,12 @@ fn append_truncated_diff(out: &mut String, diff: &str) {
         return;
     }
     if trimmed.len() > MAX_DIFF_CHARS {
-        // Find a line boundary near the limit
-        let truncate_at = trimmed[..MAX_DIFF_CHARS]
-            .rfind('\n')
-            .unwrap_or(MAX_DIFF_CHARS);
+        // Trim to the byte budget on a char boundary (diff text can carry CJK /
+        // box glyphs, so a raw `&trimmed[..MAX_DIFF_CHARS]` would panic), then
+        // prefer the last line boundary within that window — `\n` is
+        // single-byte, so the resulting index is always a char boundary too.
+        let head = coco_utils_string::take_bytes_at_char_boundary(trimmed, MAX_DIFF_CHARS);
+        let truncate_at = head.rfind('\n').unwrap_or(head.len());
         out.push_str(&trimmed[..truncate_at]);
         let remaining_lines = trimmed[truncate_at..].lines().count();
         out.push_str(&format!("\n\n... truncated ({remaining_lines} more lines)"));

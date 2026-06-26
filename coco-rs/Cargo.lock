@@ -1159,6 +1159,7 @@ dependencies = [
  "coco-subagent",
  "coco-types",
  "coco-utils-common",
+ "coco-utils-string",
  "dirs",
  "serde",
  "serde_json",

@@ -46,6 +46,24 @@ fn test_append_truncated_diff_long() {
     assert!(out.len() < long_diff.len());
 }
 
+#[test]
+fn test_append_truncated_diff_multibyte_boundary() {
+    // A multi-byte char straddling the byte limit must not panic the slice.
+    // Pad with single-byte lines up to one byte before MAX_DIFF_CHARS, then a
+    // 3-byte '─' so byte MAX_DIFF_CHARS lands inside it.
+    let mut diff = "a\n".repeat((MAX_DIFF_CHARS - 1) / 2);
+    while diff.len() < MAX_DIFF_CHARS - 1 {
+        diff.push('a');
+    }
+    diff.push('─'); // 3 bytes; the limit now falls inside this char
+    diff.push_str("more");
+    assert!(diff.len() > MAX_DIFF_CHARS);
+
+    let mut out = String::new();
+    append_truncated_diff(&mut out, &diff); // must not panic
+    assert!(out.contains("truncated"));
+}
+
 #[tokio::test]
 async fn test_diff_handler_in_git_repo() {
     // This test runs in the actual repo, so git should work

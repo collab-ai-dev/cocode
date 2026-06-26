@@ -80,6 +80,32 @@ just help               # All commands
 
 - Use `i32`/`i64` instead of `u32`/`u64` unless bit-pattern required — avoids overflow bugs, matches common APIs
 
+### String Slicing — UTF-8 safety
+
+Slicing or indexing a `&str`/`String` by a **computed byte offset** panics
+when the offset lands inside a multi-byte UTF-8 char (CJK, box-drawing glyphs,
+emoji). This has shipped as a live crash more than once — e.g. `/diff`
+truncation panicking on a `─` sitting across the byte limit. **Always go
+through `coco_utils_string`; never compute a byte cut by hand.**
+
+- **Never** write `&s[..n]`, `&s[n..]`, `&s[a..b]`, or `s.truncate(n)` when the
+  index is a *computed* value (variable, arithmetic, a `const` byte budget, a
+  `.len()` fraction). Raw slicing is only safe at a literal index on
+  known-ASCII, or at a `.find()`/`rfind()` result for a single-byte char like
+  `\n` (always a boundary).
+- **Never** hand-roll `while !s.is_char_boundary(k) { k -= 1 }`. Two blessed
+  forms, pick by need:
+  - `coco_utils_string::{take_bytes_at_char_boundary, take_last_bytes_at_char_boundary}`
+    — borrowed prefix / suffix within a byte budget; `truncate_str(s, max)` /
+    `truncate_for_log(s, max)` for owned + `...`.
+  - The std primitive `s.floor_char_boundary(n)` when you want an in-place
+    truncate or a one-off slice without adding a dep:
+    `content.truncate(content.floor_char_boundary(n))` — never
+    `content.truncate(n)`.
+- Truncating to **terminal columns** (display width), not bytes? That's a
+  different problem — use `coco_tui_ui::truncate::truncate_to_width`, which is
+  width-aware (CJK = 2 cols), not a byte budget.
+
 ### Error Handling
 
 - Never `.unwrap()` in non-test code. Use `?` or `.expect("reason")`
@@ -320,7 +346,7 @@ Reusable primitives. **Check here first** before implementing any basic utility.
 | `sleep-inhibitor` | Cross-platform sleep prevention (macOS/Linux/Windows) |
 | `stdio-to-uds` | Bridge stdio streams to Unix domain sockets |
 | `stream-parser` | Stream parsing (text, citation, inline hidden tag, proposed plan, UTF-8) |
-| `string` | String truncation and boundary utilities |
+| `string` | UTF-8-safe truncation / byte-boundary slicing (`take_bytes_at_char_boundary`, `truncate_str`). Use instead of raw `&s[..n]`, which panics mid-char — see [String Slicing](#string-slicing--utf-8-safety) |
 | `symbol-search` | Symbol search for code navigation |
 | `test-harness` | Test harness utilities for integration tests |
 
