@@ -220,6 +220,42 @@ async fn test_write_check_permissions_ignores_path_scoped_write_rule() {
     assert!(matches!(result, ToolCheckResult::Ask { .. }), "{result:?}");
 }
 
+#[test]
+fn validate_blocks_subagent_report_files() {
+    use coco_tool_runtime::Tool;
+    use coco_tool_runtime::ValidationResult;
+    use coco_types::AgentId;
+
+    let report: crate::tools::write::WriteInput =
+        serde_json::from_value(json!({"file_path": "/tmp/REPORT-auth.md", "content": "x"}))
+            .unwrap();
+
+    // Subagent writing a REPORT*.md → blocked with errorCode 5.
+    let mut sub_ctx = ToolUseContext::test_default();
+    sub_ctx.agent_id = Some(AgentId::new("subagent-1"));
+    match Tool::validate_input(&WriteTool, &report, &sub_ctx) {
+        ValidationResult::Invalid { error_code, .. } => {
+            assert_eq!(error_code.as_deref(), Some("5"));
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    // Main thread (no agent_id) → allowed even for a report filename.
+    let main_ctx = ToolUseContext::test_default();
+    assert!(matches!(
+        Tool::validate_input(&WriteTool, &report, &main_ctx),
+        ValidationResult::Valid
+    ));
+
+    // Subagent writing a normal source file → allowed.
+    let normal: crate::tools::write::WriteInput =
+        serde_json::from_value(json!({"file_path": "/tmp/src/main.rs", "content": "x"})).unwrap();
+    assert!(matches!(
+        Tool::validate_input(&WriteTool, &normal, &sub_ctx),
+        ValidationResult::Valid
+    ));
+}
+
 #[tokio::test]
 async fn test_write_new_file() {
     let dir = tempfile::tempdir().unwrap();

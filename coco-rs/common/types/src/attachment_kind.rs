@@ -23,7 +23,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Every `AttachmentKind` discriminator, plus coco-rs-synthetic
-/// reminder kinds. 64 variants.
+/// reminder kinds. 65 variants.
 /// Wire format is snake_case via `#[serde(rename_all = "snake_case")]`
 /// to match `AttachmentKind` exactly, so transcripts round-trip.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -68,6 +68,12 @@ pub enum AttachmentKind {
     OutputTokenUsage,
     CompanionIntro,
     DeferredToolsDelta,
+    /// Standing nudge that undiscovered deferred tools can be loaded via
+    /// ToolSearch — distinct from the one-shot [`DeferredToolsDelta`](Self::DeferredToolsDelta)
+    /// change-announcer. Fires whenever deferred tools remain undiscovered;
+    /// highest-leverage for non-Anthropic providers where ToolSearch is
+    /// promoted rather than native.
+    ToolSearchUsageReminder,
     AgentListingDelta,
     McpInstructionsDelta,
     HookSuccess,
@@ -150,6 +156,7 @@ impl AttachmentKind {
             Self::OutputTokenUsage => "output_token_usage",
             Self::CompanionIntro => "companion_intro",
             Self::DeferredToolsDelta => "deferred_tools_delta",
+            Self::ToolSearchUsageReminder => "tool_search_usage_reminder",
             Self::AgentListingDelta => "agent_listing_delta",
             Self::McpInstructionsDelta => "mcp_instructions_delta",
             Self::HookSuccess => "hook_success",
@@ -230,6 +237,7 @@ impl AttachmentKind {
             | OutputTokenUsage
             | CompanionIntro
             | DeferredToolsDelta
+            | ToolSearchUsageReminder
             | AgentListingDelta
             | McpInstructionsDelta
             | HookSuccess
@@ -327,6 +335,7 @@ impl AttachmentKind {
             | TaskReminder
             | ContextEfficiency
             | DeferredToolsDelta
+            | ToolSearchUsageReminder
             | McpInstructionsDelta
             | CompanionIntro
             | TokenUsage
@@ -403,10 +412,10 @@ impl AttachmentKind {
         }
     }
 
-    /// Every variant in declaration order. Length must equal 64 (61 TS
+    /// Every variant in declaration order. Length must equal 65 (61 TS
     /// `Attachment` union members + coco-rs-synthetic `UserContext`,
-    /// `SlashCommandMetadata`, and `WorkflowKeywordRequest` reminders) —
-    /// enforced by the parity test.
+    /// `SlashCommandMetadata`, `WorkflowKeywordRequest`, and
+    /// `ToolSearchUsageReminder` reminders) — enforced by the parity test.
     pub const fn all() -> &'static [AttachmentKind] {
         &[
             Self::PlanMode,
@@ -429,6 +438,7 @@ impl AttachmentKind {
             Self::OutputTokenUsage,
             Self::CompanionIntro,
             Self::DeferredToolsDelta,
+            Self::ToolSearchUsageReminder,
             Self::AgentListingDelta,
             Self::McpInstructionsDelta,
             Self::HookSuccess,
@@ -624,6 +634,9 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         },
         DeferredToolsDelta => Coverage::Reminder {
             generator: "DeferredToolsDeltaGenerator",
+        },
+        ToolSearchUsageReminder => Coverage::Reminder {
+            generator: "ToolSearchUsageReminderGenerator",
         },
         AgentListingDelta => Coverage::Reminder {
             generator: "AgentListingDeltaGenerator",

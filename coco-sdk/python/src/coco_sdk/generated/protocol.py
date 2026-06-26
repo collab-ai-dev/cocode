@@ -137,6 +137,7 @@ class AttachmentKind(str, Enum):
     critical_system_reminder = 'critical_system_reminder'
     slash_command_metadata = 'slash_command_metadata'
     user_context = 'user_context'
+    tool_search_usage_reminder = 'tool_search_usage_reminder'
 
 class Capability(str, Enum):
     text_generation = 'text_generation'

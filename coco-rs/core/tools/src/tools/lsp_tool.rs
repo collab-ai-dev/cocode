@@ -73,6 +73,8 @@ All operations require:
 - line: The line number (1-based, as shown in editors)
 - character: The character offset (1-based, as shown in editors)
 
+For workspaceSymbol, also pass `query` (the symbol name or partial name to search for). Most language servers return no results for an empty query, so always provide it.
+
 Note: LSP servers must be configured for the file type. If no server is available, an error will be returned.";
 
 /// Typed tool input matching the LSP tool-facing `inputSchema`.
@@ -96,6 +98,11 @@ pub struct LspInput {
     /// The character offset (1-based, as shown in editors)
     #[schemars(range(min = 1))]
     pub character: i32,
+    /// The symbol name or partial name to search for (workspaceSymbol only).
+    /// Most language servers return no results for an empty query, so always
+    /// provide it for workspaceSymbol; ignored for every other operation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
 }
 
 pub struct LspTool;
@@ -196,7 +203,13 @@ impl Tool for LspTool {
             message: format!("could not build file:// URI for {}", path.display()),
             error_code: None,
         })?;
-        let params = build_params(input.operation, &uri, input.line, input.character);
+        let params = build_params(
+            input.operation,
+            &uri,
+            input.line,
+            input.character,
+            input.query.as_deref(),
+        );
 
         let raw = dispatch(ctx, input.operation, &path, params).await?;
 
@@ -215,9 +228,9 @@ impl Tool for LspTool {
 
 /// Build the initial LSP request params for an operation. Positions are
 /// converted 1-based → 0-based.
-fn build_params(op: LspAction, uri: &str, line: i32, character: i32) -> Value {
+fn build_params(op: LspAction, uri: &str, line: i32, character: i32, query: Option<&str>) -> Value {
     if matches!(op, LspAction::WorkspaceSymbol) {
-        return json!({ "query": "" });
+        return json!({ "query": query.unwrap_or_default() });
     }
     if matches!(op, LspAction::DocumentSymbol) {
         return json!({ "textDocument": { "uri": uri } });

@@ -77,9 +77,19 @@ pub(crate) async fn prepare_committed_tool_call(
                 resolved_tool = name,
                 "deferred tool called before ToolSearch discovery"
             );
+            // Append the deferred tool's input schema so the model can call it
+            // correctly on the next turn (after ToolSearch loads it) instead of
+            // a second round-trip just to discover the argument shape. The tool
+            // is registered — only absent from this turn's loaded set — so the
+            // registry still resolves it.
+            let schema_hint = tools
+                .get_by_name(&name)
+                .and_then(|t| serde_json::to_string(t.runtime_validation_schema().as_value()).ok())
+                .map(|s| format!(" For reference, this tool's input schema is: {s}"))
+                .unwrap_or_default();
             let output = format!(
-                "<tool_use_error>No such tool available: {}. It is a deferred tool that has not been loaded yet; use ToolSearch with query \"select:{}\" first.</tool_use_error>",
-                tool_call.tool_name, name
+                "<tool_use_error>No such tool available: {}. It is a deferred tool that has not been loaded yet; use ToolSearch with query \"select:{}\" first.{}</tool_use_error>",
+                tool_call.tool_name, name, schema_hint
             );
             complete_tool_call_with_error_mode(
                 event_tx,

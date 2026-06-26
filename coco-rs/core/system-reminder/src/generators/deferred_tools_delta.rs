@@ -22,6 +22,7 @@ use crate::error::Result;
 use crate::generator::AttachmentGenerator;
 use crate::generator::DeferredToolsDeltaInfo;
 use crate::generator::GeneratorContext;
+use crate::types::AMBIENT_CONTEXT_TRAILER;
 use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
@@ -58,7 +59,7 @@ impl AttachmentGenerator for DeferredToolsDeltaGenerator {
 }
 
 fn render(info: &DeferredToolsDeltaInfo) -> String {
-    let mut parts: Vec<String> = Vec::with_capacity(2);
+    let mut parts: Vec<String> = Vec::with_capacity(3);
     if !info.added_lines.is_empty() {
         parts.push(format!(
             "The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded — calling them directly will fail with InputValidationError. Use ToolSearch with query \"select:<name>[,<name>...]\" to load tool schemas before calling them:\n{}",
@@ -71,6 +72,8 @@ fn render(info: &DeferredToolsDeltaInfo) -> String {
             info.removed_names.join("\n")
         ));
     }
+    // Ambient signal — the model should act on it, not narrate it.
+    parts.push(AMBIENT_CONTEXT_TRAILER.to_string());
     parts.join("\n\n")
 }
 

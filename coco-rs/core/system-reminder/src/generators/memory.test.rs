@@ -145,8 +145,16 @@ async fn relevant_memories_emits_one_message_per_entry() {
                 crate::types::ContentBlock::Text { text } => text,
                 _ => panic!("expected text block"),
             };
-            assert!(m0.starts_with("Memory: a.md (1 hour ago)"));
+            // First entry carries the "retrieved for possible relevance" lead-in.
+            assert!(m0.starts_with(RELEVANT_MEMORIES_LEAD_IN));
+            assert!(m0.contains("Memory: a.md (1 hour ago)"));
             assert!(m0.contains("a content"));
+            // Subsequent entries do not repeat the lead-in.
+            let m1 = match &msgs[1].blocks[0] {
+                crate::types::ContentBlock::Text { text } => text,
+                _ => panic!("expected text block"),
+            };
+            assert!(!m1.contains("Retrieved for possible relevance"));
         }
         other => panic!("expected Messages output, got {other:?}"),
     }
@@ -174,7 +182,8 @@ async fn relevant_memories_falls_back_to_path_header_when_none() {
     let crate::types::ContentBlock::Text { text } = &msgs[0].blocks[0] else {
         panic!("expected text");
     };
-    assert!(text.starts_with("Memory: /m/x.md"));
+    assert!(text.starts_with(RELEVANT_MEMORIES_LEAD_IN));
+    assert!(text.contains("Memory: /m/x.md"));
     assert!(text.contains("content x"));
 }
 

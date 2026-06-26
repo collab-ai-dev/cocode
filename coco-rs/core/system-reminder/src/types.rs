@@ -14,6 +14,13 @@ use serde_json::Value;
 
 use coco_types::SkillDiscoveryPayload;
 
+/// Shared "ambient context — do not narrate" trailer appended to the
+/// pool-change delta reminders (deferred-tools / agent-listing /
+/// mcp-instructions). Mirrors CC's hoisted `_7n` trailer so chatty
+/// non-Anthropic models don't narrate MCP-disconnect / new-tool / new-agent
+/// events to the user. Single const so the call sites can't drift.
+pub const AMBIENT_CONTEXT_TRAILER: &str = "This is ambient context \u{2014} do not narrate it to the user unless they ask or it is directly relevant to their request.";
+
 /// Tier determines when a generator runs. Generators are split into three
 /// parallel batches:
 ///
@@ -153,6 +160,13 @@ pub enum AttachmentType {
     /// instructions against prior announcements in history.
     McpInstructionsDelta,
 
+    /// Standing nudge that undiscovered deferred tools can be loaded via
+    /// ToolSearch — distinct from the one-shot [`DeferredToolsDelta`](Self::DeferredToolsDelta)
+    /// change-announcer. Fires whenever `ctx.deferred_tools` is non-empty.
+    /// Highest-leverage for non-Anthropic providers where ToolSearch is
+    /// promoted rather than native.
+    ToolSearchUsageReminder,
+
     // ── Phase 3 cross-crate state reminders (Core tier unless noted) ──
     /// Success output from SessionStart / UserPromptSubmit hook execution.
     /// MainAgentOnly.
@@ -262,6 +276,7 @@ impl AttachmentType {
             | Self::DeferredToolsDelta
             | Self::AgentListingDelta
             | Self::McpInstructionsDelta
+            | Self::ToolSearchUsageReminder
             | Self::QueuedCommand
             | Self::SkillListing
             | Self::TeammateMailbox
@@ -324,6 +339,7 @@ impl AttachmentType {
             | Self::DeferredToolsDelta
             | Self::AgentListingDelta
             | Self::McpInstructionsDelta
+            | Self::ToolSearchUsageReminder
             | Self::HookSuccess
             | Self::HookBlockingError
             | Self::HookAdditionalContext
@@ -381,6 +397,7 @@ impl AttachmentType {
             Self::DeferredToolsDelta => "deferred_tools_delta",
             Self::AgentListingDelta => "agent_listing_delta",
             Self::McpInstructionsDelta => "mcp_instructions_delta",
+            Self::ToolSearchUsageReminder => "tool_search_usage_reminder",
             Self::HookSuccess => "hook_success",
             Self::HookBlockingError => "hook_blocking_error",
             Self::HookAdditionalContext => "hook_additional_context",
@@ -433,6 +450,7 @@ impl AttachmentType {
             Self::DeferredToolsDelta,
             Self::AgentListingDelta,
             Self::McpInstructionsDelta,
+            Self::ToolSearchUsageReminder,
             Self::HookSuccess,
             Self::HookBlockingError,
             Self::HookAdditionalContext,
@@ -505,6 +523,7 @@ impl From<AttachmentType> for coco_types::AttachmentKind {
             AttachmentType::DeferredToolsDelta => K::DeferredToolsDelta,
             AttachmentType::AgentListingDelta => K::AgentListingDelta,
             AttachmentType::McpInstructionsDelta => K::McpInstructionsDelta,
+            AttachmentType::ToolSearchUsageReminder => K::ToolSearchUsageReminder,
             AttachmentType::HookSuccess => K::HookSuccess,
             AttachmentType::HookBlockingError => K::HookBlockingError,
             AttachmentType::HookAdditionalContext => K::HookAdditionalContext,

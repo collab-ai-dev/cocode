@@ -12,6 +12,7 @@ fn empty_env() -> EnvironmentInfo {
         model: String::new(),
         knowledge_cutoff: String::new(),
         is_git_repo: false,
+        is_worktree: false,
         git_status: None,
     }
 }
@@ -25,6 +26,7 @@ fn env_for_snapshot() -> EnvironmentInfo {
         model: "claude-opus-4-7".to_string(),
         knowledge_cutoff: "January 2026".to_string(),
         is_git_repo: true,
+        is_worktree: false,
         git_status: None,
     }
 }
@@ -186,6 +188,7 @@ fn unknown_model_omits_knowledge_cutoff_line() {
         model: "future-model-unreleased".into(),
         knowledge_cutoff: String::new(), // empty → omitted by render_env_block
         is_git_repo: false,
+        is_worktree: false,
         git_status: None,
     };
     let prompt = build_system_prompt("ID", &[], &env, None, None, None, None, &[]);
@@ -194,6 +197,22 @@ fn unknown_model_omits_knowledge_cutoff_line() {
         !text.contains("knowledge cutoff"),
         "unknown model should not render a cutoff line; got: {text}"
     );
+}
+
+/// The git-worktree note renders only when `is_worktree` is set, steering
+/// the model away from `cd`-ing out of an isolated agent worktree.
+#[test]
+fn worktree_note_renders_only_in_a_worktree() {
+    let mut env = env_for_snapshot();
+    env.is_worktree = false;
+    let no_note = build_system_prompt("ID", &[], &env, None, None, None, None, &[]);
+    assert!(!no_note.full_text().contains("isolated git worktree"));
+
+    env.is_worktree = true;
+    let with_note = build_system_prompt("ID", &[], &env, None, None, None, None, &[]);
+    let text = with_note.full_text();
+    assert!(text.contains("isolated git worktree"));
+    assert!(text.contains("do NOT `cd` to the original repository root"));
 }
 
 /// Known model renders the cutoff string verbatim.

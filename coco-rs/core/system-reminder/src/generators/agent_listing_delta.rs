@@ -20,6 +20,7 @@ use crate::error::Result;
 use crate::generator::AgentListingDeltaInfo;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
+use crate::types::AMBIENT_CONTEXT_TRAILER;
 use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
@@ -56,7 +57,7 @@ impl AttachmentGenerator for AgentListingDeltaGenerator {
 }
 
 fn render(info: &AgentListingDeltaInfo) -> String {
-    let mut parts: Vec<String> = Vec::with_capacity(3);
+    let mut parts: Vec<String> = Vec::with_capacity(4);
     if !info.added_lines.is_empty() {
         let header = if info.is_initial {
             "Available agent types for the Agent tool:"
@@ -86,6 +87,8 @@ fn render(info: &AgentListingDeltaInfo) -> String {
                 .to_string(),
         );
     }
+    // Ambient signal — the model should act on it, not narrate it.
+    parts.push(AMBIENT_CONTEXT_TRAILER.to_string());
     parts.join("\n\n")
 }
 

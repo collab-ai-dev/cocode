@@ -1914,7 +1914,7 @@
       ]
     },
     "AttachmentKind": {
-      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 64 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
+      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 65 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
       "oneOf": [
         {
           "type": "string",
@@ -1996,6 +1996,11 @@
           "description": "coco-rs per-turn baseline user context (`prependUserContext`\nInjected\nevery turn as an `is_meta` `<system-reminder>` carrying\n`Today's date is <local ISO>.` — distinct from the one-shot\n[`DateChange`](Self::DateChange) rollover notice.",
           "type": "string",
           "const": "user_context"
+        },
+        {
+          "description": "Standing nudge that undiscovered deferred tools can be loaded via\nToolSearch — distinct from the one-shot [`DeferredToolsDelta`](Self::DeferredToolsDelta)\nchange-announcer. Fires whenever deferred tools remain undiscovered;\nhighest-leverage for non-Anthropic providers where ToolSearch is\npromoted rather than native.",
+          "type": "string",
+          "const": "tool_search_usage_reminder"
         }
       ]
     },

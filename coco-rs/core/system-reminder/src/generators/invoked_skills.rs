@@ -47,7 +47,8 @@ impl AttachmentGenerator for InvokedSkillsGenerator {
             })
             .collect();
         let body = format!(
-            "The following skills were invoked in this session. Continue to follow these guidelines:\n\n{}",
+            "The following skills were invoked EARLIER in this session (before the conversation was compacted), not on the current turn. They are shown here for context only so you remain aware of their guidelines.\n\n\
+             IMPORTANT: Do NOT re-execute these skills or perform their one-time setup actions (e.g., scheduling, creating files) again. Only continue to apply ongoing guidelines.\n\n{}",
             blocks.join("\n\n---\n\n")
         );
         Ok(Some(SystemReminder::new(

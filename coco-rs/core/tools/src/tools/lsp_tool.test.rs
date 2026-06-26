@@ -63,7 +63,7 @@ fn requires_position_matches_schema() {
 
 #[test]
 fn build_params_converts_one_based_to_zero_based() {
-    let p = build_params(LspAction::GoToDefinition, "file:///a.rs", 10, 5);
+    let p = build_params(LspAction::GoToDefinition, "file:///a.rs", 10, 5, None);
     assert_eq!(p["textDocument"]["uri"], "file:///a.rs");
     assert_eq!(p["position"]["line"], 9);
     assert_eq!(p["position"]["character"], 4);
@@ -71,7 +71,7 @@ fn build_params_converts_one_based_to_zero_based() {
 
 #[test]
 fn build_params_find_references_includes_declaration() {
-    let p = build_params(LspAction::FindReferences, "file:///a.rs", 1, 1);
+    let p = build_params(LspAction::FindReferences, "file:///a.rs", 1, 1, None);
     assert_eq!(p["context"]["includeDeclaration"], true);
     assert_eq!(p["position"]["line"], 0);
 }
@@ -79,16 +79,24 @@ fn build_params_find_references_includes_declaration() {
 #[test]
 fn build_params_document_symbol_omits_position() {
     // `line` / `character` are schema-required but ignored for documentSymbol.
-    let p = build_params(LspAction::DocumentSymbol, "file:///a.rs", 1, 1);
+    let p = build_params(LspAction::DocumentSymbol, "file:///a.rs", 1, 1, None);
     assert_eq!(p["textDocument"]["uri"], "file:///a.rs");
     assert!(p.get("position").is_none());
 }
 
 #[test]
-fn build_params_workspace_symbol_is_empty_query() {
-    let p = build_params(LspAction::WorkspaceSymbol, "file:///a.rs", 1, 1);
-    assert_eq!(p["query"], "");
-    assert!(p.get("textDocument").is_none());
+fn build_params_workspace_symbol_passes_query() {
+    let empty = build_params(LspAction::WorkspaceSymbol, "file:///a.rs", 1, 1, None);
+    assert_eq!(empty["query"], "");
+    assert!(empty.get("textDocument").is_none());
+    let provided = build_params(
+        LspAction::WorkspaceSymbol,
+        "file:///a.rs",
+        1,
+        1,
+        Some("MySymbol"),
+    );
+    assert_eq!(provided["query"], "MySymbol");
 }
 
 #[test]

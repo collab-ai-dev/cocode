@@ -251,6 +251,13 @@ fn render_env_block(env: &crate::EnvironmentInfo, additional_dirs: &[String]) ->
             env.knowledge_cutoff
         ));
     }
+    if env.is_worktree {
+        s.push_str(
+            "This working directory is an isolated git worktree \u{2014} a separate working copy \
+             of the repo. Changes here do NOT affect the main repository checkout or other agents. \
+             Work normally, but do NOT `cd` to the original repository root; stay in this worktree.\n",
+        );
+    }
     s
 }
 
