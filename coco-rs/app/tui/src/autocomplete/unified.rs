@@ -1,6 +1,6 @@
 //! Unified `@` suggestion ranking and merging.
 //!
-//! Produces a single ranked list (cap 15) combining agents, file paths,
+//! Produces a single ranked list (cap [`MAX_UNIFIED`]) combining agents, file paths,
 //! and MCP resources:
 //! - agents are scored by Fuse.js with weight 3 on `agentType`, weight 2
 //! on `displayText` — fuse scores are typically < 0.5 for decent
@@ -20,8 +20,11 @@ use crate::completion::McpResourceCompletion;
 use crate::widgets::suggestion_popup::SuggestionItem;
 use crate::widgets::suggestion_popup::SuggestionMeta;
 
-/// Max number of unified suggestions to show.
-const MAX_UNIFIED: usize = 15;
+/// Max number of unified suggestions retained for the popup. The popup shows
+/// ~8 rows at a time and scrolls (with an overflow indicator) through the rest,
+/// so this is a generous ranking-cost bound, NOT the visible-row count — a
+/// tight 15 here silently dropped the 16th match before it could be scrolled to.
+const MAX_UNIFIED: usize = 50;
 
 /// Build the agent half of the unified popup. Synchronous — agents are
 /// already loaded in `session.available_agents` at session start.

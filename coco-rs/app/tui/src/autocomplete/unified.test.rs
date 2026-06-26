@@ -46,7 +46,7 @@ fn seed_agent_items_substring_filters_case_insensitively() {
 }
 
 #[test]
-fn merge_keeps_agents_before_files_and_caps_at_15() {
+fn merge_keeps_agents_before_files_and_caps_at_max() {
     let agents: Vec<SuggestionItem> = (0..5)
         .map(|i| SuggestionItem {
             label: format!("a{i} (agent)"),
@@ -54,16 +54,19 @@ fn merge_keeps_agents_before_files_and_caps_at_15() {
             metadata: Some(SuggestionMeta::Agent { color: None }),
         })
         .collect();
-    let files: Vec<SuggestionItem> = (0..20).map(|i| file_item(&format!("file{i}.rs"))).collect();
+    // Enough files to overflow the cap so the truncation path is exercised.
+    let files: Vec<SuggestionItem> = (0..MAX_UNIFIED + 10)
+        .map(|i| file_item(&format!("file{i}.rs")))
+        .collect();
     let merged = merge_file_results(agents, files);
-    assert_eq!(merged.len(), 15);
+    assert_eq!(merged.len(), MAX_UNIFIED);
     // first 5 are agents
     assert!(
         merged[..5]
             .iter()
             .all(|s| matches!(s.metadata, Some(SuggestionMeta::Agent { .. })))
     );
-    // remaining 10 are files (cap eats the rest)
+    // remaining are files (cap eats the rest)
     assert!(
         merged[5..]
             .iter()
@@ -73,7 +76,8 @@ fn merge_keeps_agents_before_files_and_caps_at_15() {
 
 #[test]
 fn seeded_provider_merge_reserves_room_for_mcp_when_agents_fill_cap() {
-    let agents: Vec<SuggestionItem> = (0..20)
+    // Enough agents to fill the cap so the MCP-reserve branch triggers.
+    let agents: Vec<SuggestionItem> = (0..MAX_UNIFIED + 10)
         .map(|i| SuggestionItem {
             label: format!("a{i} (agent)"),
             description: None,
@@ -91,7 +95,7 @@ fn seeded_provider_merge_reserves_room_for_mcp_when_agents_fill_cap() {
 
     let merged = merge_seeded_provider_items(agents, resources);
 
-    assert_eq!(merged.len(), 15);
+    assert_eq!(merged.len(), MAX_UNIFIED);
     assert!(matches!(
         merged.last().and_then(|item| item.metadata.as_ref()),
         Some(SuggestionMeta::McpResource { server, uri })

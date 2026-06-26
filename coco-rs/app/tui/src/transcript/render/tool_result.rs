@@ -226,7 +226,13 @@ fn render_edit_diff(
             return;
         }
     }
-    // No input (collapsed/standalone path) — show what the tool reported.
+    // No input — the issuing assistant message was compacted away (or this is a
+    // standalone/orphan result), so the diff can't be reconstructed. Mark it so
+    // a rich diff folded away by /compact isn't mistaken for a tiny edit, then
+    // show whatever the tool reported.
+    lines.push(Line::from(
+        Span::raw("  … diff unavailable (input not in context)").fg(cx.styles.dim()),
+    ));
     render_output_preview(cx, output, lines);
 }
 

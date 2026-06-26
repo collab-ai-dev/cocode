@@ -52,8 +52,22 @@ pub fn compute_cursor(state: &AppState, layout: FrameLayout) -> Option<CursorCla
     let (x, y) = compute_input_xy(state, layout.input);
     Some(CursorClaim {
         position: Position { x, y },
-        style: SetCursorStyle::DefaultUserShape,
+        style: vim_cursor_style(&state.ui.input.vim),
     })
+}
+
+/// Cursor shape reflects vim mode so the user has an in-band tell of which mode
+/// they are in — the universal block-vs-bar convention. Only active when vim
+/// editing is enabled; otherwise the terminal's default shape is preserved.
+fn vim_cursor_style(vim: &crate::vim::VimRuntime) -> SetCursorStyle {
+    if !vim.enabled {
+        return SetCursorStyle::DefaultUserShape;
+    }
+    if vim.is_normal() {
+        SetCursorStyle::SteadyBlock
+    } else {
+        SetCursorStyle::SteadyBar
+    }
 }
 
 fn compute_question_cursor(state: &AppState, area: Rect) -> Option<CursorClaim> {

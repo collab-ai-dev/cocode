@@ -60,6 +60,27 @@ fn fixed_slot_keeps_reserved_rows_clear() {
 }
 
 #[test]
+fn overflow_reserves_bottom_row_for_scroll_indicator() {
+    // 20 items into a 6-row slot: 5 item rows + 1 dim overflow indicator
+    // reporting position + a scroll affordance, instead of silently dropping
+    // the 6th..20th matches.
+    let items: Vec<SuggestionItem> = (0..20)
+        .map(|i| item(&format!("/cmd{i}"), Some("desc")))
+        .collect();
+    let out = render_popup(&items, 0, 40, 6);
+    let lines = out.lines().collect::<Vec<_>>();
+    assert!(lines[0].contains("/cmd0"), "first item row missing: {out}");
+    assert!(
+        lines[5].contains("1/20"),
+        "expected position/total in overflow hint: {out}"
+    );
+    assert!(
+        lines[5].contains("more"),
+        "expected scroll affordance in overflow hint: {out}"
+    );
+}
+
+#[test]
 fn snapshot_short_descriptions() {
     let items = vec![
         item("/clear", Some("Clear chat")),

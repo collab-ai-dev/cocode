@@ -80,6 +80,14 @@ pub async fn handle_command(
     let text_before = state.ui.input.text().to_string();
     let cursor_before = state.ui.input.textarea.cursor();
 
+    // Capture a pre-edit snapshot so chat-undo (`UndoInput`) works on the
+    // non-vim edit path. Vim normal-mode dispatch owns its own undo stack (and
+    // the `u` command), so skip there — committing here would double-push or
+    // turn the next undo into a redo-flip. Committed below iff the edit landed.
+    let undo_snapshot = (is_input_mutating_edit(&cmd)
+        && !state.ui.input.vim.normal_dispatch_active())
+    .then(|| state.ui.input.textarea.snapshot());
+
     // Intercept editable-dialog keys before the main dispatch.
     // The skills dialog has a richer state machine (select / filter
     // modes) than the generic modal cancel/submit path; deferring to
@@ -609,6 +617,18 @@ pub async fn handle_command(
         TuiCommand::Yank => {
             state.ui.input.clear_inline_hint();
             edit::yank(state);
+            true
+        }
+        TuiCommand::UndoInput => {
+            state.ui.input.clear_inline_hint();
+            let msg = if state.ui.input.textarea.undo() {
+                crate::i18n::t!("toast.undo_done")
+            } else {
+                crate::i18n::t!("toast.undo_nothing")
+            };
+            state
+                .ui
+                .add_toast(crate::state::ui::Toast::info(msg.to_string()));
             true
         }
 
@@ -1205,10 +1225,36 @@ pub async fn handle_command(
         }
     };
 
+    // Commit the pre-edit undo snapshot only if the edit actually changed the
+    // buffer (the TextArea dedups consecutive identical snapshots).
+    if let Some(snapshot) = undo_snapshot
+        && state.ui.input.text() != text_before
+    {
+        state.ui.input.textarea.commit_undo(snapshot);
+    }
+
     if state.ui.input.text() != text_before || state.ui.input.textarea.cursor() != cursor_before {
         crate::autocomplete::refresh_suggestions(state);
     }
     changed
+}
+
+/// Composer commands that mutate the input buffer and should push an undo
+/// snapshot. Cursor moves, scrolling, and async paste (whose mutation lands
+/// out-of-band) are intentionally excluded.
+fn is_input_mutating_edit(cmd: &TuiCommand) -> bool {
+    matches!(
+        cmd,
+        TuiCommand::InsertChar(_)
+            | TuiCommand::InsertNewline
+            | TuiCommand::DeleteBackward
+            | TuiCommand::DeleteForward
+            | TuiCommand::DeleteWordBackward
+            | TuiCommand::DeleteWordForward
+            | TuiCommand::KillToEndOfLine
+            | TuiCommand::KillToBeginningOfLine
+            | TuiCommand::Yank
+    )
 }
 
 /// Loose upper bound for the active permission prompt's body scroll offset.

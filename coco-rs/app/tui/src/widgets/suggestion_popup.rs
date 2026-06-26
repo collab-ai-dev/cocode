@@ -144,11 +144,21 @@ impl Widget for SuggestionPopup<'_> {
             return;
         }
 
-        let visible_count = self
-            .items
-            .len()
-            .min(self.max_visible)
-            .min(area.height as usize);
+        let slot = self.max_visible.min(area.height as usize);
+        if slot == 0 {
+            return;
+        }
+        let total_items = self.items.len();
+        // When more items match than fit the slot, sacrifice the bottom row for
+        // an overflow indicator (position + scroll affordance) so the user can
+        // tell the list is scrollable rather than silently truncated.
+        let overflow = total_items > slot;
+        let reserve_hint = overflow && slot >= 2;
+        let visible_count = if reserve_hint {
+            slot - 1
+        } else {
+            slot.min(total_items)
+        };
         if visible_count == 0 {
             return;
         }
@@ -173,13 +183,13 @@ impl Widget for SuggestionPopup<'_> {
 
         // Center the selected row in the visible window so the user
         // sees context above and below as they navigate.
-        let total = self.items.len();
+        let total = total_items;
         let half = visible_count / 2;
         let max_start = total.saturating_sub(visible_count);
         let start = self.selected.saturating_sub(half).min(max_start);
-        let end = (start + visible_count).min(self.items.len());
+        let end = (start + visible_count).min(total);
 
-        let mut lines: Vec<Line> = Vec::with_capacity(end - start);
+        let mut lines: Vec<Line> = Vec::with_capacity(visible_count + usize::from(reserve_hint));
         for (i, item) in self.items[start..end].iter().enumerate() {
             let actual_idx = start + i;
             let is_selected = actual_idx == self.selected;
@@ -187,6 +197,14 @@ impl Widget for SuggestionPopup<'_> {
                 item,
                 is_selected,
                 name_col_width,
+                popup_width as usize,
+                self.styles,
+            ));
+        }
+        if reserve_hint {
+            lines.push(build_overflow_hint(
+                self.selected,
+                total,
                 popup_width as usize,
                 self.styles,
             ));
@@ -257,6 +275,21 @@ fn build_row(
     }
 
     Line::from(spans)
+}
+
+/// Dim trailing row shown when the result list is taller than the popup slot.
+/// Surfaces the selected position (`pos/total`) and a scroll affordance so the
+/// user knows the list continues beyond the visible window instead of being
+/// silently truncated.
+fn build_overflow_hint(
+    selected: usize,
+    total: usize,
+    popup_width: usize,
+    styles: UiStyles<'_>,
+) -> Line<'static> {
+    let text = format!("  {}/{}  ↑↓ more", selected + 1, total);
+    let truncated = truncate_to_width(&text, popup_width);
+    Line::from(Span::styled(truncated, Style::default().fg(styles.dim())))
 }
 
 /// Map `AgentColorName` onto ratatui terminal colors. Indexed colors keep

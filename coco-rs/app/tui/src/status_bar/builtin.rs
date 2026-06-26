@@ -43,7 +43,8 @@ pub(crate) fn built_in_line_count(state: &AppState) -> u16 {
 /// Whether line 2 (permission mode / task pill) has content. Cheap: the task
 /// side is an allocation-free `any`, not the formatted pill label.
 fn show_permission_tasks_line(state: &AppState) -> bool {
-    permission_mode_status(state.session.permission_mode).is_some()
+    state.ui.input.vim.enabled
+        || permission_mode_status(state.session.permission_mode).is_some()
         || state.session.has_running_background_task()
 }
 
@@ -260,8 +261,20 @@ fn separator(spans: &mut Vec<StatusSpan>) {
 /// shows its glyph, label, and the shift+tab affordance uniformly.
 fn permission_and_tasks_line(state: &AppState) -> Vec<StatusSpan> {
     let mut spans = Vec::new();
+    // Vim mode badge — the in-band tell of NORMAL vs INSERT (the cursor shape
+    // is the other half, see `cursor::vim_cursor_style`). Only shown when vim
+    // editing is enabled.
+    if state.ui.input.vim.enabled {
+        let (label, tone) = if state.ui.input.vim.is_normal() {
+            ("NORMAL", StatusTone::Accent)
+        } else {
+            ("INSERT", StatusTone::Primary)
+        };
+        spans.push(StatusSpan::bold(format!(" {label} "), tone));
+    }
     if let Some((symbol, label, tone)) = permission_mode_status(state.session.permission_mode) {
-        spans.push(StatusSpan::new(format!(" {symbol} {label}"), tone));
+        let lead = if spans.is_empty() { " " } else { " · " };
+        spans.push(StatusSpan::new(format!("{lead}{symbol} {label}"), tone));
         // Every mode shows the cycle gesture, `·`-separated and dimmed, so the
         // shift+tab affordance is uniform across modes.
         spans.push(StatusSpan::new(" · ", StatusTone::Dim));

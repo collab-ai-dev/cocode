@@ -152,7 +152,6 @@ fn feature_gated_actions_silently_no_op() {
     // keystroke is swallowed silently.
     let state = fresh_state();
     let gated = [
-        KeybindingAction::ChatUndo,
         KeybindingAction::ChatMessageActions,
         KeybindingAction::AppToggleBrief,
         KeybindingAction::AppToggleTerminal,
@@ -173,6 +172,13 @@ fn feature_gated_actions_silently_no_op() {
             "{action:?} should return None — feature-gated action with no surface yet",
         );
     }
+}
+
+#[test]
+fn chat_undo_maps_to_undo_input() {
+    let state = fresh_state();
+    let cmd = dispatch_action(&KeybindingAction::ChatUndo, &state).unwrap();
+    assert!(matches!(cmd, TuiCommand::UndoInput));
 }
 
 #[test]

@@ -42,17 +42,27 @@ pub(crate) struct NativeSurfaceController {
     session_header: Option<(u64, SessionHeader)>,
 }
 
-/// Display-mode inputs whose change requires a full history re-render (the
-/// committed cells are re-derived). Deliberately excludes reasoning metadata:
-/// that is a side-cache read at cell-build time (`history_options`), so the
-/// finalize draw bakes it into the assistant cell's single append-only emit —
-/// a per-turn metadata attach must NOT force `replay_all_capped`.
+/// Content-structure inputs whose change requires a full history re-render
+/// (cells appear/disappear, so the committed rows must be re-derived).
+///
+/// Deliberately EXCLUDES pure-restyle inputs (`theme`, `syntax_highlighting`):
+/// a full replay emits `ESC[3J` via `clear_owned_scrollback`, which wipes the
+/// terminal's native scrollback — forfeiting the very Cmd+F / tmux-copy-mode
+/// affordance native-scrollback rendering exists to preserve. A restyle can't
+/// repaint bytes already committed to scrollback anyway, so we don't try: past
+/// rows keep the styling they were emitted with (real-terminal semantics) and
+/// only subsequently-appended history picks up the new theme/syntax via the
+/// per-frame `history_options`. Width-reflow and these content toggles remain
+/// the only replay triggers.
+///
+/// Also excludes reasoning metadata: that is a side-cache read at cell-build
+/// time (`history_options`), so the finalize draw bakes it into the assistant
+/// cell's single append-only emit — a per-turn metadata attach must NOT force
+/// `replay_all_capped`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HistoryDisplayState {
     show_system_reminders: bool,
     show_thinking: bool,
-    syntax_highlighting: coco_tui_ui::display::SyntaxHighlighting,
-    theme_hash: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -551,8 +561,6 @@ impl From<&AppState> for HistoryDisplayState {
         Self {
             show_system_reminders: state.ui.show_system_reminders,
             show_thinking: state.ui.show_thinking,
-            syntax_highlighting: state.ui.display_settings.syntax_highlighting,
-            theme_hash: UiStyles::new(&state.ui.theme).theme_hash(),
         }
     }
 }

@@ -17,8 +17,10 @@ use crate::widgets::suggestion_popup::SuggestionMeta;
 /// Debounce delay for file search.
 const DEBOUNCE: Duration = Duration::from_millis(50);
 
-/// Maximum suggestions returned.
-const MAX_SUGGESTIONS: i32 = 15;
+/// Maximum suggestions returned. The popup shows ~8 rows and scrolls through
+/// the rest, so this bounds ranking cost rather than the visible-row count;
+/// a tight 15 made the 16th match unreachable.
+const MAX_SUGGESTIONS: i32 = 50;
 
 /// Events from file search to TUI.
 #[derive(Debug, Clone)]
