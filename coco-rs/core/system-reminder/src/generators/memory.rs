@@ -31,6 +31,10 @@ use crate::types::ReminderOutput;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
 
+/// Lead-in prepended to the first relevant-memory entry — these are retrieved
+/// by similarity, so the model is told to apply them only if they fit.
+const RELEVANT_MEMORIES_LEAD_IN: &str = "Retrieved for possible relevance \u{2014} use only if it actually applies to what the user asked.\n\n";
+
 // ---------------------------------------------------------------------------
 // Snapshot types (populated by engine from context::Attachment variants)
 // ---------------------------------------------------------------------------
@@ -141,15 +145,24 @@ impl AttachmentGenerator for RelevantMemoriesGenerator {
             .relevant_memories
             .iter()
             .filter(|m| !m.content.is_empty())
-            .map(|m| {
+            .enumerate()
+            .map(|(i, m)| {
                 let header = m
                     .header
                     .clone()
                     .unwrap_or_else(|| fallback_header(&m.path, m.mtime_ms));
+                // Lead-in on the first entry only: these were retrieved by
+                // similarity, not necessarily relevance, so steer the model to
+                // use them only if they actually apply (CC's `o===0` gate).
+                let lead_in = if i == 0 {
+                    RELEVANT_MEMORIES_LEAD_IN
+                } else {
+                    ""
+                };
                 ReminderMessage {
                     role: MessageRole::User,
                     blocks: vec![ContentBlock::Text {
-                        text: format!("{header}\n\n{content}", content = m.content),
+                        text: format!("{lead_in}{header}\n\n{content}", content = m.content),
                     }],
                     is_meta: true,
                 }

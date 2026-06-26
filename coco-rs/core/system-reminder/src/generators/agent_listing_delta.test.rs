@@ -128,6 +128,6 @@ async fn emits_standalone_concurrency_note_on_initial_even_without_changes() {
     let text = r.content().unwrap();
     assert_eq!(
         text,
-        "Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses."
+        "Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses.\n\nThis is ambient context — do not narrate it to the user unless they ask or it is directly relevant to their request."
     );
 }

@@ -106,9 +106,20 @@ impl Tool for WriteTool {
         Some(input.file_path.clone())
     }
 
-    fn validate_input(&self, input: &WriteInput, _ctx: &ToolUseContext) -> ValidationResult {
+    fn validate_input(&self, input: &WriteInput, ctx: &ToolUseContext) -> ValidationResult {
         if input.file_path.is_empty() {
             return ValidationResult::invalid("missing required field: file_path");
+        }
+        // Subagents should return findings as text, not write report files —
+        // a report.md written by a subagent is invisible to the parent unless
+        // re-read. Block the conventional report-file basenames so the model
+        // puts the content in its final response instead.
+        if ctx.agent_id.is_some() && is_subagent_report_filename(&input.file_path) {
+            return ValidationResult::invalid_with_code(
+                "Subagents should return findings as text, not write report files. \
+                 Include this content in your final response instead.",
+                "5",
+            );
         }
         // Note: `content: String` deserialized successfully, so it's
         // present; empty content is a legitimate "truncate" use case.
@@ -330,6 +341,21 @@ impl Tool for WriteTool {
             display_data: None,
         })
     }
+}
+
+/// Matches CC's `^(REPORT|SUMMARY|FINDINGS|ANALYSIS).*\.md$` on the basename,
+/// case-insensitive — the conventional subagent report-file shapes. No regex
+/// dep: an uppercase-prefix-insensitive `.md`-suffix check is exact-equivalent.
+fn is_subagent_report_filename(file_path: &str) -> bool {
+    let base = std::path::Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    base.ends_with(".md")
+        && ["report", "summary", "findings", "analysis"]
+            .iter()
+            .any(|prefix| base.starts_with(prefix))
 }
 
 #[cfg(test)]

@@ -109,6 +109,12 @@ pub struct EnvironmentInfo {
     pub model: String,
     pub knowledge_cutoff: String,
     pub is_git_repo: bool,
+    /// True when the cwd is a *linked* git worktree — `.git` is a file
+    /// pointing at the gitdir rather than a directory. coco agent worktrees
+    /// live at `<main>/.claude/worktrees/<slug>`; the env block warns the
+    /// model not to `cd` to the original repo root and escape the isolation.
+    #[serde(default)]
+    pub is_worktree: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_status: Option<GitStatus>,
 }
@@ -133,6 +139,9 @@ pub struct GitStatus {
 /// block is suppressed.
 pub fn get_environment_info(cwd: &Path, model: &str, include_git_status: bool) -> EnvironmentInfo {
     let is_git_repo = cwd.join(".git").exists();
+    // A linked worktree's `.git` is a file (`gitdir: …`); the main checkout's
+    // is a directory. This distinguishes "in a worktree" from "in a repo".
+    let is_worktree = cwd.join(".git").is_file();
     let git_status = if is_git_repo && include_git_status {
         get_git_status(cwd).ok()
     } else {
@@ -156,6 +165,7 @@ pub fn get_environment_info(cwd: &Path, model: &str, include_git_status: bool) -
         model,
         knowledge_cutoff,
         is_git_repo,
+        is_worktree,
         git_status,
     }
 }

@@ -7,11 +7,11 @@ use std::collections::HashSet;
 /// continuing. Update both the constant and the TS `Attachment` union
 /// size in the README.
 #[test]
-fn attachment_kind_all_has_64_variants() {
+fn attachment_kind_all_has_65_variants() {
     assert_eq!(
         AttachmentKind::all().len(),
-        64,
-        "61 TS Attachment union members + coco-rs-synthetic user_context, slash_command_metadata, and workflow_keyword_request"
+        65,
+        "61 TS Attachment union members + coco-rs-synthetic user_context, slash_command_metadata, workflow_keyword_request, and tool_search_usage_reminder"
     );
 }
 
@@ -70,8 +70,8 @@ fn coverage_distribution_matches_readme_snapshot() {
     // API-hidden audit-add kinds are typed silent events or inactive runtime
     // bookkeeping.
     assert_eq!(
-        reminder, 40,
-        "in-crate reminders (incl. synthetic user_context)"
+        reminder, 41,
+        "in-crate reminders (incl. synthetic user_context + tool_search_usage_reminder)"
     );
     assert_eq!(silent_reminder, 2, "in-crate silent reminders");
     assert_eq!(outside, 8, "owned by sister crates");
@@ -80,8 +80,8 @@ fn coverage_distribution_matches_readme_snapshot() {
     assert_eq!(runtime, 3, "inactive runtime bookkeeping");
     assert_eq!(
         reminder + silent_reminder + outside + silent_event + feature_gated + runtime,
-        64,
-        "total must match union size + synthetic user_context + slash_command_metadata + workflow_keyword_request"
+        65,
+        "total must match union size + synthetic user_context + slash_command_metadata + workflow_keyword_request + tool_search_usage_reminder"
     );
 }
 

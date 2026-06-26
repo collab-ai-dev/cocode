@@ -102,19 +102,24 @@ impl Tool for SkillTool {
          When users ask you to perform tasks, check if any of the available skills match. \
          Skills provide specialized capabilities and domain knowledge.\n\
          \n\
-         When users reference a \"slash command\" or \"/<something>\" (e.g., \"/commit\", \
-         \"/review-pr\"), they are referring to a skill. Use this tool to invoke it.\n\
+         When users reference a \"slash command\" or \"/<something>\", they are referring to a \
+         skill. Use this tool to invoke it.\n\
          \n\
          How to invoke:\n\
-         - Use this tool with the skill name and optional arguments\n\
-         - Examples:\n\
-         \u{20}\u{20}- `skill: \"pdf\"` - invoke the pdf skill\n\
-         \u{20}\u{20}- `skill: \"commit\", args: \"-m 'Fix bug'\"` - invoke with arguments\n\
-         \u{20}\u{20}- `skill: \"review-pr\", args: \"123\"` - invoke with arguments\n\
-         \u{20}\u{20}- `skill: \"ms-office-suite:pdf\"` - invoke using fully qualified name\n\
+         - Set `skill` to the exact name of an available skill (no leading slash). For \
+         plugin-namespaced skills use the fully qualified `plugin:skill` form.\n\
+         - Set `args` to pass optional arguments.\n\
+         - Some skills are scoped to a directory: their name is prefixed with the directory \
+         (e.g. `apps/web:deploy`) and their description says which directory they apply to. When \
+         a skill name has both a scoped and an unscoped variant, pick by the files you are working \
+         on: if the files are under a variant's directory, invoke that variant (most specific \
+         directory wins); otherwise invoke the unscoped one.\n\
          \n\
          Important:\n\
          - Available skills are listed in system-reminder messages in the conversation\n\
+         - Only invoke a skill that appears in that list, or one the user explicitly typed as \
+         `/<name>` in their message. Never guess or invent a skill name from training data; \
+         otherwise do not call this tool\n\
          - When a skill matches the user's request, this is a BLOCKING REQUIREMENT: invoke the \
          relevant Skill tool BEFORE generating any other response about the task\n\
          - NEVER mention a skill without actually calling this tool\n\

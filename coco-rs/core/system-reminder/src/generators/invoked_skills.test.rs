@@ -41,7 +41,8 @@ async fn emits_with_triple_dash_separator() {
         .content()
         .unwrap()
         .to_string();
-    assert!(text.contains("The following skills were invoked in this session"));
+    assert!(text.contains("The following skills were invoked EARLIER in this session"));
+    assert!(text.contains("Do NOT re-execute these skills"));
     assert!(text.contains("### Skill: one\nPath: /skills/one.md\n\ndo one thing"));
     assert!(text.contains("### Skill: two\nPath: /skills/two.md\n\ndo two things"));
     assert!(text.contains("\n\n---\n\n"));

@@ -163,10 +163,24 @@ pub fn attachment_to_messages(att: &Attachment) -> Vec<Message> {
                 f.filename
             );
             let result = format!("Result of calling the {read_tool} tool:\n{}", f.content);
-            vec![
+            let mut msgs = vec![
                 coco_messages::wrapping::create_system_reminder_message(&call),
                 coco_messages::wrapping::create_system_reminder_message(&result),
-            ]
+            ];
+            // Truncated @-mention content needs a marker so the model knows
+            // there's more and reaches for Read rather than assuming it saw
+            // the whole file. Kept out of the visible summary (don't narrate).
+            if f.truncated {
+                let lines = f.content.lines().count();
+                let note = format!(
+                    "Note: The file {filename} was too large and has been truncated to the first {lines} lines. Don't tell the user about this truncation. Use {read_tool} to read more of the file if you need.",
+                    filename = f.filename,
+                );
+                msgs.push(coco_messages::wrapping::create_system_reminder_message(
+                    &note,
+                ));
+            }
+            msgs
         }
         Attachment::Image(img) => {
             let Some(b64) = img.base64_data.as_ref() else {
@@ -202,8 +216,38 @@ pub fn attachment_to_messages(att: &Attachment) -> Vec<Message> {
                 coco_messages::wrapping::create_system_reminder_message(&result),
             ]
         }
+        Attachment::PdfReference(p) => {
+            // A large @-mentioned PDF can't be inlined — point the model at
+            // Read with the pages parameter rather than emitting nothing
+            // (which left the model to call Read without pages and fail).
+            let content = format!(
+                "PDF file: {filename} ({pages} pages, {size}). This PDF is too large to read all at once. You MUST use the {read_tool} tool with the pages parameter to read specific page ranges (e.g., pages: \"1-5\"). Do NOT call {read_tool} without the pages parameter or it will fail. Start by reading the first few pages to understand the structure, then read more as needed. Maximum 20 pages per request.",
+                filename = p.filename,
+                pages = p.page_count,
+                size = format_file_size(p.file_size),
+            );
+            vec![coco_messages::wrapping::create_system_reminder_message(
+                &content,
+            )]
+        }
         Attachment::AlreadyReadFile(_) | Attachment::AgentMention(_) => Vec::new(),
         _ => Vec::new(),
+    }
+}
+
+/// Human-readable byte size (e.g. `1.2 MB`) for the PDF-reference reminder.
+fn format_file_size(bytes: i64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
     }
 }
 

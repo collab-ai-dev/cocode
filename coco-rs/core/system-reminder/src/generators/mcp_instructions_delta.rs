@@ -18,6 +18,7 @@ use crate::error::Result;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
 use crate::generator::McpInstructionsDeltaInfo;
+use crate::types::AMBIENT_CONTEXT_TRAILER;
 use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
@@ -54,7 +55,7 @@ impl AttachmentGenerator for McpInstructionsDeltaGenerator {
 }
 
 fn render(info: &McpInstructionsDeltaInfo) -> String {
-    let mut parts: Vec<String> = Vec::with_capacity(2);
+    let mut parts: Vec<String> = Vec::with_capacity(3);
     if !info.added_blocks.is_empty() {
         parts.push(format!(
             "# MCP Server Instructions\n\nThe following MCP servers have provided instructions for how to use their tools and resources:\n\n{}",
@@ -67,6 +68,8 @@ fn render(info: &McpInstructionsDeltaInfo) -> String {
             info.removed_names.join("\n")
         ));
     }
+    // Ambient signal — the model should act on it, not narrate it.
+    parts.push(AMBIENT_CONTEXT_TRAILER.to_string());
     parts.join("\n\n")
 }
 

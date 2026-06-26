@@ -65,11 +65,7 @@ static ASK_USER_QUESTION_PROMPT: std::sync::LazyLock<String> = std::sync::LazyLo
     let exit = coco_types::ToolName::ExitPlanMode.as_str();
     format!(
         "\
-Use this tool when you need to ask the user questions during execution. This allows you to:
-1. Gather user preferences or requirements
-2. Clarify ambiguous instructions
-3. Get decisions on implementation choices as you work
-4. Offer choices to the user about what direction to take.
+Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the code, or sensible defaults.
 
 Usage notes:
 - Users will always be able to select \"Other\" to provide custom text input
@@ -77,6 +73,8 @@ Usage notes:
 - If you recommend a specific option, make that the first option in the list and add \"(Recommended)\" at the end of the label
 
 Plan mode note: In plan mode, use this tool to clarify requirements or choose between approaches BEFORE finalizing your plan. Do NOT use this tool to ask \"Is my plan ready?\" or \"Should I proceed?\" - use {exit} for plan approval. IMPORTANT: Do not reference \"the plan\" in your questions (e.g., \"Do you have feedback about the plan?\", \"Does the plan look good?\") because the user cannot see the plan in the UI until you call {exit}. If you need plan approval, use {exit} instead.
+
+Reserve this for decisions where the user's answer changes what you do next — not for choices with a conventional default or facts you can verify in the codebase yourself. In those cases pick the obvious option, mention it in your response, and proceed.
 
 Preview feature:
 Use the optional `preview` field on options when presenting concrete artifacts that users need to visually compare:

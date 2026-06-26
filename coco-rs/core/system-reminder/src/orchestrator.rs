@@ -107,8 +107,8 @@ impl SystemReminderOrchestrator {
             PlanModeReentryGenerator, RelevantMemoriesGenerator, SkillDiscoveryGenerator,
             SkillListingGenerator, TaskRemindersGenerator, TaskStatusGenerator,
             TeamContextGenerator, TeammateMailboxGenerator, TodoRemindersGenerator,
-            TokenUsageGenerator, UltrathinkEffortGenerator, UserContextGenerator,
-            VerifyPlanReminderGenerator,
+            TokenUsageGenerator, ToolSearchUsageReminderGenerator, UltrathinkEffortGenerator,
+            UserContextGenerator, VerifyPlanReminderGenerator,
         };
 
         // UserInput batch.
@@ -125,6 +125,7 @@ impl SystemReminderOrchestrator {
         self.add_generator(Arc::new(UserContextGenerator));
         self.add_generator(Arc::new(UltrathinkEffortGenerator));
         self.add_generator(Arc::new(DeferredToolsDeltaGenerator));
+        self.add_generator(Arc::new(ToolSearchUsageReminderGenerator));
         self.add_generator(Arc::new(AgentListingDeltaGenerator));
         self.add_generator(Arc::new(McpInstructionsDeltaGenerator));
         self.add_generator(Arc::new(CompanionIntroGenerator));

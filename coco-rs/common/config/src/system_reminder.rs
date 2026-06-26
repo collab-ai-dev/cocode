@@ -132,6 +132,13 @@ pub struct AttachmentSettings {
     /// default.
     pub mcp_instructions_delta: bool,
 
+    /// Recurring tool-search usage nudge. Fires whenever deferred tools
+    /// remain undiscovered, reminding the model to load their schemas via
+    /// ToolSearch before concluding a capability is missing. On by default;
+    /// highest-leverage for non-Anthropic providers where ToolSearch is
+    /// promoted rather than native.
+    pub tool_search_usage_reminder: bool,
+
     // ── Phase 3 cross-crate state reminders ──
     /// Hook success output. On by default.
     pub hook_success: bool,
@@ -224,6 +231,7 @@ impl Default for AttachmentSettings {
             deferred_tools_delta: true,
             agent_listing_delta: true,
             mcp_instructions_delta: true,
+            tool_search_usage_reminder: true,
             // Phase 3 — on by default; generators short-circuit when ctx state is empty.
             hook_success: true,
             hook_blocking_error: true,
