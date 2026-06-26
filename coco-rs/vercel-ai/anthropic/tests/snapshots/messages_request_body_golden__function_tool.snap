@@ -1,0 +1,48 @@
+---
+source: vercel-ai/anthropic/tests/messages_request_body_golden.rs
+expression: "wire_view(&options, false)"
+---
+{
+  "body": {
+    "max_tokens": 64000,
+    "messages": [
+      {
+        "content": [
+          {
+            "text": "read /tmp/x",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "claude-sonnet-4-5",
+    "tools": [
+      {
+        "description": "Read a file from disk",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "file_path": {
+              "description": "Absolute path",
+              "type": "string"
+            },
+            "limit": {
+              "description": "Max lines",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "file_path"
+          ],
+          "type": "object"
+        },
+        "name": "Read"
+      }
+    ]
+  },
+  "headers": {
+    "anthropic-beta": "prompt-caching-scope-2026-01-05,structured-outputs-2025-11-13",
+    "anthropic-version": "2023-06-01"
+  }
+}

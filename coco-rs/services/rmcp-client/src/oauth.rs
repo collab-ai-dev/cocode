@@ -19,6 +19,8 @@
 use crate::Result;
 use crate::ResultExt;
 use crate::RmcpClientError;
+use coco_async_utils::clock::Clock;
+use coco_async_utils::clock::SystemClock;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
 use oauth2::Scope;
@@ -39,8 +41,6 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 use tracing::warn;
 
 use coco_keyring_store::DefaultKeyringStore;
@@ -131,15 +131,15 @@ pub fn has_valid_oauth_tokens(
     let Some(tokens) = load_oauth_tokens(server_name, url, store_mode, config_home)? else {
         return Ok(false);
     };
-    Ok(!token_needs_refresh(tokens.expires_at))
+    Ok(!token_needs_refresh(tokens.expires_at, &SystemClock))
 }
 
-fn refresh_expires_in_from_timestamp(tokens: &mut StoredOAuthTokens) {
+fn refresh_expires_in_from_timestamp(tokens: &mut StoredOAuthTokens, clock: &dyn Clock) {
     let Some(expires_at) = tokens.expires_at else {
         return;
     };
 
-    match expires_in_from_timestamp(expires_at) {
+    match expires_in_from_timestamp(expires_at, clock) {
         Some(seconds) => {
             let duration = Duration::from_secs(seconds);
             tokens.token_response.0.set_expires_in(Some(&duration));
@@ -177,7 +177,7 @@ fn load_oauth_tokens_from_keyring<K: KeyringStore>(
         Ok(Some(serialized)) => {
             let mut tokens: StoredOAuthTokens = serde_json::from_str(&serialized)
                 .with_ctx("failed to deserialize OAuth tokens from keyring")?;
-            refresh_expires_in_from_timestamp(&mut tokens);
+            refresh_expires_in_from_timestamp(&mut tokens, &SystemClock);
             Ok(Some(tokens))
         }
         Ok(None) => Ok(None),
@@ -246,7 +246,7 @@ pub fn save_oauth_access_token(params: OAuthAccessTokenSave<'_>) -> Result<()> {
         token_response.set_expires_in(Some(&duration));
     }
 
-    let expires_at = compute_expires_at_millis(&token_response);
+    let expires_at = compute_expires_at_millis(&token_response, &SystemClock);
     let stored = StoredOAuthTokens {
         server_name: params.server_name.to_string(),
         url: params.url.to_string(),
@@ -405,7 +405,7 @@ impl OAuthPersistor {
                 let expires_at = if same_token {
                     last_credentials.as_ref().and_then(|prev| prev.expires_at)
                 } else {
-                    compute_expires_at_millis(&credentials)
+                    compute_expires_at_millis(&credentials, &SystemClock)
                 };
                 let stored = StoredOAuthTokens {
                     server_name: self.inner.server_name.clone(),
@@ -451,7 +451,7 @@ impl OAuthPersistor {
             guard.as_ref().and_then(|tokens| tokens.expires_at)
         };
 
-        if !token_needs_refresh(expires_at) {
+        if !token_needs_refresh(expires_at, &SystemClock) {
             return Ok(());
         }
 
@@ -528,7 +528,7 @@ fn load_oauth_tokens_from_file(
             token_response: WrappedOAuthTokenResponse(token_response),
             expires_at: entry.expires_at,
         };
-        refresh_expires_in_from_timestamp(&mut stored);
+        refresh_expires_in_from_timestamp(&mut stored, &SystemClock);
 
         return Ok(Some(stored));
     }
@@ -546,7 +546,7 @@ fn save_oauth_tokens_to_file(
     let token_response = &tokens.token_response.0;
     let expires_at = tokens
         .expires_at
-        .or_else(|| compute_expires_at_millis(token_response));
+        .or_else(|| compute_expires_at_millis(token_response, &SystemClock));
     let refresh_token = token_response
         .refresh_token()
         .map(|token| token.secret().to_string());
@@ -583,11 +583,12 @@ fn delete_oauth_tokens_from_file(key: &str, config_home: &std::path::Path) -> Re
     Ok(removed)
 }
 
-pub(crate) fn compute_expires_at_millis(response: &OAuthTokenResponse) -> Option<u64> {
+pub(crate) fn compute_expires_at_millis(
+    response: &OAuthTokenResponse,
+    clock: &dyn Clock,
+) -> Option<u64> {
     let expires_in = response.expires_in()?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0));
+    let now = Duration::from_millis(clock.now_unix_millis().max(0) as u64);
     let expiry = now.checked_add(expires_in)?;
     let millis = expiry.as_millis();
     if millis > u128::from(u64::MAX) {
@@ -597,11 +598,8 @@ pub(crate) fn compute_expires_at_millis(response: &OAuthTokenResponse) -> Option
     }
 }
 
-fn expires_in_from_timestamp(expires_at: u64) -> Option<u64> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0));
-    let now_ms = now.as_millis() as u64;
+fn expires_in_from_timestamp(expires_at: u64, clock: &dyn Clock) -> Option<u64> {
+    let now_ms = clock.now_unix_millis().max(0) as u64;
 
     if expires_at <= now_ms {
         None
@@ -610,15 +608,12 @@ fn expires_in_from_timestamp(expires_at: u64) -> Option<u64> {
     }
 }
 
-fn token_needs_refresh(expires_at: Option<u64>) -> bool {
+fn token_needs_refresh(expires_at: Option<u64>, clock: &dyn Clock) -> bool {
     let Some(expires_at) = expires_at else {
         return false;
     };
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0))
-        .as_millis() as u64;
+    let now = clock.now_unix_millis().max(0) as u64;
 
     now.saturating_add(REFRESH_SKEW_MILLIS) >= expires_at
 }

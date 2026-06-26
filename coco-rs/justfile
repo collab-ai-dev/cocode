@@ -80,6 +80,16 @@ test *args:
 test-crate crate *args:
     cargo test -p {{crate}} {{args}}
 
+# Run the render/paint benchmarks. The probe-metric unit tests run FIRST and
+# gate the benchmarks: untrustworthy metric math fails before any number is
+# produced (opencode's `bun test ./unit && playwright` trust chain). Benchmarks
+# assert scenario completion + structural invariants only, never machine-
+# dependent timing thresholds.
+bench *args:
+    cargo test -p coco-tui-ui --features testing bench_metrics
+    cargo bench -p coco-tui-ui --features testing "$@"
+    cargo bench -p coco-tui "$@"
+
 # Run the coco-sdk Python suite (unit + e2e). E2E tests skip cleanly
 # when DEEPSEEK_API_KEY is unset, so this is a no-op cost without
 # credentials. The script lives next to the SDK so it can pick up the

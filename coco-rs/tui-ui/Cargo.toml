@@ -34,6 +34,7 @@ libc.workspace = true
 [dev-dependencies]
 pretty_assertions.workspace = true
 vt100.workspace = true
+insta.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 criterion = { workspace = true }
 # Dev-only: the render bench drives the real markdown renderer to generate

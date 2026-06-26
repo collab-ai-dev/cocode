@@ -7,3 +7,4 @@
 pub mod compact;
 pub mod conversation;
 pub mod messages;
+pub mod recording;

@@ -43,9 +43,10 @@ members = [
     "utils/string",
     "utils/symbol-search",
 
-    # ─── tests/ (2) ── shared integration-test scaffolding + live API runner ───
+    # ─── tests/ (3) ── shared integration-test scaffolding + live API runner ───
     "tests/harness",
     "tests/live",
+    "tests/cassette",
 
     # ─── vercel-ai/ (9) ───
     "vercel-ai/provider",
@@ -191,6 +192,7 @@ coco-lsp = { path = "services/lsp" }
 coco-compact = { path = "services/compact" }
 coco-wire-dump = { path = "services/wire-dump" }
 coco-test-harness = { path = "tests/harness" }
+coco-cassette = { path = "tests/cassette" }
 
 # Internal - core
 coco-messages = { path = "core/messages" }

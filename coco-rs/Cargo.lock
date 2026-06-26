@@ -1072,6 +1072,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-cassette"
+version = "0.1.1"
+dependencies = [
+ "coco-secret-redact",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "coco-cli"
 version = "0.1.1"
 dependencies = [
@@ -1965,6 +1978,7 @@ version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
+ "coco-async-utils",
  "coco-error",
  "coco-keyring-store",
  "coco-mcp-types",
@@ -2263,10 +2277,12 @@ dependencies = [
 name = "coco-test-harness"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
  "coco-compact",
  "coco-inference",
  "coco-llm-types",
  "coco-messages",
+ "coco-tool-runtime",
  "coco-types",
  "serde_json",
  "tokio",
@@ -2390,6 +2406,7 @@ dependencies = [
  "html2text",
  "ignore",
  "image",
+ "insta",
  "jsonschema",
  "pathdiff",
  "pdf-extract",
@@ -2498,6 +2515,7 @@ dependencies = [
  "coco-tui-markdown",
  "criterion",
  "crossterm",
+ "insta",
  "libc",
  "pretty_assertions",
  "ratatui",
@@ -4660,6 +4678,7 @@ checksum = "7b4a6248eb93a4401ed2f37dfe8ea592d3cf05b7cf4f8efa867b6895af7e094e"
 dependencies = [
  "console 0.16.3",
  "once_cell",
+ "serde",
  "similar",
  "tempfile",
 ]
@@ -9382,7 +9401,9 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytes",
+ "coco-cassette",
  "futures",
+ "insta",
  "pretty_assertions",
  "regex",
  "reqwest 0.12.28",

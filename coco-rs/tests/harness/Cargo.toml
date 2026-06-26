@@ -13,7 +13,9 @@ coco-llm-types.workspace = true
 coco-messages.workspace = true
 coco-compact.workspace = true
 coco-inference.workspace = true
+coco-tool-runtime.workspace = true
 
+async-trait.workspace = true
 serde_json.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 tokio = { workspace = true, features = ["sync"] }

@@ -70,6 +70,7 @@ pathdiff.workspace = true
 [dev-dependencies]
 anyhow.workspace = true
 pretty_assertions.workspace = true
+insta = { workspace = true, features = ["json"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile.workspace = true
 coco-tool-runtime = { workspace = true, features = ["testing"] }

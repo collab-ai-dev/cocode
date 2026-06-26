@@ -1,0 +1,19 @@
+[package]
+name = "coco-cassette"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints.clippy]
+unwrap_used = "allow"  # test-support crate, unwrap/expect is fine
+
+[dependencies]
+coco-secret-redact.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+wiremock.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+reqwest = { workspace = true, features = ["json"] }

@@ -26,6 +26,10 @@ regex = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 pretty_assertions = { workspace = true }
 wiremock = { workspace = true }
+insta = { workspace = true, features = ["json"] }
+# Cassette record/replay demo. coco-cassette has no vercel-ai dependency, so
+# this dev-dep introduces no cycle and trips no seam guard.
+coco-cassette = { workspace = true }
 
 [lints]
 workspace = true

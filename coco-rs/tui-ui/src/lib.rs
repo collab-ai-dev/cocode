@@ -5,6 +5,10 @@
 //! primitives (color adaptation, width-aware text, frame pacing, the surface
 //! paint engine) that the `coco-tui` shell drives with already-projected data.
 
+/// Pure metric predicates for the render benchmarks (probe trust chain).
+/// Gated behind `testing` — never ships in release; `app/tui` enables it.
+#[cfg(any(test, feature = "testing"))]
+pub mod bench_metrics;
 pub mod clipboard;
 pub mod clipboard_copy;
 pub mod clock;

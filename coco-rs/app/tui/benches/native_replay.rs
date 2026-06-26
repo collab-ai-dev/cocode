@@ -128,8 +128,12 @@ fn bench_cached_render_case(
             assert!(!warmed.cache_hit);
             b.iter(|| {
                 let output = bench.render_cached(width);
-                assert!(output.cache_hit);
-                assert_eq!(output.finalized_render_calls, 0);
+                // Tested predicate (coco_tui_ui::bench_metrics) instead of
+                // inline arithmetic — the probe trust chain.
+                assert!(coco_tui_ui::bench_metrics::is_clean_cache_hit(
+                    output.cache_hit,
+                    output.finalized_render_calls,
+                ));
                 black_box(output.lines)
             });
         },
@@ -180,8 +184,10 @@ fn bench_cached_insert_case(
             assert!(!warmed.cache_hit);
             b.iter(|| {
                 let output = bench.insert_cached(width, 40);
-                assert!(output.cache_hit);
-                assert_eq!(output.finalized_render_calls, 0);
+                assert!(coco_tui_ui::bench_metrics::is_clean_cache_hit(
+                    output.cache_hit,
+                    output.finalized_render_calls,
+                ));
                 black_box(output.rows)
             });
         },
