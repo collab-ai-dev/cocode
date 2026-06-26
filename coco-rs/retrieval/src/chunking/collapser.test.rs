@@ -15,6 +15,20 @@ fn test_no_collapse_needed() {
 }
 
 #[test]
+fn test_truncate_multibyte_no_newline_does_not_panic() {
+    // A single long line (no `\n`) of multi-byte chars whose byte length
+    // exceeds max_size: the no-newline branch must cut on a char boundary
+    // rather than panic slicing mid-char.
+    let collapser = SmartCollapser::new(10);
+    let content = "你好世界一二三四五六".to_string(); // 30 bytes, 10 chars
+    assert!(content.len() > 10);
+    let out = collapser.truncate(&content); // must not panic
+    assert!(out.ends_with("..."));
+    // Everything before the "..." is whole chars (valid UTF-8 prefix).
+    assert!(content.starts_with(out.trim_end_matches("...")));
+}
+
+#[test]
 fn test_collapse_block() {
     let content = r#"fn main() {
     let x = 1;

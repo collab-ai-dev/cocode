@@ -183,7 +183,12 @@ impl SmartCollapser {
         if last_newline > 0 {
             format!("{}\n// ... truncated", &content[..last_newline])
         } else {
-            format!("{}...", &content[..self.max_size.min(content.len())])
+            // No newline within budget: cut on a char boundary so a multi-byte
+            // UTF-8 char straddling `max_size` can't panic the slice.
+            format!(
+                "{}...",
+                &content[..content.floor_char_boundary(self.max_size)]
+            )
         }
     }
 

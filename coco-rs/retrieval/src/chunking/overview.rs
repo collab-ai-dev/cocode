@@ -100,9 +100,11 @@ pub fn generate_overview_chunks(
             }
         }
 
-        // Truncate if too large
+        // Truncate if too large. Cut on a char boundary — source carries
+        // multi-byte UTF-8 (CJK comments, emoji), so a raw byte truncate at
+        // `max_size` would panic when it lands mid-char.
         if content.len() > config.max_size {
-            content.truncate(config.max_size);
+            content.truncate(content.floor_char_boundary(config.max_size));
             content.push_str("\n// ... truncated");
         }
 

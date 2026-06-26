@@ -156,12 +156,16 @@ impl InputState {
 
     pub fn insert(&mut self, c: char) {
         self.text.insert(self.cursor, c);
-        self.cursor += 1;
+        // `cursor` is a byte index; advance by the char's UTF-8 width so it
+        // stays on a char boundary for multi-byte input (CJK, emoji).
+        self.cursor += c.len_utf8();
     }
 
     pub fn backspace(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
+        // Step back one whole char, then remove it — `cursor - 1` could land
+        // inside a multi-byte char and panic `remove`.
+        if let Some(c) = self.text[..self.cursor].chars().next_back() {
+            self.cursor -= c.len_utf8();
             self.text.remove(self.cursor);
         }
     }
@@ -173,14 +177,15 @@ impl InputState {
     }
 
     pub fn move_left(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
+        // Move by whole chars so the cursor stays on a UTF-8 boundary.
+        if let Some(c) = self.text[..self.cursor].chars().next_back() {
+            self.cursor -= c.len_utf8();
         }
     }
 
     pub fn move_right(&mut self) {
-        if self.cursor < self.text.len() {
-            self.cursor += 1;
+        if let Some(c) = self.text[self.cursor..].chars().next() {
+            self.cursor += c.len_utf8();
         }
     }
 
@@ -210,32 +215,36 @@ impl InputState {
 
     /// Move cursor to the beginning of the previous word (Ctrl+Left)
     pub fn move_word_left(&mut self) {
-        if self.cursor == 0 {
-            return;
+        // Walk back one whole char at a time — skip trailing whitespace, then
+        // the word. Stepping by UTF-8 width keeps the cursor on a boundary.
+        while let Some(c) = self.text[..self.cursor].chars().next_back() {
+            if !c.is_whitespace() {
+                break;
+            }
+            self.cursor -= c.len_utf8();
         }
-        // Skip any whitespace before cursor
-        while self.cursor > 0 && self.text[..self.cursor].ends_with(char::is_whitespace) {
-            self.cursor -= 1;
-        }
-        // Move to beginning of word
-        while self.cursor > 0 && !self.text[..self.cursor].ends_with(char::is_whitespace) {
-            self.cursor -= 1;
+        while let Some(c) = self.text[..self.cursor].chars().next_back() {
+            if c.is_whitespace() {
+                break;
+            }
+            self.cursor -= c.len_utf8();
         }
     }
 
     /// Move cursor to the end of the next word (Ctrl+Right)
     pub fn move_word_right(&mut self) {
-        let len = self.text.len();
-        if self.cursor >= len {
-            return;
+        // Walk forward one whole char at a time — skip whitespace, then the word.
+        while let Some(c) = self.text[self.cursor..].chars().next() {
+            if !c.is_whitespace() {
+                break;
+            }
+            self.cursor += c.len_utf8();
         }
-        // Skip any whitespace after cursor
-        while self.cursor < len && self.text[self.cursor..].starts_with(char::is_whitespace) {
-            self.cursor += 1;
-        }
-        // Move to end of word
-        while self.cursor < len && !self.text[self.cursor..].starts_with(char::is_whitespace) {
-            self.cursor += 1;
+        while let Some(c) = self.text[self.cursor..].chars().next() {
+            if c.is_whitespace() {
+                break;
+            }
+            self.cursor += c.len_utf8();
         }
     }
 }
@@ -1146,3 +1155,7 @@ impl App {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "app.test.rs"]
+mod tests;
