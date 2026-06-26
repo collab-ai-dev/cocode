@@ -22,6 +22,7 @@ use crate::oauth::compute_expires_at_millis;
 use crate::save_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
+use coco_async_utils::clock::SystemClock;
 
 struct OauthHeaders {
     http_headers: Option<HashMap<String, String>>,
@@ -330,7 +331,7 @@ impl OauthLoginFlow {
                 RmcpClientError::oauth("OAuth provider did not return credentials")
             })?;
 
-            let expires_at = compute_expires_at_millis(&credentials);
+            let expires_at = compute_expires_at_millis(&credentials, &SystemClock);
             let stored = StoredOAuthTokens {
                 server_name: self.server_name.clone(),
                 url: self.server_url.clone(),

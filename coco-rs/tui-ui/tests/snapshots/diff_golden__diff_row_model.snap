@@ -1,0 +1,43 @@
+---
+source: tui-ui/tests/diff_golden.rs
+expression: rows
+---
+[
+    FileHeader {
+        marker: "─",
+        path: "a/src/main.rs",
+    },
+    FileHeader {
+        marker: "+",
+        path: "b/src/main.rs",
+    },
+    Hunk {
+        old_start: 1,
+        new_start: 1,
+        label: "",
+    },
+    Context {
+        old_line: 1,
+        new_line: 1,
+        content: "fn main() {",
+    },
+    Removed {
+        old_line: 2,
+        content: "    println!(\"hello\");",
+        compare_to: Some(
+            "    println!(\"hello, world\");",
+        ),
+    },
+    Added {
+        new_line: 2,
+        content: "    println!(\"hello, world\");",
+        compare_to: Some(
+            "    println!(\"hello\");",
+        ),
+    },
+    Context {
+        old_line: 3,
+        new_line: 3,
+        content: "}",
+    },
+]

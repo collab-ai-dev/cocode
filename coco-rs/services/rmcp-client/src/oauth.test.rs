@@ -1,5 +1,6 @@
 use super::*;
 use anyhow::Result;
+use coco_async_utils::clock::TestClock;
 use keyring::Error as KeyringError;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -287,7 +288,7 @@ fn refresh_expires_in_from_timestamp_restores_future_durations() {
     let expires_at = tokens.expires_at.expect("expires_at should be set");
 
     tokens.token_response.0.set_expires_in(None);
-    super::refresh_expires_in_from_timestamp(&mut tokens);
+    super::refresh_expires_in_from_timestamp(&mut tokens, &SystemClock);
 
     let actual = tokens
         .token_response
@@ -295,7 +296,7 @@ fn refresh_expires_in_from_timestamp_restores_future_durations() {
         .expires_in()
         .expect("expires_in should be restored")
         .as_secs();
-    let expected = super::expires_in_from_timestamp(expires_at)
+    let expected = super::expires_in_from_timestamp(expires_at, &SystemClock)
         .expect("expires_at should still be in the future");
     let diff = actual.abs_diff(expected);
     assert!(diff <= 1, "expires_in drift too large: diff={diff}");
@@ -304,18 +305,49 @@ fn refresh_expires_in_from_timestamp_restores_future_durations() {
 #[test]
 fn refresh_expires_in_from_timestamp_clears_expired_tokens() {
     let mut tokens = sample_tokens();
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0));
-    let expired_at = now.as_millis() as u64;
-    tokens.expires_at = Some(expired_at.saturating_sub(1000));
+    // Deterministic: pin "now" and place the expiry strictly in the past.
+    let clock = TestClock::new(1_000_000);
+    tokens.expires_at = Some(999_000); // 1s before the pinned now
 
     let duration = Duration::from_secs(600);
     tokens.token_response.0.set_expires_in(Some(&duration));
 
-    super::refresh_expires_in_from_timestamp(&mut tokens);
+    super::refresh_expires_in_from_timestamp(&mut tokens, &clock);
 
     assert!(tokens.token_response.0.expires_in().is_none());
+}
+
+#[test]
+fn token_needs_refresh_is_deterministic_with_injected_clock() {
+    // Robust to the actual REFRESH_SKEW_MILLIS value: refresh triggers once
+    // `now + skew >= expires_at`.
+    let skew = super::REFRESH_SKEW_MILLIS;
+    let now: i64 = 1_000_000;
+
+    // Well beyond now + skew: no refresh.
+    let far_future = Some(now as u64 + skew + 60_000);
+    assert!(!super::token_needs_refresh(
+        far_future,
+        &TestClock::new(now)
+    ));
+
+    // Inside the refresh-skew window: refresh.
+    let within = Some(now as u64 + skew / 2);
+    assert!(super::token_needs_refresh(within, &TestClock::new(now)));
+
+    // Already expired: refresh.
+    let expired = Some((now as u64).saturating_sub(1_000));
+    assert!(super::token_needs_refresh(expired, &TestClock::new(now)));
+
+    // Advancing virtual time flips a future expiry into the refresh window.
+    let clock = TestClock::new(now);
+    let soon = Some(now as u64 + skew + 10_000);
+    assert!(!super::token_needs_refresh(soon, &clock));
+    clock.advance_millis(60_000);
+    assert!(super::token_needs_refresh(soon, &clock));
+
+    // A token with no expiry never needs refresh.
+    assert!(!super::token_needs_refresh(None, &TestClock::new(now)));
 }
 
 fn assert_tokens_match_without_expiry(actual: &StoredOAuthTokens, expected: &StoredOAuthTokens) {
@@ -368,7 +400,7 @@ fn sample_tokens() -> StoredOAuthTokens {
     ]));
     let expires_in = Duration::from_secs(3600);
     response.set_expires_in(Some(&expires_in));
-    let expires_at = super::compute_expires_at_millis(&response);
+    let expires_at = super::compute_expires_at_millis(&response, &SystemClock);
 
     StoredOAuthTokens {
         server_name: "test-server".to_string(),

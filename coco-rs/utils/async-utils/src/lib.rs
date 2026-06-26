@@ -2,6 +2,13 @@ use async_trait::async_trait;
 use std::future::Future;
 use tokio_util::sync::CancellationToken;
 
+pub mod clock;
+
+pub use clock::Clock;
+pub use clock::SystemClock;
+#[cfg(any(test, feature = "testing"))]
+pub use clock::TestClock;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum CancelErr {
     Cancelled,

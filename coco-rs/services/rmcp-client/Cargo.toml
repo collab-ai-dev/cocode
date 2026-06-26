@@ -16,6 +16,7 @@ axum = { workspace = true, default-features = false, features = [
     "http1",
     "tokio",
 ] }
+coco-async-utils.workspace = true
 coco-error.workspace = true
 coco-keyring-store.workspace = true
 coco-mcp-types.workspace = true
@@ -65,6 +66,7 @@ which.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
+coco-async-utils = { workspace = true, features = ["testing"] }
 coco-utils-cargo-bin.workspace = true
 pretty_assertions.workspace = true
 serial_test.workspace = true

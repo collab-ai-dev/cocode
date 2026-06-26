@@ -418,6 +418,111 @@ fn native_draw_does_not_replay_or_wipe_scrollback_when_theme_changes() {
 }
 
 #[test]
+fn theme_toggle_emits_no_scrollback_wipe_bytes() {
+    // Byte-level regression guard for the ESC[3J scrollback-wipe-on-theme-toggle
+    // bug. The sibling test above asserts the `HistoryEmissionOutcome` is not
+    // `Replayed`; this one asserts the *actual bytes* the engine writes to the
+    // terminal, mirroring opencode's "assert on emitted bytes" e2e philosophy.
+    // It is strictly stronger: it catches ANY path that reaches
+    // `clear_owned_scrollback` (which emits ESC[3J), not just the Replayed
+    // branch we currently know about.
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct CapturedWriter(Rc<RefCell<Vec<u8>>>);
+    impl Write for CapturedWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let writer = CapturedWriter::default();
+    let backend = ratatui::backend::CrosstermBackend::new(writer.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 5, 48, 4));
+    let mut state = AppState::new();
+    test_helpers::push_assistant_text(&mut state.session, "stable");
+    let mut controller = NativeSurfaceController::default();
+    controller.draw(&mut terminal, &state).expect("first draw");
+
+    // Discard startup bytes; only the restyle redraw must be free of ESC[3J.
+    writer.0.borrow_mut().clear();
+    state.ui.theme.accent = ratatui::style::Color::LightRed;
+    controller
+        .draw(&mut terminal, &state)
+        .expect("theme redraw");
+
+    let bytes = writer.0.borrow();
+    let emitted = String::from_utf8_lossy(&bytes);
+    assert!(
+        !emitted.contains("\u{1b}[3J"),
+        "theme restyle must not emit ESC[3J (native-scrollback wipe); emitted: {emitted:?}"
+    );
+}
+
+#[test]
+fn paint_engine_emitted_bytes_decode_to_expected_grid_via_vt100() {
+    // Decode the engine's ACTUAL emitted ANSI with a real terminal emulator
+    // (vt100), not the in-memory TestBackend buffer. A real emulator agreeing
+    // that the rendered text landed on the visible grid validates cursor
+    // positioning, scroll regions, and SGR framing end to end — the in-process
+    // core of opencode's "decode the real emitted bytes" golden-frame approach,
+    // without the flakiness of driving the full interactive binary in a PTY.
+    // We assert on the live streaming tail because it renders in the visible
+    // viewport; committed messages live in native scrollback (off the visible
+    // screen vt100 exposes via `contents()`).
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::rc::Rc;
+
+    #[derive(Clone, Default)]
+    struct CapturedWriter(Rc<RefCell<Vec<u8>>>);
+    impl Write for CapturedWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    const ROWS: u16 = 24;
+    const COLS: u16 = 64;
+    let writer = CapturedWriter::default();
+    let backend = ratatui::backend::CrosstermBackend::new(writer.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    // Fix geometry deterministically (independent of the real test tty size).
+    terminal.sync_screen_size(ratatui::layout::Size::new(COLS, ROWS));
+    terminal.set_viewport_area(Rect::new(0, 16, COLS, 8));
+
+    let mut state = AppState::new();
+    let mut streaming = StreamingState::new();
+    streaming.append_text("hello from the paint engine");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    let mut controller = NativeSurfaceController::default();
+    controller.draw(&mut terminal, &state).expect("draw");
+
+    // Feed the captured ANSI into a real terminal emulator and read the grid.
+    let bytes = writer.0.borrow().clone();
+    let mut parser = vt100::Parser::new(ROWS, COLS, 200);
+    parser.process(&bytes);
+    let screen = parser.screen().contents();
+
+    assert!(
+        screen.contains("hello from the paint engine"),
+        "vt100-decoded visible screen must show the streamed text; got:\n{screen}"
+    );
+}
+
+#[test]
 fn native_draw_appends_after_transcript_revision_changes() {
     let backend = TestBackend::new(48, 12);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
