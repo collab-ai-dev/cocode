@@ -469,8 +469,9 @@ fn render_live_viewport(
 /// Sizing to the item count — rather than always reserving the full cap —
 /// keeps the composer's vertical shift proportional to the popup (a 2-item
 /// popup shifts the input ~2 rows, not 10). Mirrors codex's content-based
-/// `calculate_required_height`. The widget renders exactly one row per item
-/// with no border/title/hint chrome, so item count is the exact row need.
+/// `calculate_required_height`. When the result count exceeds the cap the
+/// widget shows one fewer item and reuses that bottom row for a dim overflow
+/// indicator, so the reserved height is unchanged (still capped at the cap).
 fn popup_row_budget(item_count: usize, avail_below_input: u16) -> u16 {
     let rows = item_count.min(SuggestionPopup::DEFAULT_MAX_VISIBLE as usize) as u16;
     rows.min(avail_below_input)

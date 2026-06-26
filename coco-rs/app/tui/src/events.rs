@@ -119,6 +119,8 @@ pub enum TuiCommand {
     KillToBeginningOfLine,
     /// Yank killed text (Ctrl+Y).
     Yank,
+    /// Undo the last composer edit (restores the previous input snapshot).
+    UndoInput,
 
     // ── Cursor movement ──
     /// Move cursor left.

@@ -121,10 +121,9 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // both directions. Update handler in `update.rs` does the swap.
         ChatStash => TuiCommand::StashInputDraft,
         ChatImagePaste => TuiCommand::PasteFromClipboard,
-        // `chat:undo` — undoable-input stack not yet implemented; silently
-        // no-op so a user-bound key doesn't fall through to the legacy
-        // cascade. Implement when the stack lands.
-        ChatUndo => return None,
+        // `chat:undo` — restore the previous composer snapshot from the
+        // TextArea undo stack (captured per mutating edit in `update.rs`).
+        ChatUndo => TuiCommand::UndoInput,
         // `chat:messageActions` — message-actions cursor not yet shipped;
         // silently no-op.
         ChatMessageActions => return None,

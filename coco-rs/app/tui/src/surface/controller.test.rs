@@ -337,7 +337,12 @@ fn native_draw_finalizes_after_turn_end_shrink_without_full_replay() {
 }
 
 #[test]
-fn native_draw_replays_finalized_history_when_theme_changes_at_finalize() {
+fn native_draw_finalizes_cleanly_when_theme_changes_at_finalize() {
+    // Finalizing a streamed message while the theme changed in the same frame
+    // must not corrupt the committed history: the text appears exactly once,
+    // never duplicated or dropped. (The finalize of a streamed multi-line
+    // message in a tiny viewport may legitimately re-emit via replay for
+    // streaming reasons; the theme change itself no longer forces it.)
     let backend = TestBackend::new(64, 18);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
@@ -356,14 +361,10 @@ fn native_draw_replays_finalized_history_when_theme_changes_at_finalize() {
     state.ui.theme.accent = ratatui::style::Color::LightRed;
     state.ui.streaming = None;
     test_helpers::push_assistant_text(&mut state.session, "alpha\n\nbeta");
-    let outcome = controller
+    controller
         .draw(&mut terminal, &state)
         .expect("final append draw");
 
-    assert!(matches!(
-        outcome.history,
-        HistoryEmissionOutcome::Replayed { .. }
-    ));
     let final_text = plain_terminal_text(&terminal);
     assert_eq!(final_text.matches("alpha").count(), 1, "{final_text}");
     assert_eq!(final_text.matches("beta").count(), 1, "{final_text}");
@@ -389,7 +390,11 @@ fn native_draw_fast_noops_when_transcript_revision_is_unchanged() {
 }
 
 #[test]
-fn native_draw_replays_finalized_history_when_theme_changes() {
+fn native_draw_does_not_replay_or_wipe_scrollback_when_theme_changes() {
+    // A theme change is a pure restyle: it must NOT force the destructive
+    // `clear_owned_scrollback` (ESC[3J) replay, which would wipe the user's
+    // native scrollback (the Cmd+F / tmux-copy-mode affordance). Committed
+    // rows keep their emitted styling; only new appends pick up the new theme.
     let backend = TestBackend::new(48, 9);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 5, 48, 4));
@@ -401,12 +406,15 @@ fn native_draw_replays_finalized_history_when_theme_changes() {
     state.ui.theme.accent = ratatui::style::Color::LightRed;
     let outcome = controller
         .draw(&mut terminal, &state)
-        .expect("theme replay");
+        .expect("theme redraw");
 
-    assert!(matches!(
-        outcome.history,
-        HistoryEmissionOutcome::Replayed { .. }
-    ));
+    assert!(
+        !matches!(outcome.history, HistoryEmissionOutcome::Replayed { .. }),
+        "theme change must not trigger a scrollback-wiping replay: {:?}",
+        outcome.history
+    );
+    let text = plain_terminal_text(&terminal);
+    assert_eq!(text.matches("stable").count(), 1, "{text}");
 }
 
 #[test]
