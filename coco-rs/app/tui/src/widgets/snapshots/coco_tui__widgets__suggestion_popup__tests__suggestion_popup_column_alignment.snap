@@ -2,6 +2,6 @@
 source: app/tui/src/widgets/suggestion_popup.test.rs
 expression: "render_popup(&items, 0, 60, 6)"
 ---
-▸   /m               model                                  
-    /clear           clear chat                             
-    /commit-push-pr  commit + push + PR
+▸ /m               model                                    
+  /clear           clear chat                               
+  /commit-push-pr  commit + push + PR

@@ -9,5 +9,5 @@ expression: output
 ────────────────────────────────────────────────────────────────────────────────
 ❯ /c                                                                            
 ────────────────────────────────────────────────────────────────────────────────
-▸   /clear    Clear conversation                                                
-    /compact  Compact conversation
+▸ /clear    Clear conversation                                                  
+  /compact  Compact conversation

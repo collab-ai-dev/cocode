@@ -137,6 +137,32 @@ fn snapshot_uniform_name_column_padding() {
 }
 
 #[test]
+fn slash_only_popup_drops_icon_column() {
+    // A pure slash palette (all metadata None) drops the always-blank
+    // kind-icon column, so the label's `/` sits at column 2 — directly
+    // under the `/` the user typed after the composer's 2-col `❯ ` prefix.
+    let items = vec![item("/clear", Some("Clear chat"))];
+    let out = render_popup(&items, 0, 30, 1);
+    let line = out.lines().next().unwrap();
+    assert!(line.starts_with("▸ /clear"), "got: {line:?}");
+}
+
+#[test]
+fn mixed_popup_keeps_icon_column() {
+    use super::SuggestionMeta;
+    // When any row carries an icon the column is reserved for every row,
+    // so labels stay aligned: the agent `*` sits at col 2, label at col 4.
+    let items = vec![SuggestionItem {
+        label: "Plan (agent)".into(),
+        description: None,
+        metadata: Some(SuggestionMeta::Agent { color: None }),
+    }];
+    let out = render_popup(&items, 0, 40, 1);
+    let line = out.lines().next().unwrap();
+    assert!(line.starts_with("▸ * Plan"), "got: {line:?}");
+}
+
+#[test]
 fn empty_items_renders_nothing() {
     let out = render_popup(&[], 0, 30, 4);
     // Widget early-returns; the buffer stays as default cells (spaces).

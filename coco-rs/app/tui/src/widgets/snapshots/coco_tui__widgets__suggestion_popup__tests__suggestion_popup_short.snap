@@ -2,5 +2,5 @@
 source: app/tui/src/widgets/suggestion_popup.test.rs
 expression: "render_popup(&items, 0, 50, 6)"
 ---
-▸   /clear    Clear chat                          
-    /config   Settings
+▸ /clear    Clear chat                            
+  /config   Settings
