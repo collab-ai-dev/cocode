@@ -2,12 +2,16 @@
 //! palette.
 //!
 //! Renders an inline, borderless list directly above the input area.
-//! Each row is a single text line: a leading kind icon (`▸` selected
-//! marker, `*` for agents, `+` for files / paths, `◇` for MCP resources,
-//! blank for slash commands), then a fixed-width name column, then a
-//! single-line description. Selected rows use the theme's primary color
-//! (bold); unselected rows are rendered with `text_dim`. Agent rows pick
-//! up the agent's configured color (Red/Blue/Green/…) when present.
+//! Each row is a single text line: a `▸` selection marker, then — only
+//! when at least one row in the list carries a kind icon — a kind-icon
+//! column (`*` agents, `+` files / paths, `◇` MCP resources, `#` symbols,
+//! `↻` sessions), then a fixed-width name column and a single-line
+//! description. A palette whose rows have no icons (the slash-command /
+//! skill list) drops the icon column entirely, so a `/cmd` label lines up
+//! under the `/` the user typed in the composer. Selected rows use the
+//! theme's primary color (bold); unselected rows are rendered with
+//! `text_dim`. Agent rows pick up the agent's configured color
+//! (Red/Blue/Green/…) when present.
 
 use coco_types::AgentColorName;
 use ratatui::buffer::Buffer;
@@ -121,10 +125,15 @@ impl<'a> SuggestionPopup<'a> {
     }
 }
 
-/// Width of the leading marker. Layout: `▸ X ` when selected with kind
-/// icon, `  X ` when unselected — three columns for the marker + icon +
-/// trailing space.
-const MARKER_WIDTH: usize = 4;
+/// Width of the leading marker when the kind-icon column is shown:
+/// `▸ X ` (selection marker + space + icon + space). Used when at least
+/// one row carries an icon, so every label aligns past the icon column.
+const MARKER_WIDTH_WITH_ICON: usize = 4;
+/// Width of the leading marker when NO row carries a kind icon (the pure
+/// slash-command / skill palette): `▸ ` (selection marker + space). The
+/// always-blank icon column is dropped so a `/cmd` label lines up under
+/// the `/` the user typed after the composer's 2-col `❯ ` indicator.
+const MARKER_WIDTH_NO_ICON: usize = 2;
 /// Trailing padding between the name column and the description so the
 /// description never abuts the longest name in the list.
 const NAME_COLUMN_PADDING: usize = 2;
@@ -181,6 +190,11 @@ impl Widget for SuggestionPopup<'_> {
             .min(column_cap)
             .max(NAME_COLUMN_FLOOR.min(column_cap));
 
+        // Reserve the kind-icon column only when some row actually carries an
+        // icon. A pure slash-command / skill palette (all metadata `None`)
+        // drops it so labels line up under the composer's typed `/`.
+        let show_icon_column = self.items.iter().any(|item| item.metadata.is_some());
+
         // Center the selected row in the visible window so the user
         // sees context above and below as they navigate.
         let total = total_items;
@@ -198,6 +212,7 @@ impl Widget for SuggestionPopup<'_> {
                 is_selected,
                 name_col_width,
                 popup_width as usize,
+                show_icon_column,
                 self.styles,
             ));
         }
@@ -219,15 +234,25 @@ fn build_row(
     is_selected: bool,
     name_col_width: usize,
     popup_width: usize,
+    show_icon_column: bool,
     styles: UiStyles<'_>,
 ) -> Line<'static> {
+    let marker_width = if show_icon_column {
+        MARKER_WIDTH_WITH_ICON
+    } else {
+        MARKER_WIDTH_NO_ICON
+    };
     let selection_marker = if is_selected { '▸' } else { ' ' };
-    let kind_icon = item
-        .metadata
-        .as_ref()
-        .map(SuggestionMeta::icon)
-        .unwrap_or(' ');
-    let marker_text = format!("{selection_marker} {kind_icon} ");
+    let marker_text = if show_icon_column {
+        let kind_icon = item
+            .metadata
+            .as_ref()
+            .map(SuggestionMeta::icon)
+            .unwrap_or(' ');
+        format!("{selection_marker} {kind_icon} ")
+    } else {
+        format!("{selection_marker} ")
+    };
 
     let label_color = match item.metadata.as_ref() {
         Some(SuggestionMeta::Agent { color: Some(c) }) => Some(agent_color_to_ratatui(*c)),
@@ -266,7 +291,7 @@ fn build_row(
     ];
 
     if let Some(desc) = item.description.as_ref() {
-        let remaining = popup_width.saturating_sub(MARKER_WIDTH + name_col_width);
+        let remaining = popup_width.saturating_sub(marker_width + name_col_width);
         if remaining > 0 {
             let normalized = normalize_whitespace(desc);
             let truncated = truncate_to_width(&normalized, remaining);

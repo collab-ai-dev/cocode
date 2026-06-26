@@ -2,4 +2,4 @@
 source: app/tui/src/widgets/suggestion_popup.test.rs
 expression: "render_popup(&items, 0, 60, 4)"
 ---
-▸   /帮 助      显 示 帮 助 信 息
+▸ /帮 助      显 示 帮 助 信 息
