@@ -1,0 +1,84 @@
+//! Reminder generator implementations.
+//!
+//! Each submodule owns one or more [`AttachmentGenerator`](crate::AttachmentGenerator)
+//! implementations. Phase B ships plan-mode + auto-mode generators only; Phase
+//! C adds todo / task / compaction / critical / date-change generators.
+
+pub mod agent_listing_delta;
+pub mod already_read_file;
+pub mod audit_add;
+pub mod auto_mode;
+pub mod auto_mode_enter;
+pub mod budget_usd;
+pub mod compaction_reminder;
+pub mod companion_intro;
+pub mod critical_system_reminder;
+pub mod date_change;
+pub mod deferred_tools_delta;
+pub mod diagnostics;
+pub mod edited_image_file;
+pub mod hook_events;
+pub mod invoked_skills;
+pub mod mcp_instructions_delta;
+pub mod memory;
+pub mod output_style;
+pub mod output_token_usage;
+pub mod plan_mode;
+pub mod queued_command;
+pub mod skill_listing;
+pub mod task_reminders;
+pub mod task_status;
+pub mod team;
+pub mod todo_reminders;
+pub mod token_usage;
+pub mod tool_search_usage_reminder;
+pub mod ultrathink_effort;
+pub mod user_context;
+pub mod user_input;
+pub mod verify_plan;
+
+pub use agent_listing_delta::AgentListingDeltaGenerator;
+pub use already_read_file::AlreadyReadFileGenerator;
+pub use audit_add::SkillDiscoveryGenerator;
+pub use auto_mode::AutoModeExitGenerator;
+pub use auto_mode_enter::AutoModeEnterGenerator;
+pub use budget_usd::BudgetUsdGenerator;
+pub use compaction_reminder::CompactionReminderGenerator;
+pub use companion_intro::CompanionIntroGenerator;
+pub use critical_system_reminder::CriticalSystemReminderGenerator;
+pub use date_change::DateChangeGenerator;
+pub use deferred_tools_delta::DeferredToolsDeltaGenerator;
+pub use diagnostics::DiagnosticsGenerator;
+pub use edited_image_file::EditedImageFileGenerator;
+pub use hook_events::AsyncHookResponseGenerator;
+pub use hook_events::HookAdditionalContextGenerator;
+pub use hook_events::HookBlockingErrorGenerator;
+pub use hook_events::HookStoppedContinuationGenerator;
+pub use hook_events::HookSuccessGenerator;
+pub use invoked_skills::InvokedSkillsGenerator;
+pub use mcp_instructions_delta::McpInstructionsDeltaGenerator;
+pub use memory::NestedMemoryGenerator;
+pub use memory::RelevantMemoriesGenerator;
+pub use output_style::OutputStyleGenerator;
+pub use output_token_usage::OutputTokenUsageGenerator;
+pub use plan_mode::PlanModeEnterGenerator;
+pub use plan_mode::PlanModeExitGenerator;
+pub use plan_mode::PlanModeReentryGenerator;
+pub use queued_command::QueuedCommandGenerator;
+pub use skill_listing::SkillListingGenerator;
+pub use task_reminders::TaskRemindersGenerator;
+pub use task_status::TaskStatusGenerator;
+pub use team::AgentPendingMessagesGenerator;
+pub use team::TeamContextGenerator;
+pub use team::TeammateMailboxGenerator;
+pub use todo_reminders::TodoRemindersGenerator;
+pub use token_usage::TokenUsageGenerator;
+pub use tool_search_usage_reminder::ToolSearchUsageReminderGenerator;
+pub use ultrathink_effort::UltrathinkEffortGenerator;
+pub use user_context::UserContextGenerator;
+pub use user_input::AgentMentionsGenerator;
+pub use user_input::AtMentionedFilesGenerator;
+pub use user_input::IdeOpenedFileGenerator;
+pub use user_input::IdeSelectionGenerator;
+pub use user_input::McpResourcesGenerator;
+pub use verify_plan::VerifyPlanReminderGenerator;

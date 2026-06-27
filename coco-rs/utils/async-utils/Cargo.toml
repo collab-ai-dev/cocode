@@ -1,0 +1,22 @@
+[package]
+name = "coco-async-utils"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Exposes the `TestClock` (deterministic clock) to other crates' tests, since
+# deps aren't built under `cfg(test)`. Downstream crates enable this in
+# `[dev-dependencies]` (mirrors `coco-tui-ui`'s `testing` feature).
+testing = []
+
+[dependencies]
+async-trait.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+tokio-util.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

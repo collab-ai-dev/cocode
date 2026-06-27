@@ -1,0 +1,17 @@
+---
+source: app/tui/src/presentation/agents_dialog.test.rs
+expression: "body_only(&state, &[])"
+---
+ Running   [Library]
+▸ + Create new agent
+
+  ── User agents ──
+  alpha  ·  user
+    First user agent
+
+  ── Built-in agents ──
+  Explore  ·  built-in  (cannot be modified)
+    Fast read-only search agent
+
+
+←/→ to switch · ↑/↓ to navigate · Enter to select · Esc to close

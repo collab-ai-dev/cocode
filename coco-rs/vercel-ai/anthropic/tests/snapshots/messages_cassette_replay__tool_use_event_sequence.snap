@@ -1,0 +1,11 @@
+---
+source: vercel-ai/anthropic/tests/messages_cassette_replay.rs
+expression: "event_types.join(\"\\n\")"
+---
+streamStart
+response-metadata
+toolInputStart
+toolInputDelta
+toolInputEnd
+tool-call
+finish

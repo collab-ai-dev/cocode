@@ -1,0 +1,11 @@
+---
+source: hub/protocol/tests/wire_format.rs
+expression: json
+---
+{
+  "kind": "events_dropped",
+  "count": 3,
+  "since_seq": 10,
+  "until_seq": 13,
+  "reason": "backpressure"
+}

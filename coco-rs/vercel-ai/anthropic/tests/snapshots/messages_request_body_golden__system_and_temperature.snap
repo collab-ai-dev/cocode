@@ -1,0 +1,32 @@
+---
+source: vercel-ai/anthropic/tests/messages_request_body_golden.rs
+expression: "wire_view(&options, false)"
+---
+{
+  "body": {
+    "max_tokens": 64000,
+    "messages": [
+      {
+        "content": [
+          {
+            "text": "Hi",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "claude-sonnet-4-5",
+    "system": [
+      {
+        "text": "You are coco.",
+        "type": "text"
+      }
+    ],
+    "temperature": 1.0
+  },
+  "headers": {
+    "anthropic-beta": "prompt-caching-scope-2026-01-05",
+    "anthropic-version": "2023-06-01"
+  }
+}

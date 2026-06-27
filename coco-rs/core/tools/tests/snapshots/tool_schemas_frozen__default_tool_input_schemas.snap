@@ -1,0 +1,425 @@
+---
+source: core/tools/tests/tool_schemas_frozen.rs
+expression: map
+---
+{
+  "Agent": {
+    "properties": [
+      "cwd",
+      "description",
+      "isolation",
+      "mcp_servers",
+      "mode",
+      "name",
+      "prompt",
+      "run_in_background",
+      "subagent_type",
+      "team_name"
+    ],
+    "required": [
+      "description",
+      "prompt"
+    ]
+  },
+  "AskUserQuestion": {
+    "properties": [
+      "annotations",
+      "answers",
+      "metadata",
+      "questions"
+    ],
+    "required": [
+      "questions"
+    ]
+  },
+  "Bash": {
+    "properties": [
+      "_simulatedSedEdit",
+      "command",
+      "dangerouslyDisableSandbox",
+      "description",
+      "run_in_background",
+      "timeout"
+    ],
+    "required": [
+      "command"
+    ]
+  },
+  "Config": {
+    "properties": [
+      "setting",
+      "value"
+    ],
+    "required": [
+      "setting"
+    ]
+  },
+  "CronCreate": {
+    "properties": [
+      "cron",
+      "durable",
+      "prompt",
+      "recurring"
+    ],
+    "required": [
+      "cron",
+      "prompt"
+    ]
+  },
+  "CronDelete": {
+    "properties": [
+      "id"
+    ],
+    "required": [
+      "id"
+    ]
+  },
+  "CronList": {
+    "properties": [],
+    "required": []
+  },
+  "Edit": {
+    "properties": [
+      "file_path",
+      "new_string",
+      "old_string",
+      "replace_all"
+    ],
+    "required": [
+      "file_path",
+      "new_string",
+      "old_string"
+    ]
+  },
+  "EnterPlanMode": {
+    "properties": [],
+    "required": []
+  },
+  "EnterWorktree": {
+    "properties": [
+      "name"
+    ],
+    "required": []
+  },
+  "ExitPlanMode": {
+    "properties": [
+      "allowedPrompts"
+    ],
+    "required": []
+  },
+  "ExitWorktree": {
+    "properties": [
+      "action",
+      "discard_changes"
+    ],
+    "required": [
+      "action"
+    ]
+  },
+  "Glob": {
+    "properties": [
+      "path",
+      "pattern"
+    ],
+    "required": [
+      "pattern"
+    ]
+  },
+  "Grep": {
+    "properties": [
+      "-A",
+      "-B",
+      "-C",
+      "-i",
+      "-n",
+      "context",
+      "glob",
+      "head_limit",
+      "multiline",
+      "offset",
+      "output_mode",
+      "path",
+      "pattern",
+      "type"
+    ],
+    "required": [
+      "pattern"
+    ]
+  },
+  "LSP": {
+    "properties": [
+      "character",
+      "filePath",
+      "line",
+      "operation",
+      "query"
+    ],
+    "required": [
+      "character",
+      "filePath",
+      "line",
+      "operation"
+    ]
+  },
+  "ListMcpResourcesTool": {
+    "properties": [
+      "server"
+    ],
+    "required": []
+  },
+  "McpAuth": {
+    "properties": [
+      "server_name"
+    ],
+    "required": []
+  },
+  "Monitor": {
+    "properties": [
+      "command",
+      "description",
+      "persistent",
+      "timeout_ms"
+    ],
+    "required": [
+      "command",
+      "description"
+    ]
+  },
+  "NotebookEdit": {
+    "properties": [
+      "cell_id",
+      "cell_type",
+      "edit_mode",
+      "new_source",
+      "notebook_path"
+    ],
+    "required": [
+      "new_source",
+      "notebook_path"
+    ]
+  },
+  "PowerShell": {
+    "properties": [
+      "command",
+      "dangerouslyDisableSandbox",
+      "description",
+      "run_in_background",
+      "timeout"
+    ],
+    "required": [
+      "command"
+    ]
+  },
+  "REPL": {
+    "properties": [
+      "command",
+      "language"
+    ],
+    "required": []
+  },
+  "Read": {
+    "properties": [
+      "file_path",
+      "limit",
+      "offset",
+      "pages"
+    ],
+    "required": [
+      "file_path"
+    ]
+  },
+  "ReadMcpResourceTool": {
+    "properties": [
+      "server",
+      "uri"
+    ],
+    "required": [
+      "server",
+      "uri"
+    ]
+  },
+  "RemoteTrigger": {
+    "properties": [
+      "action",
+      "body",
+      "trigger_id"
+    ],
+    "required": [
+      "action"
+    ]
+  },
+  "ScheduleWakeup": {
+    "properties": [
+      "delaySeconds",
+      "prompt",
+      "reason"
+    ],
+    "required": [
+      "delaySeconds",
+      "prompt",
+      "reason"
+    ]
+  },
+  "SendMessage": {
+    "properties": [
+      "message",
+      "summary",
+      "to"
+    ],
+    "required": [
+      "message",
+      "to"
+    ]
+  },
+  "SendUserMessage": {
+    "properties": [
+      "attachments",
+      "message",
+      "status"
+    ],
+    "required": [
+      "message",
+      "status"
+    ]
+  },
+  "Skill": {
+    "properties": [
+      "args",
+      "skill"
+    ],
+    "required": [
+      "skill"
+    ]
+  },
+  "Sleep": {
+    "properties": [
+      "seconds"
+    ],
+    "required": []
+  },
+  "TaskCreate": {
+    "properties": [
+      "activeForm",
+      "description",
+      "metadata",
+      "subject"
+    ],
+    "required": [
+      "description",
+      "subject"
+    ]
+  },
+  "TaskGet": {
+    "properties": [
+      "taskId"
+    ],
+    "required": [
+      "taskId"
+    ]
+  },
+  "TaskList": {
+    "properties": [],
+    "required": []
+  },
+  "TaskOutput": {
+    "properties": [
+      "block",
+      "task_id",
+      "timeout"
+    ],
+    "required": [
+      "task_id"
+    ]
+  },
+  "TaskStop": {
+    "properties": [
+      "shell_id",
+      "task_id"
+    ],
+    "required": []
+  },
+  "TaskUpdate": {
+    "properties": [
+      "activeForm",
+      "addBlockedBy",
+      "addBlocks",
+      "description",
+      "metadata",
+      "owner",
+      "status",
+      "subject",
+      "taskId"
+    ],
+    "required": [
+      "taskId"
+    ]
+  },
+  "TodoWrite": {
+    "properties": [
+      "todos"
+    ],
+    "required": [
+      "todos"
+    ]
+  },
+  "ToolSearch": {
+    "properties": [
+      "max_results",
+      "query"
+    ],
+    "required": [
+      "query"
+    ]
+  },
+  "WebFetch": {
+    "properties": [
+      "prompt",
+      "url"
+    ],
+    "required": [
+      "prompt",
+      "url"
+    ]
+  },
+  "WebSearch": {
+    "properties": [
+      "allowed_domains",
+      "blocked_domains",
+      "max_results",
+      "query"
+    ],
+    "required": [
+      "query"
+    ]
+  },
+  "Workflow": {
+    "properties": [
+      "args",
+      "description",
+      "name",
+      "resumeFromRunId",
+      "script",
+      "scriptPath",
+      "title"
+    ],
+    "required": []
+  },
+  "Write": {
+    "properties": [
+      "content",
+      "file_path"
+    ],
+    "required": [
+      "content",
+      "file_path"
+    ]
+  },
+  "apply_patch": {
+    "properties": [
+      "patch"
+    ],
+    "required": [
+      "patch"
+    ]
+  }
+}

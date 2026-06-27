@@ -1,0 +1,168 @@
+# Release workflow for coco-rs.
+#
+# Trigger:
+#   git tag -a coco-v0.1.0 -m "Release 0.1.0"
+#   git push origin coco-v0.1.0
+#
+# Output:
+#   One artifact per target triple, each containing a zstd-compressed coco
+#   binary. The artifact directory layout matches what
+#   coco-cli/scripts/install_native_deps.py expects:
+#     <target-triple>/coco-<target-triple>.zst        (linux/macOS)
+#     <target-triple>/coco-<target-triple>.exe.zst    (windows)
+#
+# After this workflow finishes, run:
+#   python3 coco-cli/scripts/stage_npm_packages.py \
+#     --release-version 0.1.0 \
+#     --package coco-cli \
+#     --workflow-url <run-url>
+# to download artifacts and produce npm tarballs.
+
+name: coco-release
+
+on:
+  push:
+    tags:
+      - "coco-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label to record in the run summary (no Cargo.toml check)."
+        required: false
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  model-card:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: coco-rs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update bundled model-card snapshot
+        shell: bash
+        run: bash scripts/update-model-card-openrouter.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openrouter-models
+          path: coco-rs/common/model-card/data/openrouter-models.json
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    name: ${{ matrix.target }}
+    needs: model-card
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: coco-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-14
+            target: aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Rust target
+        shell: bash
+        run: rustup target add ${{ matrix.target }}
+
+      # cargo-zigbuild handles musl cross-linking out of the box, so we don't
+      # need separate musl-tools / sysroot setup for either x86_64 or aarch64.
+      - name: Install zig (musl targets)
+        if: contains(matrix.target, 'linux-musl')
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - name: Install cargo-zigbuild (musl targets)
+        if: contains(matrix.target, 'linux-musl')
+        run: cargo install --locked cargo-zigbuild
+        working-directory: .
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: openrouter-models
+          path: coco-rs/common/model-card/data
+
+      # `--features jemalloc` ships the tuned long-running-process allocator
+      # (see app/cli/src/main.rs). NOTE: the musl path builds jemalloc-sys (C)
+      # under cargo-zigbuild cross-compile — confirm the first release run is
+      # green; if zig mis-probes jemalloc's configure, drop the flag here and
+      # keep it only on the native target.
+      - name: Build (musl)
+        if: contains(matrix.target, 'linux-musl')
+        shell: bash
+        run: cargo zigbuild --release --target ${{ matrix.target }} -p coco-cli --bin coco --features jemalloc
+
+      - name: Build (native)
+        if: ${{ !contains(matrix.target, 'linux-musl') }}
+        shell: bash
+        run: cargo build --release --target ${{ matrix.target }} -p coco-cli --bin coco --features jemalloc
+
+      - name: Install zstd (macOS)
+        if: runner.os == 'macOS'
+        run: brew list zstd >/dev/null 2>&1 || brew install zstd
+        working-directory: .
+
+      - name: Compress artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          out_dir="dist/${target}"
+          mkdir -p "$out_dir"
+          src="target/${target}/release/coco"
+          dst="${out_dir}/coco-${target}.zst"
+          ls -la "$src"
+          zstd -19 -T0 -o "$dst" "$src"
+          ls -la "$dst"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: coco-rs/dist/${{ matrix.target }}/*
+          if-no-files-found: error
+          retention-days: 30
+
+  summary:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Print follow-up instructions
+        run: |
+          cat <<EOF
+          Build matrix complete.
+
+          Next step (manual): from a checkout of this repo, run
+
+            python3 coco-cli/scripts/install_native_deps.py \\
+              --workflow-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            python3 coco-cli/scripts/build_npm_package.py --package coco-cli --version <ver> --pack-output dist/coco-cli.tgz
+            for t in linux-x64 linux-arm64 darwin-arm64; do
+              python3 coco-cli/scripts/build_npm_package.py --package coco-cli-\$t --version <ver> --vendor-src coco-cli/vendor --pack-output dist/coco-cli-\$t.tgz
+            done
+
+          Or use scripts/stage_npm_packages.py to do both steps in one shot.
+          EOF

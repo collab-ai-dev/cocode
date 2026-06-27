@@ -1,0 +1,28 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+            ┌ Error ───────────────────────────────────────────────┐            
+            │Connection refused after 3 retries                    │            
+            │                                                      │            
+            │Category: network                                     │            
+            │Non-retryable — this turn cannot be resumed.          │            
+            │                                                      │            
+            │Press Esc to dismiss.                                 │            
+            │                                                      │            
+            │                                                      │            
+            └──────────────────────────────────────────────────────┘            
+                                                                                
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+❯                                                                               
+────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto * ctrl+t to cycle | ↑0 ↓0 · cache 0/0% | ctx -- | →0 ←0          
+ ⏯ ask mode on · shift+tab to cycle

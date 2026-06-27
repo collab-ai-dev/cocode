@@ -1,0 +1,29 @@
+[package]
+edition = "2021"
+license.workspace = true
+name = "coco-utils-pty"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# anyhow is required transitively because the vendored Windows ConPty code
+# implements `portable_pty::PtySystem` / `MasterPty` / `SlavePty`, whose trait
+# methods use `anyhow::Result`. Public crate API does NOT return anyhow::Result.
+anyhow = { workspace = true }
+portable-pty = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+filedescriptor.workspace = true
+lazy_static = { workspace = true }
+log = { workspace = true }
+shared_library.workspace = true
+winapi = { workspace = true }
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

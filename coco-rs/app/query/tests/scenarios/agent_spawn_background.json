@@ -1,0 +1,49 @@
+{
+  "name": "agent_spawn_background",
+  "description": "Spawn a background agent, get async_launched status, then continue with other work",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "text": "I'll launch a background agent for the heavy analysis.",
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Perform deep analysis of all dependencies and security audit",
+            "description": "Security audit",
+            "run_in_background": true
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/status.txt",
+            "content": "Background agent launched for security audit.\nWill check results later."
+          }
+        }
+      ]
+    },
+    {
+      "text": "Background agent is running. Status file created."
+    }
+  ],
+  "expect": {
+    "turns": 3,
+    "response_contains": "Background",
+    "not_cancelled": true,
+    "files": {
+      "status.txt": {
+        "exists": true,
+        "contains": "Background agent launched"
+      }
+    },
+    "event_counts": {
+      "ToolUseEnd": 2
+    }
+  }
+}

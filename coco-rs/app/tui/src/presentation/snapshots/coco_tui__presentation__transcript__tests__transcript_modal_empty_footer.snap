@@ -1,0 +1,12 @@
+---
+source: app/tui/src/presentation/transcript.test.rs
+expression: "render_transcript_text(&app_state, &state, 72, 8)"
+---
+┌ Transcript ──────────────────────────────────────────────────────────┐
+│No messages yet.                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│ctrl+o toggle · ↑/↓ scroll · PgUp/PgDn page · Home/End jump           │
+│Tab select · Enter expand/collapse · Esc/q quit                       │
+└──────────────────────────────────────────────────────────────────────┘

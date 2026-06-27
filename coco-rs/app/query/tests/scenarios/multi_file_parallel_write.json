@@ -1,0 +1,54 @@
+{
+  "name": "multi_file_parallel_write",
+  "description": "Write two files sequentially, then read both in parallel",
+  "workspace": {},
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/first.txt",
+            "content": "First file content"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/second.txt",
+            "content": "Second file content"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/first.txt" }
+        },
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/second.txt" }
+        }
+      ]
+    },
+    {
+      "text": "Both files created and verified."
+    }
+  ],
+  "expect": {
+    "turns": 4,
+    "response_contains": "Both files",
+    "files": {
+      "first.txt": { "exists": true, "equals": "First file content" },
+      "second.txt": { "exists": true, "equals": "Second file content" }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

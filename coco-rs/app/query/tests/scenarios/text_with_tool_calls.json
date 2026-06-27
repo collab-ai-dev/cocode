@@ -1,0 +1,41 @@
+{
+  "name": "text_with_tool_calls",
+  "description": "Model returns text AND a tool call in the same response (TextAndToolCalls path)",
+  "workspace": {},
+  "turns": [
+    {
+      "text": "Let me create that file for you.",
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/notes.txt",
+            "content": "Created via text+tool response"
+          }
+        }
+      ]
+    },
+    {
+      "text": "File created successfully."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "File created",
+    "files": {
+      "notes.txt": {
+        "exists": true,
+        "equals": "Created via text+tool response"
+      }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "event_counts": {
+      "TurnStarted": 1,
+      "TurnEnded": 1
+    },
+    "min_event_counts": {
+      "ToolUseEnd": 1
+    }
+  }
+}

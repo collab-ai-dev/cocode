@@ -1,0 +1,1600 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ClientRequest",
+  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the 22 base variants and §5.4 for the 8 gap additions. 31 total.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "initialize"
+        },
+        "params": {
+          "$ref": "#/$defs/InitializeParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/start"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionStartParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/resume"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionResumeParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/list"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/read"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionReadParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/archive"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionArchiveParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "turn/start"
+        },
+        "params": {
+          "$ref": "#/$defs/TurnStartParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "turn/interrupt"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "approval/resolve"
+        },
+        "params": {
+          "$ref": "#/$defs/ApprovalResolveParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "input/resolveUserInput"
+        },
+        "params": {
+          "$ref": "#/$defs/UserInputResolveParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Resolve a pending MCP elicitation request. Counterpart to the\n`ServerRequest` the agent sends when an MCP server needs\nstructured user input (form values, OAuth tokens, etc.).\nSee `event-system-design.md` §5.4.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "elicitation/resolve"
+        },
+        "params": {
+          "$ref": "#/$defs/ElicitationResolveParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/setModel"
+        },
+        "params": {
+          "$ref": "#/$defs/SetModelParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/setPermissionMode"
+        },
+        "params": {
+          "$ref": "#/$defs/SetPermissionModeParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/setThinking"
+        },
+        "params": {
+          "$ref": "#/$defs/SetThinkingParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/stopTask"
+        },
+        "params": {
+          "$ref": "#/$defs/StopTaskParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/rewindFiles"
+        },
+        "params": {
+          "$ref": "#/$defs/RewindFilesParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/updateEnv"
+        },
+        "params": {
+          "$ref": "#/$defs/UpdateEnvParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/keepAlive"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/cancelRequest"
+        },
+        "params": {
+          "$ref": "#/$defs/CancelRequestParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Interrupt one in-process teammate's active turn without\nstopping the teammate lifecycle.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "agent/interruptCurrentWork"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentInterruptCurrentWorkParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "config/read"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "config/value/write"
+        },
+        "params": {
+          "$ref": "#/$defs/ConfigWriteParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Query MCP server connection status.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "mcp/status"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
+      "description": "Get context window usage breakdown.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "context/usage"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
+      "description": "Hot-reload MCP server configurations.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "mcp/setServers"
+        },
+        "params": {
+          "$ref": "#/$defs/McpSetServersParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Reconnect a specific MCP server.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "mcp/reconnect"
+        },
+        "params": {
+          "$ref": "#/$defs/McpReconnectParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Enable/disable a specific MCP server.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "mcp/toggle"
+        },
+        "params": {
+          "$ref": "#/$defs/McpToggleParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Reload all plugins from disk.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "plugin/reload"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
+      "description": "Apply feature flag settings at runtime.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "config/applyFlags"
+        },
+        "params": {
+          "$ref": "#/$defs/ConfigApplyFlagsParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    }
+  ],
+  "$defs": {
+    "AgentInterruptCurrentWorkParams": {
+      "description": "Params for `agent/interruptCurrentWork`.\n\nAborts the target teammate's current model/tool turn while keeping the\nteammate process alive for later messages.",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_id"
+      ]
+    },
+    "AgentMcpServerSpec": {
+      "description": "One entry in `AgentDefinition.mcp_servers`:\neither a `string` (reference to an existing MCP server config) or\nan inline `{name: config}` mapping that stands up a dynamic\nserver scoped to this agent. Inline configs are stored as\n`serde_json::Value` because the underlying `McpServerConfig`\nshape lives in `coco-mcp` (a higher layer that depends on\n`coco-types`); keeping it as opaque JSON avoids a back-edge.",
+      "anyOf": [
+        {
+          "description": "Reference an existing MCP server by name (`string` arm).",
+          "type": "string"
+        },
+        {
+          "description": "Inline definition `{name: config}` (TS record arm). The map\nalways carries exactly one entry — the server name → its\n`McpServerConfig` JSON. TS validates this with Zod on load.",
+          "type": "object",
+          "additionalProperties": true
+        }
+      ]
+    },
+    "ApprovalDecision": {
+      "description": "Permission approval decision.",
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny"
+      ]
+    },
+    "ApprovalResolveParams": {
+      "description": "The SDK is *resolving* a pending approval request, sent client→server.",
+      "type": "object",
+      "properties": {
+        "content_blocks": {
+          "description": "Optional content blocks (typically image attachments) the SDK client\nwants attached to the next user message. Paste-image-during-\nAskUserQuestion or attachments alongside `MCPTool` answers ride this\nslot. Carried verbatim as `serde_json::Value` because the underlying\ncontent block shape is provider-specific; consumers translate per\nprovider.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": true
+        },
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecision"
+        },
+        "feedback": {
+          "description": "Optional feedback to inject back to the model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_update": {
+          "description": "Optional permission update to persist to rules.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionUpdate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "updated_input": {
+          "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nIn-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(TUI mode). Consumed by `app/cli/src/sdk_server/approval_bridge.rs`."
+        }
+      },
+      "required": [
+        "request_id",
+        "decision"
+      ]
+    },
+    "CancelRequestParams": {
+      "description": "Params for `control/cancelRequest`.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id"
+      ]
+    },
+    "ConfigApplyFlagsParams": {
+      "description": "Params for `config/applyFlags`.",
+      "type": "object",
+      "properties": {
+        "settings": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "settings"
+      ]
+    },
+    "ConfigWriteParams": {
+      "description": "Params for `config/value/write`.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "scope": {
+          "description": "Optional scope: \"user\" | \"project\" | \"local\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": true
+      },
+      "required": [
+        "key",
+        "value"
+      ]
+    },
+    "ElicitationResolveParams": {
+      "description": "Params for `elicitation/resolve`.\n\nSent client→server in response to a prior `ServerRequest` that\nasked the client to collect structured input on behalf of an MCP\nserver (form values, OAuth tokens, etc.). The client populates\n`values` with the user's input and sets `approved=true`, or sets\n`approved=false` to reject the elicitation.",
+      "type": "object",
+      "properties": {
+        "approved": {
+          "description": "Whether the user approved the elicitation. If `false`, `values`\nis ignored and the MCP server sees a rejection.",
+          "type": "boolean"
+        },
+        "mcp_server_name": {
+          "description": "Which MCP server the elicitation originated from. Echoed back\nso the agent can route the resolution to the right connection.",
+          "type": "string"
+        },
+        "request_id": {
+          "description": "Correlation id matching the `ServerRequest` the agent sent.",
+          "type": "string"
+        },
+        "values": {
+          "description": "The collected field values keyed by field name. Each value is\nan opaque JSON payload so typed/untyped fields share the wire\nformat. Empty when `approved=false`.",
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      },
+      "required": [
+        "request_id",
+        "mcp_server_name",
+        "approved"
+      ]
+    },
+    "HookCallbackMatcher": {
+      "description": "Hook callback matcher with optional tool-name filter and callback IDs.",
+      "type": "object",
+      "properties": {
+        "hook_callback_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "matcher": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "required": [
+        "hook_callback_ids"
+      ]
+    },
+    "InitializeParams": {
+      "description": "Sent once at session start for capability negotiation. Carries hooks,\nSDK MCP servers, output format, system prompt, and agent definitions\nso the agent can construct its registries before the first turn.",
+      "type": "object",
+      "properties": {
+        "agent_progress_summaries": {
+          "description": "Enable agent progress summaries.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "agents": {
+          "description": "Custom agent definitions keyed by name.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/SdkAgentDefinition"
+          }
+        },
+        "append_system_prompt": {
+          "description": "Text appended to the default system prompt.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hooks": {
+          "description": "Hook callbacks keyed by event type.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "ConfigChange": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "CwdChanged": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "Elicitation": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "ElicitationResult": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "FileChanged": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "InstructionsLoaded": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "Notification": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "PermissionDenied": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "PermissionRequest": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "PostCompact": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "PostToolUse": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "PostToolUseFailure": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "PreCompact": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "PreToolUse": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "SessionEnd": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "SessionStart": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "Setup": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "Stop": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "StopFailure": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "SubagentStart": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "SubagentStop": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "TaskCompleted": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "TaskCreated": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "TeammateIdle": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "UserPromptSubmit": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "WorktreeCreate": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            },
+            "WorktreeRemove": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/HookCallbackMatcher"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "json_schema": {
+          "description": "JSON schema for structured output."
+        },
+        "prompt_suggestions": {
+          "description": "Enable prompt suggestions in the output stream.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "sdk_mcp_servers": {
+          "description": "SDK-provided MCP server names (to skip env-configured ones).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "system_prompt": {
+          "description": "Full system prompt override.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "McpReconnectParams": {
+      "description": "Params for `mcp/reconnect`.",
+      "type": "object",
+      "properties": {
+        "server_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server_name"
+      ]
+    },
+    "McpSetServersParams": {
+      "description": "Params for `mcp/setServers`.",
+      "type": "object",
+      "properties": {
+        "servers": {
+          "description": "Server configs keyed by name.",
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "servers"
+      ]
+    },
+    "McpToggleParams": {
+      "description": "Params for `mcp/toggle`.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "server_name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "server_name",
+        "enabled"
+      ]
+    },
+    "MemoryScope": {
+      "description": "Scope for agent memory persistence. Controls where MEMORY.md is stored/read.",
+      "oneOf": [
+        {
+          "description": "User-global memory (config home/MEMORY.md).",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "Project-scoped memory (project root MEMORY.md).",
+          "type": "string",
+          "const": "project"
+        },
+        {
+          "description": "Local-only memory (not persisted across sessions).",
+          "type": "string",
+          "const": "local"
+        }
+      ]
+    },
+    "PermissionBehavior": {
+      "description": "Permission behavior for a rule.",
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ]
+    },
+    "PermissionMode": {
+      "description": "Permission mode (top-level because it's used by both message and permission modules).\nWire format is camelCase. The serde aliases on the drifting variants accept\nlegacy snake_case input so old session transcripts deserialize cleanly.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "default",
+            "plan",
+            "bypassPermissions",
+            "dontAsk",
+            "acceptEdits"
+          ]
+        },
+        {
+          "description": "Feature-gated auto mode.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Internal: escalate to parent agent.",
+          "type": "string",
+          "const": "bubble"
+        }
+      ]
+    },
+    "PermissionRule": {
+      "description": "A single permission rule.",
+      "type": "object",
+      "properties": {
+        "behavior": {
+          "$ref": "#/$defs/PermissionBehavior"
+        },
+        "source": {
+          "$ref": "#/$defs/PermissionRuleSource"
+        },
+        "value": {
+          "$ref": "#/$defs/PermissionRuleValue"
+        }
+      },
+      "required": [
+        "source",
+        "behavior",
+        "value"
+      ]
+    },
+    "PermissionRuleSource": {
+      "description": "Source of a permission rule (ordered by priority: Session is most specific).",
+      "type": "string",
+      "enum": [
+        "user_settings",
+        "project_settings",
+        "local_settings",
+        "flag_settings",
+        "policy_settings",
+        "cli_arg",
+        "command",
+        "session"
+      ]
+    },
+    "PermissionRuleValue": {
+      "description": "Permission rule value — tool_pattern is a glob/wildcard expression.\nExamples: \"Read\", \"Bash(git *)\", \"mcp__slack__*\", \"*\"",
+      "type": "object",
+      "properties": {
+        "rule_content": {
+          "description": "Command pattern within tool (e.g. \"git *\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_pattern": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_pattern"
+      ]
+    },
+    "PermissionUpdate": {
+      "description": "A permission update action.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "add_rules"
+            }
+          },
+          "required": [
+            "type",
+            "rules",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "replace_rules"
+            }
+          },
+          "required": [
+            "type",
+            "rules",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_rules"
+            }
+          },
+          "required": [
+            "type",
+            "rules",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_mode"
+            }
+          },
+          "required": [
+            "type",
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "directories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "add_directories"
+            }
+          },
+          "required": [
+            "type",
+            "directories",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "$ref": "#/$defs/PermissionUpdateDestination"
+            },
+            "directories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_directories"
+            }
+          },
+          "required": [
+            "type",
+            "directories",
+            "destination"
+          ]
+        }
+      ]
+    },
+    "PermissionUpdateDestination": {
+      "description": "Destination for persisting permission updates.\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to\ndisk; in-memory destinations (`Session`/`CliArg`/`Command`) live only\nfor the running session. same split as\n`persistPermissionUpdates` in `PermissionUpdate.ts`.\n`Command` is reserved for rules contributed by an invoked command or\nskill's frontmatter (`allowed-tools:`).\n`alwaysAllowRules.command` populated by `SkillTool` /\n`createGetAppStateWithAllowedTools`.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user_settings",
+            "project_settings",
+            "local_settings",
+            "session",
+            "cli_arg"
+          ]
+        },
+        {
+          "description": "Rules contributed by a command/skill frontmatter `allowed-tools`.\nIn-memory only; cleared on session end.",
+          "type": "string",
+          "const": "command"
+        }
+      ]
+    },
+    "ReasoningEffort": {
+      "description": "Reasoning effort. Ordered from \"off\" through numeric intensity.\nProvider-agnostic — `thinking_convert` maps to per-provider wire shapes.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "x_high"
+          ]
+        },
+        {
+          "description": "Explicit \"thinking off\". Convert layer skips typed-effort\nemission; `level.options` may still carry an explicit-off\nwire toggle (e.g. DeepSeek's `{\"thinking\":{\"type\":\"disabled\"}}`).",
+          "type": "string",
+          "const": "off"
+        },
+        {
+          "description": "\"Let the provider decide\". Convert layer omits reasoning fields;\nthe server-side default applies. This is the default state when\nno thinking level is configured.",
+          "type": "string",
+          "const": "auto"
+        }
+      ]
+    },
+    "RewindFilesParams": {
+      "description": "Params for `control/rewindFiles`.",
+      "type": "object",
+      "properties": {
+        "dry_run": {
+          "type": "boolean",
+          "default": false
+        },
+        "user_message_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_message_id"
+      ]
+    },
+    "SdkAgentDefinition": {
+      "description": "SDK-supplied custom subagent spec carried on `InitializeParams.agents`.\n\nWire-level DTO. **Distinct** from the internal [`crate::AgentDefinition`]\nwhich is the resolved post-load representation merged from markdown /\nplugin / SDK sources.",
+      "type": "object",
+      "properties": {
+        "background": {
+          "description": "Run as a fire-and-forget background task when invoked.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "criticalSystemReminder_EXPERIMENTAL": {
+          "description": "Experimental critical system reminder appended to the system prompt.\nWire field name: `criticalSystemReminder_EXPERIMENTAL`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Natural-language description shown in the AgentTool prompt list.",
+          "type": "string"
+        },
+        "disallowed_tools": {
+          "description": "Explicit tool deny-list.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "effort": {
+          "description": "Reasoning effort selector.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "initial_prompt": {
+          "description": "Auto-submitted as the first user turn when this agent is the main thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_turns": {
+          "description": "Hard ceiling on agentic turns before the agent stops.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "mcp_servers": {
+          "description": "Per-agent MCP servers (`string` name-ref or inline `{name: config}` map).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/AgentMcpServerSpec"
+          }
+        },
+        "memory": {
+          "description": "Auto-loading scope for agent memory files (`user` / `project` / `local`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "description": "Model alias / full id / `\"inherit\"`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "description": "Permission mode override for tool executions.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prompt": {
+          "description": "Agent system prompt body.",
+          "type": "string"
+        },
+        "skills": {
+          "description": "Skill names auto-loaded into the agent context.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "description": "Allowed tool names. `None` inherits all parent tools.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "description",
+        "prompt"
+      ]
+    },
+    "SessionArchiveParams": {
+      "description": "Params for `session/archive`.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ]
+    },
+    "SessionReadParams": {
+      "description": "Params for `session/read`.",
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "description": "Optional pagination cursor.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ]
+    },
+    "SessionResumeParams": {
+      "description": "Params for `session/resume`.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ]
+    },
+    "SessionStartParams": {
+      "description": "Params for `session/start`.",
+      "type": "object",
+      "properties": {
+        "append_system_prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "initial_prompt": {
+          "description": "Optional initial user prompt to run immediately after start.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_budget_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "max_turns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "system_prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SetModelParams": {
+      "description": "Params for `control/setModel`.",
+      "type": "object",
+      "properties": {
+        "model": {
+          "description": "None means revert to the default model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SetPermissionModeParams": {
+      "description": "Params for `control/setPermissionMode`.\n\nThe `ultraplan` field (CCR web-UI refinement flow) is intentionally\nomitted — see CLAUDE.md \"Plan Mode — Skip Ultraplan Only\".",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/PermissionMode"
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "SetThinkingParams": {
+      "description": "Params for `control/setThinking`.\nUses `ThinkingLevel` which includes effort level and per-provider options.",
+      "type": "object",
+      "properties": {
+        "thinking_level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThinkingLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "StopTaskParams": {
+      "description": "Params for `control/stopTask`.",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    },
+    "ThinkingLevel": {
+      "description": "Unified thinking configuration for all providers.\n\n`effort` carries provider-agnostic intent — `Disable`, `Auto`, or\none of the numeric levels (`Minimal`..`XHigh`). Provider-specific\nwire toggles (e.g. DeepSeek's `{\"thinking\":{\"type\":\"enabled\"}}`)\nflow through `options` verbatim.\n\nSemantic states:\n  * `Disable` — explicit \"thinking off\"; emit explicit-off signals\n    where the provider supports them, otherwise omit reasoning fields.\n  * `Auto`    — \"let the provider decide\"; omit reasoning fields\n    so the server-side default applies.\n  * `Minimal`..`XHigh` — explicit numeric efforts; emitted via the\n    provider's typed reasoning channel.",
+      "type": "object",
+      "properties": {
+        "budget_tokens": {
+          "description": "Token budget — universal for budget-based providers.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "effort": {
+          "description": "Reasoning effort — universal across all providers.",
+          "$ref": "#/$defs/ReasoningEffort"
+        },
+        "options": {
+          "description": "Provider-specific thinking extensions — data-driven passthrough.",
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "effort"
+      ]
+    },
+    "TurnStartParams": {
+      "description": "Params for `turn/start`.",
+      "type": "object",
+      "properties": {
+        "permission_mode": {
+          "description": "Optional turn-scoped permission mode override.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "thinking_level": {
+          "description": "Optional turn-scoped thinking override.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThinkingLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "prompt"
+      ]
+    },
+    "UpdateEnvParams": {
+      "description": "Params for `control/updateEnv`.",
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "env"
+      ]
+    },
+    "UserInputResolveParams": {
+      "description": "Params for `input/resolveUserInput`.",
+      "type": "object",
+      "properties": {
+        "answer": {
+          "description": "The user's answer to the `AskUserQuestion` prompt.",
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "answer"
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+---
+source: app/tui/src/presentation/agents_dialog.test.rs
+expression: "body_only(&state, &[])"
+---
+ Running   [Library]
+Step 3 of 4 — Source
+
+Where should the agent file live?
+    User  (~/.cocode/agents) — visible across every project
+  ▸ Project  (.cocode/agents) — committed with this repo
+
+
+Enter advance · Esc back · ←/→/Home/End move caret · ↑/↓ on source

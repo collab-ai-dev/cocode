@@ -1,0 +1,5 @@
+---
+source: tui-ui/src/widgets/status_indicator.test.rs
+expression: "render(view, 100, 1)"
+---
+⠹ Pondering with high effort… (35s · ↑1.2k ↓5.7k) · esc to interrupt

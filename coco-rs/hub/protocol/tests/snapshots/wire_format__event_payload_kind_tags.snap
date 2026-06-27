@@ -1,0 +1,14 @@
+---
+source: hub/protocol/tests/wire_format.rs
+expression: "kinds.join(\"\\n\")"
+---
+protocol
+tool_use_queued
+tool_use_started
+tool_use_completed
+mcp_tool_call_begin
+mcp_tool_call_end
+text_block_completed
+thinking_block_completed
+events_dropped
+unknown

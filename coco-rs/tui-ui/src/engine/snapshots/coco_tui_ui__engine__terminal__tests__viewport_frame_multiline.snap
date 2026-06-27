@@ -1,0 +1,6 @@
+---
+source: tui-ui/src/engine/terminal.test.rs
+expression: text
+---
+❯ prompt
+status: working

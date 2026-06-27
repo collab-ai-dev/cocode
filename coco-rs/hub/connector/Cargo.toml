@@ -1,0 +1,16 @@
+[package]
+name = "coco-hub-connector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "coco_hub_connector"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-error.workspace = true
+coco-hub-protocol.workspace = true

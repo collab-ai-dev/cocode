@@ -1,0 +1,17 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCODE v0.1.1                                                         
+ │●│ │●│  opus-4  *  auto                                                       
+ ╰─╯ ╰─╯                                                                        
+                                                                                
+❯ Hello, how are you?                                                           
+                                                                                
+⏺ I'm doing well! How can I help you today?                                     
+                                                                                
+────────────────────────────────────────────────────────────────────────────────
+❯                                                                               
+────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto * ctrl+t to cycle | ↑0 ↓0 · cache 0/0% | ctx -- | →1 ←1          
+ ⏯ ask mode on · shift+tab to cycle

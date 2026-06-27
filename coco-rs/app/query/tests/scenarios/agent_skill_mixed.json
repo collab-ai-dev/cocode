@@ -1,0 +1,59 @@
+{
+  "name": "agent_skill_mixed",
+  "description": "Model uses both Agent and Skill tools in a multi-step workflow",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Skill",
+          "input": {
+            "skill": "review-pr",
+            "args": "789"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Fix the issues found in the PR review",
+            "description": "Fix PR issues"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/fix_summary.md",
+            "content": "# Fix Summary\n\n- Reviewed PR #789\n- Dispatched agent to fix issues\n- All issues resolved\n"
+          }
+        }
+      ]
+    },
+    {
+      "text": "PR reviewed, fixes applied, and summary written."
+    }
+  ],
+  "expect": {
+    "turns": 4,
+    "response_contains": "summary",
+    "files": {
+      "fix_summary.md": {
+        "exists": true,
+        "contains_all": ["PR #789", "agent", "resolved"]
+      }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "event_counts": {
+      "ToolUseEnd": 3
+    }
+  }
+}

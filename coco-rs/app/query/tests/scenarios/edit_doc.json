@@ -1,0 +1,45 @@
+{
+  "name": "edit_doc",
+  "description": "Read an existing document, then edit it",
+  "workspace": {
+    "README.md": "# Project\n\nA simple project.\n\n## Getting Started\n\nRun the app.\n"
+  },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/README.md" }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Edit",
+          "input": {
+            "file_path": "{{workspace}}/README.md",
+            "old_string": "A simple project.",
+            "new_string": "A Rust project with full documentation."
+          }
+        }
+      ]
+    },
+    {
+      "text": "I updated the project description in README.md."
+    }
+  ],
+  "expect": {
+    "turns": 3,
+    "response_contains": "README.md",
+    "files": {
+      "README.md": {
+        "exists": true,
+        "contains": "A Rust project with full documentation.",
+        "not_contains": "A simple project."
+      }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

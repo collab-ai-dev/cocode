@@ -1,0 +1,26 @@
+---
+source: vercel-ai/anthropic/tests/messages_request_body_golden.rs
+expression: "wire_view(&options, true)"
+---
+{
+  "body": {
+    "max_tokens": 64000,
+    "messages": [
+      {
+        "content": [
+          {
+            "text": "Stream a reply.",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "claude-sonnet-4-5",
+    "stream": true
+  },
+  "headers": {
+    "anthropic-beta": "fine-grained-tool-streaming-2025-05-14,prompt-caching-scope-2026-01-05",
+    "anthropic-version": "2023-06-01"
+  }
+}

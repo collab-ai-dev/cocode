@@ -1,0 +1,80 @@
+[package]
+name = "coco-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-config.workspace = true
+coco-cron.workspace = true
+coco-error.workspace = true
+coco-types = { workspace = true, features = ["schema"] }
+coco-messages.workspace = true
+coco-subagent.workspace = true
+coco-tool-runtime.workspace = true
+coco-workflow.workspace = true
+coco-workflow-runtime.workspace = true
+coco-context.workspace = true
+coco-permissions.workspace = true
+coco-sandbox.workspace = true
+coco-shell.workspace = true
+coco-skills.workspace = true
+coco-memory.workspace = true
+coco-secret-redact.workspace = true
+coco-file-encoding.workspace = true
+coco-file-ignore.workspace = true
+coco-utils-image.workspace = true
+coco-apply-patch.workspace = true
+coco-exec-server.workspace = true
+coco-utils-absolute-path.workspace = true
+coco-utils-common.workspace = true
+coco-git.workspace = true
+coco-plugins.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+similar.workspace = true
+# Per-tool typed Input/Output structs derive `JsonSchema` (Step 3
+# of the Tool trait refactor). The blanket `Tool::input_schema()` /
+# `output_schema()` defaults in `coco-tool-runtime` consume the
+# derived schema.
+schemars.workspace = true
+jsonschema.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+futures.workspace = true
+globset.workspace = true
+html2text.workspace = true
+rand.workspace = true
+ignore.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+pdf-extract.workspace = true
+regex.workspace = true
+unicode-normalization.workspace = true
+walkdir.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+tokio = { workspace = true, features = ["process", "time", "fs"] }
+tokio-util.workspace = true
+tracing.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
+url.workspace = true
+urlencoding.workspace = true
+pathdiff.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+pretty_assertions.workspace = true
+insta = { workspace = true, features = ["json"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile.workspace = true
+coco-tool-runtime = { workspace = true, features = ["testing"] }
+coco-tasks.workspace = true
+# Test-only image crate features — tests need to generate real 1x1
+# fixtures to exercise the FileRead → coco-utils-image pipeline.
+image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }

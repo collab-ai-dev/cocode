@@ -1,0 +1,22 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCODE v0.1.1                                                                         
+ │●│ │●│  opus-4  *  auto                                                                       
+ ╰─╯ ╰─╯                                                                                        
+                                                                                                
+❯ bump the version                                                                              
+                                                                                                
+● Edit(Cargo.toml)                                                                              
+    ╶╴ @@ -1 +1 @@                                                                              
+    1   │ -version = "0.1.0"                                                                    
+      1 │ +version = "0.2.0"                                                                    
+    2   │ -edition = "2021"                                                                     
+      2 │ +edition = "2024"                                                                     
+                                                                                                
+────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                               
+────────────────────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto * ctrl+t to cycle | ↑0 ↓0 · cache 0/0% | ctx -- | →1 ←1 · tool 1                 
+ ⏯ ask mode on · shift+tab to cycle

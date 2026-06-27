@@ -1,0 +1,30 @@
+[package]
+name = "coco-system-reminder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-error.workspace = true
+coco-stack-trace-macro.workspace = true
+coco-types.workspace = true
+coco-config.workspace = true
+coco-messages.workspace = true
+coco-context.workspace = true
+
+async-trait.workspace = true
+futures = { workspace = true, features = ["alloc"] }
+regex-lite.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+tokio = { workspace = true, features = ["time", "sync"] }
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+pretty_assertions.workspace = true

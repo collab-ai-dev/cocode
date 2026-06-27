@@ -1,0 +1,5 @@
+pub mod openai_compatible_embedding_api;
+pub mod openai_compatible_embedding_model;
+pub mod openai_compatible_embedding_options;
+
+pub use openai_compatible_embedding_model::OpenAICompatibleEmbeddingModel;

@@ -1,0 +1,15 @@
+---
+source: core/context/src/prompt.test.rs
+expression: prompt.full_text()
+---
+You are Claude Code.
+Here is useful information about the environment you are running in:
+<env>
+Working directory: /repo
+Is directory a git repo: Yes
+Platform: darwin
+Shell: zsh
+OS Version: Darwin 24.0.0
+</env>
+You are powered by the model claude-opus-4-7.
+Assistant knowledge cutoff is January 2026.

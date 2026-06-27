@@ -1,0 +1,23 @@
+# Grandfathered error-policy violations.
+#
+# This file is the declared technical-debt list for the three-tier error policy
+# documented in coco-rs/CLAUDE.md → Error Handling. Entries here are pre-existing
+# drift that the strengthened scripts/check-error-policy.sh tolerates today; new
+# violations must NOT be added — fix them instead.
+#
+# When you fix a violation, remove its line from this file. The script fails if
+# an allowlist entry is no longer a real violation, which forces the list to
+# shrink monotonically as crates are migrated.
+#
+# Format: `<key> <rule-id>` per line. Blank lines and `#`-prefixed lines are
+# comments.
+#
+# Rule IDs:
+#   tier2-deps-cocoerror   Tier 2 leaf lib has `coco-error` in [dependencies]
+#   tier2-deps-snafu       Tier 2 leaf lib has `snafu` in [dependencies]
+#   tier2-pubfn-anyhow     Tier 2 `pub fn` returns `anyhow::Result<…>` (key: file:line)
+#   tier3-deps-anyhow      Tier 3 main-trunk crate has `anyhow` in [dependencies]
+#   tier3-needs-cocoerror  Tier 3 main-trunk crate missing `coco-error` in [dependencies]
+#
+# Tier definitions live in scripts/check-error-policy.sh.
+

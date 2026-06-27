@@ -1,0 +1,23 @@
+[package]
+name = "vercel-ai-bytedance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ByteDance Seedance video provider for Vercel AI SDK (Rust)"
+
+[dependencies]
+vercel-ai-provider.workspace = true
+vercel-ai-provider-utils.workspace = true
+async-trait.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+reqwest = { workspace = true, features = ["json", "stream"] }
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
+base64.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

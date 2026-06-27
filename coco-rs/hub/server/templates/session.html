@@ -1,0 +1,246 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<section class="hero hero--compact">
+  <div>
+    <p class="kicker">Session timeline</p>
+    <h1>{{ title }}</h1>
+    <p class="subtitle">{{ session.session_id }}</p>
+  </div>
+  <a class="button button--ghost" href="/i/{{ instance_id }}">Project</a>
+</section>
+
+<section class="metric-grid" aria-label="Session summary">
+  <div class="metric">
+    <span class="metric__label">Visible messages</span>
+    <strong>{{ session.message_count }}</strong>
+  </div>
+  <div class="metric">
+    <span class="metric__label">Loaded rows</span>
+    <strong>{{ event_count }}</strong>
+  </div>
+  <div class="metric">
+    <span class="metric__label">Tokens</span>
+    <strong>{{ tokens }}</strong>
+  </div>
+  <div class="metric metric--attention">
+    <span class="metric__label">Attention rows</span>
+    <strong>{{ audit.attention_rows }}</strong>
+  </div>
+</section>
+
+<section class="audit-strip" aria-label="Agent behavior audit">
+  <div class="audit-card audit-card--intent">
+    <span>User messages</span>
+    <strong>{{ audit.user_turns }}</strong>
+  </div>
+  <div class="audit-card audit-card--message">
+    <span>Assistant replies</span>
+    <strong>{{ audit.assistant_messages }}</strong>
+  </div>
+  {% if audit.reasoning_blocks > 0 %}
+  <div class="audit-card audit-card--reasoning">
+    <span>Model thinking</span>
+    <strong>{{ audit.reasoning_blocks }}</strong>
+  </div>
+  {% endif %}
+  <div class="audit-card audit-card--tool">
+    <span>Tool calls</span>
+    <strong>{{ audit.tool_requests }}</strong>
+  </div>
+  <div class="audit-card audit-card--result">
+    <span>Tool results</span>
+    <strong>{{ audit.tool_results }}</strong>
+  </div>
+  <div class="audit-card audit-card--read">
+    <span>Reads</span>
+    <strong>{{ audit.reads }}</strong>
+  </div>
+  <div class="audit-card audit-card--search">
+    <span>Searches</span>
+    <strong>{{ audit.searches }}</strong>
+  </div>
+  <div class="audit-card audit-card--write">
+    <span>Writes</span>
+    <strong>{{ audit.writes }}</strong>
+  </div>
+  <div class="audit-card audit-card--shell">
+    <span>Shell</span>
+    <strong>{{ audit.shell }}</strong>
+  </div>
+  <div class="audit-card audit-card--metadata">
+    <span>Metadata</span>
+    <strong>{{ audit.metadata }}</strong>
+  </div>
+</section>
+
+<section class="workbench-grid" aria-label="Session workbench">
+  <div class="workbench-panel workbench-panel--wide">
+    <div class="workbench-panel__header">
+      <p class="kicker">Investigation lens</p>
+      <strong>Agent behavior</strong>
+    </div>
+    <div class="lens-grid">
+      <div>
+        <span>Conversation turns</span>
+        <strong>{{ audit.user_turns }} / {{ audit.assistant_messages }}</strong>
+      </div>
+      <div>
+        <span>Tool requests</span>
+        <strong>{{ audit.tool_requests }}</strong>
+      </div>
+      <div>
+        <span>Tool results</span>
+        <strong>{{ audit.tool_results }}</strong>
+      </div>
+      <div>
+        <span>Writes</span>
+        <strong>{{ audit.writes }}</strong>
+      </div>
+      <div>
+        <span>Shell commands</span>
+        <strong>{{ audit.shell }}</strong>
+      </div>
+    </div>
+  </div>
+
+  <div class="workbench-panel">
+    <div class="workbench-panel__header">
+      <p class="kicker">Tools</p>
+      <strong>Inventory</strong>
+    </div>
+    {% if tool_impacts.len() > 0 %}
+    <ol class="impact-list">
+      {% for tool in tool_impacts %}
+      <li>
+        <span>{{ tool.label }}</span>
+        <strong>{{ tool.count }}</strong>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="muted-line">No tool calls in this view.</p>
+    {% endif %}
+  </div>
+
+  <div class="workbench-panel">
+    <div class="workbench-panel__header">
+      <p class="kicker">Files</p>
+      <strong>Impact</strong>
+    </div>
+    {% if file_impacts.len() > 0 %}
+    <ol class="impact-list impact-list--files">
+      {% for file in file_impacts %}
+      <li>
+        <span>{{ file.label }}</span>
+        <strong>{{ file.count }}</strong>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="muted-line">No file references in this view.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="timeline-shell">
+  <aside class="filter-panel">
+    <p class="kicker">Timeline filters</p>
+    <form
+      id="timeline-filter-form"
+      hx-get="/p/events"
+      hx-target="#event-stream"
+      hx-swap="innerHTML"
+      hx-indicator="#event-loading"
+    >
+      <input type="hidden" name="instance" value="{{ instance_id }}">
+      <input type="hidden" name="session" value="{{ session.session_id }}">
+      <input id="time-from-rfc3339" type="hidden" name="time_from" value="{{ filters.time_from }}">
+      <input id="time-to-rfc3339" type="hidden" name="time_to" value="{{ filters.time_to }}">
+      <label>
+        Kind
+        <select name="kind">
+          <option value=""{% if filters.kind == "" %} selected{% endif %}>All events</option>
+          <option value="transcript"{% if filters.kind == "transcript" %} selected{% endif %}>Transcript</option>
+          <option value="metadata"{% if filters.kind == "metadata" %} selected{% endif %}>Metadata</option>
+          <option value="unknown"{% if filters.kind == "unknown" %} selected{% endif %}>Unknown</option>
+        </select>
+      </label>
+      <label>
+        Row type
+        <select name="msg_type">
+          <option value=""{% if filters.msg_type == "" %} selected{% endif %}>All row types</option>
+          <option value="user"{% if filters.msg_type == "user" %} selected{% endif %}>User message</option>
+          <option value="assistant"{% if filters.msg_type == "assistant" %} selected{% endif %}>Assistant reply</option>
+          <option value="reasoning"{% if filters.msg_type == "reasoning" %} selected{% endif %}>Model thinking</option>
+          <option value="tool_use"{% if filters.msg_type == "tool_use" %} selected{% endif %}>Tool request</option>
+          <option value="tool_result"{% if filters.msg_type == "tool_result" %} selected{% endif %}>Tool result</option>
+          <option value="read"{% if filters.msg_type == "read" %} selected{% endif %}>File read</option>
+          <option value="search"{% if filters.msg_type == "search" %} selected{% endif %}>Search</option>
+          <option value="write"{% if filters.msg_type == "write" %} selected{% endif %}>Write</option>
+          <option value="shell"{% if filters.msg_type == "shell" %} selected{% endif %}>Shell</option>
+          <option value="metadata"{% if filters.msg_type == "metadata" %} selected{% endif %}>Metadata</option>
+        </select>
+      </label>
+      <label>
+        Tool
+        <select name="tool">
+          <option value=""{% if filters.tool == "" %} selected{% endif %}>All tools</option>
+          {% for tool in tool_options %}
+          <option value="{{ tool.label }}"{% if filters.tool == tool.label %} selected{% endif %}>{{ tool.label }} ({{ tool.count }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div
+        class="time-window"
+        data-range-start="{{ time_range.start_iso }}"
+        data-range-end="{{ time_range.end_iso }}"
+      >
+        <div class="time-window__header">
+          <span>Time window</span>
+          {% if time_range.has_range %}
+          <strong>{{ time_range.start_label }} - {{ time_range.end_label }}</strong>
+          {% else %}
+          <strong>No timestamps</strong>
+          {% endif %}
+        </div>
+        <div class="time-window__fields">
+          <label>
+            Start
+            <input id="time-from-local" type="datetime-local" step="60">
+          </label>
+          <label>
+            End
+            <input id="time-to-local" type="datetime-local" step="60">
+          </label>
+        </div>
+        <button class="button button--ghost button--full" type="button" data-time-action="full">Full session</button>
+      </div>
+      <label>
+        Limit
+        <input type="number" name="limit" min="1" max="500" value="{{ filters.limit }}">
+      </label>
+      <button class="button" type="submit">Apply</button>
+      <span id="event-loading" class="htmx-indicator">Refreshing</span>
+    </form>
+    <div class="local-controls" aria-label="Loaded timeline controls">
+      <label>
+        Search loaded timeline
+        <input id="timeline-search" type="search" placeholder="tool, path, text">
+      </label>
+      <div class="detail-actions">
+        <button class="button button--ghost" type="button" data-detail-action="expand">Open raw</button>
+        <button class="button button--ghost" type="button" data-detail-action="collapse">Fold raw</button>
+      </div>
+      <span id="timeline-search-status" class="local-status"></span>
+    </div>
+    <a class="button button--ghost button--full" href="/v1/instances/{{ instance_id }}/sessions/{{ session.session_id }}/events">
+      JSON API
+    </a>
+  </aside>
+
+  <div id="event-stream" class="timeline" hx-boost="false">
+    {% include "partials/events.html" %}
+  </div>
+</section>
+{% endblock %}

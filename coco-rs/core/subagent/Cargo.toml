@@ -1,0 +1,35 @@
+[package]
+name = "coco-subagent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# Pure-logic crate: definition loading, source precedence, builtin catalog,
+# AgentTool prompt rendering, tool filter planning, validation diagnostics.
+#
+# DO NOT ADD tokio, mpsc, watcher, cancellation, or any app/state, app/query,
+# coco-tool, coco-tools deps. Background tasks, file watchers, and runtime
+# execution belong in app/state — see docs/coco-rs/subagent-refactor-plan.md
+# § "Avoid dependencies".
+
+[dependencies]
+coco-types.workspace = true
+coco-config.workspace = true
+coco-error.workspace = true
+coco-frontmatter.workspace = true
+coco-llm-types.workspace = true
+coco-utils-common.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+strum = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
+uuid = { workspace = true, features = ["v4"] }

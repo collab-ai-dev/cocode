@@ -1,0 +1,37 @@
+[package]
+name = "coco-plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-types.workspace = true
+coco-error.workspace = true
+coco-config.workspace = true
+coco-git.workspace = true
+coco-skills.workspace = true
+coco-hooks.workspace = true
+coco-lsp.workspace = true
+coco-mcp.workspace = true
+coco-utils-common.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+toml.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+regex.workspace = true
+tracing.workspace = true
+sha2.workspace = true
+hex.workspace = true
+zip = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+tokio = { workspace = true, features = ["sync", "rt", "time", "fs", "macros", "process"] }
+notify.workspace = true
+thiserror.workspace = true
+coco-file-watch.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true

@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentStreamEvent",
+  "description": "Agent-loop stream events. Higher-level than `coco_types::StreamEvent`\n(which represents raw LLM inference deltas). Adds:\n- Tool lifecycle states (Queued → Started → Completed)\n- MCP tool call tracking\n- Turn-scoped item IDs\n\nInput to `StreamAccumulator`.\nSee `event-system-design.md` Section 1.5.",
+  "oneOf": [
+    {
+      "description": "Text content delta from assistant response.",
+      "type": "object",
+      "properties": {
+        "delta": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "text_delta"
+        }
+      },
+      "required": [
+        "type",
+        "turn_id",
+        "delta"
+      ]
+    },
+    {
+      "description": "Thinking/reasoning delta from extended thinking.",
+      "type": "object",
+      "properties": {
+        "delta": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "thinking_delta"
+        }
+      },
+      "required": [
+        "type",
+        "turn_id",
+        "delta"
+      ]
+    },
+    {
+      "description": "Tool use block received from API (input complete). Creates a ThreadItem.",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "input": true,
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_use_queued"
+        }
+      },
+      "required": [
+        "type",
+        "call_id",
+        "name",
+        "input"
+      ]
+    },
+    {
+      "description": "Tool execution has begun (after permission check).",
+      "type": "object",
+      "properties": {
+        "batch_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_use_started"
+        }
+      },
+      "required": [
+        "type",
+        "call_id",
+        "name"
+      ]
+    },
+    {
+      "description": "Tool execution completed with result.\n\n`name` is carried here so StreamAccumulator and TUI consumers can\nreconstruct display state without maintaining their own call_id → name map.",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "is_error": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_use_completed"
+        }
+      },
+      "required": [
+        "type",
+        "call_id",
+        "name",
+        "output",
+        "is_error"
+      ]
+    },
+    {
+      "description": "MCP tool call initiated (separate from builtin tools).",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "server": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "mcp_tool_call_begin"
+        }
+      },
+      "required": [
+        "type",
+        "server",
+        "tool",
+        "call_id"
+      ]
+    },
+    {
+      "description": "MCP tool call completed.",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "is_error": {
+          "type": "boolean"
+        },
+        "server": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "mcp_tool_call_end"
+        }
+      },
+      "required": [
+        "type",
+        "server",
+        "tool",
+        "call_id",
+        "is_error"
+      ]
+    }
+  ]
+}

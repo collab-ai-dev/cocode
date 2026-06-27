@@ -1,0 +1,43 @@
+{
+  "name": "max_turns_limit",
+  "description": "Engine stops when max_turns is reached, even if more tool calls remain",
+  "prompt": "keep going",
+  "workspace": {},
+  "config": {
+    "max_turns": 2
+  },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Bash",
+          "input": { "command": "echo turn1" }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Bash",
+          "input": { "command": "echo turn2" }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Bash",
+          "input": { "command": "echo turn3_unreachable" }
+        }
+      ]
+    },
+    {
+      "text": "This should never be reached."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "budget_exhausted": true,
+    "not_cancelled": true
+  }
+}

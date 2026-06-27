@@ -1,0 +1,61 @@
+[package]
+name = "coco-tool-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+testing = []
+
+[dependencies]
+coco-types.workspace = true
+coco-error.workspace = true
+coco-messages.workspace = true
+coco-config.workspace = true
+# Cron parsing + reachability for the schedule store (read-time validation).
+coco-cron.workspace = true
+# Disk-backed schedule store round-trips the project config schedule file.
+coco-file-encoding.workspace = true
+coco-context.workspace = true
+coco-sandbox.workspace = true
+coco-shell.workspace = true
+# Pure-logic foundation; carries the AgentDefinition catalog snapshot that
+# `ToolUseContext` exposes to AgentTool. One-way dep — `coco-subagent`
+# does NOT depend on `coco-tool-runtime` (see core/subagent/Cargo.toml).
+coco-subagent.workspace = true
+# `ReminderMailboxRef` trait — producer-side handle threaded onto
+# `ToolUseContext` so tools / subsystems can push event-driven reminder
+# snapshots without depending on the full reminder-orchestration stack.
+# One-way: coco-system-reminder does NOT depend on coco-tool-runtime.
+coco-system-reminder.workspace = true
+coco-wire-dump.workspace = true
+coco-utils-json-repair.workspace = true
+coco-utils-common.workspace = true
+coco-utils-string.workspace = true
+
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json.workspace = true
+async-trait.workspace = true
+futures = { workspace = true, features = ["alloc"] }
+jsonschema.workspace = true
+# Used by `derive` module to produce `ToolInputSchema` from
+# `#[derive(JsonSchema)]` input/output structs — one artifact per tool
+# is the source of truth for both schema and typed parsing.
+# TS parity: `z.infer<Input>` derives the type FROM the zod schema; the
+# Rust mirror is `T: JsonSchema` → schema, with `T: Deserialize` doing
+# the typed parse.
+schemars.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "fs"] }
+tokio-util = { workspace = true }
+tracing.workspace = true
+uuid = { workspace = true }
+
+[dev-dependencies]
+anyhow.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

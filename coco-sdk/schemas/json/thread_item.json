@@ -1,0 +1,300 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreadItem",
+  "description": "Semantic representation of a conversation thread item.\nProduced by `StreamAccumulator` from `AgentStreamEvent` sequences.\nUsed in `ServerNotification::ItemStarted / ItemUpdated / ItemCompleted`.\n\nSee `event-system-design.md` Section 1.6.",
+  "type": "object",
+  "properties": {
+    "details": {
+      "$ref": "#/$defs/ThreadItemDetails"
+    },
+    "item_id": {
+      "type": "string"
+    },
+    "turn_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id",
+    "turn_id",
+    "details"
+  ],
+  "$defs": {
+    "FileChangeInfo": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/FileChangeKind"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "kind"
+      ]
+    },
+    "FileChangeKind": {
+      "type": "string",
+      "enum": [
+        "create",
+        "modify",
+        "delete"
+      ]
+    },
+    "ItemStatus": {
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "completed",
+        "failed",
+        "declined"
+      ]
+    },
+    "ThreadItemDetails": {
+      "description": "Tool-specific semantic mapping.\n\nMapping rules (from `event-system-design.md` Section 6.2):\n- Bash → `CommandExecution`\n- Edit/Write → `FileChange`\n- WebSearch → `WebSearch`\n- mcp__* → `McpToolCall`\n- Agent/Task → `Subagent`\n- all others → `ToolCall`\n- text content → `AgentMessage`\n- thinking → `Reasoning`\n- errors → `Error`",
+      "oneOf": [
+        {
+          "description": "Bash tool → command execution with output.",
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "exit_code": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "output": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "const": "command_execution"
+            }
+          },
+          "required": [
+            "type",
+            "command",
+            "output",
+            "status"
+          ]
+        },
+        {
+          "description": "Edit/Write tools → file change with diff info.",
+          "type": "object",
+          "properties": {
+            "changes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/FileChangeInfo"
+              }
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "const": "file_change"
+            }
+          },
+          "required": [
+            "type",
+            "changes",
+            "status"
+          ]
+        },
+        {
+          "description": "WebSearch tool.",
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "const": "web_search"
+            }
+          },
+          "required": [
+            "type",
+            "query",
+            "status"
+          ]
+        },
+        {
+          "description": "MCP server tool call.",
+          "type": "object",
+          "properties": {
+            "arguments": true,
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "server": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "mcp_tool_call"
+            }
+          },
+          "required": [
+            "type",
+            "server",
+            "tool",
+            "arguments",
+            "status"
+          ]
+        },
+        {
+          "description": "Agent/Task tool → subagent lifecycle.",
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "type": "string"
+            },
+            "agent_type": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "is_background": {
+              "type": "boolean",
+              "default": false
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "const": "subagent"
+            }
+          },
+          "required": [
+            "type",
+            "agent_id",
+            "agent_type",
+            "description",
+            "status"
+          ]
+        },
+        {
+          "description": "All other tools (Read, Glob, Grep, etc.).",
+          "type": "object",
+          "properties": {
+            "input": true,
+            "is_error": {
+              "type": "boolean",
+              "default": false
+            },
+            "output": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/$defs/ItemStatus"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "required": [
+            "type",
+            "tool",
+            "input",
+            "status"
+          ]
+        },
+        {
+          "description": "Assistant text content.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "agent_message"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Reasoning/thinking content.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "reasoning"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Error during processing.",
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "error"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        }
+      ]
+    }
+  }
+}

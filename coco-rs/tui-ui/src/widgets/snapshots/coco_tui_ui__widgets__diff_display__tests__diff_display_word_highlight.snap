@@ -1,0 +1,11 @@
+---
+source: tui-ui/src/widgets/diff_display.test.rs
+expression: text_of(&lines)
+---
+  ─ a/hello.rs
+  + b/hello.rs
+  ╶╴ @@ -1 +1 @@
+  1 1 │ fn greet() {
+  2   │ -    println!("hello world");
+    2 │ +    println!("hello, world!");
+  3 3 │ }

@@ -1,0 +1,156 @@
+set positional-arguments
+
+# Display help
+help:
+    just -l
+
+# ============================================================================
+# Development
+# ============================================================================
+
+# Format code
+fmt:
+    #!/usr/bin/env bash
+    # imports_granularity is nightly-only; filter the harmless stable warning.
+    cargo fmt 2> >(grep -v 'imports_granularity = Item' >&2 || true)
+
+# Verify formatting without mutating (CI gate). Same nightly-only-warning
+# filter as `fmt`; fails on any unformatted file.
+fmt-check:
+    #!/usr/bin/env bash
+    cargo fmt --check 2> >(grep -v 'imports_granularity = Item' >&2 || true)
+
+# Check all crates (lib + bin)
+check *args:
+    cargo check "$@"
+
+# Check that tests compile too. Catches breakage in `*.test.rs` files
+# without paying the cost of running them. Run before `clippy` / `test`
+# so test compile errors surface in seconds, not minutes.
+check-tests *args:
+    cargo check --workspace --tests "$@"
+
+# Build all crates
+build *args:
+    cargo build "$@"
+
+# Run clippy on all crates (workspace-wide)
+clippy *args:
+    bash "{{justfile_directory()}}/../.claude/scripts/clippy.sh" --full "$@"
+
+# Run clippy only on crates affected by uncommitted changes (incl. transitive
+# reverse-dep closure). Falls back to full when Cargo.toml/Cargo.lock change
+# or affected ≥ 70% of workspace.
+clippy-affected *args:
+    bash "{{justfile_directory()}}/../.claude/scripts/clippy.sh" --incremental --head "$@"
+
+# Fix clippy warnings. Flag set MUST match `clippy.sh --full` (same
+# `--all-features --tests`) so `fix` can't auto-edit code into a state
+# clippy still reports. Caller scopes via `-p coco-<name>` to a single
+# crate; the workspace-wide form lives in `clippy-affected` instead.
+fix *args:
+    cargo clippy --fix --all-features --tests --allow-dirty "$@"
+
+# Install dependencies
+install:
+    rustup show active-toolchain
+    cargo fetch
+
+# Update the bundled OpenRouter model-card snapshot.
+model-card-update:
+    bash "{{justfile_directory()}}/scripts/update-model-card-openrouter.sh"
+
+# ============================================================================
+# Testing
+# ============================================================================
+
+# Run all workspace tests (nextest, faster than cargo test).
+# `--workspace` is required: workspace `Cargo.toml` sets
+# `default-members = ["app/cli"]`, so without it cargo / nextest
+# narrows the run to coco-cli alone (~3% of the workspace) and
+# `just pre-commit` silently skips ~97% of the test surface. The
+# original recipe omitted `--workspace` and masked at least 18
+# pre-existing coco-query failures (`853117b14`-introduced
+# `debug_assert!` on test mocks lacking `input_json_schema`) plus
+# the coco-tui snapshot drift this surfaces.
+test *args:
+    cargo nextest run --workspace --no-fail-fast "$@"
+
+# Test a specific crate
+test-crate crate *args:
+    cargo test -p {{crate}} {{args}}
+
+# Run the render/paint benchmarks. The probe-metric unit tests run FIRST and
+# gate the benchmarks: untrustworthy metric math fails before any number is
+# produced (opencode's `bun test ./unit && playwright` trust chain). Benchmarks
+# assert scenario completion + structural invariants only, never machine-
+# dependent timing thresholds.
+bench *args:
+    cargo test -p coco-tui-ui --features testing bench_metrics
+    cargo bench -p coco-tui-ui --features testing "$@"
+    cargo bench -p coco-tui "$@"
+
+# Run the coco-sdk Python suite (unit + e2e). E2E tests skip cleanly
+# when DEEPSEEK_API_KEY is unset, so this is a no-op cost without
+# credentials. The script lives next to the SDK so it can pick up the
+# right interpreter and pin pytest-asyncio config from pyproject.toml.
+sdk-py-test *args:
+    bash "{{justfile_directory()}}/scripts/run-sdk-py-tests.sh" "$@"
+
+# Verify the Rust↔Python codegen is in sync: schemas match coco-types,
+# protocol.py matches schemas, __init__.py matches protocol.py.
+# All three are diff-only (no in-place writes); fast (~1s warm cache).
+# Wire into pre-commit so silent drift fails the build, not the user.
+sdk-py-check:
+    bash "{{justfile_directory()}}/../coco-sdk/scripts/generate_schemas.sh" --check
+    bash "{{justfile_directory()}}/../coco-sdk/scripts/generate_python.sh" --check
+
+# ============================================================================
+# Pre-commit
+# ============================================================================
+
+# Enforce: vercel-ai-provider may only be imported by services/inference
+# (the re-export seam) and common/types. Every other crate must reach AI
+# SDK types via `coco_inference::*` aliases — see
+# services/inference/src/lib.rs for the canonical list.
+check-seam:
+    bash "{{justfile_directory()}}/scripts/check-vercel-ai-seam.sh"
+    bash "{{justfile_directory()}}/scripts/check-tui-ui-seam.sh"
+
+# Enforce: utils/* and vercel-ai/* are libraries. Their public API may
+# not return `anyhow::Result<…>` — declare a typed `thiserror` enum
+# instead. See coco-rs/CLAUDE.md → Error Handling for the three-tier
+# policy.
+check-error-policy:
+    bash "{{justfile_directory()}}/scripts/check-error-policy.sh"
+
+# Fast validation: same chain as `pre-commit` minus the test run. Use
+# during iteration when you want fmt + seam guards + clippy (which is a
+# superset of `cargo check`) but don't yet need to pay for nextest.
+# Promote to `pre-commit` before committing.
+quick-check: fmt check-seam check-error-policy clippy-affected
+
+# REQUIRED before commit. Uses incremental clippy (changed crates + reverse-dep
+# closure) to avoid recompiling the whole workspace on small commits. Falls
+# back to full when Cargo.toml/Cargo.lock change.
+#
+# Prefer this over running fmt/check/clippy/test individually: clippy is a
+# superset of `cargo check`, and `test` compiles everything `clippy --tests`
+# already linted, so the manual chain just duplicates work. For iteration
+# without a test run, use `quick-check`.
+#
+# `sdk-py-check` (cheap, ~1s) runs the codegen in --check mode so any
+# drift between coco-types ↔ schemas ↔ Python fails the build. Then
+# `sdk-py-test` runs the actual Python suite (unit + e2e); e2e tests
+# self-skip without DEEPSEEK_API_KEY, so the recipe stays usable for
+# everyone.
+pre-commit: fmt check-seam check-error-policy clippy-affected test sdk-py-check sdk-py-test
+
+# ============================================================================
+# Running
+# ============================================================================
+
+# Run coco CLI
+alias c := coco
+coco *args:
+    cargo run --bin coco -- "$@"

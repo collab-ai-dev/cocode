@@ -1,0 +1,32 @@
+{
+  "name": "agent_spawn_basic",
+  "description": "Model spawns a subagent with a task description, gets queued acknowledgment",
+  "workspace": {},
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "text": "I'll spawn an agent to explore the codebase.",
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Search for all Rust files and summarize the architecture",
+            "description": "Explore codebase architecture"
+          }
+        }
+      ]
+    },
+    {
+      "text": "The agent has been dispatched to analyze the codebase."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "agent",
+    "not_cancelled": true,
+    "not_budget_exhausted": true,
+    "min_event_counts": {
+      "ToolUseEnd": 1
+    }
+  }
+}

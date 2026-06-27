@@ -1,0 +1,62 @@
+[package]
+name = "coco-query"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-types.workspace = true
+coco-llm-types.workspace = true
+coco-config.workspace = true
+coco-error.workspace = true
+coco-inference.workspace = true
+coco-wire-dump.workspace = true
+coco-tool-runtime.workspace = true
+coco-utils-json-repair.workspace = true
+coco-utils-string.workspace = true
+coco-tools.workspace = true
+coco-sandbox.workspace = true
+coco-shell.workspace = true
+coco-messages.workspace = true
+coco-context.workspace = true
+coco-compact.workspace = true
+coco-hooks.workspace = true
+coco-otel.workspace = true
+coco-permissions.workspace = true
+coco-skills.workspace = true
+coco-subagent.workspace = true
+coco-system-reminder.workspace = true
+coco-lsp.workspace = true
+coco-mcp.workspace = true
+coco-memory.workspace = true
+coco-session.workspace = true
+coco-tasks.workspace = true
+coco-git.workspace = true
+chrono.workspace = true
+lru.workspace = true
+once_cell.workspace = true
+regex.workspace = true
+snafu.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-util.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+anyhow.workspace = true
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
+coco-paths.workspace = true
+coco-tools.workspace = true
+coco-tool-runtime = { workspace = true, features = ["testing"] }
+coco-hooks.workspace = true
+tempfile.workspace = true
+async-trait.workspace = true
+futures.workspace = true

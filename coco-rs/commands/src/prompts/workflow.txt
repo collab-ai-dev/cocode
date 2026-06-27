@@ -1,0 +1,16 @@
+Run a local workflow using the Workflow tool.
+
+Use the `Workflow` tool to launch the workflow. Do not use Bash, node, or
+ad hoc script execution for the workflow itself.
+
+Map the user's request to Workflow input:
+- If they named a workflow, pass it as `name`.
+- If they provided a file path, pass it as `scriptPath`.
+- If they provided inline JavaScript workflow source, pass it as `script`.
+- Pass task-specific data or options as `args`.
+
+After launching, report the `taskId`, `runId`, and workflow name when present.
+Tell the user that progress appears in the task/activity UI.
+
+If the user did not provide a workflow name, path, inline script, or task to
+run, ask for the missing workflow target instead of guessing.

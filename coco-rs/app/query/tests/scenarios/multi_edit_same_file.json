@@ -1,0 +1,61 @@
+{
+  "name": "multi_edit_same_file",
+  "description": "Apply three successive edits to the same file",
+  "workspace": {
+    "config.toml": "[package]\nname = \"old-name\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"
+  },
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Edit",
+          "input": {
+            "file_path": "{{workspace}}/config.toml",
+            "old_string": "old-name",
+            "new_string": "new-name"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Edit",
+          "input": {
+            "file_path": "{{workspace}}/config.toml",
+            "old_string": "0.1.0",
+            "new_string": "1.0.0"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Edit",
+          "input": {
+            "file_path": "{{workspace}}/config.toml",
+            "old_string": "2021",
+            "new_string": "2024"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Updated name, version, and edition."
+    }
+  ],
+  "expect": {
+    "turns": 4,
+    "response_contains": "Updated",
+    "files": {
+      "config.toml": {
+        "exists": true,
+        "contains_all": ["new-name", "1.0.0", "2024"],
+        "not_contains": "old-name"
+      }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

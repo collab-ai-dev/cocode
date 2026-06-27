@@ -1,0 +1,4 @@
+[plugin]
+name = "my-plugin"
+version = "0.1.0"
+description = "Plugin my-plugin"

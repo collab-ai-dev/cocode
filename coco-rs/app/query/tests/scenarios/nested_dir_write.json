@@ -1,0 +1,60 @@
+{
+  "name": "nested_dir_write",
+  "description": "Write files into nested subdirectories",
+  "workspace": {},
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/src/lib.rs",
+            "content": "pub fn hello() -> &'static str {\n    \"hello\"\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/src/utils/helpers.rs",
+            "content": "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/src/lib.rs" }
+        },
+        {
+          "tool": "Read",
+          "input": { "file_path": "{{workspace}}/src/utils/helpers.rs" }
+        }
+      ]
+    },
+    {
+      "text": "Created nested source files."
+    }
+  ],
+  "expect": {
+    "turns": 4,
+    "response_contains": "nested",
+    "files": {
+      "src/lib.rs": {
+        "exists": true,
+        "contains": "pub fn hello()"
+      },
+      "src/utils/helpers.rs": {
+        "exists": true,
+        "contains": "pub fn add("
+      }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

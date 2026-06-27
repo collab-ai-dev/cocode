@@ -1,0 +1,43 @@
+{
+  "name": "agent_parallel_spawn",
+  "description": "Spawn multiple agents in parallel via multi-tool-call turn",
+  "workspace": {
+    "src/lib.rs": "pub mod a;\npub mod b;\n",
+    "src/a.rs": "pub fn hello() {}",
+    "src/b.rs": "pub fn world() {}"
+  },
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "text": "I'll spawn two agents in parallel to analyze different modules.",
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Analyze module A in src/a.rs",
+            "description": "Analyze module A",
+            "subagent_type": "Explore"
+          }
+        },
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Analyze module B in src/b.rs",
+            "description": "Analyze module B",
+            "subagent_type": "Explore"
+          }
+        }
+      ]
+    },
+    {
+      "text": "Both modules analyzed in parallel."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "not_cancelled": true,
+    "event_counts": {
+      "ToolUseEnd": 2
+    }
+  }
+}

@@ -1,0 +1,32 @@
+[package]
+name = "coco-tui-markdown"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Render ```mermaid fences as box-drawing cells (pulls the mermaid layout
+# engine via coco-tui-mermaid). Off by default — when disabled, mermaid fences
+# render verbatim like any other code block. app/tui opts in.
+mermaid = ["dep:coco-tui-mermaid"]
+
+[dependencies]
+# Shared presentational types (Theme/UiStyles/SyntaxHighlighting). This crate
+# depends UP on the lean primitive crate; coco-tui-ui must never depend back.
+coco-tui-ui.workspace = true
+ratatui.workspace = true
+pulldown-cmark.workspace = true
+syntect.workspace = true
+two-face.workspace = true
+tracing.workspace = true
+unicode-width.workspace = true
+coco-tui-mermaid = { workspace = true, optional = true }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+# Used only by `examples/measure_grammar.rs` (a dev tool that reads peak RSS via
+# getrusage to size the prewarm grammar list). Not linked into the coco binary.
+libc.workspace = true

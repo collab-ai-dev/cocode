@@ -1,0 +1,34 @@
+{
+  "name": "agent_spawn_with_type",
+  "description": "Spawn an Explore agent with specific subagent_type, gets typed response",
+  "workspace": {
+    "src/main.rs": "fn main() { println!(\"hello\"); }"
+  },
+  "config": { "tools": "extended" },
+  "turns": [
+    {
+      "text": "I'll use an Explore agent to search the codebase.",
+      "tool_calls": [
+        {
+          "tool": "Agent",
+          "input": {
+            "prompt": "Find all Rust source files and report their locations",
+            "description": "Find Rust files",
+            "subagent_type": "Explore"
+          }
+        }
+      ]
+    },
+    {
+      "text": "The Explore agent found 1 Rust file: src/main.rs"
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "Explore",
+    "not_cancelled": true,
+    "event_counts": {
+      "ToolUseEnd": 1
+    }
+  }
+}

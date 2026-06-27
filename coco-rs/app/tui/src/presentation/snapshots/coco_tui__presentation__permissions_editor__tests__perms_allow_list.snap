@@ -1,0 +1,14 @@
+---
+source: app/tui/src/presentation/permissions_editor.test.rs
+expression: body_only(&state)
+---
+[Allow]   Ask    Deny    Workspace 
+
+Tools allowed without asking.
+
+▸ + Add a new rule…
+  Bash(git *)  ·  local
+  Read  ·  managed  ·  read-only
+
+
+←/→ switch tab · ↑/↓ select · Enter choose · Esc close

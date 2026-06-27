@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ServerRequestMethod",
+  "description": "Wire-method identifier for every `ServerRequest` variant.\n\nCross-language protocol constant exported to the JSON schema bundle so Python / other SDK codegens obtain the same vocabulary. Consumers should reference `ServerRequestMethod::HookCallback` rather than compare against raw wire strings.",
+  "type": "string",
+  "enum": [
+    "approval/askForApproval",
+    "input/requestUserInput",
+    "mcp/routeMessage",
+    "hook/callback",
+    "control/cancelRequest",
+    "mcp/requestElicitation"
+  ]
+}

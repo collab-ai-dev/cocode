@@ -1,0 +1,5 @@
+---
+source: app/tui/src/widgets/suggestion_popup.test.rs
+expression: "render_popup(&items, 0, 60, 4)"
+---
+▸ /add-dir  <path> Mount an extra working directory

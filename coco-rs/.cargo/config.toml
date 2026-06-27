@@ -1,0 +1,62 @@
+[build]
+rustc-wrapper = "scripts/rustc-wrapper.sh"
+
+[env]
+SCCACHE_CACHE_SIZE = "40G"
+SCCACHE_IDLE_TIMEOUT = "0"
+# Bake jemalloc tuning into libjemalloc at build time. jemalloc-sys passes this
+# verbatim as `./configure --with-malloc-conf=...`, compiling it in as the
+# library's internal default — consumed only when `coco` is built with
+# `--features jemalloc` (ignored otherwise). Because it is a compiled-in default
+# (not an exported `malloc_conf` symbol), it applies on BOTH Linux and macOS;
+# the symbol form would be silently ignored on macOS, where jemalloc keeps its
+# `_rjem_` prefix. THIS env is BUILD-TIME only — setting it when launching `coco`
+# does nothing; changing the baseline needs a rebuild. For a no-rebuild startup
+# override, set jemalloc's own runtime env in the process environment BEFORE exec
+# (it is read at init, before `main`, so neither `coco` itself nor settings.json
+# can set it): `MALLOC_CONF` on Linux, `_RJEM_MALLOC_CONF` on macOS (the prefixed
+# build). That env is a later conf source, so it overrides the values below —
+# including `narenas`. See app/cli/src/main.rs and app/cli/CLAUDE.md.
+#
+# Knobs below (parenthetical = jemalloc 5.3.0 stock default we override):
+#   dirty_decay_ms:1000  ms a freed page stays "dirty" (still resident) before
+#                        jemalloc starts returning it to the OS. Lower = lower
+#                        idle RSS, more madvise/page-fault churn. (default 10000)
+#   muzzy_decay_ms:1000  ms a MADV_FREE'd "muzzy" page lingers before MADV_DONTNEED
+#                        hands it fully back. A 1s reuse buffer vs. (default 0).
+#   narenas:4            cap on arenas for thread<->arena multiplexing; fewer =
+#                        less per-thread over-provisioning. (default 4x ncpus)
+# Goal: keep a long-running TUI/server process's RSS bounded across sessions.
+JEMALLOC_SYS_WITH_MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:4"
+
+[profile.dev]
+incremental = false
+
+[profile.test]
+incremental = false
+
+[profile.ci]
+incremental = false
+
+[profile.ci-test]
+incremental = false
+
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "link-arg=/STACK:8388608"]
+
+[target.'cfg(all(windows, target_env = "gnu"))']
+rustflags = ["-C", "link-arg=-Wl,--stack,8388608"]
+
+# Use mold as the linker on Linux. mold (https://github.com/rui314/mold)
+# is a drop-in replacement for GNU ld, typically 5-10x faster on debug
+# / test binaries (which are the bottleneck of `cargo test --no-run`).
+# GCC 12+ supports `-fuse-ld=mold` natively — no clang required.
+#
+# Install:  apt install mold
+# Verify:   mold --version
+# Rollback: remove these two target sections.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

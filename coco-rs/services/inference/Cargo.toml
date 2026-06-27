@@ -1,0 +1,47 @@
+[package]
+name = "coco-inference"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rand.workspace = true
+coco-types.workspace = true
+coco-config.workspace = true
+coco-error.workspace = true
+coco-otel.workspace = true
+coco-llm-types.workspace = true
+coco-utils-json-repair.workspace = true
+vercel-ai-provider.workspace = true
+vercel-ai-provider-utils.workspace = true
+# Concrete provider crates — `coco-inference` is the canonical home for
+# `Arc<dyn LanguageModel>` construction. No other crate may depend on
+# these directly (enforced by scripts/check-vercel-ai-seam.sh).
+vercel-ai-anthropic.workspace = true
+vercel-ai-openai.workspace = true
+vercel-ai-openai-compatible.workspace = true
+vercel-ai-google.workspace = true
+vercel-ai-google-codeassist.workspace = true
+vercel-ai.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+snafu.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio-util.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
+tokio-util.workspace = true
+futures.workspace = true
+wiremock.workspace = true

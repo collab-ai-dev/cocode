@@ -1,0 +1,34 @@
+{
+  "name": "write_doc",
+  "description": "Create a new markdown document from scratch",
+  "workspace": {},
+  "turns": [
+    {
+      "tool_calls": [
+        {
+          "tool": "Write",
+          "input": {
+            "file_path": "{{workspace}}/hello.md",
+            "content": "# Hello World\n\nThis is a test document.\n"
+          }
+        }
+      ]
+    },
+    {
+      "text": "I created hello.md with a heading and description."
+    }
+  ],
+  "expect": {
+    "turns": 2,
+    "response_contains": "hello.md",
+    "files": {
+      "hello.md": {
+        "exists": true,
+        "contains": "# Hello World",
+        "line_count": 3
+      }
+    },
+    "not_cancelled": true,
+    "not_budget_exhausted": true
+  }
+}

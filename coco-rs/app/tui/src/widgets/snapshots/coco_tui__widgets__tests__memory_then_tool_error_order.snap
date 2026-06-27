@@ -1,0 +1,21 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ ╭─╮ ╭─╮  COCODE v0.1.1                                                             
+ │●│ │●│  opus-4  *  auto                                                           
+ ╰─╯ ╰─╯  /repo                                                                     
+                                                                                    
+❯ read the memory-guided file                                                       
+                                                                                    
+◆ memory · CLAUDE.md                                                                
+                                                                                    
+● Read(missing.txt)                                                                 
+  └ File does not exist: missing.txt                                                
+                                                                                    
+────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                   
+────────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto * ctrl+t to cycle | ↑0 ↓0 · cache 0/0% | ctx -- | →1 ←1 · tool 1     
+ ⏯ ask mode on · shift+tab to cycle                                                 
+ repo

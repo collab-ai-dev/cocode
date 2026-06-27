@@ -1,0 +1,82 @@
+[package]
+name = "coco-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+testing = []
+
+[dependencies]
+coco-config.workspace = true
+coco-coordinator.workspace = true
+coco-messages.workspace = true
+coco-permissions.workspace = true
+coco-types.workspace = true
+coco-context.workspace = true
+coco-file-search.workspace = true
+coco-file-watch.workspace = true
+coco-git.workspace = true
+coco-keybindings = { workspace = true, features = ["crossterm", "loader"] }
+coco-plugins.workspace = true
+coco-subagent.workspace = true
+coco-tui-markdown = { workspace = true, features = ["mermaid"] }
+coco-tui-ui.workspace = true
+coco-utils-pty.workspace = true
+coco-utils-common.workspace = true
+coco-utils-string.workspace = true
+dirs.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+anyhow.workspace = true
+similar.workspace = true
+ratatui.workspace = true
+crossterm = { workspace = true, features = ["event-stream"] }
+tokio = { workspace = true, features = ["sync", "macros", "time", "process"] }
+tokio-stream.workspace = true
+rust-i18n.workspace = true
+nucleo.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4", "v5"] }
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
+# Clipboard (copy_to_clipboard + OSC 52 + arboard + WSL PowerShell fallback).
+# Unavailable on Android; see clipboard_copy.rs for the cfg gating.
+base64.workspace = true
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+rustix.workspace = true
+
+[dev-dependencies]
+# Self dev-dependency: enables this crate's own `testing` feature for every
+# dev target (tests/, the `required-features` benches) via feature
+# unification, so `testing`-gated helpers (`handle_event_for_test`, the
+# `testing` module) stay visible to `app/tui/tests/` without shipping in
+# release builds.
+coco-tui = { workspace = true, features = ["testing"] }
+coco-tui-ui = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+insta.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true
+vt100.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "native_replay"
+harness = false
+required-features = ["testing"]
+
+[[bench]]
+name = "native_surface_normal"
+harness = false
+required-features = ["testing"]
