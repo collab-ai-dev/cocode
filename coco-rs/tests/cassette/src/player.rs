@@ -18,45 +18,113 @@ use wiremock::matchers::any;
 
 use crate::cassette::Cassette;
 use crate::cassette::Interaction;
+use crate::cassette::RecordedRequest;
 
 #[derive(Debug)]
 struct ReplayState {
     interactions: Vec<Interaction>,
-    cursor: usize,
+    /// Per-interaction consumed flag (parallel to `interactions`).
+    consumed: Vec<bool>,
+    /// See [`Cassette::allow_any_order`].
+    allow_any_order: bool,
     mismatches: Vec<String>,
     overflow: usize,
 }
 
-/// Serves recorded interactions sequentially and records any request-body
-/// mismatch for [`CassettePlayer::verify`].
+/// Serves recorded interactions and records any request-shape mismatch
+/// (method + path + body) for [`CassettePlayer::verify`].
 struct CassetteResponder {
     state: Arc<Mutex<ReplayState>>,
+}
+
+/// Canonical JSON body (object key order irrelevant; non-JSON ⇒ `null`).
+fn canonical_body(request: &Request) -> serde_json::Value {
+    serde_json::from_slice(&request.body).unwrap_or(serde_json::Value::Null)
+}
+
+/// Path + query, matching `CassetteBuilder`'s recorded `path` (host stripped).
+fn incoming_path(request: &Request) -> String {
+    match request.url.query() {
+        Some(query) => format!("{}?{}", request.url.path(), query),
+        None => request.url.path().to_string(),
+    }
+}
+
+fn request_matches(recorded: &RecordedRequest, request: &Request) -> bool {
+    request
+        .method
+        .as_str()
+        .eq_ignore_ascii_case(&recorded.method)
+        && incoming_path(request) == recorded.path
+        && canonical_body(request) == recorded.body
+}
+
+/// First differing facet (method, then path, then body), or `None` if the
+/// request fully matches the recorded shape. The body branch keeps the literal
+/// phrase `request body mismatch` that tests assert on.
+fn request_mismatch(recorded: &RecordedRequest, request: &Request) -> Option<String> {
+    if !request
+        .method
+        .as_str()
+        .eq_ignore_ascii_case(&recorded.method)
+    {
+        return Some(format!(
+            "method mismatch: expected {}, actual {}",
+            recorded.method,
+            request.method.as_str()
+        ));
+    }
+    let path = incoming_path(request);
+    if path != recorded.path {
+        return Some(format!(
+            "path mismatch: expected {}, actual {path}",
+            recorded.path
+        ));
+    }
+    let body = canonical_body(request);
+    if body != recorded.body {
+        return Some(format!(
+            "request body mismatch:\n  expected: {}\n  actual:   {body}",
+            recorded.body
+        ));
+    }
+    None
 }
 
 impl Respond for CassetteResponder {
     fn respond(&self, request: &Request) -> ResponseTemplate {
         let mut state = self.state.lock().expect("replay state mutex poisoned");
-        let cursor = state.cursor;
 
-        let Some(interaction) = state.interactions.get(cursor).cloned() else {
-            state.overflow += 1;
-            return ResponseTemplate::new(500).set_body_string(format!(
-                "cassette overflow: request arrived with no recorded interaction #{cursor}"
-            ));
+        // Choose the interaction to serve. Strict (default): the next unconsumed
+        // one, which must then match. Any-order: the first unconsumed one whose
+        // method+path+body match this request.
+        let chosen = if state.allow_any_order {
+            (0..state.interactions.len()).find(|&i| {
+                !state.consumed[i] && request_matches(&state.interactions[i].request, request)
+            })
+        } else {
+            state.consumed.iter().position(|consumed| !consumed)
         };
 
-        // Canonicalized JSON comparison (object key order is irrelevant). A
-        // non-JSON body compares as `null` on both sides only if neither parsed.
-        let incoming: serde_json::Value =
-            serde_json::from_slice(&request.body).unwrap_or(serde_json::Value::Null);
-        if incoming != interaction.request.body {
-            state.mismatches.push(format!(
-                "interaction #{cursor} request body mismatch:\n  expected: {}\n  actual:   {}",
-                interaction.request.body, incoming
-            ));
+        let Some(idx) = chosen else {
+            state.overflow += 1;
+            return ResponseTemplate::new(500).set_body_string(
+                "cassette: no recorded interaction left to replay for this request",
+            );
+        };
+
+        // Strict mode validates the full request shape against the chosen
+        // interaction (any-order already matched on all three facets above).
+        if !state.allow_any_order
+            && let Some(detail) = request_mismatch(&state.interactions[idx].request, request)
+        {
+            state
+                .mismatches
+                .push(format!("interaction #{idx} {detail}"));
         }
 
-        state.cursor += 1;
+        state.consumed[idx] = true;
+        let interaction = state.interactions[idx].clone();
         ResponseTemplate::new(interaction.response.status).set_body_raw(
             interaction.response.body.into_bytes(),
             &interaction.response.content_type,
@@ -74,9 +142,13 @@ pub struct CassettePlayer {
 impl CassettePlayer {
     /// Start a replay server for `cassette`.
     pub async fn start(cassette: Cassette) -> Self {
+        let allow_any_order = cassette.allow_any_order;
+        let interactions = cassette.interactions;
+        let consumed = vec![false; interactions.len()];
         let state = Arc::new(Mutex::new(ReplayState {
-            interactions: cassette.interactions,
-            cursor: 0,
+            interactions,
+            consumed,
+            allow_any_order,
             mismatches: Vec::new(),
             overflow: 0,
         }));
@@ -106,7 +178,10 @@ impl CassettePlayer {
         self.state
             .lock()
             .expect("replay state mutex poisoned")
-            .cursor
+            .consumed
+            .iter()
+            .filter(|consumed| **consumed)
+            .count()
     }
 
     /// Assert the replay was faithful: every recorded interaction consumed in
@@ -124,11 +199,12 @@ impl CassettePlayer {
             "{} request(s) arrived with no recorded interaction left to replay",
             state.overflow
         );
+        let consumed = state.consumed.iter().filter(|c| **c).count();
         assert_eq!(
-            state.cursor,
+            consumed,
             state.interactions.len(),
             "unused recorded interactions: consumed {} of {}",
-            state.cursor,
+            consumed,
             state.interactions.len()
         );
     }

@@ -156,6 +156,11 @@ impl QueryEngine {
         // SessionStarted must happen before anything that can error.
         self.emit_session_started(&event_tx).await;
 
+        // Surface which features deviate from their defaults so rollout /
+        // opt-out rates are measurable. Counter; emits nothing for an
+        // all-defaults config and is zero-cost without an OTel exporter.
+        crate::emit::emit_feature_state_metrics(&self.config.features);
+
         // Running — agent is actively processing.
         state_tracker
             .transition_to(coco_types::SessionState::Running, &event_tx)

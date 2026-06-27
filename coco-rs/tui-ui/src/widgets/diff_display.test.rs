@@ -24,6 +24,26 @@ fn line_width(line: &Line<'static>) -> usize {
 }
 
 #[test]
+fn snapshot_diff_display_word_level_highlight() {
+    // Visual golden: file headers, hunk marker, context, and a removed/added
+    // pair with an intra-line word change. Locks gutter alignment + the
+    // rendered text structure (styling is verified by the per-test assertions
+    // above; this captures layout).
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let diff = "\
+--- a/hello.rs
++++ b/hello.rs
+@@ -1,2 +1,2 @@
+ fn greet() {
+-    println!(\"hello world\");
++    println!(\"hello, world!\");
+ }";
+    let lines = render_diff_lines(diff, styles, 60);
+    insta::assert_snapshot!("diff_display_word_highlight", text_of(&lines));
+}
+
+#[test]
 fn test_render_diff_lines_basic() {
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);

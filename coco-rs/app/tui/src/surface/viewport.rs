@@ -348,7 +348,12 @@ fn render_live_viewport(
             .is_interrupting()
             .then(|| crate::i18n::t!("status.interrupting").to_string());
         let view = if state.ui.ephemeral.turn_active() {
-            let elapsed_ms = state.ui.ephemeral.elapsed_ms(std::time::Instant::now());
+            // Read elapsed through the injected clock, the same source
+            // `start_turn` anchors `started_at` to (server_notification_handler
+            // uses `state.clock.now()`). Mixing a wall-clock `Instant::now()`
+            // here would make the spinner elapsed incoherent — and untestable —
+            // under a `MockClock`.
+            let elapsed_ms = state.ui.ephemeral.elapsed_ms(state.clock.now());
             let effort = state.session.thinking_effort;
             let effort_level = effort.is_explicit_level().then(|| effort.as_str());
             // An "in-process teammate" maps to `SubagentKind::Teammate` and

@@ -504,3 +504,33 @@ fn split_body_and_actions_no_blank_is_all_body() {
     assert_eq!(body.len(), 2);
     assert!(actions.is_empty());
 }
+
+#[test]
+fn live_viewport_spinner_elapsed_reads_injected_clock_not_wall_clock() {
+    use std::sync::Arc;
+
+    // Anchor the turn at mock-time 0 (the same clock `start_turn` reads from in
+    // production), then advance the mock clock by 7s. The rendered spinner must
+    // report "7s" — proving the live viewport reads `state.clock.now()` and not
+    // a wall-clock `Instant::now()` (which would ignore the advance entirely).
+    let clock = Arc::new(coco_tui_ui::clock::MockClock::new(0));
+    let mut state = AppState::with_clock(clock.clone());
+    state.ui.ephemeral.start_turn("Working", state.clock.now());
+    clock.advance(7_000);
+
+    let backend = TestBackend::new(60, 12);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 60, 12));
+    let mut transcript_layout = crate::widgets::TranscriptLayoutIndex::default();
+    terminal
+        .draw_viewport(|frame| {
+            render_interactive_viewport(frame, &state, native_plan(), &mut transcript_layout, None);
+        })
+        .expect("draw");
+
+    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(
+        text.contains("7s"),
+        "spinner must reflect mock-clock elapsed (7s); got:\n{text}"
+    );
+}

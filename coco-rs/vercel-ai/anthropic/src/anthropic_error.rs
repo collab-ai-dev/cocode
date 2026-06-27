@@ -32,6 +32,20 @@ impl ResponseHandler<AISdkError> for AnthropicFailedResponseHandler {
         _request_body_values: &Value,
     ) -> Result<AISdkError, AISdkError> {
         let status = response.status();
+        // Capture diagnostic response headers (request id, rate-limit budget)
+        // BEFORE `text()` consumes the response, so `coco-inference` can surface
+        // `request-id` / `anthropic-ratelimit-*` for support correlation. These
+        // were previously dropped here.
+        let response_headers: std::collections::HashMap<String, String> = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (name.as_str().to_string(), v.to_string()))
+            })
+            .collect();
         let body = response
             .text()
             .await
@@ -56,6 +70,7 @@ impl ResponseHandler<AISdkError> for AnthropicFailedResponseHandler {
         let api_error = APICallError::new(&message, url)
             .with_status(status.as_u16())
             .with_response_body(&body)
+            .with_response_headers(response_headers)
             .with_retryable(is_retryable);
 
         Ok(

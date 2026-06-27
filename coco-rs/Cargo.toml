@@ -68,6 +68,7 @@ members = [
     "services/lsp",
     "services/compact",
     "services/provider-auth",
+    "services/session-trace",
     "services/wire-dump",
 
     # ─── core/ (7) ───
@@ -190,6 +191,7 @@ coco-mcp-types = { path = "services/mcp-types" }
 coco-rmcp-client = { path = "services/rmcp-client" }
 coco-lsp = { path = "services/lsp" }
 coco-compact = { path = "services/compact" }
+coco-session-trace = { path = "services/session-trace" }
 coco-wire-dump = { path = "services/wire-dump" }
 coco-test-harness = { path = "tests/harness" }
 coco-cassette = { path = "tests/cassette" }
@@ -370,6 +372,9 @@ ratatui = { version = "0.30", features = [
     "scrolling-regions",
     "unstable-rendered-line-info",
     "unstable-widget-ref",
+    # Exposes `CrosstermBackend::writer()` so the test-only `VT100Backend`
+    # (coco-tui-ui) can read back the emulator it writes into.
+    "unstable-backend-writer",
 ] }
 ratatui-macros = "0.7"
 # Markdown rendering (coco-tui-markdown): pulldown-cmark for parsing, syntect for

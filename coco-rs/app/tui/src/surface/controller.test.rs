@@ -477,27 +477,16 @@ fn paint_engine_emitted_bytes_decode_to_expected_grid_via_vt100() {
     // We assert on the live streaming tail because it renders in the visible
     // viewport; committed messages live in native scrollback (off the visible
     // screen vt100 exposes via `contents()`).
-    use std::cell::RefCell;
-    use std::io::Write;
-    use std::rc::Rc;
-
-    #[derive(Clone, Default)]
-    struct CapturedWriter(Rc<RefCell<Vec<u8>>>);
-    impl Write for CapturedWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
+    //
+    // The paint goes through `VT100Backend`, a `SurfaceBackend` that funnels the
+    // engine's real emitted ANSI into a live `vt100` emulator — so the grid we
+    // read back is what a real terminal would show, not the buffer ratatui
+    // diffed against.
+    use coco_tui_ui::engine::test_backend::VT100Backend;
 
     const ROWS: u16 = 24;
     const COLS: u16 = 64;
-    let writer = CapturedWriter::default();
-    let backend = ratatui::backend::CrosstermBackend::new(writer.clone());
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    let mut terminal = SurfaceTerminal::new(VT100Backend::new(COLS, ROWS)).expect("terminal");
     // Fix geometry deterministically (independent of the real test tty size).
     terminal.sync_screen_size(ratatui::layout::Size::new(COLS, ROWS));
     terminal.set_viewport_area(Rect::new(0, 16, COLS, 8));
@@ -510,15 +499,33 @@ fn paint_engine_emitted_bytes_decode_to_expected_grid_via_vt100() {
     let mut controller = NativeSurfaceController::default();
     controller.draw(&mut terminal, &state).expect("draw");
 
-    // Feed the captured ANSI into a real terminal emulator and read the grid.
-    let bytes = writer.0.borrow().clone();
-    let mut parser = vt100::Parser::new(ROWS, COLS, 200);
-    parser.process(&bytes);
-    let screen = parser.screen().contents();
+    let screen = terminal.backend().screen();
 
+    // Whole-screen text sanity (cheap), then a per-cell row assertion that
+    // proves the glyphs landed on contiguous columns with no SGR-induced gaps.
+    let needle = "hello from the paint engine";
     assert!(
-        screen.contains("hello from the paint engine"),
-        "vt100-decoded visible screen must show the streamed text; got:\n{screen}"
+        screen.contents().contains(needle),
+        "vt100-decoded visible screen must show the streamed text; got:\n{}",
+        screen.contents()
+    );
+
+    let row_text = |row: u16| -> String {
+        (0..COLS)
+            .map(|col| {
+                screen
+                    .cell(row, col)
+                    .map(vt100::Cell::contents)
+                    .unwrap_or_default()
+            })
+            .collect()
+    };
+    let row = (0..ROWS)
+        .find(|&r| row_text(r).contains(needle))
+        .expect("streamed text must occupy a visible row");
+    assert!(
+        row_text(row).contains(needle),
+        "row {row} reconstructed from cells must contain the streamed text"
     );
 }
 

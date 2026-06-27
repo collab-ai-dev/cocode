@@ -71,3 +71,80 @@ async fn verify_panics_when_interactions_unconsumed() {
     // No request issued → the single interaction stays unconsumed.
     player.verify();
 }
+
+#[tokio::test]
+#[should_panic(expected = "path mismatch")]
+async fn verify_panics_on_path_mismatch() {
+    // Recorded path is `/messages`; the request hits a different path with a
+    // matching body. The strengthened guard catches the wrong-endpoint hit that
+    // a body-only matcher would silently allow.
+    let player =
+        CassettePlayer::start(cassette_with(serde_json::json!({ "model": "x" }), "ok")).await;
+
+    let client = reqwest::Client::new();
+    let _ = client
+        .post(format!("{}/WRONG", player.base_url()))
+        .json(&serde_json::json!({ "model": "x" }))
+        .send()
+        .await;
+
+    player.verify(); // panics: recorded path != requested path
+}
+
+#[tokio::test]
+async fn any_order_matches_requests_out_of_recorded_order() {
+    // Two interactions with distinct bodies, requested in reverse order. Strict
+    // mode would flag both as body mismatches; any-order matches each request to
+    // the interaction with the same shape.
+    let cassette = Cassette::new(vec![
+        Interaction {
+            request: RecordedRequest {
+                method: "POST".into(),
+                path: "/messages".into(),
+                body: serde_json::json!({ "n": 1 }),
+            },
+            response: RecordedResponse {
+                status: 200,
+                content_type: "application/json".into(),
+                body: "first".into(),
+            },
+        },
+        Interaction {
+            request: RecordedRequest {
+                method: "POST".into(),
+                path: "/messages".into(),
+                body: serde_json::json!({ "n": 2 }),
+            },
+            response: RecordedResponse {
+                status: 200,
+                content_type: "application/json".into(),
+                body: "second".into(),
+            },
+        },
+    ])
+    .with_any_order();
+
+    let player = CassettePlayer::start(cassette).await;
+    let client = reqwest::Client::new();
+
+    // Request #2's body first.
+    let r2 = client
+        .post(format!("{}/messages", player.base_url()))
+        .json(&serde_json::json!({ "n": 2 }))
+        .send()
+        .await
+        .expect("request 2");
+    assert_eq!(r2.text().await.expect("body"), "second");
+
+    // Then #1's body.
+    let r1 = client
+        .post(format!("{}/messages", player.base_url()))
+        .json(&serde_json::json!({ "n": 1 }))
+        .send()
+        .await
+        .expect("request 1");
+    assert_eq!(r1.text().await.expect("body"), "first");
+
+    player.verify();
+    assert_eq!(player.consumed(), 2);
+}

@@ -65,6 +65,23 @@ fn render(view: StatusIndicatorView<'_>, w: u16, h: u16) -> String {
 }
 
 #[test]
+fn snapshot_status_indicator_tokens_and_effort() {
+    // Visual golden: spinner + verb + effort suffix + elapsed + ↑/↓ tokens +
+    // interrupt hint, fully laid out. Locks the row composition / width logic.
+    let view = StatusIndicatorView {
+        verb: "Pondering",
+        elapsed_ms: 35_000,
+        input_tokens: Some(1_234),
+        output_tokens: 5_678,
+        effort_level: Some("high"),
+        show_interrupt_hint: true,
+        force_show_tokens: false,
+        has_running_teammates: false,
+    };
+    insta::assert_snapshot!("status_indicator_tokens_effort", render(view, 100, 1));
+}
+
+#[test]
 fn renders_typical_80_col_with_tokens() {
     let view = StatusIndicatorView {
         verb: "Pondering",

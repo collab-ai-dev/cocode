@@ -879,7 +879,7 @@ fn system_time_to_unix_ms(time: SystemTime) -> i64 {
 }
 
 #[cfg(all(test, any(unix, windows)))]
-#[path = "local_file_system_path_uri_tests.rs"]
+#[path = "local_file_system.test.rs"]
 mod path_uri_tests;
 
 #[cfg(all(test, unix))]

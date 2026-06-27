@@ -226,16 +226,52 @@ fn command_writes_git_internal(subs: &[String]) -> bool {
     false
 }
 
+/// Minimal synchronous filesystem probe for path validation. Exists purely so
+/// the security-critical bare-repo-escape detection can be unit-tested against
+/// arbitrary FS layouts (planted `HEAD`/`objects`/`refs` without `.git`) via a
+/// mock, instead of needing a real temp dir per case. Kept private and tiny
+/// (3 methods) to minimize the audit surface; production always uses
+/// [`LocalPathFileSystem`].
+trait PathFileSystem {
+    fn exists(&self, path: &std::path::Path) -> bool;
+    fn is_file(&self, path: &std::path::Path) -> bool;
+    fn is_dir(&self, path: &std::path::Path) -> bool;
+}
+
+/// Production [`PathFileSystem`] over `std::fs` (zero-sized).
+struct LocalPathFileSystem;
+
+impl PathFileSystem for LocalPathFileSystem {
+    fn exists(&self, path: &std::path::Path) -> bool {
+        path.exists()
+    }
+    fn is_file(&self, path: &std::path::Path) -> bool {
+        path.is_file()
+    }
+    fn is_dir(&self, path: &std::path::Path) -> bool {
+        path.is_dir()
+    }
+}
+
 /// Checks whether the cwd itself looks like a git dir (`HEAD` + `objects/` +
 /// `refs/`) but is NOT a normal working tree (`.git` absent) — a planted bare
-/// repo a `git` command could be tricked into using.
+/// repo a `git` command could be tricked into using. Thin production wrapper
+/// over the testable [`is_current_dir_bare_git_repo_with_fs`] seam.
 fn is_current_dir_bare_git_repo(cwd: &str) -> bool {
+    is_current_dir_bare_git_repo_with_fs(cwd, &LocalPathFileSystem)
+}
+
+/// SECURITY: bare-repo-escape detection. Must reject any cwd carrying the
+/// `HEAD` + `objects/` + `refs/` triad while lacking `.git`. The `fs` seam
+/// exists only to make this unit-testable; tests MUST cover every attack
+/// layout (full triad, each member missing, `.git` present).
+fn is_current_dir_bare_git_repo_with_fs(cwd: &str, fs: &dyn PathFileSystem) -> bool {
     use std::path::Path;
     let dir = Path::new(cwd);
-    if dir.join(".git").exists() {
+    if fs.exists(&dir.join(".git")) {
         return false;
     }
-    dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir()
+    fs.is_file(&dir.join("HEAD")) && fs.is_dir(&dir.join("objects")) && fs.is_dir(&dir.join("refs"))
 }
 
 /// Filter out flags from args, returning only positional arguments.

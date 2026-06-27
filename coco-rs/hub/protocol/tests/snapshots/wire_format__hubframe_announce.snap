@@ -1,0 +1,16 @@
+---
+source: hub/protocol/tests/wire_format.rs
+expression: json
+---
+{
+  "kind": "announce",
+  "instanceId": "00000000-0000-0000-0000-000000000000",
+  "host": "test-host",
+  "cwd": "/work",
+  "pid": 4242,
+  "startedAt": "2024-01-01T00:00:00Z",
+  "version": "0.1.0",
+  "instanceKind": "cli",
+  "entrypoint": "coco",
+  "name": "demo"
+}

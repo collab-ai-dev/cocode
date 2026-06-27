@@ -65,6 +65,68 @@ fn one_shot_options() -> LanguageModelV4CallOptions {
     LanguageModelV4CallOptions::new(vec![LanguageModelV4Message::user_text("read /tmp/x")])
 }
 
+/// Golden of the DECODED response stream (not just the request body): replay the
+/// canonical tool_use SSE through the real Anthropic codec and snapshot the
+/// ordered sequence of decoded stream-part *types*. A silent change in how the
+/// adapter frames the SSE (block start/delta/stop ordering, a missing/extra
+/// event, a renamed part) shows up here — the response-side counterpart to
+/// `messages_request_body_golden`. We snapshot the type tags rather than the
+/// full `Debug` because the latter embeds the provider's raw usage blob, whose
+/// JSON object-key order is non-deterministic under `serde_json/preserve_order`
+/// feature unification. The decoded *values* (tool name, input, finish reason)
+/// are asserted by `cassette_replays_tool_use_through_real_codec`.
+#[tokio::test]
+async fn golden_tool_use_sse_decoded_stream_shape() {
+    let options = one_shot_options();
+    let probe = create_anthropic(AnthropicProviderSettings {
+        base_url: Some("https://api.anthropic.com/v1".to_string()),
+        api_key: Some("test-key".to_string()),
+        ..Default::default()
+    })
+    .messages("claude-test");
+    let (recorded_body, _headers, _warnings) = probe.get_args(&options, true).expect("get_args");
+
+    let cassette = Cassette::new(vec![Interaction {
+        request: RecordedRequest {
+            method: "POST".to_string(),
+            path: "/messages".to_string(),
+            body: recorded_body,
+        },
+        response: RecordedResponse {
+            status: 200,
+            content_type: "text/event-stream".to_string(),
+            body: tool_use_sse(),
+        },
+    }]);
+
+    let player = CassettePlayer::start(cassette).await;
+    let model = create_anthropic(AnthropicProviderSettings {
+        base_url: Some(player.base_url()),
+        api_key: Some("test-key".to_string()),
+        ..Default::default()
+    })
+    .messages("claude-test");
+
+    let mut stream = model
+        .do_stream(&options, None)
+        .await
+        .expect("do_stream opens");
+    let mut event_types: Vec<String> = Vec::new();
+    while let Some(part) = stream.stream.next().await {
+        let part = part.expect("stream part decodes");
+        // The `type` tag is the variant's stable serde discriminant — robust to
+        // provider-blob field ordering, unlike the full `Debug`.
+        let tag = serde_json::to_value(&part)
+            .ok()
+            .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(String::from))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        event_types.push(tag);
+    }
+
+    player.verify();
+    insta::assert_snapshot!("tool_use_event_sequence", event_types.join("\n"));
+}
+
 #[tokio::test]
 async fn cassette_replays_tool_use_through_real_codec() {
     let options = one_shot_options();

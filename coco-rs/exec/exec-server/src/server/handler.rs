@@ -405,4 +405,5 @@ impl ExecServerHandler {
 }
 
 #[cfg(test)]
+#[path = "handler.test.rs"]
 mod tests;

@@ -14,8 +14,16 @@ coco-messages.workspace = true
 coco-compact.workspace = true
 coco-inference.workspace = true
 coco-tool-runtime.workspace = true
+# Real built-in tool impls (Bash/Read/Write/Edit/Glob/Grep) for ToolRegistryBuilder.
+coco-tools.workspace = true
 
 async-trait.workspace = true
 serde_json.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 tokio = { workspace = true, features = ["sync"] }
+# Volatile-field normalization for golden snapshots (timestamps / uuids / temp paths).
+regex.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

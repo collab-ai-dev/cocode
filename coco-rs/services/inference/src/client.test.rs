@@ -291,6 +291,32 @@ fn wrap_provider_error_classifies_retryable_status_from_cause() {
 }
 
 #[test]
+fn wrap_provider_error_surfaces_request_id_from_response_headers() {
+    // A provider error whose `APICallError` cause carries the diagnostic
+    // response headers: `wrap_provider_error` must pull `x-request-id` into the
+    // surfaced error message (support correlation) instead of dropping it.
+    let client = ApiClient::with_default_fingerprint(Arc::new(ErrorModel), RetryConfig::default());
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("x-request-id".to_string(), "req_abc123".to_string());
+    headers.insert(
+        "anthropic-ratelimit-requests-remaining".to_string(),
+        "0".to_string(),
+    );
+    let api = vercel_ai_provider::APICallError::new("rate limited", "https://api.anthropic.com")
+        .with_status(429)
+        .with_response_headers(headers)
+        .with_retryable(true);
+    let sdk =
+        vercel_ai_provider::AISdkError::new("Anthropic API error (429)").with_cause(Box::new(api));
+    let err = client.wrap_provider_error(sdk);
+    let message = format!("{err}");
+    assert!(
+        message.contains("[request_id: req_abc123]"),
+        "request id must be surfaced in the error message: {message}"
+    );
+}
+
+#[test]
 fn wrap_provider_error_opaque_no_cause_is_non_retryable() {
     // No `APICallError` cause (opaque transport/serde error) → non-retryable
     // ProviderError, so the backoff loop doesn't spin on unknown errors.

@@ -52,6 +52,14 @@ pub struct Cassette {
     pub version: u32,
     /// Interactions in request order.
     pub interactions: Vec<Interaction>,
+    /// Replay-order policy. When `false` (default), the Nth request must match
+    /// the Nth recorded interaction (method + path + body) — so a duplicated,
+    /// missing, or reordered request (a retry / parallel-tool bug) surfaces in
+    /// [`crate::CassettePlayer::verify`]. When `true`, each request matches the
+    /// first *unconsumed* interaction with the same method+path+body, for tests
+    /// that legitimately issue concurrent / out-of-order requests.
+    #[serde(default)]
+    pub allow_any_order: bool,
 }
 
 /// Errors from cassette I/O. Test-support boundary crate ⇒ `thiserror`.
@@ -111,12 +119,19 @@ pub enum CassetteError {
 }
 
 impl Cassette {
-    /// A cassette at the current version from `interactions`.
+    /// A cassette at the current version from `interactions` (strict order).
     pub fn new(interactions: Vec<Interaction>) -> Self {
         Self {
             version: CASSETTE_VERSION,
             interactions,
+            allow_any_order: false,
         }
+    }
+
+    /// Opt into order-independent matching (see [`Cassette::allow_any_order`]).
+    pub fn with_any_order(mut self) -> Self {
+        self.allow_any_order = true;
+        self
     }
 
     /// Load a cassette from disk. Returns [`CassetteError::Missing`] when the

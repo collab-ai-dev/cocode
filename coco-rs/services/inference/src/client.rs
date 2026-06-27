@@ -818,11 +818,60 @@ impl ApiClient {
             .and_then(|api| api.status_code)
             .map(i32::from)
             .unwrap_or(0);
+
+        // Surface the provider's diagnostic response headers that the transport
+        // captured but were previously dropped here: the request id (correlates
+        // a failure with the provider's own logs for support) and the rate-limit
+        // budget (shows whether a 429 was a true limit and how much remained).
+        let headers = api_err.and_then(|api| api.response_headers.as_ref());
+        let request_id = headers.and_then(|h| {
+            h.iter().find_map(|(k, v)| {
+                ["x-request-id", "request-id", "anthropic-request-id"]
+                    .iter()
+                    .any(|c| k.eq_ignore_ascii_case(c))
+                    .then_some(v.as_str())
+            })
+        });
+        let ratelimit = headers
+            .map(|h| {
+                let mut parts: Vec<String> = h
+                    .iter()
+                    .filter(|(k, _)| k.to_ascii_lowercase().contains("ratelimit"))
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect();
+                parts.sort();
+                parts.join(" ")
+            })
+            .unwrap_or_default();
+        if request_id.is_some() || !ratelimit.is_empty() {
+            tracing::debug!(
+                provider = self.model.provider(),
+                model = self.model.model_id(),
+                status,
+                request_id = request_id.unwrap_or("-"),
+                ratelimit = %ratelimit,
+                "provider error diagnostics"
+            );
+        }
+        coco_otel::metrics::record_counter(
+            "coco_inference_provider_error_total",
+            1,
+            &[
+                ("provider", self.model.provider()),
+                ("status", &status.to_string()),
+            ],
+        );
+
+        // Carry the request id into the user-facing message so it shows up in
+        // logs and surfaced errors without a separate lookup.
         let message = format!(
-            "Provider '{}' error for model '{}': {}",
+            "Provider '{}' error for model '{}': {}{}",
             self.model.provider(),
             self.model.model_id(),
-            e
+            e,
+            request_id
+                .map(|id| format!(" [request_id: {id}]"))
+                .unwrap_or_default(),
         );
 
         // Classify by HTTP status so `is_retryable()` is correct and the

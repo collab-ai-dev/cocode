@@ -9,6 +9,12 @@ pub mod history_reflow;
 pub mod seat;
 pub mod terminal;
 
+/// Terminal-emulator-backed test backend (`VT100Backend`). Exposed to other
+/// crates' tests via the `testing` feature; available within this crate under
+/// `cfg(test)`.
+#[cfg(any(test, feature = "testing"))]
+pub mod test_backend;
+
 use crossterm::cursor::SetCursorStyle;
 use ratatui::layout::Position;
 

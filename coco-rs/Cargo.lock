@@ -1476,6 +1476,8 @@ version = "0.1.1"
 dependencies = [
  "chrono",
  "coco-error",
+ "insta",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "uuid",
@@ -2064,6 +2066,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-session-trace"
+version = "0.1.1"
+dependencies = [
+ "coco-error",
+ "coco-types",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "coco-shell"
 version = "0.1.1"
 dependencies = [
@@ -2283,7 +2299,10 @@ dependencies = [
  "coco-llm-types",
  "coco-messages",
  "coco-tool-runtime",
+ "coco-tools",
  "coco-types",
+ "pretty_assertions",
+ "regex",
  "serde_json",
  "tokio",
  "uuid",
@@ -9482,6 +9501,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chrono",
+ "coco-cassette",
  "futures",
  "pretty_assertions",
  "regex",

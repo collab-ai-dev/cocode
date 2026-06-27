@@ -816,9 +816,101 @@ fn clear_after_position_stays_inside_synchronized_window() {
     assert!(clear < end, "clear must precede ?2026l: {bytes:?}");
 }
 
-fn parse_with_vt100(bytes: &str) {
+#[test]
+fn snapshot_viewport_frame_multiline() {
+    // Visual golden of a painted viewport frame: the engine's draw path
+    // (`draw_viewport` → buffer-diff → backend draw) composing multi-line
+    // content. A regression in frame composition surfaces as a diff here.
+    let backend = TestBackend::new(24, 4);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 24, 4));
+    terminal
+        .draw_viewport(|frame| {
+            frame.render_widget(
+                Paragraph::new(vec![Line::from("❯ prompt"), Line::from("status: working")]),
+                frame.area(),
+            );
+        })
+        .expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    let text = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("viewport_frame_multiline", text);
+}
+
+/// Feed emitted bytes through a real `vt100` emulator and return the parser so
+/// callers can assert on the decoded grid (cells / cursor), not just that the
+/// bytes parsed without panicking. Existing callers discard the return — the
+/// parse itself is the assertion that the SGR/cursor framing is well-formed.
+fn parse_with_vt100(bytes: &str) -> vt100::Parser {
     let mut parser = vt100::Parser::new(8, 16, 16);
     parser.process(bytes.as_bytes());
+    parser
+}
+
+#[test]
+fn vt100_backend_decodes_styled_cells_and_cursor() {
+    // Drive a full paint through `SurfaceTerminal<VT100Backend>` and assert on
+    // the emulator-decoded grid: cell text, per-run styling, and final cursor
+    // position. This validates the engine's *emitted bytes* end to end — a
+    // malformed SGR run, a dropped reset, or an off-by-one cursor move surfaces
+    // here, where the in-memory `TestBackend` (which only echoes the buffer the
+    // engine diffed against) is blind to it.
+    use crate::engine::CursorClaim;
+    use crate::engine::test_backend::VT100Backend;
+
+    let mut terminal = SurfaceTerminal::new(VT100Backend::new(16, 8)).expect("terminal");
+    terminal.sync_screen_size(Size::new(16, 8));
+    terminal.set_viewport_area(Rect::new(0, 0, 16, 8));
+
+    terminal
+        .draw_viewport(|frame| {
+            let area = frame.area();
+            // "OK done": "OK" styled bold+red, " done" default.
+            let line = Line::from(vec!["OK".bold().red(), " done".into()]);
+            frame.render_widget(Paragraph::new(line), area);
+            frame.set_cursor_claim(CursorClaim {
+                position: Position::new(7, 0),
+                style: SetCursorStyle::DefaultUserShape,
+            });
+        })
+        .expect("draw");
+
+    let screen = terminal.backend().screen();
+
+    // Text landed on the visible grid at the expected columns.
+    assert_eq!(screen.cell(0, 0).expect("cell 0,0").contents(), "O");
+    assert_eq!(screen.cell(0, 1).expect("cell 0,1").contents(), "K");
+
+    // The "OK" run decoded as bold with a non-default fg; the trailing plain
+    // " done" run did not — proving per-run SGR framing (set + reset) is intact.
+    let styled = screen.cell(0, 0).expect("cell 0,0");
+    assert!(styled.bold(), "styled run must decode as bold");
+    assert_ne!(
+        styled.fgcolor(),
+        vt100::Color::Default,
+        "styled run must carry a foreground color"
+    );
+    let plain = screen.cell(0, 3).expect("'d' of done");
+    assert_eq!(plain.contents(), "d");
+    assert!(!plain.bold(), "plain run must not be bold");
+    assert_eq!(
+        plain.fgcolor(),
+        vt100::Color::Default,
+        "plain run must reset to default fg"
+    );
+
+    // Cursor parked exactly where the claim asked (vt100 reports row, col).
+    assert_eq!(screen.cursor_position(), (0, 7));
 }
 
 #[derive(Debug, Default, Clone)]

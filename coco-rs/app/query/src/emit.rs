@@ -154,6 +154,28 @@ fn record_emit_metric(layer: &'static str, method_or_kind: &str, delivered: bool
     coco_otel::metrics::record_counter(name, 1, &[("layer", layer), ("method", method_or_kind)]);
 }
 
+/// Emit one `coco.feature.state` counter per feature whose runtime state
+/// deviates from its built-in default — an explicit opt-in to an off-by-default
+/// feature or opt-out of an on-by-default one. This makes experimental-feature
+/// uptake and unexpected Stable opt-outs measurable; the gate itself was
+/// previously invisible to telemetry. Common case (all defaults) emits nothing.
+/// Zero-cost when no OTel exporter is attached — `record_counter` short-circuits.
+pub(crate) fn emit_feature_state_metrics(features: &coco_types::Features) {
+    for spec in coco_types::all_features() {
+        let on = features.enabled(spec.id);
+        if on != spec.default_enabled {
+            coco_otel::metrics::record_counter(
+                "coco.feature.state",
+                1,
+                &[
+                    ("feature", spec.key),
+                    ("state", if on { "enabled" } else { "disabled" }),
+                ],
+            );
+        }
+    }
+}
+
 /// Tag for `AgentStreamEvent` variants — avoids allocating the full
 /// `Debug` representation just for the trace log.
 fn stream_kind(evt: &AgentStreamEvent) -> &'static str {

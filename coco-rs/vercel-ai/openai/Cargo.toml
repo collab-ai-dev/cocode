@@ -27,6 +27,10 @@ regex = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 pretty_assertions = { workspace = true }
 wiremock = { workspace = true }
+# Cassette record/replay: exercise the real codec against recorded bytes with
+# request-body validation. coco-cassette has no vercel-ai dependency, so this
+# dev-only edge introduces no cycle.
+coco-cassette = { workspace = true }
 
 [lints]
 workspace = true

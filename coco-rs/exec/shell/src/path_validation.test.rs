@@ -119,3 +119,87 @@ fn test_extract_write_path_targets_ignores_reads() {
     assert!(extract_write_path_targets("echo hi").is_empty());
     assert!(extract_write_path_targets("git status").is_empty());
 }
+
+/// In-memory [`PathFileSystem`] for the bare-repo-escape tests: only the
+/// explicitly-planted paths exist, with the declared kind.
+#[derive(Default)]
+struct MockPathFileSystem {
+    files: std::collections::HashSet<std::path::PathBuf>,
+    dirs: std::collections::HashSet<std::path::PathBuf>,
+}
+
+impl MockPathFileSystem {
+    fn with_file(mut self, cwd: &str, rel: &str) -> Self {
+        self.files.insert(std::path::Path::new(cwd).join(rel));
+        self
+    }
+    fn with_dir(mut self, cwd: &str, rel: &str) -> Self {
+        self.dirs.insert(std::path::Path::new(cwd).join(rel));
+        self
+    }
+}
+
+impl PathFileSystem for MockPathFileSystem {
+    fn exists(&self, path: &std::path::Path) -> bool {
+        self.files.contains(path) || self.dirs.contains(path)
+    }
+    fn is_file(&self, path: &std::path::Path) -> bool {
+        self.files.contains(path)
+    }
+    fn is_dir(&self, path: &std::path::Path) -> bool {
+        self.dirs.contains(path)
+    }
+}
+
+const CWD: &str = "/work/planted";
+
+#[test]
+fn test_bare_repo_detected_on_full_internal_triad() {
+    // HEAD file + objects/ + refs/ and no .git → planted bare repo.
+    let fs = MockPathFileSystem::default()
+        .with_file(CWD, "HEAD")
+        .with_dir(CWD, "objects")
+        .with_dir(CWD, "refs");
+    assert!(is_current_dir_bare_git_repo_with_fs(CWD, &fs));
+}
+
+#[test]
+fn test_bare_repo_ignored_when_dot_git_present() {
+    // A normal working tree (has .git) is never treated as a bare repo, even
+    // with the triad also present.
+    let fs = MockPathFileSystem::default()
+        .with_dir(CWD, ".git")
+        .with_file(CWD, "HEAD")
+        .with_dir(CWD, "objects")
+        .with_dir(CWD, "refs");
+    assert!(!is_current_dir_bare_git_repo_with_fs(CWD, &fs));
+}
+
+#[test]
+fn test_bare_repo_requires_every_triad_member() {
+    // Missing any one of HEAD / objects / refs → not a bare repo.
+    let missing_head = MockPathFileSystem::default()
+        .with_dir(CWD, "objects")
+        .with_dir(CWD, "refs");
+    assert!(!is_current_dir_bare_git_repo_with_fs(CWD, &missing_head));
+
+    let missing_objects = MockPathFileSystem::default()
+        .with_file(CWD, "HEAD")
+        .with_dir(CWD, "refs");
+    assert!(!is_current_dir_bare_git_repo_with_fs(CWD, &missing_objects));
+
+    let missing_refs = MockPathFileSystem::default()
+        .with_file(CWD, "HEAD")
+        .with_dir(CWD, "objects");
+    assert!(!is_current_dir_bare_git_repo_with_fs(CWD, &missing_refs));
+}
+
+#[test]
+fn test_bare_repo_rejects_head_as_directory() {
+    // `HEAD` must be a FILE; a directory named HEAD does not satisfy the triad.
+    let fs = MockPathFileSystem::default()
+        .with_dir(CWD, "HEAD")
+        .with_dir(CWD, "objects")
+        .with_dir(CWD, "refs");
+    assert!(!is_current_dir_bare_git_repo_with_fs(CWD, &fs));
+}

@@ -66,7 +66,11 @@ impl OpenAIChatLanguageModel {
     }
 
     /// Build request body and collect warnings.
-    fn get_args(
+    ///
+    /// `pub` so cassette / wire-shape tests can derive the exact request body
+    /// the provider sends (mirrors Anthropic's `get_args`). `do_stream` layers
+    /// `stream` + `stream_options` on top of this body.
+    pub fn get_args(
         &self,
         options: &LanguageModelV4CallOptions,
     ) -> Result<(Value, Vec<Warning>), AISdkError> {
