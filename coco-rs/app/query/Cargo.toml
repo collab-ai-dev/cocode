@@ -16,6 +16,7 @@ coco-inference.workspace = true
 coco-wire-dump.workspace = true
 coco-tool-runtime.workspace = true
 coco-utils-json-repair.workspace = true
+coco-utils-string.workspace = true
 coco-tools.workspace = true
 coco-sandbox.workspace = true
 coco-shell.workspace = true

@@ -308,6 +308,64 @@ fn test_metadata_entries_round_trip() {
 }
 
 #[test]
+fn test_goal_metadata_last_wins() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "goal-meta-session";
+
+    let user = make_user_entry("u1", sid, "Ship the feature");
+    store.append_message(sid, &user).unwrap();
+
+    let active = GoalMetadata {
+        condition: "all tests pass".to_string(),
+        set_at: 123,
+        iterations: 1,
+        last_reason: Some("one test is still failing".to_string()),
+        met: false,
+    };
+    store
+        .append_metadata(
+            sid,
+            &MetadataEntry::Goal {
+                session_id: sid.to_string(),
+                goal: Some(active.clone()),
+            },
+        )
+        .unwrap();
+
+    let meta = store.read_metadata(sid).unwrap();
+    assert_eq!(meta.goal, Some(active));
+
+    let achieved = GoalMetadata {
+        condition: "all tests pass".to_string(),
+        set_at: 123,
+        iterations: 2,
+        last_reason: None,
+        met: true,
+    };
+    store
+        .append_metadata(
+            sid,
+            &MetadataEntry::Goal {
+                session_id: sid.to_string(),
+                goal: Some(achieved.clone()),
+            },
+        )
+        .unwrap();
+    assert_eq!(store.read_metadata(sid).unwrap().goal, Some(achieved));
+
+    store
+        .append_metadata(
+            sid,
+            &MetadataEntry::Goal {
+                session_id: sid.to_string(),
+                goal: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(store.read_metadata(sid).unwrap().goal, None);
+}
+
+#[test]
 fn test_content_replacement_records_round_trip() {
     let (_dir, store, _project_dir) = test_store();
     let sid = "content-replacements";

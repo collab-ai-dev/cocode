@@ -1,5 +1,6 @@
 use super::*;
 use crate::state::PermissionPromptState;
+use coco_tui_ui::theme::Theme;
 
 #[test]
 fn prompt_text_surface_skips_exit_plan_mode_permission() {
@@ -30,4 +31,22 @@ fn prompt_text_surface_skips_exit_plan_mode_permission() {
     });
 
     assert!(prompt_text_surface(&prompt).is_none());
+}
+
+#[test]
+fn goal_status_surface_uses_pre_rendered_body() {
+    let state = AppState::new();
+    let goal = crate::state::GoalStatusState {
+        title: "Goal active".into(),
+        body: "Running: 3m\nGoal:\nship it".into(),
+    };
+    let theme = Theme::default();
+    let (title, body, _border) = surface_content(
+        TextSurfaceContent::GoalStatus(&goal),
+        &state,
+        UiStyles::new(&theme),
+    );
+
+    assert_eq!(title, "Goal active");
+    assert_eq!(body, "Running: 3m\nGoal:\nship it");
 }

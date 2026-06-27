@@ -645,9 +645,48 @@ pub(crate) fn attachment_summary_text(source: &coco_messages::Message) -> Option
     ) {
         return None;
     }
+    if let coco_messages::AttachmentBody::Silent(coco_messages::SilentPayload::GoalStatus(
+        payload,
+    )) = &att.body
+    {
+        if payload.sentinel {
+            return None;
+        }
+        return Some(format_goal_status(payload));
+    }
     let body = strip_system_reminder_wrapper(&att.as_text_for_display());
     let first = body.lines().map(str::trim).find(|line| !line.is_empty())?;
     Some(first.to_string())
+}
+
+fn format_goal_status(payload: &coco_types::GoalStatusPayload) -> String {
+    let status = if payload.failed {
+        "Goal could not be achieved"
+    } else if payload.met {
+        "Goal achieved"
+    } else {
+        "Goal not yet met; continuing"
+    };
+    let mut text = format!("{status}: {}", payload.condition);
+    if let Some(reason) = payload
+        .reason
+        .as_deref()
+        .map(clean_goal_reason)
+        .filter(|reason| !reason.is_empty())
+    {
+        text.push_str(&format!(" - {reason}"));
+    }
+    text
+}
+
+fn clean_goal_reason(reason: &str) -> String {
+    reason
+        .trim()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Compact transcript rows for a resolved `@`-mention summary attachment

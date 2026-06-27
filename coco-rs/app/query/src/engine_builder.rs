@@ -146,6 +146,7 @@ impl QueryEngine {
             session_usage_write_lock: None,
             transcript_session_id: None,
             transcript_dedup: None,
+            terminal_goal_metadata_written: None,
             live_transcript: None,
             pending_nested_memory: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             loaded_nested_memory_paths: Arc::new(tokio::sync::Mutex::new(
@@ -352,6 +353,14 @@ impl QueryEngine {
         seen: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
     ) -> Self {
         self.transcript_dedup = Some(seen);
+        self
+    }
+
+    pub fn with_terminal_goal_metadata_flag(
+        mut self,
+        flag: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        self.terminal_goal_metadata_written = Some(flag);
         self
     }
 

@@ -58,6 +58,8 @@ pub enum ModalState {
     PluginHint(crate::state::plugin_dialog::PluginHintState),
     /// `/add-dir` (no-arg) interactive directory-path input.
     AddDirectory(surface_payloads::AddDirectoryState),
+    /// `/goal` read-only status panel.
+    GoalStatus(surface_payloads::GoalStatusState),
 }
 
 impl ModalState {
@@ -89,6 +91,7 @@ impl ModalState {
             | Self::TeamRoster(_)
             | Self::PluginHint(_)
             | Self::AddDirectory(_)
+            | Self::GoalStatus(_)
             | Self::IdleReturn(_) => 7,
             Self::Help => 8,
         }

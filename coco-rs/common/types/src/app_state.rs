@@ -331,7 +331,8 @@ pub struct ToolAppState {
 }
 
 /// Session-scoped goal metadata for `/goal`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActiveGoal {
     pub condition: String,
     pub iterations: i32,

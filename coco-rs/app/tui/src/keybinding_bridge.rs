@@ -98,7 +98,8 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             ModalState::Help
             | ModalState::DiffView(_)
             | ModalState::TaskDetail(_)
-            | ModalState::Doctor(_) => KeybindingContext::Scrollable,
+            | ModalState::Doctor(_)
+            | ModalState::GoalStatus(_) => KeybindingContext::Scrollable,
             ModalState::Transcript(_) => KeybindingContext::Transcript,
 
             // Tabbed settings state. The Display tab gets the ThemePicker

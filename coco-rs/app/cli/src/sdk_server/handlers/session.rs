@@ -931,6 +931,29 @@ pub(super) async fn handle_session_resume(
             runtime
                 .seed_tool_result_replacement_state(&conversation.messages, &session.id, None)
                 .await;
+            let cfg = runtime.current_engine_config().await;
+            let messages = conversation
+                .messages
+                .iter()
+                .cloned()
+                .map(Arc::new)
+                .collect::<Vec<_>>();
+            let goal = crate::goal_command::restore_goal_from_history(
+                &messages,
+                &runtime.app_state,
+                &runtime.hook_registry(),
+                runtime.session_usage_snapshot().await.totals.output_tokens,
+                crate::goal_command::GoalGate {
+                    hooks_restricted: cfg.disable_all_hooks || cfg.allow_managed_hooks_only,
+                    trust_rejected: false,
+                },
+            )
+            .await;
+            runtime
+                .persist_goal_metadata(goal.as_ref().map(|goal| {
+                    coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
+                }))
+                .await;
         }
         runtime.fire_session_start_hooks("resume").await;
     }

@@ -250,6 +250,7 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
         M::Error(_)
         | M::Transcript(_)
         | M::Rewind(_)
+        | M::GoalStatus(_)
         | M::Doctor(_)
         | M::WorktreeExit(_)
         | M::Bridge(_)
@@ -457,6 +458,7 @@ pub(crate) fn nav(state: &mut AppState, delta: i32) {
         }
         Some(
             ModalState::Help
+            | ModalState::GoalStatus(_)
             | ModalState::Doctor(_)
             | ModalState::Bridge(_)
             | ModalState::InvalidConfig(_),

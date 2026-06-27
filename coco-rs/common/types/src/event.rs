@@ -420,6 +420,12 @@ matching `NotificationMethod` discriminant.",
     /// by the message UUID rather than re-walking transcript cells.
     /// Eliminates the prior I-2 exception in `TranscriptView`.
     "history/reasoningMetadataAttached" => ReasoningMetadataAttached(ReasoningMetadataAttachedParams),
+    /// Active `/goal` state changed.
+    ///
+    /// Mirrors the engine's `ToolAppState.active_goal` so consumers can
+    /// render live footer/status affordances without reverse-engineering
+    /// the silent `goal_status` transcript attachments.
+    "goal/activeChanged" => ActiveGoalChanged(Box<ActiveGoalChangedParams>),
 
     // === Turn lifecycle (2) ===
 
@@ -1130,6 +1136,18 @@ pub struct ReasoningMetadataAttachedParams {
     pub duration_ms: Option<i64>,
     /// Cumulative reasoning tokens for the turn.
     pub reasoning_tokens: i64,
+}
+
+/// Active `/goal` snapshot.
+///
+/// `goal = None` means no active goal. Terminal goal_status attachments
+/// still carry achieved / failed details; this event is only the live-state
+/// mirror.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveGoalChangedParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<crate::ActiveGoal>,
 }
 
 /// Why a turn was aborted. Lets consumers distinguish user cancel,
@@ -1929,6 +1947,12 @@ pub enum TuiOnlyEvent {
         args: String,
         text: String,
     },
+    /// Open the interactive `/goal` status panel.
+    ///
+    /// The CLI side pre-renders the body from engine state/history so the TUI
+    /// does not reach across layers to compute durations, tokens, or the last
+    /// achieved goal.
+    OpenGoalStatus { title: String, body: String },
     /// Open the full-color `/context` usage surface. Carries the analyzed
     /// report (the TUI cannot reach the engine to compute it). Replaces the
     /// former markdown-in-transcript output and the removed `Ctrl+W` overlay.

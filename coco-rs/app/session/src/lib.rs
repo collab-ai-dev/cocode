@@ -26,6 +26,7 @@ pub use history::PromptHistory;
 pub use storage::AgentMetadata;
 pub use storage::ContentReplacementRecord;
 pub use storage::Entry;
+pub use storage::GoalMetadata;
 pub use storage::MetadataEntry;
 pub use storage::ModelCostEntry;
 pub use storage::TranscriptEntry;

@@ -229,6 +229,8 @@ pub struct SessionState {
     pub token_usage: TokenUsage,
     /// Cumulative session usage and cost snapshot.
     pub session_usage: Option<coco_types::SessionUsageSnapshot>,
+    /// Active `/goal` snapshot, mirrored from the engine.
+    pub active_goal: Option<coco_types::ActiveGoal>,
     /// Session identifier.
     pub session_id: Option<String>,
     /// OS process id, surfaced in the header so concurrent coco sessions
@@ -642,6 +644,7 @@ impl Default for SessionState {
             subagents: Vec::new(),
             token_usage: TokenUsage::default(),
             session_usage: None,
+            active_goal: None,
             session_id: None,
             pid: 0,
             conversation_id: None,

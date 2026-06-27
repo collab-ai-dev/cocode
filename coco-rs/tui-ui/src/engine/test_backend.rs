@@ -48,6 +48,7 @@ impl std::fmt::Debug for VT100Backend {
 impl VT100Backend {
     /// A `cols` × `rows` emulator with no off-screen scrollback.
     pub fn new(cols: u16, rows: u16) -> Self {
+        crossterm::style::force_color_output(true);
         Self {
             inner: CrosstermBackend::new(vt100::Parser::new(rows, cols, 0)),
         }
@@ -56,6 +57,7 @@ impl VT100Backend {
     /// A `cols` × `rows` emulator retaining `scrollback` rows above the visible
     /// viewport, so tests can assert on history committed off-screen.
     pub fn with_scrollback(cols: u16, rows: u16, scrollback: usize) -> Self {
+        crossterm::style::force_color_output(true);
         Self {
             inner: CrosstermBackend::new(vt100::Parser::new(rows, cols, scrollback)),
         }

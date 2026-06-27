@@ -65,6 +65,60 @@ fn find_last_achieved_goal_skips_clear_sentinel() {
 }
 
 #[test]
+fn find_restorable_goal_condition_uses_latest_goal_status() {
+    let unmet = coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: false,
+            condition: "finish tests".to_string(),
+            sentinel: false,
+            ..Default::default()
+        }),
+    );
+    let achieved = coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: true,
+            condition: "finish tests".to_string(),
+            sentinel: false,
+            ..Default::default()
+        }),
+    );
+
+    assert_eq!(
+        find_restorable_goal_condition(&[Arc::new(unmet.clone())]).as_deref(),
+        Some("finish tests")
+    );
+    assert_eq!(
+        find_restorable_goal_condition(&[Arc::new(unmet), Arc::new(achieved)]),
+        None
+    );
+}
+
+#[test]
+fn find_restorable_goal_condition_treats_clear_sentinel_as_terminal() {
+    let unmet = coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: false,
+            condition: "finish tests".to_string(),
+            sentinel: false,
+            ..Default::default()
+        }),
+    );
+    let clear = coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: true,
+            condition: "finish tests".to_string(),
+            sentinel: true,
+            ..Default::default()
+        }),
+    );
+
+    assert_eq!(
+        find_restorable_goal_condition(&[Arc::new(unmet), Arc::new(clear)]),
+        None
+    );
+}
+
+#[test]
 fn goal_hook_matcher_requires_managed_session_stop_prompt() {
     let mut hook = managed_goal_hook("done".to_string());
 
@@ -167,6 +221,28 @@ async fn resolve_set_registers_hook_seeds_state_and_kicks_off() {
     assert_eq!(active.condition, "all tests pass");
     assert_eq!(active.tokens_at_start, 42);
     assert_eq!(active.iterations, 0);
+    assert_eq!(goal_hook_count(&registry), 1);
+}
+
+#[tokio::test]
+async fn restore_goal_from_history_reinstalls_managed_hook() {
+    let state = empty_state();
+    let registry = coco_hooks::HookRegistry::new();
+    let history = vec![Arc::new(coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: false,
+            condition: "ship feature".to_string(),
+            ..Default::default()
+        }),
+    ))];
+
+    let restored = restore_goal_from_history(&history, &state, &registry, 77, GoalGate::default())
+        .await
+        .expect("restored goal");
+
+    assert_eq!(restored.condition, "ship feature");
+    assert_eq!(restored.tokens_at_start, 77);
+    assert_eq!(state.read().await.active_goal.as_ref(), Some(&restored));
     assert_eq!(goal_hook_count(&registry), 1);
 }
 

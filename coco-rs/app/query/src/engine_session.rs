@@ -12,6 +12,7 @@
 //! Extracted from `engine.rs` so the multi-turn loop file can stay
 //! focused on per-turn mechanics.
 
+use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
@@ -160,6 +161,13 @@ impl QueryEngine {
         // opt-out rates are measurable. Counter; emits nothing for an
         // all-defaults config and is zero-cost without an OTel exporter.
         crate::emit::emit_feature_state_metrics(&self.config.features);
+
+        if self.config.agent_id.is_none()
+            && let Some(flag) = &self.terminal_goal_metadata_written
+            && flag.swap(false, Ordering::SeqCst)
+        {
+            self.persist_goal_metadata(None).await;
+        }
 
         // Running — agent is actively processing.
         state_tracker

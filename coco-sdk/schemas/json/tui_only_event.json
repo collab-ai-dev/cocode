@@ -688,6 +688,27 @@
       ]
     },
     {
+      "description": "Open the interactive `/goal` status panel.\n\nThe CLI side pre-renders the body from engine state/history so the TUI\ndoes not reach across layers to compute durations, tokens, or the last\nachieved goal.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "open_goal_status"
+        }
+      },
+      "required": [
+        "type",
+        "title",
+        "body"
+      ]
+    },
+    {
       "description": "Open the full-color `/context` usage surface. Carries the analyzed\nreport (the TUI cannot reach the engine to compute it). Replaces the\nformer markdown-in-transcript output and the removed `Ctrl+W` overlay.",
       "type": "object",
       "properties": {

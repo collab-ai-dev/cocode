@@ -171,6 +171,30 @@ fn background_pill_label_localizes_workflows() {
 }
 
 #[test]
+fn status_bar_view_renders_active_goal_badge() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.active_goal = Some(coco_types::ActiveGoal {
+        condition: "finish tests".into(),
+        iterations: 0,
+        set_at_ms: 0,
+        tokens_at_start: 0,
+        last_reason: None,
+    });
+
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
+        panic!("expected built-in status bar");
+    };
+    let text = lines
+        .iter()
+        .flatten()
+        .map(|span| span.text.as_str())
+        .collect::<String>();
+
+    assert!(text.contains("/goal active"));
+}
+
+#[test]
 fn status_bar_surfaces_ask_mode_and_cycle_hint_in_default_state() {
     let _locale = locale_test_guard("en");
     let state = AppState::default();

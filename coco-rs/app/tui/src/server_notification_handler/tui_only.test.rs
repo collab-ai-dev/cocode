@@ -81,6 +81,28 @@ fn available_commands_refreshed_overwrites_slot() {
 }
 
 #[test]
+fn open_goal_status_opens_goal_modal() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::OpenGoalStatus {
+            title: "Goal active".into(),
+            body: "Goal:\nship it".into(),
+        },
+        &tx,
+    );
+
+    assert!(consumed);
+    let Some(ModalState::GoalStatus(goal)) = state.ui.modal.as_ref() else {
+        panic!("expected goal status modal, got {:?}", state.ui.modal);
+    };
+    assert_eq!(goal.title, "Goal active");
+    assert_eq!(goal.body, "Goal:\nship it");
+}
+
+#[test]
 fn queued_command_edit_ready_restores_prompt_and_image_pill() {
     let mut state = AppState::new();
     let (tx, _rx) = channel();

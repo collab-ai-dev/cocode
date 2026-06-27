@@ -4,6 +4,8 @@
 //! "4 项 HIGH bug 修复并有 regression test：C3 + C15 + N1 + N2".
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration;
@@ -19,6 +21,7 @@ use coco_llm_types::TextPart;
 use coco_llm_types::Usage;
 use coco_messages::MessageHistory;
 use coco_messages::create_user_message;
+use coco_session::TranscriptIo;
 use coco_tool_runtime::ToolRegistry;
 use coco_types::ActiveGoal;
 use coco_types::ToolAppState;
@@ -231,6 +234,11 @@ async fn goal_terminal_success_clears_active_goal_hook_and_records_status() {
     let hooks = Arc::new(HookRegistry::new());
     hooks.register(goal_hook("finish migration"));
     let mut engine = engine_with_hooks(Some(hooks.clone()));
+    let store = Arc::new(coco_session::InMemoryStore::new());
+    engine.transcript_store = Some(store.clone());
+    engine.transcript_session_id = Some("goal-success-session".to_string());
+    let terminal_goal_metadata_written = Arc::new(AtomicBool::new(false));
+    engine.terminal_goal_metadata_written = Some(terminal_goal_metadata_written.clone());
     let app_state = Arc::new(RwLock::new(ToolAppState {
         active_goal: Some(active_goal("finish migration")),
         ..ToolAppState::default()
@@ -269,6 +277,18 @@ async fn goal_terminal_success_clears_active_goal_hook_and_records_status() {
     assert_eq!(statuses[0].condition, "finish migration");
     assert_eq!(statuses[0].reason.as_deref(), Some("all checks passed"));
     assert_eq!(statuses[0].iterations, Some(3));
+    let metadata = store.read_metadata("goal-success-session").unwrap();
+    let goal = metadata
+        .goal
+        .expect("success stores terminal goal metadata");
+    assert!(goal.met);
+    assert_eq!(goal.condition, "finish migration");
+    assert_eq!(goal.iterations, 3);
+    assert_eq!(goal.last_reason, None);
+    assert!(terminal_goal_metadata_written.load(Ordering::SeqCst));
+
+    engine.persist_goal_metadata(None).await;
+    assert!(!terminal_goal_metadata_written.load(Ordering::SeqCst));
 }
 
 #[tokio::test]
@@ -276,6 +296,9 @@ async fn goal_terminal_impossible_clears_goal_and_records_failed_status() {
     let hooks = Arc::new(HookRegistry::new());
     hooks.register(goal_hook("finish migration"));
     let mut engine = engine_with_hooks(Some(hooks.clone()));
+    let store = Arc::new(coco_session::InMemoryStore::new());
+    engine.transcript_store = Some(store.clone());
+    engine.transcript_session_id = Some("goal-impossible-session".to_string());
     let app_state = Arc::new(RwLock::new(ToolAppState {
         active_goal: Some(active_goal("finish migration")),
         ..ToolAppState::default()
@@ -317,11 +340,18 @@ async fn goal_terminal_impossible_clears_goal_and_records_failed_status() {
         Some("remote branch was deleted")
     );
     assert_eq!(statuses[0].iterations, Some(3));
+    assert_eq!(
+        store.read_metadata("goal-impossible-session").unwrap().goal,
+        None
+    );
 }
 
 #[tokio::test]
 async fn goal_blocked_updates_active_goal_and_records_unmet_status() {
     let mut engine = engine_with_hooks(Some(Arc::new(HookRegistry::new())));
+    let store = Arc::new(coco_session::InMemoryStore::new());
+    engine.transcript_store = Some(store.clone());
+    engine.transcript_session_id = Some("goal-blocked-session".to_string());
     let app_state = Arc::new(RwLock::new(ToolAppState {
         active_goal: Some(ActiveGoal {
             condition: "finish migration".to_string(),
@@ -369,6 +399,12 @@ async fn goal_blocked_updates_active_goal_and_records_unmet_status() {
         statuses[0].reason.as_deref(),
         Some("tests are still failing")
     );
+    let metadata = store.read_metadata("goal-blocked-session").unwrap();
+    let goal = metadata.goal.expect("blocked stores active goal metadata");
+    assert!(!goal.met);
+    assert_eq!(goal.condition, "finish migration");
+    assert_eq!(goal.iterations, 1);
+    assert_eq!(goal.last_reason.as_deref(), Some("tests are still failing"));
 }
 
 #[tokio::test]

@@ -417,6 +417,15 @@ pub(super) fn handle(
             }
             true
         }
+        TuiOnlyEvent::OpenGoalStatus { title, body } => {
+            state
+                .ui
+                .show_modal(ModalState::GoalStatus(crate::state::GoalStatusState {
+                    title,
+                    body,
+                }));
+            true
+        }
         // === `/context` full-color usage snapshot (inline in transcript) ===
         TuiOnlyEvent::OpenContextUsage { result } => {
             // `/context` prints `<ContextVisualization>` into the scrollback,

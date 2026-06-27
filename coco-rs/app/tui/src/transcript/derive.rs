@@ -29,7 +29,10 @@ use super::cells::SystemCellKind;
 /// yield multiple cells when its content interleaves text / thinking /
 /// tool_use blocks. `Message::Tombstone` yields zero (filtered).
 pub fn message_to_cells(msg: Arc<Message>) -> Vec<RenderedCell> {
-    if matches!(msg.as_ref(), Message::Attachment(_)) && !msg.visibility().ui {
+    if matches!(msg.as_ref(), Message::Attachment(_))
+        && !msg.visibility().ui
+        && !is_renderable_goal_status(msg.as_ref())
+    {
         return Vec::new();
     }
 
@@ -65,6 +68,18 @@ pub fn message_to_cells(msg: Arc<Message>) -> Vec<RenderedCell> {
         Message::Progress(_) => Vec::new(),
         Message::Tombstone(_) => Vec::new(),
     }
+}
+
+fn is_renderable_goal_status(msg: &Message) -> bool {
+    let Message::Attachment(attachment) = msg else {
+        return false;
+    };
+    let coco_messages::AttachmentBody::Silent(coco_messages::SilentPayload::GoalStatus(payload)) =
+        &attachment.body
+    else {
+        return false;
+    };
+    !payload.sentinel
 }
 
 fn cell(message_uuid: Uuid, kind: CellKind, source: Arc<Message>) -> RenderedCell {

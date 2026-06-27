@@ -707,7 +707,15 @@ pub async fn run_chat_with_options(
                 let text = match crate::goal_command::find_last_achieved_goal(&opts.prior_messages)
                 {
                     Some(goal) => crate::goal_command::format_achieved_goal_status(&goal),
-                    None => "No goal set. Usage: `/goal <condition>`".to_string(),
+                    None => match crate::goal_command::find_restorable_goal_condition(
+                        &opts.prior_messages,
+                    ) {
+                        Some(condition) => {
+                            let goal = crate::goal_command::active_goal(condition, 0);
+                            crate::goal_command::format_active_goal_status(&goal)
+                        }
+                        None => "No goal set. Usage: `/goal <condition>`".to_string(),
+                    },
                 };
                 return Ok(headless_local_goal_text_outcome(
                     cli,
@@ -718,13 +726,17 @@ pub async fn run_chat_with_options(
                 ));
             }
             Ok(coco_commands::GoalCommandRequest::Clear) => {
-                return Ok(headless_local_goal_text_outcome(
-                    cli,
-                    &cwd,
-                    "clear",
-                    "No goal set".to_string(),
-                    opts.prior_messages,
-                ));
+                if crate::goal_command::find_restorable_goal_condition(&opts.prior_messages)
+                    .is_none()
+                {
+                    return Ok(headless_local_goal_text_outcome(
+                        cli,
+                        &cwd,
+                        "clear",
+                        "No goal set".to_string(),
+                        opts.prior_messages,
+                    ));
+                }
             }
             Ok(coco_commands::GoalCommandRequest::Set { .. }) => {}
         }
@@ -945,6 +957,25 @@ pub async fn run_chat_with_options(
             .seed_tool_result_replacement_state(&prior, &session_id, None)
             .await;
     }
+    if !opts.prior_messages.is_empty() {
+        let cfg = runtime.current_engine_config().await;
+        let goal = crate::goal_command::restore_goal_from_history(
+            &opts.prior_messages,
+            &runtime.app_state,
+            &runtime.hook_registry(),
+            runtime.session_usage_snapshot().await.totals.output_tokens,
+            crate::goal_command::GoalGate {
+                hooks_restricted: cfg.disable_all_hooks || cfg.allow_managed_hooks_only,
+                trust_rejected: false,
+            },
+        )
+        .await;
+        runtime
+            .persist_goal_metadata(goal.as_ref().map(|goal| {
+                coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
+            }))
+            .await;
+    }
 
     // Bootstrap the per-source permission rule maps; see
     // `crate::permission_rule_loader` for the conversion path. Headless runs
@@ -1078,6 +1109,7 @@ pub async fn run_chat_with_options(
                     }
                     crate::goal_command::GoalOutcome::StatusThenText { status, text } => {
                         append_headless_goal_status(&mut prefix_messages, status);
+                        runtime.persist_goal_metadata(None).await;
                         append_headless_slash_text(&mut prefix_messages, "goal", &args, &text);
                         let mut final_messages = prior_messages;
                         final_messages.extend(prefix_messages);
@@ -1100,6 +1132,14 @@ pub async fn run_chat_with_options(
                         kickoff,
                     } => {
                         append_headless_goal_status(&mut prefix_messages, status);
+                        let goal = runtime.app_state.read().await.active_goal.clone();
+                        runtime
+                            .persist_goal_metadata(goal.as_ref().map(|goal| {
+                                coco_session::GoalMetadata::from_active_goal(
+                                    goal, /*met*/ false,
+                                )
+                            }))
+                            .await;
                         append_headless_slash_text(&mut prefix_messages, "goal", &args, &text);
                         effective_prompt = kickoff;
                     }

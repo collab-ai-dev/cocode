@@ -23,6 +23,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 use tokio::sync::Mutex;
@@ -683,6 +685,10 @@ pub struct SessionRuntime {
     /// empty by [`Self::clear_conversation`] when the session id
     /// regenerates.
     transcript_dedup: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
+    /// True after the engine writes a terminal `/goal` success snapshot
+    /// to session metadata. The next main-session turn clears it, matching
+    /// the TS metadata observer lifecycle.
+    terminal_goal_metadata_written: Arc<AtomicBool>,
     /// Cross-engine tool-result replacement state. QueryEngine is
     /// rebuilt per user message, so this runtime-owned state preserves
     /// Level 2 `seen_ids` / replacement strings across turns.
@@ -1329,6 +1335,7 @@ impl SessionRuntime {
         let transcript_dedup = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::<
             uuid::Uuid,
         >::new()));
+        let terminal_goal_metadata_written = Arc::new(AtomicBool::new(false));
         let tool_result_replacement_state = Arc::new(tokio::sync::RwLock::new(
             coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX),
         ));
@@ -1474,6 +1481,7 @@ impl SessionRuntime {
             session_usage_tracker,
             session_usage_write_lock,
             transcript_dedup,
+            terminal_goal_metadata_written,
             tool_result_replacement_state,
             command_queue: CommandQueue::new(),
             _pid_registry: pid_registry,
@@ -1743,6 +1751,66 @@ impl SessionRuntime {
     pub async fn session_usage_snapshot(&self) -> coco_types::SessionUsageSnapshot {
         let session_id = self.current_session_id().await;
         self.session_usage_tracker.lock().await.snapshot(session_id)
+    }
+
+    pub async fn persist_goal_metadata(&self, goal: Option<coco_session::GoalMetadata>) {
+        if !self.persist_session {
+            return;
+        }
+        self.terminal_goal_metadata_written
+            .store(goal.as_ref().is_some_and(|goal| goal.met), Ordering::SeqCst);
+        let session_id = self.current_session_id().await;
+        let store = Arc::clone(&self.transcript_store);
+        let entry = coco_session::MetadataEntry::Goal {
+            session_id: session_id.clone(),
+            goal,
+        };
+        let session_id_for_write = session_id.clone();
+        match tokio::task::spawn_blocking(move || {
+            store.append_metadata(&session_id_for_write, &entry)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                warn!(error = %e, session_id, "failed to persist goal metadata");
+            }
+            Err(e) => {
+                warn!(error = %e, session_id, "goal metadata write task failed");
+            }
+        }
+    }
+
+    pub async fn persist_local_transcript_messages(&self, messages: &[coco_messages::Message]) {
+        if !self.persist_session || messages.is_empty() {
+            return;
+        }
+        let session_id = self.current_session_id().await;
+        let store = Arc::clone(&self.transcript_store);
+        let seen = Arc::clone(&self.transcript_dedup);
+        let cwd_path = std::env::current_dir().unwrap_or_default();
+        let cwd = cwd_path.display().to_string();
+        let git_branch = coco_git::get_current_branch(&cwd_path)
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty());
+        let now = chrono::Utc::now().to_rfc3339();
+        let message_owned = messages.to_vec();
+        let mut seen_guard = seen.lock().await;
+        let message_refs: Vec<&coco_messages::Message> = message_owned.iter().collect();
+        let options = coco_session::storage::ChainWriteOptions {
+            cwd,
+            timestamp: now,
+            is_sidechain: false,
+            agent_id: None,
+            starting_parent_uuid: None,
+            git_branch,
+        };
+        if let Err(e) =
+            store.append_message_chain(&session_id, &message_refs, &mut seen_guard, options)
+        {
+            warn!(error = %e, session_id, "failed to persist local transcript messages");
+        }
     }
 
     async fn load_usage_tracker_for_session(&self, session_id: &str) -> CostTracker {
@@ -2656,6 +2724,8 @@ impl SessionRuntime {
             engine = engine.with_session_usage_tracker(self.session_usage_tracker.clone());
             engine = engine.with_session_usage_write_lock(self.session_usage_write_lock.clone());
             engine = engine.with_transcript_dedup(self.transcript_dedup.clone());
+            engine = engine
+                .with_terminal_goal_metadata_flag(self.terminal_goal_metadata_written.clone());
             engine = engine
                 .with_tool_result_replacement_state(self.tool_result_replacement_state.clone());
         }

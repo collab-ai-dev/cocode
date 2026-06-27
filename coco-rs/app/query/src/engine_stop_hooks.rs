@@ -24,6 +24,7 @@ use coco_hooks::HookDefinition;
 use coco_hooks::orchestration;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
+use std::sync::atomic::Ordering;
 use tracing::info;
 use tracing::warn;
 
@@ -230,8 +231,6 @@ impl QueryEngine {
             }
             Ok(agg) if agg.is_blocked() => {
                 if let Some(err) = &agg.blocking_error {
-                    self.record_active_goal_blocked(history, event_tx, err)
-                        .await;
                     let feedback = orchestration::format_stop_hook_message(err);
                     warn!(%feedback, "Stop hook blocked session completion");
                     crate::history_sync::history_push_and_emit(
@@ -240,6 +239,8 @@ impl QueryEngine {
                         event_tx,
                     )
                     .await;
+                    self.record_active_goal_blocked(history, event_tx, err)
+                        .await;
                     self.flush_successful_turn_state(history).await;
                     turn_state.transition = Some(ContinueReason::StopHookBlocking);
                     // Mark the recursion so the next Stop firing carries
@@ -344,7 +345,7 @@ impl QueryEngine {
         let orchestration::HookBlockingSource::Prompt { prompt } = &err.source else {
             return;
         };
-        let condition = {
+        let updated_goal = {
             let mut state = app_state.write().await;
             let Some(goal) = state.active_goal.as_mut() else {
                 return;
@@ -354,8 +355,15 @@ impl QueryEngine {
             }
             goal.iterations = goal.iterations.saturating_add(1);
             goal.last_reason = Some(err.blocking_error.clone());
-            goal.condition.clone()
+            goal.clone()
         };
+        let condition = updated_goal.condition.clone();
+        emit_active_goal_changed(event_tx, Some(updated_goal.clone())).await;
+        self.persist_goal_metadata(Some(coco_session::GoalMetadata::from_active_goal(
+            &updated_goal,
+            /*met*/ false,
+        )))
+        .await;
         append_goal_status(
             history,
             event_tx,
@@ -403,6 +411,19 @@ impl QueryEngine {
         let duration_ms = unix_time_ms().saturating_sub(goal.set_at_ms);
         let current_output_tokens = self.current_session_output_tokens().await;
         let tokens = current_output_tokens.saturating_sub(goal.tokens_at_start);
+        emit_active_goal_changed(event_tx, None).await;
+        if met {
+            let mut terminal_goal = goal.clone();
+            terminal_goal.iterations = terminal_goal.iterations.saturating_add(1);
+            terminal_goal.last_reason = None;
+            self.persist_goal_metadata(Some(coco_session::GoalMetadata::from_active_goal(
+                &terminal_goal,
+                /*met*/ true,
+            )))
+            .await;
+        } else {
+            self.persist_goal_metadata(None).await;
+        }
         append_goal_status(
             history,
             event_tx,
@@ -464,6 +485,38 @@ impl QueryEngine {
             .totals
             .output_tokens
     }
+
+    pub(crate) async fn persist_goal_metadata(&self, goal: Option<coco_session::GoalMetadata>) {
+        if let Some(flag) = &self.terminal_goal_metadata_written {
+            flag.store(goal.as_ref().is_some_and(|goal| goal.met), Ordering::SeqCst);
+        }
+        let (Some(store), Some(session_id)) = (
+            self.transcript_store.as_ref(),
+            self.transcript_session_id.as_ref(),
+        ) else {
+            return;
+        };
+        let store = store.clone();
+        let session_id = session_id.clone();
+        let entry = coco_session::MetadataEntry::Goal {
+            session_id: session_id.clone(),
+            goal,
+        };
+        let session_id_for_write = session_id.clone();
+        match tokio::task::spawn_blocking(move || {
+            store.append_metadata(&session_id_for_write, &entry)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                warn!(error = %e, session_id, "failed to persist goal metadata");
+            }
+            Err(e) => {
+                warn!(error = %e, session_id, "goal metadata write task failed");
+            }
+        }
+    }
 }
 
 fn is_goal_prompt_hook(hook: &HookDefinition, condition: &str) -> bool {
@@ -490,6 +543,22 @@ async fn append_goal_status(
         event_tx,
     )
     .await;
+}
+
+async fn emit_active_goal_changed(
+    event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+    goal: Option<coco_types::ActiveGoal>,
+) {
+    let Some(tx) = event_tx else {
+        return;
+    };
+    let _ = tx
+        .send(crate::CoreEvent::Protocol(
+            coco_types::ServerNotification::ActiveGoalChanged(Box::new(
+                coco_types::ActiveGoalChangedParams { goal },
+            )),
+        ))
+        .await;
 }
 
 fn unix_time_ms() -> i64 {

@@ -1,5 +1,54 @@
 {
   "$defs": {
+    "ActiveGoal": {
+      "description": "Session-scoped goal metadata for `/goal`.",
+      "properties": {
+        "condition": {
+          "type": "string"
+        },
+        "iterations": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "last_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "set_at_ms": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "tokens_at_start": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "condition",
+        "iterations",
+        "set_at_ms",
+        "tokens_at_start"
+      ],
+      "type": "object"
+    },
+    "ActiveGoalChangedParams": {
+      "description": "Active `/goal` snapshot.\n\n`goal = None` means no active goal. Terminal goal_status attachments\nstill carry achieved / failed details; this event is only the live-state\nmirror.",
+      "properties": {
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActiveGoal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "AgentColorName": {
       "description": "`AgentColorName`. Validated set; unknown values are dropped at parse\ntime with a warning so the runtime never sees an invalid color.",
       "enum": [
@@ -5147,6 +5196,7 @@
         "history/resetForResume",
         "history/replaced",
         "history/reasoningMetadataAttached",
+        "goal/activeChanged",
         "turn/started",
         "turn/ended",
         "item/started",
@@ -7261,6 +7311,23 @@
             },
             "params": {
               "$ref": "#/$defs/ReasoningMetadataAttachedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Active `/goal` state changed.\n\nMirrors the engine's `ToolAppState.active_goal` so consumers can\nrender live footer/status affordances without reverse-engineering\nthe silent `goal_status` transcript attachments.",
+          "properties": {
+            "method": {
+              "const": "goal/activeChanged",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/ActiveGoalChangedParams"
             }
           },
           "required": [
@@ -12918,6 +12985,27 @@
             "name",
             "args",
             "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Open the interactive `/goal` status panel.\n\nThe CLI side pre-renders the body from engine state/history so the TUI\ndoes not reach across layers to compute durations, tokens, or the last\nachieved goal.",
+          "properties": {
+            "body": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "type": {
+              "const": "open_goal_status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "title",
+            "body"
           ],
           "type": "object"
         },

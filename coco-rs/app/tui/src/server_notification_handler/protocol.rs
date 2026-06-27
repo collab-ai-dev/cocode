@@ -1132,6 +1132,10 @@ pub(super) fn handle(
             );
             true
         }
+        ServerNotification::ActiveGoalChanged(p) => {
+            state.session.active_goal = p.goal;
+            true
+        }
         ServerNotification::HistoryReplaced { messages, .. } => {
             // Bulk resume hydration: a single replace instead of N
             // MessageAppended events. UI-only side-caches that anchor

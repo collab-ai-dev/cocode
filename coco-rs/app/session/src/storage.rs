@@ -125,6 +125,31 @@ pub struct TranscriptEntry {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+/// Session-level `/goal` metadata. This mirrors the active-goal payload
+/// surfaced by the 2.1.193 session metadata observer: `met == false`
+/// means the goal is active, `met == true` is the terminal success snapshot,
+/// and `None` at the `MetadataEntry::Goal` layer clears the metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GoalMetadata {
+    pub condition: String,
+    pub set_at: i64,
+    pub iterations: i32,
+    pub last_reason: Option<String>,
+    pub met: bool,
+}
+
+impl GoalMetadata {
+    pub fn from_active_goal(goal: &coco_types::ActiveGoal, met: bool) -> Self {
+        Self {
+            condition: goal.condition.clone(),
+            set_at: goal.set_at_ms,
+            iterations: goal.iterations,
+            last_reason: goal.last_reason.clone(),
+            met,
+        }
+    }
+}
+
 /// Metadata entries that live alongside transcript messages in the JSONL.
 /// `type:` discriminator is kebab-case (`custom-title`, `last-prompt`,
 /// `file-history-snapshot`, …) — these drive cross-system tooling that
@@ -265,6 +290,13 @@ pub enum MetadataEntry {
         session_id: String,
         mode: String,
     },
+
+    /// Last-wins `/goal` session metadata. `goal: null` clears the live
+    /// metadata; `goal.met == true` records the terminal achieved snapshot.
+    Goal {
+        session_id: String,
+        goal: Option<GoalMetadata>,
+    },
 }
 
 /// One content-replacement record.
@@ -386,6 +418,8 @@ pub struct TranscriptMetadata {
     pub worktree_state: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_link: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<GoalMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1339,6 +1373,7 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &str) -> Transcri
     let mut mode: Option<String> = None;
     let mut worktree_state: Option<serde_json::Value> = None;
     let mut pr_link: Option<serde_json::Value> = None;
+    let mut goal: Option<GoalMetadata> = None;
     let mut tag: Option<String> = None;
     let mut last_prompt: Option<String> = None;
     let mut git_branch: Option<String> = None;
@@ -1425,6 +1460,12 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &str) -> Transcri
                 {
                     pr_link = Some(payload.clone());
                 }
+                MetadataEntry::Goal {
+                    session_id: entry_session_id,
+                    goal: next_goal,
+                } if entry_session_id == session_id => {
+                    goal.clone_from(next_goal);
+                }
                 MetadataEntry::Summary { .. }
                 | MetadataEntry::CostSummary { .. }
                 | MetadataEntry::FileHistorySnapshot { .. }
@@ -1437,7 +1478,8 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &str) -> Transcri
                 | MetadataEntry::AgentSetting { .. }
                 | MetadataEntry::PrLink { .. }
                 | MetadataEntry::WorktreeState { .. }
-                | MetadataEntry::Mode { .. } => {}
+                | MetadataEntry::Mode { .. }
+                | MetadataEntry::Goal { .. } => {}
             },
             Entry::Unknown(_) => {}
         }
@@ -1455,6 +1497,7 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &str) -> Transcri
         mode,
         worktree_state,
         pr_link,
+        goal,
         tag,
         last_prompt,
         git_branch,

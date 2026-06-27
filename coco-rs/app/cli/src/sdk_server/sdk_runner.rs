@@ -230,8 +230,16 @@ impl TurnRunner for QueryEngineRunner {
                         return Ok(());
                     }
                     crate::goal_command::GoalOutcome::StatusThenText { status, text } => {
-                        sdk_append_goal_status(&history_handle, &event_tx, status).await;
-                        sdk_append_slash_text(&history_handle, &event_tx, "goal", &args, &text)
+                        sdk_append_goal_status_and_slash_text(
+                            &self.runtime,
+                            &history_handle,
+                            &event_tx,
+                            status,
+                            &args,
+                            &text,
+                        )
+                        .await;
+                        sdk_emit_active_goal_snapshot(&self.runtime, &handoff.app_state, &event_tx)
                             .await;
                         return Ok(());
                     }
@@ -241,6 +249,8 @@ impl TurnRunner for QueryEngineRunner {
                         kickoff,
                     } => {
                         sdk_append_goal_status(&history_handle, &event_tx, status).await;
+                        sdk_emit_active_goal_snapshot(&self.runtime, &handoff.app_state, &event_tx)
+                            .await;
                         sdk_append_slash_text(&history_handle, &event_tx, "goal", &args, &text)
                             .await;
                         prompt = kickoff;
@@ -765,6 +775,42 @@ async fn sdk_append_goal_status(
         )],
     )
     .await;
+}
+
+async fn sdk_append_goal_status_and_slash_text(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    payload: coco_types::GoalStatusPayload,
+    args: &str,
+    text: &str,
+) {
+    let mut messages = vec![coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(payload),
+    )];
+    messages.extend(coco_messages::build_slash_command_messages(
+        "goal", args, text, /*is_sensitive*/ false,
+    ));
+    sdk_append_messages(history_handle, event_tx, messages.clone()).await;
+    runtime.persist_local_transcript_messages(&messages).await;
+}
+
+async fn sdk_emit_active_goal_snapshot(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    app_state: &tokio::sync::RwLock<coco_types::ToolAppState>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) {
+    let goal = app_state.read().await.active_goal.clone();
+    let _ = event_tx
+        .send(CoreEvent::Protocol(
+            crate::goal_command::active_goal_changed_notification(goal.clone()),
+        ))
+        .await;
+    runtime
+        .persist_goal_metadata(goal.as_ref().map(|goal| {
+            coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
+        }))
+        .await;
 }
 
 async fn sdk_append_messages(

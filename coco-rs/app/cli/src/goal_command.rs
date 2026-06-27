@@ -80,6 +80,26 @@ pub fn find_last_achieved_goal(
     })
 }
 
+pub fn find_restorable_goal_condition(messages: &[Arc<coco_messages::Message>]) -> Option<String> {
+    for message in messages.iter().rev() {
+        let coco_messages::Message::Attachment(attachment) = message.as_ref() else {
+            continue;
+        };
+        let coco_messages::AttachmentBody::Silent(coco_messages::SilentPayload::GoalStatus(
+            payload,
+        )) = &attachment.body
+        else {
+            continue;
+        };
+        return if payload.met || payload.failed {
+            None
+        } else {
+            Some(payload.condition.clone())
+        };
+    }
+    None
+}
+
 pub fn active_goal(condition: String, tokens_at_start: i64) -> coco_types::ActiveGoal {
     coco_types::ActiveGoal {
         condition,
@@ -88,6 +108,39 @@ pub fn active_goal(condition: String, tokens_at_start: i64) -> coco_types::Activ
         tokens_at_start,
         last_reason: None,
     }
+}
+
+pub async fn restore_goal_from_history(
+    messages: &[Arc<coco_messages::Message>],
+    app_state: &tokio::sync::RwLock<coco_types::ToolAppState>,
+    hook_registry: &coco_hooks::HookRegistry,
+    tokens_at_start: i64,
+    gate: GoalGate,
+) -> Option<coco_types::ActiveGoal> {
+    if gate.hooks_restricted || gate.trust_rejected {
+        hook_registry.remove_matching_hooks(is_managed_goal_hook);
+        app_state.write().await.active_goal = None;
+        return None;
+    }
+
+    let Some(condition) = find_restorable_goal_condition(messages) else {
+        hook_registry.remove_matching_hooks(is_managed_goal_hook);
+        app_state.write().await.active_goal = None;
+        return None;
+    };
+    hook_registry.remove_matching_hooks(is_managed_goal_hook);
+    let goal = active_goal(condition.clone(), tokens_at_start);
+    app_state.write().await.active_goal = Some(goal.clone());
+    hook_registry.register(managed_goal_hook(condition));
+    Some(goal)
+}
+
+pub fn active_goal_changed_notification(
+    goal: Option<coco_types::ActiveGoal>,
+) -> coco_types::ServerNotification {
+    coco_types::ServerNotification::ActiveGoalChanged(Box::new(
+        coco_types::ActiveGoalChangedParams { goal },
+    ))
 }
 
 pub fn goal_status_sentinel(met: bool, condition: String) -> coco_types::GoalStatusPayload {

@@ -803,3 +803,12 @@ impl AddDirectoryState {
         Self::default()
     }
 }
+
+/// Read-only `/goal` status panel. The body is pre-rendered by the CLI layer
+/// from engine-authoritative state/history; the TUI only owns display and
+/// dismissal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalStatusState {
+    pub title: String,
+    pub body: String,
+}

@@ -61,26 +61,40 @@ use async_trait::async_trait;
 use coco_hooks::HookEvaluationResult;
 use coco_hooks::HookLlmEvaluationContext;
 use coco_hooks::HookLlmHandle;
+use coco_inference::InferenceError;
 use coco_inference::ModelRuntimeQueryOutcome;
 use coco_inference::ModelRuntimeRegistry;
 use coco_inference::ModelRuntimeSource;
 use coco_inference::QueryParams;
+use coco_inference::ResponseFormat;
+use coco_inference::RetryConfig;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::LlmMessage;
 use coco_llm_types::UserContentPart;
 use coco_types::ModelRole;
 use serde_json::Value;
+use serde_json::json;
+
+const STOP_HOOK_TRANSCRIPT_MAX_BYTES: usize = 64 * 1024;
+const STOP_HOOK_TRANSCRIPT_RETRY_BYTES: usize = 32 * 1024;
 
 /// System prompt prepended to every Prompt hook evaluation.
-///
-/// The schema constraint is enforced by JSON parse rather than a
-/// provider-level `output_format` (which is not yet wired in
-/// `coco-inference`).
 const HOOK_PROMPT_SYSTEM: &str = "You are evaluating a hook in Claude Code.
 
 Your response must be a JSON object matching one of the following schemas:
 1. If the condition is met, return: {\"ok\": true}
 2. If the condition is not met, return: {\"ok\": false, \"reason\": \"Reason for why it is not met\"}";
+
+const STOP_HOOK_PROMPT_SYSTEM: &str = r#"You are evaluating a stop-condition hook in Claude Code. Read the conversation transcript carefully, then judge whether the user-provided condition is satisfied.
+
+Your response must be a JSON object with one of these shapes:
+- {"ok": true, "reason": "<quote evidence from the transcript that satisfies the condition>"}
+- {"ok": false, "reason": "<quote what is missing or what blocks the condition>"}
+- {"ok": false, "impossible": true, "reason": "<explain why the condition can never be satisfied>"}
+
+Always include a "reason" field, quoting specific text from the transcript whenever possible. If the transcript does not contain clear evidence that the condition is satisfied, return {"ok": false, "reason": "insufficient evidence in transcript"}.
+
+Only use {"ok": false, "impossible": true} when the condition is genuinely unachievable within this session: for example it is self-contradictory, depends on an unavailable resource or capability, or the assistant already tried, exhausted reasonable options, and stated it cannot be done. An assistant claim is evidence, not proof; independently confirm from the transcript when possible. Do not use impossible merely because the goal has not been reached yet, may take more work, or is slow. When in doubt, return {"ok": false} without "impossible"."#;
 
 /// `coco-query`'s `HookLlmHandle` implementation. Single struct for
 /// both Prompt and Agent paths — they share `model_runtimes` and the
@@ -194,11 +208,21 @@ impl HookLlmHandle for QueryHookLlm {
         context: HookLlmEvaluationContext,
     ) -> HookEvaluationResult {
         let source = self.pick_source(model);
-
-        let prompt = build_prompt(prompt, &context);
+        let is_stop_event = is_stop_event(context.event);
+        let user_prompt = prompt.to_string();
 
         let result = async {
+            let mut prompt_too_long_retried = false;
             loop {
+                let prompt = build_prompt(
+                    &user_prompt,
+                    &context,
+                    if prompt_too_long_retried {
+                        STOP_HOOK_TRANSCRIPT_RETRY_BYTES
+                    } else {
+                        STOP_HOOK_TRANSCRIPT_MAX_BYTES
+                    },
+                );
                 let params = QueryParams {
                     prompt: prompt.clone(),
                     max_tokens: Some(1024),
@@ -213,7 +237,7 @@ impl HookLlmHandle for QueryHookLlm {
                     cache: None,
                     agentic: false,
                     stop_sequences: None,
-                    response_format: None,
+                    response_format: Some(hook_response_format()),
                     cancel: None,
                     wire_tap: None,
                 };
@@ -225,6 +249,10 @@ impl HookLlmHandle for QueryHookLlm {
                     ModelRuntimeQueryOutcome::Success { result, .. } => return Ok(result),
                     ModelRuntimeQueryOutcome::Retry { .. } => continue,
                     ModelRuntimeQueryOutcome::Failed { error, .. } => {
+                        if is_stop_event && !prompt_too_long_retried && is_prompt_too_long(&error) {
+                            prompt_too_long_retried = true;
+                            continue;
+                        }
                         return Err(format!("hook prompt API error: {error}"));
                     }
                 }
@@ -296,26 +324,23 @@ impl HookLlmHandle for QueryHookLlm {
 /// Two-message shape: `System` carries the JSON-output instruction;
 /// `User` carries the user's hook prompt with `$ARGUMENTS` already
 /// substituted upstream by `run_hook_via_handle_or_fallback`.
-fn build_prompt(user_prompt: &str, context: &HookLlmEvaluationContext) -> Vec<LlmMessage> {
-    if matches!(
-        context.event,
-        coco_types::HookEventType::Stop | coco_types::HookEventType::SubagentStop
-    ) {
+fn build_prompt(
+    user_prompt: &str,
+    context: &HookLlmEvaluationContext,
+    stop_transcript_max_bytes: usize,
+) -> Vec<LlmMessage> {
+    if is_stop_event(context.event) {
         let transcript = if context.transcript_history.is_empty() {
             "(no transcript evidence available)".to_string()
         } else {
-            context.transcript_history.join("\n")
+            bounded_transcript_history(&context.transcript_history, stop_transcript_max_bytes)
         };
         let stop_prompt = format!(
-            "Transcript evidence:\n{transcript}\n\nHook input JSON:\n{input}\n\nCondition: {condition}\n\nReturn a strict JSON object with exactly these fields: `ok` (boolean) and `reason` (string). You may also include `impossible` (boolean) only if the condition can never be satisfied. Do not include any other fields.",
-            input = context.hook_input_json,
-            condition = user_prompt,
+            "Conversation transcript:\n{transcript}\n\nBased on the conversation transcript above, has the following stopping condition been satisfied? Answer based on transcript evidence only.\n\nCondition: {user_prompt}",
         );
         return vec![
             LlmMessage::System {
-                content: vec![UserContentPart::text(
-                    "You are judging whether a Stop hook condition is satisfied. Respond only with strict JSON.",
-                )],
+                content: vec![UserContentPart::text(STOP_HOOK_PROMPT_SYSTEM)],
                 provider_options: None,
             },
             LlmMessage::User {
@@ -334,6 +359,65 @@ fn build_prompt(user_prompt: &str, context: &HookLlmEvaluationContext) -> Vec<Ll
             provider_options: None,
         },
     ]
+}
+
+fn is_stop_event(event: coco_types::HookEventType) -> bool {
+    matches!(
+        event,
+        coco_types::HookEventType::Stop | coco_types::HookEventType::SubagentStop
+    )
+}
+
+fn bounded_transcript_history(history: &[String], max_bytes: usize) -> String {
+    if history.is_empty() {
+        return "(no transcript evidence available)".to_string();
+    }
+    let mut kept_rev: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    let mut omitted = 0usize;
+    for idx in (0..history.len()).rev() {
+        let entry = &history[idx];
+        let separator = usize::from(!kept_rev.is_empty());
+        if used + separator + entry.len() <= max_bytes {
+            kept_rev.push(entry.clone());
+            used += separator + entry.len();
+            continue;
+        }
+        let remaining = max_bytes.saturating_sub(used + separator);
+        let suffix = coco_utils_string::take_last_bytes_at_char_boundary(entry, remaining);
+        if !suffix.is_empty() {
+            kept_rev.push(suffix.to_string());
+        }
+        omitted = idx;
+        break;
+    }
+    kept_rev.reverse();
+    let mut transcript = kept_rev.join("\n");
+    if omitted > 0 {
+        transcript = format!(
+            "({omitted} older transcript entries omitted due to hook context limit)\n{transcript}"
+        );
+    }
+    transcript
+}
+
+fn hook_response_format() -> ResponseFormat {
+    ResponseFormat::json_with_schema(json!({
+        "type": "object",
+        "properties": {
+            "ok": { "type": "boolean" },
+            "reason": { "type": "string" },
+            "impossible": { "type": "boolean" }
+        },
+        "required": ["ok", "reason"],
+        "additionalProperties": false
+    }))
+    .with_name("hook_verdict")
+}
+
+fn is_prompt_too_long(error: &InferenceError) -> bool {
+    matches!(error, InferenceError::ContextWindowExceeded { .. })
+        || RetryConfig::is_prompt_too_long(error)
 }
 
 /// Parse the assistant's text response as `{ok, reason}` JSON.

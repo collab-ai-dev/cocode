@@ -225,6 +225,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::ToolExecutionAborted { .. } => "tool_execution_aborted",
         TuiOnlyEvent::RewindCompleted { .. } => "rewind_completed",
         TuiOnlyEvent::SlashCommandResult { .. } => "slash_command_result",
+        TuiOnlyEvent::OpenGoalStatus { .. } => "open_goal_status",
         TuiOnlyEvent::SlashCommandStatus { .. } => "slash_command_status",
         TuiOnlyEvent::OpenContextUsage { .. } => "open_context_usage",
         TuiOnlyEvent::OpenRewindPicker => "open_rewind_picker",

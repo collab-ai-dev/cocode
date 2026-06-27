@@ -120,6 +120,7 @@ pub use apply_patch_preview::ExitPlanModeResult;
 pub use apply_patch_preview::ToolDisplayData;
 
 // Event types (three-layer CoreEvent system; see event-system-design.md)
+pub use event::ActiveGoalChangedParams;
 pub use event::AgentInfo;
 pub use event::AgentStreamEvent;
 pub use event::AgentsDialogEntry;

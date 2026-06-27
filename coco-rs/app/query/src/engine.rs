@@ -29,6 +29,7 @@ use coco_llm_types::ReasoningPart;
 use coco_llm_types::TextPart;
 use coco_llm_types::ToolCallPart;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -387,6 +388,9 @@ pub struct QueryEngine {
     /// metadata is written).
     pub(crate) transcript_dedup:
         Option<Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>>,
+    /// Shared runtime flag set after terminal `/goal` success metadata
+    /// is written and cleared at the next main-session turn start.
+    pub(crate) terminal_goal_metadata_written: Option<Arc<AtomicBool>>,
     /// Live message-history sink read by the periodic AgentSummary timer.
     /// Set on (background) sub-agent engines via `with_live_transcript`
     /// when the spawn enabled summarization; the engine publishes a

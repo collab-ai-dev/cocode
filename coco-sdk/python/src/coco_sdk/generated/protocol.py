@@ -1139,6 +1139,11 @@ class ServerNotificationHistoryReasoningMetadataAttached(BaseModel):
     method: Literal['history/reasoningMetadataAttached'] = Field(default='history/reasoningMetadataAttached', alias='method')
     params: ReasoningMetadataAttachedParams
 
+class ServerNotificationGoalActiveChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal['goal/activeChanged'] = Field(default='goal/activeChanged', alias='method')
+    params: ActiveGoalChangedParams
+
 class ServerNotificationTurnStarted(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal['turn/started'] = Field(default='turn/started', alias='method')
@@ -1433,7 +1438,7 @@ class ServerNotificationPluginsChanged(BaseModel):
     params: dict[str, Any]
 
 ServerNotification = Annotated[
-    Union[ServerNotificationSessionStarted, ServerNotificationSessionResult, ServerNotificationSessionEnded, ServerNotificationSessionUsageUpdated, ServerNotificationHistoryMessageAppended, ServerNotificationHistoryMessageTruncated, ServerNotificationHistoryResetForResume, ServerNotificationHistoryReplaced, ServerNotificationHistoryReasoningMetadataAttached, ServerNotificationTurnStarted, ServerNotificationTurnEnded, ServerNotificationItemStarted, ServerNotificationItemUpdated, ServerNotificationItemCompleted, ServerNotificationAgentMessageDelta, ServerNotificationReasoningDelta, ServerNotificationMcpStartupStatus, ServerNotificationMcpStartupComplete, ServerNotificationLspPrewarmComplete, ServerNotificationContextCompacted, ServerNotificationContextUsageWarning, ServerNotificationContextCompactionStarted, ServerNotificationContextCompactionPhase, ServerNotificationContextCompactionFailed, ServerNotificationContextCleared, ServerNotificationTaskStarted, ServerNotificationTaskCompleted, ServerNotificationTaskProgress, ServerNotificationTaskPanelChanged, ServerNotificationPlanApprovalRequested, ServerNotificationAgentsKilled, ServerNotificationModelFallbackStarted, ServerNotificationModelFallbackCompleted, ServerNotificationModelFastModeChanged, ServerNotificationModelRoleChanged, ServerNotificationPermissionModeChanged, ServerNotificationPromptSuggestion, ServerNotificationError, ServerNotificationRateLimit, ServerNotificationKeepAlive, ServerNotificationIdeSelectionChanged, ServerNotificationIdeDiagnosticsUpdated, ServerNotificationQueueStateChanged, ServerNotificationQueueCommandQueued, ServerNotificationQueueCommandDequeued, ServerNotificationRewindCompleted, ServerNotificationRewindFailed, ServerNotificationCostWarning, ServerNotificationSandboxStateChanged, ServerNotificationSandboxViolationsDetected, ServerNotificationAgentsRegistered, ServerNotificationHookStarted, ServerNotificationHookProgress, ServerNotificationHookResponse, ServerNotificationWorktreeEntered, ServerNotificationWorktreeExited, ServerNotificationSummarizeCompleted, ServerNotificationSummarizeFailed, ServerNotificationStreamStallDetected, ServerNotificationStreamWatchdogWarning, ServerNotificationStreamRequestEnd, ServerNotificationSessionStateChanged, ServerNotificationLocalCommandOutput, ServerNotificationFilesPersisted, ServerNotificationElicitationComplete, ServerNotificationToolUseSummary, ServerNotificationToolProgress, ServerNotificationPluginsChanged],
+    Union[ServerNotificationSessionStarted, ServerNotificationSessionResult, ServerNotificationSessionEnded, ServerNotificationSessionUsageUpdated, ServerNotificationHistoryMessageAppended, ServerNotificationHistoryMessageTruncated, ServerNotificationHistoryResetForResume, ServerNotificationHistoryReplaced, ServerNotificationHistoryReasoningMetadataAttached, ServerNotificationGoalActiveChanged, ServerNotificationTurnStarted, ServerNotificationTurnEnded, ServerNotificationItemStarted, ServerNotificationItemUpdated, ServerNotificationItemCompleted, ServerNotificationAgentMessageDelta, ServerNotificationReasoningDelta, ServerNotificationMcpStartupStatus, ServerNotificationMcpStartupComplete, ServerNotificationLspPrewarmComplete, ServerNotificationContextCompacted, ServerNotificationContextUsageWarning, ServerNotificationContextCompactionStarted, ServerNotificationContextCompactionPhase, ServerNotificationContextCompactionFailed, ServerNotificationContextCleared, ServerNotificationTaskStarted, ServerNotificationTaskCompleted, ServerNotificationTaskProgress, ServerNotificationTaskPanelChanged, ServerNotificationPlanApprovalRequested, ServerNotificationAgentsKilled, ServerNotificationModelFallbackStarted, ServerNotificationModelFallbackCompleted, ServerNotificationModelFastModeChanged, ServerNotificationModelRoleChanged, ServerNotificationPermissionModeChanged, ServerNotificationPromptSuggestion, ServerNotificationError, ServerNotificationRateLimit, ServerNotificationKeepAlive, ServerNotificationIdeSelectionChanged, ServerNotificationIdeDiagnosticsUpdated, ServerNotificationQueueStateChanged, ServerNotificationQueueCommandQueued, ServerNotificationQueueCommandDequeued, ServerNotificationRewindCompleted, ServerNotificationRewindFailed, ServerNotificationCostWarning, ServerNotificationSandboxStateChanged, ServerNotificationSandboxViolationsDetected, ServerNotificationAgentsRegistered, ServerNotificationHookStarted, ServerNotificationHookProgress, ServerNotificationHookResponse, ServerNotificationWorktreeEntered, ServerNotificationWorktreeExited, ServerNotificationSummarizeCompleted, ServerNotificationSummarizeFailed, ServerNotificationStreamStallDetected, ServerNotificationStreamWatchdogWarning, ServerNotificationStreamRequestEnd, ServerNotificationSessionStateChanged, ServerNotificationLocalCommandOutput, ServerNotificationFilesPersisted, ServerNotificationElicitationComplete, ServerNotificationToolUseSummary, ServerNotificationToolProgress, ServerNotificationPluginsChanged],
     Field(discriminator='method'),
 ]
 
@@ -1861,6 +1866,12 @@ class TuiOnlyEventSlashCommandResult(BaseModel):
     name: str
     text: str
 
+class TuiOnlyEventOpenGoalStatus(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_goal_status'] = Field(default='open_goal_status', alias='type')
+    body: str
+    title: str
+
 class TuiOnlyEventOpenContextUsage(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['open_context_usage'] = Field(default='open_context_usage', alias='type')
@@ -1983,7 +1994,7 @@ class TuiOnlyEventSkillOverridesSaved(BaseModel):
     result: SkillOverridesSaveResult
 
 TuiOnlyEvent = Annotated[
-    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPermissionExplanationReady, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventQueuedCommandEditReady, TuiOnlyEventQueuedCommandsEditReady, TuiOnlyEventQueuedCommandEditUnavailable, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallStreamStart, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolInterruptibilityChanged, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventOpenContextUsage, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventOpenWorkflowPicker, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSettings, TuiOnlyEventOpenThemePicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenPluginDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventOpenPermissionsEditor, TuiOnlyEventOpenAddDirectory, TuiOnlyEventOpenExport, TuiOnlyEventSkillOverridesSaved],
+    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPermissionExplanationReady, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventQueuedCommandEditReady, TuiOnlyEventQueuedCommandsEditReady, TuiOnlyEventQueuedCommandEditUnavailable, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallStreamStart, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolInterruptibilityChanged, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventOpenGoalStatus, TuiOnlyEventOpenContextUsage, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventOpenWorkflowPicker, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSettings, TuiOnlyEventOpenThemePicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenPluginDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventOpenPermissionsEditor, TuiOnlyEventOpenAddDirectory, TuiOnlyEventOpenExport, TuiOnlyEventSkillOverridesSaved],
     Field(discriminator='type_'),
 ]
 
@@ -2117,6 +2128,9 @@ class ThreadItem(BaseModel):
 # ---------------------------------------------------------------------------
 # Server notification params
 # ---------------------------------------------------------------------------
+
+class ActiveGoalChangedParams(BaseModel):
+    goal: ActiveGoal | None = None
 
 class AgentsKilledParams(BaseModel):
     count: int
@@ -2481,6 +2495,7 @@ class NotificationMethod(str, Enum):
     HISTORY_RESET_FOR_RESUME = 'history/resetForResume'
     HISTORY_REPLACED = 'history/replaced'
     HISTORY_REASONING_METADATA_ATTACHED = 'history/reasoningMetadataAttached'
+    GOAL_ACTIVE_CHANGED = 'goal/activeChanged'
     TURN_STARTED = 'turn/started'
     TURN_ENDED = 'turn/ended'
     ITEM_STARTED = 'item/started'
@@ -3080,6 +3095,13 @@ ClientRequest = Annotated[
 # ---------------------------------------------------------------------------
 # Additional types
 # ---------------------------------------------------------------------------
+
+class ActiveGoal(BaseModel):
+    condition: str
+    iterations: int
+    set_at_ms: int
+    tokens_at_start: int
+    last_reason: str | None = None
 
 class AgentInfo(BaseModel):
     name: str

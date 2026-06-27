@@ -117,6 +117,7 @@ pub use surface_payloads::ExportFormat;
 pub use surface_payloads::ExportState;
 pub use surface_payloads::FeedbackState;
 pub use surface_payloads::GlobalSearchState;
+pub use surface_payloads::GoalStatusState;
 pub use surface_payloads::IdleReturnState;
 pub use surface_payloads::InvalidConfigState;
 pub use surface_payloads::McpServerApprovalPromptState;

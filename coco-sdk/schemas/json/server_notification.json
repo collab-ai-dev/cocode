@@ -229,6 +229,23 @@
       ]
     },
     {
+      "description": "Active `/goal` state changed.\n\nMirrors the engine's `ToolAppState.active_goal` so consumers can\nrender live footer/status affordances without reverse-engineering\nthe silent `goal_status` transcript attachments.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "goal/activeChanged"
+        },
+        "params": {
+          "$ref": "#/$defs/ActiveGoalChangedParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
       "description": "Agent turn started. Emitted by the runner layer\n(`tui_runner` / `sdk_runner`) at the start of every logical\nuser-prompt cycle. Pairs 1:1 with `TurnEnded` sharing the\nsame `turn_id`. Intra-turn loops (Stop-hook blocking,\nreactive compact, max-tokens recovery, etc. — every\n`ContinueReason::*`) do NOT re-emit this event.",
       "type": "object",
       "properties": {
@@ -1387,6 +1404,55 @@
     }
   ],
   "$defs": {
+    "ActiveGoal": {
+      "description": "Session-scoped goal metadata for `/goal`.",
+      "type": "object",
+      "properties": {
+        "condition": {
+          "type": "string"
+        },
+        "iterations": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "last_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "set_at_ms": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokens_at_start": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "condition",
+        "iterations",
+        "set_at_ms",
+        "tokens_at_start"
+      ]
+    },
+    "ActiveGoalChangedParams": {
+      "description": "Active `/goal` snapshot.\n\n`goal = None` means no active goal. Terminal goal_status attachments\nstill carry achieved / failed details; this event is only the live-state\nmirror.",
+      "type": "object",
+      "properties": {
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActiveGoal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "AgentInfo": {
       "type": "object",
       "properties": {
