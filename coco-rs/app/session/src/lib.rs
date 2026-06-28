@@ -372,6 +372,9 @@ impl SessionManager {
                 &storage::MetadataEntry::LastPrompt {
                     session_id: id.to_string(),
                     last_prompt: last_prompt.to_string(),
+                    leaf_uuid: None,
+                    explicit: false,
+                    rewound: false,
                 },
             )?;
         }

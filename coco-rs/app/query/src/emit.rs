@@ -228,6 +228,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::OpenGoalStatus { .. } => "open_goal_status",
         TuiOnlyEvent::SlashCommandStatus { .. } => "slash_command_status",
         TuiOnlyEvent::OpenContextUsage { .. } => "open_context_usage",
+        TuiOnlyEvent::RewindPreClearSnapshot { .. } => "rewind_pre_clear_snapshot",
         TuiOnlyEvent::OpenRewindPicker => "open_rewind_picker",
         TuiOnlyEvent::OpenMemoryDialog { .. } => "open_memory_dialog",
         TuiOnlyEvent::OpenWorkflowPicker { .. } => "open_workflow_picker",

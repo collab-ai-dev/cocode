@@ -1754,20 +1754,37 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /review — Prompt-type, not a local handler. Appends `PR number: ${args}`
-    // inline at the body's end — even when `args` is empty, the literal
-    // `PR number: ` line is present so the model sees an explicit value (or
-    // its absence). Handled via `ArgsHandling::AppendInline`.
-    register_static_prompt(
-        registry,
-        names::REVIEW,
-        "Review a pull request",
-        "reviewing pull request",
-        REVIEW_PROMPT,
-        handlers::prompt_command::ArgsHandling::AppendInline {
-            prefix: "PR number: ",
-        },
-    );
+    // /review — Prompt-type PR review. Medium effort and PR-only scope match
+    // Claude Code 2.1.193; `/code-review` remains the working-diff command.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::REVIEW,
+            "Review a GitHub pull request; for your working diff use /code-review",
+            &[],
+            CommandSafety::LocalOnly,
+            Some("[pr number]"),
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::Prompt(coco_types::PromptCommandData {
+                progress_message: "reviewing pull request".to_string(),
+                content_length: REVIEW_PROMPT.len() as i64,
+                allowed_tools: None,
+                model: None,
+                context: coco_types::CommandContext::Inline,
+                agent: None,
+                thinking_level: Some(coco_types::ThinkingLevel::medium()),
+                hooks: None,
+            }),
+            handler: Some(Arc::new(handlers::prompt_command::ReviewPromptHandler {
+                name: names::REVIEW.to_string(),
+                progress_message: "reviewing pull request".to_string(),
+                body: REVIEW_PROMPT.to_string(),
+            })),
+            is_enabled: None,
+        });
+    }
 
     // /commit-push-pr — inline-resolves git status / diff / branch /
     // `git diff <default>...HEAD` / `gh pr view` and detects the repo's

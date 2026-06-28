@@ -17,6 +17,7 @@ fn make_marketplace(name: &str, plugins: Vec<PluginMarketplaceEntry>) -> PluginM
             url: None,
         },
         plugins,
+        renames: None,
         force_remove_deleted_plugins: None,
         metadata: None,
         allow_cross_marketplace_dependencies_on: None,

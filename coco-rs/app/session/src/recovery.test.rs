@@ -428,6 +428,41 @@ fn test_load_conversation_for_resume_skips_metadata_lines() {
 }
 
 #[test]
+fn test_load_conversation_for_resume_honors_rewound_last_prompt_leaf() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rewound.jsonl");
+    let body = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        user_line("u1", "first"),
+        assistant_line("a1", "u1", "one", "claude-sonnet-4-6", None),
+        user_line_with_parent("u2", Some("a1"), "second"),
+        assistant_line("a2", "u2", "two", "claude-sonnet-4-6", None),
+        user_line_with_parent("u3", Some("a2"), "third"),
+        assistant_line("a3", "u3", "three", "claude-sonnet-4-6", None),
+        serde_json::to_string(&json!({
+            "type": "last-prompt",
+            "session_id": "s1",
+            "last_prompt": "second",
+            "leaf_uuid": "u2",
+            "explicit": true,
+            "rewound": true
+        }))
+        .unwrap(),
+        ""
+    );
+    std::fs::write(&path, body).unwrap();
+
+    let conversation = load_conversation_for_resume(&path).expect("resume loads");
+    let texts = conversation
+        .messages
+        .iter()
+        .map(coco_messages::wrapping::extract_text_from_message)
+        .collect::<Vec<_>>();
+
+    assert_eq!(texts, vec!["first", "one", "second"]);
+}
+
+#[test]
 fn test_load_conversation_for_resume_sidechain_flag_and_filter() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("s3.jsonl");

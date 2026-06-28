@@ -99,8 +99,9 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
 /// this function, and the tool is absent from
 /// [`register_all_tools`] so interactive sessions never see it.
 ///
-/// Returns the parsed/compiled tool's reference so callers can install
-/// matching Stop-hook enforcement at the same call site.
+/// Returns the parsed/compiled tool's reference so callers can enable the
+/// engine-level `requires_structured_output` terminal enforcement at the same
+/// call site.
 ///
 /// Errors are propagated as `String` (invalid schema shape, unsupported
 /// keyword, …); the caller is responsible for logging and deciding

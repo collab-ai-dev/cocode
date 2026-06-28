@@ -22,6 +22,7 @@ use crate::state::MemoryDialogState;
 use crate::state::QuickOpenState;
 use crate::state::SessionBrowserState;
 use crate::state::TeamRosterState;
+use crate::state::WorkflowAgentStatusFilter;
 use crate::state::WorkflowPickerEntry;
 use crate::state::WorkflowPickerState;
 use crate::state::session::SubagentInstance;
@@ -441,7 +442,14 @@ pub(crate) fn background_tasks_lines(
     let now_ms = state.clock.now_ms();
     let rows = state.session.running_background_tasks();
     if let Some(task_id) = bt.detail.as_deref() {
-        background_tasks_detail_lines(&rows, task_id, state, now_ms, styles)
+        background_tasks_detail_lines(
+            &rows,
+            task_id,
+            bt.workflow_agent_filter,
+            state,
+            now_ms,
+            styles,
+        )
     } else {
         background_tasks_list_lines(&rows, bt.selected, state, now_ms, styles)
     }
@@ -567,6 +575,7 @@ fn background_task_row(
 fn background_tasks_detail_lines(
     rows: &[&TaskEntry],
     task_id: &str,
+    workflow_agent_filter: WorkflowAgentStatusFilter,
     state: &AppState,
     now_ms: i64,
     styles: UiStyles<'_>,
@@ -628,7 +637,14 @@ fn background_tasks_detail_lines(
             if progress.is_empty() {
                 lines.push(dim_line(t!("dialog.workflow_progress_empty"), styles));
             } else {
-                for event in progress.iter().rev().take(8).rev() {
+                let visible: Vec<&coco_types::WorkflowProgressEvent> = progress
+                    .iter()
+                    .filter(|event| workflow_agent_filter.matches_event(event))
+                    .collect();
+                if visible.is_empty() {
+                    lines.push(dim_line(t!("dialog.workflow_progress_empty"), styles));
+                }
+                for event in visible.into_iter().rev().take(8).rev() {
                     lines.push(workflow_progress_line(event, styles));
                 }
             }
@@ -640,8 +656,33 @@ fn background_tasks_detail_lines(
     }
 
     lines.push(Line::default());
-    lines.push(dim_line(t!("dialog.background_detail_hints"), styles));
+    let mut hints = t!("dialog.background_detail_hints").to_string();
+    if matches!(kind, Some(TaskEntryKind::Workflow)) {
+        hints.push_str(" · ");
+        hints.push_str(&workflow_filter_hint(workflow_agent_filter));
+    }
+    lines.push(dim_line(hints, styles));
     (title, lines, styles.primary())
+}
+
+fn workflow_filter_hint(filter: WorkflowAgentStatusFilter) -> String {
+    if filter == WorkflowAgentStatusFilter::All {
+        return t!("dialog.workflow_filter_hint").to_string();
+    }
+    let status = match filter {
+        WorkflowAgentStatusFilter::All => unreachable!("all handled above"),
+        WorkflowAgentStatusFilter::Running => t!("dialog.workflow_filter_status_running"),
+        WorkflowAgentStatusFilter::Queued => t!("dialog.workflow_filter_status_queued"),
+        WorkflowAgentStatusFilter::Failed => t!("dialog.workflow_filter_status_failed"),
+        WorkflowAgentStatusFilter::Done => t!("dialog.workflow_filter_status_done"),
+        WorkflowAgentStatusFilter::Skipped => t!("dialog.workflow_filter_status_skipped"),
+        WorkflowAgentStatusFilter::Interrupted => t!("dialog.workflow_filter_status_interrupted"),
+    };
+    t!(
+        "dialog.workflow_filter_hint_active",
+        status = status.to_string()
+    )
+    .to_string()
 }
 
 fn workflow_progress_line(

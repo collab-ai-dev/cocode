@@ -147,10 +147,11 @@ impl WorkflowRunHost {
             // whole-run cancel still tears the in-flight subagent down.
             parent_turn_abort: Some(attempt_abort),
             // `agent(prompt, {schema})` forces the StructuredOutput contract:
-            // the spawn driver registers `StructuredOutputTool` + a forcing
-            // Stop hook on the child and routes the captured tool-call input
-            // back through `AgentSpawnResponse.structured_output`. The
-            // schema-blob `Value` is the sanctioned passthrough exception.
+            // the spawn driver registers `StructuredOutputTool`, enables the
+            // inline `requires_structured_output` nudge on the child, and
+            // routes the captured tool-call input back through
+            // `AgentSpawnResponse.structured_output`. The schema-blob `Value`
+            // is the sanctioned passthrough exception.
             output_schema: opts.schema.clone().map(std::sync::Arc::new),
             ..Default::default()
         })
@@ -443,9 +444,8 @@ pub(crate) fn spawn_workflow_engine(
 }
 
 /// Convert a completed `AgentSpawnResponse` into a `WorkflowAgentResult`.
-/// Honours the structured-output contract (schema-forced spawns surface the
-/// validated tool-call input on `structured_output`; text-JSON parse is the
-/// last-resort fallback).
+/// Honours the structured-output contract: schema-forced spawns must surface
+/// the validated tool-call input on `structured_output`.
 fn convert_response(
     response: coco_tool_runtime::AgentSpawnResponse,
     opts: &WorkflowAgentOpts,
@@ -458,10 +458,11 @@ fn convert_response(
             let duration_ms = Some(response.duration_ms);
             let text = response.result.unwrap_or_default();
             let value = if opts.schema.is_some() {
-                response.structured_output.unwrap_or_else(|| {
-                    serde_json::from_str::<serde_json::Value>(&text)
-                        .unwrap_or(serde_json::Value::String(text))
-                })
+                response.structured_output.ok_or_else(|| {
+                    "agent({schema}): subagent completed without calling StructuredOutput \
+                     (after in-conversation nudge)"
+                        .to_string()
+                })?
             } else {
                 serde_json::Value::String(text)
             };

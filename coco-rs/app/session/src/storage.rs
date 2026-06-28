@@ -170,6 +170,12 @@ pub enum MetadataEntry {
     LastPrompt {
         session_id: String,
         last_prompt: String,
+        #[serde(default, alias = "leafUuid", skip_serializing_if = "Option::is_none")]
+        leaf_uuid: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        explicit: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        rewound: bool,
     },
     Summary {
         leaf_uuid: String,

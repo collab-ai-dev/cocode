@@ -192,7 +192,7 @@ async fn run_agent_uses_captured_structured_output() {
 }
 
 #[tokio::test]
-async fn run_agent_falls_back_to_text_parse_without_capture() {
+async fn run_agent_schema_errors_without_capture() {
     use coco_tool_runtime::AgentHandle;
     use coco_tool_runtime::AgentSpawnRequest;
     use coco_tool_runtime::AgentSpawnResponse;
@@ -200,8 +200,7 @@ async fn run_agent_falls_back_to_text_parse_without_capture() {
     use coco_tool_runtime::TeamMessageDispatchResult;
     use coco_workflow_runtime::WorkflowHost;
 
-    // No captured structured value → host falls back to parsing the final
-    // text as JSON (the last-resort path; behaviour never worse than before).
+    // No captured structured value in schema mode is a contract failure.
     #[derive(Debug)]
     struct TextOnlyHandle;
 
@@ -236,7 +235,7 @@ async fn run_agent_falls_back_to_text_parse_without_capture() {
 
     let mut host = host();
     host.agent = Arc::new(TextOnlyHandle);
-    let result = host
+    let err = host
         .run_agent(
             "compute".to_string(),
             WorkflowAgentOpts {
@@ -245,8 +244,8 @@ async fn run_agent_falls_back_to_text_parse_without_capture() {
             },
         )
         .await
-        .expect("run_agent ok");
-    assert_eq!(result.value, serde_json::json!({ "answer": "parsed" }));
+        .expect_err("schema run must require StructuredOutput");
+    assert!(err.contains("subagent completed without calling StructuredOutput"));
 }
 
 #[tokio::test]

@@ -567,6 +567,64 @@ pub struct BackgroundTasksState {
     /// `Some(task_id)` when the detail layer is open for that task; `None`
     /// shows the list layer.
     pub detail: Option<String>,
+    /// Workflow-agent status filter for the workflow detail layer.
+    pub workflow_agent_filter: WorkflowAgentStatusFilter,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum WorkflowAgentStatusFilter {
+    #[default]
+    All,
+    Running,
+    Queued,
+    Failed,
+    Done,
+    Skipped,
+    Interrupted,
+}
+
+impl WorkflowAgentStatusFilter {
+    pub const ORDER: [Self; 7] = [
+        Self::All,
+        Self::Running,
+        Self::Queued,
+        Self::Failed,
+        Self::Done,
+        Self::Skipped,
+        Self::Interrupted,
+    ];
+
+    pub fn from_progress_event(event: &coco_types::WorkflowProgressEvent) -> Option<Self> {
+        match event {
+            coco_types::WorkflowProgressEvent::WorkflowAgent { state, .. } => match state {
+                coco_types::WorkflowAgentState::Start
+                | coco_types::WorkflowAgentState::Progress => Some(Self::Running),
+                coco_types::WorkflowAgentState::Done => Some(Self::Done),
+                coco_types::WorkflowAgentState::Error => Some(Self::Failed),
+            },
+            coco_types::WorkflowProgressEvent::WorkflowPhase { .. }
+            | coco_types::WorkflowProgressEvent::WorkflowLog { .. } => None,
+        }
+    }
+
+    pub fn matches_event(self, event: &coco_types::WorkflowProgressEvent) -> bool {
+        self == Self::All || Self::from_progress_event(event) == Some(self)
+    }
+
+    pub fn next_with_present(self, present: &[Self]) -> Self {
+        let mut idx = Self::ORDER
+            .iter()
+            .position(|status| *status == self)
+            .unwrap_or(0);
+        for _ in 0..Self::ORDER.len() {
+            idx = (idx + 1) % Self::ORDER.len();
+            let candidate = Self::ORDER[idx];
+            if candidate == Self::All || present.contains(&candidate) {
+                return candidate;
+            }
+        }
+        Self::All
+    }
 }
 
 /// Feedback survey state.

@@ -1,11 +1,11 @@
 # coco-hooks
 
-Pre/post event interception with scoped priority: Command / Prompt / Http / Agent handlers, SSRF guard, async hook registry, `if` permission-rule conditions, matcher patterns (exact / pipe-separated / regex / glob), dedup + `once` tracking, HTTP URL allowlist + per-hook env-var allowlist, `expectedHookEvent` JSON cross-check.
+Pre/post event interception with scoped priority: Command / Prompt / Http / Agent handlers, SSRF guard, async hook registry, `if` permission-rule conditions, matcher patterns (exact / pipe/comma-separated / regex / glob), dedup + `once` tracking, HTTP URL allowlist + per-hook env-var allowlist, `expectedHookEvent` JSON cross-check.
 
 ## Key Types
 - `HookDefinition` — `event` (`HookEventType`, 27 variants), `matcher`, `handler`, `priority` (asc), `scope` (Session>Local>Project>User>Builtin), `if_condition`, `once`, `is_async`, `async_rewake`, `status_message`
 - `HookHandler` — `Command{command,timeout_ms,shell}` / `Prompt{prompt,model,timeout_ms}` / `Http{url,headers,timeout_ms,allowed_env_vars}` / `Agent{prompt,model,timeout_ms}`
-- `FunctionHookPredicate` (trait) — `evaluate(&[Arc<Message>]) -> bool` + `name()`. Implementations are `Send + Sync + Debug` and must be pure. Used by `FunctionHook` (an in-memory hook registered at session bootstrap rather than loaded from settings) to express in-process callbacks like `StructuredOutput` Stop enforcement and Swarm teammate init. Stored on `HookRegistry.function_hooks` (separate from settings-loaded `hooks` because closures cannot `Serialize` / `Deserialize`).
+- `FunctionHookPredicate` (trait) — `evaluate(&[Arc<Message>]) -> bool` + `name()`. Implementations are `Send + Sync + Debug` and must be pure. Used by `FunctionHook` (an in-memory hook registered at session bootstrap rather than loaded from settings) to express in-process callbacks like Swarm teammate init. Stored on `HookRegistry.function_hooks` (separate from settings-loaded `hooks` because closures cannot `Serialize` / `Deserialize`).
 - `HookEvaluationResult` — `Ok` / `Blocking{reason}` / `Cancelled` / `NonBlockingError{error}` for LLM-driven Prompt/Agent paths
 - `HookLlmHandle` (trait) — async `evaluate_prompt` / `evaluate_agent` callbacks installed via `OrchestrationContext.llm_handle`; impl lives in `coco-query` to keep coco-hooks below the inference layer
 - `HookExecutionResult` — `CommandOutput{exit_code,stdout,stderr}` or `PromptText(String)`
@@ -20,7 +20,7 @@ Pre/post event interception with scoped priority: Command / Prompt / Http / Agen
 ## Key Functions
 - `execute_hook()` — Command via `sh -c` + stdin piping (30 s default), Prompt/Agent text-passthrough fallback (real LLM eval lives in `run_hook_via_handle_or_fallback` once `llm_handle` is installed), HTTP defaults to **10-minute** timeout, hardcoded POST, allowlist-gated env-var interpolation, CRLF-sanitized headers, SSRF gate (private/link-local block, loopback allowed)
 - `load_hooks_from_config()` — deserialize snake_case event-keyed JSON; accepts both `allowed_env_vars` and `allowedEnvVars`; `model` honored on Prompt + Agent; top-level `timeout` (sec) applied to Command/Http/Prompt/Agent when handler-level `timeout_ms` absent
-- `matcher_matches()` — `None` matches all, `"*"` requires a value, simple alnum/`_`/`|`, else regex with glob fallback
+- `matcher_matches()` — `None` matches all, `"*"` requires a value, simple alnum/`_`/`|`/`,`/space, else regex with glob fallback
 - `aggregate_results_for_event()` — event-name cross-check: when `hookSpecificOutput.hookEventName` doesn't match the firing event, the nested fields are skipped with a warning instead of silently applied
 
 ## Orchestration Entry Points

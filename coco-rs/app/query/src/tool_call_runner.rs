@@ -71,6 +71,8 @@ pub(crate) struct ToolCallRunOutcome {
     /// turns into `RunArtifacts.structured_output_attempts` for the
     /// retry-cap check.
     pub structured_output_attempts: u32,
+    /// Number of failed `StructuredOutput` tool invocations in this batch.
+    pub structured_output_failed_attempts: u32,
     pub permission_aborted: bool,
 }
 
@@ -326,6 +328,10 @@ impl<'a> ToolCallRunner<'a> {
                     ) {
                         control.structured_output_attempts =
                             control.structured_output_attempts.saturating_add(1);
+                        if is_error {
+                            control.structured_output_failed_attempts =
+                                control.structured_output_failed_attempts.saturating_add(1);
+                        }
                     }
                     if let Some(data) = parts.structured_output.clone() {
                         control.structured_output = Some(data);
@@ -435,6 +441,7 @@ struct Control {
     stop_reason_override: Option<String>,
     structured_output: Option<serde_json::Value>,
     structured_output_attempts: u32,
+    structured_output_failed_attempts: u32,
     permission_aborted: bool,
 }
 
@@ -445,6 +452,7 @@ impl Default for Control {
             stop_reason_override: None,
             structured_output: None,
             structured_output_attempts: 0,
+            structured_output_failed_attempts: 0,
             permission_aborted: false,
         }
     }
@@ -457,6 +465,7 @@ impl Control {
             stop_reason_override: self.stop_reason_override,
             structured_output: self.structured_output,
             structured_output_attempts: self.structured_output_attempts,
+            structured_output_failed_attempts: self.structured_output_failed_attempts,
             permission_aborted: self.permission_aborted,
         }
     }

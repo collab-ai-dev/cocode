@@ -135,6 +135,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // Subagents inherit no output-token budget (reminder stays dormant);
             // the caller sets it explicitly when desired, same as the main loop.
             output_token_budget: None,
+            requires_structured_output: false,
             streaming_tool_execution: true,
             is_non_interactive: true,
             // Hardcoded for ALL subagents: a residual `Ask` fails closed
@@ -376,12 +377,10 @@ impl AgentQueryEngine for QueryEngineAdapter {
         // final answer via the synthetic `StructuredOutput` tool rather than
         // free-form text. Mirror the headless `--json-schema` path
         // (`coco_cli::headless::inject_structured_output_tool_if_requested`):
-        // register the compiled tool into a PER-SPAWN tool registry and a
-        // matching `StructuredOutput` Stop-enforcement hook into a per-spawn
-        // hook registry, then swap both onto the child engine. Per-spawn
+        // register the compiled tool into a PER-SPAWN tool registry and enable
+        // `requires_structured_output` on the child engine. Per-spawn
         // isolation is mandatory — registering on the shared session
-        // registries would leak the tool to the parent + siblings and make
-        // the Stop hook wrongly block every other session's turn.
+        // registries would leak the tool to the parent + siblings.
         if let Some(schema) = config.output_schema.clone()
             && let Err(error) = install_structured_output(&mut engine, schema.as_ref())
         {
@@ -465,20 +464,14 @@ impl AgentQueryEngine for QueryEngineAdapter {
     }
 }
 
-/// Install the structured-output contract on a child engine: a per-spawn
-/// tool registry carrying every parent tool plus a freshly-compiled
-/// `StructuredOutputTool`, and a per-spawn hook registry whose only entry is
-/// the `StructuredOutput` Stop-enforcement hook. Both replace the engine's
-/// shared registries so the contract stays scoped to this single spawn.
-///
-/// Mirrors `coco_cli::headless::inject_structured_output_tool_if_requested`
-/// and `coco_cli::hook_agent_runner::{scoped_tool_registry,scoped_hook_registry}`.
+/// Install the structured-output contract on a child engine: a per-spawn tool
+/// registry carrying every parent tool plus a freshly-compiled
+/// `StructuredOutputTool`, and the inline `requires_structured_output` nudge.
+/// This keeps the contract scoped to one spawn without relying on a Stop hook.
 fn install_structured_output(
     engine: &mut QueryEngine,
     schema: &serde_json::Value,
 ) -> Result<(), String> {
-    use std::time::Duration;
-
     // Per-spawn tool registry: clone the parent's tool handles, then add the
     // compiled StructuredOutput tool. `register_structured_output_tool` fails
     // when the schema is invalid — propagate that as the setup error.
@@ -488,27 +481,8 @@ fn install_structured_output(
     }
     coco_tools::register_structured_output_tool(&tools, schema.clone())?;
 
-    // Per-spawn hook registry carrying only the StructuredOutput Stop hook.
-    // The engine's terminal path additionally forces a retry while the tool
-    // is registered but no structured output exists yet; this Stop hook is
-    // the nudge that blocks stop and re-prompts the model to call the tool.
-    let hooks = Arc::new(coco_hooks::HookRegistry::new());
-    hooks
-        .register_function_hook(
-            format!("structured-output-enforcement-{}", uuid::Uuid::new_v4()),
-            coco_types::HookEventType::Stop,
-            None,
-            Duration::from_millis(5_000),
-            Arc::new(crate::structured_output_enforcement::StructuredOutputEnforcement),
-            format!(
-                "You MUST call the {} tool exactly once with your final answer to complete this request. Call this tool now.",
-                coco_types::ToolName::StructuredOutput.as_str()
-            ),
-        )
-        .map_err(|e| format!("failed to register StructuredOutput Stop hook: {e}"))?;
-
     engine.tools = tools;
-    engine.hooks = Some(hooks);
+    engine.config.requires_structured_output = true;
     Ok(())
 }
 

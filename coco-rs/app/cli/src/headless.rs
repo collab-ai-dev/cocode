@@ -458,23 +458,21 @@ pub fn resolve_startup_permission_state(
 
 /// Reject requesting bypass when the host is not a sandbox.
 /// Parse `--json-schema` (if set) and register the synthetic
-/// `StructuredOutput` tool against `registry` + a matching Stop
-/// function hook on `hook_registry`.
+/// `StructuredOutput` tool against `registry`.
 /// Only the non-interactive bootstrap (headless print mode / SDK
 /// NDJSON) calls this; TUI must not, by design — the tool is excluded
 /// from `register_all_tools` and only installed through this helper.
-/// Returns `Ok(true)` when the flag was set and both the tool and
-/// Stop hook were registered. Returns `Ok(false)` when the flag was
+/// Returns `Ok(true)` when the flag was set and the tool was registered.
+/// The caller must also set `QueryEngineConfig.requires_structured_output`
+/// so the query loop injects the inline enforcement nudge. Returns `Ok(false)`
+/// when the flag was
 /// absent (caller proceeds without structured output). Returns
 /// `Err(_)` when:
 /// - `--json-schema` is not valid JSON
 /// - the parsed value fails JSON-Schema meta-validation
-/// - the Stop function hook fails to register (programmer error —
-/// duplicate id, unsupported event)
 pub fn inject_structured_output_tool_if_requested(
     cli: &Cli,
     registry: &ToolRegistry,
-    hook_registry: &coco_hooks::HookRegistry,
 ) -> Result<bool> {
     let Some(raw) = cli.json_schema.as_deref() else {
         return Ok(false);
@@ -484,29 +482,9 @@ pub fn inject_structured_output_tool_if_requested(
     coco_tools::register_structured_output_tool(registry, schema)
         .map_err(|e| anyhow::anyhow!("--json-schema rejected: {e}"))?;
 
-    // Block the model from ending its turn until it has pushed at least
-    // one valid `StructuredOutput` attachment into history. Uses the
-    // typed AttachmentKind directly instead of a fragile
-    // `hasSuccessfulToolCall(name)` scan.
-    hook_registry
-        .register_function_hook(
-            format!("structured-output-enforcement-{}", uuid::Uuid::new_v4()),
-            coco_types::HookEventType::Stop,
-            None,
-            std::time::Duration::from_millis(5_000),
-            std::sync::Arc::new(
-                coco_query::structured_output_enforcement::StructuredOutputEnforcement,
-            ),
-            format!(
-                "You MUST call the {} tool to complete this request. Call this tool now.",
-                coco_types::ToolName::StructuredOutput.as_str()
-            ),
-        )
-        .map_err(|e| anyhow::anyhow!("failed to register StructuredOutput Stop hook: {e}"))?;
-
     tracing::info!(
         target: "coco_cli::headless",
-        "registered StructuredOutput tool + Stop enforcement hook from --json-schema"
+        "registered StructuredOutput tool from --json-schema"
     );
     Ok(true)
 }
@@ -899,10 +877,13 @@ pub async fn run_chat_with_options(
         _ => None,
     };
 
-    // `StructuredOutput` tool + Stop hook. The tool registers into the shared
-    // `tools` Arc; the Stop hook MUST target the runtime's hook registry —
-    // the one its engines dispatch from.
-    inject_structured_output_tool_if_requested(cli, tools.as_ref(), &runtime.hook_registry())?;
+    // `StructuredOutput` tool + inline enforcement. The tool registers into
+    // the shared `tools` Arc; the config flag drives the per-turn nudge.
+    if inject_structured_output_tool_if_requested(cli, tools.as_ref())? {
+        runtime
+            .update_engine_config(|cfg| cfg.requires_structured_output = true)
+            .await;
+    }
 
     // Agent/task spawning infra (TaskRuntime + agent team + worktree manager +
     // fork dispatcher), unconditional like TUI/SDK. Best-effort: a transient

@@ -323,6 +323,47 @@ fn test_pipe_separated_matcher() {
 }
 
 #[test]
+fn test_comma_separated_matcher() {
+    let registry = HookRegistry::new();
+    registry.register(HookDefinition {
+        event: HookEventType::PreToolUse,
+        matcher: Some("Bash, PowerShell".into()),
+        handler: HookHandler::Prompt {
+            prompt: "matched".into(),
+            model: None,
+            timeout_ms: None,
+        },
+        priority: 0,
+        scope: HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+        managed_by: None,
+    });
+
+    assert_eq!(
+        registry
+            .find_matching(HookEventType::PreToolUse, Some("Bash"))
+            .len(),
+        1
+    );
+    assert_eq!(
+        registry
+            .find_matching(HookEventType::PreToolUse, Some("PowerShell"))
+            .len(),
+        1
+    );
+    assert_eq!(
+        registry
+            .find_matching(HookEventType::PreToolUse, Some("Read"))
+            .len(),
+        0
+    );
+}
+
+#[test]
 fn test_regex_matcher() {
     let registry = HookRegistry::new();
     registry.register(HookDefinition {
@@ -1252,38 +1293,68 @@ async fn test_command_hook_custom_shell() {
 #[test]
 fn test_matcher_simple_alphanumeric_only() {
     // Pattern with only alphanumeric + underscore → exact match
-    assert!(matcher_matches(Some("Read"), Some("Read")));
-    assert!(!matcher_matches(Some("Read"), Some("Write")));
+    assert!(matcher_matches(Some("Read"), Some("Read"), true));
+    assert!(!matcher_matches(Some("Read"), Some("Write"), true));
+}
+
+#[test]
+fn test_matcher_simple_comma_list_trims_empty_segments() {
+    assert!(matcher_matches(
+        Some("Bash, PowerShell"),
+        Some("Bash"),
+        true
+    ));
+    assert!(matcher_matches(
+        Some("Bash, PowerShell"),
+        Some("PowerShell"),
+        true
+    ));
+    assert!(matcher_matches(Some("Bash,"), Some("Bash"), true));
+    assert!(!matcher_matches(Some("Bash,"), Some("Read"), true));
+    assert!(!matcher_matches(Some("foo,bar"), Some("foo"), false));
+    assert!(matcher_matches(Some("foo,bar"), Some("foo,bar"), false));
 }
 
 #[test]
 fn test_matcher_regex_with_dot_star() {
     // "Read.*" contains '.' which is not simple → treated as regex
-    assert!(matcher_matches(Some("Read.*"), Some("ReadFile")));
-    assert!(matcher_matches(Some("Read.*"), Some("Read")));
-    assert!(!matcher_matches(Some("Read.*"), Some("Write")));
+    assert!(matcher_matches(Some("Read.*"), Some("ReadFile"), true));
+    assert!(matcher_matches(Some("Read.*"), Some("Read"), true));
+    assert!(!matcher_matches(Some("Read.*"), Some("Write"), true));
 }
 
 #[test]
 fn test_matcher_regex_dot_plus() {
     // "Read.+" is regex, not glob
-    assert!(matcher_matches(Some("Read.+"), Some("ReadFile")));
-    assert!(!matcher_matches(Some("Read.+"), Some("Read"))); // .+ needs at least one char
+    assert!(matcher_matches(Some("Read.+"), Some("ReadFile"), true));
+    assert!(!matcher_matches(Some("Read.+"), Some("Read"), true)); // .+ needs at least one char
 }
 
 #[test]
 fn test_matcher_pipe_with_special_chars_is_regex() {
     // "Write|Edit|Read.*" has '.' → treated as regex, not pipe-separated
-    assert!(matcher_matches(Some("Write|Edit|Read.*"), Some("Write")));
-    assert!(matcher_matches(Some("Write|Edit|Read.*"), Some("Edit")));
-    assert!(matcher_matches(Some("Write|Edit|Read.*"), Some("ReadFile")));
+    assert!(matcher_matches(
+        Some("Write|Edit|Read.*"),
+        Some("Write"),
+        true
+    ));
+    assert!(matcher_matches(
+        Some("Write|Edit|Read.*"),
+        Some("Edit"),
+        true
+    ));
+    assert!(matcher_matches(
+        Some("Write|Edit|Read.*"),
+        Some("ReadFile"),
+        true
+    ));
 }
 
 #[test]
 fn test_matcher_glob_fallback_on_invalid_regex() {
     // Invalid regex like "[" falls through to glob
     // "[" is also invalid glob, so should return false
-    assert!(!matcher_matches(Some("["), Some("anything")));
+    assert!(!matcher_matches(Some("["), Some("anything"), true));
 }
 
 // -----------------------------------------------------------------------

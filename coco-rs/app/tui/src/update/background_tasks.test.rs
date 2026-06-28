@@ -6,6 +6,7 @@ use crate::events::TuiCommand;
 use crate::state::AppState;
 use crate::state::BackgroundTasksState;
 use crate::state::ModalState;
+use crate::state::WorkflowAgentStatusFilter;
 use crate::state::session::TaskEntry;
 use crate::state::session::TaskEntryKind;
 use crate::state::session::TaskEntryStatus;
@@ -39,6 +40,7 @@ async fn x_cancels_selected_workflow_task() {
         .show_modal(ModalState::BackgroundTasks(BackgroundTasksState {
             selected: 2,
             detail: None,
+            workflow_agent_filter: Default::default(),
         }));
     let (tx, mut rx) = mpsc::channel(4);
 
@@ -49,5 +51,72 @@ async fn x_cancels_selected_workflow_task() {
     assert!(matches!(
         cmd,
         UserCommand::CancelSubagent { task_id } if task_id == "workflow-1"
+    ));
+}
+
+#[tokio::test]
+async fn f_cycles_workflow_detail_filter_skipping_empty_statuses() {
+    let mut state = AppState::default();
+    let mut workflow = running_task("workflow-1", TaskEntryKind::Workflow);
+    workflow.workflow_progress = vec![
+        coco_types::WorkflowProgressEvent::WorkflowAgent {
+            index: 0,
+            state: coco_types::WorkflowAgentState::Done,
+            label: "Explore".to_string(),
+            phase_title: None,
+            phase_index: None,
+            agent_id: None,
+            model: None,
+            tokens: None,
+            tool_calls: None,
+            duration_ms: None,
+            cached: false,
+            result_preview: None,
+            prompt_preview: None,
+            error: None,
+        },
+        coco_types::WorkflowProgressEvent::WorkflowAgent {
+            index: 1,
+            state: coco_types::WorkflowAgentState::Error,
+            label: "Verify".to_string(),
+            phase_title: None,
+            phase_index: None,
+            agent_id: None,
+            model: None,
+            tokens: None,
+            tool_calls: None,
+            duration_ms: None,
+            cached: false,
+            result_preview: None,
+            prompt_preview: None,
+            error: Some("failed".to_string()),
+        },
+    ];
+    state.session.active_tasks = vec![workflow];
+    state
+        .ui
+        .show_modal(ModalState::BackgroundTasks(BackgroundTasksState {
+            selected: 0,
+            detail: Some("workflow-1".to_string()),
+            workflow_agent_filter: WorkflowAgentStatusFilter::All,
+        }));
+    let (tx, _rx) = mpsc::channel(4);
+
+    let handled = intercept(&mut state, &TuiCommand::InsertChar('f'), &tx).await;
+
+    assert!(matches!(handled, super::Handled::Yes(true)));
+    assert!(matches!(
+        state.ui.modal.as_ref(),
+        Some(ModalState::BackgroundTasks(bt))
+            if bt.workflow_agent_filter == WorkflowAgentStatusFilter::Failed
+    ));
+
+    let handled = intercept(&mut state, &TuiCommand::InsertChar('f'), &tx).await;
+
+    assert!(matches!(handled, super::Handled::Yes(true)));
+    assert!(matches!(
+        state.ui.modal.as_ref(),
+        Some(ModalState::BackgroundTasks(bt))
+            if bt.workflow_agent_filter == WorkflowAgentStatusFilter::Done
     ));
 }

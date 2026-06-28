@@ -1856,6 +1856,13 @@ pub enum TuiOnlyEvent {
         message_id: String,
         stats: Option<RewindDiffStatsPayload>,
     },
+    /// Hidden pre-clear conversation snapshot used only as a `/rewind`
+    /// source. `/clear` still resets the visible transcript; this lets
+    /// the picker recover a prompt from the prior session when the new
+    /// session has no selectable messages yet.
+    RewindPreClearSnapshot {
+        messages: Vec<std::sync::Arc<crate::messages::Message>>,
+    },
 
     // === Compaction / speculation toasts (4) ===
     /// Compaction circuit breaker opened.

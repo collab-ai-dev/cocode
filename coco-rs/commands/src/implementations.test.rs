@@ -294,6 +294,65 @@ async fn workflow_prompt_command_uses_workflow_tool() {
     );
 }
 
+#[tokio::test]
+async fn review_prompt_command_matches_pr_scope_and_medium_effort() {
+    let mut registry = CommandRegistry::new();
+    register_ts_parity_handlers(
+        &mut registry,
+        coco_types::UserType::Human,
+        coco_types::Features::with_defaults(),
+        std::path::PathBuf::from("."),
+        std::path::PathBuf::from("."),
+        None,
+    );
+
+    let command = registry
+        .get(names::REVIEW)
+        .expect("/review should be registered");
+    assert_eq!(
+        command.base.description,
+        "Review a GitHub pull request; for your working diff use /code-review"
+    );
+    assert_eq!(command.base.argument_hint.as_deref(), Some("[pr number]"));
+    let CommandType::Prompt(data) = &command.command_type else {
+        panic!("expected prompt command");
+    };
+    assert_eq!(
+        data.thinking_level.as_ref().map(|level| level.effort),
+        Some(coco_types::ReasoningEffort::Medium)
+    );
+
+    let result = registry
+        .execute_command(names::REVIEW, "#123 focus security")
+        .await
+        .unwrap();
+    let crate::CommandResult::Prompt { parts, .. } = result else {
+        panic!("expected prompt result");
+    };
+    let text = match &parts[0] {
+        crate::PromptPart::Text { text } => text,
+        crate::PromptPart::File { .. } => panic!("expected text prompt part"),
+    };
+    assert!(text.contains("Review target: GitHub pull request `123`."));
+    assert!(text.contains(
+        "gh pr view 123 --json title,body,author,baseRefName,headRefName,state,additions,deletions,changedFiles,labels"
+    ));
+    assert!(text.contains("gh pr diff 123"));
+    assert!(text.contains("Local working-tree changes are out of scope."));
+    assert!(text.contains("Additional instructions from the user: focus security"));
+
+    let no_arg = registry.execute_command(names::REVIEW, "").await.unwrap();
+    let crate::CommandResult::Prompt { parts, .. } = no_arg else {
+        panic!("expected prompt result");
+    };
+    let no_arg_text = match &parts[0] {
+        crate::PromptPart::Text { text } => text,
+        crate::PromptPart::File { .. } => panic!("expected text prompt part"),
+    };
+    assert!(no_arg_text.contains("gh pr list"));
+    assert!(no_arg_text.contains("/review <number>"));
+}
+
 #[test]
 fn test_plan_handler_subcommands() {
     // Fallback handler used when not running through the TUI dispatcher.

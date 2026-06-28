@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use coco_types::ModelRole;
 use coco_types::PermissionMode;
@@ -27,6 +29,7 @@ pub(crate) const BASH_MAX_OUTPUT_BYTES_UPPER: i64 = 150_000;
 const DEFAULT_GLOB_TIMEOUT_SECONDS: i32 = 10;
 // DEFAULT_MAX_RETRIES = 10, base delay 500ms.
 const DEFAULT_MAX_RETRIES: i32 = 10;
+const MAX_RETRIES_CAP: i32 = 15;
 const DEFAULT_RETRY_BASE_DELAY_MS: i64 = 500;
 // #134: `getRetryDelay` maxDelayMs default is 32000.
 const DEFAULT_RETRY_MAX_DELAY_MS: i64 = 32_000;
@@ -38,6 +41,7 @@ const DEFAULT_WEB_FETCH_TIMEOUT_SECS: i64 = 60;
 /// 100K-char extraction budget.
 /// `MAX_MARKDOWN_LENGTH = 100_000`. Guards side-query token cost.
 const DEFAULT_WEB_FETCH_MAX_CONTENT_LENGTH: i64 = 100_000;
+static MAX_RETRIES_CLAMP_WARNED: AtomicBool = AtomicBool::new(false);
 /// Default user agent — so robots.txt
 /// rules targeting Claude-Code's fetcher apply identically to coco-rs.
 const DEFAULT_WEB_FETCH_USER_AGENT: &str = "Claude-User (coco-rs; +https://support.anthropic.com/)";
@@ -351,6 +355,16 @@ impl ApiRetryConfig {
 
     fn finalize(&mut self) {
         self.max_retries = self.max_retries.max(0);
+        if self.max_retries > MAX_RETRIES_CAP {
+            if !MAX_RETRIES_CLAMP_WARNED.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    requested = self.max_retries,
+                    cap = MAX_RETRIES_CAP,
+                    "COCO_API_MAX_RETRIES clamped to retry cap"
+                );
+            }
+            self.max_retries = MAX_RETRIES_CAP;
+        }
         self.base_delay_ms = self.base_delay_ms.max(0);
         self.max_delay_ms = self.max_delay_ms.max(self.base_delay_ms);
         self.jitter_factor = self.jitter_factor.clamp(0.0, 1.0);

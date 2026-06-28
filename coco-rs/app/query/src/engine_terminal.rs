@@ -199,10 +199,15 @@ impl QueryEngine {
         usage: TokenUsage,
         parsed_stop_reason: Option<coco_messages::StopReason>,
     ) -> NoToolCallsTerminal {
-        if self.tools.get_by_name("StructuredOutput").is_some()
+        if self.config.requires_structured_output
+            && self.tools.get_by_name("StructuredOutput").is_some()
             && acc.run_artifacts.structured_output.is_none()
         {
             let max_retries = crate::config::max_structured_output_retries();
+            acc.run_artifacts.structured_output_attempts = acc
+                .run_artifacts
+                .structured_output_attempts
+                .saturating_add(1);
             if acc.run_artifacts.structured_output_attempts >= max_retries {
                 warn!(
                     attempts = acc.run_artifacts.structured_output_attempts,
@@ -228,6 +233,16 @@ impl QueryEngine {
                     history.snapshot(),
                 )));
             }
+            crate::history_sync::history_push_and_emit(
+                history,
+                crate::engine_turn_reminders::structured_output_enforcement_message(),
+                event_tx,
+            )
+            .await;
+            turn_state.transition = Some(crate::ContinueReason::NextTurn);
+            turn_state.stop_hook_active = false;
+            turn_state.max_tokens_recovery_count = 0;
+            return NoToolCallsTerminal::ContinueLoop;
         }
 
         self.flush_successful_turn_state(&mut *history).await;

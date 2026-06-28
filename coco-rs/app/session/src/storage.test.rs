@@ -292,6 +292,9 @@ fn test_metadata_entries_round_trip() {
             &MetadataEntry::LastPrompt {
                 session_id: sid.to_string(),
                 last_prompt: "Fix the bug".to_string(),
+                leaf_uuid: None,
+                explicit: false,
+                rewound: false,
             },
         )
         .unwrap();

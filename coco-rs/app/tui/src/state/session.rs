@@ -148,6 +148,10 @@ pub struct SessionState {
     /// JSONL transcript on disk — this is the source of truth for
     /// "what is in the conversation".
     pub transcript: super::transcript_view::TranscriptView,
+    /// Hidden snapshot of the conversation immediately before the most
+    /// recent `/clear`. Used only to populate `/rewind` when the fresh
+    /// post-clear transcript has no selectable user messages.
+    pub rewind_pre_clear_messages: Vec<std::sync::Arc<coco_messages::Message>>,
     /// Active model id (e.g. `claude-sonnet-4-6`, `gpt-5`, `gemini-2.5-pro`).
     pub model: String,
     /// Active provider id for [`Self::model`] (e.g. `anthropic`, `openai`,
@@ -625,6 +629,7 @@ impl Default for SessionState {
     fn default() -> Self {
         Self {
             transcript: super::transcript_view::TranscriptView::new(),
+            rewind_pre_clear_messages: Vec::new(),
             model: String::new(),
             provider: String::new(),
             model_catalog: Vec::new(),

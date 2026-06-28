@@ -5,6 +5,23 @@ use crate::transcript::derive::test_helpers;
 
 use super::*;
 
+fn user_message(id: uuid::Uuid, text: &str) -> Message {
+    Message::User(coco_messages::UserMessage {
+        message: coco_messages::LlmMessage::User {
+            content: vec![coco_messages::UserContent::text(text)],
+            provider_options: None,
+        },
+        uuid: id,
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    })
+}
+
 /// Map a legacy test id (`"msg-1"`) to the v5 UUID the cell-push helper
 /// would have produced for the same id. Returns a `Uuid` (not a String)
 /// so callers can pass it directly to `build_rewind_state_for_uuid` and
@@ -95,6 +112,26 @@ fn test_build_rewind_state_does_not_populate_row_stats_eagerly() {
             "can_restore unknown until RewindRowMetadataReady arrives"
         );
     }
+}
+
+#[test]
+fn test_build_rewind_state_uses_pre_clear_snapshot_when_visible_transcript_empty() {
+    let mut state = AppState::new();
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    state.session.rewind_pre_clear_messages = vec![
+        std::sync::Arc::new(user_message(first, "before clear one")),
+        std::sync::Arc::new(user_message(second, "before clear two")),
+    ];
+
+    let rewind = build_rewind_state(&state);
+
+    assert_eq!(rewind.messages.len(), 3, "two pre-clear rows + synthetic");
+    assert_eq!(rewind.messages[0].message_id, first);
+    assert_eq!(rewind.messages[0].display_text, "before clear one");
+    assert_eq!(rewind.messages[0].can_restore_code, Some(false));
+    assert_eq!(rewind.messages[1].message_id, second);
+    assert!(rewind.messages[2].is_current_prompt);
 }
 
 #[test]

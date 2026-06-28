@@ -111,6 +111,7 @@ use super::ActiveTurn;
 use super::ActiveTurnDrain;
 use super::PermissionsMutation;
 use super::SentinelTrigger;
+use super::add_dir_already_message;
 use super::classify_sentinel_trigger;
 use super::create_slash_metadata_message;
 use super::drain_active_turn;
@@ -127,6 +128,40 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::Mutex;
+
+#[test]
+fn add_dir_already_message_distinguishes_current_added_and_nested() {
+    let current = std::path::Path::new("/repo");
+    let additional = vec![std::path::PathBuf::from("/opt/shared")];
+
+    assert_eq!(
+        add_dir_already_message(std::path::Path::new("/repo"), current, &additional).as_deref(),
+        Some("/repo is already the current working directory.")
+    );
+    assert_eq!(
+        add_dir_already_message(std::path::Path::new("/opt/shared"), current, &additional)
+            .as_deref(),
+        Some("/opt/shared is already added as a working directory.")
+    );
+    assert_eq!(
+        add_dir_already_message(std::path::Path::new("/repo/src"), current, &additional).as_deref(),
+        Some("/repo/src is already accessible within the current working directory /repo.")
+    );
+    assert_eq!(
+        add_dir_already_message(
+            std::path::Path::new("/opt/shared/tools"),
+            current,
+            &additional,
+        )
+        .as_deref(),
+        Some(
+            "/opt/shared/tools is already accessible within the additional working directory /opt/shared."
+        )
+    );
+    assert!(
+        add_dir_already_message(std::path::Path::new("/tmp/other"), current, &additional).is_none()
+    );
+}
 
 #[test]
 fn title_gen_fires_when_all_conditions_met() {

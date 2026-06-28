@@ -180,6 +180,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::SlashCommandResult { .. } => "SlashCommandResult",
         E::OpenGoalStatus { .. } => "OpenGoalStatus",
         E::OpenContextUsage { .. } => "OpenContextUsage",
+        E::RewindPreClearSnapshot { .. } => "RewindPreClearSnapshot",
         E::OpenRewindPicker => "OpenRewindPicker",
         E::OpenMemoryDialog { .. } => "OpenMemoryDialog",
         E::OpenWorkflowPicker { .. } => "OpenWorkflowPicker",

@@ -55,6 +55,37 @@ fn test_apply_patch_summary_lists_target_paths() {
 }
 
 #[test]
+fn test_structured_output_summary_lists_up_to_three_fields_with_values() {
+    assert_eq!(
+        tool_input_summary(
+            ToolName::StructuredOutput.as_str(),
+            &json!({
+                "age": 30,
+                "name": "Alice",
+                "profile": { "role": "engineer" }
+            })
+        ),
+        r#"age: 30, name: "Alice", profile: {"role":"engineer"}"#
+    );
+}
+
+#[test]
+fn test_structured_output_summary_many_fields_matches_ts_shape() {
+    assert_eq!(
+        tool_input_summary(
+            ToolName::StructuredOutput.as_str(),
+            &json!({
+                "alpha": 1,
+                "beta": 2,
+                "gamma": 3,
+                "delta": 4
+            })
+        ),
+        "4 fields: alpha, beta, delta…"
+    );
+}
+
+#[test]
 fn test_unknown_tool_falls_back_to_object_summary() {
     assert_eq!(
         tool_input_summary("totally_custom", &json!({"a": 1, "b": "x"})),
