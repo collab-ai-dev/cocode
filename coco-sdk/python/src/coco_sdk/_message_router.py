@@ -12,6 +12,7 @@ from coco_sdk._internal.transport import Transport
 from coco_sdk.errors import ProcessError, TransportClosedError
 
 logger = logging.getLogger(__name__)
+JSONRPC_VERSION = "2.0"
 
 ServerRequestHandler = Callable[[dict[str, Any]], Awaitable[bool]]
 
@@ -91,11 +92,15 @@ class MessageRouter:
             raise
 
     async def respond(self, request_id: int | str, result: Any) -> None:
-        await self._transport.send_line(json.dumps({
-            "type": "response",
-            "request_id": request_id,
-            "result": result if result is not None else {},
-        }))
+        await self._transport.send_line(
+            json.dumps(
+                {
+                    "jsonrpc": JSONRPC_VERSION,
+                    "id": request_id,
+                    "result": result if result is not None else {},
+                }
+            )
+        )
 
     async def respond_error(
         self,
@@ -104,12 +109,18 @@ class MessageRouter:
         code: int = -32603,
         message: str,
     ) -> None:
-        await self._transport.send_line(json.dumps({
-            "type": "error",
-            "request_id": request_id,
-            "code": code,
-            "message": message,
-        }))
+        await self._transport.send_line(
+            json.dumps(
+                {
+                    "jsonrpc": JSONRPC_VERSION,
+                    "id": request_id,
+                    "error": {
+                        "code": code,
+                        "message": message,
+                    },
+                }
+            )
+        )
 
     async def next_event(self) -> dict[str, Any]:
         item = await self._events.get()
@@ -117,10 +128,12 @@ class MessageRouter:
             raise item
         return item
 
-    async def _send_typed_request(self, request_id: int | str, typed_request: Any) -> None:
+    async def _send_typed_request(
+        self, request_id: int | str, typed_request: Any
+    ) -> None:
         envelope: dict[str, Any] = {
-            "type": "request",
-            "request_id": request_id,
+            "jsonrpc": JSONRPC_VERSION,
+            "id": request_id,
             "method": typed_request.method,
         }
         params = getattr(typed_request, "params", None)
@@ -135,15 +148,20 @@ class MessageRouter:
     async def _read_messages(self) -> None:
         try:
             async for data in self._transport.read_lines():
-                msg_type = data.get("type")
-                if msg_type == "response":
+                if data.get("jsonrpc") != JSONRPC_VERSION:
+                    raise ProcessError(
+                        f"invalid JSON-RPC version from coco: {data.get('jsonrpc')!r}"
+                    )
+                if "id" in data and "result" in data:
                     self._route_response(data)
-                elif msg_type == "error":
+                elif "error" in data:
                     self._route_error(data)
-                elif msg_type == "request":
+                elif "id" in data and "method" in data:
                     self._route_server_request(data)
-                else:
+                elif "method" in data:
                     await self._events.put(data)
+                else:
+                    raise ProcessError(f"invalid JSON-RPC message from coco: {data!r}")
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
@@ -152,7 +170,7 @@ class MessageRouter:
             self._fail_all(TransportClosedError("transport closed"))
 
     def _route_response(self, data: dict[str, Any]) -> None:
-        request_id = data.get("request_id")
+        request_id = data.get("id")
         if request_id in self._ignored_responses:
             self._ignored_responses.discard(request_id)
             return
@@ -164,14 +182,15 @@ class MessageRouter:
             self._early_responses[request_id] = data.get("result", {}) or {}
 
     def _route_error(self, data: dict[str, Any]) -> None:
-        request_id = data.get("request_id")
+        request_id = data.get("id")
+        error_obj = data.get("error") or {}
         if request_id in self._ignored_responses:
             self._ignored_responses.discard(request_id)
             return
         waiter = self._pending.pop(request_id, None)
         error = ProcessError(
-            f"coco rejected request {request_id}: {data.get('message', '')}",
-            exit_code=data.get("code"),
+            f"coco rejected request {request_id}: {error_obj.get('message', '')}",
+            exit_code=error_obj.get("code"),
         )
         if waiter and not waiter.done():
             waiter.set_exception(error)
@@ -181,8 +200,8 @@ class MessageRouter:
             return
         logger.warning(
             "wire error from coco: code=%s message=%s",
-            data.get("code"),
-            data.get("message"),
+            error_obj.get("code"),
+            error_obj.get("message"),
         )
 
     def _route_server_request(self, data: dict[str, Any]) -> None:

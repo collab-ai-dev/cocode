@@ -182,8 +182,8 @@ impl SandboxApprovalBridge for SdkSandboxApprovalBridge {
             }
             JsonRpcMessage::Error(e) => {
                 warn!(
-                    code = e.code,
-                    message = %e.message,
+                    code = e.error.code,
+                    message = %e.error.message,
                     "SdkSandboxApprovalBridge: client returned error; rejecting"
                 );
                 SandboxApprovalDecision::Rejected

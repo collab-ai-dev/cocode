@@ -317,7 +317,7 @@ async fn bridge_elicitation_to_sdk_client(
         coco_types::JsonRpcMessage::Error(e) => {
             return Err(coco_mcp::RmcpClientError::generic(format!(
                 "SDK client returned error for mcp/requestElicitation: {} ({})",
-                e.message, e.code
+                e.error.message, e.error.code
             )));
         }
         other => {

@@ -1,26 +1,30 @@
-//! coco-rs SDK control protocol — wire envelope.
+//! coco-rs SDK control protocol — strict JSON-RPC 2.0 wire envelope.
 //!
-//! **Not strict JSON-RPC 2.0** — there is no `jsonrpc: "2.0"` field
-//! on the wire. The shape is JSON-RPC-*like* (request_id / method /
-//! params / result), promoted from the TS SDK's `control_request` /
-//! `control_response` discriminated union for clearer correlation and
-//! cross-language codegen.
-//!
-//! **Not strictly TS-mirror** — TS uses
-//! `{type: "control_request", request_id, request: {subtype, ...}}` /
-//! `{type: "control_response", response: {subtype, request_id, response?, error?}}`
-//! with `subtype` as the method discriminator nested under
-//! `request`/`response`. coco-rs flattens that to
-//! `{type: "request"|"response"|"notification"|"error", request_id,
-//! method, params|result|error}` so the wire is one level shallower
-//! and JSON-RPC tooling Just Works. Functionally equivalent contract;
-//! different envelope tags. SDK clients targeting coco-rs follow this
-//! shape, not the TS one — see `coco-sdk/python/_message_router.py`.
+//! SDK clients send one JSON-RPC message per NDJSON line. Requests and
+//! responses correlate through `id`; notifications omit `id`; errors use
+//! the standard nested `{ code, message, data? }` object. Batch requests
+//! are intentionally unsupported.
 //!
 //! See `event-system-design.md` §1.4.
 
 use serde::Deserialize;
 use serde::Serialize;
+
+pub const JSONRPC_VERSION: &str = "2.0";
+
+fn deserialize_jsonrpc_version<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value == JSONRPC_VERSION {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "invalid JSON-RPC version: expected {JSONRPC_VERSION}, got {value}"
+        )))
+    }
+}
 
 /// Request identifier. Can be a string or integer per JSON-RPC 2.0.
 /// SDK clients typically use integers; coco-rs accepts both.
@@ -42,14 +46,12 @@ impl RequestId {
     }
 }
 
-/// Top-level wire message. SDK clients send these over stdin; coco-rs
-/// writes these to stdout. Consumers dispatch on the `type` discriminator
-/// (NOT `method` — JSON-RPC's `method` field is inside the inner payload).
+/// Top-level JSON-RPC 2.0 message.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum JsonRpcMessage {
-    /// Request expecting a response. Correlates via `request_id`.
+    /// Request expecting a response. Correlates via `id`.
     Request(JsonRpcRequest),
     /// Response to a previously-sent request.
     Response(JsonRpcResponse),
@@ -64,7 +66,10 @@ pub enum JsonRpcMessage {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
+    #[serde(deserialize_with = "deserialize_jsonrpc_version")]
+    pub jsonrpc: String,
     /// Unique identifier for correlating the response.
+    #[serde(rename = "id")]
     pub request_id: RequestId,
     /// Dispatch key (e.g. "turn/start", "mcp/status").
     pub method: String,
@@ -77,6 +82,9 @@ pub struct JsonRpcRequest {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
+    #[serde(deserialize_with = "deserialize_jsonrpc_version")]
+    pub jsonrpc: String,
+    #[serde(rename = "id")]
     pub request_id: RequestId,
     /// Method-specific result value.
     #[serde(default)]
@@ -87,7 +95,16 @@ pub struct JsonRpcResponse {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcError {
+    #[serde(deserialize_with = "deserialize_jsonrpc_version")]
+    pub jsonrpc: String,
+    #[serde(rename = "id")]
     pub request_id: RequestId,
+    pub error: JsonRpcErrorObject,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcErrorObject {
     pub code: i32,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,6 +116,8 @@ pub struct JsonRpcError {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcNotification {
+    #[serde(deserialize_with = "deserialize_jsonrpc_version")]
+    pub jsonrpc: String,
     pub method: String,
     #[serde(default)]
     pub params: serde_json::Value,

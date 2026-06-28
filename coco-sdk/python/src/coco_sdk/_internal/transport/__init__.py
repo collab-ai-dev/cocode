@@ -15,8 +15,8 @@ class Transport(ABC):
     Two send paths:
 
     * :meth:`send_request` (preferred) — wraps a typed ``*Request``
-      model in the JSON-RPC envelope ``{type, request_id, method,
-      params}`` coco-rs requires, allocates a fresh request id, and
+      model in the JSON-RPC 2.0 envelope ``{jsonrpc, id, method,
+      params}``, allocates a fresh request id, and
       returns it. Use this for every wire interaction.
     * :meth:`send_line` — raw NDJSON write. Reserved for cases where
       the caller is hand-building the envelope (for example, the
@@ -39,8 +39,8 @@ class Transport(ABC):
         """
         request_id = self.next_request_id()
         envelope: dict[str, Any] = {
-            "type": "request",
-            "request_id": request_id,
+            "jsonrpc": "2.0",
+            "id": request_id,
             "method": typed_request.method,
         }
         params = getattr(typed_request, "params", None)

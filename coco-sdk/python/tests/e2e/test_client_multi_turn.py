@@ -40,7 +40,9 @@ async def test_client_two_turns(live_deepseek, isolated_cwd) -> None:
         # Follow-up turn — verify the model has the conversation context.
         second_parts: list[str] = []
         async with asyncio.timeout(120):
-            async for event in client.send("What number did I ask you to remember? Reply with just the digits."):
+            async for event in client.send(
+                "What number did I ask you to remember? Reply with just the digits."
+            ):
                 if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
                     second_parts.append(event.params.delta)
                 elif event.method == NotificationMethod.TURN_ENDED:

@@ -316,7 +316,9 @@ pub use server_request::ToolTypeBreakdown;
 pub use server_request::TurnStartResult;
 
 // JSON-RPC envelope types (Phase 2 — wire format)
+pub use jsonrpc::JSONRPC_VERSION;
 pub use jsonrpc::JsonRpcError;
+pub use jsonrpc::JsonRpcErrorObject;
 pub use jsonrpc::JsonRpcMessage;
 pub use jsonrpc::JsonRpcNotification;
 pub use jsonrpc::JsonRpcRequest;

@@ -112,7 +112,7 @@ async fn route_hook_callback(
         }
         coco_types::JsonRpcMessage::Error(error) => Err(coco_hooks::HooksError::generic(format!(
             "SDK client returned hook/callback error: {} ({})",
-            error.message, error.code
+            error.error.message, error.error.code
         ))),
         other => {
             warn!(?other, "unexpected hook/callback reply");

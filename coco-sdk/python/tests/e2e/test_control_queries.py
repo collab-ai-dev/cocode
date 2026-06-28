@@ -40,7 +40,9 @@ async def test_mcp_status_returns_empty_roster(live_deepseek, isolated_cwd) -> N
     )
 
 
-async def test_context_usage_returns_token_breakdown(live_deepseek, isolated_cwd) -> None:
+async def test_context_usage_returns_token_breakdown(
+    live_deepseek, isolated_cwd
+) -> None:
     """After a real turn against DeepSeek, context_usage should report
     a non-empty breakdown — at minimum a token count (pre-turn or post-turn).
     """

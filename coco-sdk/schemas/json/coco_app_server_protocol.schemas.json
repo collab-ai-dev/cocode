@@ -3989,6 +3989,26 @@
     "JsonRpcError": {
       "description": "Error response payload. Mirrors JSON-RPC 2.0 error structure.",
       "properties": {
+        "error": {
+          "$ref": "#/$defs/JsonRpcErrorObject"
+        },
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "jsonrpc": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ],
+      "title": "JsonRpcError",
+      "type": "object"
+    },
+    "JsonRpcErrorObject": {
+      "properties": {
         "code": {
           "format": "int32",
           "type": "integer"
@@ -3996,84 +4016,42 @@
         "data": true,
         "message": {
           "type": "string"
-        },
-        "request_id": {
-          "$ref": "#/$defs/RequestId"
         }
       },
       "required": [
-        "request_id",
         "code",
         "message"
       ],
-      "title": "JsonRpcError",
       "type": "object"
     },
     "JsonRpcMessage": {
-      "description": "Top-level wire message. SDK clients send these over stdin; coco-rs\nwrites these to stdout. Consumers dispatch on the `type` discriminator\n(NOT `method` \u2014 JSON-RPC's `method` field is inside the inner payload).",
-      "oneOf": [
+      "anyOf": [
         {
           "$ref": "#/$defs/JsonRpcRequest",
-          "description": "Request expecting a response. Correlates via `request_id`.",
-          "properties": {
-            "type": {
-              "const": "request",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
+          "description": "Request expecting a response. Correlates via `id`."
         },
         {
           "$ref": "#/$defs/JsonRpcResponse",
-          "description": "Response to a previously-sent request.",
-          "properties": {
-            "type": {
-              "const": "response",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
+          "description": "Response to a previously-sent request."
         },
         {
           "$ref": "#/$defs/JsonRpcNotification",
-          "description": "Fire-and-forget notification (no response expected).\n`ServerNotification` is the usual payload in coco-rs.",
-          "properties": {
-            "type": {
-              "const": "notification",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
+          "description": "Fire-and-forget notification (no response expected).\n`ServerNotification` is the usual payload in coco-rs."
         },
         {
           "$ref": "#/$defs/JsonRpcError",
-          "description": "Error reply (alternative to `Response` for failures).",
-          "properties": {
-            "type": {
-              "const": "error",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
+          "description": "Error reply (alternative to `Response` for failures)."
         }
       ],
+      "description": "Top-level JSON-RPC 2.0 message.",
       "title": "JsonRpcMessage"
     },
     "JsonRpcNotification": {
       "description": "Fire-and-forget notification. In coco-rs this is the primary outbound\nformat for `ServerNotification` events (no `request_id`).",
       "properties": {
+        "jsonrpc": {
+          "type": "string"
+        },
         "method": {
           "type": "string"
         },
@@ -4082,6 +4060,7 @@
         }
       },
       "required": [
+        "jsonrpc",
         "method"
       ],
       "title": "JsonRpcNotification",
@@ -4090,6 +4069,13 @@
     "JsonRpcRequest": {
       "description": "A JSON-RPC request wrapper. Holds the method name + params.",
       "properties": {
+        "id": {
+          "$ref": "#/$defs/RequestId",
+          "description": "Unique identifier for correlating the response."
+        },
+        "jsonrpc": {
+          "type": "string"
+        },
         "method": {
           "description": "Dispatch key (e.g. \"turn/start\", \"mcp/status\").",
           "type": "string"
@@ -4097,14 +4083,11 @@
         "params": {
           "default": null,
           "description": "Method-specific parameters."
-        },
-        "request_id": {
-          "$ref": "#/$defs/RequestId",
-          "description": "Unique identifier for correlating the response."
         }
       },
       "required": [
-        "request_id",
+        "jsonrpc",
+        "id",
         "method"
       ],
       "title": "JsonRpcRequest",
@@ -4113,8 +4096,11 @@
     "JsonRpcResponse": {
       "description": "Successful response payload.",
       "properties": {
-        "request_id": {
+        "id": {
           "$ref": "#/$defs/RequestId"
+        },
+        "jsonrpc": {
+          "type": "string"
         },
         "result": {
           "default": null,
@@ -4122,7 +4108,8 @@
         }
       },
       "required": [
-        "request_id"
+        "jsonrpc",
+        "id"
       ],
       "title": "JsonRpcResponse",
       "type": "object"

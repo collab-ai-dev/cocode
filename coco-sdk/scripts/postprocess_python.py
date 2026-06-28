@@ -373,22 +373,35 @@ def generate_tagged_union(
 
 
 def generate_thread_item() -> str:
-    """Generate the ThreadItem class with extra-fields pattern."""
-    lines = ['class ThreadItem(BaseModel):']
+    """Generate the ThreadItem class with typed details accessors."""
+    lines = ["class ThreadItem(BaseModel):"]
     lines.append('    """A discrete operation within a turn."""')
     lines.append("")
-    lines.append("    id: str")
-    lines.append("    type: str")
-    lines.append('    model_config = {"extra": "allow"}')
+    lines.append("    item_id: str")
+    lines.append("    turn_id: str")
+    lines.append("    details: ThreadItemDetails")
 
     for key, (method_name, return_type) in THREAD_ITEM_ACCESSORS.items():
         lines.append("")
         lines.append(f"    def {method_name}(self) -> {return_type} | None:")
-        lines.append(f"        if self.type == {key!r}:")
-        lines.append(f"            return {return_type}.model_validate(self.model_extra or {{}})")
+        lines.append(f"        if self.details.type == {key!r}:")
+        lines.append(f"            return {return_type}.model_validate(self.details.model_dump())")
         lines.append("        return None")
 
     return "\n".join(lines)
+
+
+def generate_thread_item_details_alias() -> str:
+    """Generate the ThreadItemDetails discriminated union alias."""
+    variants = [return_type for _, return_type in THREAD_ITEM_ACCESSORS.values()]
+    return (
+        "ThreadItemDetails = Annotated[\n"
+        "    Union[\n"
+        + "".join(f"        {name},\n" for name in variants)
+        + "    ],\n"
+        '    Field(discriminator="type"),\n'
+        "]"
+    )
 
 
 def generate_client_request_wrapper(
@@ -801,14 +814,21 @@ def collect_definitions(schema_dir: Path) -> dict[str, dict]:
             ):
                 defs[name] = entry
 
-    # Extract inline item types from ThreadItem oneOf variants.
+    # Extract inline item types from ThreadItemDetails oneOf variants.
     # These types (AgentMessageItem, ReasoningItem, etc.) are defined
     # inline in the schema, not in the definitions section.
     thread_item_path = schema_dir / "thread_item.json"
     if thread_item_path.exists():
         with open(thread_item_path) as f:
             ti_schema = json.load(f)
-        for variant in ti_schema.get("oneOf", []):
+        thread_item_variants = (
+            ti_schema.get("$defs", {})
+            .get("ThreadItemDetails", {})
+            .get("oneOf", [])
+        )
+        if not thread_item_variants:
+            thread_item_variants = ti_schema.get("oneOf", [])
+        for variant in thread_item_variants:
             type_prop = variant.get("properties", {}).get("type", {})
             type_values = enum_values(type_prop)
             if not type_values:
@@ -819,12 +839,8 @@ def collect_definitions(schema_dir: Path) -> dict[str, dict]:
             if class_name and class_name not in defs:
                 # Build a synthetic schema for this item type
                 props = dict(variant.get("properties", {}))
-                props.pop("type", None)  # Remove the discriminator
-                props.pop("id", None)    # Remove the shared id field
-                required = [
-                    r for r in variant.get("required", [])
-                    if r not in ("type", "id")
-                ]
+                props.pop("id", None)  # Remove the legacy shared id field
+                required = [r for r in variant.get("required", []) if r != "id"]
                 defs[class_name] = {
                     "type": "object",
                     "properties": props,
@@ -1261,11 +1277,13 @@ def main() -> None:
             sections.append(generate_model(name, all_defs[name], all_defs))
             sections.append("")
             model_names.discard(name)
+    sections.append(generate_thread_item_details_alias())
+    sections.append("")
     sections.append("")
 
     # ── Section: ThreadItem ──
     sections.append("# " + "-" * 75)
-    sections.append("# ThreadItem (tagged union with extra fields)")
+    sections.append("# ThreadItem")
     sections.append("# " + "-" * 75)
     sections.append("")
     sections.append(generate_thread_item())
@@ -1584,7 +1602,6 @@ def main() -> None:
         "# constructs validators eagerly; classes that reference\n"
         "# later-defined models would error on first validation\n"
         "# without an explicit rebuild pass.\n"
-        "import sys as _sys\n"
         "for _name in list(globals()):\n"
         "    _obj = globals()[_name]\n"
         "    if isinstance(_obj, type) and issubclass(_obj, BaseModel):\n"

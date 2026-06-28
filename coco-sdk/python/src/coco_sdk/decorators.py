@@ -93,8 +93,6 @@ def hook(
     """
 
     def decorator(fn: HookFn) -> HookDefinition:
-        return HookDefinition(
-            fn, event=event, matcher=matcher, timeout_ms=timeout_ms
-        )
+        return HookDefinition(fn, event=event, matcher=matcher, timeout_ms=timeout_ms)
 
     return decorator

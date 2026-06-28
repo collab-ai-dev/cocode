@@ -25,6 +25,9 @@ STATIC_EXPORTS = [
     "ToolDefinition",
     "tool",
     "TypedClient",
+    "CocoRuntime",
+    "find_coco_binary",
+    "resolve_coco_runtime",
     # Multi-provider helper namespace (mostly re-exports of schema-
     # derived types from coco_sdk.generated.protocol; ModelSpec adds an
     # ergonomic cli_arg/__str__ subclass; ModelAlias and DEEPSEEK are
@@ -93,6 +96,7 @@ from coco_sdk.errors import (
     TransportClosedError,
 )
 from coco_sdk.query import query
+from coco_sdk.runtime import CocoRuntime, find_coco_binary, resolve_coco_runtime
 from coco_sdk.structured import TypedClient
 from coco_sdk.tools import ToolDefinition, tool
 from coco_sdk.types import (

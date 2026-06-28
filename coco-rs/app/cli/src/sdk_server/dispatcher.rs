@@ -13,7 +13,9 @@ use coco_query::StreamAccumulator;
 use coco_types::AgentStreamEvent;
 use coco_types::ClientRequest;
 use coco_types::CoreEvent;
+use coco_types::JSONRPC_VERSION;
 use coco_types::JsonRpcError;
+use coco_types::JsonRpcErrorObject;
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcNotification;
 use coco_types::JsonRpcRequest;
@@ -585,15 +587,22 @@ impl SdkServer {
 // ---------------------------------------------------------------------------
 
 fn success_reply(request_id: RequestId, result: Value) -> JsonRpcMessage {
-    JsonRpcMessage::Response(JsonRpcResponse { request_id, result })
+    JsonRpcMessage::Response(JsonRpcResponse {
+        jsonrpc: JSONRPC_VERSION.into(),
+        request_id,
+        result,
+    })
 }
 
 fn error_reply(request_id: RequestId, code: i32, message: String) -> JsonRpcMessage {
     JsonRpcMessage::Error(JsonRpcError {
+        jsonrpc: JSONRPC_VERSION.into(),
         request_id,
-        code,
-        message,
-        data: None,
+        error: JsonRpcErrorObject {
+            code,
+            message,
+            data: None,
+        },
     })
 }
 
@@ -604,10 +613,13 @@ fn error_reply_with_data(
     data: Option<Value>,
 ) -> JsonRpcMessage {
     JsonRpcMessage::Error(JsonRpcError {
+        jsonrpc: JSONRPC_VERSION.into(),
         request_id,
-        code,
-        message,
-        data,
+        error: JsonRpcErrorObject {
+            code,
+            message,
+            data,
+        },
     })
 }
 
@@ -647,7 +659,11 @@ pub fn server_notification_to_jsonrpc(notif: ServerNotification) -> Option<JsonR
                 _ => return None,
             };
             let params = map.remove("params").unwrap_or(Value::Null);
-            Some(JsonRpcNotification { method, params })
+            Some(JsonRpcNotification {
+                jsonrpc: JSONRPC_VERSION.into(),
+                method,
+                params,
+            })
         }
         _ => None,
     }

@@ -6,12 +6,11 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 from typing import Any, AsyncIterator
 
+from coco_sdk.runtime import find_coco_binary
 from coco_sdk.errors import (
     CLIConnectionError,
-    CLINotFoundError,
     ProcessError,
     TransportClosedError,
 )
@@ -31,34 +30,13 @@ logger = logging.getLogger("coco_sdk.transport")
 _STDOUT_LINE_LIMIT = 64 * 1024 * 1024
 
 
-def _find_coco_binary() -> str:
-    """Locate the coco binary on PATH or common install locations."""
-    binary = shutil.which("coco")
-    if binary:
-        return binary
-
-    candidates = [
-        os.path.expanduser("~/.cargo/bin/coco"),
-        "/usr/local/bin/coco",
-    ]
-    for path in candidates:
-        if os.path.isfile(path) and os.access(path, os.X_OK):
-            return path
-
-    raise CLINotFoundError(
-        "coco binary not found. Install it or set COCO_PATH environment variable."
-    )
-
-
 class SubprocessCLITransport(Transport):
     """Transport that spawns ``coco sdk`` as a subprocess.
 
     The Rust binary's ``sdk`` subcommand speaks the **coco-rs SDK
-    control protocol** over NDJSON on stdin/stdout — a JSON-RPC-like
-    envelope (``{type, request_id, method, params}`` /
-    ``{type, request_id, result|error}``) but NOT strict JSON-RPC 2.0
-    (no ``jsonrpc: "2.0"`` field). See ``coco_types::jsonrpc`` for the
-    canonical envelope definition. Stderr is captured and logged.
+    control protocol** over NDJSON on stdin/stdout using strict JSON-RPC
+    2.0 single-message envelopes. Batch requests are not supported.
+    Stderr is captured and logged.
 
     ``cli_args`` are appended verbatim after ``sdk`` so callers can
     pass model selection, system prompt, permission mode, etc. without
@@ -75,7 +53,7 @@ class SubprocessCLITransport(Transport):
         env: dict[str, str] | None = None,
         cli_args: list[str] | None = None,
     ):
-        self._binary_path = binary_path or os.environ.get("COCO_PATH") or _find_coco_binary()
+        self._binary_path = find_coco_binary(binary_path)
         self._cwd = cwd
         self._env = env
         self._cli_args = list(cli_args) if cli_args else []
@@ -91,10 +69,13 @@ class SubprocessCLITransport(Transport):
                 return
             except OSError as e:
                 last_error = e
-                backoff = self.INITIAL_BACKOFF * (2 ** attempt)
+                backoff = self.INITIAL_BACKOFF * (2**attempt)
                 logger.warning(
                     "Failed to start coco (attempt %d/%d): %s. Retrying in %.1fs",
-                    attempt + 1, self.MAX_START_RETRIES, e, backoff,
+                    attempt + 1,
+                    self.MAX_START_RETRIES,
+                    e,
+                    backoff,
                 )
                 await asyncio.sleep(backoff)
         raise CLIConnectionError(
@@ -141,7 +122,7 @@ class SubprocessCLITransport(Transport):
         """Send a raw NDJSON line. Caller is responsible for wrapping.
 
         Most callers should use :meth:`send_request` instead — it wraps
-        the typed request in the ``{type, request_id, method, params}``
+        the typed request in the ``{jsonrpc, id, method, params}``
         envelope coco-rs's dispatcher expects.
         """
         if not self._process or not self._process.stdin:
@@ -159,16 +140,13 @@ class SubprocessCLITransport(Transport):
         """Wrap a generated ``*Request`` model into a JSON-RPC envelope and send.
 
         Returns the assigned ``request_id`` so callers can match the
-        eventual response. Coco-rs dispatcher requires every client→
-        server message to carry ``{type: "request", request_id, method,
-        params}`` — sending raw ``{method, params}`` triggers
-        ``parse error: missing field `type``` and the subprocess
-        terminates.
+        eventual response. Coco-rs dispatcher requires every client to
+        server message to carry ``{jsonrpc: "2.0", id, method, params}``.
         """
         request_id = self.next_request_id()
         envelope = {
-            "type": "request",
-            "request_id": request_id,
+            "jsonrpc": "2.0",
+            "id": request_id,
             "method": typed_request.method,
         }
         params = getattr(typed_request, "params", None)
@@ -201,23 +179,28 @@ class SubprocessCLITransport(Transport):
             try:
                 yield json.loads(line_str)
             except json.JSONDecodeError as e:
-                logger.warning("Malformed JSON from coco: %s (line: %s)", e, line_str[:200])
+                logger.warning(
+                    "Malformed JSON from coco: %s (line: %s)", e, line_str[:200]
+                )
 
     async def read_events(self) -> AsyncIterator[ServerNotification]:
-        """Yield only ``type: "notification"`` messages from the wire.
+        """Yield only JSON-RPC notifications from the wire.
 
-        Responses (``type: "response"``) and server-initiated requests
-        (``type: "request"``) are filtered out — they're consumed by
-        the request/reply machinery in ``CocoClient`` instead. For raw
-        access to every wire frame, use :meth:`read_lines`.
+        Responses, errors, and server-initiated requests all carry
+        ``id`` and are filtered out. For raw access to every wire frame,
+        use :meth:`read_lines`.
         """
         async for data in self.read_lines():
-            msg_type = data.get("type")
-            if msg_type and msg_type != "notification":
+            if data.get("jsonrpc") != "2.0":
+                logger.warning("Ignoring non-JSON-RPC 2.0 message from coco: %s", data)
+                continue
+            if "id" in data:
                 # Response, server request, or error — not an event.
                 continue
             try:
-                yield ServerNotification.model_validate(data)
+                event_data = dict(data)
+                event_data.pop("jsonrpc", None)
+                yield ServerNotification.model_validate(event_data)
             except Exception as e:
                 logger.warning("Failed to parse server event: %s", e)
 

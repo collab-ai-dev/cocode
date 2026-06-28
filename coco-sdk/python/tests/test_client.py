@@ -44,14 +44,16 @@ class MockTransport(Transport):
 
     async def read_events(self) -> AsyncIterator[ServerNotification]:
         for resp in self._responses:
-            yield ServerNotification.model_validate(resp)
+            event = dict(resp)
+            event.pop("jsonrpc", None)
+            yield ServerNotification.model_validate(event)
 
     async def close(self) -> None:
         self._closed = True
 
 
 def _notif(method: NotificationMethod, **params: Any) -> dict[str, Any]:
-    return {"method": method.value, "params": params}
+    return {"jsonrpc": "2.0", "method": method.value, "params": params}
 
 
 _DEFAULT_USAGE: dict[str, Any] = {
@@ -87,14 +89,18 @@ def _session_started(session_id: str = "s1", **overrides: Any) -> dict[str, Any]
         "version": "0.0.0-test",
     }
     params.update(overrides)
-    return {"method": NotificationMethod.SESSION_STARTED.value, "params": params}
+    return {
+        "jsonrpc": "2.0",
+        "method": NotificationMethod.SESSION_STARTED.value,
+        "params": params,
+    }
 
 
 def _server_request(method: ServerRequestMethod, **params: Any) -> dict[str, Any]:
     request_id = params.pop("_wire_request_id", f"srv_{method.value}")
     return {
-        "type": "request",
-        "request_id": request_id,
+        "jsonrpc": "2.0",
+        "id": request_id,
         "method": method.value,
         "params": params,
     }
@@ -106,18 +112,20 @@ def _sent_methods(transport: MockTransport) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_client_sends_initialize_session_start_turn_start() -> None:
-    transport = MockTransport(responses=[
-        _response(1, {}),
-        _response(2, {"session_id": "s1"}),
-        _response(3, {"turn_id": "t1"}),
-        _session_started(session_id="s1"),
-        _notif(
-            NotificationMethod.TURN_ENDED,
-            turn_id="t1",
-            usage={"input_tokens": {"total": 10}, "output_tokens": {"total": 5}},
-        outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
-        ),
-    ])
+    transport = MockTransport(
+        responses=[
+            _response(1, {}),
+            _response(2, {"session_id": "s1"}),
+            _response(3, {"turn_id": "t1"}),
+            _session_started(session_id="s1"),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 10}, "output_tokens": {"total": 5}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
 
     client = CocoClient(prompt="hello", transport=transport)
     await client.start()
@@ -142,15 +150,17 @@ async def test_client_sends_initialize_session_start_turn_start() -> None:
 
 @pytest.mark.asyncio
 async def test_client_send_follow_up() -> None:
-    transport = MockTransport(responses=[
-        _response(1, {"turn_id": "t2"}),
-        _notif(
-            NotificationMethod.TURN_ENDED,
-            turn_id="t2",
-            usage={"input_tokens": {"total": 5}, "output_tokens": {"total": 3}},
-        outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
-        ),
-    ])
+    transport = MockTransport(
+        responses=[
+            _response(1, {"turn_id": "t2"}),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t2",
+                usage={"input_tokens": {"total": 5}, "output_tokens": {"total": 3}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
 
     client = CocoClient(prompt="init", transport=transport)
     client._started = True
@@ -201,21 +211,23 @@ async def test_start_turn_does_not_retry_other_process_errors(monkeypatch) -> No
 
 @pytest.mark.asyncio
 async def test_client_auto_approval() -> None:
-    transport = MockTransport(responses=[
-        _server_request(
-            ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL,
-            request_id="r1",
-            tool_name="Read",
-            tool_use_id="tu1",
-            input={},
-        ),
-        _notif(
-            NotificationMethod.TURN_ENDED,
-            turn_id="t1",
-            usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
-        outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
-        ),
-    ])
+    transport = MockTransport(
+        responses=[
+            _server_request(
+                ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL,
+                request_id="r1",
+                tool_name="Read",
+                tool_use_id="tu1",
+                input={},
+            ),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
 
     from coco_sdk.generated.protocol import ApprovalDecision
 
@@ -230,7 +242,11 @@ async def test_client_auto_approval() -> None:
     assert events[0].method == NotificationMethod.TURN_ENDED
 
     approval_sent = json.loads(transport.sent_lines[0])
-    assert approval_sent["type"] == "response"
+    assert approval_sent["jsonrpc"] == "2.0"
+    assert (
+        approval_sent["id"]
+        == f"srv_{ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL.value}"
+    )
     assert approval_sent["result"]["decision"] == "allow"
     assert approval_sent["result"]["request_id"] == "r1"
 
@@ -241,21 +257,23 @@ async def test_client_denies_approval_without_callback() -> None:
     # approval request (denying it), or the server hangs waiting for a reply.
     # Regression: AskUserQuestion now always asks, so a headless session that
     # didn't set a callback used to hang on it.
-    transport = MockTransport(responses=[
-        _server_request(
-            ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL,
-            request_id="r1",
-            tool_name="AskUserQuestion",
-            tool_use_id="tu1",
-            input={},
-        ),
-        _notif(
-            NotificationMethod.TURN_ENDED,
-            turn_id="t1",
-            usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
-            outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
-        ),
-    ])
+    transport = MockTransport(
+        responses=[
+            _server_request(
+                ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL,
+                request_id="r1",
+                tool_name="AskUserQuestion",
+                tool_use_id="tu1",
+                input={},
+            ),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
 
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
@@ -265,7 +283,11 @@ async def test_client_denies_approval_without_callback() -> None:
     assert events[0].method == NotificationMethod.TURN_ENDED
 
     approval_sent = json.loads(transport.sent_lines[0])
-    assert approval_sent["type"] == "response"
+    assert approval_sent["jsonrpc"] == "2.0"
+    assert (
+        approval_sent["id"]
+        == f"srv_{ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL.value}"
+    )
     assert approval_sent["result"]["decision"] == "deny"
     assert approval_sent["result"]["request_id"] == "r1"
 
@@ -383,7 +405,7 @@ async def test_client_cancel_request() -> None:
 
 def _response(request_id: int, result: Any) -> dict[str, Any]:
     """Matches the real wire shape coco-rs sends back."""
-    return {"type": "response", "request_id": request_id, "result": result}
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
 @pytest.mark.asyncio
@@ -407,14 +429,22 @@ async def test_client_context_usage_returns_typed_response() -> None:
     """`context_usage()` returns a typed `ContextUsageResult`."""
     from coco_sdk import ContextUsageResult
 
-    transport = MockTransport(responses=[
-        _response(1, {
-            "total_tokens": 1000, "max_tokens": 100000,
-            "raw_max_tokens": 100000, "percentage": 1.0,
-            "model": "claude-opus", "categories": [],
-            "is_auto_compact_enabled": False,
-        }),
-    ])
+    transport = MockTransport(
+        responses=[
+            _response(
+                1,
+                {
+                    "total_tokens": 1000,
+                    "max_tokens": 100000,
+                    "raw_max_tokens": 100000,
+                    "percentage": 1.0,
+                    "model": "claude-opus",
+                    "categories": [],
+                    "is_auto_compact_enabled": False,
+                },
+            ),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
     result = await client.context_usage()
@@ -461,14 +491,18 @@ async def test_client_initialize_includes_hooks_map() -> None:
     from coco_sdk import hook
 
     @hook(event="PreToolUse", matcher="Bash", timeout_ms=5000)
-    async def block_rm(callback_id, event_type, input):  # pragma: no cover - decorator only
+    async def block_rm(
+        callback_id, event_type, input
+    ):  # pragma: no cover - decorator only
         return {"behavior": "allow"}
 
-    transport = MockTransport(responses=[
-        _response(1, {}),
-        _response(2, {"session_id": "s1"}),
-        _response(3, {"turn_id": "t1"}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _response(1, {}),
+            _response(2, {"session_id": "s1"}),
+            _response(3, {"turn_id": "t1"}),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport, hooks=[block_rm])
     await client.start()
 
@@ -492,13 +526,19 @@ async def test_client_waits_for_sdk_mcp_servers_before_session_start() -> None:
     async def ping() -> str:  # pragma: no cover - decorator only
         return "pong"
 
-    transport = MockTransport(responses=[
-        _response(1, {}),
-        _response(2, {"mcpServers": [{"name": ping.server_name, "status": "pending"}]}),
-        _response(3, {"mcpServers": [{"name": ping.server_name, "status": "connected"}]}),
-        _response(4, {"session_id": "s1"}),
-        _response(5, {"turn_id": "t1"}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _response(1, {}),
+            _response(
+                2, {"mcpServers": [{"name": ping.server_name, "status": "pending"}]}
+            ),
+            _response(
+                3, {"mcpServers": [{"name": ping.server_name, "status": "connected"}]}
+            ),
+            _response(4, {"session_id": "s1"}),
+            _response(5, {"turn_id": "t1"}),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport, tools=[ping])
     await client.start()
 
@@ -513,18 +553,20 @@ async def test_client_waits_for_sdk_mcp_servers_before_session_start() -> None:
 
 @pytest.mark.asyncio
 async def test_client_context_manager() -> None:
-    transport = MockTransport(responses=[
-        _response(1, {}),
-        _response(2, {"session_id": "s1"}),
-        _response(3, {"turn_id": "t1"}),
-        _session_started(session_id="s1"),
-        _notif(
-            NotificationMethod.TURN_ENDED,
-            turn_id="t1",
-            usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
-        outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
-        ),
-    ])
+    transport = MockTransport(
+        responses=[
+            _response(1, {}),
+            _response(2, {"session_id": "s1"}),
+            _response(3, {"turn_id": "t1"}),
+            _session_started(session_id="s1"),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
 
     async with CocoClient(prompt="hi", transport=transport) as client:
         _ = [event async for event in client.events()]
@@ -538,6 +580,7 @@ async def test_client_context_manager() -> None:
 @pytest.mark.asyncio
 async def test_client_set_permission_mode_string_coerced() -> None:
     from coco_sdk.generated.protocol import PermissionMode
+
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
@@ -551,6 +594,7 @@ async def test_client_set_permission_mode_string_coerced() -> None:
 @pytest.mark.asyncio
 async def test_client_set_permission_mode_enum() -> None:
     from coco_sdk.generated.protocol import PermissionMode
+
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
@@ -614,12 +658,29 @@ async def test_client_list_sessions_returns_typed_response() -> None:
     """`list_sessions()` returns a typed `SessionListResult`."""
     from coco_sdk import SessionListResult
 
-    transport = MockTransport(responses=[
-        _response(1, {"sessions": [
-            {"session_id": "s1", "model": "m", "cwd": "/", "created_at": "2025-01-01T00:00:00Z"},
-            {"session_id": "s2", "model": "m", "cwd": "/", "created_at": "2025-01-01T00:00:00Z"},
-        ]})
-    ])
+    transport = MockTransport(
+        responses=[
+            _response(
+                1,
+                {
+                    "sessions": [
+                        {
+                            "session_id": "s1",
+                            "model": "m",
+                            "cwd": "/",
+                            "created_at": "2025-01-01T00:00:00Z",
+                        },
+                        {
+                            "session_id": "s2",
+                            "model": "m",
+                            "cwd": "/",
+                            "created_at": "2025-01-01T00:00:00Z",
+                        },
+                    ]
+                },
+            )
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
     result = await client.list_sessions(limit=10)
@@ -636,10 +697,22 @@ async def test_client_read_session_returns_typed_response() -> None:
     """`read_session()` returns a typed `SessionReadResult`."""
     from coco_sdk import SessionReadResult
 
-    transport = MockTransport(responses=[_response(1, {
-        "session": {"session_id": "s1", "model": "m", "cwd": "/", "created_at": "2025-01-01T00:00:00Z"},
-        "messages": [],
-    })])
+    transport = MockTransport(
+        responses=[
+            _response(
+                1,
+                {
+                    "session": {
+                        "session_id": "s1",
+                        "model": "m",
+                        "cwd": "/",
+                        "created_at": "2025-01-01T00:00:00Z",
+                    },
+                    "messages": [],
+                },
+            )
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
     result = await client.read_session("s1")
@@ -668,9 +741,9 @@ async def test_client_read_config_returns_typed_response() -> None:
     """`read_config()` returns a typed `ConfigReadResult`."""
     from coco_sdk import ConfigReadResult
 
-    transport = MockTransport(responses=[
-        _response(1, {"config": {"theme": "dark"}, "sources": {}})
-    ])
+    transport = MockTransport(
+        responses=[_response(1, {"config": {"theme": "dark"}, "sources": {}})]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
     result = await client.read_config()
@@ -714,9 +787,9 @@ async def test_client_mcp_set_servers() -> None:
     from coco_sdk import McpSetServersResult
     from coco_sdk.generated.protocol import StdioMcpServerConfig
 
-    transport = MockTransport(responses=[
-        _response(1, {"added": ["fs"], "removed": [], "errors": {}})
-    ])
+    transport = MockTransport(
+        responses=[_response(1, {"added": ["fs"], "removed": [], "errors": {}})]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
     result = await client.mcp_set_servers(
@@ -748,9 +821,19 @@ async def test_client_plugin_reload() -> None:
     """`plugin_reload()` returns a typed `PluginReloadResult`."""
     from coco_sdk import PluginReloadResult
 
-    transport = MockTransport(responses=[_response(1, {
-        "plugins": ["a", "b", "c"], "commands": [], "agents": [], "error_count": 0,
-    })])
+    transport = MockTransport(
+        responses=[
+            _response(
+                1,
+                {
+                    "plugins": ["a", "b", "c"],
+                    "commands": [],
+                    "agents": [],
+                    "error_count": 0,
+                },
+            )
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
     result = await client.plugin_reload()
@@ -769,9 +852,15 @@ async def test_send_and_await_raises_on_error_frame() -> None:
     """Error response with matching request_id surfaces as ProcessError."""
     from coco_sdk.errors import ProcessError
 
-    transport = MockTransport(responses=[
-        {"type": "error", "request_id": 1, "code": -32601, "message": "method not found"}
-    ])
+    transport = MockTransport(
+        responses=[
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {"code": -32601, "message": "method not found"},
+            }
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
@@ -783,15 +872,17 @@ async def test_send_and_await_raises_on_error_frame() -> None:
 @pytest.mark.asyncio
 async def test_send_and_await_skips_other_request_ids() -> None:
     """Responses with non-matching ids are skipped until ours arrives."""
-    transport = MockTransport(responses=[
-        # Stale response for an earlier request — should be ignored.
-        _response(99, {"stale": True}),
-        # Notifications interleaved on the wire — also ignored by req/resp matcher.
-        _notif(NotificationMethod.SESSION_STATE_CHANGED, state="running"),
-        # Our actual response — must be a valid `mcp/status` payload now
-        # that the client decodes into a typed `McpStatusResult`.
-        _response(1, {"mcpServers": []}),
-    ])
+    transport = MockTransport(
+        responses=[
+            # Stale response for an earlier request — should be ignored.
+            _response(99, {"stale": True}),
+            # Notifications interleaved on the wire — also ignored by req/resp matcher.
+            _notif(NotificationMethod.SESSION_STATE_CHANGED, state="running"),
+            # Our actual response — must be a valid `mcp/status` payload now
+            # that the client decodes into a typed `McpStatusResult`.
+            _response(1, {"mcpServers": []}),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
     result = await client.mcp_status()
@@ -802,12 +893,17 @@ async def test_send_and_await_skips_other_request_ids() -> None:
 @pytest.mark.asyncio
 async def test_concurrent_control_query_and_events_share_reader() -> None:
     """A control request and event stream can both complete with one stdout reader."""
-    transport = MockTransport(responses=[
-        _notif(NotificationMethod.TURN_ENDED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
-               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
-        _response(1, {"mcpServers": []}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+            _response(1, {"mcpServers": []}),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
@@ -835,10 +931,12 @@ async def test_stdout_close_fails_pending_request() -> None:
 
 @pytest.mark.asyncio
 async def test_fire_and_forget_response_is_discarded() -> None:
-    transport = MockTransport(responses=[
-        _response(1, {}),
-        _response(2, {"mcpServers": []}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _response(1, {}),
+            _response(2, {"mcpServers": []}),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
@@ -850,13 +948,21 @@ async def test_fire_and_forget_response_is_discarded() -> None:
 @pytest.mark.asyncio
 async def test_events_loop_drops_error_frames() -> None:
     """Error frames during events() get logged-and-dropped, never raised."""
-    transport = MockTransport(responses=[
-        {"type": "error", "request_id": 99, "code": -32600, "message": "bad request"},
-        {"type": "notification", **_notif(NotificationMethod.TURN_ENDED,
-                                          turn_id="t1",
-                                          usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
-               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}})},
-    ])
+    transport = MockTransport(
+        responses=[
+            {
+                "jsonrpc": "2.0",
+                "id": 99,
+                "error": {"code": -32600, "message": "bad request"},
+            },
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
@@ -868,13 +974,17 @@ async def test_events_loop_drops_error_frames() -> None:
 @pytest.mark.asyncio
 async def test_events_loop_drops_response_frames() -> None:
     """Response frames during events() are silently dropped (handled by req/resp matcher)."""
-    transport = MockTransport(responses=[
-        {"type": "response", "request_id": 1, "result": {"orphan": True}},
-        {"type": "notification", **_notif(NotificationMethod.TURN_ENDED,
-                                          turn_id="t1",
-                                          usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
-               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}})},
-    ])
+    transport = MockTransport(
+        responses=[
+            _response(1, {"orphan": True}),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
@@ -888,21 +998,28 @@ async def test_hook_callback_dispatches_to_registered_handler() -> None:
     """When the server sends hook/callback, the registered handler runs and a response is sent."""
     seen: list[dict[str, Any]] = []
 
-    async def my_handler(callback_id: str, event_type: str, input: dict[str, Any]) -> dict[str, Any]:
+    async def my_handler(
+        callback_id: str, event_type: str, input: dict[str, Any]
+    ) -> dict[str, Any]:
         seen.append({"cb": callback_id, "event": event_type, "input": input})
         return {"behavior": "deny", "reason": "test rule"}
 
-    transport = MockTransport(responses=[
-        _server_request(
-            ServerRequestMethod.HOOK_CALLBACK,
-            callback_id="cb_xyz",
-            event_type="PreToolUse",
-            input={"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}},
-        ),
-        _notif(NotificationMethod.TURN_ENDED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
-               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _server_request(
+                ServerRequestMethod.HOOK_CALLBACK,
+                callback_id="cb_xyz",
+                event_type="PreToolUse",
+                input={"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}},
+            ),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
     client.on_hook("cb_xyz", my_handler)
@@ -922,7 +1039,7 @@ async def test_hook_callback_dispatches_to_registered_handler() -> None:
     # which the SDK ships verbatim (legacy shape; the typed
     # SdkHookOutput is preferred but Pydantic models also accept it).
     sent = [json.loads(line) for line in transport.sent_lines]
-    hook_responses = [m for m in sent if m.get("type") == "response"]
+    hook_responses = [m for m in sent if "result" in m and "id" in m]
     assert len(hook_responses) == 1
     assert "callback_id" not in hook_responses[0]["result"]
     # Whatever the handler returned ends up in `output` verbatim.
@@ -941,16 +1058,28 @@ async def test_hook_callback_handler_exception_falls_back_to_empty_output() -> N
     permission on crash. The TS-canonical empty dict surfaces the
     crash through logs while letting the loop continue.
     """
-    async def boom(callback_id: str, event_type: str, input: dict[str, Any]) -> dict[str, Any]:
+
+    async def boom(
+        callback_id: str, event_type: str, input: dict[str, Any]
+    ) -> dict[str, Any]:
         raise RuntimeError("handler crashed")
 
-    transport = MockTransport(responses=[
-        _server_request(ServerRequestMethod.HOOK_CALLBACK,
-                        callback_id="cb_x", event_type="PreToolUse", input={}),
-        _notif(NotificationMethod.TURN_ENDED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
-               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _server_request(
+                ServerRequestMethod.HOOK_CALLBACK,
+                callback_id="cb_x",
+                event_type="PreToolUse",
+                input={},
+            ),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
     client.on_hook("cb_x", boom)
@@ -958,7 +1087,7 @@ async def test_hook_callback_handler_exception_falls_back_to_empty_output() -> N
     _ = [e async for e in client.events()]
 
     sent = [json.loads(line) for line in transport.sent_lines]
-    responses = [m for m in sent if m.get("type") == "response"]
+    responses = [m for m in sent if "result" in m and "id" in m]
     assert len(responses) == 1
     assert responses[0]["result"]["output"] == {}
 
@@ -966,13 +1095,22 @@ async def test_hook_callback_handler_exception_falls_back_to_empty_output() -> N
 @pytest.mark.asyncio
 async def test_hook_callback_unregistered_id_yields_event() -> None:
     """When the callback_id has no handler registered, the notification is yielded so the caller can decide."""
-    transport = MockTransport(responses=[
-        _server_request(ServerRequestMethod.HOOK_CALLBACK,
-                        callback_id="cb_unknown", event_type="PreToolUse", input={}),
-        _notif(NotificationMethod.TURN_ENDED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
-               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _server_request(
+                ServerRequestMethod.HOOK_CALLBACK,
+                callback_id="cb_unknown",
+                event_type="PreToolUse",
+                input={},
+            ),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
     # No handler registered — expect the request to be yielded as a parsed notification.
@@ -987,14 +1125,29 @@ async def test_hook_callback_unregistered_id_yields_event() -> None:
 @pytest.mark.asyncio
 async def test_stream_text_yields_only_deltas() -> None:
     """`stream_text` filters everything except agent_message/delta payloads."""
-    transport = MockTransport(responses=[
-        _notif(NotificationMethod.TURN_STARTED, turn_id="t1", turn_number=1),
-        _notif(NotificationMethod.AGENT_MESSAGE_DELTA, item_id="i1", turn_id="t1", delta="Hello "),
-        _notif(NotificationMethod.AGENT_MESSAGE_DELTA, item_id="i1", turn_id="t1", delta="world"),
-        _notif(NotificationMethod.TURN_ENDED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 2}},
-               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _notif(NotificationMethod.TURN_STARTED, turn_id="t1", turn_number=1),
+            _notif(
+                NotificationMethod.AGENT_MESSAGE_DELTA,
+                item_id="i1",
+                turn_id="t1",
+                delta="Hello ",
+            ),
+            _notif(
+                NotificationMethod.AGENT_MESSAGE_DELTA,
+                item_id="i1",
+                turn_id="t1",
+                delta="world",
+            ),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 2}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
@@ -1004,13 +1157,28 @@ async def test_stream_text_yields_only_deltas() -> None:
 
 @pytest.mark.asyncio
 async def test_get_final_text_concatenates_deltas() -> None:
-    transport = MockTransport(responses=[
-        _notif(NotificationMethod.AGENT_MESSAGE_DELTA, item_id="i1", turn_id="t1", delta="Hello "),
-        _notif(NotificationMethod.AGENT_MESSAGE_DELTA, item_id="i1", turn_id="t1", delta="world"),
-        _notif(NotificationMethod.TURN_ENDED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 2}},
-               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _notif(
+                NotificationMethod.AGENT_MESSAGE_DELTA,
+                item_id="i1",
+                turn_id="t1",
+                delta="Hello ",
+            ),
+            _notif(
+                NotificationMethod.AGENT_MESSAGE_DELTA,
+                item_id="i1",
+                turn_id="t1",
+                delta="world",
+            ),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 2}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
@@ -1020,12 +1188,22 @@ async def test_get_final_text_concatenates_deltas() -> None:
 
 @pytest.mark.asyncio
 async def test_wait_for_turn_ended_returns_params() -> None:
-    transport = MockTransport(responses=[
-        _notif(NotificationMethod.AGENT_MESSAGE_DELTA, item_id="i1", turn_id="t1", delta="ok"),
-        _notif(NotificationMethod.TURN_ENDED,
-               turn_id="t1", usage={"input_tokens": {"total": 4}, "output_tokens": {"total": 1}},
-               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _notif(
+                NotificationMethod.AGENT_MESSAGE_DELTA,
+                item_id="i1",
+                turn_id="t1",
+                delta="ok",
+            ),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 4}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
@@ -1038,13 +1216,18 @@ async def test_wait_for_turn_ended_returns_params() -> None:
 @pytest.mark.asyncio
 async def test_resume_emits_session_resume_then_streams() -> None:
     """`resume` sends a session/resume request and yields the resulting events."""
-    transport = MockTransport(responses=[
-        _response(1, {"session_id": "s_old"}),
-        _session_started(session_id="s_old"),
-        _notif(NotificationMethod.TURN_ENDED,
-               turn_id="t-resumed", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
-               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _response(1, {"session_id": "s_old"}),
+            _session_started(session_id="s_old"),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t-resumed",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
 
@@ -1064,18 +1247,23 @@ async def test_can_use_tool_deny_flows_through_approve() -> None:
     """When `can_use_tool` denies, the approve() call carries the deny + feedback."""
     from coco_sdk.generated.protocol import ApprovalDecision
 
-    transport = MockTransport(responses=[
-        _server_request(
-            ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL,
-            request_id="approval_42",
-            tool_name="Bash",
-            tool_use_id="tu_1",
-            input={"command": "rm -rf /"},
-        ),
-        _notif(NotificationMethod.TURN_ENDED,
-               turn_id="t1", usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
-               outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}}),
-    ])
+    transport = MockTransport(
+        responses=[
+            _server_request(
+                ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL,
+                request_id="approval_42",
+                tool_name="Bash",
+                tool_use_id="tu_1",
+                input={"command": "rm -rf /"},
+            ),
+            _notif(
+                NotificationMethod.TURN_ENDED,
+                turn_id="t1",
+                usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+                outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+            ),
+        ]
+    )
 
     async def deny_dangerous(tool_name: str, input: dict[str, Any]) -> ApprovalDecision:
         return ApprovalDecision.deny
@@ -1085,7 +1273,7 @@ async def test_can_use_tool_deny_flows_through_approve() -> None:
     _ = [e async for e in client.events()]
 
     sent = [json.loads(line) for line in transport.sent_lines]
-    approval_resolves = [m for m in sent if m.get("type") == "response"]
+    approval_resolves = [m for m in sent if "result" in m and "id" in m]
     assert len(approval_resolves) == 1
     assert approval_resolves[0]["result"]["decision"] == "deny"
     assert approval_resolves[0]["result"]["request_id"] == "approval_42"

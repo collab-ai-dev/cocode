@@ -111,7 +111,7 @@ async fn route_message(
         }
         coco_types::JsonRpcMessage::Error(error) => Err(format!(
             "SDK client returned mcp/routeMessage error: {} ({})",
-            error.message, error.code
+            error.error.message, error.error.code
         )),
         other => Err(format!("unexpected mcp/routeMessage reply: {other:?}")),
     }

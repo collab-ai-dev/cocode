@@ -29,7 +29,7 @@ async def test_text_arrives_incrementally(live_deepseek, isolated_cwd) -> None:
                 # Ask for ~25-50 short tokens so we reliably see more than
                 # one delta even on a fast provider.
                 "List the numbers 1 through 20 separated by commas; nothing else.",
-                    models_main=live_deepseek.models_main,
+                models_main=live_deepseek.models_main,
                 cwd=str(isolated_cwd),
                 max_turns=1,
             ):
@@ -44,9 +44,7 @@ async def test_text_arrives_incrementally(live_deepseek, isolated_cwd) -> None:
                 elif method == NotificationMethod.TURN_ENDED:
                     pytest.fail(f"turn failed: {event.params}")
     except asyncio.TimeoutError:
-        pytest.fail(
-            f"streaming test timed out (got {len(delta_arrival_times)} deltas)"
-        )
+        pytest.fail(f"streaming test timed out (got {len(delta_arrival_times)} deltas)")
 
     assert len(delta_arrival_times) >= 2, (
         f"expected at least 2 deltas (streaming), got {len(delta_arrival_times)}"

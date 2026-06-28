@@ -349,6 +349,7 @@ pub async fn build_live_server_with_options(
 /// Build a `JsonRpcRequest` envelope.
 pub fn req(id: i64, method: &str, params: serde_json::Value) -> JsonRpcMessage {
     JsonRpcMessage::Request(JsonRpcRequest {
+        jsonrpc: coco_types::JSONRPC_VERSION.into(),
         request_id: RequestId::Integer(id),
         method: method.into(),
         params,
@@ -393,8 +394,8 @@ pub async fn drive_until_response(
                     return Err(anyhow!(
                         "SDK request {request_id} returned error: \
                          code={} message={}",
-                        err.code,
-                        err.message
+                        err.error.code,
+                        err.error.message
                     ));
                 }
             }

@@ -83,33 +83,39 @@ async def query(
         router.start()
 
         # 1) initialize — capability negotiation handshake.
-        await router.request(InitializeRequest(
-            params=InitializeRequest.InitializeRequestParams()
-        ))
+        await router.request(
+            InitializeRequest(params=InitializeRequest.InitializeRequestParams())
+        )
 
         # 2) session/start — create the session shell. `initial_prompt`
         #    on this request does NOT auto-run a turn (it's just a label
         #    for the first user message); turns are launched separately
         #    via `turn/start`.
-        await router.request(SessionStartRequest(params=SessionStartRequest.SessionStartRequestParams(
-            model=models_main_str,
-            max_turns=max_turns,
-            cwd=cwd,
-            append_system_prompt=append_system_prompt,
-            system_prompt=system_prompt,
-            permission_mode=(
-                PermissionMode(permission_mode)
-                if isinstance(permission_mode, str)
-                else permission_mode
-            ),
-            max_budget_usd=max_budget_usd,
-        )))
+        await router.request(
+            SessionStartRequest(
+                params=SessionStartRequest.SessionStartRequestParams(
+                    model=models_main_str,
+                    max_turns=max_turns,
+                    cwd=cwd,
+                    append_system_prompt=append_system_prompt,
+                    system_prompt=system_prompt,
+                    permission_mode=(
+                        PermissionMode(permission_mode)
+                        if isinstance(permission_mode, str)
+                        else permission_mode
+                    ),
+                    max_budget_usd=max_budget_usd,
+                )
+            )
+        )
 
         # 3) turn/start — actually runs the prompt and produces the
         #    notification stream.
-        await router.request(TurnStartRequest(
-            params=TurnStartRequest.TurnStartRequestParams(prompt=prompt)
-        ))
+        await router.request(
+            TurnStartRequest(
+                params=TurnStartRequest.TurnStartRequestParams(prompt=prompt)
+            )
+        )
 
         while True:
             data = await router.next_event()

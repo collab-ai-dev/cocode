@@ -1,3 +1,4 @@
+use coco_types::JSONRPC_VERSION;
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcNotification;
 use coco_types::JsonRpcRequest;
@@ -9,6 +10,7 @@ use super::*;
 
 fn make_request(id: i64, method: &str) -> JsonRpcMessage {
     JsonRpcMessage::Request(JsonRpcRequest {
+        jsonrpc: JSONRPC_VERSION.into(),
         request_id: RequestId::Integer(id),
         method: method.into(),
         params: serde_json::json!({}),
@@ -17,6 +19,7 @@ fn make_request(id: i64, method: &str) -> JsonRpcMessage {
 
 fn make_response(id: i64) -> JsonRpcMessage {
     JsonRpcMessage::Response(JsonRpcResponse {
+        jsonrpc: JSONRPC_VERSION.into(),
         request_id: RequestId::Integer(id),
         result: serde_json::json!({ "ok": true }),
     })
@@ -24,6 +27,7 @@ fn make_response(id: i64) -> JsonRpcMessage {
 
 fn make_notification(method: &str) -> JsonRpcMessage {
     JsonRpcMessage::Notification(JsonRpcNotification {
+        jsonrpc: JSONRPC_VERSION.into(),
         method: method.into(),
         params: serde_json::json!({}),
     })
@@ -192,10 +196,13 @@ async fn send_roundtrips_all_message_variants() {
     // Error
     server
         .send(JsonRpcMessage::Error(coco_types::JsonRpcError {
+            jsonrpc: JSONRPC_VERSION.into(),
             request_id: RequestId::Integer(2),
-            code: coco_types::error_codes::METHOD_NOT_FOUND,
-            message: "unknown".into(),
-            data: None,
+            error: coco_types::JsonRpcErrorObject {
+                code: coco_types::error_codes::METHOD_NOT_FOUND,
+                message: "unknown".into(),
+                data: None,
+            },
         }))
         .await
         .unwrap();
@@ -261,7 +268,11 @@ async fn send_notification_wire_matches_default_path() {
             Value::Object(mut map) => map.remove("params").unwrap_or(Value::Null),
             _ => Value::Null,
         };
-        let direct = JsonRpcMessage::Notification(JsonRpcNotification { method, params });
+        let direct = JsonRpcMessage::Notification(JsonRpcNotification {
+            jsonrpc: JSONRPC_VERSION.into(),
+            method,
+            params,
+        });
 
         assert_eq!(
             wire_value(&via_default),
