@@ -1,6 +1,7 @@
 use coco_types::MCP_TOOL_PREFIX;
 use coco_types::ToolId;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -42,15 +43,39 @@ fn passes_filter_pipeline(tool: &dyn DynTool, ctx: &ToolUseContext) -> bool {
 /// touches both). A single lock ensures the two maps are always
 /// consistent — no window where `tools` has a new entry but `aliases`
 /// does not, or vice versa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ToolRegistrationId(i64);
+
+#[derive(Clone)]
+struct RegisteredTool {
+    registration_id: ToolRegistrationId,
+    tool: Arc<dyn DynTool>,
+}
+
+impl RegisteredTool {
+    fn new(registration_id: ToolRegistrationId, tool: Arc<dyn DynTool>) -> Self {
+        Self {
+            registration_id,
+            tool,
+        }
+    }
+}
+
 #[derive(Default)]
 struct RegistryInner {
     /// Primary lookup: canonical name → tool.
-    tools: HashMap<String, Arc<dyn DynTool>>,
+    tools: HashMap<String, RegisteredTool>,
     /// Alias lookup: alias → canonical name.
     aliases: HashMap<String, String>,
+    next_registration_id: i64,
 }
 
 impl RegistryInner {
+    fn next_registration_id(&mut self) -> ToolRegistrationId {
+        self.next_registration_id += 1;
+        ToolRegistrationId(self.next_registration_id)
+    }
+
     /// Insert `tool` under its canonical name + aliases, replicating the
     /// **MCP-namespace promotion** (a hostile MCP `Read` is stored as
     /// `mcp__srv__Read`, never shadowing the built-in). Shared by
@@ -72,7 +97,9 @@ impl RegistryInner {
         for alias in tool.aliases() {
             self.aliases.insert(alias.to_string(), canonical.clone());
         }
-        self.tools.insert(canonical, tool);
+        let registration_id = self.next_registration_id();
+        self.tools
+            .insert(canonical, RegisteredTool::new(registration_id, tool));
     }
 
     /// Remove a tool by `ToolId` (canonical name is `id.to_string()`). Does
@@ -95,6 +122,112 @@ pub struct ToolRegistry {
     inner: RwLock<RegistryInner>,
 }
 
+#[derive(Clone)]
+pub struct MaterializedTool {
+    pub tool_id: ToolId,
+    pub canonical_name: String,
+    pub registration_id: ToolRegistrationId,
+    pub tool: Arc<dyn DynTool>,
+}
+
+impl MaterializedTool {
+    fn from_registered(canonical_name: String, registered: &RegisteredTool) -> Self {
+        Self {
+            tool_id: registered.tool.id(),
+            canonical_name,
+            registration_id: registered.registration_id,
+            tool: registered.tool.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ToolMaterialization {
+    loaded: Vec<MaterializedTool>,
+    deferred: Vec<MaterializedTool>,
+    aliases: HashMap<String, String>,
+}
+
+impl ToolMaterialization {
+    pub fn loaded_tools(&self) -> Vec<Arc<dyn DynTool>> {
+        self.loaded.iter().map(|t| t.tool.clone()).collect()
+    }
+
+    pub fn deferred_tools(&self) -> Vec<Arc<dyn DynTool>> {
+        self.deferred.iter().map(|t| t.tool.clone()).collect()
+    }
+
+    pub fn loaded_materialized(&self) -> &[MaterializedTool] {
+        &self.loaded
+    }
+
+    pub fn deferred_materialized(&self) -> &[MaterializedTool] {
+        &self.deferred
+    }
+
+    pub fn lookup(&self, registry: &ToolRegistry, id: &ToolId) -> MaterializedToolLookup {
+        let requested_name = id.to_string();
+        let direct = self.lookup_canonical(registry, &requested_name);
+        if !matches!(direct, MaterializedToolLookup::Unavailable) {
+            return direct;
+        }
+        let Some(canonical_name) = self.aliases.get(&requested_name) else {
+            return MaterializedToolLookup::Unavailable;
+        };
+        self.lookup_canonical(registry, canonical_name)
+    }
+
+    fn lookup_canonical(
+        &self,
+        registry: &ToolRegistry,
+        canonical_name: &str,
+    ) -> MaterializedToolLookup {
+        if let Some(tool) = self
+            .loaded
+            .iter()
+            .find(|tool| tool.canonical_name == canonical_name)
+        {
+            return match registry.current_registration_id(&tool.canonical_name) {
+                Some(current) if current == tool.registration_id => {
+                    MaterializedToolLookup::Loaded(tool.clone())
+                }
+                Some(_) | None => MaterializedToolLookup::Stale {
+                    name: tool.canonical_name.clone(),
+                },
+            };
+        }
+        if let Some(tool) = self
+            .deferred
+            .iter()
+            .find(|tool| tool.canonical_name == canonical_name)
+        {
+            return MaterializedToolLookup::Deferred {
+                name: tool.canonical_name.clone(),
+                tool: tool.tool.clone(),
+            };
+        }
+        MaterializedToolLookup::Unavailable
+    }
+}
+
+fn visible_aliases_for(
+    inner: &RegistryInner,
+    loaded: &[MaterializedTool],
+    deferred: &[MaterializedTool],
+) -> HashMap<String, String> {
+    let visible_canonicals: HashSet<&str> = loaded
+        .iter()
+        .chain(deferred.iter())
+        .map(|tool| tool.canonical_name.as_str())
+        .collect();
+    inner
+        .aliases
+        .iter()
+        .filter(|(_, canonical)| visible_canonicals.contains(canonical.as_str()))
+        .map(|(alias, canonical)| (alias.clone(), canonical.clone()))
+        .collect()
+}
+
 /// Context-aware tool lookup for committed model tool calls.
 pub enum ToolLookup {
     /// Tool is visible in the current turn's loaded tool set.
@@ -102,6 +235,22 @@ pub enum ToolLookup {
     /// Tool exists and is enabled, but is deferred until ToolSearch discovers it.
     Deferred { name: String },
     /// Tool is unknown or filtered out by feature/override/agent policy.
+    Unavailable,
+}
+
+/// Context-aware lookup against one provider-turn tool materialization.
+pub enum MaterializedToolLookup {
+    /// Tool was loaded in the provider-turn snapshot and still has the same
+    /// registry identity at settlement.
+    Loaded(MaterializedTool),
+    /// Tool was known to this snapshot, but deferred until ToolSearch discovers it.
+    Deferred {
+        name: String,
+        tool: Arc<dyn DynTool>,
+    },
+    /// Tool was loaded in this snapshot, but its registry entry was removed or replaced.
+    Stale { name: String },
+    /// Tool was not part of the provider-turn call surface.
     Unavailable,
 }
 
@@ -147,23 +296,13 @@ impl ToolRegistry {
     /// model-facing view: feature/override/filter gates applied, and deferred
     /// tools rejected until ToolSearch has promoted them into the loaded set.
     pub fn lookup_loaded(&self, id: &ToolId, ctx: &ToolUseContext) -> ToolLookup {
-        let Some(tool) = self.get(id) else {
-            return ToolLookup::Unavailable;
-        };
-        if !passes_filter_pipeline(tool.as_ref(), ctx) {
-            return ToolLookup::Unavailable;
+        match self.materialize(ctx).lookup(self, id) {
+            MaterializedToolLookup::Loaded(tool) => ToolLookup::Loaded(tool.tool),
+            MaterializedToolLookup::Deferred { name, .. } => ToolLookup::Deferred { name },
+            MaterializedToolLookup::Stale { .. } | MaterializedToolLookup::Unavailable => {
+                ToolLookup::Unavailable
+            }
         }
-        let tool_search_active = ctx.tool_search_active();
-        if tool_search_active
-            && tool.should_defer()
-            && !tool.always_load()
-            && !ctx.discovered_tool_names.contains(tool.name())
-        {
-            return ToolLookup::Deferred {
-                name: tool.name().to_string(),
-            };
-        }
-        ToolLookup::Loaded(tool)
     }
 
     /// Look up a tool by name or alias.
@@ -172,13 +311,20 @@ impl ToolRegistry {
             .inner
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.tools.get(name).cloned().or_else(|| {
+        inner.tools.get(name).map(|t| t.tool.clone()).or_else(|| {
             inner
                 .aliases
                 .get(name)
-                .and_then(|canonical| inner.tools.get(canonical))
-                .cloned()
+                .and_then(|canonical| inner.tools.get(canonical).map(|t| t.tool.clone()))
         })
+    }
+
+    fn current_registration_id(&self, canonical_name: &str) -> Option<ToolRegistrationId> {
+        let inner = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.tools.get(canonical_name).map(|t| t.registration_id)
     }
 
     /// Get all registered tools (clones the Arc handles).
@@ -187,7 +333,7 @@ impl ToolRegistry {
             .inner
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.tools.values().cloned().collect()
+        inner.tools.values().map(|t| t.tool.clone()).collect()
     }
 
     /// Get enabled tools after running the schema-time filter pipeline
@@ -202,8 +348,8 @@ impl ToolRegistry {
         inner
             .tools
             .values()
-            .filter(|t| passes_filter_pipeline(t.as_ref(), ctx))
-            .cloned()
+            .filter(|t| passes_filter_pipeline(t.tool.as_ref(), ctx))
+            .map(|t| t.tool.clone())
             .collect()
     }
 
@@ -221,22 +367,84 @@ impl ToolRegistry {
     /// Keeps the per-Provider serialization path identical, just
     /// without the lazy-loading optimization.
     pub fn loaded_tools(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn DynTool>> {
+        self.materialize(ctx).loaded_tools()
+    }
+
+    pub fn materialize(&self, ctx: &ToolUseContext) -> ToolMaterialization {
         let inner = self
             .inner
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tool_search_active = ctx.tool_search_active();
-        inner
-            .tools
-            .values()
-            .filter(|t| {
-                passes_filter_pipeline(t.as_ref(), ctx)
-                    && (!tool_search_active
-                        || !t.should_defer()
-                        || t.always_load()
-                        || ctx.discovered_tool_names.contains(t.name()))
-            })
-            .cloned()
+        let mut loaded = Vec::new();
+        let mut deferred = Vec::new();
+        for (canonical, registered) in &inner.tools {
+            if !passes_filter_pipeline(registered.tool.as_ref(), ctx) {
+                continue;
+            }
+            let should_defer = tool_search_active
+                && registered.tool.should_defer()
+                && !registered.tool.always_load()
+                && !ctx.discovered_tool_names.contains(registered.tool.name());
+            let tool = MaterializedTool::from_registered(canonical.clone(), registered);
+            if should_defer {
+                deferred.push(tool);
+            } else {
+                loaded.push(tool);
+            }
+        }
+        let aliases = visible_aliases_for(&inner, &loaded, &deferred);
+        ToolMaterialization {
+            loaded,
+            deferred,
+            aliases,
+        }
+    }
+
+    /// Materialize every enabled tool while separately marking the tools that
+    /// would normally be deferred. This is used by providers that support a
+    /// native deferred-tool-reference flag in the tool definition itself.
+    pub fn materialize_with_deferred_references(
+        &self,
+        ctx: &ToolUseContext,
+    ) -> (ToolMaterialization, HashSet<String>) {
+        let inner = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut loaded = Vec::new();
+        let mut deferred_marker = HashSet::new();
+        for (canonical, registered) in &inner.tools {
+            if !passes_filter_pipeline(registered.tool.as_ref(), ctx) {
+                continue;
+            }
+            if ctx.tool_search_active()
+                && registered.tool.should_defer()
+                && !registered.tool.always_load()
+                && !ctx.discovered_tool_names.contains(registered.tool.name())
+            {
+                deferred_marker.insert(registered.tool.name().to_string());
+            }
+            loaded.push(MaterializedTool::from_registered(
+                canonical.clone(),
+                registered,
+            ));
+        }
+        (
+            ToolMaterialization {
+                aliases: visible_aliases_for(&inner, &loaded, &[]),
+                loaded,
+                deferred: Vec::new(),
+            },
+            deferred_marker,
+        )
+    }
+
+    pub fn deferred_tool_names(&self, ctx: &ToolUseContext) -> HashSet<String> {
+        self.materialize(ctx)
+            .deferred_materialized()
+            .iter()
+            .map(|t| t.tool.name().to_string())
             .collect()
     }
 
@@ -250,24 +458,7 @@ impl ToolRegistry {
     /// off — there is no deferred pool to surface, every tool is
     /// already loaded via [`Self::loaded_tools`].
     pub fn deferred_tools(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn DynTool>> {
-        if !ctx.tool_search_active() {
-            return Vec::new();
-        }
-        let inner = self
-            .inner
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner
-            .tools
-            .values()
-            .filter(|t| {
-                passes_filter_pipeline(t.as_ref(), ctx)
-                    && t.should_defer()
-                    && !t.always_load()
-                    && !ctx.discovered_tool_names.contains(t.name())
-            })
-            .cloned()
-            .collect()
+        self.materialize(ctx).deferred_tools()
     }
 
     /// Deferred tools eligible to be surfaced by `ToolSearch`.
@@ -289,9 +480,11 @@ impl ToolRegistry {
             .tools
             .values()
             .filter(|t| {
-                passes_filter_pipeline(t.as_ref(), ctx) && t.should_defer() && !t.always_load()
+                passes_filter_pipeline(t.tool.as_ref(), ctx)
+                    && t.tool.should_defer()
+                    && !t.tool.always_load()
             })
-            .cloned()
+            .map(|t| t.tool.clone())
             .collect()
     }
 
@@ -309,8 +502,10 @@ impl ToolRegistry {
         let to_remove: Vec<String> = inner
             .tools
             .iter()
-            .filter(|(_, tool)| {
-                tool.mcp_info()
+            .filter(|(_, registered)| {
+                registered
+                    .tool
+                    .mcp_info()
                     .is_some_and(|info| info.server_name == server_name)
             })
             .map(|(name, _)| name.clone())
@@ -349,8 +544,12 @@ impl ToolRegistry {
         let owned: Vec<(String, ToolId)> = inner
             .tools
             .iter()
-            .filter(|(_, t)| t.mcp_info().is_some_and(|i| i.server_name == server_name))
-            .map(|(name, t)| (name.clone(), t.id()))
+            .filter(|(_, t)| {
+                t.tool
+                    .mcp_info()
+                    .is_some_and(|i| i.server_name == server_name)
+            })
+            .map(|(name, t)| (name.clone(), t.tool.id()))
             .collect();
         let owned_names: std::collections::HashSet<String> =
             owned.iter().map(|(n, _)| n.clone()).collect();

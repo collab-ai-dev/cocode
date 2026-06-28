@@ -28,9 +28,8 @@ use coco_tui::ImageData;
 /// Output of the per-turn user-input resolution pipeline.
 /// Field order is the injection order: the user message first
 /// (carrying the prompt + any clipboard images), then per-attachment
-/// system-reminder messages with file/image/dir content, then any
-/// edited-file notifications. [`build_messages_for_turn`] concatenates
-/// them in that order.
+/// system-reminder messages with file/image/dir content. [`build_messages_for_turn`]
+/// concatenates them in that order.
 pub struct ResolvedTurnInputs {
     /// The user-role message carrying the prompt text (+ inline images
     /// if `images` was non-empty).
@@ -41,8 +40,8 @@ pub struct ResolvedTurnInputs {
     /// in `<system-reminder>` (image blocks pass through unwrapped).
     /// See [`attachment_to_messages`].
     pub attachment_messages: Vec<Message>,
-    /// One system-reminder note per file detected as modified externally
-    /// since the last turn.
+    /// Query-owned changed-file reminders. CLI mention resolution leaves
+    /// this empty because it has no ToolUseContext sandbox/permission gate.
     pub changed_file_messages: Vec<Message>,
     /// Absolute paths of files this turn either loaded or recognized as
     /// already-loaded. Engine consumers thread this into
@@ -59,9 +58,7 @@ const MAX_DIR_ENTRIES: i32 = 1000;
 /// 1. `coco_context::process_user_input` — extract `@` mentions.
 /// 2. `coco_context::resolve_mentions` — load file content / resolve
 /// directory listings, with `FileReadState` dedup.
-/// 3. `coco_context::detect_changed_files` — find files modified since
-/// last seen.
-/// 4. Build the user message (text + optional image parts) with
+/// 3. Build the user message (text + optional image parts) with
 /// `user_uuid`, then per-attachment reminder messages.
 pub async fn resolve_turn_inputs(
     content: &str,
@@ -72,16 +69,13 @@ pub async fn resolve_turn_inputs(
 ) -> ResolvedTurnInputs {
     let processed = coco_context::process_user_input(content);
 
-    let (file_attachments, changed_file_attachments) = {
+    let file_attachments = {
         let mut frs = file_read_state.write().await;
         let opts = MentionResolveOptions {
             cwd,
             max_dir_entries: MAX_DIR_ENTRIES,
         };
-        let file_attachments =
-            coco_context::resolve_mentions(&processed.mentions, &mut frs, &opts).await;
-        let changed_file_attachments = coco_context::detect_changed_files(&mut frs).await;
-        (file_attachments, changed_file_attachments)
+        coco_context::resolve_mentions(&processed.mentions, &mut frs, &opts).await
     };
 
     let mentioned_paths: Vec<std::path::PathBuf> = file_attachments
@@ -107,15 +101,10 @@ pub async fn resolve_turn_inputs(
         attachment_messages.insert(0, summary);
     }
 
-    let changed_file_messages: Vec<Message> = changed_file_attachments
-        .iter()
-        .filter_map(changed_file_to_message)
-        .collect();
-
     ResolvedTurnInputs {
         user_message,
         attachment_messages,
-        changed_file_messages,
+        changed_file_messages: Vec::new(),
         mentioned_paths,
     }
 }
@@ -132,7 +121,7 @@ pub async fn resolve_turn_inputs_text_only(
 }
 
 /// Concatenate the inputs into a `Vec<Message>` in order:
-/// `user_message` → file/image/dir reminders → changed-file notes.
+/// `user_message` → file/image/dir reminders → query-owned changed-file notes.
 /// Engine callers pass the result to [`engine.run_with_messages`].
 pub fn build_messages_for_turn(inputs: &ResolvedTurnInputs) -> Vec<Message> {
     let mut messages = Vec::with_capacity(
@@ -308,23 +297,14 @@ fn mention_summary_message(atts: &[Attachment]) -> Option<Message> {
     ))
 }
 
-/// Convert a `detect_changed_files` attachment into the externally-modified
+/// Convert a changed-file attachment into the externally-modified
 /// notification message.
 pub fn changed_file_to_message(att: &Attachment) -> Option<Message> {
     match att {
-        Attachment::File(f) => {
-            let text = format!(
-                "Note: {} was modified, either by the user or by a linter. \
-                 This change was intentional, so make sure to take it into \
-                 account as you proceed (ie. don't revert it unless the user \
-                 asks you to). Don't tell the user this, since they are already \
-                 aware. Here are the relevant changes (shown with line numbers):\n{}",
-                f.display_path, f.content
-            );
-            Some(coco_messages::wrapping::create_system_reminder_message(
-                &text,
-            ))
-        }
+        Attachment::EditedTextFile(f) => Some(coco_messages::changed_file_reminder_message(
+            &f.display_path,
+            &f.snippet,
+        )),
         _ => None,
     }
 }

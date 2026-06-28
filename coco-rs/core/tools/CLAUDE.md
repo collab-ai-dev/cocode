@@ -14,6 +14,7 @@
 ## Cross-Cutting Helpers (crate-private)
 
 - `record_file_read` / `record_file_edit` — updates `FileReadState` for @mention dedup + Read-tool `file_unchanged` detection
+- `tools::read_loader` — side-effect-free file classification/loading shared by `ReadTool` and background changed-file scans
 - `check_team_mem_secret` — blocks writes containing secrets into team-memory paths (layered detection: authoritative via `coco-memory::team_paths` + substring fallback, gated by `coco-secret-redact`)
 - `track_nested_memory_attachment` — pushes read paths into `ctx.nested_memory_attachment_triggers` for next-turn CLAUDE.md loading
 - `track_skill_discovery` — discovers `.coco/skills` in file ancestry, pushes to `ctx.dynamic_skill_dir_triggers`

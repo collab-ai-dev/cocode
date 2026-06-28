@@ -14,6 +14,7 @@ use coco_types::ToolOverrides;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use super::ToolSettlement;
 use super::prepare_committed_tool_call;
 use crate::helpers::ToolCompletionEventMode;
 
@@ -55,11 +56,15 @@ async fn deferred_tool_call_before_tool_search_does_not_schema_validate() {
         "WebFetch",
         json!({"summary": "wrong shape"}),
     );
+    let materialization = tools.materialize(&ctx);
 
     let prepared = prepare_committed_tool_call(
         &None,
         &mut history,
-        &tools,
+        ToolSettlement {
+            registry: &tools,
+            materialization: &materialization,
+        },
         &ctx,
         &tc,
         ToolCompletionEventMode::Emit,
@@ -93,11 +98,15 @@ async fn test_prepare_committed_freeform_raw_string_threads_coerced_input() {
     let mut history = MessageHistory::new();
     let raw = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n";
     let tc = ToolCallPart::new("call-1", "apply_patch", json!(raw));
+    let materialization = tools.materialize(&ctx);
 
     let prepared = prepare_committed_tool_call(
         &None,
         &mut history,
-        &tools,
+        ToolSettlement {
+            registry: &tools,
+            materialization: &materialization,
+        },
         &ctx,
         &tc,
         ToolCompletionEventMode::Emit,
@@ -127,11 +136,15 @@ async fn test_prepare_committed_double_encoded_json_threads_recovered_input() {
         "Read",
         json!("{\"file_path\": \"/tmp/recovered.txt\"}"),
     );
+    let materialization = tools.materialize(&ctx);
 
     let prepared = prepare_committed_tool_call(
         &None,
         &mut history,
-        &tools,
+        ToolSettlement {
+            registry: &tools,
+            materialization: &materialization,
+        },
         &ctx,
         &tc,
         ToolCompletionEventMode::Emit,

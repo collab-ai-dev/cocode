@@ -71,6 +71,7 @@ impl QueryEngine {
         parsed_stop_reason: Option<coco_messages::StopReason>,
         tool_calls: &[ToolCallPart],
         messages_snapshot: Arc<Vec<Arc<coco_messages::Message>>>,
+        tool_materialization: &coco_tool_runtime::ToolMaterialization,
         opened_runtime_snapshot: &coco_inference::ModelRuntimeSnapshot,
         streaming_ctx: Option<Arc<ToolUseContext>>,
         streaming_executed: bool,
@@ -96,6 +97,7 @@ impl QueryEngine {
             }
             if let Some(ref c) = streaming_ctx {
                 self.drain_nested_memory_triggers(c).await;
+                self.drain_changed_files(c, history, event_tx).await;
             }
             let structured_output_recall_limit_reached = structured_output_recall_limit_reached(
                 self.config.requires_structured_output,
@@ -206,6 +208,7 @@ impl QueryEngine {
             tool_calls,
             turn: turn_state.turn,
             tools: &self.tools,
+            tool_materialization,
             hooks: self.hooks.as_ref(),
             orchestration_ctx: self.orchestration_ctx(),
             hook_tx_opt,
@@ -243,6 +246,7 @@ impl QueryEngine {
         }
 
         self.drain_nested_memory_triggers(&ctx).await;
+        self.drain_changed_files(&ctx, history, event_tx).await;
         if let Some(data) = tool_run_outcome.structured_output.clone() {
             acc.run_artifacts.structured_output = Some(data);
         }

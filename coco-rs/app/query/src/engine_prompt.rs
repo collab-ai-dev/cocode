@@ -44,6 +44,11 @@ pub(crate) struct BuiltToolDefinition {
     pub deferred: bool,
 }
 
+pub(crate) struct BuiltToolDefinitions {
+    pub definitions: Vec<BuiltToolDefinition>,
+    pub materialization: coco_tool_runtime::ToolMaterialization,
+}
+
 /// Realize a `Freeform` [`ToolSpec`](coco_tool_runtime::ToolSpec) as the OpenAI
 /// Responses custom-grammar wire tool. The provider-specific realization (the
 /// `openai.custom` id + `{type:"grammar", …}` shape) lives in
@@ -106,6 +111,7 @@ impl QueryEngine {
             coco_context::PromptContextMode::default_workspace(&cwd)
         };
         let prompt_context = coco_context::PromptContext::build(prompt_context_mode);
+        self.record_context_epoch_if_changed(&prompt_context);
         prompt.push(LlmMessage::system(prompt_context.system_prompt()));
 
         // Pre-build hook: apply staged-collapse commits so each
@@ -159,6 +165,57 @@ impl QueryEngine {
             prompt,
             prompt_context,
             messages_snapshot: Arc::new(messages_for_api),
+        }
+    }
+
+    fn record_context_epoch_if_changed(&self, prompt_context: &coco_context::PromptContext) {
+        let (Some(store), Some(session_id)) = (&self.transcript_store, &self.transcript_session_id)
+        else {
+            return;
+        };
+        let latest_epoch = match store.load_entries(session_id) {
+            Ok(entries) => entries.into_iter().rev().find_map(|entry| match entry {
+                coco_session::storage::Entry::Metadata(
+                    coco_session::storage::MetadataEntry::ContextEpoch {
+                        session_id: entry_session_id,
+                        agent_id,
+                        record,
+                    },
+                ) if entry_session_id == *session_id
+                    && agent_id.as_deref() == self.config.agent_id.as_deref() =>
+                {
+                    Some(record.epoch)
+                }
+                _ => None,
+            }),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load context epoch metadata");
+                None
+            }
+        };
+        if latest_epoch.as_deref() == Some(prompt_context.epoch.as_str()) {
+            return;
+        }
+
+        let sources = prompt_context
+            .sources
+            .iter()
+            .filter_map(|source| serde_json::to_value(source).ok())
+            .collect();
+        let record = coco_session::ContextEpochRecord::new(
+            prompt_context.epoch.as_str(),
+            prompt_context.system_prompt(),
+            sources,
+        );
+        if let Err(e) = store.append_metadata(
+            session_id,
+            &coco_session::storage::MetadataEntry::ContextEpoch {
+                session_id: session_id.clone(),
+                agent_id: self.config.agent_id.clone(),
+                record,
+            },
+        ) {
+            tracing::warn!(error = %e, "failed to persist context epoch metadata");
         }
     }
 
@@ -315,27 +372,19 @@ impl QueryEngine {
         None
     }
 
-    /// Build tool definitions for the LLM (function tool schemas).
-    /// Each `Tool::prompt(&PromptOptions)` call returns the description the
-    /// model sees that turn. Agent/Skill tools use this hook to inject live
-    /// runtime state (current agent / skill listings) into their description.
-    /// For tools that don't override `prompt`, the trait default delegates to
-    /// `description()`, preserving the legacy behavior.
-    pub(crate) async fn build_tool_definitions(
-        &self,
-        app_state: &ToolAppState,
-    ) -> Vec<LanguageModelTool> {
-        self.build_tool_definitions_detailed(app_state)
-            .await
-            .into_iter()
-            .map(|d| d.tool)
-            .collect()
-    }
-
     pub(crate) async fn build_tool_definitions_detailed(
         &self,
         app_state: &ToolAppState,
     ) -> Vec<BuiltToolDefinition> {
+        self.build_tool_definitions_with_materialization(app_state)
+            .await
+            .definitions
+    }
+
+    pub(crate) async fn build_tool_definitions_with_materialization(
+        &self,
+        app_state: &ToolAppState,
+    ) -> BuiltToolDefinitions {
         // Carry the `ToolSearch` discovery set into the filter pipeline
         // so deferred tools the model has unlocked get their schema in
         // this turn's request.
@@ -366,6 +415,7 @@ impl QueryEngine {
         // capability-missing case automatically.
         let use_anthropic_tool_reference =
             tool_search_strategy.uses_anthropic_tool_reference() && stub_ctx.tool_search_active();
+        let materialization = self.tools.materialize(&stub_ctx);
         let (mut model_tools, deferred_marker): (Vec<_>, std::collections::HashSet<String>) =
             if use_anthropic_tool_reference {
                 let enabled = self.tools.enabled(&stub_ctx);
@@ -630,7 +680,10 @@ impl QueryEngine {
                 deferred,
             });
         }
-        out
+        BuiltToolDefinitions {
+            definitions: out,
+            materialization,
+        }
     }
 
     /// Build a factory that knows how to construct [`ToolUseContext`]

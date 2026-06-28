@@ -408,6 +408,11 @@ pub struct QueryEngine {
     pub(crate) pending_nested_memory: std::sync::Arc<
         tokio::sync::Mutex<Vec<coco_system_reminder::generators::memory::NestedMemoryInfo>>,
     >,
+    /// Engine-side delivery channel for changed image files. Consumed by
+    /// `engine_turn_reminders` and rendered by `EditedImageFileGenerator`
+    /// as a silent reminder.
+    pub(crate) pending_edited_image_file_paths:
+        std::sync::Arc<tokio::sync::Mutex<Vec<std::path::PathBuf>>>,
     /// Session-level dedup set for nested-memory paths — once a memory
     /// file is injected in this session, subsequent file reads in the
     /// same subtree won't re-inject it. Cleared on conversation reset
@@ -667,6 +672,7 @@ impl QueryEngine {
                 active_snapshot,
                 prompt_context,
                 messages_snapshot,
+                tool_materialization,
                 streaming_ctx,
                 streaming_handle,
                 streaming_model_index,
@@ -760,6 +766,7 @@ impl QueryEngine {
                     hook_tx_opt.as_ref(),
                     &mut streaming_handle,
                     streaming_ctx.as_ref(),
+                    &tool_materialization,
                     &mut streaming_model_index,
                     state_tracker,
                     &turn_id,
@@ -1049,6 +1056,7 @@ impl QueryEngine {
                     parsed_stop_reason,
                     &tool_calls,
                     messages_snapshot.clone(),
+                    &tool_materialization,
                     &opened_runtime_snapshot,
                     streaming_ctx.clone(),
                     streaming_executed,

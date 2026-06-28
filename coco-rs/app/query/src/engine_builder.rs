@@ -149,6 +149,7 @@ impl QueryEngine {
             terminal_goal_metadata_written: None,
             live_transcript: None,
             pending_nested_memory: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            pending_edited_image_file_paths: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             loaded_nested_memory_paths: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),

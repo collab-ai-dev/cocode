@@ -100,6 +100,10 @@ pub enum AttachmentBatch {
 pub enum Attachment {
     /// A file read into context (text content).
     File(FileAttachment),
+    /// A previously observed text file changed on disk; carries a bounded snippet.
+    EditedTextFile(EditedTextFileAttachment),
+    /// A previously observed image file changed on disk.
+    EditedImageFile(EditedImageFileAttachment),
     /// A compact reference to a file (no content, just path).
     CompactFileReference(CompactFileReferenceAttachment),
     /// A PDF too large to inline — lightweight reference.
@@ -161,6 +165,22 @@ pub struct FileAttachment {
     pub offset: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditedTextFileAttachment {
+    pub filename: String,
+    /// Path relative to CWD at creation time, for stable display.
+    pub display_path: String,
+    /// Bounded snippet of the new file content around the changed hunks.
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditedImageFileAttachment {
+    pub filename: String,
+    /// Path relative to CWD at creation time, for stable display.
+    pub display_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -425,6 +445,8 @@ impl Attachment {
                 // Content tokens + small overhead for XML wrapping
                 estimate_tokens(&f.content) + 20
             }
+            Attachment::EditedTextFile(f) => estimate_tokens(&f.snippet) + 20,
+            Attachment::EditedImageFile(_) => 0,
             Attachment::CompactFileReference(_) => 15,
             Attachment::PdfReference(_) => 30,
             Attachment::AlreadyReadFile(_) => 15,
@@ -503,7 +525,9 @@ impl Attachment {
             | Attachment::Directory(_)
             | Attachment::AgentMention(_) => AttachmentBatch::UserInput,
 
-            Attachment::NestedMemory(_)
+            Attachment::EditedTextFile(_)
+            | Attachment::EditedImageFile(_)
+            | Attachment::NestedMemory(_)
             | Attachment::RelevantMemories(_)
             | Attachment::Memory(_)
             | Attachment::SkillListing(_)
@@ -777,6 +801,8 @@ impl AttachmentDeduplicator {
             .filter(|att| {
                 let path = match att {
                     Attachment::File(f) => Some(f.filename.as_str()),
+                    Attachment::EditedTextFile(f) => Some(f.filename.as_str()),
+                    Attachment::EditedImageFile(f) => Some(f.filename.as_str()),
                     Attachment::NestedMemory(nm) => Some(nm.path.as_str()),
                     Attachment::AlreadyReadFile(a) => Some(a.filename.as_str()),
                     _ => None,

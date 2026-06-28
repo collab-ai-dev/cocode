@@ -33,11 +33,79 @@ use std::path::PathBuf;
 use coco_messages::AttachmentMessage;
 use coco_messages::Message;
 use coco_system_reminder::generators::memory::NestedMemoryInfo;
+use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolUseContext;
 
 use crate::engine::QueryEngine;
 
 impl QueryEngine {
+    /// Scan session `FileReadState` for files whose mtime changed since
+    /// the model last saw them, then inject TS-style `edited_text_file`
+    /// reminders into history. Mirrors `getChangedFiles()` inside TS
+    /// `getAttachmentMessages()`.
+    pub(crate) async fn drain_changed_files(
+        &self,
+        ctx: &ToolUseContext,
+        history: &mut coco_messages::MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    ) {
+        let Some(frs_arc) = self.file_read_state.as_ref() else {
+            return;
+        };
+
+        let candidates = {
+            let frs = frs_arc.read().await;
+            coco_context::changed_file_candidates(&frs)
+        };
+        let mut allowed_candidates = Vec::new();
+        for candidate in candidates {
+            if changed_file_read_allowed(ctx, &candidate.path).await {
+                allowed_candidates.push(candidate);
+            }
+        }
+        if allowed_candidates.is_empty() {
+            return;
+        }
+
+        let mut observations = Vec::new();
+        for candidate in allowed_candidates {
+            if let Some(observation) = load_changed_file_observation(candidate).await {
+                observations.push(observation);
+            }
+        }
+        if observations.is_empty() {
+            return;
+        }
+
+        let changed = coco_context::attachments_from_changed_file_observations(&observations);
+
+        {
+            let mut frs = frs_arc.write().await;
+            coco_context::apply_changed_file_observations(&mut frs, &observations);
+        }
+
+        if changed.is_empty() {
+            return;
+        }
+
+        for attachment in changed {
+            let msg = match attachment {
+                coco_context::Attachment::EditedTextFile(file) => {
+                    coco_messages::changed_file_reminder_message(&file.display_path, &file.snippet)
+                }
+                coco_context::Attachment::EditedImageFile(file) => {
+                    self.pending_edited_image_file_paths
+                        .lock()
+                        .await
+                        .push(std::path::PathBuf::from(file.filename));
+                    continue;
+                }
+                _ => continue,
+            };
+            crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+        }
+    }
+
     /// Drain `ctx.nested_memory_attachment_triggers`, traverse each
     /// triggered file's CWD→file slice, and append the resulting
     /// memory entries to `self.pending_nested_memory`.
@@ -290,6 +358,11 @@ impl QueryEngine {
         std::mem::take(&mut *pending)
     }
 
+    pub(crate) async fn take_pending_edited_image_file_paths(&self) -> Vec<PathBuf> {
+        let mut pending = self.pending_edited_image_file_paths.lock().await;
+        std::mem::take(&mut *pending)
+    }
+
     /// Reset the session-level dedup set. Wired to `/clear` /
     /// conversation-reset paths so a fresh conversation re-injects
     /// memory files even if their content is unchanged.
@@ -297,6 +370,114 @@ impl QueryEngine {
     pub(crate) async fn clear_loaded_nested_memory_paths(&self) {
         self.loaded_nested_memory_paths.lock().await.clear();
     }
+}
+
+async fn changed_file_read_allowed(ctx: &ToolUseContext, path: &std::path::Path) -> bool {
+    let file_path = path.display().to_string();
+    if coco_tools::tools::read::is_blocked_device_path(&file_path) {
+        return false;
+    }
+    let input = coco_tools::tools::read::ReadInput {
+        file_path,
+        offset: None,
+        limit: None,
+        pages: None,
+    };
+    if !coco_tools::tools::ReadTool
+        .validate_input(&input, ctx)
+        .is_valid()
+    {
+        return false;
+    }
+
+    !matches!(
+        coco_tools::tools::read_permissions::check_background_read_permission_with_sandbox(
+            path, ctx
+        )
+        .await,
+        coco_types::ToolCheckResult::Deny { .. } | coco_types::ToolCheckResult::Ask { .. }
+    )
+}
+
+async fn load_changed_file_observation(
+    candidate: coco_context::ChangedFileCandidate,
+) -> Option<coco_context::ChangedFileObservation> {
+    let metadata = match tokio::fs::metadata(&candidate.path).await {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Some(coco_context::deleted_changed_file_observation(
+                candidate.path,
+            ));
+        }
+        Err(_) => return None,
+    };
+    let disk_mtime = metadata_mtime_ms(&metadata);
+    if disk_mtime <= candidate.cached_mtime_ms {
+        return None;
+    }
+
+    match coco_tools::tools::read_loader::classify_read_path(&candidate.path) {
+        coco_tools::tools::read_loader::ReadFileKind::SupportedImage { .. } => {
+            Some(coco_context::changed_file_observation_from_loaded(
+                candidate,
+                coco_context::ChangedFileLoadedContent::Image {
+                    mtime_ms: disk_mtime,
+                },
+            ))
+        }
+        coco_tools::tools::read_loader::ReadFileKind::PlaceholderImage { .. }
+        | coco_tools::tools::read_loader::ReadFileKind::Binary { .. }
+        | coco_tools::tools::read_loader::ReadFileKind::Notebook
+        | coco_tools::tools::read_loader::ReadFileKind::Pdf => {
+            Some(coco_context::changed_file_observation_from_loaded(
+                candidate,
+                coco_context::ChangedFileLoadedContent::Unsupported {
+                    mtime_ms: disk_mtime,
+                },
+            ))
+        }
+        coco_tools::tools::read_loader::ReadFileKind::Text => {
+            let new_bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+            let input_bytes = candidate
+                .cached_entry
+                .content
+                .len()
+                .saturating_add(new_bytes);
+            if input_bytes > coco_context::DIFF_INPUT_MAX_BYTES {
+                tracing::warn!(
+                    path = %candidate.path.display(),
+                    input_bytes,
+                    max_bytes = coco_context::DIFF_INPUT_MAX_BYTES,
+                    old_bytes = candidate.cached_entry.content.len(),
+                    new_bytes = metadata.len(),
+                    "skipping changed-file diff because input is too large"
+                );
+                return None;
+            }
+
+            let content = match coco_tools::tools::read_loader::read_full_text_for_changed_file(
+                &candidate.path,
+            ) {
+                Ok(content) => content,
+                Err(_) => return None,
+            };
+            Some(coco_context::changed_file_observation_from_loaded(
+                candidate,
+                coco_context::ChangedFileLoadedContent::Text {
+                    content,
+                    mtime_ms: disk_mtime,
+                },
+            ))
+        }
+    }
+}
+
+fn metadata_mtime_ms(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

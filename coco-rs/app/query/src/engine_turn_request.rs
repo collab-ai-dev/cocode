@@ -33,6 +33,7 @@ pub(crate) struct PreparedTurnRequest {
     pub(crate) active_snapshot: coco_inference::ModelRuntimeSnapshot,
     pub(crate) prompt_context: coco_context::PromptContext,
     pub(crate) messages_snapshot: Arc<Vec<Arc<Message>>>,
+    pub(crate) tool_materialization: coco_tool_runtime::ToolMaterialization,
     pub(crate) streaming_ctx: Option<Arc<ToolUseContext>>,
     pub(crate) streaming_handle: Option<SessionStreamingHandle>,
     pub(crate) streaming_model_index: usize,
@@ -115,6 +116,10 @@ impl QueryEngine {
             "turn start (per-round; cycle TurnStarted was emitted by run_internal_with_messages)"
         );
 
+        let attachment_ctx = self.build_base_tool_context().await;
+        self.drain_changed_files(&attachment_ctx, history, event_tx)
+            .await;
+
         let app_state_snapshot = self
             .run_turn_reminder_pipeline(crate::engine_turn_reminders::TurnReminderContext {
                 history: &mut *history,
@@ -135,7 +140,13 @@ impl QueryEngine {
             prompt_context,
             messages_snapshot,
         } = self.build_prompt(history).await;
-        let tool_defs = self.build_tool_definitions(&app_state_snapshot).await;
+        let crate::engine_prompt::BuiltToolDefinitions {
+            definitions: tool_definitions,
+            materialization: tool_materialization,
+        } = self
+            .build_tool_definitions_with_materialization(&app_state_snapshot)
+            .await;
+        let tool_defs: Vec<_> = tool_definitions.into_iter().map(|d| d.tool).collect();
 
         let context_management = if active_snapshot.supports_server_side_context_edits {
             let mut pending = self.pending_reactive_context_management.lock().await;
@@ -322,6 +333,7 @@ impl QueryEngine {
             active_snapshot,
             prompt_context,
             messages_snapshot,
+            tool_materialization,
             streaming_ctx,
             streaming_handle,
             streaming_model_index: 0,

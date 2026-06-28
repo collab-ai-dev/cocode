@@ -327,10 +327,14 @@ impl Tool for EditTool {
                     (
                         coco_context::FileReadRange::Full,
                         coco_context::ReadEvidence::InjectedPartialView,
+                    )
+                    | (
+                        coco_context::FileReadRange::Full,
+                        coco_context::ReadEvidence::ObservedForDiff,
                     ) => {
                         return Err(ToolError::ExecutionFailed {
                             message: format!(
-                                "{file_path} was only provided as partial injected context. \
+                                "{file_path} was only provided as partial injected context or a changed-file snippet. \
                                  Read it with the Read tool before editing it."
                             ),
                             display_data: None,

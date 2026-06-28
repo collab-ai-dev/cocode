@@ -133,6 +133,22 @@ fn tool_result_display_data(message: &Message) -> Option<&ToolDisplayData> {
     tr.display_data.as_ref()
 }
 
+fn tool_result_parts(message: &Message) -> &[ToolResultContentPart] {
+    let Message::ToolResult(tr) = message else {
+        panic!("expected tool result");
+    };
+    let LlmMessage::Tool { content, .. } = &tr.message else {
+        panic!("expected tool-role message");
+    };
+    let ToolContentPart::ToolResult(result) = &content[0] else {
+        panic!("expected tool result content");
+    };
+    let ToolResultContent::Content { value, .. } = &result.output else {
+        panic!("expected multipart output");
+    };
+    value
+}
+
 #[tokio::test]
 async fn text_only_multipart_output_uses_level1_persistence() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -165,6 +181,92 @@ async fn text_only_multipart_output_uses_level1_persistence() {
     assert!(!is_error);
     assert!(text.starts_with("<persisted-output>"), "got: {text}");
     let persisted = tmp.path().join("session-1/tool-results/call-1.txt");
+    assert_eq!(
+        std::fs::read_to_string(persisted).unwrap(),
+        format!("{first}\n\n{second}")
+    );
+}
+
+#[tokio::test]
+async fn oversized_output_without_store_fails_closed() {
+    let huge = "x".repeat(128);
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
+        parts: vec![text_part(huge.clone())],
+        is_mcp: false,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(8),
+    });
+
+    let outcome = build_outcome_from_execution(RunOneTail {
+        tool_use_id: "call-no-store".into(),
+        tool_id: tool.id(),
+        tool_name: tool.name().into(),
+        model_index: 0,
+        tool,
+        effective_input: Value::Null,
+        execute_result: Ok(CocoToolResult::data(Value::String("ignored".into()))),
+        hooks: None,
+        orchestration_ctx: test_orchestration_ctx(),
+        hook_tx: None,
+        tool_output_store: None,
+    })
+    .await;
+
+    assert_eq!(
+        outcome.error_kind,
+        Some(coco_tool_runtime::ToolCallErrorKind::ExecutionFailed)
+    );
+    let (text, is_error) = tool_result_text(&outcome.ordered_messages[0]);
+    assert!(is_error);
+    assert!(text.contains("no output store is configured"));
+    assert!(!text.contains(&huge));
+}
+
+#[tokio::test]
+async fn mixed_output_uses_aggregate_text_persistence_and_preserves_media() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let first = "a".repeat(80);
+    let second = "b".repeat(80);
+    let image = ToolResultContentPart::file_data("aGVsbG8=", "image/png");
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
+        parts: vec![
+            text_part(first.clone()),
+            image.clone(),
+            text_part(second.clone()),
+        ],
+        is_mcp: false,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100),
+    });
+
+    let outcome = build_outcome_from_execution(RunOneTail {
+        tool_use_id: "call-mixed".into(),
+        tool_id: tool.id(),
+        tool_name: tool.name().into(),
+        model_index: 0,
+        tool,
+        effective_input: Value::Null,
+        execute_result: Ok(CocoToolResult::data(Value::String("ignored".into()))),
+        hooks: None,
+        orchestration_ctx: test_orchestration_ctx(),
+        hook_tx: None,
+        tool_output_store: Some(coco_tool_runtime::ToolOutputStore::new(
+            tmp.path().join("session-1"),
+        )),
+    })
+    .await;
+
+    let parts = tool_result_parts(&outcome.ordered_messages[0]);
+    assert_eq!(parts.len(), 2);
+    match &parts[0] {
+        ToolResultContentPart::Text { text, .. } => {
+            assert!(text.starts_with("<persisted-output>"), "got: {text}");
+        }
+        other => panic!("expected replacement text, got {other:?}"),
+    }
+    assert_eq!(parts[1], image);
+
+    let persisted = tmp
+        .path()
+        .join("session-1/tool-results/call-mixed-parts-text.txt");
     assert_eq!(
         std::fs::read_to_string(persisted).unwrap(),
         format!("{first}\n\n{second}")

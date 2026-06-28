@@ -230,6 +230,16 @@ pub enum MetadataEntry {
         replacements: Vec<ContentReplacementRecord>,
     },
 
+    /// Baseline system-context epoch snapshot. Query records this when
+    /// the rendered baseline prompt or its eager sources change.
+    #[serde(rename = "context-epoch")]
+    ContextEpoch {
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+        record: ContextEpochRecord,
+    },
+
     /// AI-generated session title. Lower priority than `CustomTitle`
     /// (user override wins). Unlike `CustomTitle`, this variant is
     /// **not** re-appended to the tail on cleanup; the session picker
@@ -316,6 +326,28 @@ pub enum ContentReplacementRecord {
         tool_use_id: String,
         replacement: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContextEpochRecord {
+    pub epoch: String,
+    pub rendered_system_prompt: String,
+    #[serde(default)]
+    pub sources: Vec<serde_json::Value>,
+}
+
+impl ContextEpochRecord {
+    pub fn new(
+        epoch: impl Into<String>,
+        rendered_system_prompt: impl Into<String>,
+        sources: Vec<serde_json::Value>,
+    ) -> Self {
+        Self {
+            epoch: epoch.into(),
+            rendered_system_prompt: rendered_system_prompt.into(),
+            sources,
+        }
+    }
 }
 
 impl ContentReplacementRecord {
@@ -1478,6 +1510,7 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &str) -> Transcri
                 | MetadataEntry::MarbleOrigamiCommit { .. }
                 | MetadataEntry::MarbleOrigamiSnapshot { .. }
                 | MetadataEntry::ContentReplacement { .. }
+                | MetadataEntry::ContextEpoch { .. }
                 | MetadataEntry::TaskSummary { .. }
                 | MetadataEntry::AttributionSnapshot { .. }
                 | MetadataEntry::AgentColor { .. }

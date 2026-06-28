@@ -14,7 +14,9 @@ System context assembly: environment info, memory-file discovery (`CLAUDE.md` / 
 - **Plan mode**: `PlanModeAttachment`, `PlanModeExitAttachment`, `PlanWorkflow`, `Phase4Variant`, `PlanVerificationOutcome`, plan file management (`get_plan`, `set_plan_slug`, `write_plan`, `delete_plan`, `verify_plan_was_edited`, `recover_plan_for_resume`, `render_plan_mode_reminder`, `render_plan_mode_exit_reminder`, `render_auto_mode_exit_reminder`, `resolve_plans_directory`, `generate_word_slug`, etc.)
 - **File history**: `FileHistoryState`, `FileHistorySnapshot`, `FileHistoryBackup`, `DiffStats`, `backup_dir`, `copy_file_history_for_resume`
 - **File read state / cache**: `FileReadState`, `FileReadEntry`, `FileReadCache`, `file_mtime_ms`
-- **Changed files**: `detect_changed_files`
+- **Changed files**: `changed_file_candidates` → permission/read-loader
+  in `app/query` → `changed_file_observation_from_loaded` →
+  `apply_changed_file_observations`
 - **Memory (legacy info type)**: `MemoryFileInfo`, `MemoryType`
 - **Mentions**: `MentionResolveOptions`, `resolve_mentions`
 - **User input**: `ProcessedInput`, `Mention`, `MentionType`, `process_user_input`

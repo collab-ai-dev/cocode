@@ -8,6 +8,7 @@ use super::*;
 use coco_context::FileReadState;
 use coco_context::attachment::Attachment;
 use coco_context::attachment::DirectoryAttachment;
+use coco_context::attachment::EditedTextFileAttachment;
 use coco_context::attachment::FileAttachment;
 use coco_context::attachment::ImageAttachment;
 use coco_messages::Message;
@@ -164,13 +165,10 @@ fn attachment_to_messages_already_read_file_returns_empty() {
 
 #[test]
 fn changed_file_to_message_emits_modification_note() {
-    let att = Attachment::File(FileAttachment {
+    let att = Attachment::EditedTextFile(EditedTextFileAttachment {
         filename: "/abs/edited.rs".to_string(),
-        content: "diff snippet here".to_string(),
-        truncated: false,
         display_path: "edited.rs".to_string(),
-        offset: None,
-        limit: None,
+        snippet: "diff snippet here".to_string(),
     });
 
     let msg = changed_file_to_message(&att).expect("changed file produces a message");

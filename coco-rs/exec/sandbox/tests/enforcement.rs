@@ -137,8 +137,8 @@ mod linux {
             allow_network: true,
             ..Default::default()
         };
-        let (code, _) = run_sandboxed("cat /etc/hostname", &config).await?;
-        assert_eq!(code, 0, "ReadOnly should allow reading /etc/hostname");
+        let (code, _) = run_sandboxed("cat /etc/hosts", &config).await?;
+        assert_eq!(code, 0, "ReadOnly should allow reading /etc/hosts");
         Ok(())
     }
 
@@ -292,8 +292,8 @@ mod macos {
             allow_network: true,
             ..Default::default()
         };
-        let (code, _) = run_sandboxed("cat /etc/hostname", &config).await?;
-        assert_eq!(code, 0, "ReadOnly should allow reading /etc/hostname");
+        let (code, _) = run_sandboxed("cat /etc/hosts", &config).await?;
+        assert_eq!(code, 0, "ReadOnly should allow reading /etc/hosts");
         Ok(())
     }
 
