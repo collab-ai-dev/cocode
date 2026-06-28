@@ -856,6 +856,41 @@ fn test_content_replacement_serializes_ts_shape() {
 }
 
 #[test]
+fn test_context_epoch_serializes_snake_case_snapshot() {
+    let m = MetadataEntry::ContextEpoch {
+        session_id: "ss".into(),
+        agent_id: Some("agent-1".into()),
+        record: ContextEpochRecord::new(
+            "epoch-a",
+            "system prompt",
+            vec![serde_json::json!({
+                "kind": "default_identity",
+                "rendered_size_bytes": 12
+            })],
+        ),
+    };
+    let v = serde_json::to_value(&m).unwrap();
+    assert_eq!(
+        v.get("type").and_then(|t| t.as_str()),
+        Some("context-epoch")
+    );
+    assert_eq!(v.get("session_id").and_then(|t| t.as_str()), Some("ss"));
+    assert_eq!(v.get("agent_id").and_then(|t| t.as_str()), Some("agent-1"));
+    let record = v.get("record").expect("record");
+    assert_eq!(
+        record.get("epoch").and_then(|t| t.as_str()),
+        Some("epoch-a")
+    );
+    assert_eq!(
+        record
+            .get("rendered_system_prompt")
+            .and_then(|t| t.as_str()),
+        Some("system prompt")
+    );
+    assert!(record.get("renderedSystemPrompt").is_none());
+}
+
+#[test]
 fn test_tool_result_transcript_serializes_as_user_message_with_tool_result_block() {
     let tool_result = coco_messages::create_tool_result_message(
         "toolu_1",

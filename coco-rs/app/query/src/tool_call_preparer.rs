@@ -38,6 +38,7 @@ use crate::hook_controller::PreToolUseOutcome;
 use crate::permission_controller::PermissionController;
 use crate::permission_controller::PermissionOutcome;
 use crate::session_state::SessionStateTracker;
+use crate::tool_runner::ToolSettlement;
 use crate::tool_runner::prepare_committed_tool_call;
 
 /// Per-call data carried from preparation → run_one → on_outcome.
@@ -61,6 +62,7 @@ pub(crate) struct PendingToolPreparation<'a> {
     pub ctx: &'a ToolUseContext,
     pub tool_calls: &'a [ToolCallPart],
     pub tools: &'a ToolRegistry,
+    pub tool_materialization: &'a coco_tool_runtime::ToolMaterialization,
     pub hooks: Option<&'a Arc<HookRegistry>>,
     pub orchestration_ctx: OrchestrationContext,
     pub hook_tx_opt: Option<&'a mpsc::Sender<HookExecutionEvent>>,
@@ -132,7 +134,10 @@ pub(crate) async fn prepare_one_pending_tool_call(
     let prepared = prepare_committed_tool_call(
         args.event_tx,
         args.history,
-        args.tools,
+        ToolSettlement {
+            registry: args.tools,
+            materialization: args.tool_materialization,
+        },
         args.ctx,
         tc,
         args.completion_event_mode,

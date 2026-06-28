@@ -1,7 +1,7 @@
 //! Tests for ToolRegistry, focusing on the B3.3 MCP naming convention
 //! enforcement (`mcp__<server>__<tool>`) and deregister cleanup.
 
-use super::{ToolLookup, ToolRegistry};
+use super::{MaterializedToolLookup, ToolLookup, ToolRegistry};
 use crate::traits::DescriptionOptions;
 use crate::traits::DynTool;
 use crate::traits::McpToolInfo;
@@ -317,6 +317,71 @@ fn doc_example_registry() -> ToolRegistry {
 
 fn names(tools: &[Arc<dyn DynTool>]) -> std::collections::HashSet<String> {
     tools.iter().map(|t| t.name().to_string()).collect()
+}
+
+fn default_filter_ctx() -> crate::context::ToolUseContext {
+    crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(coco_types::Features::with_defaults()),
+        Arc::new(coco_types::ToolOverrides::none()),
+        coco_types::ToolFilter::unrestricted(),
+        coco_types::PermissionMode::Default,
+    )
+}
+
+#[test]
+fn materialized_lookup_rejects_replaced_registration_as_stale() {
+    let reg = ToolRegistry::new();
+    reg.register(stub("Mutable"));
+    let ctx = default_filter_ctx();
+    let materialized = reg.materialize(&ctx);
+
+    reg.register(stub("Mutable"));
+
+    let lookup = materialized.lookup(&reg, &ToolId::Custom("Mutable".into()));
+    assert!(matches!(lookup, MaterializedToolLookup::Stale { name } if name == "Mutable"));
+}
+
+#[test]
+fn materialized_lookup_rejects_deregistered_mcp_registration_as_stale() {
+    let reg = ToolRegistry::new();
+    reg.register(mcp_stub("Read", "server1", "Read"));
+    let ctx = default_filter_ctx();
+    let materialized = reg.materialize(&ctx);
+
+    reg.deregister_by_server("server1");
+
+    let lookup = materialized.lookup(&reg, &ToolId::Custom("mcp__server1__Read".into()));
+    assert!(matches!(
+        lookup,
+        MaterializedToolLookup::Stale { name } if name == "mcp__server1__Read"
+    ));
+}
+
+#[test]
+fn materialized_lookup_resolves_snapshot_alias_without_live_alias_drift() {
+    let reg = ToolRegistry::new();
+    reg.register(mcp_stub("hook_mcp", "test-server", "hook_mcp"));
+    let ctx = default_filter_ctx();
+    let materialized = reg.materialize(&ctx);
+
+    let lookup = materialized.lookup(&reg, &ToolId::Custom("hook_mcp".into()));
+    assert!(
+        matches!(lookup, MaterializedToolLookup::Loaded(tool) if tool.canonical_name == "mcp__test-server__hook_mcp")
+    );
+}
+
+#[test]
+fn materialized_lookup_prefers_visible_canonical_over_alias() {
+    let reg = ToolRegistry::new();
+    reg.register(mcp_stub("Read", "evil_server", "Read"));
+    reg.register(stub("Read"));
+    let ctx = default_filter_ctx();
+    let materialized = reg.materialize(&ctx);
+
+    let lookup = materialized.lookup(&reg, &ToolId::Builtin(ToolName::Read));
+    assert!(
+        matches!(lookup, MaterializedToolLookup::Loaded(tool) if tool.canonical_name == "Read" && tool.tool.mcp_info().is_none())
+    );
 }
 
 #[test]

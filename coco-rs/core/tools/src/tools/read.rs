@@ -1,4 +1,3 @@
-use base64::Engine;
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::SearchReadInfo;
@@ -12,11 +11,9 @@ use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
-use std::fs::File;
-use std::io::BufRead;
-use std::io::BufReader;
-use std::io::Read;
 use std::path::Path;
+
+use super::read_loader::ReadFileKind;
 
 /// Short per-call UI label, returned by `async description()`.
 const READ_TOOL_SHORT_DESCRIPTION: &str = "Read a file from the local filesystem.";
@@ -43,91 +40,9 @@ Usage:
 - You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.";
 
-/// Maximum total file size for a FULL read (no `limit`). A full
-/// read of a larger file throws `FileTooLargeError` rather than
-/// truncating — truncation was deliberately reverted because
-/// a ~100-byte error beats ~256KB of truncated content. Partial reads
-/// (explicit `limit`) skip this check and rely on the token cap below.
-const MAX_READ_OUTPUT_BYTES: usize = 256 * 1024;
-
-/// Default output token budget for a read slice.
-/// Any read whose slice exceeds this estimate throws
-/// `MaxFileReadTokenExceededError`.
-const DEFAULT_MAX_OUTPUT_TOKENS: usize = 25_000;
-
-/// JSON family packs ~2 bytes/token, everything else ~4. Used for the rough
-/// pre-API token estimate.
-fn bytes_per_token_for_ext(file_path: &str) -> usize {
-    let ext = Path::new(file_path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    match ext.as_str() {
-        "json" | "jsonl" | "jsonc" => 2,
-        _ => 4,
-    }
+pub fn is_blocked_device_path(file_path: &str) -> bool {
+    super::read_loader::is_blocked_device_path(file_path)
 }
-
-/// Upper bound on the RAW file size before we even attempt to decode.
-///
-/// This is a safety valve for catastrophically large files (e.g. a 500MB
-/// "image" that's actually a typo for a database dump). The image crate
-/// itself would handle the decode, but pulling half a gig into memory
-/// before recognizing it's not useful is wasteful. Rejects obviously-oversized
-/// files before invoking the compression pipeline.
-///
-/// 32MB is big enough for typical high-resolution photos (e.g. a 24MP
-/// JPEG) while still catching path-of-least-resistance abuse.
-const MAX_IMAGE_DECODE_BYTES: u64 = 32 * 1024 * 1024;
-
-/// Image media-type table for formats we can actually decode, resize,
-/// and send as multimodal content: `['png','jpg','jpeg','gif','webp']`.
-/// Order matters — first match wins.
-///
-/// SVG is intentionally NOT in this list: (a) the Anthropic multimodal API
-/// doesn't accept `image/svg+xml`, and (b) the `image` crate is raster-only
-/// and cannot decode SVG. SVG files fall through to the placeholder path below.
-const IMAGE_MEDIA_TYPES: &[(&str, &str)] = &[
-    ("png", "image/png"),
-    ("jpg", "image/jpeg"),
-    ("jpeg", "image/jpeg"),
-    ("gif", "image/gif"),
-    ("webp", "image/webp"),
-];
-
-/// Image extensions we recognize but cannot send as multimodal content.
-/// Fall back to a placeholder message so the model knows the file exists.
-/// SVG is included here because the Anthropic API doesn't accept it and
-/// our raster image pipeline can't decode it — convert to PNG first.
-const PLACEHOLDER_IMAGE_EXTENSIONS: &[&str] = &["bmp", "ico", "tiff", "tif", "svg"];
-
-/// Known binary extensions that should not be read as text.
-const BINARY_EXTENSIONS: &[&str] = &[
-    "exe", "dll", "so", "dylib", "o", "a", "bin", "class", "pyc", "pyo", "wasm", "zip", "tar",
-    "gz", "bz2", "xz", "7z", "rar", "mp3", "mp4", "wav", "avi", "mov", "mkv", "flv", "ttf", "otf",
-    "woff", "woff2", "eot", "sqlite", "db",
-];
-
-/// Device files that must never be read. Reading these would hang (stdin/tty)
-/// or spew infinite output (/dev/zero, /dev/random, /dev/urandom).
-///
-/// NOTE: `/dev/null` is intentionally NOT blocked — it's a common sink and
-/// reading from it returns EOF immediately, which is harmless and useful.
-const BLOCKED_DEVICE_PATHS: &[&str] = &[
-    "/dev/zero",
-    "/dev/random",
-    "/dev/urandom",
-    "/dev/full",
-    "/dev/stdin",
-    "/dev/tty",
-    "/dev/console",
-    "/dev/stdout",
-    "/dev/stderr",
-    "/dev/fd/0",
-    "/dev/fd/1",
-    "/dev/fd/2",
-];
 
 /// Typed input for [`ReadTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -319,7 +234,7 @@ impl Tool for ReadTool {
         // BEFORE the existence check because some of these (/dev/stdin)
         // exist but would hang the tool indefinitely. `/dev/null` is OK
         // and falls through.
-        if BLOCKED_DEVICE_PATHS.contains(&file_path) {
+        if is_blocked_device_path(file_path) {
             return Err(ToolError::InvalidInput {
                 message: format!(
                     "Cannot read device file: {file_path}. \
@@ -383,17 +298,7 @@ impl Tool for ReadTool {
         // Only attempt dedup for plain text reads. Image/PDF/notebook
         // paths fall through to their dedicated handlers below — they
         // call `record_file_read` themselves and never need a stub.
-        let is_special_extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_lowercase)
-            .is_some_and(|ext| {
-                IMAGE_MEDIA_TYPES.iter().any(|(e, _)| *e == ext)
-                    || PLACEHOLDER_IMAGE_EXTENSIONS.contains(&ext.as_str())
-                    || ext == "ipynb"
-                    || ext == "pdf"
-                    || BINARY_EXTENSIONS.contains(&ext.as_str())
-            });
+        let is_special_extension = super::read_loader::is_special_read_path(path);
         if !is_special_extension
             && let Some(frs) = &ctx.file_read_state
             && let Ok(abs_path) = std::fs::canonicalize(path)
@@ -433,16 +338,8 @@ impl Tool for ReadTool {
             }
         }
 
-        // Check extension for special file types
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_lowercase();
-
-            // Image files that map to a supported multimodal media type get
-            // returned as base64-encoded bytes.
-            if let Some(media_type) = IMAGE_MEDIA_TYPES
-                .iter()
-                .find_map(|(e, mt)| (*e == ext_lower).then_some(*mt))
-            {
+        match super::read_loader::classify_read_path(path) {
+            ReadFileKind::SupportedImage { media_type } => {
                 crate::record_file_read(
                     ctx,
                     path,
@@ -453,12 +350,29 @@ impl Tool for ReadTool {
                 )
                 .await;
                 crate::track_nested_memory_attachment(ctx, path).await;
-                return read_image_as_base64(file_path, media_type).await;
+                let image = super::read_loader::read_image_for_tool(file_path, media_type).await?;
+                return Ok(ToolResult {
+                    data: serde_json::json!({
+                        "type": "image",
+                        "file": {
+                            "base64": image.base64,
+                            "type": image.media_type,
+                            "originalSize": image.original_size,
+                            "dimensions": {
+                                "originalWidth": image.original_width,
+                                "originalHeight": image.original_height,
+                                "displayWidth": image.display_width,
+                                "displayHeight": image.display_height,
+                            }
+                        }
+                    }),
+                    new_messages: vec![],
+                    app_state_patch: None,
+                    permission_updates: Vec::new(),
+                    display_data: None,
+                });
             }
-
-            // Image formats we recognize but Anthropic multimodal API doesn't
-            // accept — return a placeholder so the model knows the file type.
-            if PLACEHOLDER_IMAGE_EXTENSIONS.contains(&ext_lower.as_str()) {
+            ReadFileKind::PlaceholderImage { extension } => {
                 crate::record_file_read(
                     ctx,
                     path,
@@ -476,7 +390,7 @@ impl Tool for ReadTool {
                     data: text_output(
                         file_path,
                         &format!(
-                            "[image file ({ext_lower}) — format not supported by multimodal API, \
+                            "[image file ({extension}) — format not supported by multimodal API, \
                              convert to PNG/JPEG/GIF/WEBP first]"
                         ),
                         1,
@@ -489,15 +403,13 @@ impl Tool for ReadTool {
                     display_data: None,
                 });
             }
-
-            if ext_lower == "ipynb" {
+            ReadFileKind::Notebook => {
                 // Add the notebook path to the nested-memory triggers from
                 // inside the notebook code path.
                 crate::track_nested_memory_attachment(ctx, path).await;
                 return read_notebook(file_path);
             }
-
-            if ext_lower == "pdf" {
+            ReadFileKind::Pdf => {
                 crate::record_file_read(
                     ctx,
                     path,
@@ -511,20 +423,19 @@ impl Tool for ReadTool {
                 let pages = input.pages.as_deref();
                 return read_pdf(file_path, pages);
             }
-
-            // Binary files
-            if BINARY_EXTENSIONS.contains(&ext_lower.as_str()) {
+            ReadFileKind::Binary { extension } => {
                 return Ok(ToolResult {
-                    data: text_output(file_path, &format!("[binary file: {ext_lower}]"), 1, 1, 1),
+                    data: text_output(file_path, &format!("[binary file: {extension}]"), 1, 1, 1),
                     new_messages: vec![],
                     app_state_patch: None,
                     permission_updates: Vec::new(),
                     display_data: None,
                 });
             }
+            ReadFileKind::Text => {}
         }
 
-        let selection = read_text_selection(file_path, &input)?;
+        let selection = super::read_loader::read_text_selection(file_path, &input)?;
 
         if !selection.should_record {
             return Ok(ToolResult {
@@ -672,326 +583,6 @@ impl Tool for ReadTool {
             }],
         }
     }
-}
-
-struct TextReadSelection {
-    output: String,
-    cached_content: String,
-    range: coco_context::FileReadRange,
-    num_lines: usize,
-    start_line: usize,
-    total_lines: usize,
-    should_record: bool,
-}
-
-fn read_text_selection(file_path: &str, input: &ReadInput) -> Result<TextReadSelection, ToolError> {
-    let metadata = std::fs::metadata(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to stat {file_path}: {e}"),
-        display_data: None,
-        source: None,
-    })?;
-
-    if input.limit.is_some() && metadata.len() > MAX_READ_OUTPUT_BYTES as u64 {
-        return read_text_selection_streaming(file_path, input);
-    }
-
-    let raw_bytes = std::fs::read(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to read {file_path}: {e}"),
-        display_data: None,
-        source: None,
-    })?;
-
-    // #25: a FULL read (no `limit`) of a file larger than
-    // MAX_READ_OUTPUT_BYTES throws instead of truncating — the model must
-    // narrow with offset/limit. Partial reads pass through to the line +
-    // token caps.
-    if input.limit.is_none() && raw_bytes.len() > MAX_READ_OUTPUT_BYTES {
-        return Err(ToolError::InvalidInput {
-            message: format!(
-                "File content ({} bytes) exceeds maximum allowed size ({} bytes). \
-                 Use the offset and limit parameters to read specific portions of the file.",
-                raw_bytes.len(),
-                MAX_READ_OUTPUT_BYTES
-            ),
-            error_code: None,
-        });
-    }
-
-    let encoding = coco_file_encoding::detect_encoding(&raw_bytes);
-    let content = encoding
-        .decode(&raw_bytes)
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: format!("failed to decode {file_path} as {encoding:?}: {e}"),
-            display_data: None,
-            source: None,
-        })?;
-
-    read_text_selection_from_content(file_path, input, content)
-}
-
-fn read_text_selection_from_content(
-    file_path: &str,
-    input: &ReadInput,
-    content: String,
-) -> Result<TextReadSelection, ToolError> {
-    let offset = normalized_offset(input);
-    let explicit_limit = explicit_limit(input);
-
-    // Empty file. Yields one empty selected line → `totalLines = 1`, so
-    // this routes to the offset warning in `render_for_model`.
-    if content.is_empty() {
-        return Ok(TextReadSelection {
-            output: String::new(),
-            cached_content: String::new(),
-            range: coco_context::FileReadRange::Full,
-            num_lines: 0,
-            start_line: offset,
-            total_lines: 1,
-            should_record: false,
-        });
-    }
-
-    let lines: Vec<&str> = content.lines().collect();
-    let total_lines = lines.len();
-    let start = start_index(offset);
-
-    // Offset-beyond-file: emits a `<system-reminder>` at render time.
-    if start >= total_lines && total_lines > 0 {
-        return Ok(TextReadSelection {
-            output: String::new(),
-            cached_content: String::new(),
-            range: coco_context::FileReadRange::Lines {
-                offset: if offset > 1 {
-                    Some(offset as i32)
-                } else {
-                    None
-                },
-                limit: 0,
-            },
-            num_lines: 0,
-            start_line: offset,
-            total_lines,
-            should_record: false,
-        });
-    }
-
-    let line_end = explicit_limit
-        .map(|limit| start.saturating_add(limit).min(total_lines))
-        .unwrap_or(total_lines);
-    let slice_bytes: usize = lines[start..line_end].iter().map(|l| l.len() + 1).sum();
-    enforce_token_cap(file_path, slice_bytes)?;
-
-    let mut output = String::new();
-    for (i, line) in lines[start..line_end].iter().enumerate() {
-        let line_num = start + i + 1;
-        output.push_str(&format!("{line_num}\t{line}\n"));
-    }
-
-    if line_end < total_lines {
-        output.push_str(&format!(
-            "\n... ({} more lines not shown. Use offset/limit to read more.)",
-            total_lines - line_end
-        ));
-    }
-
-    let requested_line_range = input.limit.is_some() || input.offset.is_some_and(|n| n > 1);
-    let range = if requested_line_range {
-        coco_context::FileReadRange::Lines {
-            offset: if offset > 1 {
-                Some(offset as i32)
-            } else {
-                None
-            },
-            limit: (line_end - start) as i32,
-        }
-    } else {
-        coco_context::FileReadRange::Full
-    };
-    let cached_content = if range == coco_context::FileReadRange::Full {
-        content
-    } else {
-        lines[start..line_end].join("\n")
-    };
-
-    Ok(TextReadSelection {
-        output,
-        cached_content,
-        range,
-        num_lines: line_end - start,
-        start_line: if start == 0 { 1 } else { start + 1 },
-        total_lines,
-        should_record: true,
-    })
-}
-
-fn read_text_selection_streaming(
-    file_path: &str,
-    input: &ReadInput,
-) -> Result<TextReadSelection, ToolError> {
-    reject_unsupported_streaming_encoding(file_path)?;
-
-    let file = File::open(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to read {file_path}: {e}"),
-        display_data: None,
-        source: None,
-    })?;
-    let mut reader = BufReader::new(file);
-    let offset = normalized_offset(input);
-    let Some(limit) = explicit_limit(input) else {
-        return Err(ToolError::InvalidInput {
-            message: "streaming range reads require a positive limit".into(),
-            error_code: None,
-        });
-    };
-    let start = start_index(offset);
-    let requested_end = start.saturating_add(limit);
-    let mut line = String::new();
-    let mut total_lines = 0usize;
-    let mut selected_lines: Vec<String> = Vec::new();
-    let mut slice_bytes = 0usize;
-
-    loop {
-        line.clear();
-        let bytes = reader
-            .read_line(&mut line)
-            .map_err(|e| ToolError::ExecutionFailed {
-                message: format!("failed to decode {file_path} as UTF-8 while streaming: {e}"),
-                display_data: None,
-                source: None,
-            })?;
-        if bytes == 0 {
-            break;
-        }
-        trim_line_ending(&mut line);
-        if total_lines == 0 && line.starts_with('\u{feff}') {
-            line.remove(0);
-        }
-        if total_lines >= start && total_lines < requested_end {
-            slice_bytes += line.len() + 1;
-            selected_lines.push(line.clone());
-        }
-        total_lines += 1;
-    }
-
-    if start >= total_lines && total_lines > 0 {
-        return Ok(TextReadSelection {
-            output: String::new(),
-            cached_content: String::new(),
-            range: coco_context::FileReadRange::Lines {
-                offset: if offset > 1 {
-                    Some(offset as i32)
-                } else {
-                    None
-                },
-                limit: 0,
-            },
-            num_lines: 0,
-            start_line: offset,
-            total_lines,
-            should_record: false,
-        });
-    }
-
-    enforce_token_cap(file_path, slice_bytes)?;
-
-    let mut output = String::new();
-    for (i, line) in selected_lines.iter().enumerate() {
-        let line_num = start + i + 1;
-        output.push_str(&format!("{line_num}\t{line}\n"));
-    }
-
-    let end = start + selected_lines.len();
-    if end < total_lines {
-        output.push_str(&format!(
-            "\n... ({} more lines not shown. Use offset/limit to read more.)",
-            total_lines - end
-        ));
-    }
-
-    Ok(TextReadSelection {
-        output,
-        cached_content: selected_lines.join("\n"),
-        range: coco_context::FileReadRange::Lines {
-            offset: if offset > 1 {
-                Some(offset as i32)
-            } else {
-                None
-            },
-            limit: selected_lines.len() as i32,
-        },
-        num_lines: selected_lines.len(),
-        start_line: if start == 0 { 1 } else { start + 1 },
-        total_lines,
-        should_record: true,
-    })
-}
-
-fn reject_unsupported_streaming_encoding(file_path: &str) -> Result<(), ToolError> {
-    let mut file = File::open(file_path).map_err(|e| ToolError::ExecutionFailed {
-        message: format!("failed to read {file_path}: {e}"),
-        display_data: None,
-        source: None,
-    })?;
-    let mut prefix = [0u8; 3];
-    let bytes = file
-        .read(&mut prefix)
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: format!("failed to read {file_path}: {e}"),
-            display_data: None,
-            source: None,
-        })?;
-    if bytes >= 2 && (prefix[..2] == [0xff, 0xfe] || prefix[..2] == [0xfe, 0xff]) {
-        return Err(ToolError::ExecutionFailed {
-            message: format!(
-                "Cannot range-stream {file_path}: UTF-16 is not supported for large explicit-range reads. \
-                 Use a smaller UTF-8 file or convert the file to UTF-8 before reading a range."
-            ),
-            display_data: None,
-            source: None,
-        });
-    }
-    Ok(())
-}
-
-fn normalized_offset(input: &ReadInput) -> usize {
-    input
-        .offset
-        .filter(|n| *n >= 0)
-        .map(|n| n as usize)
-        .unwrap_or(1)
-}
-
-fn explicit_limit(input: &ReadInput) -> Option<usize> {
-    input.limit.filter(|n| *n > 0).map(|n| n as usize)
-}
-
-fn start_index(offset: usize) -> usize {
-    if offset == 0 { 0 } else { offset - 1 }
-}
-
-fn trim_line_ending(line: &mut String) {
-    if line.ends_with('\n') {
-        line.pop();
-        if line.ends_with('\r') {
-            line.pop();
-        }
-    }
-}
-
-fn enforce_token_cap(file_path: &str, slice_bytes: usize) -> Result<(), ToolError> {
-    let token_estimate = slice_bytes / bytes_per_token_for_ext(file_path);
-    if token_estimate > DEFAULT_MAX_OUTPUT_TOKENS {
-        return Err(ToolError::InvalidInput {
-            message: format!(
-                "File content ({token_estimate} tokens) exceeds maximum allowed tokens \
-                 ({DEFAULT_MAX_OUTPUT_TOKENS}). Use offset and limit parameters to read \
-                 specific portions of the file, or search for specific content instead of \
-                 reading the whole file."
-            ),
-            error_code: None,
-        });
-    }
-    Ok(())
 }
 
 /// Render notebook cells as multi-block content.
@@ -1371,144 +962,6 @@ fn join_cell_source(source: Option<&Value>) -> String {
             .join(""),
         _ => String::new(),
     }
-}
-
-/// Read an image file and return it as base64-encoded data with its
-/// media type, running it through the resize-and-re-encode pipeline.
-///
-/// Pipeline (at the behavior level, not byte-for-byte):
-///
-/// 1. Read raw bytes from disk via `spawn_blocking`.
-/// 2. Safety cap at [`MAX_IMAGE_DECODE_BYTES`] (32MB) — catches obvious
-///    path-of-least-resistance abuse before spending CPU on decode.
-/// 3. Delegate to `coco_utils_image::load_for_prompt_bytes` with
-///    `PromptImageMode::ResizeToFit`. This:
-///    - detects the format (PNG/JPEG/GIF/WebP)
-///    - preserves the source bytes when the image is already within
-///      `MAX_WIDTH × MAX_HEIGHT` (2048 × 768) bounds
-///    - otherwise resizes via Triangle filter and re-encodes to the
-///      source format (with PNG fallback for formats we can't round-trip)
-/// 4. Base64-encode the post-processing bytes.
-///
-/// `readImageWithTokenBudget` has a genuinely two-stage pipeline: standard
-/// resize, then aggressive JPEG re-encoding if still over the token budget.
-/// Our single-stage resize is close enough for the common case — a typical
-/// 24MP photo shrinks from ~24MB to ~500KB at 2048×768, well under any
-/// reasonable token budget. The aggressive JPEG stage is a follow-up if we
-/// hit real budget issues.
-///
-/// Result payload shape matches the format used by coco-rs elsewhere for
-/// multimodal content: a JSON object with `type: "image"`, `source.type:
-/// "base64"`, `source.media_type`, and `source.data`. The query/message
-/// layer converts this into the provider-specific multimodal block.
-///
-/// The `media_type` argument is a hint from the file extension; the
-/// actual `source.media_type` in the returned payload is the type the
-/// image crate decided on after processing (which may differ if a WebP
-/// with alpha got re-encoded as PNG, for example).
-async fn read_image_as_base64(
-    file_path: &str,
-    media_type: &str,
-) -> Result<ToolResult<Value>, ToolError> {
-    // Stage 0: metadata-based raw-size cap. Read the file size without
-    // slurping the whole thing into memory first — this catches an
-    // accidentally-huge file before we allocate a multi-GB Vec.
-    let metadata =
-        tokio::fs::metadata(file_path)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed {
-                message: format!("failed to stat image {file_path}: {e}"),
-                display_data: None,
-                source: None,
-            })?;
-    if metadata.len() > MAX_IMAGE_DECODE_BYTES {
-        return Err(ToolError::ExecutionFailed {
-            message: format!(
-                "Image file too large to decode: {} bytes > {MAX_IMAGE_DECODE_BYTES} byte \
-                 limit. This cap exists to prevent accidentally loading huge files; if you \
-                 genuinely need to process a larger image, resize it first with an external \
-                 tool (e.g. `magick input.png -resize 2048x2048 output.png`).",
-                metadata.len()
-            ),
-            display_data: None,
-            source: None,
-        });
-    }
-
-    // Stage 1: blocking read + resize + re-encode. Both the file read
-    // and the image decode/encode are CPU-or-IO bound and block, so we
-    // run the whole pipeline inside `spawn_blocking`.
-    let file_path_owned = file_path.to_string();
-    let hint_path = std::path::PathBuf::from(file_path);
-    let encoded =
-        tokio::task::spawn_blocking(move || -> Result<coco_utils_image::EncodedImage, String> {
-            let raw = std::fs::read(&file_path_owned)
-                .map_err(|e| format!("failed to read image {file_path_owned}: {e}"))?;
-            coco_utils_image::load_for_prompt_bytes(
-                &hint_path,
-                raw,
-                coco_utils_image::PromptImageMode::ResizeToFit,
-            )
-            .map_err(|e| format!("image processing failed: {e}"))
-        })
-        .await
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: format!("spawn_blocking failed: {e}"),
-            display_data: None,
-            source: None,
-        })?
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: e,
-            display_data: None,
-            source: None,
-        })?;
-
-    // Stage 2: base64-encode the processed bytes. We use the MIME type
-    // from the image processing result — if the crate downgraded WebP to
-    // PNG, for example, the returned MIME reflects that so the model
-    // sees the correct content type.
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&encoded.bytes);
-
-    // Debug-log any mismatch between the filename-derived hint and the
-    // image crate's actual decision — useful when investigating why a
-    // .webp is being returned as image/png.
-    if encoded.mime != media_type {
-        tracing::debug!(
-            "Image MIME adjusted from filename hint {media_type} to {} after processing",
-            encoded.mime
-        );
-    }
-
-    // Image discriminated-union variant shape:
-    //   { type: 'image', file: { base64, type, originalSize,
-    //                            dimensions?: { originalWidth,
-    //                                           originalHeight,
-    //                                           displayWidth,
-    //                                           displayHeight } } }
-    //
-    // R7-T20: dimensions are plumbed from `coco_utils_image::EncodedImage`
-    // so the model can convert click coordinates between the resized display
-    // image and the source image's coordinate space.
-    Ok(ToolResult {
-        data: serde_json::json!({
-            "type": "image",
-            "file": {
-                "base64": b64,
-                "type": encoded.mime,
-                "originalSize": metadata.len(),
-                "dimensions": {
-                    "originalWidth": encoded.original_width,
-                    "originalHeight": encoded.original_height,
-                    "displayWidth": encoded.width,
-                    "displayHeight": encoded.height,
-                }
-            }
-        }),
-        new_messages: vec![],
-        app_state_patch: None,
-        permission_updates: Vec::new(),
-        display_data: None,
-    })
 }
 
 /// Maximum number of pages to extract per read. Defaults to 20.

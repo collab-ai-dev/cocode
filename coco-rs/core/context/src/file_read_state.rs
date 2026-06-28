@@ -42,6 +42,7 @@ pub enum FileReadRange {
 pub enum ReadEvidence {
     RealFileView,
     InjectedPartialView,
+    ObservedForDiff,
 }
 
 impl FileReadEntry {
@@ -69,6 +70,15 @@ impl FileReadEntry {
             mtime_ms,
             range,
             evidence: ReadEvidence::InjectedPartialView,
+        }
+    }
+
+    pub fn observed_for_diff(content: String, mtime_ms: i64) -> Self {
+        Self {
+            content,
+            mtime_ms,
+            range: FileReadRange::Full,
+            evidence: ReadEvidence::ObservedForDiff,
         }
     }
 
@@ -134,6 +144,15 @@ impl FileReadState {
         self.evict_if_full();
         self.touch_lru(&path);
         self.read_input_ranges.remove(&path);
+        self.entries.insert(path, entry);
+    }
+
+    /// Replace an entry without changing whether it came from Read.
+    /// Used for mtime-only refreshes where the model's prior full view
+    /// remains valid and Read dedup evidence should not be downgraded.
+    pub fn set_preserving_read_origin(&mut self, path: PathBuf, entry: FileReadEntry) {
+        self.evict_if_full();
+        self.touch_lru(&path);
         self.entries.insert(path, entry);
     }
 

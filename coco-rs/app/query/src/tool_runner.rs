@@ -3,8 +3,9 @@ use std::sync::Arc;
 use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::DynTool;
+use coco_tool_runtime::MaterializedToolLookup;
 use coco_tool_runtime::ToolCallErrorKind;
-use coco_tool_runtime::ToolLookup;
+use coco_tool_runtime::ToolMaterialization;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
@@ -17,6 +18,11 @@ use tracing::warn;
 use crate::emit::emit_stream;
 use crate::helpers::ToolCompletionEventMode;
 use crate::helpers::complete_tool_call_with_error_mode;
+
+pub(crate) struct ToolSettlement<'a> {
+    pub registry: &'a ToolRegistry,
+    pub materialization: &'a ToolMaterialization,
+}
 
 /// Resolved and validated tool call ready for permission/hook/execution.
 ///
@@ -47,7 +53,7 @@ pub(crate) struct PreparedToolCall {
 pub(crate) async fn prepare_committed_tool_call(
     event_tx: &Option<mpsc::Sender<CoreEvent>>,
     history: &mut MessageHistory,
-    tools: &ToolRegistry,
+    settlement: ToolSettlement<'_>,
     ctx: &ToolUseContext,
     tool_call: &ToolCallPart,
     completion_event_mode: ToolCompletionEventMode,
@@ -69,9 +75,12 @@ pub(crate) async fn prepare_committed_tool_call(
     )
     .await;
 
-    let tool = match tools.lookup_loaded(&tool_id, ctx) {
-        ToolLookup::Loaded(tool) => tool,
-        ToolLookup::Deferred { name } => {
+    let tool = match settlement
+        .materialization
+        .lookup(settlement.registry, &tool_id)
+    {
+        MaterializedToolLookup::Loaded(materialized) => materialized.tool,
+        MaterializedToolLookup::Deferred { name, tool } => {
             warn!(
                 tool = tool_call.tool_name,
                 resolved_tool = name,
@@ -82,9 +91,7 @@ pub(crate) async fn prepare_committed_tool_call(
             // a second round-trip just to discover the argument shape. The tool
             // is registered — only absent from this turn's loaded set — so the
             // registry still resolves it.
-            let schema_hint = tools
-                .get_by_name(&name)
-                .and_then(|t| serde_json::to_string(t.runtime_validation_schema().as_value()).ok())
+            let schema_hint = serde_json::to_string(tool.runtime_validation_schema().as_value())
                 .map(|s| format!(" For reference, this tool's input schema is: {s}"))
                 .unwrap_or_default();
             let output = format!(
@@ -105,7 +112,31 @@ pub(crate) async fn prepare_committed_tool_call(
             .await;
             return None;
         }
-        ToolLookup::Unavailable => {
+        MaterializedToolLookup::Stale { name } => {
+            warn!(
+                tool = tool_call.tool_name,
+                resolved_tool = name,
+                "tool registration changed after provider-turn materialization"
+            );
+            let output = format!(
+                "<tool_use_error>No such tool available: {}. Its registration changed after this turn's tool list was sent; retry the request so the current tool list can be used.</tool_use_error>",
+                tool_call.tool_name
+            );
+            complete_tool_call_with_error_mode(
+                event_tx,
+                history,
+                &tool_call.tool_call_id,
+                &tool_call.tool_name,
+                &tool_id,
+                &output,
+                ToolCallErrorKind::UnknownTool,
+                completion_event_mode,
+                deferred_tool_completions.take(),
+            )
+            .await;
+            return None;
+        }
+        MaterializedToolLookup::Unavailable => {
             warn!(
                 tool = tool_call.tool_name,
                 "tool not available in current context"

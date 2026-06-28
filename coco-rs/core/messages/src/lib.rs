@@ -1,5 +1,6 @@
 //! Message creation, normalization, history, cost tracking, lookups.
 
+pub mod changed_file;
 pub mod command_tags;
 pub mod content_kind;
 pub mod cost;
@@ -19,6 +20,7 @@ pub mod wrapping;
 // the operations layer that does normalization / history.
 pub use coco_types::messages::*;
 
+pub use changed_file::changed_file_reminder_message;
 pub use command_tags::COMMAND_ARGS_TAG;
 pub use command_tags::COMMAND_MESSAGE_TAG;
 pub use command_tags::COMMAND_NAME_TAG;

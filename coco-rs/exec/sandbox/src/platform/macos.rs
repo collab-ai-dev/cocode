@@ -5,6 +5,8 @@
 //! Uses a static base policy (Chrome-inspired, from codex-rs) plus dynamic
 //! path rules for writable roots and network access.
 
+use std::collections::BTreeSet;
+
 use tracing::info;
 
 use crate::config::EnforcementLevel;
@@ -132,24 +134,11 @@ fn generate_seatbelt_profile(
     }
     profile.push('\n');
 
-    // System read access (always allowed for basic operation)
-    profile.push_str("; System read access\n");
-    for path in &[
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/lib",
-        "/System/Library",
-        "/Library/Frameworks",
-        "/dev/null",
-        "/dev/urandom",
-        "/dev/random",
-        "/private/var/tmp",
-        "/private/tmp",
-        "/etc",
-    ] {
-        let _ = writeln!(profile, "(allow file-read* (subpath \"{path}\"))");
-    }
+    // ReadOnly / WorkspaceWrite allow reads by default. Explicit denied read
+    // paths below are emitted later so Seatbelt's last-match-wins evaluation
+    // lets them override this broad allow.
+    profile.push_str("; Read access\n");
+    profile.push_str("(allow file-read*)\n");
 
     // Home directory read access
     if let Some(h) = &home {
@@ -188,8 +177,10 @@ fn generate_seatbelt_profile(
             .chain(&config.denied_paths)
             .chain(&glob_expanded)
         {
-            let escaped = escape_sbpl_path(&path.display().to_string());
-            let _ = writeln!(profile, "(deny file-read* (subpath \"{escaped}\"))");
+            for variant in macos_path_variants(path) {
+                let escaped = escape_sbpl_path(&variant);
+                let _ = writeln!(profile, "(deny file-read* (subpath \"{escaped}\"))");
+            }
         }
         profile.push('\n');
     }
@@ -200,8 +191,10 @@ fn generate_seatbelt_profile(
     if !config.allowed_read_paths.is_empty() {
         profile.push_str("; allow_read carve-outs (override matching denies)\n");
         for path in &config.allowed_read_paths {
-            let escaped = escape_sbpl_path(&path.display().to_string());
-            let _ = writeln!(profile, "(allow file-read* (subpath \"{escaped}\"))");
+            for variant in macos_path_variants(path) {
+                let escaped = escape_sbpl_path(&variant);
+                let _ = writeln!(profile, "(allow file-read* (subpath \"{escaped}\"))");
+            }
         }
         profile.push('\n');
     }
@@ -240,13 +233,17 @@ fn generate_seatbelt_profile(
     if !config.writable_roots.is_empty() {
         profile.push_str("; Writable roots\n");
         for root in &config.writable_roots {
-            let path = escape_sbpl_path(&root.path.display().to_string());
-            let _ = writeln!(profile, "(allow file-write* (subpath \"{path}\"))");
+            for variant in macos_path_variants(&root.path) {
+                let path = escape_sbpl_path(&variant);
+                let _ = writeln!(profile, "(allow file-write* (subpath \"{path}\"))");
+            }
             // Re-deny write access to read-only subpaths
             for sub in &root.readonly_subpaths {
                 let sub_path = root.path.join(sub);
-                let escaped = escape_sbpl_path(&sub_path.display().to_string());
-                let _ = writeln!(profile, "(deny file-write* (subpath \"{escaped}\"))");
+                for variant in macos_path_variants(&sub_path) {
+                    let escaped = escape_sbpl_path(&variant);
+                    let _ = writeln!(profile, "(deny file-write* (subpath \"{escaped}\"))");
+                }
             }
         }
         profile.push('\n');
@@ -264,8 +261,10 @@ fn generate_seatbelt_profile(
     // for cwd-file tracking and `TMPDIR` injection. Seatbelt treats
     // these as additional writable subpaths; bwrap on Linux binds them.
     for path in extra_writable_binds {
-        let escaped = escape_sbpl_path(&path.display().to_string());
-        let _ = writeln!(profile, "(allow file-write* (subpath \"{escaped}\"))");
+        for variant in macos_path_variants(path) {
+            let escaped = escape_sbpl_path(&variant);
+            let _ = writeln!(profile, "(allow file-write* (subpath \"{escaped}\"))");
+        }
     }
     profile.push('\n');
 
@@ -335,6 +334,47 @@ fn tmpdir_variants() -> Vec<String> {
         dirs.push(format!("/private/var/{rest}"));
     }
     dirs
+}
+
+fn macos_path_variants(path: &std::path::Path) -> Vec<String> {
+    let raw = path.display().to_string();
+    let mut variants = BTreeSet::from([raw.clone()]);
+    if let Some(rest) = raw.strip_prefix("/private/var/") {
+        variants.insert(format!("/var/{rest}"));
+    } else if let Some(rest) = raw.strip_prefix("/var/") {
+        variants.insert(format!("/private/var/{rest}"));
+    } else if let Some(rest) = raw.strip_prefix("/private/tmp/") {
+        variants.insert(format!("/tmp/{rest}"));
+    } else if let Some(rest) = raw.strip_prefix("/tmp/") {
+        variants.insert(format!("/private/tmp/{rest}"));
+    } else if let Some(rest) = raw.strip_prefix("/private/etc/") {
+        variants.insert(format!("/etc/{rest}"));
+    } else if let Some(rest) = raw.strip_prefix("/etc/") {
+        variants.insert(format!("/private/etc/{rest}"));
+    } else {
+        match raw.as_str() {
+            "/var" => {
+                variants.insert("/private/var".to_string());
+            }
+            "/private/var" => {
+                variants.insert("/var".to_string());
+            }
+            "/tmp" => {
+                variants.insert("/private/tmp".to_string());
+            }
+            "/private/tmp" => {
+                variants.insert("/tmp".to_string());
+            }
+            "/etc" => {
+                variants.insert("/private/etc".to_string());
+            }
+            "/private/etc" => {
+                variants.insert("/etc".to_string());
+            }
+            _ => {}
+        }
+    }
+    variants.into_iter().collect()
 }
 
 /// Get the user's home directory, if available.

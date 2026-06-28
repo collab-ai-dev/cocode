@@ -99,7 +99,7 @@ fn test_generate_seatbelt_profile_readonly_no_writable_roots() {
     };
 
     let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX", &[]);
-    assert!(profile.contains("(allow file-read* (subpath \"/usr\"))"));
+    assert!(profile.contains("(allow file-read*)"));
     assert!(!profile.contains("Writable roots"));
     // Network restricted to loopback
     assert!(profile.contains("localhost"));

@@ -645,11 +645,8 @@ impl QueryEngine {
             // @-mentioned paths with the `FileReadState` cache where
             // mtime still matches disk — computed above via
             // `FileReadState::unchanged_paths`.
-            // `edited_image_file_paths`: reserved for a future image-
-            // mtime tracker. Text `FileReadState` is text-only; image
-            // drift detection would need a parallel cache.
             already_read_file_paths: reminder_already_read_file_paths,
-            edited_image_file_paths: Vec::new(),
+            edited_image_file_paths: self.take_pending_edited_image_file_paths().await,
             skill_discovery: materialized.skill_discovery,
         };
         let reminders = run_turn_reminders(reminder_orchestrator, reminder_input).await;

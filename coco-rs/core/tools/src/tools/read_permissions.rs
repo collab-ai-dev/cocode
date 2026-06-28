@@ -116,6 +116,31 @@ pub fn check_read_permission_with_matcher(
     check_read_permission_for_path(&path, ctx)
 }
 
+/// Background readers must match ReadTool's user-visible gates before
+/// touching the filesystem. Returns Ask/Deny as a skip decision because
+/// background attachment refreshes cannot safely prompt mid-scan.
+pub async fn check_background_read_permission_with_sandbox(
+    path: &Path,
+    ctx: &coco_tool_runtime::ToolUseContext,
+) -> ToolCheckResult {
+    let matcher =
+        file_read_ignore_matcher_from_patterns(&ctx.tool_config.file_read_ignore_patterns);
+    let permission = check_read_permission_with_matcher(path, &matcher, ctx);
+    if matches!(
+        permission,
+        ToolCheckResult::Deny { .. } | ToolCheckResult::Ask { .. }
+    ) {
+        return permission;
+    }
+
+    match super::sandbox_preflight::preflight_path(ctx, path, false).await {
+        Ok(()) => permission,
+        Err(e) => ToolCheckResult::Deny {
+            message: e.to_string(),
+        },
+    }
+}
+
 /// Read deny/ask rules win, then working-directory/internal paths are
 /// allowed, then explicit read allow rules are honored, otherwise prompt.
 ///
