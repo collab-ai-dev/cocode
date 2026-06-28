@@ -16,7 +16,7 @@ All mechanical renames from the original `cocode-sdk/` naming have been applied:
 
 ## Regeneration Pipeline (Phase 2.A.5 ✅ done)
 
-The full Rust → JSON Schema → Python pipeline is working:
+The full Rust → JSON Schema → SDK language pipeline is working:
 
 ```bash
 # One-shot regeneration of everything:
@@ -25,6 +25,7 @@ The full Rust → JSON Schema → Python pipeline is working:
 # Or step by step:
 ./coco-sdk/scripts/generate_schemas.sh   # coco-rs types → schemas/json/*.json
 ./coco-sdk/scripts/generate_python.sh    # schemas → generated/protocol.py + stubs + __init__.py
+./coco-sdk/scripts/generate_typescript.sh # schemas → generated/protocol.ts
 ```
 
 ### Pipeline internals
@@ -58,6 +59,19 @@ The full Rust → JSON Schema → Python pipeline is working:
    - `regen_init.py` rewrites `__init__.py` with the current set of protocol
      class names plus the 17 static SDK exports (CocoClient, query, @tool,
      @hook, errors, etc.).
+
+3. **`generate_typescript.sh`** runs:
+   - `postprocess_typescript.py` reads the same schema bundle + individual
+     schemas and emits structural wire types in
+     `typescript/src/generated/protocol.ts`.
+   - Tagged wire envelopes (`ClientRequest`, `ServerNotification`,
+     `ServerRequest`) and their method constants are derived from each
+     top-level `oneOf`, so method additions flow into TypeScript with the same
+     source-of-truth model as Python.
+   - The hand-written TypeScript runtime mirrors the Python SDK's
+     transport/router/client/query split, because coco's SDK protocol is a
+     long-lived JSON-RPC subprocess rather than Codex's one-shot exec JSONL
+     stream.
 
 ### Current generator output
 
@@ -97,8 +111,15 @@ coco-sdk/
 │   ├── examples/                # Ported examples (binary name updated)
 │   ├── tests/                   # Ported tests (MockTransport, no subprocess)
 │   └── pyproject.toml           # Hatch-based build
-├── schemas/json/                # Schema artifacts (need regeneration)
-└── scripts/                     # generate_schemas.sh + postprocess_python.py
+├── typescript/
+│   ├── src/generated/protocol.ts # Generated structural protocol types
+│   ├── src/client.ts             # CocoClient multi-turn session
+│   ├── src/query.ts              # one-shot query()
+│   ├── src/messageRouter.ts      # JSON-RPC response/event/request router
+│   ├── src/transport.ts          # SubprocessCLITransport
+│   └── package.json              # tsc-based ESM package
+├── schemas/json/                # Schema artifacts
+└── scripts/                     # generate_schemas.sh + language generators
 ```
 
 ## Dependencies on coco-rs
