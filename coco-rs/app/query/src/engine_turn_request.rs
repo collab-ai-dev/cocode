@@ -31,6 +31,7 @@ pub(crate) type SessionStreamingHandle = StreamingHandle<StreamingRunFn, Streami
 pub(crate) struct PreparedTurnRequest {
     pub(crate) params: QueryParams,
     pub(crate) active_snapshot: coco_inference::ModelRuntimeSnapshot,
+    pub(crate) prompt_context: coco_context::PromptContext,
     pub(crate) messages_snapshot: Arc<Vec<Arc<Message>>>,
     pub(crate) streaming_ctx: Option<Arc<ToolUseContext>>,
     pub(crate) streaming_handle: Option<SessionStreamingHandle>,
@@ -131,6 +132,7 @@ impl QueryEngine {
 
         let crate::engine_prompt::BuiltPrompt {
             prompt,
+            prompt_context,
             messages_snapshot,
         } = self.build_prompt(history).await;
         let tool_defs = self.build_tool_definitions(&app_state_snapshot).await;
@@ -270,7 +272,7 @@ impl QueryEngine {
                             hooks: hooks.as_ref(),
                             orchestration_ctx,
                             hook_tx: hook_tx.as_ref(),
-                            tool_result_session_dir: ctx.tool_result_session_dir.clone(),
+                            tool_output_store: ctx.tool_output_store.clone(),
                         },
                     )
                     .await
@@ -318,6 +320,7 @@ impl QueryEngine {
         PreparedTurnRequest {
             params,
             active_snapshot,
+            prompt_context,
             messages_snapshot,
             streaming_ctx,
             streaming_handle,

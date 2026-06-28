@@ -665,11 +665,17 @@ impl QueryEngine {
             let crate::engine_turn_request::PreparedTurnRequest {
                 params,
                 active_snapshot,
+                prompt_context,
                 messages_snapshot,
                 streaming_ctx,
                 streaming_handle,
                 streaming_model_index,
             } = prepared_turn;
+            tracing::debug!(
+                context_epoch = %prompt_context.epoch,
+                context_sources = prompt_context.sources.len(),
+                "prepared prompt context"
+            );
             let mut streaming_handle = streaming_handle;
             let mut streaming_model_index = streaming_model_index;
 

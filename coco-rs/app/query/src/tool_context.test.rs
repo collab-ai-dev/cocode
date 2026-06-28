@@ -66,7 +66,7 @@ fn factory_with_live_rules(
         file_read_state: None,
         file_history: None,
         config_home: None,
-        tool_result_session_dir: None,
+        tool_output_store: None,
         transcript_path: None,
         hook_handle: None,
         agent_handle: None,

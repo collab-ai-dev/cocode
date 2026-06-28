@@ -290,6 +290,81 @@ pub fn empty_tool_result_message(tool_name: &str) -> String {
     format!("({tool_name} completed with no output)")
 }
 
+/// Session-scoped facade for model-facing tool output persistence.
+///
+/// This keeps the storage policy at the tool-runtime boundary while preserving
+/// the existing pure helpers for compatibility and focused unit tests. Higher
+/// layers should prefer this type over passing raw session artifact paths
+/// through prompt/tool code.
+#[derive(Debug, Clone)]
+pub struct ToolOutputStore {
+    session_dir: PathBuf,
+}
+
+impl ToolOutputStore {
+    pub fn new(session_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            session_dir: session_dir.into(),
+        }
+    }
+
+    pub fn session_dir(&self) -> &Path {
+        &self.session_dir
+    }
+
+    /// Persist text output unconditionally and return its structured reference.
+    pub async fn persist_text(
+        &self,
+        id: &str,
+        content: &str,
+        is_json: bool,
+    ) -> std::io::Result<PersistedToolResult> {
+        persist_to_disk(&self.session_dir, id, content, is_json).await
+    }
+
+    /// Persist text output only when the resolved per-tool bound requires it.
+    ///
+    /// `Ok(None)` means the caller should keep the original inline content.
+    /// `Ok(Some(_))` is the rendered `<persisted-output>` replacement.
+    pub async fn persist_text_if_over_bound(
+        &self,
+        id: &str,
+        content: &str,
+        is_json: bool,
+        declared_bound: ResultSizeBound,
+    ) -> std::io::Result<Option<String>> {
+        let threshold = match resolve_persistence_threshold(declared_bound) {
+            ResultSizeBound::Unbounded => return Ok(None),
+            ResultSizeBound::Chars(threshold) => threshold,
+        };
+        if (content.len() as i64) <= threshold || is_content_already_persisted(content) {
+            return Ok(None);
+        }
+
+        let persisted = self.persist_text(id, content, is_json).await?;
+        Ok(Some(render_persisted_reference(&persisted)))
+    }
+
+    /// Persist a binary MCP payload under this session's tool-output store.
+    pub async fn persist_binary(
+        &self,
+        id: &str,
+        bytes: &[u8],
+        mime_type: Option<&str>,
+    ) -> std::io::Result<PersistedMcpBinaryOutput> {
+        persist_mcp_binary_to_disk(&self.session_dir, id, bytes, mime_type).await
+    }
+
+    /// Apply the per-message aggregate budget using this session's store.
+    pub async fn apply_budget(
+        &self,
+        candidates: &[ToolResultCandidate],
+        state: &ContentReplacementStateRef,
+    ) -> BudgetOutcome {
+        apply_tool_result_budget(candidates, state, &self.session_dir).await
+    }
+}
+
 /// Per-session content-replacement state for Level 2 budget. Tracks:
 ///
 /// - `replacements`: tool_use_id → replacement string (the exact

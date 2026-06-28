@@ -283,8 +283,7 @@ impl<'a> ToolCallRunner<'a> {
                             hooks,
                             orchestration_ctx,
                             hook_tx,
-                            // Tool Result Budget Level 1 session dir.
-                            tool_result_session_dir: shared_ctx.tool_result_session_dir.clone(),
+                            tool_output_store: shared_ctx.tool_output_store.clone(),
                         })
                         .await
                     }

@@ -518,7 +518,9 @@ async fn read_mcp_resource_persists_blob_to_session_tool_results() {
     let mut ctx = ToolUseContext::test_default();
     ctx.config_home = Some(tmp.path().to_path_buf());
     ctx.session_id_for_history = Some("session-1".into());
-    ctx.tool_result_session_dir = Some(tmp.path().join("sessions/session-1"));
+    ctx.tool_output_store = Some(coco_tool_runtime::ToolOutputStore::new(
+        tmp.path().join("sessions/session-1"),
+    ));
     ctx.tool_use_id = Some("tool-1".into());
     ctx.mcp = Arc::new(BlobResourceHandle {
         blob: base64::engine::general_purpose::STANDARD.encode(bytes),
@@ -555,7 +557,9 @@ async fn read_mcp_resource_preserves_multiple_contents() {
     let tmp = tempfile::TempDir::new().unwrap();
     let bytes = b"audio";
     let mut ctx = ToolUseContext::test_default();
-    ctx.tool_result_session_dir = Some(tmp.path().join("sessions/session-1"));
+    ctx.tool_output_store = Some(coco_tool_runtime::ToolOutputStore::new(
+        tmp.path().join("sessions/session-1"),
+    ));
     ctx.tool_use_id = Some("tool-multi".into());
     ctx.mcp = Arc::new(MixedResourceHandle {
         blob: base64::engine::general_purpose::STANDARD.encode(bytes),
@@ -596,7 +600,9 @@ async fn dynamic_mcp_tool_persists_embedded_resource_blob() {
     let mut ctx = ToolUseContext::test_default();
     ctx.config_home = Some(tmp.path().to_path_buf());
     ctx.session_id_for_history = Some("session-1".into());
-    ctx.tool_result_session_dir = Some(tmp.path().join("sessions/session-1"));
+    ctx.tool_output_store = Some(coco_tool_runtime::ToolOutputStore::new(
+        tmp.path().join("sessions/session-1"),
+    ));
     ctx.tool_use_id = Some("tool-2".into());
     ctx.mcp = Arc::new(BlobToolHandle {
         blob: base64::engine::general_purpose::STANDARD.encode(bytes),

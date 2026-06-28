@@ -57,6 +57,39 @@ async fn test_persist_to_disk_is_idempotent_existing_file_wins() {
 }
 
 #[tokio::test]
+async fn test_tool_output_store_persists_text_when_over_bound() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let store = ToolOutputStore::new(tmp.path());
+    let content = "x".repeat(128);
+
+    let replacement = store
+        .persist_text_if_over_bound("tool-1", &content, false, ResultSizeBound::Chars(8))
+        .await
+        .unwrap()
+        .expect("replacement");
+
+    assert!(replacement.starts_with(PERSISTED_OUTPUT_TAG));
+    assert_eq!(
+        std::fs::read_to_string(tool_result_path(tmp.path(), "tool-1", false)).unwrap(),
+        content
+    );
+}
+
+#[tokio::test]
+async fn test_tool_output_store_keeps_inline_when_under_bound() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let store = ToolOutputStore::new(tmp.path());
+
+    let replacement = store
+        .persist_text_if_over_bound("tool-1", "short", false, ResultSizeBound::Chars(100))
+        .await
+        .unwrap();
+
+    assert!(replacement.is_none());
+    assert!(!tool_result_path(tmp.path(), "tool-1", false).exists());
+}
+
+#[tokio::test]
 async fn test_persist_mcp_binary_to_disk_uses_mime_extension_and_is_idempotent() {
     let tmp = tempfile::TempDir::new().unwrap();
     let first = b"\x89PNG\r\n\x1a\nfirst";

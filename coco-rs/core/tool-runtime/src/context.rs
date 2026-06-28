@@ -507,9 +507,8 @@ pub struct ToolUseContext {
     pub config_home: Option<PathBuf>,
     /// Session ID for file history backup naming.
     pub session_id_for_history: Option<String>,
-    /// Session artifact root used by tool-result persistence helpers.
-    /// Storage helpers append `tool-results/` below this directory.
-    pub tool_result_session_dir: Option<PathBuf>,
+    /// Session-scoped store used by tool-result persistence helpers.
+    pub tool_output_store: Option<crate::ToolOutputStore>,
     /// Path to the session transcript, used for post-clear implementation
     /// hints after plan approval.
     pub transcript_path: Option<PathBuf>,
@@ -695,7 +694,7 @@ impl ToolUseContext {
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
             session_id_for_history: self.session_id_for_history.clone(),
-            tool_result_session_dir: self.tool_result_session_dir.clone(),
+            tool_output_store: self.tool_output_store.clone(),
             transcript_path: self.transcript_path.clone(),
             approval_feedback: self.approval_feedback.clone(),
             permission_resolution_detail: self.permission_resolution_detail.clone(),
@@ -956,7 +955,7 @@ impl ToolUseContext {
             file_history: None,
             config_home: None,
             session_id_for_history: None,
-            tool_result_session_dir: None,
+            tool_output_store: None,
             transcript_path: None,
             approval_feedback: None,
             permission_resolution_detail: None,

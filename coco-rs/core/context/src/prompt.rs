@@ -41,13 +41,13 @@ pub fn default_agent_identity() -> String {
 }
 
 /// A compiled system prompt with cache breakpoints.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemPrompt {
     pub blocks: Vec<SystemPromptBlock>,
 }
 
 /// A block within the system prompt.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SystemPromptBlock {
     Text { content: String },
