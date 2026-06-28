@@ -91,6 +91,7 @@ fn test_register_builtins() {
     //   registered in implementations.rs).
     // - /bug, /ant-trace are deliberately not ported;
     //   see commands/CLAUDE.md "Deliberately Not Ported".
+    //   /feedback is registered in the extended set, without /bug alias.
     // - /login + /logout are registered (multi-provider OAuth subscriptions);
     //   the interactive flow is handled in app/cli::tui_runner.
     // - /effort is not registered; live thinking effort uses Ctrl+T/model picker.

@@ -3634,6 +3634,7 @@ impl SessionRuntime {
             None,
             &runtime_config.skill_overrides,
         );
+        registry.set_build_provenance(crate::build_provenance());
         let count = registry.len();
         let new_registry = Arc::new(registry);
         {

@@ -14,6 +14,7 @@ pub mod context;
 pub mod cost;
 pub mod diff;
 pub mod dream;
+pub mod feedback;
 pub mod files;
 pub mod help;
 pub mod hooks;

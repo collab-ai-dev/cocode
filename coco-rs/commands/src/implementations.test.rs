@@ -122,6 +122,7 @@ fn test_all_name_constants_are_valid() {
         names::GOAL,
         names::EXIT,
         names::VERSION,
+        names::FEEDBACK,
         names::CONFIG,
         names::MODEL,
         names::PERMISSIONS,
@@ -189,6 +190,24 @@ fn test_all_name_constants_are_valid() {
         "expected at least 50 command name constants, got {}",
         all_names.len()
     );
+}
+
+#[test]
+fn feedback_registration_matches_coco_issue_flow() {
+    let mut registry = CommandRegistry::new();
+    register_extended_builtins(&mut registry);
+
+    let feedback = registry.get(names::FEEDBACK).expect("feedback registered");
+    assert_eq!(
+        feedback.base.description,
+        "Prepare a coco-rs GitHub feedback issue"
+    );
+    assert_eq!(
+        feedback.base.argument_hint.as_deref(),
+        Some("[--with-logs] <report>")
+    );
+    assert!(feedback.base.aliases.is_empty());
+    assert_eq!(feedback.base.safety, coco_types::CommandSafety::LocalOnly);
 }
 
 #[test]

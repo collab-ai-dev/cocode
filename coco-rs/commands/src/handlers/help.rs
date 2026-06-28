@@ -59,6 +59,12 @@ const CATEGORIES: &[Category] = &[
                 description: "Show version info",
                 usage: "/version",
             },
+            CommandEntry {
+                name: "feedback",
+                aliases: &[],
+                description: "Prepare a coco-rs GitHub feedback issue",
+                usage: "/feedback [--with-logs] <report>",
+            },
         ],
     },
     Category {

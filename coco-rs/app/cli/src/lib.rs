@@ -49,6 +49,12 @@ pub mod tui_permission_bridge;
 use clap::Parser;
 use clap::Subcommand;
 
+pub const BUILD_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BUILD_GIT_HASH: &str = env!("COCO_BUILD_GIT_HASH");
+pub const BUILD_GIT_DATE: &str = env!("COCO_BUILD_GIT_DATE");
+pub const BUILD_GIT_SUBJECT: &str = env!("COCO_BUILD_GIT_SUBJECT");
+pub const BUILD_TIME: &str = env!("COCO_BUILD_TIME");
+
 /// Multi-line `--version` text: semver + commit hash/date/subject + build time.
 /// The `COCO_BUILD_*` components are emitted by build.rs; `concat!` over `env!`
 /// keeps it a compile-time `&'static str` (clap needs a const version).
@@ -63,6 +69,16 @@ const LONG_VERSION: &str = concat!(
     "\nbuilt:  ",
     env!("COCO_BUILD_TIME"),
 );
+
+pub fn build_provenance() -> coco_utils_common::BuildProvenance {
+    coco_utils_common::BuildProvenance::new(
+        BUILD_PACKAGE_VERSION,
+        BUILD_GIT_HASH,
+        BUILD_GIT_DATE,
+        BUILD_GIT_SUBJECT,
+        BUILD_TIME,
+    )
+}
 
 /// The cocode CLI.
 #[derive(Clone, Parser)]
