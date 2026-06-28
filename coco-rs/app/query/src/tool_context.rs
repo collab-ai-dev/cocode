@@ -108,7 +108,7 @@ pub(crate) struct ToolContextFactory {
     pub(crate) file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,
     pub(crate) file_history: Option<Arc<RwLock<FileHistoryState>>>,
     pub(crate) config_home: Option<PathBuf>,
-    pub(crate) tool_result_session_dir: Option<PathBuf>,
+    pub(crate) tool_output_store: Option<coco_tool_runtime::ToolOutputStore>,
     pub(crate) transcript_path: Option<PathBuf>,
     /// Optional hook-callback bridge. `None` in tests and phases where the
     /// adapter is not yet installed; filled in by Phase 3's `QueryHookHandle`.
@@ -661,7 +661,7 @@ impl ToolContextFactory {
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
             session_id_for_history: Some(self.config.session_id.clone()),
-            tool_result_session_dir: self.tool_result_session_dir.clone(),
+            tool_output_store: self.tool_output_store.clone(),
             transcript_path: self.transcript_path.clone(),
             approval_feedback: None,
             permission_resolution_detail: None,

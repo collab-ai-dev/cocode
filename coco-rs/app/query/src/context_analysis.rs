@@ -204,20 +204,25 @@ pub async fn analyze_engine_context_with_sources(
 
     let system_text = first_system_text(&built.prompt);
     let system_total = coco_messages::estimate_text_tokens(system_text);
-    // CLAUDE.md / AGENTS.md are embedded inline in the bootstrap-assembled
-    // system prompt (`build_system_prompt` → "# Project Instructions"), so
-    // discover them independently here and attribute their tokens to the
-    // Memory files category instead of burying them in System prompt.
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let memory_files: Vec<MemoryFileEstimate> = coco_context::discover_memory_files(&cwd)
-        .into_iter()
-        .map(|f| {
-            let segment = format!("## {}\n{}\n\n", f.path.display(), f.content);
-            MemoryFileEstimate {
-                tokens: coco_messages::estimate_text_tokens(&segment),
-                path: f.path.display().to_string(),
-                source: memory_file_source_label(f.source).to_string(),
-            }
+    // Attribute only the memory bytes actually rendered by PromptContext, so
+    // this report follows the same source bounds as the provider request.
+    let memory_files: Vec<MemoryFileEstimate> = built
+        .prompt_context
+        .sources
+        .iter()
+        .filter(|source| source.kind == coco_context::PromptContextSourceKind::MemoryFile)
+        .map(|source| MemoryFileEstimate {
+            tokens: (source.rendered_size_bytes / 4).max(0),
+            path: source
+                .path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<memory>".to_string()),
+            source: if source.truncated {
+                "prompt_context_truncated".to_string()
+            } else {
+                "prompt_context".to_string()
+            },
         })
         .collect();
     let memory_tokens = memory_files.iter().map(|m| m.tokens).sum::<i64>();
@@ -364,16 +369,6 @@ pub async fn analyze_engine_context_with_sources(
         is_auto_compact_enabled,
         auto_compact_threshold,
     })
-}
-
-fn memory_file_source_label(source: coco_context::MemoryFileSource) -> &'static str {
-    match source {
-        coco_context::MemoryFileSource::Managed => "managed",
-        coco_context::MemoryFileSource::UserGlobal => "user",
-        coco_context::MemoryFileSource::ProjectConfig => "project_config",
-        coco_context::MemoryFileSource::Project => "project",
-        coco_context::MemoryFileSource::Local => "local",
-    }
 }
 
 /// Glyph for a full content cell (fullness ≥ 0.7).

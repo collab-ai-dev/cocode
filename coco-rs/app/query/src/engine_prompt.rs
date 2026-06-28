@@ -68,6 +68,8 @@ pub(crate) struct BuiltPrompt {
     /// Normalized LLM messages — system prompt + per-turn working copy
     /// after `apply_tool_result_budget_to_prompt`, ready for the API.
     pub prompt: Vec<LlmMessage>,
+    /// Structured prompt context used to produce the system message.
+    pub prompt_context: coco_context::PromptContext,
     /// Same working copy as `Vec<Arc<Message>>`, shared via outer `Arc` so
     /// every tool ctx in this turn observes byte-identical history.
     pub messages_snapshot: Arc<Vec<Arc<Message>>>,
@@ -88,21 +90,23 @@ impl QueryEngine {
         // (`EnvKey::CocoSimple`) narrows the worker tool list.
         // 2. Otherwise: explicit config override > built-in default +
         // CLAUDE.md discovery.
-        let system_text = if coco_subagent::is_coordinator_mode(&self.config.features) {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let prompt_context_mode = if coco_subagent::is_coordinator_mode(&self.config.features) {
             let simple_mode = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoSimple);
-            coco_subagent::coordinator_system_prompt(simple_mode)
+            coco_context::PromptContextMode::literal(
+                coco_context::PromptContextLiteralSource::Coordinator,
+                coco_subagent::coordinator_system_prompt(simple_mode),
+            )
         } else if let Some(ref sys) = self.config.system_prompt {
-            sys.clone()
+            coco_context::PromptContextMode::literal(
+                coco_context::PromptContextLiteralSource::ConfigOverride,
+                sys.as_str(),
+            )
         } else {
-            let mut text =
-                String::from("You are coco, an AI coding assistant. Be concise and helpful.\n\n");
-            let cwd = std::env::current_dir().unwrap_or_default();
-            for f in &coco_context::discover_memory_files(&cwd) {
-                text.push_str(&format!("# {}\n{}\n\n", f.path.display(), f.content));
-            }
-            text
+            coco_context::PromptContextMode::default_workspace(&cwd)
         };
-        prompt.push(LlmMessage::system(&system_text));
+        let prompt_context = coco_context::PromptContext::build(prompt_context_mode);
+        prompt.push(LlmMessage::system(prompt_context.system_prompt()));
 
         // Pre-build hook: apply staged-collapse commits so each
         // archived range is a single placeholder rather than full turns.
@@ -153,6 +157,7 @@ impl QueryEngine {
 
         BuiltPrompt {
             prompt,
+            prompt_context,
             messages_snapshot: Arc::new(messages_for_api),
         }
     }
@@ -170,7 +175,7 @@ impl QueryEngine {
             return;
         }
 
-        let Some(session_dir) = self.tool_result_session_dir_for_prompt() else {
+        let Some(tool_output_store) = self.tool_output_store_for_prompt() else {
             return;
         };
 
@@ -207,12 +212,9 @@ impl QueryEngine {
                 continue;
             }
 
-            let outcome = coco_tool_runtime::tool_result_storage::apply_tool_result_budget(
-                &candidates,
-                &self.tool_result_replacement_state,
-                &session_dir,
-            )
-            .await;
+            let outcome = tool_output_store
+                .apply_budget(&candidates, &self.tool_result_replacement_state)
+                .await;
 
             let mut persist_records_failed = false;
             if budget.persist_records
@@ -302,11 +304,13 @@ impl QueryEngine {
         }
     }
 
-    fn tool_result_session_dir_for_prompt(&self) -> Option<std::path::PathBuf> {
+    fn tool_output_store_for_prompt(&self) -> Option<coco_tool_runtime::ToolOutputStore> {
         if let (Some(store), Some(session_id)) =
             (&self.transcript_store, &self.transcript_session_id)
         {
-            return store.session_artifact_dir(session_id);
+            return store
+                .session_artifact_dir(session_id)
+                .map(coco_tool_runtime::ToolOutputStore::new);
         }
         None
     }
@@ -741,7 +745,7 @@ impl QueryEngine {
             file_read_state: self.file_read_state.clone(),
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
-            tool_result_session_dir: self.tool_result_session_dir_for_prompt(),
+            tool_output_store: self.tool_output_store_for_prompt(),
             transcript_path: self
                 .transcript_store
                 .as_ref()

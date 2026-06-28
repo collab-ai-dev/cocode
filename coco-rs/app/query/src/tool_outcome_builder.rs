@@ -50,14 +50,11 @@ pub(crate) struct RunOneTail<'a> {
     pub hooks: Option<&'a Arc<HookRegistry>>,
     pub orchestration_ctx: OrchestrationContext,
     pub hook_tx: Option<&'a mpsc::Sender<HookExecutionEvent>>,
-    /// Per-session tool-result persistence root. `Some` ⇒ Level 1
+    /// Per-session tool-result persistence store. `Some` ⇒ Level 1
     /// persistence is active for this session; the outcome builder
     /// checks `tool.max_result_size_bound()` against the rendered
-    /// output and persists to disk when over threshold. `None` ⇒
-    /// Level 1 is disabled (legacy behaviour) and tool results stay
-    /// inline. Wired by `tool_call_runner` from the engine's resolved
-    /// transcript/session artifact root.
-    pub tool_result_session_dir: Option<std::path::PathBuf>,
+    /// output and persists when over threshold.
+    pub tool_output_store: Option<coco_tool_runtime::ToolOutputStore>,
 }
 
 fn plain_text_parts(parts: &[ToolResultContentPart]) -> Option<String> {
@@ -92,7 +89,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
         hooks,
         orchestration_ctx,
         hook_tx,
-        tool_result_session_dir,
+        tool_output_store,
     } = args;
     let is_mcp = tool.is_mcp();
     let order = ToolMessageOrder::for_tool(&*tool);
@@ -168,47 +165,28 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                     // and replace the inline content with a `<persisted-output>`
                     // reference message. Failures fall back to inline content
                     // (persistence is best-effort, not gating).
-                    let rendered_output = if let Some(sess_dir) = tool_result_session_dir.as_ref() {
-                        let resolved =
-                            coco_tool_runtime::tool_result_storage::resolve_persistence_threshold(
-                                tool.max_result_size_bound(),
-                            );
-                        let over_threshold = match resolved {
-                            coco_tool_runtime::ResultSizeBound::Unbounded => None,
-                            coco_tool_runtime::ResultSizeBound::Chars(t) => {
-                                ((rendered_output_raw.len() as i64) > t).then_some(t)
-                            }
-                        };
-                        if over_threshold.is_some()
-                            && !coco_tool_runtime::tool_result_storage::is_content_already_persisted(
+                    let rendered_output = if let Some(store) = tool_output_store.as_ref() {
+                        let is_json = output_data.is_object() || output_data.is_array();
+                        match store
+                            .persist_text_if_over_bound(
+                                &tool_use_id,
                                 &rendered_output_raw,
+                                is_json,
+                                tool.max_result_size_bound(),
                             )
+                            .await
                         {
-                            let is_json = output_data.is_object() || output_data.is_array();
-                            let persist_result =
-                                coco_tool_runtime::tool_result_storage::persist_to_disk(
-                                    sess_dir,
-                                    &tool_use_id,
-                                    &rendered_output_raw,
-                                    is_json,
-                                )
-                                .await;
-                            match persist_result {
-                                Ok(persisted) => {
-                                    coco_tool_runtime::tool_result_storage::render_persisted_reference(&persisted)
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        error = %e,
-                                        tool = %tool_name,
-                                        tool_use_id = %tool_use_id,
-                                        "Level 1 tool-result persistence failed; falling back to inline"
-                                    );
-                                    rendered_output_raw
-                                }
+                            Ok(Some(replacement)) => replacement,
+                            Ok(None) => rendered_output_raw,
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    tool = %tool_name,
+                                    tool_use_id = %tool_use_id,
+                                    "Level 1 tool-result persistence failed; falling back to inline"
+                                );
+                                rendered_output_raw
                             }
-                        } else {
-                            rendered_output_raw
                         }
                     } else {
                         rendered_output_raw

@@ -1114,6 +1114,31 @@ async fn test_system_prompt_included() {
 }
 
 #[tokio::test]
+async fn build_prompt_returns_prompt_context_metadata() {
+    let model = Arc::new(TextMock { text: "ok".into() });
+    let client = crate::test_support::model_runtime_registry(model);
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+
+    let config = QueryEngineConfig {
+        system_prompt: Some("system from config".into()),
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(config, client, tools, cancel, None);
+    let history = coco_messages::MessageHistory::new();
+
+    let built = engine.build_prompt(&history).await;
+
+    assert_eq!(built.prompt_context.system_prompt(), "system from config");
+    assert_eq!(built.prompt_context.epoch.as_str().len(), 64);
+    assert_eq!(built.prompt_context.sources.len(), 1);
+    assert_eq!(
+        built.prompt_context.sources[0].kind,
+        coco_context::PromptContextSourceKind::Literal
+    );
+}
+
+#[tokio::test]
 async fn test_max_turns_limit() {
     // Model always returns tool calls → should stop at max_turns
     let model = Arc::new(ToolCallThenTextMock {

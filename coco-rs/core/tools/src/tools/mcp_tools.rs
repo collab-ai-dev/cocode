@@ -868,17 +868,17 @@ async fn persist_mcp_blob_reference(
 ) -> Result<String, String> {
     use base64::Engine as _;
 
-    let session_dir = ctx
-        .tool_result_session_dir
+    let store = ctx
+        .tool_output_store
         .as_ref()
         .ok_or_else(|| "persistence unavailable".to_string())?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(blob)
         .map_err(|e| format!("invalid base64 data: {e}"))?;
-    let persisted =
-        tool_result_storage::persist_mcp_binary_to_disk(session_dir, output_id, &bytes, mime_type)
-            .await
-            .map_err(|e| format!("failed to persist binary output: {e}"))?;
+    let persisted = store
+        .persist_binary(output_id, &bytes, mime_type)
+        .await
+        .map_err(|e| format!("failed to persist binary output: {e}"))?;
     Ok(tool_result_storage::render_mcp_binary_reference(&persisted))
 }
 
