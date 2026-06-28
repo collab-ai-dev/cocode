@@ -2,7 +2,10 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
+use coco_session::InMemoryCatalog;
+use coco_session::InMemoryStore;
 use coco_session::TranscriptEntry;
+use coco_session::TranscriptIo;
 use coco_session::TranscriptStore;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -116,6 +119,58 @@ async fn list_events_denormalizes_tool_use_blocks() {
     assert_eq!(events.items[1].inner_kind.as_deref(), Some("assistant"));
     assert_eq!(events.items[1].tool_name.as_deref(), Some("Read"));
     assert_eq!(events.items[1].call_id.as_deref(), Some("toolu_1"));
+}
+
+#[tokio::test]
+async fn local_hub_reads_from_injected_session_catalog() {
+    let tmp = tempfile::tempdir().unwrap();
+    let memory_store = Arc::new(InMemoryStore::new());
+    let catalog = InMemoryCatalog::with_store(memory_store.clone());
+    let session_id = "session-memory";
+    let cwd = "/tmp/project-memory";
+    let user = TranscriptEntry {
+        entry_type: "user".into(),
+        uuid: "u1".into(),
+        parent_uuid: None,
+        logical_parent_uuid: None,
+        session_id: session_id.into(),
+        cwd: cwd.into(),
+        timestamp: "2026-05-17T01:00:00Z".into(),
+        version: Some("0.0.0".into()),
+        git_branch: None,
+        is_sidechain: false,
+        agent_id: None,
+        message: Some(json!({"role":"user","content":[{"type":"text","text":"in memory only"}]})),
+        usage: None,
+        model: None,
+        request_id: None,
+        cost_usd: None,
+        extra: serde_json::Map::new(),
+    };
+    TranscriptIo::append_message(&*memory_store, session_id, &user).unwrap();
+    let store = LocalSessionJsonStore::with_catalog(tmp.path().to_path_buf(), Arc::new(catalog));
+
+    let instance = store
+        .list_instances(ListInstancesParams::default())
+        .await
+        .unwrap()
+        .items
+        .pop()
+        .unwrap();
+    let events = store
+        .list_events(EventQuery {
+            instance_id: instance.instance_id,
+            session_id: Some(session_id.to_string()),
+            before: None,
+            limit: 100,
+            filter: EventFilter::default(),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(instance.session_count, 1);
+    assert_eq!(events.items.len(), 1);
+    assert_eq!(events.items[0].preview.as_deref(), Some("in memory only"));
 }
 
 #[tokio::test]

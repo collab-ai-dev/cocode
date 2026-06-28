@@ -26,11 +26,12 @@ camelCase.
   format we pass to/from the LLM. This boundary is independent of the
   envelope serde.
 
-The Event Hub (`coco-hub-server::local_store`) reads coco-rs JSONL through
-the typed `TranscriptEntry` deserializer plus a few raw `Value::get`
-lookups; both sides use snake_case keys now. Cross-language hub clients
-(the embedded web UI) continue to receive camelCase via the `hub/server/src/
-store/mod.rs` HTTP DTOs — that boundary is separate from disk wire.
+The local Event Hub (`coco-hub-server::local_store`) reads through
+`SessionCatalog`/`SessionStore` and projects session entries into Hub rows.
+The disk-backed path still sees snake_case `TranscriptEntry`/`MetadataEntry`
+wire shapes; cross-language hub clients (the embedded web UI) continue to
+receive camelCase via the `hub/server/src/store/mod.rs` HTTP DTOs — that
+boundary is separate from disk wire.
 
 ## Key Types
 

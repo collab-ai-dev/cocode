@@ -3,10 +3,10 @@
 This is the simplified Event Hub implementation in `coco-rs/hub/server`.
 
 It reuses the Event Hub route shape and timeline-oriented UI, but swaps the
-remote ingest/storage architecture for a read-only adapter over existing
-session transcripts:
+remote ingest/storage architecture for a read-only projection over the
+`coco-session` store boundary:
 
-- Source: `<memory-base>/projects/<project-slug>/<session-id>.jsonl`
+- Default source: disk `SessionCatalog` rooted at `<memory-base>`
 - UI: Axum routes + Askama templates under `coco-rs/hub/server/templates/`
 - HTMX: `/p/events` serves the session timeline fragment for structured filters
 - Static assets: served from `coco-rs/hub/server/web/static/`
@@ -14,28 +14,31 @@ session transcripts:
 - No WebSocket connector
 - No SQLite or derived storage
 - No retention task
-- Synthetic `instance_id`: the project slug directory name
-- Synthetic event `seq`: `line_number * 1000 + content_block_index`, so one
-  JSONL transcript entry can render multiple timeline rows
+- Synthetic `instance_id`: derived from each session metadata `cwd` via
+  `coco_paths::ProjectSlug`; disk mode falls back to the resolved project dir
+  name when old/partial metadata has no cwd
+- Synthetic event `seq`: `entry_index * 1000 + content_block_index`, so one
+  session entry can render multiple timeline rows
 
 ## Store Adapter Shape
 
 The UI/API layer talks to `EventStore`. The simplified server wires that
-trait to `LocalSessionJsonStore`, which reads JSONL on demand and emits
-normalized rows. Store model/query/error types are backend-agnostic and live
-under `coco-rs/hub/server/src/store/`; local JSONL parsing is just one backend.
+trait to `LocalSessionJsonStore`, which reads through an injected
+`coco_session::SessionCatalog` on demand and emits normalized rows. Store
+model/query/error types are backend-agnostic and live under
+`coco-rs/hub/server/src/store/`; session projection is just one backend.
 The important boundary is:
 
 ```text
 routes/templates
   -> EventStore
-       -> LocalSessionJsonStore      # simplified, direct JSONL reads
+       -> LocalSessionJsonStore      # simplified, SessionCatalog projection
        -> future SQLite/remote store # full Event Hub implementation
 ```
 
 This means local mode is not a second frontend and not an ingest pipeline. It
-is a base session JSON store adapter that simulates the Event Hub read model.
-The conversion is per request and in memory only.
+is a session-store projection that simulates the Event Hub read model. The
+conversion is per request and in memory only.
 
 The simplified implementation intentionally keeps HTML and CSS out of Rust
 source files. Handlers build view models and render templates; static CSS is
@@ -57,10 +60,10 @@ Remote Event Hub events are envelopes:
 }
 ```
 
-Local transcripts are JSONL records without an envelope. Message rows use
-`type` values such as `user`, `assistant`, `system`, `attachment`, and
-`tool_result`; metadata rows use `type` values such as `custom-title`,
-`tag`, `last-prompt`, `cost-summary`, and compaction markers.
+Local session entries have no Event Hub envelope. Message rows use `type`
+values such as `user`, `assistant`, `system`, `attachment`, and `tool_result`;
+metadata rows use `type` values such as `custom-title`, `tag`, `last-prompt`,
+`cost-summary`, and compaction markers.
 
 The local hub maps those rows to Event Hub-like rows for API/UI
 compatibility:
