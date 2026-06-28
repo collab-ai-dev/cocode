@@ -261,8 +261,8 @@ Update these as boxes get ticked.
 
 - **Gap:** Help.rs advertises 5 phantom commands (fast, privacy-settings, feedback+bug, pr+pr-create, resume+continue) that are NOT in the live registry and will throw NotFound
 - **TS:** commands/help/help.tsx passes the live commands registry to <HelpV2 commands={commands}/> (dynamic, source-annotated, including skills/plugins/MCP commands).
-- **Rust (HEAD):** /lyz/codespace/codex/coco-rs/commands/src/handlers/help.rs:127 (fast), :139 (privacy-settings), :316 (feedback/bug), :228 (pr/pr-create), :168 (resume/continue). These entries are hardcoded in CATEGORIES but NOT registered in implementations.rs (grep of implementations.rs finds no FAST, PRIVACY, FEEDBACK, PR_CREATE, or CONTINUE constants).
-- **Fix:** Minimal: delete the unregistered entries (fast, privacy-settings, feedback/bug) and the bogus aliases (continue, pr-create, pr) from CATEGORIES. Proper: iterate the live CommandRegistry snapshot (needs handler-side registry access) so skills/plugins/MCP also appear.
+- **Rust (HEAD):** /lyz/codespace/codex/coco-rs/commands/src/handlers/help.rs advertised fast, privacy-settings, feedback/bug, pr/pr-create, and resume/continue despite missing live registry entries at the time of this audit.
+- **Fix:** Minimal: delete unregistered entries and bogus aliases. Follow-up note: `/feedback` is now reintroduced as a coco-rs GitHub issue-draft command with no `/bug` alias.
 
 ### [x] commands#206 — /clear missing reset/new aliases; /config alias is 'configuration' not TS 'sett… ✅ FIXED (feat/review)
 `● genuinely_open` · **MEDI** · effort **small** · fix-sketch *sound*

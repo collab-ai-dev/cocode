@@ -36,6 +36,7 @@ pub mod names {
     pub const GOAL: &str = "goal";
     pub const EXIT: &str = "exit";
     pub const VERSION: &str = "version";
+    pub const FEEDBACK: &str = "feedback";
 
     // Configuration
     pub const CONFIG: &str = "config";
@@ -387,6 +388,25 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             is_enabled: None,
         });
     }
+
+    let mut base = builtin_base_ext(
+        names::FEEDBACK,
+        "Prepare a coco-rs GitHub feedback issue",
+        &[],
+        LocalOnly,
+        Some("[--with-logs] <report>"),
+    );
+    base.argument_kind = builtin_argument_kind(names::FEEDBACK, base.argument_kind);
+    registry.register(RegisteredCommand {
+        base,
+        command_type: CommandType::Local(LocalCommandData {
+            handler: names::FEEDBACK.to_string(),
+        }),
+        handler: Some(Arc::new(handlers::feedback::FeedbackHandler::new(
+            registry.build_provenance_cell(),
+        ))),
+        is_enabled: None,
+    });
 
     // Async handlers (run git commands, read files, etc.)
     // Format: (name, desc, aliases, handler, is_overlay, safety, arg_hint)

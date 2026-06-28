@@ -1168,6 +1168,7 @@ dependencies = [
  "coco-error",
  "coco-lsp",
  "coco-plugins",
+ "coco-secret-redact",
  "coco-skills",
  "coco-subagent",
  "coco-types",
@@ -1180,6 +1181,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "urlencoding",
 ]
 
 [[package]]

@@ -29,6 +29,7 @@ use coco_types::CommandType;
 use coco_types::Feature;
 use coco_types::LocalCommandData;
 use coco_types::SlashCommandInfo;
+use coco_utils_common::BuildProvenance;
 
 pub use implementations::ADD_DIR_SENTINEL;
 pub use implementations::GOAL_SENTINEL;
@@ -66,11 +67,26 @@ pub(crate) type SharedBashToolHandle = Arc<std::sync::RwLock<Option<Arc<dyn Bash
 /// [`CommandRegistry::set_session_id`] at session bootstrap.
 pub(crate) type SharedSessionId = Arc<std::sync::RwLock<Option<String>>>;
 
+/// Late-bound build provenance shared with commands that report runtime
+/// diagnostics. Filled by [`CommandRegistry::set_build_provenance`] from the
+/// binary crate so command crates do not duplicate build scripts.
+pub(crate) type SharedBuildProvenance = Arc<std::sync::RwLock<Option<BuildProvenance>>>;
+
 /// Clone the current handle out of the shared cell, dropping the read
 /// guard before any `.await` (the guard is `!Send`). Returns `None` when
 /// no handle has been injected yet.
 pub(crate) fn snapshot_bash_handle(cell: &SharedBashToolHandle) -> Option<Arc<dyn BashToolHandle>> {
     cell.read().ok().and_then(|slot| slot.clone())
+}
+
+/// Clone current build provenance out of the shared cell. Tests and command
+/// registries created outside app/cli fall back to package version + unknown
+/// build metadata.
+pub(crate) fn snapshot_build_provenance(cell: &SharedBuildProvenance) -> BuildProvenance {
+    cell.read()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .unwrap_or_else(|| BuildProvenance::unknown(env!("CARGO_PKG_VERSION")))
 }
 
 /// Trait for command execution handlers.
@@ -261,6 +277,8 @@ pub struct CommandRegistry {
     /// Late-bound session id shared with skill handlers for the
     /// `${CLAUDE_SESSION_ID}` placeholder. Filled by [`Self::set_session_id`].
     session_id: SharedSessionId,
+    /// Late-bound build provenance from the final binary crate.
+    build_provenance: SharedBuildProvenance,
 }
 
 impl CommandRegistry {
@@ -300,6 +318,19 @@ impl CommandRegistry {
     pub fn set_session_id(&self, session_id: String) {
         if let Ok(mut slot) = self.session_id.write() {
             *slot = Some(session_id);
+        }
+    }
+
+    /// The shared build-provenance cell handed to diagnostic handlers.
+    pub(crate) fn build_provenance_cell(&self) -> SharedBuildProvenance {
+        Arc::clone(&self.build_provenance)
+    }
+
+    /// Inject provenance for the final binary. This is set by app/cli after
+    /// constructing the registry, and again after registry reload.
+    pub fn set_build_provenance(&self, provenance: BuildProvenance) {
+        if let Ok(mut slot) = self.build_provenance.write() {
+            *slot = Some(provenance);
         }
     }
 

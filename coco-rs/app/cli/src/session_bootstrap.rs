@@ -289,6 +289,7 @@ pub(crate) fn build_session_command_registry(
         /*managed_root*/ None,
         &runtime_config.skill_overrides,
     );
+    registry.set_build_provenance(crate::build_provenance());
     (registry, skill_manager)
 }
 

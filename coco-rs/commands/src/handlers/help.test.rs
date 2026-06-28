@@ -26,12 +26,22 @@ async fn test_help_omits_unregistered_phantom_commands() {
     // These commands are NOT registered in implementations.rs, so the help
     // listing must not advertise them (they would 404 if a user tried them).
     let result = handler("".to_string()).await.unwrap();
-    for phantom in ["/fast", "/privacy-settings", "/feedback", "/pr "] {
+    for phantom in ["/fast", "/privacy-settings", "/bug", "/pr "] {
         assert!(
             !result.contains(phantom),
             "help should not list unregistered command {phantom}"
         );
     }
+}
+
+#[tokio::test]
+async fn test_help_lists_coco_feedback_command() {
+    let result = handler("".to_string()).await.unwrap();
+    assert!(result.contains("/feedback"));
+    assert!(result.contains("Prepare a coco-rs GitHub feedback issue"));
+
+    let detail = handler("feedback".to_string()).await.unwrap();
+    assert!(detail.contains("/feedback [--with-logs] <report>"));
 }
 
 #[tokio::test]

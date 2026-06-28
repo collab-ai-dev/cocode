@@ -89,7 +89,7 @@ be reported as missing coco-rs TUI work.
 | TS command | Reason |
 |---|---|
 | `/login`, `/logout` | Anthropic account OAuth; provider auth belongs in provider crates. |
-| `/feedback` / `/bug` | Anthropic Statsig feedback endpoint. |
+| `/bug` | Anthropic Statsig feedback alias; coco-rs uses its own `/feedback` issue-draft command instead. |
 | `/fast` | Claude.ai/console fast-mode picker; coco-rs exposes fast state through runtime controls. |
 | `/privacy-settings` | Anthropic consumer-account settings. |
 | `/rate-limit-options`, `/reset-limits`, `/extra-usage` | Anthropic billing/limit flows. |
@@ -118,4 +118,3 @@ easter eggs. They stay hidden or deliberately absent in coco-rs.
 | `release-notes/` | Anthropic-hosted changelog; not TUI slash-invoked. |
 | `init-verifiers.ts` | TS setup helper; no standalone TUI slash surface. |
 | `createMovedToPluginCommand.ts` | TS migration helper, not a user command. |
-

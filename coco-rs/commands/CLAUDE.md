@@ -27,7 +27,7 @@ account-management surface applies across providers.
 
 | Command | Reason |
 |---|---|
-| `/feedback` (and its alias `/bug`) | Posts to Anthropic Statsig endpoint; gated on `DISABLE_FEEDBACK_COMMAND` + Bedrock/Vertex/Foundry env. The `/bug` alias is also not registered standalone — pointing users at the upstream Anthropic GitHub repo would mislead them about where to file coco-rs issues. |
+| `/bug` | Anthropic `/feedback` alias. coco-rs intentionally does not register it so prompts and docs point users at the explicit `/feedback` command and the `collab-ai-dev/cocode` issue tracker instead of upstream Anthropic routes. |
 | `/fast` | Claude.ai/console-only fast-mode picker; coco-rs exposes fast-mode via `FastModeState` + Ctrl+Shift+F keybind only. |
 | `/release-notes` | Fetches Anthropic-hosted changelog; not slash-invoked in coco-rs (CLI subcommand only). |
 | `/privacy-settings` | `isConsumerSubscriber()`-gated; calls Anthropic Grove API. |
@@ -152,6 +152,7 @@ every user.
 | Command | What it does in coco-rs |
 |---|---|
 | `/version` | Prints `cocode v{CARGO_PKG_VERSION}`. |
+| `/feedback` | Generates a prefilled `collab-ai-dev/cocode` GitHub issue URL with version, commit, build time, OS, arch, and timestamp. Logs are excluded by default; `--with-logs` includes only a best-effort redacted tail of the current coco log and tells the user to review before submitting. No `/bug` alias. |
 | `/tag` | Toggles a searchable tag on the current session via `SessionManager::toggle_tag` (sentinel-based dispatch). |
 | `/files` | Lists `git ls-files` grouped by top-level directory with rough context-size estimate. (Description: "List git-tracked files in this repository".) |
 
