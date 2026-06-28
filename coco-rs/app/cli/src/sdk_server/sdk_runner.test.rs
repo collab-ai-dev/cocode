@@ -37,7 +37,7 @@ fn sdk_goal_status_format_matches_noninteractive_contract() {
     goal.last_reason = Some(" tests still failing\n rerun needed ".to_string());
     assert_eq!(
         crate::goal_command::format_active_goal_status(&goal),
-        "Goal active: finish migration (2 turns)\nLast check: tests still failing rerun needed"
+        "Goal active: finish migration (2 turns)\ntests still failing rerun needed"
     );
 }
 

@@ -12682,6 +12682,26 @@
           "type": "object"
         },
         {
+          "description": "Hidden pre-clear conversation snapshot used only as a `/rewind`\nsource. `/clear` still resets the visible transcript; this lets\nthe picker recover a prompt from the prior session when the new\nsession has no selectable messages yet.",
+          "properties": {
+            "messages": {
+              "items": {
+                "$ref": "#/$defs/Message"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "rewind_pre_clear_snapshot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "messages"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Compaction circuit breaker opened.",
           "properties": {
             "failures": {

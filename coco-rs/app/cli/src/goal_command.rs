@@ -41,10 +41,8 @@ pub fn format_active_goal_status(goal: &coco_types::ActiveGoal) -> String {
         .as_deref()
         .filter(|reason| !reason.is_empty())
     {
-        text.push_str(&format!(
-            "\nLast check: {}",
-            format_goal_last_reason(reason)
-        ));
+        text.push('\n');
+        text.push_str(&format_goal_last_reason(reason));
     }
     text
 }
@@ -78,6 +76,41 @@ pub fn find_last_achieved_goal(
             None
         }
     })
+}
+
+pub fn find_latest_goal_status(
+    messages: &[Arc<coco_messages::Message>],
+) -> Option<coco_types::GoalStatusPayload> {
+    messages.iter().rev().find_map(|message| {
+        let coco_messages::Message::Attachment(attachment) = message.as_ref() else {
+            return None;
+        };
+        let coco_messages::AttachmentBody::Silent(coco_messages::SilentPayload::GoalStatus(
+            payload,
+        )) = &attachment.body
+        else {
+            return None;
+        };
+        Some(payload.clone())
+    })
+}
+
+pub fn format_latest_goal_history_status(
+    messages: &[Arc<coco_messages::Message>],
+) -> Option<String> {
+    let latest = find_latest_goal_status(messages)?;
+    if latest.met || latest.failed {
+        return (latest.met && !latest.failed && !latest.sentinel)
+            .then(|| format_achieved_goal_status(&latest));
+    }
+    let goal = coco_types::ActiveGoal {
+        condition: latest.condition,
+        iterations: latest.iterations.unwrap_or_default(),
+        set_at_ms: 0,
+        tokens_at_start: 0,
+        last_reason: latest.reason,
+    };
+    Some(format_active_goal_status(&goal))
 }
 
 pub fn find_restorable_goal_condition(messages: &[Arc<coco_messages::Message>]) -> Option<String> {
@@ -237,10 +270,10 @@ pub fn goal_display_args(request: &coco_commands::GoalCommandRequest) -> &str {
 /// headless runners. Performs the app-state and hook-registry mutations and
 /// returns the I/O the caller must carry out via its own sinks.
 ///
-/// `history` is the transcript scanned for the last achieved goal when no goal
-/// is active; `tokens_at_start` is the session output-token baseline recorded
-/// on a fresh `set`. The hooks gate is checked before the trust gate so a
-/// hooks-restricted session reports the structural reason rather than a
+/// `history` is the transcript scanned for the latest goal marker when no
+/// goal is active; `tokens_at_start` is the session output-token baseline
+/// recorded on a fresh `set`. The hooks gate is checked before the trust gate
+/// so a hooks-restricted session reports the structural reason rather than a
 /// misleading trust message.
 pub async fn resolve_goal_request(
     request: coco_commands::GoalCommandRequest,
@@ -255,10 +288,8 @@ pub async fn resolve_goal_request(
             let active = app_state.read().await.active_goal.clone();
             let text = match active {
                 Some(goal) => format_active_goal_status(&goal),
-                None => match find_last_achieved_goal(history) {
-                    Some(goal) => format_achieved_goal_status(&goal),
-                    None => "No goal set. Usage: `/goal <condition>`".to_string(),
-                },
+                None => format_latest_goal_history_status(history)
+                    .unwrap_or_else(|| "No goal set. Usage: `/goal <condition>`".to_string()),
             };
             GoalOutcome::Text(text)
         }

@@ -33,7 +33,7 @@ fn active_goal_status_matches_noninteractive_contract() {
     goal.last_reason = Some(" tests still failing\n rerun needed ".to_string());
     assert_eq!(
         format_active_goal_status(&goal),
-        "Goal active: finish migration (2 turns)\nLast check: tests still failing rerun needed"
+        "Goal active: finish migration (2 turns)\ntests still failing rerun needed"
     );
 }
 
@@ -119,6 +119,56 @@ fn find_restorable_goal_condition_treats_clear_sentinel_as_terminal() {
 }
 
 #[test]
+fn latest_goal_history_status_prefers_newer_active_over_older_achieved() {
+    let achieved = coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: true,
+            condition: "old goal".to_string(),
+            iterations: Some(2),
+            ..Default::default()
+        }),
+    );
+    let active = coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: false,
+            condition: "new goal".to_string(),
+            reason: Some("still missing tests".to_string()),
+            ..Default::default()
+        }),
+    );
+
+    assert_eq!(
+        format_latest_goal_history_status(&[Arc::new(achieved), Arc::new(active)]).as_deref(),
+        Some("Goal active: new goal (not yet evaluated)\nstill missing tests")
+    );
+}
+
+#[test]
+fn latest_goal_history_status_treats_clear_sentinel_as_no_goal() {
+    let achieved = coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: true,
+            condition: "old goal".to_string(),
+            iterations: Some(2),
+            ..Default::default()
+        }),
+    );
+    let clear = coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: true,
+            condition: "cleared goal".to_string(),
+            sentinel: true,
+            ..Default::default()
+        }),
+    );
+
+    assert_eq!(
+        format_latest_goal_history_status(&[Arc::new(achieved), Arc::new(clear)]),
+        None
+    );
+}
+
+#[test]
 fn goal_hook_matcher_requires_managed_session_stop_prompt() {
     let mut hook = managed_goal_hook("done".to_string());
 
@@ -188,6 +238,79 @@ async fn resolve_status_with_active_goal_formats_active() {
     assert_eq!(
         outcome,
         GoalOutcome::Text("Goal active: finish migration (not yet evaluated)".to_string())
+    );
+}
+
+#[tokio::test]
+async fn resolve_status_uses_latest_history_goal_when_state_is_empty() {
+    let state = empty_state();
+    let registry = coco_hooks::HookRegistry::new();
+    let achieved = Arc::new(coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: true,
+            condition: "old goal".to_string(),
+            iterations: Some(2),
+            ..Default::default()
+        }),
+    ));
+    let active = Arc::new(coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: false,
+            condition: "new goal".to_string(),
+            ..Default::default()
+        }),
+    ));
+
+    let outcome = resolve_goal_request(
+        coco_commands::GoalCommandRequest::Status,
+        &state,
+        &registry,
+        &[achieved, active],
+        0,
+        GoalGate::default(),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        GoalOutcome::Text("Goal active: new goal (not yet evaluated)".to_string())
+    );
+}
+
+#[tokio::test]
+async fn resolve_status_does_not_report_older_achieved_after_clear() {
+    let state = empty_state();
+    let registry = coco_hooks::HookRegistry::new();
+    let achieved = Arc::new(coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: true,
+            condition: "old goal".to_string(),
+            iterations: Some(2),
+            ..Default::default()
+        }),
+    ));
+    let clear = Arc::new(coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(coco_types::GoalStatusPayload {
+            met: true,
+            condition: "cleared goal".to_string(),
+            sentinel: true,
+            ..Default::default()
+        }),
+    ));
+
+    let outcome = resolve_goal_request(
+        coco_commands::GoalCommandRequest::Status,
+        &state,
+        &registry,
+        &[achieved, clear],
+        0,
+        GoalGate::default(),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        GoalOutcome::Text("No goal set. Usage: `/goal <condition>`".to_string())
     );
 }
 
