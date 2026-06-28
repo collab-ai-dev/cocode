@@ -15,6 +15,7 @@ use crate::sdk_server::InMemoryTransport;
 
 fn req(id: i64, method: &str, params: serde_json::Value) -> JsonRpcMessage {
     JsonRpcMessage::Request(JsonRpcRequest {
+        jsonrpc: coco_types::JSONRPC_VERSION.into(),
         request_id: RequestId::Integer(id),
         method: method.into(),
         params,
@@ -78,7 +79,7 @@ async fn unknown_method_returns_invalid_params_error() {
     match reply {
         JsonRpcMessage::Error(e) => {
             assert_eq!(e.request_id, RequestId::Integer(99));
-            assert_eq!(e.code, error_codes::INVALID_PARAMS);
+            assert_eq!(e.error.code, error_codes::INVALID_PARAMS);
         }
         other => panic!("expected Error, got {other:?}"),
     }

@@ -473,6 +473,7 @@ impl SdkServerState {
         // populated `outbound_tx`; the only code path that hit the
         // old fallback was tests, which now wait explicitly.
         let req = JsonRpcRequest {
+            jsonrpc: coco_types::JSONRPC_VERSION.into(),
             request_id: request_id.clone(),
             method: method.into(),
             params,
@@ -522,7 +523,7 @@ impl SdkServerState {
     }
 
     /// Deliver an inbound `Response`/`Error` to the pending server
-    /// request with the matching `request_id`, if any. Called by the
+    /// request with the matching JSON-RPC `id`, if any. Called by the
     /// dispatcher when it reads a message from the transport.
     /// Returns `true` if the message was routed to a pending request;
     /// `false` if no match was found (the client is replying to a

@@ -46,8 +46,6 @@ async def test_pre_tool_use_hook_fires(live_deepseek, isolated_cwd) -> None:
                     elif event.method == NotificationMethod.TURN_ENDED:
                         pytest.fail(f"turn failed: {event.params}")
         except asyncio.TimeoutError:
-            pytest.fail(
-                f"timed out waiting for hook to fire (seen={len(seen)})"
-            )
+            pytest.fail(f"timed out waiting for hook to fire (seen={len(seen)})")
 
     assert seen, "expected the PreToolUse hook to fire at least once"

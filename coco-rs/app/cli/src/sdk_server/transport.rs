@@ -18,6 +18,7 @@
 
 use std::sync::Arc;
 
+use coco_types::JSONRPC_VERSION;
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcNotification;
 use coco_types::ServerNotification;
@@ -99,6 +100,7 @@ pub trait SdkTransport: Send + Sync {
             _ => (notif.method().as_str().to_string(), serde_json::Value::Null),
         };
         self.send(JsonRpcMessage::Notification(JsonRpcNotification {
+            jsonrpc: JSONRPC_VERSION.into(),
             method,
             params,
         }))
@@ -221,17 +223,15 @@ impl SdkTransport for StdioTransport {
         // Flatten the notification's `method` + `params` keys into the
         // JSON-RPC envelope. ServerNotification is `#[serde(tag, content)]`,
         // so flatten gives `{"method":"...","params":{...}}`; we add
-        // `"type":"notification"` on top to match `JsonRpcMessage`'s
-        // `#[serde(tag = "type")]` wire shape.
+        // `"jsonrpc":"2.0"` on top to match the strict JSON-RPC wire shape.
         #[derive(serde::Serialize)]
         struct NotificationWire<'a> {
-            #[serde(rename = "type")]
-            ty: &'static str,
+            jsonrpc: &'static str,
             #[serde(flatten)]
             inner: &'a ServerNotification,
         }
         let wire = NotificationWire {
-            ty: "notification",
+            jsonrpc: JSONRPC_VERSION,
             inner: notif,
         };
         let json = serde_json::to_string(&wire)?;

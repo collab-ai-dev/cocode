@@ -75,6 +75,7 @@ async fn request_permission_approved_round_trip() {
 
     client
         .send(JsonRpcMessage::Response(coco_types::JsonRpcResponse {
+            jsonrpc: coco_types::JSONRPC_VERSION.into(),
             request_id: req_id,
             result: serde_json::json!({
                 "request_id": "req-1",
@@ -124,6 +125,7 @@ async fn request_permission_denied_round_trip() {
 
     client
         .send(JsonRpcMessage::Response(coco_types::JsonRpcResponse {
+            jsonrpc: coco_types::JSONRPC_VERSION.into(),
             request_id: req_id,
             result: serde_json::json!({
                 "request_id": "req-2",
@@ -172,10 +174,13 @@ async fn request_permission_client_error_is_treated_as_denial() {
 
     client
         .send(JsonRpcMessage::Error(coco_types::JsonRpcError {
+            jsonrpc: coco_types::JSONRPC_VERSION.into(),
             request_id: req_id,
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: "client UI crashed".into(),
-            data: None,
+            error: coco_types::JsonRpcErrorObject {
+                code: coco_types::error_codes::INTERNAL_ERROR,
+                message: "client UI crashed".into(),
+                data: None,
+            },
         }))
         .await
         .unwrap();

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import inspect
 
-import pytest
 from pydantic import BaseModel
 
 
@@ -59,11 +58,7 @@ def test_every_basemodel_resolves_forward_refs() -> None:
     broken: list[tuple[str, str]] = []
     for name in dir(proto):
         cls = getattr(proto, name)
-        if (
-            inspect.isclass(cls)
-            and issubclass(cls, BaseModel)
-            and cls is not BaseModel
-        ):
+        if inspect.isclass(cls) and issubclass(cls, BaseModel) and cls is not BaseModel:
             try:
                 cls.model_rebuild()
             except Exception as exc:
@@ -79,37 +74,43 @@ def test_every_basemodel_resolves_forward_refs() -> None:
 def test_jsonrpc_request_roundtrips_int_id() -> None:
     from coco_sdk import JsonRpcRequest
 
-    req = JsonRpcRequest(method="session/start", request_id=1, params={"foo": "bar"})
+    req = JsonRpcRequest(
+        jsonrpc="2.0", method="session/start", id=1, params={"foo": "bar"}
+    )
     assert req.method == "session/start"
-    assert req.request_id == 1
-    assert JsonRpcRequest.model_validate(req.model_dump()).request_id == 1
+    assert req.id == 1
+    assert JsonRpcRequest.model_validate(req.model_dump()).id == 1
 
 
 def test_jsonrpc_request_roundtrips_str_id() -> None:
     from coco_sdk import JsonRpcRequest
 
-    req = JsonRpcRequest(method="x", request_id="abc-42")
-    assert req.request_id == "abc-42"
+    req = JsonRpcRequest(jsonrpc="2.0", method="x", id="abc-42")
+    assert req.id == "abc-42"
 
 
 def test_jsonrpc_response_roundtrips() -> None:
     from coco_sdk import JsonRpcResponse
 
-    resp = JsonRpcResponse(request_id=7, result={"ok": True})
+    resp = JsonRpcResponse(jsonrpc="2.0", id=7, result={"ok": True})
     assert resp.result == {"ok": True}
 
 
 def test_jsonrpc_error_roundtrips() -> None:
-    from coco_sdk import JsonRpcError
+    from coco_sdk import JsonRpcError, JsonRpcErrorObject
 
-    err = JsonRpcError(request_id=1, code=-32602, message="invalid params")
-    assert err.code == -32602
+    err = JsonRpcError(
+        jsonrpc="2.0",
+        id=1,
+        error=JsonRpcErrorObject(code=-32602, message="invalid params"),
+    )
+    assert err.error.code == -32602
 
 
 def test_jsonrpc_notification_roundtrips() -> None:
     from coco_sdk import JsonRpcNotification
 
-    notif = JsonRpcNotification(method="x/y", params={})
+    notif = JsonRpcNotification(jsonrpc="2.0", method="x/y", params={})
     assert notif.method == "x/y"
 
 
@@ -135,8 +136,14 @@ def test_model_role_enum_has_all_eight_variants() -> None:
     from coco_sdk import ModelRole
 
     expected = {
-        "main", "fast", "plan", "explore",
-        "review", "hook_agent", "memory", "subagent",
+        "main",
+        "fast",
+        "plan",
+        "explore",
+        "review",
+        "hook_agent",
+        "memory",
+        "subagent",
     }
     assert {m.value for m in ModelRole} == expected
 
@@ -221,7 +228,9 @@ def test_client_request_methods_match_rust_wire_strings() -> None:
         "elicitation/resolve": ClientRequestMethod.ELICITATION_RESOLVE,
     }
     for wire, member in spot.items():
-        assert member.value == wire, f"{member.name} = {member.value!r}, expected {wire!r}"
+        assert member.value == wire, (
+            f"{member.name} = {member.value!r}, expected {wire!r}"
+        )
 
 
 def test_server_request_methods_cover_variants() -> None:
@@ -244,9 +253,7 @@ def test_server_request_methods_cover_variants() -> None:
 def test_hook_callback_matcher_constructs() -> None:
     from coco_sdk import HookCallbackMatcher
 
-    m = HookCallbackMatcher(
-        hook_callback_ids=["abc"], matcher="Bash|Read", timeout=5
-    )
+    m = HookCallbackMatcher(hook_callback_ids=["abc"], matcher="Bash|Read", timeout=5)
     assert m.hook_callback_ids == ["abc"]
     assert m.timeout == 5
 
@@ -328,7 +335,10 @@ def test_server_notification_typed_dispatch() -> None:
     # attributes rather than dict keys.
     for outcome, attr_check in [
         (
-            {"kind": "failed", "data": {"error": {"message": "boom", "code": "provider"}}},
+            {
+                "kind": "failed",
+                "data": {"error": {"message": "boom", "code": "provider"}},
+            },
             lambda d: d.error.message == "boom" and d.error.code == "provider",
         ),
         (
@@ -358,7 +368,10 @@ def test_server_notification_typed_dispatch() -> None:
                 "method": NotificationMethod.TURN_ENDED.value,
                 "params": {
                     "turn_id": "t-x",
-                    "usage": {"input_tokens": {"total": 0}, "output_tokens": {"total": 0}},
+                    "usage": {
+                        "input_tokens": {"total": 0},
+                        "output_tokens": {"total": 0},
+                    },
                     "outcome": outcome,
                 },
             }
@@ -396,7 +409,9 @@ def test_tool_decorator_produces_definition() -> None:
 
     assert isinstance(echo, ToolDefinition)
     assert echo.name == "echo"
-    assert echo.to_mcp_tool_def()["inputSchema"]["properties"]["text"]["type"] == "string"
+    assert (
+        echo.to_mcp_tool_def()["inputSchema"]["properties"]["text"]["type"] == "string"
+    )
 
 
 # ── 10. Errors module ─────────────────────────────────────────────

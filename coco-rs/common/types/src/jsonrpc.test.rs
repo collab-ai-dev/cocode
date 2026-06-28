@@ -28,63 +28,70 @@ fn request_id_display() {
 }
 
 #[test]
-fn jsonrpc_request_serializes_with_type_tag() {
+fn jsonrpc_request_serializes_as_jsonrpc2() {
     let msg = JsonRpcMessage::Request(JsonRpcRequest {
+        jsonrpc: JSONRPC_VERSION.into(),
         request_id: RequestId::Integer(1),
         method: "turn/start".into(),
         params: json!({ "prompt": "hello" }),
     });
     let j = serde_json::to_value(&msg).unwrap();
-    assert_eq!(j["type"], "request");
-    assert_eq!(j["request_id"], 1);
+    assert_eq!(j["jsonrpc"], "2.0");
+    assert_eq!(j["id"], 1);
     assert_eq!(j["method"], "turn/start");
     assert_eq!(j["params"]["prompt"], "hello");
 }
 
 #[test]
-fn jsonrpc_response_serializes_with_type_tag() {
+fn jsonrpc_response_serializes_as_jsonrpc2() {
     let msg = JsonRpcMessage::Response(JsonRpcResponse {
+        jsonrpc: JSONRPC_VERSION.into(),
         request_id: RequestId::Integer(1),
         result: json!({ "ok": true }),
     });
     let j = serde_json::to_value(&msg).unwrap();
-    assert_eq!(j["type"], "response");
-    assert_eq!(j["request_id"], 1);
+    assert_eq!(j["jsonrpc"], "2.0");
+    assert_eq!(j["id"], 1);
     assert_eq!(j["result"]["ok"], true);
 }
 
 #[test]
-fn jsonrpc_error_serializes_with_type_tag() {
+fn jsonrpc_error_serializes_as_jsonrpc2() {
     let msg = JsonRpcMessage::Error(JsonRpcError {
+        jsonrpc: JSONRPC_VERSION.into(),
         request_id: RequestId::Integer(2),
-        code: error_codes::METHOD_NOT_FOUND,
-        message: "unknown method".into(),
-        data: None,
+        error: JsonRpcErrorObject {
+            code: error_codes::METHOD_NOT_FOUND,
+            message: "unknown method".into(),
+            data: None,
+        },
     });
     let j = serde_json::to_value(&msg).unwrap();
-    assert_eq!(j["type"], "error");
-    assert_eq!(j["code"], -32601);
-    assert_eq!(j["message"], "unknown method");
-    assert!(j.get("data").is_none() || j["data"].is_null());
+    assert_eq!(j["jsonrpc"], "2.0");
+    assert_eq!(j["id"], 2);
+    assert_eq!(j["error"]["code"], -32601);
+    assert_eq!(j["error"]["message"], "unknown method");
+    assert!(j["error"].get("data").is_none() || j["error"]["data"].is_null());
 }
 
 #[test]
-fn jsonrpc_notification_serializes_with_type_tag() {
+fn jsonrpc_notification_serializes_as_jsonrpc2() {
     let msg = JsonRpcMessage::Notification(JsonRpcNotification {
+        jsonrpc: JSONRPC_VERSION.into(),
         method: "turn/started".into(),
         params: json!({ "turn_id": "t1", "turn_number": 1 }),
     });
     let j = serde_json::to_value(&msg).unwrap();
-    assert_eq!(j["type"], "notification");
+    assert_eq!(j["jsonrpc"], "2.0");
     assert_eq!(j["method"], "turn/started");
     assert_eq!(j["params"]["turn_number"], 1);
-    // Notifications have no request_id
-    assert!(j.get("request_id").is_none());
+    assert!(j.get("id").is_none());
 }
 
 #[test]
 fn jsonrpc_message_roundtrip() {
     let msg = JsonRpcMessage::Request(JsonRpcRequest {
+        jsonrpc: JSONRPC_VERSION.into(),
         request_id: RequestId::String("req-1".into()),
         method: "mcp/status".into(),
         params: json!({}),
@@ -93,11 +100,35 @@ fn jsonrpc_message_roundtrip() {
     let back: JsonRpcMessage = serde_json::from_str(&s).unwrap();
     match back {
         JsonRpcMessage::Request(r) => {
+            assert_eq!(r.jsonrpc, JSONRPC_VERSION);
             assert_eq!(r.request_id, RequestId::String("req-1".into()));
             assert_eq!(r.method, "mcp/status");
         }
         _ => panic!("expected Request"),
     }
+}
+
+#[test]
+fn jsonrpc_requires_version_member() {
+    let err = serde_json::from_value::<JsonRpcMessage>(json!({
+        "id": 1,
+        "method": "control/keepAlive",
+        "params": {}
+    }))
+    .expect_err("missing jsonrpc must fail");
+    assert!(err.to_string().contains("data did not match any variant"));
+}
+
+#[test]
+fn jsonrpc_rejects_non_v2_version() {
+    let err = serde_json::from_value::<JsonRpcMessage>(json!({
+        "jsonrpc": "1.0",
+        "id": 1,
+        "method": "control/keepAlive",
+        "params": {}
+    }))
+    .expect_err("wrong jsonrpc version must fail");
+    assert!(err.to_string().contains("data did not match any variant"));
 }
 
 #[test]

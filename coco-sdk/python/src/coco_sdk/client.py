@@ -9,14 +9,11 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
 from pydantic import BaseModel, TypeAdapter
 
-logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from coco_sdk.tools import ToolDefinition
-
 from coco_sdk._internal.transport import Transport
 from coco_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 from coco_sdk._message_router import MessageRouter
+from coco_sdk.decorators import HookDefinition
+from coco_sdk.errors import ProcessError
 from coco_sdk.generated.protocol import (
     ApprovalDecision,
     ApprovalResolveRequest,
@@ -30,7 +27,6 @@ from coco_sdk.generated.protocol import (
     ElicitationResolveRequest,
     HookCallbackMatcher,
     InitializeRequest,
-    InitializeResult,
     KeepAliveRequest,
     McpConnectionStatus,
     McpReconnectRequest,
@@ -40,7 +36,6 @@ from coco_sdk.generated.protocol import (
     McpStatusRequest,
     McpStatusResult,
     McpToggleRequest,
-    NotificationMethod,
     PermissionMode,
     PluginReloadRequest,
     PluginReloadResult,
@@ -67,6 +62,12 @@ from coco_sdk.generated.protocol import (
     UpdateEnvRequest,
     UserInputResolveRequest,
 )
+from coco_sdk.types import ModelSpec
+
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from coco_sdk.tools import ToolDefinition
 
 # Validator for inbound `ServerNotification` payloads. Pydantic's
 # discriminated-union dispatch picks the right variant class based on
@@ -75,9 +76,6 @@ from coco_sdk.generated.protocol import (
 _SERVER_NOTIFICATION_ADAPTER: TypeAdapter[ServerNotification] = TypeAdapter(
     ServerNotification
 )
-from coco_sdk.decorators import HookDefinition
-from coco_sdk.errors import ProcessError
-from coco_sdk.types import ModelSpec
 
 # A follow-up `turn/start` can arrive in the brief window after the server emits
 # `TurnEnded` but before the detached turn task's post-run cleanup clears the
@@ -331,7 +329,8 @@ class CocoClient:
                     failed[name] = server.error
             if failed:
                 details = ", ".join(
-                    f"{name}: {error or 'failed'}" for name, error in sorted(failed.items())
+                    f"{name}: {error or 'failed'}"
+                    for name, error in sorted(failed.items())
                 )
                 raise RuntimeError(f"SDK MCP server connection failed: {details}")
             if asyncio.get_running_loop().time() >= deadline:
@@ -461,9 +460,7 @@ class CocoClient:
         request = ApprovalResolveRequest(params=params)
         await self._notify(request)
 
-    async def respond_to_question(
-        self, request_id: str, answer: str
-    ) -> None:
+    async def respond_to_question(self, request_id: str, answer: str) -> None:
         """Respond to a user-input request (AskUserQuestion)."""
         request = UserInputResolveRequest(
             params=UserInputResolveRequest.UserInputResolveRequestParams(
@@ -599,9 +596,7 @@ class CocoClient:
     async def read_session(self, session_id: str) -> SessionReadResult:
         """Read a session's items by ID without resuming (typed response)."""
         request = SessionReadRequest(
-            params=SessionReadRequest.SessionReadRequestParams(
-                session_id=session_id
-            )
+            params=SessionReadRequest.SessionReadRequestParams(session_id=session_id)
         )
         raw = await self._send_and_await_response(request)
         return SessionReadResult.model_validate(raw)
@@ -615,9 +610,7 @@ class CocoClient:
         )
         await self._notify(request)
 
-    async def resume(
-        self, session_id: str
-    ) -> AsyncIterator[ServerNotification]:
+    async def resume(self, session_id: str) -> AsyncIterator[ServerNotification]:
         """Resume an existing session by ID and yield events."""
         request = SessionResumeRequest(
             params=SessionResumeRequest.SessionResumeRequestParams(
@@ -632,9 +625,7 @@ class CocoClient:
 
     async def read_config(self) -> ConfigReadResult:
         """Read the merged effective configuration (typed response)."""
-        request = ConfigReadRequest(
-            params=ConfigReadRequest.ConfigReadRequestParams()
-        )
+        request = ConfigReadRequest(params=ConfigReadRequest.ConfigReadRequestParams())
         raw = await self._send_and_await_response(request)
         return ConfigReadResult.model_validate(raw)
 
@@ -662,9 +653,7 @@ class CocoClient:
 
     async def mcp_status(self) -> McpStatusResult:
         """Query the connection status of every MCP server (typed response)."""
-        request = McpStatusRequest(
-            params=McpStatusRequest.McpStatusRequestParams()
-        )
+        request = McpStatusRequest(params=McpStatusRequest.McpStatusRequestParams())
         raw = await self._send_and_await_response(request)
         return McpStatusResult.model_validate(raw)
 
@@ -747,6 +736,7 @@ class CocoClient:
         the matched `event.params` is the typed `ContentDeltaParams`.
         """
         from coco_sdk.generated.protocol import ServerNotificationAgentMessageDelta
+
         async for event in self.events():
             if isinstance(event, ServerNotificationAgentMessageDelta):
                 yield event.params.delta
@@ -769,6 +759,7 @@ class CocoClient:
     async def get_final_text(self) -> str:
         """Consume all events and return the accumulated assistant text."""
         from coco_sdk.generated.protocol import ServerNotificationAgentMessageDelta
+
         parts: list[str] = []
         async for event in self.events():
             if isinstance(event, ServerNotificationAgentMessageDelta):
@@ -806,7 +797,7 @@ class CocoClient:
 
     async def _handle_server_request(self, line_data: dict[str, Any]) -> bool:
         method = line_data.get("method", "")
-        request_id = line_data.get("request_id")
+        request_id = line_data.get("id")
         params = line_data.get("params", {})
         router = self._require_router()
 
@@ -818,19 +809,27 @@ class CocoClient:
                 # allowing — is the safe default because this path covers every
                 # Ask-returning tool, not just AskUserQuestion. A headless
                 # session that needs to answer must supply `can_use_tool`.
-                await router.respond(request_id, {
-                    "request_id": params.get("request_id", ""),
-                    "decision": "deny",
-                })
+                await router.respond(
+                    request_id,
+                    {
+                        "request_id": params.get("request_id", ""),
+                        "decision": "deny",
+                    },
+                )
                 return True
             decision = await self._can_use_tool(
                 params.get("tool_name", ""),
                 params.get("input", {}),
             )
-            await router.respond(request_id, {
-                "request_id": params.get("request_id", ""),
-                "decision": decision.value if hasattr(decision, "value") else decision,
-            })
+            await router.respond(
+                request_id,
+                {
+                    "request_id": params.get("request_id", ""),
+                    "decision": decision.value
+                    if hasattr(decision, "value")
+                    else decision,
+                },
+            )
             return True
 
         if method == ServerRequestMethod.HOOK_CALLBACK:
@@ -854,7 +853,7 @@ class CocoClient:
                 output = {}
             output = self._normalize_hook_output(output, callback_id=cb_id)
             # Reply body is the bare `HookCallbackResult` shape: `{output}`.
-            # Correlation is the outer JSON-RPC `request_id`; there is
+            # Correlation is the outer JSON-RPC `id`; there is
             # no inner echo field — `callback_id` would be diagnostic-only
             # and Rust ignores it.
             await router.respond(request_id, {"output": output})
@@ -868,7 +867,7 @@ class CocoClient:
             if response is None:
                 return False
             # TS-canonical reply body: `{message}` — outer JSON-RPC
-            # request_id correlates; no echo in the body.
+            # id correlates; no echo in the body.
             await router.respond(request_id, {"message": response})
             return True
 

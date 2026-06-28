@@ -39,6 +39,7 @@ use crate::sdk_server::handlers::SdkServerState;
 
 fn req(id: i64, method: &str, params: serde_json::Value) -> JsonRpcMessage {
     JsonRpcMessage::Request(JsonRpcRequest {
+        jsonrpc: coco_types::JSONRPC_VERSION.into(),
         request_id: RequestId::Integer(id),
         method: method.into(),
         params,
@@ -578,8 +579,8 @@ async fn session_start_rejects_second_concurrent_session() {
     let second = client.recv().await.unwrap().unwrap();
     match second {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("already active"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("already active"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -605,8 +606,8 @@ async fn turn_start_rejects_without_active_session() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("no active session"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no active session"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -730,8 +731,8 @@ async fn turn_interrupt_without_active_turn_errors() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("no turn in flight"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no turn in flight"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -778,8 +779,8 @@ async fn turn_start_rejects_second_concurrent_turn() {
     let second = client.recv().await.unwrap().unwrap();
     match second {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("already running"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("already running"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -855,9 +856,9 @@ async fn approval_resolve_unknown_id_errors() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("no pending approval"));
-            assert!(e.message.contains("does-not-exist"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no pending approval"));
+            assert!(e.error.message.contains("does-not-exist"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -943,8 +944,8 @@ async fn user_input_resolve_unknown_id_errors() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("no pending user input"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no pending user input"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -1029,8 +1030,8 @@ async fn session_archive_rejects_mismatched_id() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("session_id mismatch"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("session_id mismatch"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -1054,8 +1055,8 @@ async fn session_archive_without_active_session_errors() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("no active session"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no active session"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -1221,11 +1222,11 @@ async fn set_permission_mode_rejects_bypass_without_capability() {
         }
         other => panic!("expected JsonRpcError for rejected bypass, got {other:?}"),
     };
-    assert_eq!(err.code, coco_types::error_codes::PERMISSION_DENIED);
+    assert_eq!(err.error.code, coco_types::error_codes::PERMISSION_DENIED);
     assert!(
-        err.message.contains("bypassPermissions"),
+        err.error.message.contains("bypassPermissions"),
         "error message should identify the rejected mode, got: {msg:?}",
-        msg = err.message
+        msg = err.error.message
     );
 
     // Session mode was NOT mutated.
@@ -1825,6 +1826,7 @@ async fn send_server_request_roundtrips_success() {
     };
     client_end
         .send(JsonRpcMessage::Response(coco_types::JsonRpcResponse {
+            jsonrpc: coco_types::JSONRPC_VERSION.into(),
             request_id: server_req_id,
             result: serde_json::json!({ "decision": "allow" }),
         }))
@@ -1874,10 +1876,13 @@ async fn send_server_request_returns_error_on_error_reply() {
     };
     client_end
         .send(JsonRpcMessage::Error(coco_types::JsonRpcError {
+            jsonrpc: coco_types::JSONRPC_VERSION.into(),
             request_id: id,
-            code: error_codes::INTERNAL_ERROR,
-            message: "client says no".into(),
-            data: None,
+            error: coco_types::JsonRpcErrorObject {
+                code: error_codes::INTERNAL_ERROR,
+                message: "client says no".into(),
+                data: None,
+            },
         }))
         .await
         .unwrap();
@@ -1885,8 +1890,8 @@ async fn send_server_request_returns_error_on_error_reply() {
     let reply = send_task.await.unwrap().expect("send returned");
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INTERNAL_ERROR);
-            assert!(e.message.contains("client says no"));
+            assert_eq!(e.error.code, error_codes::INTERNAL_ERROR);
+            assert!(e.error.message.contains("client says no"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -1932,6 +1937,7 @@ async fn send_server_request_unique_ids() {
 
     client_end
         .send(JsonRpcMessage::Response(coco_types::JsonRpcResponse {
+            jsonrpc: coco_types::JSONRPC_VERSION.into(),
             request_id: req1.request_id.clone(),
             result: serde_json::json!({ "method": req1.method }),
         }))
@@ -1939,6 +1945,7 @@ async fn send_server_request_unique_ids() {
         .unwrap();
     client_end
         .send(JsonRpcMessage::Response(coco_types::JsonRpcResponse {
+            jsonrpc: coco_types::JSONRPC_VERSION.into(),
             request_id: req2.request_id.clone(),
             result: serde_json::json!({ "method": req2.method }),
         }))
@@ -2771,8 +2778,8 @@ async fn session_read_unknown_id_errors() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("session/read"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("session/read"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -2836,8 +2843,8 @@ async fn session_resume_unknown_id_errors() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("session/resume"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("session/resume"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -3121,9 +3128,9 @@ async fn config_write_invalid_scope_errors() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_PARAMS);
-            assert!(e.message.contains("invalid scope"));
-            assert!(e.message.contains("bogus"));
+            assert_eq!(e.error.code, error_codes::INVALID_PARAMS);
+            assert!(e.error.message.contains("invalid scope"));
+            assert!(e.error.message.contains("bogus"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -3155,12 +3162,16 @@ async fn config_write_unknown_setting_key_errors_without_writing() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_PARAMS);
-            assert!(e.message.contains("theme"), "got: {}", e.message);
+            assert_eq!(e.error.code, error_codes::INVALID_PARAMS);
             assert!(
-                e.message.contains("not a supported settings key"),
+                e.error.message.contains("theme"),
                 "got: {}",
-                e.message
+                e.error.message
+            );
+            assert!(
+                e.error.message.contains("not a supported settings key"),
+                "got: {}",
+                e.error.message
             );
         }
         other => panic!("expected Error, got {other:?}"),
@@ -3350,8 +3361,8 @@ async fn context_usage_errors_without_active_session() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("no active session"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no active session"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -3375,8 +3386,8 @@ async fn agent_interrupt_current_work_errors_without_team_runtime() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("agent teams are not active"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("agent teams are not active"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -3416,9 +3427,10 @@ async fn context_usage_requires_runtime_analyzer_instead_of_session_stats() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
             assert!(
-                e.message
+                e.error
+                    .message
                     .contains("context usage requires an active session runtime")
             );
         }
@@ -3523,8 +3535,8 @@ async fn rewind_files_errors_without_active_session() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("no active session"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no active session"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -3552,8 +3564,8 @@ async fn rewind_files_errors_when_file_history_not_enabled() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("file history not enabled"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("file history not enabled"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -3599,8 +3611,8 @@ async fn mcp_set_servers_without_manager_errors() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("MCP manager not enabled"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("MCP manager not enabled"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -3796,6 +3808,7 @@ async fn initialize_sdk_mcp_server_connects_via_route_message() {
                 };
                 client
                     .send(JsonRpcMessage::Response(JsonRpcResponse {
+                        jsonrpc: coco_types::JSONRPC_VERSION.into(),
                         request_id: request.request_id,
                         result: serde_json::json!({ "message": mcp_response }),
                     }))
@@ -3954,8 +3967,8 @@ async fn mcp_reconnect_without_manager_errors() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("MCP manager not enabled"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("MCP manager not enabled"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -3993,8 +4006,8 @@ async fn rewind_files_errors_on_unknown_message_id() {
     let reply = client_end.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("no snapshot for user_message_id"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no snapshot for user_message_id"));
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -4022,8 +4035,8 @@ async fn elicitation_resolve_unknown_id_errors() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Error(e) => {
-            assert_eq!(e.code, error_codes::INVALID_REQUEST);
-            assert!(e.message.contains("no pending elicitation"));
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no pending elicitation"));
         }
         other => panic!("expected Error, got {other:?}"),
     }

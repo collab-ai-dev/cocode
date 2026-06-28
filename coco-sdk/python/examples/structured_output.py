@@ -37,7 +37,9 @@ async def main():
     ) as client:
         review, metadata = await client.get_typed_result_with_metadata()
         print(f"\nScore: {review.score}/10")
-        print(f"Tokens used: {metadata.usage.input_tokens + metadata.usage.output_tokens}")
+        print(
+            f"Tokens used: {metadata.usage.input_tokens + metadata.usage.output_tokens}"
+        )
 
 
 if __name__ == "__main__":

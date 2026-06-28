@@ -17,7 +17,6 @@ Mirrors the conventions of ``coco-rs/tests/live/``:
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -26,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from coco_sdk.runtime import find_coco_binary
 from coco_sdk.types import DEEPSEEK, ModelSpec
 
 DEEPSEEK_ENV_KEY = "DEEPSEEK_API_KEY"
@@ -68,19 +68,10 @@ _load_env_file_once()
 
 def _resolve_coco_binary() -> str | None:
     """Find the ``coco`` binary, preferring an explicit override."""
-    explicit = os.environ.get("COCO_PATH")
-    if explicit and Path(explicit).is_file():
-        return explicit
-    on_path = shutil.which("coco")
-    if on_path:
-        return on_path
-    for candidate in (
-        Path.home() / ".cargo" / "bin" / "coco",
-        Path("/usr/local/bin/coco"),
-    ):
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
+    try:
+        return find_coco_binary()
+    except Exception:
+        return None
 
 
 def _skip(reason: str) -> None:

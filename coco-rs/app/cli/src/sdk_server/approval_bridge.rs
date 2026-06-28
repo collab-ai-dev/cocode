@@ -178,15 +178,15 @@ impl ToolPermissionBridge for SdkPermissionBridge {
             JsonRpcMessage::Error(e) => {
                 warn!(
                     request_id = %request.id,
-                    code = e.code,
-                    message = %e.message,
+                    code = e.error.code,
+                    message = %e.error.message,
                     "SdkPermissionBridge: client returned error for approval ask"
                 );
                 // Client-side error on the approval path is treated as a
                 // rejection — safer default than blocking execution.
                 Ok(ToolPermissionResolution {
                     decision: ToolPermissionDecision::Rejected,
-                    feedback: Some(format!("approval error: {}", e.message)),
+                    feedback: Some(format!("approval error: {}", e.error.message)),
                     applied_updates: Vec::new(),
                     updated_input: None,
                     content_blocks: None,

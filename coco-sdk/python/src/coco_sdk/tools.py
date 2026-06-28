@@ -20,12 +20,12 @@ Example::
 from __future__ import annotations
 
 import inspect
-import json
 import logging
 import uuid
 from typing import Any, Callable, get_type_hints
 
 logger = logging.getLogger(__name__)
+
 
 # Sentinel type to identify decorated tools
 class ToolDefinition:

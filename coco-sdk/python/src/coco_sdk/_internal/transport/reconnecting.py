@@ -18,9 +18,7 @@ import logging
 import random
 import time
 from collections import deque
-from typing import Any, AsyncIterator, Callable, Awaitable
-
-logger = logging.getLogger(__name__)
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from coco_sdk._internal.transport import Transport
 from coco_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
@@ -29,6 +27,8 @@ from coco_sdk.generated.protocol import (
     NotificationMethod,
     ServerNotification,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ReconnectingTransport(Transport):
@@ -89,7 +89,9 @@ class ReconnectingTransport(Transport):
             except Exception as exc:
                 logger.warning("Transport error: %s. Attempting reconnection...", exc)
                 if not await self._try_reconnect():
-                    logger.error("Reconnection failed after %.0fs", self._max_reconnect_duration)
+                    logger.error(
+                        "Reconnection failed after %.0fs", self._max_reconnect_duration
+                    )
                     raise
 
     async def _try_reconnect(self) -> bool:
