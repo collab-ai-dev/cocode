@@ -1431,8 +1431,8 @@ impl SwarmAgentHandle {
             live_transcript: live_transcript.clone(),
             // Structured-output contract for workflow `agent(prompt, {schema})`
             // spawns: when set, the adapter registers a per-spawn
-            // StructuredOutput tool + Stop-forcing hook and routes the
-            // captured tool-call input back through
+            // StructuredOutput tool, enables the inline enforcement nudge,
+            // and routes the captured tool-call input back through
             // `AgentQueryResult.structured_output`.
             output_schema: request.output_schema.clone(),
         };
