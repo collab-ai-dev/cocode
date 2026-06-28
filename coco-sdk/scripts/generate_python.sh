@@ -23,6 +23,10 @@ SCHEMA_DIR="$REPO_ROOT/coco-sdk/schemas/json"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROTOCOL_PATH="$REPO_ROOT/coco-sdk/python/src/coco_sdk/generated/protocol.py"
 INIT_PATH="$REPO_ROOT/coco-sdk/python/src/coco_sdk/__init__.py"
+PYTHON_DIR="$REPO_ROOT/coco-sdk/python"
+SDK_VENV_DIR="$PYTHON_DIR/.venv"
+RUFF_VERSION="0.15.20"
+RUFF_REQUIREMENT="ruff==$RUFF_VERSION"
 
 CHECK_MODE=false
 for arg in "$@"; do
@@ -51,10 +55,62 @@ if [ ! -f "$SCHEMA_DIR/server_notification.json" ]; then
     exit 1
 fi
 
+ruff_version_matches() {
+    local candidate="$1"
+    [[ "$("$candidate" --version 2>/dev/null)" == "ruff $RUFF_VERSION" ]]
+}
+
+install_ruff() {
+    local venv_ruff="$SDK_VENV_DIR/bin/ruff"
+    echo "==> installing $RUFF_REQUIREMENT into $SDK_VENV_DIR..." >&2
+    if [[ ! -x "$SDK_VENV_DIR/bin/python" ]]; then
+        python3 -m venv "$SDK_VENV_DIR"
+    fi
+
+    "$SDK_VENV_DIR/bin/python" -m pip install --upgrade "$RUFF_REQUIREMENT" >&2
+    if [[ -x "$venv_ruff" ]] && ruff_version_matches "$venv_ruff"; then
+        printf '%s\n' "$venv_ruff"
+        return 0
+    fi
+
+    echo "error: installed $RUFF_REQUIREMENT but $venv_ruff is unavailable or has the wrong version" >&2
+    return 1
+}
+
+resolve_ruff() {
+    local venv_ruff="$SDK_VENV_DIR/bin/ruff"
+    if [[ -x "$venv_ruff" ]]; then
+        if ruff_version_matches "$venv_ruff"; then
+            printf '%s\n' "$venv_ruff"
+            return 0
+        fi
+        echo "==> $venv_ruff is not ruff $RUFF_VERSION; updating SDK venv..." >&2
+        install_ruff
+        return
+    fi
+
+    if command -v ruff >/dev/null 2>&1; then
+        local path_ruff
+        path_ruff="$(command -v ruff)"
+        if ruff_version_matches "$path_ruff"; then
+            printf '%s\n' "$path_ruff"
+            return 0
+        fi
+        echo "==> $path_ruff is not ruff $RUFF_VERSION; using SDK venv instead..." >&2
+        install_ruff
+        return
+    fi
+
+    echo "==> ruff not found; using SDK venv..." >&2
+    install_ruff
+}
+
+RUFF_BIN="$(resolve_ruff)"
+
 # ---------------------------------------------------------------------------
 # Run the three-phase pipeline. Same body for regen and --check, only the
-# output paths differ. ruff (if present) auto-formats; without it the diff
-# may still pass because the generators emit consistent style.
+# output paths differ. Ruff formatting is required so generated output stays
+# stable across machines with different PATH contents.
 # ---------------------------------------------------------------------------
 run_pipeline() {
     local out_protocol="$1"
@@ -66,9 +122,7 @@ run_pipeline() {
     # only redirect the *outputs*; reads still come from the live tree.
     python3 "$SCRIPTS_DIR/postprocess_python.py" "$SCHEMA_DIR" "$out_protocol"
     python3 "$SCRIPTS_DIR/append_stubs.py" "$REPO_ROOT/coco-sdk/python" "$out_protocol"
-    if command -v ruff &>/dev/null; then
-        ruff format "$out_protocol" >/dev/null 2>&1 || true
-    fi
+    "$RUFF_BIN" format "$out_protocol" >/dev/null
     # regen_init.py writes `__init__.py` next to the protocol's parent
     # directory (i.e. `<protocol_dir>/../__init__.py`). For --check we
     # want it in our staging dir instead — copy the generated protocol
