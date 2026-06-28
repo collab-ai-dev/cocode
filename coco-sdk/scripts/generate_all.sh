@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full regeneration pipeline: Rust → JSON Schema → Python types.
+# Full regeneration pipeline: Rust → JSON Schema → SDK language types.
 #
 # Usage:
 #   ./coco-sdk/scripts/generate_all.sh          # Generate all
@@ -19,6 +19,7 @@ if $CHECK_MODE; then
     echo "=== Check mode: verifying generated files are up-to-date ==="
     bash "$DIR/generate_schemas.sh" --check
     bash "$DIR/generate_python.sh" --check
+    bash "$DIR/generate_typescript.sh" --check
     echo "=== All generated files are up-to-date ==="
     exit 0
 fi
@@ -29,6 +30,10 @@ bash "$DIR/generate_schemas.sh"
 echo ""
 echo "=== Step 2: Generate Python types ==="
 bash "$DIR/generate_python.sh"
+
+echo ""
+echo "=== Step 3: Generate TypeScript types ==="
+bash "$DIR/generate_typescript.sh"
 
 echo ""
 echo "=== Done ==="

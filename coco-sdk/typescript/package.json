@@ -1,0 +1,43 @@
+{
+  "name": "@coco-rs/coco-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for coco-rs.",
+  "repository": {
+    "type": "git",
+    "directory": "coco-sdk/typescript"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./generated/protocol": {
+      "import": "./dist/generated/protocol.js",
+      "types": "./dist/generated/protocol.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "generate": "../scripts/generate_typescript.sh",
+    "generate:check": "../scripts/generate_typescript.sh --check",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "prepare": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.18",
+    "typescript": "^5.9.2"
+  }
+}
