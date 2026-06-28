@@ -93,11 +93,11 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
 /// Register the `StructuredOutput` synthetic tool with a user-supplied
 /// JSON schema.
 ///
-/// Only the non-interactive bootstrap
-/// paths (headless print mode, SDK NDJSON) call this after parsing
-/// `--json-schema`. TUI never reaches it — `tui_runner` never invokes
-/// this function, and the tool is absent from
-/// [`register_all_tools`] so interactive sessions never see it.
+/// Used by scoped callers that force a structured final answer (headless
+/// print / SDK NDJSON `--json-schema`, and per-spawn workflow
+/// `agent(prompt, {schema})`). The tool remains absent from
+/// [`register_all_tools`], so ordinary interactive sessions never see it unless
+/// a caller installs it into a private registry.
 ///
 /// Returns the parsed/compiled tool's reference so callers can enable the
 /// engine-level `requires_structured_output` terminal enforcement at the same
