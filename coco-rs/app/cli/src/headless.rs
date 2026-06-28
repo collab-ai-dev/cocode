@@ -682,19 +682,9 @@ pub async fn run_chat_with_options(
                 ));
             }
             Ok(coco_commands::GoalCommandRequest::Status) => {
-                let text = match crate::goal_command::find_last_achieved_goal(&opts.prior_messages)
-                {
-                    Some(goal) => crate::goal_command::format_achieved_goal_status(&goal),
-                    None => match crate::goal_command::find_restorable_goal_condition(
-                        &opts.prior_messages,
-                    ) {
-                        Some(condition) => {
-                            let goal = crate::goal_command::active_goal(condition, 0);
-                            crate::goal_command::format_active_goal_status(&goal)
-                        }
-                        None => "No goal set. Usage: `/goal <condition>`".to_string(),
-                    },
-                };
+                let text =
+                    crate::goal_command::format_latest_goal_history_status(&opts.prior_messages)
+                        .unwrap_or_else(|| "No goal set. Usage: `/goal <condition>`".to_string());
                 return Ok(headless_local_goal_text_outcome(
                     cli,
                     &cwd,

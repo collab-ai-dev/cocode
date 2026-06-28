@@ -4550,7 +4550,11 @@ async fn build_goal_status_modal(
             active_goal_modal_body(&goal, current_output_tokens),
         );
     }
-    if let Some(goal) = goal_command::find_last_achieved_goal(history) {
+    if let Some(goal) = goal_command::find_latest_goal_status(history)
+        && goal.met
+        && !goal.failed
+        && !goal.sentinel
+    {
         return ("Goal achieved".to_string(), achieved_goal_modal_body(&goal));
     }
     ("Goal".to_string(), fallback_text)

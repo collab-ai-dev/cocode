@@ -102,7 +102,7 @@ mod goal_tests {
         goal.last_reason = Some(" tests still failing\nrerun needed ".to_string());
         assert_eq!(
             coco_cli::goal_command::format_active_goal_status(&goal),
-            "Goal active: finish the migration (2 turns)\nLast check: tests still failing rerun needed"
+            "Goal active: finish the migration (2 turns)\ntests still failing rerun needed"
         );
     }
 }
