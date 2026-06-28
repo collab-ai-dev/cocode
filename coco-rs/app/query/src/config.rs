@@ -155,6 +155,11 @@ pub struct QueryEngineConfig {
     /// dormant. Informational only here; API-side enforcement
     /// (Anthropic `task-budgets` beta) is a separate provider concern.
     pub output_token_budget: Option<i64>,
+    /// Force this engine to complete through the synthetic StructuredOutput
+    /// tool. Scoped callers set this only after registering that tool; the
+    /// turn-reminder path injects a deduped nudge until a valid structured
+    /// output attachment appears.
+    pub requires_structured_output: bool,
     /// Enable streaming tool execution (tools execute during API streaming).
     pub streaming_tool_execution: bool,
     /// Whether this is a non-interactive (SDK/script) session. Drives
@@ -394,6 +399,7 @@ impl Default for QueryEngineConfig {
             max_output_tokens: 16_384,
             max_budget_usd: None,
             output_token_budget: None,
+            requires_structured_output: false,
             // Phase 9 landed: safe tools start mid-stream via
             // StreamingHandle, unsafe tools queue for commit_flush.
             // Default ON — the batched-at-end fallback path stays

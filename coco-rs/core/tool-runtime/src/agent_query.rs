@@ -324,9 +324,9 @@ pub struct AgentQueryConfig {
     /// User-supplied JSON Schema that forces this child to emit its final
     /// answer via the synthetic `StructuredOutput` tool. Threaded from
     /// [`AgentSpawnRequest::output_schema`]. When `Some`, the adapter
-    /// registers a per-spawn `StructuredOutputTool` + a `StructuredOutput`
-    /// Stop-enforcement hook on the child engine and routes the captured
-    /// tool-call input into [`AgentQueryResult::structured_output`].
+    /// registers a per-spawn `StructuredOutputTool`, enables the inline
+    /// `requires_structured_output` nudge on the child engine, and routes the
+    /// captured tool-call input into [`AgentQueryResult::structured_output`].
     /// `serde_json::Value` is the sanctioned schema-blob passthrough; skipped
     /// at the JSON boundary like the other in-process-only fields.
     #[serde(skip)]

@@ -315,6 +315,9 @@ fn re_append_session_metadata_preserves_ts_metadata_slots() {
         crate::storage::MetadataEntry::LastPrompt {
             session_id: sid.clone(),
             last_prompt: "fix failing tests".to_string(),
+            leaf_uuid: None,
+            explicit: false,
+            rewound: false,
         },
         crate::storage::MetadataEntry::AgentColor {
             session_id: sid.clone(),

@@ -111,6 +111,19 @@ impl Tool for StructuredOutputTool {
         true
     }
 
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        coco_tool_runtime::ResultSizeBound::Chars(100_000)
+    }
+
+    fn is_open_world(&self, _input: &Value) -> bool {
+        false
+    }
+
+    fn get_tool_use_summary(&self, input: &Value) -> Option<String> {
+        let summary = coco_types::tool_summary::tool_input_summary(self.name(), input);
+        (!summary.is_empty()).then_some(summary)
+    }
+
     fn search_hint(&self) -> Option<&str> {
         Some("return the final response as structured JSON")
     }

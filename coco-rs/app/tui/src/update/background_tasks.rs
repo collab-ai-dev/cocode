@@ -16,6 +16,8 @@ use crate::events::TuiCommand;
 use crate::state::AppState;
 use crate::state::BackgroundTasksState;
 use crate::state::ModalState;
+use crate::state::WorkflowAgentStatusFilter;
+use crate::state::session::TaskEntryKind;
 
 /// Outcome of [`intercept`]. Mirrors `agents_dialog::Handled`.
 pub(super) enum Handled {
@@ -83,6 +85,13 @@ pub(super) async fn intercept(
             stop_focused(state, &row_ids, command_tx).await;
             Handled::Yes(true)
         }
+        TuiCommand::InsertChar(c) if c.eq_ignore_ascii_case(&'f') => {
+            if cycle_workflow_agent_filter(state) {
+                Handled::Yes(true)
+            } else {
+                Handled::No
+            }
+        }
         _ => Handled::No,
     }
 }
@@ -127,6 +136,7 @@ fn toggle_detail(state: &mut AppState, row_ids: &[String]) {
         let idx = bt.selected.min(row_ids.len().saturating_sub(1));
         if let Some(id) = row_ids.get(idx) {
             bt.detail = Some(id.clone());
+            bt.workflow_agent_filter = WorkflowAgentStatusFilter::All;
         }
     }
 }
@@ -151,6 +161,42 @@ async fn stop_focused(
         let _ = command_tx
             .send(UserCommand::CancelSubagent { task_id })
             .await;
+    }
+}
+
+fn cycle_workflow_agent_filter(state: &mut AppState) -> bool {
+    let Some(task_id) = detail_task_id(state) else {
+        return false;
+    };
+    let Some(task) = state
+        .session
+        .running_background_tasks()
+        .into_iter()
+        .find(|task| task.task_id == task_id && task.kind == TaskEntryKind::Workflow)
+    else {
+        return false;
+    };
+
+    let mut present: Vec<WorkflowAgentStatusFilter> = Vec::new();
+    for event in &task.workflow_progress {
+        if let Some(status) = WorkflowAgentStatusFilter::from_progress_event(event)
+            && !present.contains(&status)
+        {
+            present.push(status);
+        }
+    }
+
+    let Some(bt) = bt_mut(state) else {
+        return false;
+    };
+    bt.workflow_agent_filter = bt.workflow_agent_filter.next_with_present(&present);
+    true
+}
+
+fn detail_task_id(state: &AppState) -> Option<String> {
+    match state.ui.modal.as_ref() {
+        Some(ModalState::BackgroundTasks(bt)) => bt.detail.clone(),
+        _ => None,
     }
 }
 

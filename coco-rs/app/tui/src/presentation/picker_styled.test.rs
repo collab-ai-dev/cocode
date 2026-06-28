@@ -387,6 +387,7 @@ fn background_tasks_lines_group_sections_with_cursor_and_agent_type() {
     let bt = crate::state::BackgroundTasksState {
         selected: 0,
         detail: None,
+        workflow_agent_filter: Default::default(),
     };
 
     let (title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
@@ -417,6 +418,7 @@ fn background_tasks_detail_shell_shows_status_runtime_command() {
     let bt = crate::state::BackgroundTasksState {
         selected: 0,
         detail: Some("s1".to_string()),
+        workflow_agent_filter: Default::default(),
     };
 
     let (title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
@@ -448,6 +450,7 @@ fn background_tasks_detail_agent_shows_live_activity() {
     let bt = crate::state::BackgroundTasksState {
         selected: 0,
         detail: Some("a1".to_string()),
+        workflow_agent_filter: Default::default(),
     };
 
     let (title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
@@ -499,6 +502,7 @@ fn background_tasks_detail_workflow_shows_progress_events() {
     let bt = crate::state::BackgroundTasksState {
         selected: 0,
         detail: Some("wf_1".to_string()),
+        workflow_agent_filter: Default::default(),
     };
 
     let (title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
@@ -549,6 +553,7 @@ fn background_tasks_detail_workflow_localizes_progress_units() {
     let bt = crate::state::BackgroundTasksState {
         selected: 0,
         detail: Some("wf_1".to_string()),
+        workflow_agent_filter: Default::default(),
     };
 
     let (_title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
@@ -591,6 +596,7 @@ fn background_tasks_detail_workflow_shows_prompt_preview_for_running_agent() {
     let bt = crate::state::BackgroundTasksState {
         selected: 0,
         detail: Some("wf_1".to_string()),
+        workflow_agent_filter: Default::default(),
     };
 
     let (_title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
@@ -599,6 +605,69 @@ fn background_tasks_detail_workflow_shows_prompt_preview_for_running_agent() {
     assert!(j.contains("Explore"), "{j}");
     assert!(j.contains("running"), "{j}");
     assert!(j.contains("prompt map the crates and summarize"), "{j}");
+}
+
+#[test]
+fn background_tasks_detail_workflow_filters_agent_progress_by_status() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let mut state = crate::state::AppState::default();
+    state.session.active_tasks = vec![running_workflow(
+        "wf_1",
+        "▸ Analyze",
+        vec![
+            coco_types::WorkflowProgressEvent::WorkflowAgent {
+                index: 0,
+                state: coco_types::WorkflowAgentState::Progress,
+                label: "Explore".to_string(),
+                phase_title: None,
+                phase_index: None,
+                agent_id: None,
+                model: None,
+                tokens: None,
+                tool_calls: None,
+                duration_ms: None,
+                cached: false,
+                result_preview: None,
+                prompt_preview: Some("map crates".to_string()),
+                error: None,
+            },
+            coco_types::WorkflowProgressEvent::WorkflowAgent {
+                index: 1,
+                state: coco_types::WorkflowAgentState::Done,
+                label: "Verify".to_string(),
+                phase_title: None,
+                phase_index: None,
+                agent_id: None,
+                model: None,
+                tokens: None,
+                tool_calls: None,
+                duration_ms: None,
+                cached: false,
+                result_preview: Some("passed".to_string()),
+                prompt_preview: None,
+                error: None,
+            },
+            coco_types::WorkflowProgressEvent::WorkflowLog {
+                message: "Combining findings".to_string(),
+            },
+        ],
+    )];
+    let bt = crate::state::BackgroundTasksState {
+        selected: 0,
+        detail: Some("wf_1".to_string()),
+        workflow_agent_filter: crate::state::WorkflowAgentStatusFilter::Done,
+    };
+
+    let (_title, lines, _) = background_tasks_lines(&bt, &state, styles, 40);
+    let j = joined(&lines);
+
+    assert!(j.contains("Verify"), "{j}");
+    assert!(j.contains("passed"), "{j}");
+    assert!(j.contains("f filter: completed"), "{j}");
+    assert!(!j.contains("Explore"), "{j}");
+    assert!(!j.contains("Combining findings"), "{j}");
 }
 
 #[test]

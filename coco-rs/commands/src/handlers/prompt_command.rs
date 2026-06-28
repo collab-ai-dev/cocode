@@ -44,6 +44,61 @@ pub struct StaticPromptHandler {
     pub args_handling: ArgsHandling,
 }
 
+/// Handler for `/review [pr] [instructions...]`, matching Claude Code's
+/// PR-scoped review command instead of reviewing the local worktree.
+pub struct ReviewPromptHandler {
+    pub name: String,
+    pub progress_message: String,
+    pub body: String,
+}
+
+impl ReviewPromptHandler {
+    fn build_prompt(&self, args: &str) -> String {
+        let mut segments = args.split_whitespace();
+        let raw_pr = segments.next().unwrap_or_default();
+        let pr = raw_pr.replace('`', "").trim_start_matches('#').to_string();
+        let extra_instructions = segments.collect::<Vec<_>>().join(" ");
+
+        if pr.is_empty() {
+            return "Run `gh pr list` to show open pull requests, then ask the user which one to review. \
+                    After they choose one, review it with `/review <number>`."
+                .to_string();
+        }
+
+        let mut text = format!(
+            "Review target: GitHub pull request `{pr}`.\n\n\
+             Gather PR metadata with:\n\
+             `gh pr view {pr} --json title,body,author,baseRefName,headRefName,state,additions,deletions,changedFiles,labels`\n\n\
+             Gather the PR diff with:\n\
+             `gh pr diff {pr}`\n\n\
+             Review only the PR diff. Local working-tree changes are out of scope."
+        );
+        if !extra_instructions.trim().is_empty() {
+            text.push_str("\n\nAdditional instructions from the user: ");
+            text.push_str(extra_instructions.trim());
+        }
+        text.push_str("\n\n");
+        text.push_str(self.body.trim());
+        text
+    }
+}
+
+#[async_trait]
+impl CommandHandler for ReviewPromptHandler {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
+        Ok(CommandResult::Prompt {
+            progress_message: self.progress_message.clone(),
+            parts: vec![PromptPart::Text {
+                text: self.build_prompt(args),
+            }],
+        })
+    }
+
+    fn handler_name(&self) -> &str {
+        &self.name
+    }
+}
+
 impl StaticPromptHandler {
     pub fn new(
         name: impl Into<String>,

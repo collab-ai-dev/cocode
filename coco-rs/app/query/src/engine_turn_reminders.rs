@@ -506,6 +506,11 @@ impl QueryEngine {
                 .any(|name| name == ToolName::Workflow.as_str()),
         )
         .then(workflow_keyword_reminder_message);
+        let structured_output_enforcement_message = should_fire_structured_output_enforcement(
+            history,
+            self.config.requires_structured_output,
+        )
+        .then(structured_output_enforcement_message);
 
         let reminder_input = TurnReminderInput {
             config: reminder_orchestrator.config(),
@@ -743,6 +748,9 @@ impl QueryEngine {
         if let Some(msg) = workflow_keyword_message {
             crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
         }
+        if let Some(msg) = structured_output_enforcement_message {
+            crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+        }
         for msg in &batch.display_only {
             tracing::debug!(
                 target: "coco::system_reminder::display_only",
@@ -786,6 +794,8 @@ fn active_agent_mentions(
 
 const WORKFLOW_KEYWORD: &str = "ultracode";
 const WORKFLOW_KEYWORD_REMINDER: &str = "The user included the keyword \"ultracode\", opting this turn into multi-agent orchestration — use the Workflow tool to fulfill the request.";
+const STRUCTURED_OUTPUT_ENFORCE_SENTINEL: &str = "[structured-output-enforce]";
+const STRUCTURED_OUTPUT_ENFORCEMENT_REMINDER: &str = "[structured-output-enforce] You MUST call the StructuredOutput tool to complete this request. Call this tool now.";
 
 fn should_fire_workflow_keyword_reminder(
     user_input: Option<&str>,
@@ -801,6 +811,66 @@ fn workflow_keyword_reminder_message() -> Message {
     Message::Attachment(coco_messages::AttachmentMessage::api(
         coco_types::AttachmentKind::WorkflowKeywordRequest,
         LlmMessage::user_text(wrap_in_system_reminder(WORKFLOW_KEYWORD_REMINDER)),
+    ))
+}
+
+fn should_fire_structured_output_enforcement(
+    history: &MessageHistory,
+    requires_structured_output: bool,
+) -> bool {
+    if !requires_structured_output {
+        return false;
+    }
+
+    let last_user_index =
+        history
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(idx, msg)| match msg.as_ref() {
+                Message::User(user)
+                    if !user.is_visible_in_transcript_only && !user.is_compact_summary =>
+                {
+                    Some(idx)
+                }
+                _ => None,
+            });
+    let window_start = last_user_index.map_or(0, |idx| idx + 1);
+
+    let mut already_nudged = false;
+    for msg in history.iter().skip(window_start) {
+        match msg.as_ref() {
+            Message::Attachment(att)
+                if att.kind == coco_types::AttachmentKind::StructuredOutput
+                    && matches!(
+                        &att.body,
+                        coco_messages::AttachmentBody::Silent(
+                            coco_messages::SilentPayload::StructuredOutput(_)
+                        )
+                    ) =>
+            {
+                return false;
+            }
+            Message::Attachment(att)
+                if att
+                    .as_text_for_display()
+                    .contains(STRUCTURED_OUTPUT_ENFORCE_SENTINEL) =>
+            {
+                already_nudged = true;
+            }
+            _ => {}
+        }
+    }
+
+    !already_nudged
+}
+
+pub(crate) fn structured_output_enforcement_message() -> Message {
+    Message::Attachment(coco_messages::AttachmentMessage::api(
+        coco_types::AttachmentKind::CriticalSystemReminder,
+        LlmMessage::user_text(wrap_in_system_reminder(
+            STRUCTURED_OUTPUT_ENFORCEMENT_REMINDER,
+        )),
     ))
 }
 

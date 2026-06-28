@@ -6,9 +6,14 @@
 use pretty_assertions::assert_eq;
 
 use base64::Engine;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
+use coco_messages::UserContent;
+use coco_messages::UserMessage;
 use coco_types::SdkSessionSummary;
 use coco_types::SlashCommandInfo;
 use coco_types::TuiOnlyEvent;
+use uuid::Uuid;
 
 use super::handle;
 use crate::command::SystemPushKind;
@@ -56,6 +61,23 @@ fn slash(name: &str) -> SlashCommandInfo {
     }
 }
 
+fn user_message(id: Uuid, text: &str) -> Message {
+    Message::User(UserMessage {
+        message: LlmMessage::User {
+            content: vec![UserContent::text(text)],
+            provider_options: None,
+        },
+        uuid: id,
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: Some(coco_types::PermissionMode::AcceptEdits),
+        origin: None,
+        parent_tool_use_id: None,
+    })
+}
+
 #[test]
 fn available_commands_refreshed_overwrites_slot() {
     let mut state = AppState::new();
@@ -78,6 +100,38 @@ fn available_commands_refreshed_overwrites_slot() {
         .map(|c| c.name.as_str())
         .collect();
     assert_eq!(names, vec!["new-cmd-a", "new-cmd-b"]);
+}
+
+#[test]
+fn rewind_completed_restores_prompt_from_pre_clear_snapshot() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+    let id = Uuid::new_v4();
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::RewindPreClearSnapshot {
+            messages: vec![std::sync::Arc::new(user_message(id, "recover this prompt"))],
+        },
+        &tx,
+    );
+    assert!(consumed);
+
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::RewindCompleted {
+            target_message_id: id.to_string(),
+            files_changed: 0,
+        },
+        &tx,
+    );
+
+    assert!(consumed);
+    assert_eq!(state.ui.input.text(), "recover this prompt");
+    assert_eq!(
+        state.session.permission_mode,
+        coco_types::PermissionMode::AcceptEdits
+    );
+    assert!(state.session.conversation_id.is_some());
 }
 
 #[test]

@@ -835,6 +835,9 @@ fn metadata_side_channels_round_trip() {
             &MetadataEntry::LastPrompt {
                 session_id: SESSION.to_string(),
                 last_prompt: "final question".to_string(),
+                leaf_uuid: None,
+                explicit: false,
+                rewound: false,
             },
         )
         .unwrap();

@@ -685,6 +685,10 @@ pub struct SessionRuntime {
     /// empty by [`Self::clear_conversation`] when the session id
     /// regenerates.
     transcript_dedup: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
+    /// Conversation snapshot captured immediately before `/clear`.
+    /// The fresh post-clear session keeps a hidden copy so `/rewind`
+    /// can recover a pre-clear prompt before any new turn is submitted.
+    clear_rewind_messages: Arc<tokio::sync::Mutex<Option<Vec<Arc<Message>>>>>,
     /// True after the engine writes a terminal `/goal` success snapshot
     /// to session metadata. The next main-session turn clears it, matching
     /// the TS metadata observer lifecycle.
@@ -1481,6 +1485,7 @@ impl SessionRuntime {
             session_usage_tracker,
             session_usage_write_lock,
             transcript_dedup,
+            clear_rewind_messages: Arc::new(tokio::sync::Mutex::new(None)),
             terminal_goal_metadata_written,
             tool_result_replacement_state,
             command_queue: CommandQueue::new(),
@@ -1811,6 +1816,55 @@ impl SessionRuntime {
         {
             warn!(error = %e, session_id, "failed to persist local transcript messages");
         }
+    }
+
+    pub async fn pre_clear_rewind_messages(&self) -> Option<Vec<Arc<Message>>> {
+        self.clear_rewind_messages.lock().await.clone()
+    }
+
+    pub async fn restore_pre_clear_rewind_prefix(
+        &self,
+        message_id: &str,
+    ) -> Option<(i32, i32, Vec<Message>)> {
+        let messages = self.clear_rewind_messages.lock().await.clone()?;
+        let idx = messages.iter().position(|m| match m.as_ref() {
+            Message::User(u) => u.uuid.to_string() == message_id,
+            _ => false,
+        })?;
+        let selected_prompt =
+            coco_messages::wrapping::extract_text_from_message(messages[idx].as_ref());
+        let pre_count = messages.len() as i32;
+        let kept: Vec<Message> = messages[..idx]
+            .iter()
+            .map(|message| message.as_ref().clone())
+            .collect();
+        let messages_removed = (pre_count - idx as i32).max(0);
+        {
+            let mut history = self.history.lock().await;
+            let replacement = kept.iter().cloned().map(Arc::new).collect();
+            let no_event_tx = None;
+            coco_query::history_sync::history_replace_and_emit(
+                &mut history,
+                replacement,
+                &no_event_tx,
+            )
+            .await;
+        }
+        self.persist_local_transcript_messages(&kept).await;
+        let session_id = self.current_session_id().await;
+        if let Err(e) = self.transcript_store.append_metadata(
+            &session_id,
+            &coco_session::MetadataEntry::LastPrompt {
+                session_id: session_id.clone(),
+                last_prompt: selected_prompt.trim().to_string(),
+                leaf_uuid: Some(message_id.to_string()),
+                explicit: true,
+                rewound: true,
+            },
+        ) {
+            warn!(error = %e, session_id, message_id, "failed to persist rewind last-prompt metadata");
+        }
+        Some((idx as i32, messages_removed, kept))
     }
 
     async fn load_usage_tracker_for_session(&self, session_id: &str) -> CostTracker {
@@ -2262,7 +2316,20 @@ impl SessionRuntime {
     }
 
     pub async fn build_engine_with_turn_abort(&self, turn_abort: TurnAbortSignal) -> QueryEngine {
+        self.build_engine_with_turn_abort_configured(turn_abort, |_| {})
+            .await
+    }
+
+    pub async fn build_engine_with_turn_abort_configured<F>(
+        &self,
+        turn_abort: TurnAbortSignal,
+        configure: F,
+    ) -> QueryEngine
+    where
+        F: FnOnce(&mut QueryEngineConfig),
+    {
         let mut engine_config = self.current_engine_config().await;
+        configure(&mut engine_config);
         self.prepare_live_permission_overlay(&mut engine_config)
             .await;
         let engine = QueryEngine::new_with_turn_abort(
@@ -3656,6 +3723,12 @@ impl SessionRuntime {
         // `COCO_SESSIONEND_HOOKS_TIMEOUT_MS` overrides).
         self.fire_session_end_hooks(coco_hooks::orchestration::ExitReason::Clear)
             .await;
+
+        let pre_clear_messages = self.history.lock().await.as_slice().to_vec();
+        *self.clear_rewind_messages.lock().await = pre_clear_messages
+            .iter()
+            .any(|m| matches!(m.as_ref(), Message::User(_)))
+            .then_some(pre_clear_messages);
 
         // Step 2: reset session caches. `/clear` clears the CONVERSATION, not
         // the session's permission grants — preserve the current live

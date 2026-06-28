@@ -537,7 +537,13 @@ impl HookRegistry {
         hooks
             .iter()
             .filter(|h| h.event == event)
-            .filter(|h| matcher_matches(h.matcher.as_deref(), match_value))
+            .filter(|h| {
+                matcher_matches(
+                    h.matcher.as_deref(),
+                    match_value,
+                    matcher_allows_comma(event),
+                )
+            })
             .cloned()
             .collect()
     }
@@ -586,7 +592,11 @@ impl HookRegistry {
                 .iter()
                 .filter(|h| {
                     h.event == event
-                        && matcher_matches(h.matcher.as_deref(), match_value)
+                        && matcher_matches(
+                            h.matcher.as_deref(),
+                            match_value,
+                            matcher_allows_comma(event),
+                        )
                         && !(h.once && fired_once_snapshot.contains(&dedup_key(h)))
                 })
                 .cloned()
@@ -600,7 +610,13 @@ impl HookRegistry {
         if let Ok(agent_scoped) = self.agent_scoped.read() {
             for hooks in agent_scoped.values() {
                 for h in hooks {
-                    if h.event == event && matcher_matches(h.matcher.as_deref(), match_value) {
+                    if h.event == event
+                        && matcher_matches(
+                            h.matcher.as_deref(),
+                            match_value,
+                            matcher_allows_comma(event),
+                        )
+                    {
                         matches.push(h.clone());
                     }
                 }
@@ -690,14 +706,37 @@ impl HookRegistry {
 /// Matching cascade:
 /// 1. `None` → matches everything
 /// 2. `"*"` → wildcard, matches if value is present
-/// 3. "Simple" pattern (only alphanumeric, `_`, `|`):
-///    - Pipe-separated: `"Write|Edit"` → any exact match
+/// 3. "Simple" pattern (only alphanumeric, `_`, `|`, `,`, space):
+///    - Pipe/comma-separated: `"Write|Edit"` / `"Bash, PowerShell"` → any exact match
 ///    - Otherwise: exact string match
 /// 4. Regex pattern (anything with special chars)
 /// 5. Glob pattern fallback (if regex is invalid)
 ///
-/// `/^[a-zA-Z0-9_|]+$/` distinguishes simple from regex patterns.
-fn matcher_matches(matcher: Option<&str>, value: Option<&str>) -> bool {
+/// `/^[a-zA-Z0-9_|, ]+$/` distinguishes simple from regex patterns.
+fn matcher_allows_comma(event: HookEventType) -> bool {
+    matches!(
+        event,
+        HookEventType::PreToolUse
+            | HookEventType::PostToolUse
+            | HookEventType::PostToolUseFailure
+            | HookEventType::PermissionRequest
+            | HookEventType::PermissionDenied
+            | HookEventType::SessionStart
+            | HookEventType::SessionEnd
+            | HookEventType::Setup
+            | HookEventType::PreCompact
+            | HookEventType::PostCompact
+            | HookEventType::Notification
+            | HookEventType::SubagentStart
+            | HookEventType::SubagentStop
+            | HookEventType::Elicitation
+            | HookEventType::ElicitationResult
+            | HookEventType::ConfigChange
+            | HookEventType::InstructionsLoaded
+    )
+}
+
+fn matcher_matches(matcher: Option<&str>, value: Option<&str>, allow_comma: bool) -> bool {
     match matcher {
         None => true,
         Some("*") => value.is_some(),
@@ -710,18 +749,22 @@ fn matcher_matches(matcher: Option<&str>, value: Option<&str>) -> bool {
                 // when the regex path is taken.
                 let name = coco_types::normalize_legacy_tool_name(raw_name);
 
-                // Simple: /^[a-zA-Z0-9_|]+$/ — only alphanumeric, underscore, pipe
-                let is_simple = pattern
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'|');
+                // Simple matcher: TS only treats comma as a list separator
+                // for an event allow-list; other events keep comma literal.
+                let is_simple = pattern.bytes().all(|b| {
+                    b.is_ascii_alphanumeric()
+                        || b == b'_'
+                        || b == b'|'
+                        || b == b' '
+                        || (allow_comma && b == b',')
+                });
 
                 if is_simple {
-                    if pattern.contains('|') {
-                        return pattern
-                            .split('|')
-                            .any(|p| coco_types::normalize_legacy_tool_name(p.trim()) == name);
-                    }
-                    return name == coco_types::normalize_legacy_tool_name(pattern);
+                    return pattern
+                        .split(|c| c == '|' || (allow_comma && c == ','))
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty())
+                        .any(|p| coco_types::normalize_legacy_tool_name(p) == name);
                 }
 
                 // Otherwise treat as regex

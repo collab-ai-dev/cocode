@@ -42,6 +42,24 @@ fn id_and_name_use_structured_output_wire_form() {
 }
 
 #[test]
+fn metadata_matches_ts_structured_output_tool_contract() {
+    let tool = StructuredOutputTool::new(person_schema()).unwrap();
+    assert_eq!(
+        tool.max_result_size_bound(),
+        coco_tool_runtime::ResultSizeBound::Chars(100_000)
+    );
+    assert!(!tool.is_open_world(&json!({ "name": "Alice" })));
+    assert_eq!(
+        tool.search_hint(),
+        Some("return the final response as structured JSON")
+    );
+    assert_eq!(
+        tool.get_tool_use_summary(&json!({ "name": "Alice", "age": 30 })),
+        Some(r#"age: 30, name: "Alice""#.to_string())
+    );
+}
+
+#[test]
 fn input_schema_forwards_user_supplied_properties_and_required() {
     let tool = StructuredOutputTool::new(person_schema()).unwrap();
     let schema = tool.runtime_validation_schema().as_value();

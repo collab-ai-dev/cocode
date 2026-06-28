@@ -1231,6 +1231,9 @@ pub(crate) struct RunArtifacts {
     /// re-inject the "you MUST call this tool" nudge when the model
     /// tries to end the turn without a successful structured response.
     pub structured_output_attempts: u32,
+    /// Count of schema-validation / execution failures for StructuredOutput.
+    /// TS caps failed tool_results, not successful recency checks.
+    pub structured_output_failed_attempts: u32,
 }
 
 fn transition_consumes_turn(transition: Option<&ContinueReason>) -> bool {

@@ -14,6 +14,8 @@
 //! ```
 
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1009,6 +1011,7 @@ async fn run_agent_driver(
                 // raw text to the model.
                 let mut effective_content = content;
                 let mut slash_metadata = None;
+                let mut slash_thinking_level = None;
                 if let Some((name, args)) = parse_slash_command(&effective_content) {
                     let outcome = dispatch_slash_command(name, args, &runtime, &event_tx).await;
                     match handle_slash_outcome(
@@ -1024,9 +1027,14 @@ async fn run_agent_driver(
                         // Unknown command falls through to the model
                         // as raw text — falls through to the model.
                         SlashFollowup::NotFound => {}
-                        SlashFollowup::RunEngine { content, metadata } => {
+                        SlashFollowup::RunEngine {
+                            content,
+                            metadata,
+                            thinking_level,
+                        } => {
                             effective_content = content;
                             slash_metadata = metadata;
+                            slash_thinking_level = thinking_level;
                         }
                     }
                 }
@@ -1064,6 +1072,7 @@ async fn run_agent_driver(
                         user_message_id,
                         effective_content,
                         slash_metadata,
+                        slash_thinking_level,
                         images,
                         runtime_t,
                         event_tx_t,
@@ -1248,10 +1257,18 @@ async fn run_agent_driver(
                     SlashFollowup::NotFound => {
                         warn!(%name, "ExecuteSkill: command not registered");
                     }
-                    SlashFollowup::RunEngine { content, metadata } => {
+                    SlashFollowup::RunEngine {
+                        content,
+                        metadata,
+                        thinking_level,
+                    } => {
                         drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                         spawn_slash_run_engine_turn(
-                            SlashEnginePrompt { content, metadata },
+                            SlashEnginePrompt {
+                                content,
+                                metadata,
+                                thinking_level,
+                            },
                             &runtime,
                             &event_tx,
                             &active_turn,
@@ -1287,10 +1304,18 @@ async fn run_agent_driver(
                         )
                         .await;
                     }
-                    SlashFollowup::RunEngine { content, metadata } => {
+                    SlashFollowup::RunEngine {
+                        content,
+                        metadata,
+                        thinking_level,
+                    } => {
                         drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                         spawn_slash_run_engine_turn(
-                            SlashEnginePrompt { content, metadata },
+                            SlashEnginePrompt {
+                                content,
+                                metadata,
+                                thinking_level,
+                            },
                             &runtime,
                             &event_tx,
                             &active_turn,
@@ -2151,6 +2176,7 @@ enum SlashOutcome {
     RunEngine {
         content: String,
         metadata: Option<String>,
+        thinking_level: Option<coco_types::ThinkingLevel>,
     },
     /// A user-typed fork-mode skill (`/<name>` with `context: fork`).
     /// Unlike `RunEngine` (which re-queries the main model with the
@@ -2887,12 +2913,14 @@ enum SlashFollowup {
     RunEngine {
         content: String,
         metadata: Option<String>,
+        thinking_level: Option<coco_types::ThinkingLevel>,
     },
 }
 
 struct SlashEnginePrompt {
     content: String,
     metadata: Option<String>,
+    thinking_level: Option<coco_types::ThinkingLevel>,
 }
 
 /// Process a [`SlashOutcome`] into a [`SlashFollowup`] for the
@@ -2908,9 +2936,15 @@ async fn handle_slash_outcome(
     match outcome {
         SlashOutcome::Handled => SlashFollowup::Done,
         SlashOutcome::NotFound => SlashFollowup::NotFound,
-        SlashOutcome::RunEngine { content, metadata } => {
-            SlashFollowup::RunEngine { content, metadata }
-        }
+        SlashOutcome::RunEngine {
+            content,
+            metadata,
+            thinking_level,
+        } => SlashFollowup::RunEngine {
+            content,
+            metadata,
+            thinking_level,
+        },
         SlashOutcome::RunForkSkill { name, args } => {
             run_fork_skill(runtime, event_tx, &name, &args, active_turn).await;
             SlashFollowup::Done
@@ -3016,10 +3050,18 @@ async fn drain_queued_slash_commands(
             SlashOutcome::NotFound => {
                 emit_slash_status(event_tx, name, args, SlashCommandStatusKind::NoHandler).await;
             }
-            SlashOutcome::RunEngine { content, metadata } => {
+            SlashOutcome::RunEngine {
+                content,
+                metadata,
+                thinking_level,
+            } => {
                 let session_id = runtime.current_session_id().await;
                 spawn_slash_run_engine_turn(
-                    SlashEnginePrompt { content, metadata },
+                    SlashEnginePrompt {
+                        content,
+                        metadata,
+                        thinking_level,
+                    },
                     runtime,
                     event_tx,
                     active_turn,
@@ -3060,12 +3102,19 @@ async fn drain_queued_slash_commands(
                 emit_slash_text(event_tx, "status", "", &text).await;
             }
             SlashOutcome::TriggerGoal { request } => {
-                if let SlashFollowup::RunEngine { content, metadata } =
-                    run_goal_command(runtime, event_tx, request).await
+                if let SlashFollowup::RunEngine {
+                    content,
+                    metadata,
+                    thinking_level,
+                } = run_goal_command(runtime, event_tx, request).await
                 {
                     let session_id = runtime.current_session_id().await;
                     spawn_slash_run_engine_turn(
-                        SlashEnginePrompt { content, metadata },
+                        SlashEnginePrompt {
+                            content,
+                            metadata,
+                            thinking_level,
+                        },
                         runtime,
                         event_tx,
                         active_turn,
@@ -3255,7 +3304,11 @@ async fn spawn_slash_run_engine_turn(
     let turn_done_tx_t = turn_done_tx.clone();
     let session_id_t = session_id.to_string();
     let synth_id = uuid::Uuid::new_v4().to_string();
-    let SlashEnginePrompt { content, metadata } = prompt;
+    let SlashEnginePrompt {
+        content,
+        metadata,
+        thinking_level,
+    } = prompt;
     let task = tokio::spawn(async move {
         let _done = TurnDoneGuard {
             turn_id,
@@ -3265,6 +3318,7 @@ async fn spawn_slash_run_engine_turn(
             synth_id,
             content,
             metadata,
+            thinking_level,
             Vec::new(),
             runtime_t,
             event_tx_t,
@@ -3350,15 +3404,14 @@ async fn dispatch_slash_command(
             .await;
         return SlashOutcome::Handled;
     }
-    // `/add-dir` (no arg) opens the interactive directory-input overlay.
-    // `/add-dir <path>` falls through to the registry handler, which validates
-    // the path + emits the session-add sentinel.:
-    // no-arg → `<AddWorkspaceDirectory>` form, arg → direct validate + add.
-    if name == "add-dir" && args.trim().is_empty() {
-        let _ = event_tx
-            .send(CoreEvent::Tui(TuiOnlyEvent::OpenAddDirectory))
-            .await;
-        return SlashOutcome::Handled;
+    if name == "add-dir" {
+        if args.trim().is_empty() {
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::OpenAddDirectory))
+                .await;
+            return SlashOutcome::Handled;
+        }
+        return dispatch_add_dir(args, runtime, event_tx).await;
     }
     // `/export` (no arg) opens the Markdown/JSON/Text format picker;
     // `/export <format>` renders the live conversation history in that format
@@ -3436,6 +3489,7 @@ async fn dispatch_slash_command(
         return SlashOutcome::RunEngine {
             content: prompt,
             metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
+            thinking_level: None,
         };
     }
     // Fork-mode skills (`context: fork`) run as a subagent via the
@@ -3520,6 +3574,7 @@ async fn dispatch_slash_command(
         CommandResult::InjectPrompt(text) => SlashOutcome::RunEngine {
             content: text,
             metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
+            thinking_level: None,
         },
         CommandResult::Prompt { parts, .. } => {
             // Concatenate text parts. `File` parts are not yet wired —
@@ -3545,6 +3600,10 @@ async fn dispatch_slash_command(
                 SlashOutcome::RunEngine {
                     content: buf,
                     metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
+                    thinking_level: match &cmd.command_type {
+                        coco_types::CommandType::Prompt(data) => data.thinking_level.clone(),
+                        _ => None,
+                    },
                 }
             }
         }
@@ -3916,6 +3975,7 @@ async fn dispatch_plan(
         Some(desc) => SlashOutcome::RunEngine {
             content: desc.to_string(),
             metadata: Some(format_slash_command_metadata("plan", args)),
+            thinking_level: None,
         },
         None => {
             // Unreachable in practice — bare `/plan` and `/plan open`
@@ -4180,6 +4240,13 @@ async fn run_clear_conversation(
         agent_id: None,
     };
     let _ = event_tx.send(CoreEvent::Protocol(notif)).await;
+    if let Some(messages) = runtime.pre_clear_rewind_messages().await {
+        let _ = event_tx
+            .send(CoreEvent::Tui(TuiOnlyEvent::RewindPreClearSnapshot {
+                messages,
+            }))
+            .await;
+    }
 }
 
 /// Force auto-memory consolidation now (skips the three-gate scheduler).
@@ -4465,6 +4532,7 @@ async fn run_goal_command(
             SlashFollowup::RunEngine {
                 content: kickoff,
                 metadata: Some(format_slash_command_metadata("goal", &args)),
+                thinking_level: None,
             }
         }
     }
@@ -4645,11 +4713,120 @@ fn workspace_trust_rejected_from_env(value: Option<&str>) -> bool {
     matches!(value, Some("0"))
 }
 
-/// `/add-dir <abs-path>` runner — pushes the (already-validated)
-/// absolute path onto the live `ToolAppState.permissions.additional_dirs`
-/// (the single base the factory reads each batch) so the next turn's
-/// `ToolPermissionContext.additional_dirs` carries it. Source is `Session`
-/// — never persisted to settings.json.
+/// `/add-dir <path>` runner — validates and pushes the path onto the live
+/// `ToolAppState.permissions.additional_dirs` base so the next batch's
+/// permission context sees the wider scope. Source is `Session` — never
+/// persisted to settings.json.
+async fn dispatch_add_dir(
+    args: &str,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) -> SlashOutcome {
+    let raw_path = args.trim();
+    let current_cwd = runtime.current_cwd.read().await.clone();
+    let candidate = if Path::new(raw_path).is_absolute() {
+        PathBuf::from(raw_path)
+    } else {
+        current_cwd.join(raw_path)
+    };
+    let absolute = match candidate.canonicalize() {
+        Ok(path) => path,
+        Err(e) => {
+            emit_slash_text(
+                event_tx,
+                "add-dir",
+                args,
+                &format!("Cannot add directory `{raw_path}`: {e}"),
+            )
+            .await;
+            return SlashOutcome::Handled;
+        }
+    };
+    if !absolute.is_dir() {
+        emit_slash_text(
+            event_tx,
+            "add-dir",
+            args,
+            &format!(
+                "Cannot add directory `{}`: not a directory",
+                absolute.display()
+            ),
+        )
+        .await;
+        return SlashOutcome::Handled;
+    }
+
+    let current = canonicalize_or_self(current_cwd);
+    let additional_dirs: Vec<PathBuf> = runtime
+        .app_state
+        .read()
+        .await
+        .permissions
+        .additional_dirs
+        .values()
+        .map(|dir| canonicalize_or_self(PathBuf::from(&dir.path)))
+        .collect();
+
+    if let Some(message) = add_dir_already_message(&absolute, &current, &additional_dirs) {
+        emit_slash_text(event_tx, "add-dir", args, &message).await;
+        return SlashOutcome::Handled;
+    }
+
+    run_add_working_dir(runtime, absolute.to_string_lossy().as_ref()).await;
+    emit_slash_text(
+        event_tx,
+        "add-dir",
+        args,
+        &format!("Added working directory: {}", absolute.display()),
+    )
+    .await;
+    SlashOutcome::Handled
+}
+
+fn canonicalize_or_self(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
+}
+
+fn add_dir_already_message(
+    directory_path: &Path,
+    current_cwd: &Path,
+    additional_dirs: &[PathBuf],
+) -> Option<String> {
+    if directory_path == current_cwd {
+        return Some(format!(
+            "{} is already the current working directory.",
+            directory_path.display()
+        ));
+    }
+    for working_dir in additional_dirs {
+        if directory_path == working_dir {
+            return Some(format!(
+                "{} is already added as a working directory.",
+                directory_path.display()
+            ));
+        }
+    }
+    if directory_path.starts_with(current_cwd) {
+        return Some(format!(
+            "{} is already accessible within the current working directory {}.",
+            directory_path.display(),
+            current_cwd.display()
+        ));
+    }
+    for working_dir in additional_dirs {
+        if directory_path.starts_with(working_dir) {
+            return Some(format!(
+                "{} is already accessible within the additional working directory {}.",
+                directory_path.display(),
+                working_dir.display()
+            ));
+        }
+    }
+    None
+}
+
+/// Push the absolute path onto the live `ToolAppState.permissions.additional_dirs`
+/// map.
 async fn run_add_working_dir(runtime: &Arc<crate::session_runtime::SessionRuntime>, path: &str) {
     let path_owned = path.to_string();
     runtime
@@ -5004,6 +5181,7 @@ async fn process_submit_turn(
     user_message_id: String,
     content: String,
     slash_metadata: Option<String>,
+    slash_thinking_level: Option<coco_types::ThinkingLevel>,
     images: Vec<coco_tui::ImageData>,
     runtime: Arc<crate::session_runtime::SessionRuntime>,
     event_tx: mpsc::Sender<CoreEvent>,
@@ -5128,7 +5306,11 @@ async fn process_submit_turn(
     };
 
     let engine = runtime
-        .build_engine_with_turn_abort(turn_abort.clone())
+        .build_engine_with_turn_abort_configured(turn_abort.clone(), |cfg| {
+            if let Some(thinking_level) = slash_thinking_level {
+                cfg.thinking_level = Some(thinking_level);
+            }
+        })
         .await;
 
     // Mention priority for post-compact restoration.
@@ -5360,6 +5542,7 @@ async fn handle_rewind(
     let mut files_changed = 0i32;
     let mut messages_removed = 0i32;
     let mut keep_count_to_emit = None;
+    let mut history_replacement_to_emit: Option<Vec<coco_messages::Message>> = None;
 
     tracing::info!(
         target: "coco_cli::rewind",
@@ -5443,12 +5626,29 @@ async fn handle_rewind(
                 keep_count_to_emit = Some(idx as i64);
             }
             None => {
-                tracing::warn!(
-                    target: "coco_cli::rewind",
-                    message_id,
-                    history_len = h.len(),
-                    "Explicit rewind: target user message not found in history",
-                );
+                let history_len = h.len();
+                drop(h);
+                if let Some((keep_count, removed, kept)) =
+                    runtime.restore_pre_clear_rewind_prefix(message_id).await
+                {
+                    messages_removed = removed;
+                    keep_count_to_emit = Some(keep_count as i64);
+                    history_replacement_to_emit = Some(kept);
+                    tracing::info!(
+                        target: "coco_cli::rewind",
+                        message_id,
+                        keep_count,
+                        messages_removed,
+                        "Explicit rewind: restored pre-clear history prefix",
+                    );
+                } else {
+                    tracing::warn!(
+                        target: "coco_cli::rewind",
+                        message_id,
+                        history_len,
+                        "Explicit rewind: target user message not found in history",
+                    );
+                }
             }
         }
     }
@@ -5469,6 +5669,15 @@ async fn handle_rewind(
     // completion event. `on_rewind_completed` restores the selected prompt
     // from the still-intact transcript before this truncation applies.
     if let Some(keep_count) = keep_count_to_emit {
+        if let Some(messages) = history_replacement_to_emit {
+            let _ = event_tx
+                .send(CoreEvent::Protocol(ServerNotification::HistoryReplaced {
+                    messages: messages.into_iter().map(Arc::new).collect(),
+                    session_id: String::new(),
+                    agent_id: None,
+                }))
+                .await;
+        }
         let _ = event_tx
             .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
                 keep_count,

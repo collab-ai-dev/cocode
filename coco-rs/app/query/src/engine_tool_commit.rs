@@ -111,6 +111,11 @@ fn collect_outcome(
     ) {
         run_artifacts.structured_output_attempts =
             run_artifacts.structured_output_attempts.saturating_add(1);
+        if is_error {
+            run_artifacts.structured_output_failed_attempts = run_artifacts
+                .structured_output_failed_attempts
+                .saturating_add(1);
+        }
     }
     if let Some(data) = parts.structured_output.clone() {
         run_artifacts.structured_output = Some(data);

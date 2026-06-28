@@ -16,10 +16,7 @@
 //!
 //! ## Use cases
 //!
-//! 1. **`StructuredOutput` Stop enforcement** — prevent Stop until the
-//!    model successfully calls the `StructuredOutput` tool. Wired in
-//!    [`coco_tools::register_structured_output_tool`] and friends.
-//! 2. **Swarm teammate init** — block Stop until team config is
+//! 1. **Swarm teammate init** — block Stop until team config is
 //!    acknowledged. (Pending port.)
 //!
 //! ## Concurrency

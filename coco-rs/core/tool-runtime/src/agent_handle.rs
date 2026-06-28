@@ -374,7 +374,7 @@ pub struct AgentSpawnRequest {
     /// free-form text. Set by the workflow host when `agent(prompt, {schema})`
     /// carries a schema; the spawn driver registers `StructuredOutputTool`
     /// (compiled from this value) into the child engine's tool registry,
-    /// installs a `StructuredOutput`-forcing Stop hook, and surfaces the
+    /// enables the inline `requires_structured_output` nudge, and surfaces the
     /// captured tool-call input on [`AgentSpawnResponse::structured_output`].
     /// `serde_json::Value` is the sanctioned schema-blob passthrough
     /// exception. Shared via `Arc` so the in-process inheritance path

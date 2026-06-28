@@ -17,7 +17,7 @@
 //! - **Agent path**: full hook verdict path via a late-bound runner
 //!   installed by `coco-cli::session_runtime`. The concrete runner
 //!   builds a scoped child `QueryEngine` with `max_turns = 50`, a
-//!   `StructuredOutputTool`, and a Stop enforcement function hook so
+//!   `StructuredOutputTool`, and `requires_structured_output` enabled so
 //!   the child must produce `{ok, reason?}`. `{ok:false}` maps to a
 //!   blocking hook result (feedback prefixed `Agent hook condition was
 //!   not met: `); max-turn/no-output still maps to `Cancelled`. The

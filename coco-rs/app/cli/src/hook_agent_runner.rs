@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use coco_hooks::HookEvaluationResult;
 use coco_query::QueryEngineConfig;
@@ -65,13 +64,12 @@ async fn run_agent(
     request: HookAgentRunRequest,
 ) -> Result<HookEvaluationResult, String> {
     let tools = scoped_tool_registry(&runtime)?;
-    let hooks = scoped_hook_registry()?;
     let mut config = runtime.current_engine_config().await;
     configure_hook_agent(&mut config, &request);
 
     let cancel = CancellationToken::new();
     let engine = runtime
-        .build_engine_from_config_with_registries(config, cancel, tools, Some(hooks))
+        .build_engine_from_config_with_registries(config, cancel, tools, None)
         .await
         .with_model_runtime_source(request.model_source.clone());
 
@@ -116,30 +114,13 @@ fn is_agent_hook_disallowed_tool(id: &ToolId) -> bool {
     )
 }
 
-fn scoped_hook_registry() -> Result<Arc<coco_hooks::HookRegistry>, String> {
-    let registry = Arc::new(coco_hooks::HookRegistry::new());
-    registry
-        .register_function_hook(
-            format!("hook-agent-structured-output-{}", uuid::Uuid::new_v4()),
-            coco_types::HookEventType::Stop,
-            None,
-            Duration::from_millis(5_000),
-            Arc::new(coco_query::structured_output_enforcement::StructuredOutputEnforcement),
-            format!(
-                "You MUST call the {} tool to complete this request. Call this tool now.",
-                coco_types::ToolName::StructuredOutput.as_str()
-            ),
-        )
-        .map_err(|e| format!("failed to register hook-agent StructuredOutput Stop hook: {e}"))?;
-    Ok(registry)
-}
-
 fn configure_hook_agent(config: &mut QueryEngineConfig, request: &HookAgentRunRequest) {
     config.model_id = request.model_id.clone();
     config.permission_mode = coco_types::PermissionMode::Default;
     config.max_turns = Some(MAX_AGENT_HOOK_TURNS);
     config.total_token_budget = None;
     config.streaming_tool_execution = false;
+    config.requires_structured_output = true;
     config.is_non_interactive = true;
     config.avoid_permission_prompts = true;
     // Verifier framing replaces the inherited main-session prompt.

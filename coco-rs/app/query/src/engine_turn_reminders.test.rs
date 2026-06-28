@@ -104,6 +104,54 @@ fn workflow_keyword_matcher_ignores_code_and_paths() {
     ));
 }
 
+#[test]
+fn structured_output_enforcement_nudges_until_success() {
+    let mut history = coco_messages::MessageHistory::new();
+    history.push(coco_messages::create_user_message("answer as json"));
+
+    assert!(super::should_fire_structured_output_enforcement(
+        &history, true
+    ));
+
+    history.push(super::structured_output_enforcement_message());
+    assert!(
+        !super::should_fire_structured_output_enforcement(&history, true),
+        "sentinel nudge should dedupe within the current user-turn window"
+    );
+
+    history.push(coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_structured_output(
+            coco_messages::StructuredOutputPayload {
+                data: serde_json::json!({"answer": 42}),
+            },
+        ),
+    ));
+    assert!(
+        !super::should_fire_structured_output_enforcement(&history, true),
+        "schema-valid StructuredOutput attachment satisfies the contract"
+    );
+}
+
+#[test]
+fn structured_output_enforcement_resets_for_next_user_turn() {
+    let mut history = coco_messages::MessageHistory::new();
+    history.push(coco_messages::create_user_message("first"));
+    history.push(super::structured_output_enforcement_message());
+    assert!(!super::should_fire_structured_output_enforcement(
+        &history, true
+    ));
+
+    history.push(coco_messages::create_user_message("second"));
+    assert!(
+        super::should_fire_structured_output_enforcement(&history, true),
+        "a prior sentinel before the latest user turn must not suppress \
+         enforcement for the new request"
+    );
+    assert!(!super::should_fire_structured_output_enforcement(
+        &history, false
+    ));
+}
+
 #[async_trait]
 impl LanguageModel for CapturingTextModel {
     fn provider(&self) -> &str {

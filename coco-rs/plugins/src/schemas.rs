@@ -508,12 +508,31 @@ pub struct PluginMarketplace {
     pub name: String,
     pub owner: PluginAuthor,
     pub plugins: Vec<PluginMarketplaceEntry>,
+    /// Append-only map of old plugin name to current name, or null when removed.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_renames",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub renames: Option<HashMap<String, Option<String>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub force_remove_deleted_plugins: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MarketplaceMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_cross_marketplace_dependencies_on: Option<Vec<String>>,
+}
+
+fn deserialize_renames<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<HashMap<String, Option<String>>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(value) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_value(value).ok())
 }
 
 /// Optional marketplace metadata.

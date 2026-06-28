@@ -58,6 +58,7 @@ pub fn tool_input_summary(tool_name: &str, input: &Value) -> String {
         ToolName::Workflow => scalar_value(input, "name")
             .or_else(|| scalar_value(input, "scriptPath"))
             .unwrap_or_default(),
+        ToolName::StructuredOutput => structured_output_summary(input),
         ToolName::ApplyPatch => input
             .get("patch")
             .and_then(Value::as_str)
@@ -175,6 +176,42 @@ fn object_summary(input: &Value) -> String {
         Value::Null => String::new(),
         other => value_to_display(other).unwrap_or_default(),
     }
+}
+
+fn structured_output_summary(input: &Value) -> String {
+    let Some(obj) = input.as_object() else {
+        return json_value_preview(input);
+    };
+    if obj.is_empty() {
+        return String::new();
+    }
+
+    let keys = obj.keys().collect::<Vec<_>>();
+    if keys.len() <= 3 {
+        return keys
+            .iter()
+            .map(|key| format!("{key}: {}", structured_output_value_preview(&obj[*key])))
+            .collect::<Vec<_>>()
+            .join(", ");
+    }
+
+    format!(
+        "{} fields: {}…",
+        keys.len(),
+        keys.iter()
+            .take(3)
+            .map(|key| key.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn structured_output_value_preview(value: &Value) -> String {
+    json_value_preview(value)
+}
+
+fn json_value_preview(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
 }
 
 fn object_lines(input: &Value) -> Vec<String> {

@@ -212,12 +212,21 @@ fn test_api_retry_env_max_retries_overrides_settings() {
 }
 
 #[test]
-fn test_api_retry_env_max_retries_is_clamped() {
+fn test_api_retry_env_max_retries_is_clamped_to_lower_bound() {
     let env = EnvSnapshot::from_pairs([(EnvKey::CocoApiMaxRetries, "-4")]);
 
     let config = ApiConfig::resolve(&Settings::default(), &env);
 
     assert_eq!(config.retry.max_retries, 0);
+}
+
+#[test]
+fn test_api_retry_env_max_retries_is_clamped_to_upper_cap() {
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoApiMaxRetries, "99")]);
+
+    let config = ApiConfig::resolve(&Settings::default(), &env);
+
+    assert_eq!(config.retry.max_retries, 15);
 }
 
 #[test]

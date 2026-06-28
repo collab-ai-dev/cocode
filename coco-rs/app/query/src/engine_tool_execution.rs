@@ -11,6 +11,7 @@ use crate::ContinueReason;
 use crate::QueryResult;
 use crate::emit::emit_protocol;
 use crate::engine::QueryEngine;
+use crate::engine::RunArtifacts;
 use crate::engine_finalize_turn::TurnContinuation;
 use crate::engine_loop_state::LoopAccumulator;
 use crate::engine_loop_state::LoopConstants;
@@ -24,6 +25,10 @@ pub(crate) enum ToolExecutionBranch {
     Return(Box<QueryResult>),
 }
 
+#[cfg(test)]
+#[path = "engine_tool_execution.test.rs"]
+mod tests;
+
 /// #3 /  `toolUseBlocks.some(b => b.name === SLEEP_TOOL_NAME)`:
 /// did the just-executed batch include a Sleep tool? Gates the
 /// `later`-priority command-queue drain at the turn boundary.
@@ -31,6 +36,21 @@ fn tool_batch_ran_sleep(tool_calls: &[ToolCallPart]) -> bool {
     tool_calls
         .iter()
         .any(|tc| tc.tool_name == coco_types::ToolName::Sleep.as_str())
+}
+
+pub(crate) fn structured_output_recall_limit_reached(
+    requires_structured_output: bool,
+    artifacts: &RunArtifacts,
+) -> bool {
+    requires_structured_output
+        && artifacts.structured_output.is_some()
+        && artifacts.structured_output_attempts > 2
+}
+
+pub(crate) fn structured_output_failure_limit_reached(artifacts: &RunArtifacts) -> bool {
+    artifacts.structured_output.is_none()
+        && artifacts.structured_output_failed_attempts
+            >= crate::config::max_structured_output_retries()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -77,7 +97,16 @@ impl QueryEngine {
             if let Some(ref c) = streaming_ctx {
                 self.drain_nested_memory_triggers(c).await;
             }
-            let continuation = if streaming_control_prevent.is_some() {
+            let structured_output_recall_limit_reached = structured_output_recall_limit_reached(
+                self.config.requires_structured_output,
+                &acc.run_artifacts,
+            );
+            let structured_output_failure_limit_reached =
+                structured_output_failure_limit_reached(&acc.run_artifacts);
+            let continuation = if streaming_control_prevent.is_some()
+                || structured_output_recall_limit_reached
+                || structured_output_failure_limit_reached
+            {
                 TurnContinuation::Terminal
             } else {
                 TurnContinuation::Continuing
@@ -105,6 +134,32 @@ impl QueryEngine {
                     /*cancelled*/ true,
                     /*budget_exhausted*/ false,
                     Some("cancelled".into()),
+                    history.to_vec(),
+                    history.snapshot(),
+                )));
+            }
+            if structured_output_failure_limit_reached {
+                return ToolExecutionBranch::Return(Box::new(make_query_result(
+                    consts,
+                    &*acc,
+                    &*turn_state,
+                    response_text,
+                    /*cancelled*/ false,
+                    /*budget_exhausted*/ false,
+                    Some("error_max_structured_output_retries".into()),
+                    history.to_vec(),
+                    history.snapshot(),
+                )));
+            }
+            if structured_output_recall_limit_reached {
+                return ToolExecutionBranch::Return(Box::new(make_query_result(
+                    consts,
+                    &*acc,
+                    &*turn_state,
+                    response_text,
+                    /*cancelled*/ false,
+                    /*budget_exhausted*/ false,
+                    None,
                     history.to_vec(),
                     history.snapshot(),
                 )));
@@ -195,7 +250,20 @@ impl QueryEngine {
             .run_artifacts
             .structured_output_attempts
             .saturating_add(tool_run_outcome.structured_output_attempts);
-        let continuation = if tool_run_outcome.continue_after_tools {
+        acc.run_artifacts.structured_output_failed_attempts = acc
+            .run_artifacts
+            .structured_output_failed_attempts
+            .saturating_add(tool_run_outcome.structured_output_failed_attempts);
+        let structured_output_recall_limit_reached = structured_output_recall_limit_reached(
+            self.config.requires_structured_output,
+            &acc.run_artifacts,
+        );
+        let structured_output_failure_limit_reached =
+            structured_output_failure_limit_reached(&acc.run_artifacts);
+        let continuation = if tool_run_outcome.continue_after_tools
+            && !structured_output_recall_limit_reached
+            && !structured_output_failure_limit_reached
+        {
             TurnContinuation::Continuing
         } else {
             TurnContinuation::Terminal
@@ -234,6 +302,32 @@ impl QueryEngine {
                 /*cancelled*/ true,
                 /*budget_exhausted*/ false,
                 Some("cancelled".into()),
+                history.to_vec(),
+                history.snapshot(),
+            )));
+        }
+        if structured_output_failure_limit_reached {
+            return ToolExecutionBranch::Return(Box::new(make_query_result(
+                consts,
+                &*acc,
+                &*turn_state,
+                response_text,
+                /*cancelled*/ false,
+                /*budget_exhausted*/ false,
+                Some("error_max_structured_output_retries".into()),
+                history.to_vec(),
+                history.snapshot(),
+            )));
+        }
+        if structured_output_recall_limit_reached {
+            return ToolExecutionBranch::Return(Box::new(make_query_result(
+                consts,
+                &*acc,
+                &*turn_state,
+                response_text,
+                /*cancelled*/ false,
+                /*budget_exhausted*/ false,
+                None,
                 history.to_vec(),
                 history.snapshot(),
             )));

@@ -144,6 +144,10 @@ pub(super) fn handle(
         TuiOnlyEvent::RewindRestorePreviewReady { message_id, stats } => {
             on_restore_preview_ready(state, message_id, stats)
         }
+        TuiOnlyEvent::RewindPreClearSnapshot { messages } => {
+            state.session.rewind_pre_clear_messages = messages;
+            true
+        }
         TuiOnlyEvent::RewindCompleted {
             target_message_id,
             files_changed,
@@ -1008,6 +1012,37 @@ fn on_rewind_completed(
             if let coco_messages::Message::User(u) = target_cell.source.as_ref()
                 && let coco_messages::LlmMessage::User { content, .. } = &u.message
             {
+                for part in content {
+                    if let coco_messages::UserContent::File(f) = part
+                        && f.media_type.starts_with("image/")
+                        && let Some(data) = f.data.as_data()
+                        && let Some(bytes) = data.to_bytes()
+                    {
+                        restored_image = Some((bytes, f.media_type.clone()));
+                        break;
+                    }
+                }
+            }
+        }
+        if restored_input_text.is_none()
+            && let Some(coco_messages::Message::User(u)) = state
+                .session
+                .rewind_pre_clear_messages
+                .iter()
+                .find_map(|message| {
+                    (message
+                        .uuid()
+                        .is_some_and(|uuid| uuid.to_string() == target_message_id))
+                    .then(|| message.as_ref())
+                })
+        {
+            restored_permission_mode = u.permission_mode;
+            let raw = coco_messages::wrapping::extract_text_from_message(
+                &coco_messages::Message::User(u.clone()),
+            );
+            let stripped = crate::update_rewind::strip_ide_context_tags(&raw);
+            restored_input_text = Some(stripped).filter(|s| !s.is_empty());
+            if let coco_messages::LlmMessage::User { content, .. } = &u.message {
                 for part in content {
                     if let coco_messages::UserContent::File(f) = part
                         && f.media_type.starts_with("image/")

@@ -571,15 +571,14 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     }
 
     // SDK NDJSON is a non-interactive session. Inject the `StructuredOutput`
-    // tool + register its Stop function hook when `--json-schema` is
-    // set. Done post-SessionRuntime so the hook lands in the same
-    // `HookRegistry` the engine will dispatch from. TUI never reaches
-    // this branch (different code path in `tui_runner`).
-    coco_cli::headless::inject_structured_output_tool_if_requested(
-        cli,
-        session_runtime.tools(),
-        &session_runtime.hook_registry(),
-    )?;
+    // tool and enable the inline enforcement nudge when `--json-schema` is set.
+    // TUI never reaches this branch (different code path in `tui_runner`).
+    if coco_cli::headless::inject_structured_output_tool_if_requested(cli, session_runtime.tools())?
+    {
+        session_runtime
+            .update_engine_config(|cfg| cfg.requires_structured_output = true)
+            .await;
+    }
 
     // Late-binds shared with TUI/headless: task runtime, agent transcript
     // persistence, agent-team wiring, fork dispatcher.

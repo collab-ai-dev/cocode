@@ -329,6 +329,25 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
             is_current_prompt: false,
         });
     }
+    if rewindable.is_empty() {
+        for (i, message) in state.session.rewind_pre_clear_messages.iter().enumerate() {
+            let Message::User(user) = message.as_ref() else {
+                continue;
+            };
+            let raw = coco_messages::wrapping::extract_text_from_message(message.as_ref());
+            let display_text = display_text_for_rewind_row(&raw);
+            rewindable.push(RewindableMessage {
+                message_id: user.uuid,
+                message_index: i as i32,
+                display_text,
+                relative_time: format_relative_time_ago(now, timestamp_to_ms(&user.timestamp)),
+                permission_mode: user.permission_mode,
+                diff_stats: None,
+                can_restore_code: Some(false),
+                is_current_prompt: false,
+            });
+        }
+    }
 
     // Appends a synthetic current-prompt entry anchoring the default
     // selection to "now" — the user must move up to indicate intent to

@@ -159,6 +159,17 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
             parent_uuids.insert(p.clone());
         }
     }
+    let rewound_leaf_idx = metadata_entries.iter().rev().find_map(|entry| {
+        let Entry::Metadata(MetadataEntry::LastPrompt {
+            leaf_uuid: Some(leaf_uuid),
+            rewound: true,
+            ..
+        }) = entry
+        else {
+            return None;
+        };
+        by_uuid.get(leaf_uuid).copied()
+    });
 
     // Find leaves:
     // 1) terminal = entries whose uuid is no one's parent;
@@ -171,45 +182,16 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
     // persisted message round-trips.
     let any_parent_link = !parent_uuids.is_empty();
     let chain_indices: Vec<usize> = if any_parent_link {
-        let mut leaf_idxs: Vec<usize> = Vec::new();
-        let mut leaf_seen: HashSet<usize> = HashSet::new();
-        for (idx, terminal) in entries.iter().enumerate() {
-            if terminal.uuid.is_empty() || parent_uuids.contains(&terminal.uuid) {
-                continue;
-            }
-            // Walk back to nearest user/assistant ancestor.
-            let mut visited: HashSet<String> = HashSet::new();
-            let mut cursor = Some(idx);
-            while let Some(i) = cursor {
-                let entry = &entries[i];
-                if !entry.uuid.is_empty() && !visited.insert(entry.uuid.clone()) {
-                    break;
+        if let Some(idx) = rewound_leaf_idx {
+            walk_parent_chain_indices(&entries, &by_uuid, idx)
+        } else {
+            let mut leaf_idxs: Vec<usize> = Vec::new();
+            let mut leaf_seen: HashSet<usize> = HashSet::new();
+            for (idx, terminal) in entries.iter().enumerate() {
+                if terminal.uuid.is_empty() || parent_uuids.contains(&terminal.uuid) {
+                    continue;
                 }
-                if entry.entry_type == "user" || entry.entry_type == "assistant" {
-                    if leaf_seen.insert(i) {
-                        leaf_idxs.push(i);
-                    }
-                    break;
-                }
-                cursor = entry
-                    .parent_uuid
-                    .as_deref()
-                    .filter(|p| !p.is_empty())
-                    .and_then(|p| by_uuid.get(p).copied());
-            }
-        }
-        // First-wins tie-break: keep the first index whose timestamp
-        // strictly exceeds the running max (`t > maxTime`).
-        let leaf_idx = leaf_idxs
-            .into_iter()
-            .fold(None::<usize>, |best, idx| match best {
-                Some(b) if entries[idx].timestamp > entries[b].timestamp => Some(idx),
-                Some(b) => Some(b),
-                None => Some(idx),
-            });
-        match leaf_idx {
-            Some(idx) => {
-                let mut walked: Vec<usize> = Vec::new();
+                // Walk back to nearest user/assistant ancestor.
                 let mut visited: HashSet<String> = HashSet::new();
                 let mut cursor = Some(idx);
                 while let Some(i) = cursor {
@@ -217,20 +199,38 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
                     if !entry.uuid.is_empty() && !visited.insert(entry.uuid.clone()) {
                         break;
                     }
-                    walked.push(i);
+                    if entry.entry_type == "user" || entry.entry_type == "assistant" {
+                        if leaf_seen.insert(i) {
+                            leaf_idxs.push(i);
+                        }
+                        break;
+                    }
                     cursor = entry
                         .parent_uuid
                         .as_deref()
                         .filter(|p| !p.is_empty())
                         .and_then(|p| by_uuid.get(p).copied());
                 }
-                walked.reverse();
-                walked
             }
-            None => (0..entries.len()).collect(),
+            // First-wins tie-break: keep the first index whose timestamp
+            // strictly exceeds the running max (`t > maxTime`).
+            let leaf_idx = leaf_idxs
+                .into_iter()
+                .fold(None::<usize>, |best, idx| match best {
+                    Some(b) if entries[idx].timestamp > entries[b].timestamp => Some(idx),
+                    Some(b) => Some(b),
+                    None => Some(idx),
+                });
+            match leaf_idx {
+                Some(idx) => walk_parent_chain_indices(&entries, &by_uuid, idx),
+                None => (0..entries.len()).collect(),
+            }
         }
     } else {
-        (0..entries.len()).collect()
+        match rewound_leaf_idx {
+            Some(idx) => (0..=idx).collect(),
+            None => (0..entries.len()).collect(),
+        }
     };
     let chain_indices = recover_parallel_tool_branch_indices(&entries, chain_indices);
 
@@ -341,6 +341,30 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
         has_sidechain,
         mode: latest_mode,
     })
+}
+
+fn walk_parent_chain_indices(
+    entries: &[TranscriptEntry],
+    by_uuid: &HashMap<String, usize>,
+    leaf_idx: usize,
+) -> Vec<usize> {
+    let mut walked: Vec<usize> = Vec::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut cursor = Some(leaf_idx);
+    while let Some(i) = cursor {
+        let entry = &entries[i];
+        if !entry.uuid.is_empty() && !visited.insert(entry.uuid.clone()) {
+            break;
+        }
+        walked.push(i);
+        cursor = entry
+            .parent_uuid
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .and_then(|p| by_uuid.get(p).copied());
+    }
+    walked.reverse();
+    walked
 }
 
 fn is_transcript_message_type(entry_type: &str) -> bool {

@@ -474,6 +474,30 @@ max_version = "3.0.0"
     assert_eq!(manifest.max_version.as_deref(), Some("3.0.0"));
 }
 
+#[test]
+fn marketplace_renames_deserializes_and_ignores_malformed_map() {
+    let json = r#"{
+        "name": "mkt",
+        "owner": { "name": "owner" },
+        "plugins": [],
+        "renames": { "old": "new", "gone": null }
+    }"#;
+    let marketplace: PluginMarketplace = serde_json::from_str(json).expect("marketplace parses");
+    let renames = marketplace.renames.expect("renames");
+    assert_eq!(renames.get("old"), Some(&Some("new".to_string())));
+    assert_eq!(renames.get("gone"), Some(&None));
+
+    let malformed = r#"{
+        "name": "mkt",
+        "owner": { "name": "owner" },
+        "plugins": [],
+        "renames": ["not", "a", "map"]
+    }"#;
+    let marketplace: PluginMarketplace =
+        serde_json::from_str(malformed).expect("malformed renames should not reject marketplace");
+    assert!(marketplace.renames.is_none());
+}
+
 /// Helper to build a minimal valid manifest for test scenarios.
 fn make_minimal_manifest(name: &str) -> PluginManifestV2 {
     PluginManifestV2 {

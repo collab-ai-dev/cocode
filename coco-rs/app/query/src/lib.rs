@@ -56,7 +56,6 @@ mod session_state;
 pub mod single_turn;
 pub mod skill_runtime;
 pub mod stream_accumulator;
-pub mod structured_output_enforcement;
 pub mod test_support;
 mod tool_call_preparer;
 mod tool_call_runner;
