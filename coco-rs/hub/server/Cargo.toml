@@ -24,6 +24,7 @@ clap = { workspace = true, features = ["derive"] }
 coco-config.workspace = true
 coco-error.workspace = true
 coco-hub-protocol.workspace = true
+coco-paths.workspace = true
 coco-session.workspace = true
 coco-secret-redact.workspace = true
 coco-types.workspace = true
@@ -35,6 +36,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-coco-paths.workspace = true
 pretty_assertions.workspace = true
 tempfile.workspace = true

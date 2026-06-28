@@ -1,13 +1,15 @@
-use std::fs;
-use std::io::BufRead;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::DateTime;
 use chrono::Utc;
 use coco_hub_protocol::SCHEMA_VERSION_V1;
+use coco_session::DiskCatalog;
+use coco_session::Entry;
 use coco_session::MetadataEntry;
+use coco_session::SessionCatalog;
 use coco_session::TranscriptEntry;
 use coco_session::TranscriptMetadata;
 use coco_types::ToolName;
@@ -37,14 +39,23 @@ const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
 const MULTI_EDIT_TOOL: &str = "MultiEdit";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LocalSessionJsonStore {
     memory_base: PathBuf,
+    catalog: Arc<dyn SessionCatalog>,
 }
 
 impl LocalSessionJsonStore {
     pub fn new(memory_base: PathBuf) -> Self {
-        Self { memory_base }
+        let catalog = Arc::new(DiskCatalog::new(memory_base.clone()));
+        Self::with_catalog(memory_base, catalog)
+    }
+
+    pub fn with_catalog(memory_base: PathBuf, catalog: Arc<dyn SessionCatalog>) -> Self {
+        Self {
+            memory_base,
+            catalog,
+        }
     }
 
     fn list_instances_from_jsonl(
@@ -60,9 +71,15 @@ impl LocalSessionJsonStore {
     }
 
     fn all_instances_from_jsonl(&self) -> Result<Vec<InstanceRow>, EventStoreError> {
+        let mut groups = std::collections::BTreeMap::<String, Vec<TranscriptMetadata>>::new();
+        for meta in self.catalog.list_all()? {
+            let instance_id = self.instance_id_for_meta(&meta)?;
+            groups.entry(instance_id).or_default().push(meta);
+        }
+
         let mut rows = Vec::new();
-        for project_dir in self.project_dirs()? {
-            if let Some(row) = self.instance_for_project(&project_dir)? {
+        for (instance_id, metas) in groups {
+            if let Some(row) = self.instance_for_metadata_group(instance_id, metas)? {
                 rows.push(row);
             }
         }
@@ -74,10 +91,13 @@ impl LocalSessionJsonStore {
         &self,
         instance_id: &str,
     ) -> Result<Option<InstanceRow>, EventStoreError> {
-        let Some(project_dir) = self.project_dir(instance_id)? else {
+        if !is_safe_path_segment(instance_id) {
             return Ok(None);
-        };
-        self.instance_for_project(&project_dir)
+        }
+        Ok(self
+            .all_instances_from_jsonl()?
+            .into_iter()
+            .find(|row| row.instance_id == instance_id))
     }
 
     fn list_sessions_from_jsonl(
@@ -97,15 +117,15 @@ impl LocalSessionJsonStore {
         &self,
         instance_id: &str,
     ) -> Result<Vec<SessionRow>, EventStoreError> {
-        let Some(project_dir) = self.project_dir(instance_id)? else {
+        if !is_safe_path_segment(instance_id) {
             return Ok(Vec::new());
-        };
+        }
         let mut rows = Vec::new();
-        for transcript in transcript_files(&project_dir)? {
-            let Some(row) = session_row_from_file(instance_id, &transcript)? else {
+        for meta in self.catalog.list_all()? {
+            if self.instance_id_for_meta(&meta)? != instance_id {
                 continue;
-            };
-            rows.push(row);
+            }
+            rows.push(self.session_row_from_meta(instance_id, &meta)?);
         }
         rows.sort_by(|a, b| b.last_event_ts.cmp(&a.last_event_ts));
         Ok(rows)
@@ -116,20 +136,20 @@ impl LocalSessionJsonStore {
         instance_id: &str,
         session_id: &str,
     ) -> Result<Option<SessionRow>, EventStoreError> {
-        let Some(path) = self.transcript_path(instance_id, session_id)? else {
+        let Some(meta) = self.session_meta_for_instance(instance_id, session_id)? else {
             return Ok(None);
         };
-        session_row_from_file(instance_id, &path)
+        Ok(Some(self.session_row_from_meta(instance_id, &meta)?))
     }
 
     fn list_events_from_jsonl(&self, query: EventQuery) -> Result<Page<EventRow>, EventStoreError> {
         let Some(session_id) = query.session_id.as_deref() else {
             return Ok(Page::new(Vec::new()));
         };
-        let Some(path) = self.transcript_path(&query.instance_id, session_id)? else {
+        let Some(meta) = self.session_meta_for_instance(&query.instance_id, session_id)? else {
             return Ok(Page::new(Vec::new()));
         };
-        let mut rows = event_rows_from_file(&query.instance_id, session_id, &path)?;
+        let mut rows = self.event_rows_from_meta(&query.instance_id, &meta)?;
         rows.retain(|row| event_matches_filter(row, &query.filter));
         Ok(paginate_offset(
             rows,
@@ -164,13 +184,12 @@ impl LocalSessionJsonStore {
                 None => self.all_sessions_from_jsonl(&instance.instance_id)?,
             };
             for session in sessions {
-                let Some(path) =
-                    self.transcript_path(&instance.instance_id, &session.session_id)?
+                let Some(meta) =
+                    self.session_meta_for_instance(&instance.instance_id, &session.session_id)?
                 else {
                     continue;
                 };
-                let mut session_rows =
-                    event_rows_from_file(&instance.instance_id, &session.session_id, &path)?;
+                let mut session_rows = self.event_rows_from_meta(&instance.instance_id, &meta)?;
                 session_rows.retain(|row| event_matches_filter(row, &filter));
                 rows.append(&mut session_rows);
             }
@@ -188,14 +207,14 @@ impl LocalSessionJsonStore {
         ))
     }
 
-    fn instance_for_project(
+    fn instance_for_metadata_group(
         &self,
-        project_dir: &Path,
+        instance_id: String,
+        metas: Vec<TranscriptMetadata>,
     ) -> Result<Option<InstanceRow>, EventStoreError> {
-        let instance_id = file_name_string(project_dir)?;
-        let sessions = transcript_files(project_dir)?
-            .into_iter()
-            .filter_map(|path| session_row_from_file(&instance_id, &path).transpose())
+        let sessions = metas
+            .iter()
+            .map(|meta| self.session_row_from_meta(&instance_id, meta))
             .collect::<Result<Vec<_>, _>>()?;
         if sessions.is_empty() {
             return Ok(None);
@@ -204,7 +223,7 @@ impl LocalSessionJsonStore {
         let cwd = sessions
             .iter()
             .find_map(|session| session.cwd.clone())
-            .unwrap_or_else(|| project_dir.display().to_string());
+            .unwrap_or_else(|| instance_id.clone());
         let started_at = sessions
             .iter()
             .map(|session| session.started_at)
@@ -215,6 +234,10 @@ impl LocalSessionJsonStore {
             .map(|session| session.last_event_ts)
             .max()
             .unwrap_or(started_at);
+        let name = self
+            .project_dir(&instance_id)?
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| instance_id.clone());
 
         Ok(Some(InstanceRow {
             instance_id,
@@ -225,7 +248,7 @@ impl LocalSessionJsonStore {
             version: None,
             kind: "local_transcripts".to_string(),
             entrypoint: None,
-            name: Some(project_dir.display().to_string()),
+            name: Some(name),
             first_seen_at: started_at,
             last_seen_at,
             status: "offline".to_string(),
@@ -235,23 +258,69 @@ impl LocalSessionJsonStore {
         }))
     }
 
-    fn project_dirs(&self) -> Result<Vec<PathBuf>, EventStoreError> {
-        let projects_root = self.memory_base.join("projects");
-        let entries = match fs::read_dir(&projects_root) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(EventStoreError::Io(e)),
-        };
-
-        let mut dirs = Vec::new();
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                dirs.push(path);
-            }
+    fn session_meta_for_instance(
+        &self,
+        instance_id: &str,
+        session_id: &str,
+    ) -> Result<Option<TranscriptMetadata>, EventStoreError> {
+        if !is_safe_path_segment(instance_id) || !is_safe_path_segment(session_id) {
+            return Ok(None);
         }
-        Ok(dirs)
+        Ok(self.catalog.list_all()?.into_iter().find(|meta| {
+            meta.session_id == session_id
+                && self
+                    .instance_id_for_meta(meta)
+                    .is_ok_and(|derived| derived == instance_id)
+        }))
+    }
+
+    fn session_row_from_meta(
+        &self,
+        instance_id: &str,
+        meta: &TranscriptMetadata,
+    ) -> Result<SessionRow, EventStoreError> {
+        let entries = self.load_entries(meta)?;
+        let stats = transcript_stats_from_entries(&entries);
+        Ok(session_row_from_meta(
+            instance_id,
+            meta,
+            stats,
+            meta.file_size,
+        ))
+    }
+
+    fn event_rows_from_meta(
+        &self,
+        instance_id: &str,
+        meta: &TranscriptMetadata,
+    ) -> Result<Vec<EventRow>, EventStoreError> {
+        let entries = self.load_entries(meta)?;
+        Ok(event_rows_from_entries(
+            instance_id,
+            &meta.session_id,
+            &entries,
+        ))
+    }
+
+    fn load_entries(&self, meta: &TranscriptMetadata) -> Result<Vec<Entry>, EventStoreError> {
+        let cwd = meta.cwd.as_deref().unwrap_or_default();
+        let store = self.catalog.store_for(Path::new(cwd));
+        Ok(store.load_entries(&meta.session_id)?)
+    }
+
+    fn instance_id_for_meta(&self, meta: &TranscriptMetadata) -> Result<String, EventStoreError> {
+        if let Some(cwd) = meta.cwd.as_deref().filter(|cwd| !cwd.is_empty()) {
+            return Ok(coco_paths::ProjectSlug::for_path(Path::new(cwd))
+                .as_str()
+                .to_string());
+        }
+        if let Some(resolved) = self.catalog.resolve(&meta.session_id, None)?
+            && let Some(project_dir) = resolved.transcript_path.parent()
+            && let Some(name) = project_dir.file_name().and_then(|name| name.to_str())
+        {
+            return Ok(name.to_string());
+        }
+        Ok("unknown".to_string())
     }
 
     fn project_dir(&self, instance_id: &str) -> Result<Option<PathBuf>, EventStoreError> {
@@ -260,25 +329,6 @@ impl LocalSessionJsonStore {
         }
         let path = self.memory_base.join("projects").join(instance_id);
         if path.is_dir() {
-            Ok(Some(path))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn transcript_path(
-        &self,
-        instance_id: &str,
-        session_id: &str,
-    ) -> Result<Option<PathBuf>, EventStoreError> {
-        if !is_safe_path_segment(session_id) {
-            return Ok(None);
-        }
-        let Some(project_dir) = self.project_dir(instance_id)? else {
-            return Ok(None);
-        };
-        let path = project_dir.join(format!("{session_id}.jsonl"));
-        if path.is_file() {
             Ok(Some(path))
         } else {
             Ok(None)
@@ -402,23 +452,6 @@ impl EventStore for LocalSessionJsonStore {
     }
 }
 
-fn session_row_from_file(
-    instance_id: &str,
-    path: &Path,
-) -> Result<Option<SessionRow>, EventStoreError> {
-    let Some(session_id) = path.file_stem().and_then(|s| s.to_str()) else {
-        return Ok(None);
-    };
-    let meta = coco_session::storage::read_transcript_metadata_at(path, session_id)?;
-    let stats = transcript_stats(path)?;
-    Ok(Some(session_row_from_meta(
-        instance_id,
-        &meta,
-        stats,
-        path.metadata()?.len(),
-    )))
-}
-
 fn session_row_from_meta(
     instance_id: &str,
     meta: &TranscriptMetadata,
@@ -445,29 +478,29 @@ fn session_row_from_meta(
     }
 }
 
-fn event_rows_from_file(
+fn event_rows_from_entries(
     instance_id: &str,
     session_id: &str,
-    path: &Path,
-) -> Result<Vec<EventRow>, EventStoreError> {
-    let file = fs::File::open(path)?;
-    let reader = std::io::BufReader::new(file);
+    entries: &[Entry],
+) -> Vec<EventRow> {
     let mut rows = Vec::new();
-    for (index, line) in reader.lines().enumerate() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        rows.extend(event_rows_from_line(
+    for (index, entry) in entries.iter().enumerate() {
+        let payload = serde_json::to_value(entry).unwrap_or(serde_json::Value::Null);
+        let payload_size = serde_json::to_string(&payload)
+            .map(|line| line.len())
+            .unwrap_or(0);
+        rows.extend(event_rows_from_value(
             instance_id,
             session_id,
             index as i64,
-            &line,
+            payload,
+            payload_size,
         ));
     }
-    Ok(rows)
+    rows
 }
 
+#[cfg(test)]
 fn event_rows_from_line(
     instance_id: &str,
     session_id: &str,
@@ -476,6 +509,16 @@ fn event_rows_from_line(
 ) -> Vec<EventRow> {
     let payload = serde_json::from_str::<serde_json::Value>(line)
         .unwrap_or_else(|_| serde_json::Value::String(line.to_string()));
+    event_rows_from_value(instance_id, session_id, line_index, payload, line.len())
+}
+
+fn event_rows_from_value(
+    instance_id: &str,
+    session_id: &str,
+    line_index: i64,
+    payload: serde_json::Value,
+    payload_size: usize,
+) -> Vec<EventRow> {
     let transcript = serde_json::from_value::<TranscriptEntry>(payload.clone()).ok();
     let metadata = serde_json::from_value::<MetadataEntry>(payload.clone()).ok();
     let redacted_payload = redact_value(payload.clone());
@@ -522,7 +565,7 @@ fn event_rows_from_line(
             agent_id,
             payload: redacted_payload,
             block_payload: None,
-            payload_size: line.len(),
+            payload_size,
             analysis,
         })];
     };
@@ -543,7 +586,7 @@ fn event_rows_from_line(
             agent_id: agent_id.clone(),
             payload: redacted_payload.clone(),
             block_payload: Some(redacted_block),
-            payload_size: line.len(),
+            payload_size,
             analysis,
         }));
     }
@@ -561,7 +604,7 @@ fn event_rows_from_line(
             agent_id,
             payload: redacted_payload,
             block_payload: None,
-            payload_size: line.len(),
+            payload_size,
             analysis,
         }));
     }
@@ -658,29 +701,23 @@ struct TranscriptStats {
     last_seq: i64,
 }
 
-fn transcript_stats(path: &Path) -> Result<TranscriptStats, EventStoreError> {
-    let file = fs::File::open(path)?;
-    let reader = std::io::BufReader::new(file);
+fn transcript_stats_from_entries(entries: &[Entry]) -> TranscriptStats {
     let mut stats = TranscriptStats::default();
-    for (index, line) in reader.lines().enumerate() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
+    for (index, entry) in entries.iter().enumerate() {
         stats.last_seq = event_seq(index as i64, None);
-        let Ok(entry) = serde_json::from_str::<TranscriptEntry>(&line) else {
+        let Entry::Transcript(entry) = entry else {
             continue;
         };
         if stats.model.is_none() {
             stats.model.clone_from(&entry.model);
         }
-        if let Some(usage) = entry.usage {
+        if let Some(usage) = &entry.usage {
             stats.total_input_tokens += usage.input_tokens;
             stats.total_output_tokens += usage.output_tokens;
         }
         stats.total_cost_usd += entry.cost_usd.unwrap_or(0.0);
     }
-    Ok(stats)
+    stats
 }
 
 #[derive(Debug, Default)]
@@ -863,25 +900,6 @@ fn preview_for_tool_output(value: &serde_json::Value) -> Option<String> {
         .and_then(serde_json::Value::as_str)
         .or_else(|| value.as_str())
         .map(truncate_preview)
-}
-
-fn transcript_files(project_dir: &Path) -> Result<Vec<PathBuf>, EventStoreError> {
-    let mut files = Vec::new();
-    for entry in fs::read_dir(project_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
-            files.push(path);
-        }
-    }
-    Ok(files)
-}
-
-fn file_name_string(path: &Path) -> Result<String, EventStoreError> {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_string)
-        .ok_or_else(|| EventStoreError::InvalidProjectDir(path.to_path_buf()))
 }
 
 fn is_safe_path_segment(segment: &str) -> bool {
