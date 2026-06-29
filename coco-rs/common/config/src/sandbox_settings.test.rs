@@ -284,6 +284,7 @@ fn test_sandbox_settings_from_empty_json() {
     assert!(settings.network.allowed_domains.is_empty());
     assert!(settings.filesystem.deny_read.is_empty());
     assert!(settings.filesystem.allow_read.is_empty());
+    assert!(settings.credentials.is_none());
     assert_eq!(settings.mandatory_deny_search_depth, 3);
 }
 
@@ -313,6 +314,10 @@ fn test_sandbox_settings_nested_json() {
             "allow_local_binding": true,
             "http_proxy_port": 3128
         },
+        "credentials": {
+            "files": [{ "path": "~/.aws/credentials", "mode": "deny" }],
+            "envVars": [{ "name": "AWS_SECRET_ACCESS_KEY", "mode": "deny" }]
+        },
         "allow_pty": true,
         "mandatory_deny_search_depth": 5
     }"#;
@@ -338,6 +343,14 @@ fn test_sandbox_settings_nested_json() {
     );
     assert!(settings.network.allow_local_binding);
     assert_eq!(settings.network.http_proxy_port, Some(3128));
+    let credentials = settings.credentials.expect("credentials parsed");
+    assert_eq!(
+        credentials.files[0].path,
+        PathBuf::from("~/.aws/credentials")
+    );
+    assert_eq!(credentials.files[0].mode, CredentialAccessMode::Deny);
+    assert_eq!(credentials.env_vars[0].name, "AWS_SECRET_ACCESS_KEY");
+    assert_eq!(credentials.env_vars[0].mode, CredentialAccessMode::Deny);
     assert!(settings.allow_pty);
     assert_eq!(settings.mandatory_deny_search_depth, 5);
 }
@@ -695,6 +708,70 @@ fn test_sourced_filesystem_allow_read_groups_by_source() {
 }
 
 #[test]
+fn test_sourced_sandbox_credentials_resolves_paths_by_source() {
+    use crate::settings::SettingsWithSource;
+    use crate::settings::source::SettingSource;
+
+    let user_raw = serde_json::json!({
+        "sandbox": {
+            "credentials": {
+                "files": [{ "path": "tokens/user.json", "mode": "deny" }],
+                "envVars": [{ "name": "USER_TOKEN", "mode": "deny" }]
+            }
+        }
+    });
+    let project_raw = serde_json::json!({
+        "sandbox": {
+            "credentials": {
+                "files": [{ "path": "secrets/project.json", "mode": "deny" }],
+                "envVars": [{ "name": "PROJECT_TOKEN", "mode": "deny" }]
+            }
+        }
+    });
+    let mut per_source = std::collections::HashMap::new();
+    per_source.insert(SettingSource::User, user_raw);
+    per_source.insert(SettingSource::Project, project_raw);
+    let mut source_paths = std::collections::HashMap::new();
+    source_paths.insert(
+        SettingSource::User,
+        PathBuf::from("/home/me")
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("settings.json"),
+    );
+    source_paths.insert(
+        SettingSource::Project,
+        PathBuf::from("/repo")
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("settings.json"),
+    );
+    let swith = SettingsWithSource {
+        merged: Settings::default(),
+        per_source,
+        source_paths,
+    };
+
+    let credentials = swith
+        .sourced_sandbox_credentials(Path::new("/fallback"))
+        .expect("credentials");
+    let paths: Vec<PathBuf> = credentials.files.iter().map(|f| f.path.clone()).collect();
+    assert!(
+        paths.contains(
+            &PathBuf::from("/home/me")
+                .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                .join("tokens/user.json")
+        )
+    );
+    assert!(paths.contains(&PathBuf::from("/repo/secrets/project.json")));
+    let env_names: Vec<&str> = credentials
+        .env_vars
+        .iter()
+        .map(|v| v.name.as_str())
+        .collect();
+    assert!(env_names.contains(&"USER_TOKEN"));
+    assert!(env_names.contains(&"PROJECT_TOKEN"));
+}
+
+#[test]
 fn test_sourced_helpers_handle_missing_keys_gracefully() {
     use crate::settings::SettingsWithSource;
     use crate::settings::source::SettingSource;
@@ -714,4 +791,9 @@ fn test_sourced_helpers_handle_missing_keys_gracefully() {
     assert!(deny.is_empty());
     assert!(ask.is_empty());
     assert!(swith.sourced_filesystem_allow_read().is_empty());
+    assert!(
+        swith
+            .sourced_sandbox_credentials(Path::new("/proj"))
+            .is_none()
+    );
 }

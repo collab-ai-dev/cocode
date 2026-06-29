@@ -195,6 +195,12 @@ async fn main() -> Result<()> {
                         }
                     }
                     McpAction::Remove { name } => println!("Removing MCP server: {name}"),
+                    McpAction::Login { name, no_browser } => {
+                        return coco_cli::mcp_cli::run_login(name, *no_browser).await;
+                    }
+                    McpAction::Logout { name } => {
+                        return coco_cli::mcp_cli::run_logout(name).await;
+                    }
                 }
                 return Ok(());
             }

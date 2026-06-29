@@ -19,6 +19,34 @@ fn headers_helper_output_must_be_string_map() {
     assert!(err.to_string().contains("non-string"));
 }
 
+#[test]
+fn resource_directory_read_capability_reads_skills_extension() {
+    let capabilities: ServerCapabilities = serde_json::from_value(serde_json::json!({
+        "resources": {
+            "extensions": {
+                "io.modelcontextprotocol/skills": {
+                    "directoryRead": true
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    assert!(server_supports_resource_directory_read(&capabilities));
+}
+
+#[test]
+fn resource_directory_read_capability_accepts_top_level_compat_field() {
+    let capabilities: ServerCapabilities = serde_json::from_value(serde_json::json!({
+        "resources": {
+            "directoryRead": true
+        }
+    }))
+    .unwrap();
+
+    assert!(server_supports_resource_directory_read(&capabilities));
+}
+
 #[tokio::test]
 async fn resolve_http_headers_dynamic_overrides_static() {
     let headers = resolve_http_headers(
@@ -183,6 +211,125 @@ fn register_http(
         scope: crate::types::ConfigScope::User,
         plugin_source: None,
     });
+}
+
+fn register_http_with_headers_helper(manager: &mut McpConnectionManager, name: &str) {
+    manager.register_server(crate::types::ScopedMcpServerConfig {
+        name: name.into(),
+        config: crate::types::McpServerConfig::Http(crate::types::McpHttpConfig {
+            url: "https://mcp.example.test/api".into(),
+            headers: Default::default(),
+            headers_helper: Some("printf '{}'".into()),
+            oauth: None,
+        }),
+        scope: crate::types::ConfigScope::User,
+        plugin_source: None,
+    });
+}
+
+#[test]
+fn tool_idle_timeout_is_remote_only_and_clamped_to_overall_timeout() {
+    let runtime = coco_config::McpRuntimeConfig {
+        tool_timeout_ms: Some(2_000),
+        tool_idle_timeout_ms: Some(10_000),
+    };
+    let manager = McpConnectionManager::new_with_runtime_config(std::env::temp_dir(), &runtime);
+
+    assert_eq!(manager.tool_timeout_ms(), 2_000);
+    assert_eq!(manager.tool_idle_timeout_ms(), 10_000);
+
+    let http = crate::types::McpServerConfig::Http(crate::types::McpHttpConfig {
+        url: "https://mcp.example.test/api".into(),
+        headers: Default::default(),
+        headers_helper: None,
+        oauth: None,
+    });
+    assert_eq!(
+        manager.effective_tool_idle_timeout(&http),
+        Some(std::time::Duration::from_millis(2_000))
+    );
+
+    let stdio = crate::types::McpServerConfig::Stdio(crate::types::McpStdioConfig {
+        command: "echo".into(),
+        args: vec![],
+        env: Default::default(),
+        cwd: None,
+    });
+    assert_eq!(manager.effective_tool_idle_timeout(&stdio), None);
+}
+
+#[test]
+fn tool_idle_timeout_zero_disables_remote_idle_watchdog() {
+    let runtime = coco_config::McpRuntimeConfig {
+        tool_timeout_ms: Some(2_000),
+        tool_idle_timeout_ms: Some(0),
+    };
+    let manager = McpConnectionManager::new_with_runtime_config(std::env::temp_dir(), &runtime);
+    let http = crate::types::McpServerConfig::Http(crate::types::McpHttpConfig {
+        url: "https://mcp.example.test/api".into(),
+        headers: Default::default(),
+        headers_helper: None,
+        oauth: None,
+    });
+
+    assert_eq!(manager.tool_idle_timeout_ms(), 0);
+    assert_eq!(manager.effective_tool_idle_timeout(&http), None);
+}
+
+#[test]
+fn tool_call_auth_reconnect_requires_headers_helper_and_401_or_403() {
+    let mut manager = McpConnectionManager::new(std::env::temp_dir());
+    register_http_with_headers_helper(&mut manager, "remote");
+    register_http(&mut manager, "plain", None);
+
+    assert!(manager.should_reconnect_tool_call_auth_error(
+        "remote",
+        &McpClientError::ToolCallHttpStatus {
+            status: 401,
+            message: "unauthorized".into(),
+        }
+    ));
+    assert!(manager.should_reconnect_tool_call_auth_error(
+        "remote",
+        &McpClientError::ToolCallHttpStatus {
+            status: 403,
+            message: "forbidden".into(),
+        }
+    ));
+    assert!(!manager.should_reconnect_tool_call_auth_error(
+        "remote",
+        &McpClientError::ToolCallHttpStatus {
+            status: 500,
+            message: "server error".into(),
+        }
+    ));
+    assert!(!manager.should_reconnect_tool_call_auth_error(
+        "plain",
+        &McpClientError::ToolCallHttpStatus {
+            status: 401,
+            message: "unauthorized".into(),
+        }
+    ));
+}
+
+#[tokio::test]
+async fn discovery_retry_list_retries_transient_failure_once() {
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let result = retry_discovery_list("remote", "tools/list", || {
+        let attempts = std::sync::Arc::clone(&attempts);
+        async move {
+            if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                Err(RmcpClientError::generic("temporary network failure"))
+            } else {
+                Ok("ok")
+            }
+        }
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(result, "ok");
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
 #[test]

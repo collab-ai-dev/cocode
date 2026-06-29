@@ -3,8 +3,24 @@
 //! Each event carries structured attributes emitted via `tracing::info!`
 //! and picked up by the OTel pipeline.
 
+use chrono::SecondsFormat;
+use chrono::Utc;
+use coco_config::EnvKey;
+use coco_config::env::is_env_truthy;
+use coco_config::env::log_assistant_responses_enabled;
+use coco_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 use std::collections::HashMap;
+
+pub(crate) const TELEMETRY_CONTENT_LIMIT_BYTES: usize = 60 * 1024;
+pub(crate) const TELEMETRY_TRUNCATION_MARKER: &str = "\n\n[TRUNCATED - Content exceeds 60KB limit]";
+pub(crate) const REDACTED: &str = "<REDACTED>";
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AssistantResponsePayload {
+    pub(crate) response_length: i64,
+    pub(crate) response: String,
+}
 
 /// Application event types (L3 — application-level analytics).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -30,6 +46,7 @@ pub enum AppEventType {
     // ── Model/inference ──
     ApiRequest,
     ApiResponse,
+    AssistantResponse,
     ApiError,
     ApiRetry,
     ModelSwitch,
@@ -89,6 +106,7 @@ impl AppEventType {
             Self::ToolPermissionAllowed => "tool_permission_allowed",
             Self::ApiRequest => "api_request",
             Self::ApiResponse => "api_response",
+            Self::AssistantResponse => "assistant_response",
             Self::ApiError => "api_error",
             Self::ApiRetry => "api_retry",
             Self::ModelSwitch => "model_switch",
@@ -288,6 +306,34 @@ pub fn emit_api_request(model: &str, input_tokens: i64, output_tokens: i64, cost
     );
 }
 
+/// Emit an assistant-response event for a completed model turn.
+///
+/// Mirrors Claude Code v2.1.193: tool-only/empty text does not emit; response
+/// body logging is controlled by
+/// `OTEL_LOG_ASSISTANT_RESPONSES ?? OTEL_LOG_USER_PROMPTS`.
+pub fn emit_assistant_response(
+    response_text: &str,
+    model: &str,
+    request_id: Option<&str>,
+    query_source: &str,
+) {
+    let log_user_prompts = is_env_truthy(EnvKey::OtelLogUserPrompts);
+    let Some(payload) = build_assistant_response_payload(response_text, log_user_prompts) else {
+        return;
+    };
+
+    tracing::event!(
+        tracing::Level::INFO,
+        event.name = "codex.assistant_response",
+        event.timestamp = %timestamp(),
+        model = %model,
+        response_length = payload.response_length,
+        response = %payload.response,
+        request_id = request_id,
+        query_source = %query_source,
+    );
+}
+
 /// Emit a slash command event.
 pub fn emit_slash_command(command_name: &str) {
     emit_event(&AppEvent::new(AppEventType::SlashCommand).with_str("command", command_name));
@@ -301,6 +347,42 @@ pub fn emit_subagent_spawn(agent_id: &str, agent_type: &str, model: &str) {
             .with_str("agent_type", agent_type)
             .with_str("model", model),
     );
+}
+
+pub(crate) fn build_assistant_response_payload(
+    response_text: &str,
+    log_user_prompts: bool,
+) -> Option<AssistantResponsePayload> {
+    if response_text.is_empty() {
+        return None;
+    }
+
+    let response = if log_assistant_responses_enabled(log_user_prompts) {
+        truncate_for_telemetry(response_text)
+    } else {
+        REDACTED.to_string()
+    };
+
+    Some(AssistantResponsePayload {
+        response_length: response_text.encode_utf16().count() as i64,
+        response,
+    })
+}
+
+fn truncate_for_telemetry(content: &str) -> String {
+    if content.len() <= TELEMETRY_CONTENT_LIMIT_BYTES {
+        return content.to_string();
+    }
+
+    format!(
+        "{}{}",
+        take_bytes_at_char_boundary(content, TELEMETRY_CONTENT_LIMIT_BYTES),
+        TELEMETRY_TRUNCATION_MARKER
+    )
+}
+
+fn timestamp() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 #[cfg(test)]

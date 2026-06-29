@@ -2488,6 +2488,14 @@ class TuiOnlyEventSandboxApprovalRequired(BaseModel):
     request_id: str
 
 
+class TuiOnlyEventAutoModeDenied(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["auto_mode_denied"] = Field(default="auto_mode_denied", alias="type")
+    display: str
+    reason: str
+    tool_name: str
+
+
 class TuiOnlyEventPermissionExplanationReady(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["permission_explanation_ready"] = Field(
@@ -2911,6 +2919,7 @@ TuiOnlyEvent = Annotated[
         TuiOnlyEventQuestionAsked,
         TuiOnlyEventElicitationRequested,
         TuiOnlyEventSandboxApprovalRequired,
+        TuiOnlyEventAutoModeDenied,
         TuiOnlyEventPermissionExplanationReady,
         TuiOnlyEventPluginDataReady,
         TuiOnlyEventOutputStylesReady,
@@ -3022,11 +3031,15 @@ class WorkflowProgressEventWorkflowAgent(BaseModel):
     cached: bool = False
     duration_ms: int | None = Field(default=None, alias="durationMs")
     error: str | None = None
+    last_progress_at: int | None = Field(default=None, alias="lastProgressAt")
     model: str | None = None
     phase_index: int | None = Field(default=None, alias="phaseIndex")
     phase_title: str | None = Field(default=None, alias="phaseTitle")
     prompt_preview: str | None = Field(default=None, alias="promptPreview")
+    queued_at: int | None = Field(default=None, alias="queuedAt")
     result_preview: str | None = Field(default=None, alias="resultPreview")
+    skipped: bool = False
+    started_at: int | None = Field(default=None, alias="startedAt")
     tokens: int | None = None
     tool_calls: int | None = Field(default=None, alias="toolCalls")
 
@@ -5012,6 +5025,23 @@ class PluginDialogPayload(BaseModel):
     errors: list[PluginDialogErrorRow]
     installed: list[PluginDialogInstalledRow]
     marketplaces: list[PluginDialogMarketplaceRow]
+    skills: list[PluginDialogSkillRow] = []
+
+
+class PluginDialogSkillRow(BaseModel):
+    description: str
+    id: str
+    name: str
+    override_state: SkillOverrideState
+    source: SkillsDialogSource
+    token_estimate: int
+    lock_source: SkillLockSource | None = None
+    usage: PluginDialogSkillUsage | None = None
+
+
+class PluginDialogSkillUsage(BaseModel):
+    count: int
+    days_since_use: int
 
 
 class PluginInit(BaseModel):

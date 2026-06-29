@@ -35,6 +35,8 @@ pub struct OtelEventMetadata {
     pub(crate) account_email: Option<String>,
     pub(crate) provider: String,
     pub(crate) model: String,
+    /// Whether user prompt body logging is enabled. Assistant response body
+    /// logging inherits this when `OTEL_LOG_ASSISTANT_RESPONSES` is unset.
     pub(crate) log_user_prompts: bool,
     pub(crate) app_version: &'static str,
     pub(crate) terminal_type: String,

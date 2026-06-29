@@ -522,6 +522,9 @@ fn agent_event(
         phase_index: None,
         agent_id: None,
         model: details.model,
+        started_at: None,
+        queued_at: None,
+        last_progress_at: None,
         tokens: details.tokens,
         tool_calls: details.tool_calls,
         duration_ms: details.duration_ms,
@@ -529,6 +532,7 @@ fn agent_event(
         result_preview: details.result_preview,
         prompt_preview: None,
         error: details.error,
+        skipped: false,
     }
 }
 

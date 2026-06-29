@@ -575,6 +575,9 @@ fn workflow_progress_events_use_ts_wire_shape() {
             phase_index: Some(0),
             agent_id: Some("a123".into()),
             model: Some("claude-opus-4-8".into()),
+            started_at: Some(1_700_000_000_000),
+            queued_at: Some(1_699_999_999_000),
+            last_progress_at: Some(1_700_000_001_000),
             tokens: Some(42),
             tool_calls: Some(3),
             duration_ms: Some(1000),
@@ -582,6 +585,7 @@ fn workflow_progress_events_use_ts_wire_shape() {
             result_preview: Some("ok".into()),
             prompt_preview: Some("do the thing".into()),
             error: None,
+            skipped: false,
         },
         WorkflowProgressEvent::WorkflowLog {
             message: "hello".into(),
@@ -601,12 +605,16 @@ fn workflow_progress_events_use_ts_wire_shape() {
                 "phaseIndex": 0,
                 "agentId": "a123",
                 "model": "claude-opus-4-8",
+                "startedAt": 1700000000000i64,
+                "queuedAt": 1699999999000i64,
+                "lastProgressAt": 1700000001000i64,
                 "tokens": 42,
                 "toolCalls": 3,
                 "durationMs": 1000,
                 "cached": true,
                 "resultPreview": "ok",
-                "promptPreview": "do the thing"
+                "promptPreview": "do the thing",
+                "skipped": false
             },
             {"type": "workflow_log", "message": "hello"}
         ])

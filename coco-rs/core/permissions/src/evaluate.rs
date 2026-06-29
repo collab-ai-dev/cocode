@@ -52,6 +52,9 @@ pub struct PermissionEvaluationOptions {
     pub sandbox_auto_allow_bash: bool,
     /// Effective Bash cwd for cwd-sensitive permission suggestions.
     pub shell_cwd: Option<String>,
+    /// Auto-mode `classifyAllShell`: temporarily ignore Bash/PowerShell allow
+    /// rules so shell calls fall through to Ask and then the classifier.
+    pub suspend_shell_allow_rules: bool,
 }
 
 /// Permission evaluator. Implements the multi-step evaluation pipeline.
@@ -239,6 +242,17 @@ impl PermissionEvaluator {
         for source in RULE_PRIORITY_ORDER {
             if let Some(rules) = context.allow_rules.get(source) {
                 for rule in rules {
+                    if options.suspend_shell_allow_rules && is_shell_tool(&rule.value.tool_pattern)
+                    {
+                        tracing::debug!(
+                            tool_name = %tool_str,
+                            rule_source = ?source,
+                            rule_pattern = %rule.value.tool_pattern,
+                            rule_content = ?rule.value.rule_content,
+                            "permission_eval: shell allow rule suspended for auto-mode classifier",
+                        );
+                        continue;
+                    }
                     if !central_rule_applies(
                         rule,
                         &tool_str,
@@ -716,6 +730,7 @@ fn is_read_only_tool(tool_name: &str) -> bool {
         ToolName::ToolSearch.as_str(),
         // MCP read-only
         ToolName::ListMcpResources.as_str(),
+        ToolName::ReadMcpResourceDir.as_str(),
         ToolName::ReadMcpResource.as_str(),
         // Task management (metadata only)
         ToolName::TodoWrite.as_str(),

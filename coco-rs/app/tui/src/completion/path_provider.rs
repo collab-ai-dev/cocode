@@ -52,7 +52,7 @@ impl PathCompletionManager {
 
         let mode = match key.kind {
             SuggestionKind::Directory => PathMode::DirectoriesOnly,
-            SuggestionKind::Path => PathMode::FilesAndDirectories,
+            SuggestionKind::Path | SuggestionKind::BashPath => PathMode::FilesAndDirectories,
             _ => return,
         };
         let tx = self.event_tx.clone();

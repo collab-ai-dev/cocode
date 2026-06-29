@@ -7761,7 +7761,7 @@
       ]
     },
     "WorkflowProgressEvent": {
-      "description": "Typed workflow progress payload carried by `task/progress`.",
+      "description": "Typed workflow progress payload carried by `task/progress`.\nMirrors Claude's workflow progress wire shape. `WorkflowAgent` is much\nlarger than phase/log events, but boxing the variant fields would add\nindirection to every producer and consumer of this serde payload for no\npractical win: values are stored in task progress vectors and rendered or\nforwarded, not packed into hot inner-loop collections.",
       "oneOf": [
         {
           "type": "object",
@@ -7798,6 +7798,14 @@
             "label": {
               "type": "string"
             },
+            "lastProgressAt": {
+              "description": "Epoch millis for the latest observed progress heartbeat.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
             "model": {
               "description": "Resolved model id for the subagent.",
               "type": [
@@ -7825,12 +7833,33 @@
                 "null"
               ]
             },
+            "queuedAt": {
+              "description": "Epoch millis when the agent entered the workflow queue.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            },
             "resultPreview": {
               "description": "Truncated preview of the subagent result.",
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "skipped": {
+              "description": "Error events produced by a user skip are displayed separately\nfrom ordinary failures.",
+              "type": "boolean",
+              "default": false
+            },
+            "startedAt": {
+              "description": "Epoch millis when the agent started running.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
             },
             "state": {
               "$ref": "#/$defs/WorkflowAgentState"

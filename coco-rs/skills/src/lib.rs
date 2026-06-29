@@ -21,6 +21,9 @@ pub use shell_exec::NoOpBashToolHandle;
 // further down; just listed here as a reminder it is part of the
 // public surface used by the `/skills` dialog payload builder.
 
+const SKILL_LOAD_DIR_FEATURE: &str = "skill_load_dir";
+const SKILL_LOAD_YAML_FAILED: &str = "skill_load_yaml_failed";
+
 /// Crate-local Result alias. Default error type is `SkillsError` but the
 /// generic stays open so `Result::ok` / 2-arg `Result<T, E>` callsites
 /// (e.g. `entries.filter_map(Result::ok)` over `io::Error`) still resolve
@@ -172,6 +175,16 @@ impl SkillDefinition {
 
 fn default_true() -> bool {
     true
+}
+
+fn emit_tengu_feature_sad(feature_name: &'static str, error_code: &'static str) {
+    tracing::info!(
+        target: "coco_skills::telemetry",
+        event_type = "tengu_feature_sad",
+        feature_name,
+        error_code,
+        "feature sad"
+    );
 }
 
 /// Where a skill was loaded from.
@@ -972,6 +985,16 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
     let name = derive_skill_name_from_path(path)?;
 
     let frontmatter = coco_frontmatter::parse(content);
+    if let Some(parse_error) = &frontmatter.parse_error {
+        tracing::error!(
+            path = %path.display(),
+            error = %parse_error,
+            "[skills] YAML frontmatter in {} failed to parse and was ignored: {}",
+            path.display(),
+            parse_error
+        );
+        emit_tengu_feature_sad(SKILL_LOAD_DIR_FEATURE, SKILL_LOAD_YAML_FAILED);
+    }
     let data = &frontmatter.data;
 
     // Look up a key under any of several aliases (kebab + snake variants).

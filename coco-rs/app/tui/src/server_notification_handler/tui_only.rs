@@ -197,6 +197,21 @@ pub(super) fn handle(
             ));
             true
         }
+        TuiOnlyEvent::AutoModeDenied {
+            tool_name,
+            display,
+            reason,
+        } => {
+            state
+                .ui
+                .record_recent_denial(tool_name.clone(), display, reason.clone());
+            state
+                .ui
+                .add_toast(Toast::warning(crate::app::auto_mode_denied_toast_message(
+                    &tool_name, &reason,
+                )));
+            true
+        }
         TuiOnlyEvent::PermissionExplanationReady {
             request_id,
             explanation,
@@ -521,12 +536,13 @@ pub(super) fn handle(
         // rule / directory data in place (preserving the focused tab +
         // cursors) rather than queueing a stale duplicate modal.
         TuiOnlyEvent::OpenPermissionsEditor { payload } => {
+            let recent_denials = state.ui.recent_denials_snapshot();
             if let Some(ModalState::PermissionsEditor(existing)) = state.ui.modal.as_mut() {
                 existing.refresh_from_payload(payload);
             } else {
-                state.ui.show_modal(ModalState::PermissionsEditor(
-                    crate::state::PermissionsEditorState::from_payload(payload),
-                ));
+                let mut editor = crate::state::PermissionsEditorState::from_payload(payload);
+                editor.set_recent_denials(recent_denials);
+                state.ui.show_modal(ModalState::PermissionsEditor(editor));
             }
             true
         }

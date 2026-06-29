@@ -522,6 +522,9 @@ fn task_progress_merges_workflow_delta_and_cumulative_batches() {
         phase_index: Some(0),
         agent_id: None,
         model: None,
+        started_at: None,
+        queued_at: None,
+        last_progress_at: None,
         tokens: None,
         tool_calls: None,
         duration_ms: None,
@@ -529,6 +532,7 @@ fn task_progress_merges_workflow_delta_and_cumulative_batches() {
         result_preview: None,
         prompt_preview: None,
         error: None,
+        skipped: false,
     };
 
     let mut first = progress_params("wf_123", None, Vec::new());
@@ -606,6 +610,9 @@ fn task_progress_localizes_workflow_agent_summary() {
         phase_index: None,
         agent_id: None,
         model: None,
+        started_at: None,
+        queued_at: None,
+        last_progress_at: None,
         tokens: None,
         tool_calls: None,
         duration_ms: None,
@@ -613,6 +620,7 @@ fn task_progress_localizes_workflow_agent_summary() {
         result_preview: None,
         prompt_preview: None,
         error: None,
+        skipped: false,
     }];
     super::handle(
         &mut state,

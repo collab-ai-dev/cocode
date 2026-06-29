@@ -2630,6 +2630,10 @@ impl SessionRuntime {
                 environment: c.environment.clone(),
                 classifier_mode: c.classifier_mode,
                 classifier_unavailable_fail_open: c.classifier_unavailable_fail_open,
+                classify_all_shell: self
+                    .runtime_config
+                    .settings
+                    .auto_mode_classify_all_shell_enabled(),
             })
             .unwrap_or_default();
         engine = engine.with_auto_mode(
@@ -3954,6 +3958,9 @@ pub(crate) async fn build_sandbox_state(
     let (sourced_allow_rules, _sourced_deny_rules, _sourced_ask_rules) =
         runtime_config.settings.sourced_permission_rules();
     let sourced_fs_allow_read = runtime_config.settings.sourced_filesystem_allow_read();
+    let sourced_sandbox_credentials = runtime_config
+        .settings
+        .sourced_sandbox_credentials(&settings_root);
 
     // Deny writes to every settings source so a sandboxed command can't edit
     // its own permission rules (or disable the sandbox), plus the `project config dir/`
@@ -3974,6 +3981,7 @@ pub(crate) async fn build_sandbox_state(
         worktree_main_repo: worktree.as_deref(),
         sourced_permission_allow_rules: Some(&sourced_allow_rules),
         sourced_filesystem_allow_read: Some(&sourced_fs_allow_read),
+        sourced_sandbox_credentials: sourced_sandbox_credentials.as_ref(),
     };
     let out = coco_sandbox::build_runtime_config(inputs);
     // `allow_network == false` means network is isolated (the safe default once

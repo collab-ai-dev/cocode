@@ -77,6 +77,103 @@ fn test_plan_mode_clear_context_can_be_disabled() {
 }
 
 #[test]
+fn test_parse_settings_accepts_auto_mode_classify_all_shell_camel_case() {
+    let settings = parse_settings(
+        r#"{
+            "autoMode": {
+                "classifyAllShell": true
+            }
+        }"#,
+    )
+    .expect("parse autoMode settings");
+
+    assert!(
+        settings
+            .auto_mode
+            .expect("autoMode parsed")
+            .classify_all_shell
+    );
+}
+
+#[test]
+fn test_classify_all_shell_is_or_across_sources() {
+    let mut per_source = std::collections::HashMap::new();
+    per_source.insert(
+        SettingSource::User,
+        serde_json::json!({
+            "auto_mode": { "classify_all_shell": true }
+        }),
+    );
+    per_source.insert(
+        SettingSource::Policy,
+        serde_json::json!({
+            "autoMode": { "classifyAllShell": false }
+        }),
+    );
+    let settings = SettingsWithSource {
+        merged: Settings {
+            auto_mode: Some(AutoModeConfig {
+                classify_all_shell: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        per_source,
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    assert!(settings.auto_mode_classify_all_shell_enabled());
+}
+
+#[test]
+fn test_classify_all_shell_ignores_project_source() {
+    let mut per_source = std::collections::HashMap::new();
+    per_source.insert(
+        SettingSource::Project,
+        serde_json::json!({
+            "autoMode": { "classifyAllShell": true }
+        }),
+    );
+    let settings = SettingsWithSource {
+        merged: Settings {
+            auto_mode: Some(AutoModeConfig {
+                classify_all_shell: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        per_source,
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    assert!(!settings.auto_mode_classify_all_shell_enabled());
+}
+
+#[test]
+fn test_classify_all_shell_requires_literal_boolean_true() {
+    let mut per_source = std::collections::HashMap::new();
+    per_source.insert(
+        SettingSource::User,
+        serde_json::json!({
+            "autoMode": { "classifyAllShell": "true" }
+        }),
+    );
+    per_source.insert(
+        SettingSource::Policy,
+        serde_json::json!({
+            "autoMode": { "classifyAllShell": 1 }
+        }),
+    );
+    let settings = SettingsWithSource {
+        merged: Settings::default(),
+        per_source,
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    assert!(!settings.auto_mode_classify_all_shell_enabled());
+}
+
+#[test]
 fn test_parse_settings_accepts_tui_native_replay_cache_policy() {
     let settings = parse_settings(
         r#"{

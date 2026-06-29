@@ -88,6 +88,7 @@ impl PluginDialogTab {
 #[derive(Debug, Clone)]
 pub struct PluginDialogState {
     pub installed: Vec<coco_types::PluginDialogInstalledRow>,
+    pub skills: Vec<coco_types::PluginDialogSkillRow>,
     pub marketplaces: Vec<coco_types::PluginDialogMarketplaceRow>,
     pub errors: Vec<coco_types::PluginDialogErrorRow>,
     pub selected_tab: PluginDialogTab,
@@ -100,6 +101,7 @@ impl PluginDialogState {
     pub fn from_wire(payload: coco_types::PluginDialogPayload) -> Self {
         Self {
             installed: payload.installed,
+            skills: payload.skills,
             marketplaces: payload.marketplaces,
             errors: payload.errors,
             selected_tab: PluginDialogTab::Installed,
@@ -109,9 +111,13 @@ impl PluginDialogState {
         }
     }
 
+    pub fn installed_count(&self) -> usize {
+        self.installed.len() + self.skills.len()
+    }
+
     pub fn selected_len(&self) -> usize {
         match self.selected_tab {
-            PluginDialogTab::Installed => self.filtered_installed_indices().len(),
+            PluginDialogTab::Installed => self.filtered_installed_items().len(),
             PluginDialogTab::Marketplaces => self.filtered_marketplace_indices().len(),
             PluginDialogTab::Errors => self.filtered_error_indices().len(),
         }
@@ -163,15 +169,26 @@ impl PluginDialogState {
         self.selected_idx = 0;
     }
 
-    pub fn filtered_installed_indices(&self) -> Vec<usize> {
-        self.installed
+    pub fn filtered_installed_items(&self) -> Vec<PluginDialogInstalledItem> {
+        let mut items = self
+            .installed
             .iter()
             .enumerate()
             .filter_map(|(idx, row)| {
                 self.matches_filter(&[&row.id, &row.name, row.description.as_deref().unwrap_or("")])
-                    .then_some(idx)
+                    .then_some(PluginDialogInstalledItem::Plugin(idx))
             })
-            .collect()
+            .collect::<Vec<_>>();
+        items.extend(self.skills.iter().enumerate().filter_map(|(idx, row)| {
+            self.matches_filter(&[
+                &row.id,
+                &row.name,
+                &row.description,
+                plugin_skill_source_label(row.source),
+            ])
+            .then_some(PluginDialogInstalledItem::Skill(idx))
+        }));
+        items
     }
 
     pub fn filtered_marketplace_indices(&self) -> Vec<usize> {
@@ -199,7 +216,10 @@ impl PluginDialogState {
     pub fn focused_action(&self) -> Option<coco_types::PluginDialogAction> {
         match self.selected_tab {
             PluginDialogTab::Installed => {
-                let idx = *self.filtered_installed_indices().get(self.selected_idx)?;
+                let item = *self.filtered_installed_items().get(self.selected_idx)?;
+                let PluginDialogInstalledItem::Plugin(idx) = item else {
+                    return None;
+                };
                 self.installed.get(idx)?.actions.first().cloned()
             }
             PluginDialogTab::Marketplaces => {
@@ -217,5 +237,22 @@ impl PluginDialogState {
         fields
             .iter()
             .any(|field| field.to_ascii_lowercase().contains(&self.filter_query))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginDialogInstalledItem {
+    Plugin(usize),
+    Skill(usize),
+}
+
+fn plugin_skill_source_label(source: coco_types::SkillsDialogSource) -> &'static str {
+    match source {
+        coco_types::SkillsDialogSource::BuiltIn => "built-in",
+        coco_types::SkillsDialogSource::Project => "project",
+        coco_types::SkillsDialogSource::User => "user",
+        coco_types::SkillsDialogSource::Policy => "policy",
+        coco_types::SkillsDialogSource::Plugin => "plugin",
+        coco_types::SkillsDialogSource::Mcp => "mcp",
     }
 }

@@ -2,7 +2,7 @@
 source: app/tui/src/presentation/permissions_editor.test.rs
 expression: body_only(&state)
 ---
-[Allow]   Ask    Deny    Workspace 
+ Recently denied   [Allow]   Ask    Deny    Workspace 
 
 Enter a permission rule (e.g. Bash(git *) or Read):
   > Bash(npm *)▏

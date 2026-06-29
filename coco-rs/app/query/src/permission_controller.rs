@@ -8,9 +8,11 @@ use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_types::CoreEvent;
 use coco_types::PermissionDecision;
+use coco_types::PermissionDecisionReason;
 use coco_types::PermissionDenialInfo;
 use coco_types::SessionState;
 use coco_types::ToolId;
+use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -107,9 +109,21 @@ impl<'a> PermissionController<'a> {
                 approval_feedback: None,
                 resolution_detail: None,
             },
-            PermissionDecision::Deny { message, .. } => {
+            PermissionDecision::Deny { message, reason } => {
                 warn!(tool = tool_call.tool_name, %message, "tool permission denied");
                 self.record_denial(tool_call, tool_input);
+                if is_auto_mode_classifier_denial(&reason) {
+                    let display = recent_denial_display(&tool_call.tool_name, tool_input);
+                    let _delivered = crate::emit::emit_tui(
+                        self.event_tx,
+                        TuiOnlyEvent::AutoModeDenied {
+                            tool_name: tool_call.tool_name.clone(),
+                            display,
+                            reason: message.clone(),
+                        },
+                    )
+                    .await;
+                }
                 let output = format!("Permission denied: {message}");
                 complete_tool_call_with_error_mode(
                     self.event_tx,
@@ -443,5 +457,55 @@ impl<'a> PermissionController<'a> {
             tool_use_id: tool_call.tool_call_id.clone(),
             tool_input: tool_input.clone(),
         });
+    }
+}
+
+fn is_auto_mode_classifier_denial(reason: &PermissionDecisionReason) -> bool {
+    matches!(
+        reason,
+        PermissionDecisionReason::Classifier { classifier, .. } if classifier == "auto_mode"
+    )
+}
+
+fn recent_denial_display(tool_name: &str, tool_input: &serde_json::Value) -> String {
+    let summary = coco_types::tool_summary::tool_input_summary(tool_name, tool_input);
+    if summary.is_empty() {
+        tool_name.to_string()
+    } else {
+        summary
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn auto_mode_classifier_denial_matches_rust_classifier_tag() {
+        assert!(is_auto_mode_classifier_denial(
+            &PermissionDecisionReason::Classifier {
+                classifier: "auto_mode".into(),
+                reason: "stage=1 model=test".into(),
+            }
+        ));
+        assert!(!is_auto_mode_classifier_denial(
+            &PermissionDecisionReason::Classifier {
+                classifier: "other".into(),
+                reason: "stage=1 model=test".into(),
+            }
+        ));
+        assert!(!is_auto_mode_classifier_denial(
+            &PermissionDecisionReason::User
+        ));
+    }
+
+    #[test]
+    fn recent_denial_display_uses_tool_input_summary() {
+        assert_eq!(
+            recent_denial_display("Bash", &json!({"command": "rm -rf /tmp/build"})),
+            "rm -rf /tmp/build"
+        );
+        assert_eq!(recent_denial_display("Bash", &json!({})), "Bash");
     }
 }

@@ -19,6 +19,7 @@ use crate::model::ModelRoles;
 use crate::model::PartialModelInfo;
 use crate::model::RoleSlots;
 use crate::model::build_model_registry;
+use crate::model_allowlist::is_model_allowed;
 use crate::overrides::RuntimeOverrides;
 use crate::prompt_cache_settings::AccountConfig;
 use crate::prompt_cache_settings::PromptCacheRuntimeConfig;
@@ -318,6 +319,7 @@ pub fn build_runtime_config_with(
     let providers = resolve_providers(&settings, &catalogs)?;
     let model_roles = resolve_model_roles(&settings, &env_only, &overrides, &providers)?;
     let merged = &settings.merged;
+    validate_roles_against_available_models(&model_roles, merged.available_models.as_deref())?;
 
     let user_catalog = load_models_catalog(&catalogs.models)?;
     let model_registry = Arc::new(build_model_registry(
@@ -372,6 +374,44 @@ pub fn build_runtime_config_with(
         model_roles,
         model_registry,
     })
+}
+
+fn validate_roles_against_available_models(
+    roles: &ModelRoles,
+    available_models: Option<&[String]>,
+) -> Result<(), ConfigError> {
+    let Some(available_models) = available_models else {
+        return Ok(());
+    };
+
+    for (role, slots) in &roles.roles {
+        ensure_model_allowed(role.as_str(), "primary", &slots.primary, available_models)?;
+        for (idx, spec) in slots.fallbacks.iter().enumerate() {
+            ensure_model_allowed(
+                role.as_str(),
+                &format!("fallbacks[{idx}]"),
+                spec,
+                available_models,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_model_allowed(
+    role: &str,
+    slot: &str,
+    spec: &ModelSpec,
+    available_models: &[String],
+) -> Result<(), ConfigError> {
+    if is_model_allowed(&spec.model_id, Some(available_models)) {
+        return Ok(());
+    }
+
+    Err(ConfigError::generic(format!(
+        "model `{}/{}` for role `{role}` slot `{slot}` is not in the available_models allowlist",
+        spec.provider, spec.model_id,
+    )))
 }
 
 /// Walk every (role, primary + fallback) `ModelSpec` and verify it

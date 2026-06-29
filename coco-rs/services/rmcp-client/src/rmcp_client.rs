@@ -4,6 +4,8 @@ use std::io;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use coco_mcp_types::CallToolRequestParams;
@@ -18,6 +20,8 @@ use coco_mcp_types::ListResourcesRequestParams;
 use coco_mcp_types::ListResourcesResult;
 use coco_mcp_types::ListToolsRequestParams;
 use coco_mcp_types::ListToolsResult;
+use coco_mcp_types::ReadResourceDirectoryRequestParams;
+use coco_mcp_types::ReadResourceDirectoryResult;
 use coco_mcp_types::ReadResourceRequestParams;
 use coco_mcp_types::ReadResourceResult;
 use coco_mcp_types::RequestId;
@@ -96,6 +100,8 @@ const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 enum SessionAwareHttpError {
     #[error("streamable HTTP session expired with 404 Not Found")]
     SessionExpired404,
+    #[error("streamable HTTP request failed with {0}")]
+    HttpStatus(reqwest::StatusCode),
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
 }
@@ -114,6 +120,15 @@ impl coco_error::ErrorExt for SessionAwareHttpError {
     fn status_code(&self) -> coco_error::StatusCode {
         match self {
             Self::SessionExpired404 => coco_error::StatusCode::AuthenticationFailed,
+            Self::HttpStatus(status)
+                if matches!(
+                    *status,
+                    reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+                ) =>
+            {
+                coco_error::StatusCode::AuthenticationFailed
+            }
+            Self::HttpStatus(_) => coco_error::StatusCode::ProviderError,
             Self::Reqwest(_) => coco_error::StatusCode::NetworkError,
         }
     }
@@ -173,6 +188,14 @@ impl StreamableHttpClient for SessionAwareHttpClient {
             .send()
             .await
             .map_err(Self::wrap_reqwest_error)?;
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            return Err(StreamableHttpError::Client(
+                SessionAwareHttpError::HttpStatus(response.status()),
+            ));
+        }
 
         // Detect session expiry: 404 with an active session.
         if response.status() == reqwest::StatusCode::NOT_FOUND && session_id.is_some() {
@@ -275,6 +298,14 @@ impl StreamableHttpClient for SessionAwareHttpClient {
         }
 
         let response = request.send().await.map_err(Self::wrap_reqwest_error)?;
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            return Err(StreamableHttpError::Client(
+                SessionAwareHttpError::HttpStatus(response.status()),
+            ));
+        }
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(StreamableHttpError::Client(
@@ -387,6 +418,69 @@ impl From<ClientOperationError> for RmcpClientError {
     }
 }
 
+impl RmcpClientError {
+    /// Return the HTTP response status when the MCP transport preserved one.
+    ///
+    /// This is intentionally narrower than [`coco_error::ErrorExt::status_code`]:
+    /// callers that need protocol-specific recovery (for example rerunning a
+    /// headers helper on 401/403) need the exact HTTP status, while ordinary
+    /// error classification should continue using `StatusCode`.
+    pub fn http_status(&self) -> Option<reqwest::StatusCode> {
+        match self {
+            Self::Http(error) => error.status(),
+            Self::Service(error) => service_error_http_status(error),
+            _ => None,
+        }
+    }
+
+    pub fn is_retryable_discovery_error(&self) -> bool {
+        if self
+            .http_status()
+            .is_some_and(|status| status.is_client_error())
+        {
+            return false;
+        }
+        match self {
+            Self::Json(_) | Self::InvalidState { .. } | Self::Auth(_) | Self::OAuth { .. } => false,
+            Self::Generic { message } if message.starts_with("timed out awaiting ") => false,
+            Self::Service(error) => service_error_is_retryable_for_discovery(error),
+            _ => true,
+        }
+    }
+}
+
+fn service_error_http_status(error: &rmcp::service::ServiceError) -> Option<reqwest::StatusCode> {
+    let rmcp::service::ServiceError::TransportSend(error) = error else {
+        return None;
+    };
+    error
+        .error
+        .downcast_ref::<StreamableHttpError<SessionAwareHttpError>>()
+        .and_then(|error| match error {
+            StreamableHttpError::Client(SessionAwareHttpError::HttpStatus(status)) => Some(*status),
+            StreamableHttpError::Client(SessionAwareHttpError::Reqwest(error)) => error.status(),
+            _ => None,
+        })
+}
+
+fn service_error_is_retryable_for_discovery(error: &rmcp::service::ServiceError) -> bool {
+    match error {
+        rmcp::service::ServiceError::McpError(error) => !matches!(
+            error.code,
+            rmcp::model::ErrorCode::INVALID_REQUEST
+                | rmcp::model::ErrorCode::METHOD_NOT_FOUND
+                | rmcp::model::ErrorCode::INVALID_PARAMS
+                | rmcp::model::ErrorCode::PARSE_ERROR
+        ),
+        rmcp::service::ServiceError::TransportSend(_) => true,
+        rmcp::service::ServiceError::TransportClosed => true,
+        rmcp::service::ServiceError::UnexpectedResponse => false,
+        rmcp::service::ServiceError::Cancelled { .. } => false,
+        rmcp::service::ServiceError::Timeout { .. } => false,
+        _ => true,
+    }
+}
+
 pub type Elicitation = CreateElicitationRequestParams;
 pub type ElicitationResponse = CreateElicitationResult;
 
@@ -414,6 +508,7 @@ pub struct RmcpClient {
     initialize_context: Mutex<Option<InitializeContext>>,
     /// Prevents concurrent session recovery attempts.
     session_recovery_lock: Mutex<()>,
+    progress_epoch: Arc<AtomicU64>,
 }
 
 impl RmcpClient {
@@ -442,6 +537,7 @@ impl RmcpClient {
             transport_recipe: recipe,
             initialize_context: Mutex::new(None),
             session_recovery_lock: Mutex::new(()),
+            progress_epoch: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -473,6 +569,7 @@ impl RmcpClient {
             transport_recipe: recipe,
             initialize_context: Mutex::new(None),
             session_recovery_lock: Mutex::new(()),
+            progress_epoch: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -485,7 +582,11 @@ impl RmcpClient {
         send_elicitation: SendElicitation,
     ) -> Result<InitializeResult> {
         let rmcp_params: RmcpInitializeRequestParams = convert_to_rmcp(params.clone())?;
-        let client_handler = LoggingClientHandler::new(rmcp_params, send_elicitation);
+        let client_handler = LoggingClientHandler::new(
+            rmcp_params,
+            send_elicitation,
+            Arc::clone(&self.progress_epoch),
+        );
 
         // Save initialization context so session recovery can re-handshake.
         {
@@ -670,6 +771,33 @@ impl RmcpClient {
                 move |service| {
                     let p = p.clone();
                     async move { service.read_resource(p).await }
+                }
+            })
+            .await?;
+        let converted = convert_to_mcp(result)?;
+        self.persist_oauth_tokens().await;
+        Ok(converted)
+    }
+
+    pub async fn read_resource_directory(
+        &self,
+        params: ReadResourceDirectoryRequestParams,
+        timeout: Option<Duration>,
+    ) -> Result<ReadResourceDirectoryResult> {
+        self.refresh_oauth_if_needed().await;
+        let result = self
+            .run_service_operation("resources/directory/read", timeout, {
+                let params = serde_json::to_value(params)?;
+                move |service| {
+                    let params = params.clone();
+                    async move {
+                        service
+                            .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+                                "resources/directory/read",
+                                Some(params),
+                            )))
+                            .await
+                    }
                 }
             })
             .await?;
@@ -1063,6 +1191,10 @@ impl RmcpClient {
         }
     }
 
+    pub fn progress_epoch(&self) -> u64 {
+        self.progress_epoch.load(Ordering::Relaxed)
+    }
+
     async fn oauth_persistor(&self) -> Option<OAuthPersistor> {
         let guard = self.state.lock().await;
         match &*guard {
@@ -1148,4 +1280,49 @@ async fn create_oauth_transport_and_runtime(
     );
 
     Ok((transport, runtime))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+
+    use rmcp::service::ServiceError;
+    use rmcp::transport::DynamicTransportError;
+
+    use super::*;
+
+    #[test]
+    fn rmcp_client_error_extracts_session_aware_http_status() {
+        let transport_error = DynamicTransportError::from_parts(
+            "test",
+            TypeId::of::<()>(),
+            Box::new(StreamableHttpError::Client(
+                SessionAwareHttpError::HttpStatus(reqwest::StatusCode::UNAUTHORIZED),
+            )),
+        );
+        let error = RmcpClientError::Service(ServiceError::TransportSend(transport_error));
+
+        assert_eq!(error.http_status(), Some(reqwest::StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn discovery_retry_classifier_excludes_4xx_and_protocol_request_errors() {
+        let transport_error = DynamicTransportError::from_parts(
+            "test",
+            TypeId::of::<()>(),
+            Box::new(StreamableHttpError::Client(
+                SessionAwareHttpError::HttpStatus(reqwest::StatusCode::FORBIDDEN),
+            )),
+        );
+        let http_4xx = RmcpClientError::Service(ServiceError::TransportSend(transport_error));
+        assert!(!http_4xx.is_retryable_discovery_error());
+
+        let invalid_params = RmcpClientError::Service(ServiceError::McpError(
+            rmcp::model::ErrorData::invalid_params("bad params", None),
+        ));
+        assert!(!invalid_params.is_retryable_discovery_error());
+
+        let transport_closed = RmcpClientError::Service(ServiceError::TransportClosed);
+        assert!(transport_closed.is_retryable_discovery_error());
+    }
 }

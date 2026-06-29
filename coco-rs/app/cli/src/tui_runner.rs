@@ -18,6 +18,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
 use tokio::sync::Mutex;
@@ -2059,6 +2061,22 @@ async fn run_agent_driver(
                 coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
             }
 
+            UserCommand::RetryPermissionDenied { tool_name, message } => {
+                drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
+                let messages = {
+                    let msg = build_system_message_from_push_kind(
+                        coco_tui::SystemPushKind::PermissionRetry { tool_name, message },
+                    );
+                    let mut h = runtime.history.lock().await;
+                    let event_tx_opt = Some(event_tx.clone());
+                    coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt)
+                        .await;
+                    h.to_vec()
+                };
+                spawn_history_turn(messages, &runtime, &event_tx, &active_turn, &turn_done_tx)
+                    .await;
+            }
+
             UserCommand::PushSlashResult { messages } => {
                 // Pre-built slash echo+result `Message::User`s (see
                 // `command_tags`). Push each through engine authority so the
@@ -3211,6 +3229,16 @@ async fn spawn_command_queue_turn(
         }))
         .await;
 
+    spawn_history_turn(messages, runtime, event_tx, active_turn, turn_done_tx).await;
+}
+
+async fn spawn_history_turn(
+    messages: Vec<std::sync::Arc<coco_messages::Message>>,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
+    turn_done_tx: &mpsc::Sender<uuid::Uuid>,
+) {
     let turn_abort = TurnAbortController::new();
     let turn_abort_signal = turn_abort.signal();
     let turn_id = uuid::Uuid::new_v4();
@@ -6094,6 +6122,13 @@ async fn build_plugin_dialog_payload(
         })
         .collect();
 
+    let skills = build_plugin_dialog_skill_rows(
+        &runtime.skill_manager(),
+        &cfg.skill_overrides,
+        &config_home,
+        coco_model_card::bytes_per_token_for_model(&cfg.model_id),
+    );
+
     let plugins_dir = config_home.join("plugins");
     let mut manager = coco_plugins::marketplace::MarketplaceManager::new(plugins_dir);
     let known = manager.load_known_marketplaces();
@@ -6119,9 +6154,94 @@ async fn build_plugin_dialog_payload(
 
     coco_types::PluginDialogPayload {
         installed,
+        skills,
         marketplaces,
         errors: Vec::new(),
     }
+}
+
+fn build_plugin_dialog_skill_rows(
+    skill_manager: &Arc<coco_skills::SkillManager>,
+    tiers: &coco_config::SkillOverrideTiers,
+    config_home: &Path,
+    bytes_per_token: i64,
+) -> Vec<coco_types::PluginDialogSkillRow> {
+    let usage = coco_skills::usage::load_all(config_home);
+    let now_ms = system_time_ms();
+    let bytes_per_token = bytes_per_token.max(1);
+    let mut rows = skill_manager
+        .all_including_conditional()
+        .into_iter()
+        .filter(|skill| {
+            !matches!(
+                skill.source,
+                coco_skills::SkillSource::Bundled | coco_skills::SkillSource::Plugin { .. }
+            )
+        })
+        .map(|skill| {
+            let lock = coco_skills::resolve_skill_override_lock(&skill, tiers);
+            let state = lock
+                .as_ref()
+                .map(|lock| lock.forced_value)
+                .unwrap_or_else(|| coco_skills::effective_skill_state(&skill, tiers));
+            let usage = usage.get(&skill.name).map(|stats| {
+                let elapsed = now_ms.saturating_sub(stats.last_used_at_ms);
+                coco_types::PluginDialogSkillUsage {
+                    count: stats.usage_count,
+                    days_since_use: elapsed / 86_400_000,
+                }
+            });
+            let token_estimate =
+                i64::try_from(coco_skills::estimate_skill_frontmatter_bytes(&skill))
+                    .unwrap_or(i64::MAX)
+                    / bytes_per_token;
+            coco_types::PluginDialogSkillRow {
+                id: format!("skill:{}", skill.name),
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                source: plugin_dialog_skill_source(&skill.source),
+                override_state: state,
+                lock_source: lock.map(|lock| lock.source),
+                token_estimate,
+                usage,
+            }
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| {
+        plugin_dialog_skill_source_sort_key(a.source)
+            .cmp(plugin_dialog_skill_source_sort_key(b.source))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    rows
+}
+
+fn plugin_dialog_skill_source(source: &coco_skills::SkillSource) -> coco_types::SkillsDialogSource {
+    match source {
+        coco_skills::SkillSource::Bundled => coco_types::SkillsDialogSource::BuiltIn,
+        coco_skills::SkillSource::Project { .. } => coco_types::SkillsDialogSource::Project,
+        coco_skills::SkillSource::User { .. } => coco_types::SkillsDialogSource::User,
+        coco_skills::SkillSource::Managed { .. } => coco_types::SkillsDialogSource::Policy,
+        coco_skills::SkillSource::Plugin { .. } => coco_types::SkillsDialogSource::Plugin,
+        coco_skills::SkillSource::Mcp { .. } => coco_types::SkillsDialogSource::Mcp,
+    }
+}
+
+fn plugin_dialog_skill_source_sort_key(source: coco_types::SkillsDialogSource) -> &'static str {
+    match source {
+        coco_types::SkillsDialogSource::BuiltIn => "built-in",
+        coco_types::SkillsDialogSource::Project => "project",
+        coco_types::SkillsDialogSource::User => "user",
+        coco_types::SkillsDialogSource::Policy => "policy",
+        coco_types::SkillsDialogSource::Plugin => "plugin",
+        coco_types::SkillsDialogSource::Mcp => "mcp",
+    }
+}
+
+fn system_time_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 /// Construct the engine `Message::System(...)` payload from a
@@ -6148,6 +6268,15 @@ fn build_system_message_from_push_kind(kind: coco_tui::SystemPushKind) -> coco_m
                 command,
                 output,
             })
+        }
+        coco_tui::SystemPushKind::PermissionRetry { tool_name, message } => {
+            coco_messages::SystemMessage::PermissionRetry(
+                coco_messages::SystemPermissionRetryMessage {
+                    uuid: uuid::Uuid::new_v4(),
+                    tool_name,
+                    message,
+                },
+            )
         }
     };
     coco_messages::Message::System(sys)
@@ -7013,6 +7142,11 @@ async fn apply_role_in_memory(
     for msg in messages {
         coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
     }
+    let is_remote =
+        coco_config::EnvSnapshot::from_current_process().is_truthy(coco_config::EnvKey::CocoRemote);
+    if let Some(msg) = build_remote_model_change_reminder(role, &display_name, is_remote) {
+        coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
+    }
 }
 
 /// Title-case a `ModelRole` for display (`main` → `Main`).
@@ -7021,6 +7155,21 @@ fn title_case_role(role: coco_types::ModelRole) -> String {
     chars.next().map_or_else(String::new, |first| {
         format!("{}{}", first.to_uppercase(), chars.as_str())
     })
+}
+
+fn build_remote_model_change_reminder(
+    role: coco_types::ModelRole,
+    display_name: &str,
+    is_remote: bool,
+) -> Option<coco_messages::Message> {
+    if !is_remote || role != coco_types::ModelRole::Main {
+        return None;
+    }
+    Some(coco_messages::wrapping::create_system_reminder_message(
+        &format!(
+            "The model for this session has been changed to {display_name}. You are now running as {display_name}."
+        ),
+    ))
 }
 
 /// Apply a thinking-level change to the Main role in-memory (Ctrl+T

@@ -16,6 +16,13 @@ fn settings_with_main(model_id: &str) -> Settings {
     }
 }
 
+fn role_selection(model_id: &str) -> crate::RoleSlots<ProviderModelSelection> {
+    crate::RoleSlots::new(ProviderModelSelection {
+        provider: "anthropic".into(),
+        model_id: model_id.into(),
+    })
+}
+
 // ── validate_permission_rule_string ──
 
 #[test]
@@ -160,7 +167,10 @@ fn test_validate_settings_model_matches_family_alias() {
     };
     let errors = validate_settings(&settings);
     // "opus" should match "claude-opus-4-6" as a family alias
-    let model_errors: Vec<_> = errors.iter().filter(|e| e.path == "models.main").collect();
+    let model_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| e.path.starts_with("models.main"))
+        .collect();
     assert!(
         model_errors.is_empty(),
         "should not flag opus match: {model_errors:?}"
@@ -175,8 +185,36 @@ fn test_validate_settings_empty_available_models_denies_selected_model() {
     };
     let errors = validate_settings(&settings);
     assert!(
-        errors.iter().any(|e| e.path == "models.main"),
+        errors.iter().any(|e| e.path == "models.main.primary"),
         "expected model allowlist error: {errors:?}"
+    );
+}
+
+#[test]
+fn test_validate_settings_available_models_checks_non_main_roles_and_fallbacks() {
+    let settings = Settings {
+        available_models: Some(vec!["sonnet".into()]),
+        models: crate::ModelSelectionSettings {
+            main: Some(role_selection("claude-sonnet-4-6")),
+            plan: Some(
+                role_selection("claude-sonnet-4-6").with_fallback(ProviderModelSelection {
+                    provider: "anthropic".into(),
+                    model_id: "claude-opus-4-6".into(),
+                }),
+            ),
+            review: Some(role_selection("claude-haiku-4-5")),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let errors = validate_settings(&settings);
+    assert!(
+        errors.iter().any(|e| e.path == "models.plan.fallbacks[0]"),
+        "expected plan fallback allowlist error: {errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| e.path == "models.review.primary"),
+        "expected review primary allowlist error: {errors:?}"
     );
 }
 
@@ -193,6 +231,30 @@ fn test_validate_settings_auto_mode_empty_string() {
     assert!(
         errors.iter().any(|e| e.message.contains("Empty string")),
         "expected empty string error: {errors:?}"
+    );
+}
+
+#[test]
+fn test_validate_sandbox_credentials_env_var_name() {
+    let settings = Settings {
+        sandbox: crate::sandbox_settings::SandboxSettings {
+            credentials: Some(crate::sandbox_settings::SandboxCredentialsConfig {
+                env_vars: vec![crate::sandbox_settings::CredentialEnvVarEntry {
+                    name: "1BAD-NAME".into(),
+                    mode: crate::sandbox_settings::CredentialAccessMode::Deny,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let errors = validate_settings(&settings);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.path == "sandbox.credentials.envVars[0].name"),
+        "expected sandbox credential env var name error: {errors:?}"
     );
 }
 

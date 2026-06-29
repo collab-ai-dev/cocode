@@ -1,0 +1,13 @@
+---
+source: app/tui/src/presentation/permissions_editor.test.rs
+expression: body_only(&state)
+---
+[Recently denied]   Allow    Ask    Deny    Workspace 
+
+Commands recently denied by the auto mode classifier.
+
+▸ ✗ Bash
+    destructive filesystem operation
+
+
+↑/↓ select · Enter approve · r retry · Esc close

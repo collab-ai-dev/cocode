@@ -29,6 +29,10 @@ fn test_tool_name_ts_wire_names() {
     // Wire names that mirror claude-code TS (`*_TOOL_NAME` consts).
     assert_eq!(ToolName::SendUserMessage.as_str(), "SendUserMessage");
     assert_eq!(ToolName::ListMcpResources.as_str(), "ListMcpResourcesTool");
+    assert_eq!(
+        ToolName::ReadMcpResourceDir.as_str(),
+        "ReadMcpResourceDirTool"
+    );
     assert_eq!(ToolName::ReadMcpResource.as_str(), "ReadMcpResourceTool");
 }
 
@@ -45,6 +49,10 @@ fn test_tool_name_renamed_wire_names_parse() {
     assert_eq!(
         ToolName::from_str("ReadMcpResourceTool").unwrap(),
         ToolName::ReadMcpResource
+    );
+    assert_eq!(
+        ToolName::from_str("ReadMcpResourceDirTool").unwrap(),
+        ToolName::ReadMcpResourceDir
     );
     // The old names are gone — no legacy alias parsing.
     assert!(ToolName::from_str("Brief").is_err());

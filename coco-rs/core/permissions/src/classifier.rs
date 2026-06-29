@@ -120,6 +120,10 @@ pub struct AutoModeRules {
     /// `classifier_mode`.
     #[serde(default)]
     pub classifier_unavailable_fail_open: bool,
+    /// Suspend Bash/PowerShell allow rules while auto mode is active so shell
+    /// commands flow through the classifier.
+    #[serde(default, alias = "classifyAllShell")]
+    pub classify_all_shell: bool,
 }
 
 /// A compressed transcript entry for the classifier.
@@ -162,6 +166,7 @@ const SAFE_TOOLS: &[&str] = &[
     ToolName::Lsp.as_str(),
     ToolName::ToolSearch.as_str(),
     ToolName::ListMcpResources.as_str(),
+    ToolName::ReadMcpResourceDir.as_str(),
     ToolName::ReadMcpResource.as_str(),
     // Task management (metadata only)
     ToolName::TodoWrite.as_str(),

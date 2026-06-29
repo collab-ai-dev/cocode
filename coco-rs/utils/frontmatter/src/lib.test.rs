@@ -176,6 +176,18 @@ fn test_yaml_special_chars_auto_quoted() {
 }
 
 #[test]
+fn test_malformed_yaml_returns_body_with_parse_error() {
+    let input = "---\nmetadata:\n  - [unterminated\n---\nbody text";
+    let fm = parse(input);
+    assert!(fm.data.is_empty());
+    assert_eq!(fm.content.trim(), "body text");
+    assert!(
+        fm.parse_error.is_some(),
+        "malformed frontmatter should surface parse_error"
+    );
+}
+
+#[test]
 fn test_skill_frontmatter() {
     let input = r#"---
 description: Review changed code

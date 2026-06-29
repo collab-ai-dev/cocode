@@ -31,6 +31,14 @@ use crate::emit::emit_stream;
 use crate::emit::emit_tui;
 use crate::model_runtime::ModelFallbackReason;
 
+const RETIRED_DEFERRED_TOOL_NAMES: &[&str] = &[
+    "Frame",
+    "FrameRead",
+    "TeamCreate",
+    "TeamDelete",
+    "SuggestBackgroundPR",
+];
+
 /// Per-call buffer used while consuming `StreamEvent`s for a single turn.
 /// `input_json` is appended from `ToolCallDelta` chunks and parsed on
 /// `ToolCallEnd`. Buffers are keyed by the provider-assigned `tool_call_id`.
@@ -221,11 +229,13 @@ pub(crate) fn compute_tools_delta(
 
     let mut added_lines: Vec<String> = current_deferred
         .iter()
+        .filter(|t| !is_retired_deferred_tool_name(t))
         .filter(|t| !last_announced.contains(t.as_str()))
         .map(|t| format!("- {t}"))
         .collect();
     let mut removed_names: Vec<String> = last_announced
         .iter()
+        .filter(|t| !is_retired_deferred_tool_name(t))
         .filter(|t| !registry_pool.contains(t.as_str()))
         .cloned()
         .collect();
@@ -241,6 +251,10 @@ pub(crate) fn compute_tools_delta(
         added_lines,
         removed_names,
     })
+}
+
+fn is_retired_deferred_tool_name(name: &str) -> bool {
+    RETIRED_DEFERRED_TOOL_NAMES.contains(&name)
 }
 
 /// Whether the most recent assistant message's total context exceeds

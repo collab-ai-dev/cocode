@@ -651,6 +651,7 @@ impl App {
                     sug.kind,
                     SuggestionKind::At
                         | SuggestionKind::Path
+                        | SuggestionKind::BashPath
                         | SuggestionKind::Directory
                         | SuggestionKind::Symbol
                 ) =>
@@ -691,7 +692,7 @@ impl App {
                 self.path_completion.cancel();
                 self.file_search.search(key.clone());
             }
-            SuggestionKind::Path | SuggestionKind::Directory => {
+            SuggestionKind::Path | SuggestionKind::BashPath | SuggestionKind::Directory => {
                 self.file_search.cancel();
                 self.symbol_search.cancel();
                 self.path_completion.search(key.clone());
@@ -878,13 +879,8 @@ impl App {
                 }
                 true
             }
-            TuiEvent::ClassifierDenied { .. } => {
-                if let Some(crate::state::PanePromptState::Permission(p)) =
-                    self.state.ui.interaction.active_prompt.as_mut()
-                {
-                    p.classifier_checking = false;
-                }
-                true
+            TuiEvent::ClassifierDenied { request_id, reason } => {
+                handle_classifier_denied(&mut self.state, &request_id, &reason)
             }
         }
     }
@@ -1223,6 +1219,37 @@ fn coalesce_lossy_deferred_event(buffer: &mut VecDeque<CoreEvent>, event: &CoreE
             })
         }
         _ => false,
+    }
+}
+
+fn handle_classifier_denied(state: &mut AppState, request_id: &str, reason: &str) -> bool {
+    let Some(crate::state::PanePromptState::Permission(prompt)) =
+        state.ui.interaction.active_prompt.as_mut()
+    else {
+        return false;
+    };
+    if prompt.request_id != request_id {
+        return false;
+    }
+
+    prompt.classifier_checking = false;
+    let tool_name = prompt.tool_name.clone();
+    let display = prompt.description.clone();
+    let message = auto_mode_denied_toast_message(&tool_name, reason);
+    state
+        .ui
+        .record_recent_denial(tool_name, display, reason.to_string());
+    state.ui.add_toast(Toast::warning(message));
+    true
+}
+
+pub(crate) fn auto_mode_denied_toast_message(tool_name: &str, reason: &str) -> String {
+    let reason = coco_utils_string::truncate_utf16_units_with_ellipsis(reason, 80, 79, "…");
+    let tool = tool_name.to_lowercase();
+    if reason.is_empty() {
+        format!("{tool} denied by auto mode · /permissions")
+    } else {
+        format!("{tool} denied by auto mode · {reason} · /permissions")
     }
 }
 

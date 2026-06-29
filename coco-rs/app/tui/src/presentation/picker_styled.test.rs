@@ -486,6 +486,9 @@ fn background_tasks_detail_workflow_shows_progress_events() {
                 phase_index: Some(0),
                 agent_id: Some("agent-1".to_string()),
                 model: Some("sonnet".to_string()),
+                started_at: None,
+                queued_at: None,
+                last_progress_at: None,
                 tokens: Some(12_345),
                 tool_calls: Some(3),
                 duration_ms: Some(65_000),
@@ -493,6 +496,7 @@ fn background_tasks_detail_workflow_shows_progress_events() {
                 result_preview: Some("mapped crates".to_string()),
                 prompt_preview: None,
                 error: None,
+                skipped: false,
             },
             coco_types::WorkflowProgressEvent::WorkflowLog {
                 message: "Combining findings".to_string(),
@@ -541,6 +545,9 @@ fn background_tasks_detail_workflow_localizes_progress_units() {
             phase_index: None,
             agent_id: None,
             model: None,
+            started_at: None,
+            queued_at: None,
+            last_progress_at: None,
             tokens: Some(12_345),
             tool_calls: Some(3),
             duration_ms: None,
@@ -548,6 +555,7 @@ fn background_tasks_detail_workflow_localizes_progress_units() {
             result_preview: None,
             prompt_preview: None,
             error: None,
+            skipped: false,
         }],
     )];
     let bt = crate::state::BackgroundTasksState {
@@ -584,6 +592,9 @@ fn background_tasks_detail_workflow_shows_prompt_preview_for_running_agent() {
             phase_index: Some(0),
             agent_id: Some("agent-1".to_string()),
             model: Some("sonnet".to_string()),
+            started_at: None,
+            queued_at: None,
+            last_progress_at: None,
             tokens: None,
             tool_calls: None,
             duration_ms: None,
@@ -591,6 +602,7 @@ fn background_tasks_detail_workflow_shows_prompt_preview_for_running_agent() {
             result_preview: None,
             prompt_preview: Some("map the crates and summarize risk".to_string()),
             error: None,
+            skipped: false,
         }],
     )];
     let bt = crate::state::BackgroundTasksState {
@@ -625,6 +637,9 @@ fn background_tasks_detail_workflow_filters_agent_progress_by_status() {
                 phase_index: None,
                 agent_id: None,
                 model: None,
+                started_at: None,
+                queued_at: None,
+                last_progress_at: None,
                 tokens: None,
                 tool_calls: None,
                 duration_ms: None,
@@ -632,6 +647,7 @@ fn background_tasks_detail_workflow_filters_agent_progress_by_status() {
                 result_preview: None,
                 prompt_preview: Some("map crates".to_string()),
                 error: None,
+                skipped: false,
             },
             coco_types::WorkflowProgressEvent::WorkflowAgent {
                 index: 1,
@@ -641,6 +657,9 @@ fn background_tasks_detail_workflow_filters_agent_progress_by_status() {
                 phase_index: None,
                 agent_id: None,
                 model: None,
+                started_at: None,
+                queued_at: None,
+                last_progress_at: None,
                 tokens: None,
                 tool_calls: None,
                 duration_ms: None,
@@ -648,6 +667,7 @@ fn background_tasks_detail_workflow_filters_agent_progress_by_status() {
                 result_preview: Some("passed".to_string()),
                 prompt_preview: None,
                 error: None,
+                skipped: false,
             },
             coco_types::WorkflowProgressEvent::WorkflowLog {
                 message: "Combining findings".to_string(),
@@ -668,6 +688,82 @@ fn background_tasks_detail_workflow_filters_agent_progress_by_status() {
     assert!(j.contains("f filter: completed"), "{j}");
     assert!(!j.contains("Explore"), "{j}");
     assert!(!j.contains("Combining findings"), "{j}");
+}
+
+#[test]
+fn background_tasks_detail_workflow_renders_queued_and_skipped_statuses() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let mut state = crate::state::AppState::default();
+    state.session.active_tasks = vec![running_workflow(
+        "wf_1",
+        "▸ Analyze",
+        vec![
+            coco_types::WorkflowProgressEvent::WorkflowAgent {
+                index: 0,
+                state: coco_types::WorkflowAgentState::Start,
+                label: "Queued agent".to_string(),
+                phase_title: None,
+                phase_index: None,
+                agent_id: None,
+                model: None,
+                started_at: None,
+                queued_at: Some(1_700_000_000_000),
+                last_progress_at: None,
+                tokens: None,
+                tool_calls: None,
+                duration_ms: None,
+                cached: false,
+                result_preview: None,
+                prompt_preview: Some("wait your turn".to_string()),
+                error: None,
+                skipped: false,
+            },
+            coco_types::WorkflowProgressEvent::WorkflowAgent {
+                index: 1,
+                state: coco_types::WorkflowAgentState::Error,
+                label: "Skipped agent".to_string(),
+                phase_title: None,
+                phase_index: None,
+                agent_id: None,
+                model: None,
+                started_at: None,
+                queued_at: None,
+                last_progress_at: None,
+                tokens: None,
+                tool_calls: None,
+                duration_ms: None,
+                cached: false,
+                result_preview: None,
+                prompt_preview: None,
+                error: Some("skipped by user".to_string()),
+                skipped: true,
+            },
+        ],
+    )];
+    let queued = crate::state::BackgroundTasksState {
+        selected: 0,
+        detail: Some("wf_1".to_string()),
+        workflow_agent_filter: crate::state::WorkflowAgentStatusFilter::Queued,
+    };
+    let skipped = crate::state::BackgroundTasksState {
+        selected: 0,
+        detail: Some("wf_1".to_string()),
+        workflow_agent_filter: crate::state::WorkflowAgentStatusFilter::Skipped,
+    };
+
+    let (_title, queued_lines, _) = background_tasks_lines(&queued, &state, styles, 40);
+    let queued_text = joined(&queued_lines);
+    assert!(queued_text.contains("Queued agent"), "{queued_text}");
+    assert!(queued_text.contains("queued"), "{queued_text}");
+    assert!(!queued_text.contains("Skipped agent"), "{queued_text}");
+
+    let (_title, skipped_lines, _) = background_tasks_lines(&skipped, &state, styles, 40);
+    let skipped_text = joined(&skipped_lines);
+    assert!(skipped_text.contains("Skipped agent"), "{skipped_text}");
+    assert!(skipped_text.contains("skipped"), "{skipped_text}");
+    assert!(!skipped_text.contains("Queued agent"), "{skipped_text}");
 }
 
 #[test]

@@ -98,6 +98,13 @@ pub enum EnvKey {
     /// Timezone for log timestamps: `local | utc`. Lower priority than
     /// `--log-timezone`. Defaults to `local`.
     CocoLogTimezone,
+    /// Claude Code compatibility toggle: truthy values allow prompt bodies in
+    /// OTEL logs. `OTEL_LOG_ASSISTANT_RESPONSES` inherits this when unset.
+    OtelLogUserPrompts,
+    /// Claude Code compatibility tri-state toggle for assistant response body
+    /// logging. Unset/unrecognized inherits `OTEL_LOG_USER_PROMPTS`; falsy
+    /// explicitly redacts responses even when prompt logging is enabled.
+    OtelLogAssistantResponses,
     /// `LspConfig::max_file_size_bytes` override. Wins over settings.
     /// Files exceeding this size are rejected at the tool layer before
     /// reaching the LSP server (rust-analyzer / pyright OOM-guard).
@@ -138,6 +145,11 @@ pub enum EnvKey {
     /// prompt copy.
     CocoCoworkMemoryExtraGuidelines,
     CocoMcpToolTimeoutMs,
+    /// Claude Code compatibility knob for remote MCP tool-call silence.
+    /// `COCO_MCP_TOOL_IDLE_TIMEOUT_MS` is the native coco-rs spelling; this
+    /// variant preserves the upstream env surface.
+    ClaudeCodeMcpToolIdleTimeout,
+    CocoMcpToolIdleTimeoutMs,
     CocoModelMain,
     CocoParentSessionId,
     /// Truthy ⇒ emergency killswitch that forcibly disables
@@ -341,6 +353,8 @@ impl EnvKey {
             Self::CocoLogLocation => "COCO_LOG_LOCATION",
             Self::CocoLogStderr => "COCO_LOG_STDERR",
             Self::CocoLogTimezone => "COCO_LOG_TIMEZONE",
+            Self::OtelLogUserPrompts => "OTEL_LOG_USER_PROMPTS",
+            Self::OtelLogAssistantResponses => "OTEL_LOG_ASSISTANT_RESPONSES",
             Self::CocoLspMaxFileSizeBytes => "COCO_LSP_MAX_FILE_SIZE_BYTES",
             Self::CocoMaxContextTokens => "COCO_MAX_CONTEXT_TOKENS",
             Self::CocoMaxStructuredOutputRetries => "COCO_MAX_STRUCTURED_OUTPUT_RETRIES",
@@ -354,6 +368,8 @@ impl EnvKey {
             Self::CocoMemoryStores => "COCO_MEMORY_STORES",
             Self::CocoCoworkMemoryExtraGuidelines => "COCO_COWORK_MEMORY_EXTRA_GUIDELINES",
             Self::CocoMcpToolTimeoutMs => "COCO_MCP_TOOL_TIMEOUT_MS",
+            Self::ClaudeCodeMcpToolIdleTimeout => "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT",
+            Self::CocoMcpToolIdleTimeoutMs => "COCO_MCP_TOOL_IDLE_TIMEOUT_MS",
             Self::CocoModelMain => "COCO_MODEL_MAIN",
             Self::CocoParentSessionId => "COCO_PARENT_SESSION_ID",
             Self::CocoPermissionsDisableBypass => "COCO_PERMISSIONS_DISABLE_BYPASS",
@@ -484,6 +500,14 @@ pub fn is_env_falsy<K: AsRef<OsStr>>(key: K) -> bool {
 /// with "explicitly false".
 pub fn env_truthy_opt<K: AsRef<OsStr>>(key: K) -> Option<bool> {
     var(key).ok().and_then(|v| parse_truthy(&v))
+}
+
+/// Resolve assistant response body logging.
+///
+/// `OTEL_LOG_ASSISTANT_RESPONSES` is a tri-state override: recognised truthy
+/// and falsy values win; unset or unrecognised values inherit prompt logging.
+pub fn log_assistant_responses_enabled(log_user_prompts: bool) -> bool {
+    env_truthy_opt(EnvKey::OtelLogAssistantResponses).unwrap_or(log_user_prompts)
 }
 
 /// Get an environment variable as an optional string.

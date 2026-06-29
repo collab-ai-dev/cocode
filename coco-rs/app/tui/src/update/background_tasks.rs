@@ -18,6 +18,7 @@ use crate::state::BackgroundTasksState;
 use crate::state::ModalState;
 use crate::state::WorkflowAgentStatusFilter;
 use crate::state::session::TaskEntryKind;
+use crate::state::session::TaskEntryStatus;
 
 /// Outcome of [`intercept`]. Mirrors `agents_dialog::Handled`.
 pub(super) enum Handled {
@@ -178,8 +179,9 @@ fn cycle_workflow_agent_filter(state: &mut AppState) -> bool {
     };
 
     let mut present: Vec<WorkflowAgentStatusFilter> = Vec::new();
+    let is_running = task.status == TaskEntryStatus::Running;
     for event in &task.workflow_progress {
-        if let Some(status) = WorkflowAgentStatusFilter::from_progress_event(event)
+        if let Some(status) = WorkflowAgentStatusFilter::from_progress_event(event, is_running)
             && !present.contains(&status)
         {
             present.push(status);

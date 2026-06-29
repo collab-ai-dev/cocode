@@ -33,9 +33,22 @@ fn payload() -> PermissionsEditorPayload {
 
 fn state_with_editor() -> AppState {
     let mut state = AppState::new();
-    state.ui.show_modal(ModalState::PermissionsEditor(
-        PermissionsEditorState::from_payload(payload()),
-    ));
+    let mut editor = PermissionsEditorState::from_payload(payload());
+    editor.selected_tab = PermissionsEditorTab::Allow;
+    state.ui.show_modal(ModalState::PermissionsEditor(editor));
+    state
+}
+
+fn state_with_recent_editor() -> AppState {
+    let mut state = AppState::new();
+    state.ui.record_recent_denial(
+        "Bash".into(),
+        "Bash".into(),
+        "destructive filesystem operation".into(),
+    );
+    let mut editor = PermissionsEditorState::from_payload(payload());
+    editor.set_recent_denials(state.ui.recent_denials_snapshot());
+    state.ui.show_modal(ModalState::PermissionsEditor(editor));
     state
 }
 
@@ -52,6 +65,60 @@ fn submit_on_add_sentinel_opens_form() {
     // Cursor defaults to row 0 = the Add sentinel.
     assert!(on_submit(&mut state));
     assert!(editor(&state).add_form.is_some());
+}
+
+#[tokio::test]
+async fn approved_recent_denial_is_removed_and_granted_on_close() {
+    let mut state = state_with_recent_editor();
+    let (tx, mut rx) = mpsc::channel(4);
+
+    assert!(on_submit(&mut state), "Enter toggles approved");
+    close_editor(&mut state, &tx).await;
+
+    assert!(
+        state.ui.recent_denials.is_empty(),
+        "approved denial should be removed from the session ring"
+    );
+    assert!(state.ui.modal.is_none(), "editor should close");
+    let cmd = rx.try_recv().expect("grant system message should dispatch");
+    match cmd {
+        UserCommand::PushSystemMessage {
+            kind: SystemPushKind::PermissionRetry { tool_name, message },
+        } => {
+            assert_eq!(tool_name, "Bash");
+            assert_eq!(
+                message,
+                "Permission granted for: Bash. You may now retry this command if you would like."
+            );
+        }
+        other => panic!("expected permission retry grant, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn retry_recent_denial_is_removed_and_requery_requested_on_close() {
+    let mut state = state_with_recent_editor();
+    let (tx, mut rx) = mpsc::channel(4);
+
+    assert!(toggle_recent_retry(&mut state), "r toggles retry");
+    close_editor(&mut state, &tx).await;
+
+    assert!(
+        state.ui.recent_denials.is_empty(),
+        "retry denial should be removed from the session ring"
+    );
+    assert!(state.ui.modal.is_none(), "editor should close");
+    let cmd = rx.try_recv().expect("retry command should dispatch");
+    match cmd {
+        UserCommand::RetryPermissionDenied { tool_name, message } => {
+            assert_eq!(tool_name, "Bash");
+            assert_eq!(
+                message,
+                "Permission granted for: Bash. You may now retry this command if you would like."
+            );
+        }
+        other => panic!("expected permission retry command, got {other:?}"),
+    }
 }
 
 #[test]

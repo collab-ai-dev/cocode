@@ -2,6 +2,7 @@ use super::*;
 use crate::i18n::locale_test_guard;
 use crate::state::McpServerOption;
 use crate::state::McpServerSelectState;
+use crate::state::PluginDialogState;
 use crate::state::SkillsDialogState;
 use crate::theme::Theme;
 use coco_tui_ui::style::UiStyles;
@@ -111,6 +112,59 @@ fn skills_dialog_content_renders_flat_list_with_state_and_lock() {
     assert!(body.contains("off"));
     // Plugin footer.
     assert!(body.contains("Plugin skills are managed via /plugin"));
+}
+
+#[test]
+fn plugin_dialog_installed_tab_renders_skills_section() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let payload = coco_types::PluginDialogPayload {
+        installed: vec![coco_types::PluginDialogInstalledRow {
+            id: "demo@market".into(),
+            name: "demo".into(),
+            version: Some("1.0.0".into()),
+            description: Some("Demo plugin".into()),
+            source: "marketplace:market".into(),
+            path: "/tmp/demo".into(),
+            enabled: true,
+            blocked_by_policy: false,
+            options: Vec::new(),
+            mcp_servers: Vec::new(),
+            actions: vec![coco_types::PluginDialogAction {
+                label: "Disable plugin".into(),
+                plugin_args: "disable demo@market".into(),
+            }],
+        }],
+        skills: vec![coco_types::PluginDialogSkillRow {
+            id: "skill:deploy".into(),
+            name: "deploy".into(),
+            description: "Deploy the project".into(),
+            source: coco_types::SkillsDialogSource::Project,
+            override_state: coco_types::SkillOverrideState::UserInvocableOnly,
+            lock_source: Some(coco_types::SkillLockSource::Author),
+            token_estimate: 42,
+            usage: Some(coco_types::PluginDialogSkillUsage {
+                count: 3,
+                days_since_use: 2,
+            }),
+        }],
+        marketplaces: Vec::new(),
+        errors: Vec::new(),
+    };
+    let mut state = PluginDialogState::from_wire(payload);
+
+    let (_, body, _) = plugin_dialog_content(&state, UiStyles::new(&theme));
+    assert!(body.contains("[Installed 2]"));
+    assert!(body.contains("demo@market v1.0.0 · enabled"));
+    assert!(body.contains("Skills"));
+    assert!(body.contains("deploy · user-only · project · ~42 tok"));
+    assert!(body.contains("locked by author"));
+    assert!(body.contains("used 3x, 2d ago"));
+
+    state.selected_idx = 1;
+    let (_, body, _) = plugin_dialog_content(&state, UiStyles::new(&theme));
+    assert!(body.contains("Deploy the project"));
+    assert!(body.contains("Manage skills with /skills"));
 }
 
 #[test]

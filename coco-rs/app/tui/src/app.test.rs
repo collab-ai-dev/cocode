@@ -16,9 +16,17 @@ use crossterm::event::KeyModifiers;
 
 use super::DEFERRED_CORE_EVENT_LIMIT;
 use super::DeferredCoreEvent;
+use super::auto_mode_denied_toast_message;
 use super::convert_crossterm_event;
 use super::defer_core_event;
+use super::handle_classifier_denied;
 use crate::events::TuiEvent;
+use crate::state::AppState;
+use crate::state::ExplainerFetch;
+use crate::state::PanePromptState;
+use crate::state::PermissionDetail;
+use crate::state::PermissionPromptState;
+use crate::state::ToastSeverity;
 
 fn key(code: KeyCode, modifiers: KeyModifiers, kind: KeyEventKind) -> KeyEvent {
     KeyEvent {
@@ -34,6 +42,97 @@ fn converts_to_key_event(key_event: KeyEvent) -> bool {
         convert_crossterm_event(Event::Key(key_event)),
         Some(TuiEvent::Key(_))
     )
+}
+
+fn classifier_prompt(request_id: &str) -> PermissionPromptState {
+    PermissionPromptState {
+        request_id: request_id.to_string(),
+        tool_name: "Bash".to_string(),
+        description: "Run command".to_string(),
+        detail: PermissionDetail::Bash {
+            command: "rm -rf /tmp/test".to_string(),
+            risk_description: None,
+            working_dir: None,
+        },
+        risk_level: None,
+        show_always_allow: true,
+        classifier_checking: true,
+        classifier_auto_approved: None,
+        choices: None,
+        selected_choice: 0,
+        display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".to_string()),
+        original_input: None,
+        cwd: None,
+        permission_suggestions: Vec::new(),
+        worker_badge: None,
+        explanation_visible: false,
+        explanation: ExplainerFetch::NotFetched,
+        prefix_input: None,
+    }
+}
+
+#[test]
+fn classifier_denied_toast_includes_reason_and_permissions_hint() {
+    let mut state = AppState::new();
+    state
+        .ui
+        .push_prompt(PanePromptState::Permission(classifier_prompt("req-1")));
+
+    assert!(handle_classifier_denied(
+        &mut state,
+        "req-1",
+        "destructive filesystem operation",
+    ));
+
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(PanePromptState::Permission(prompt)) => assert!(!prompt.classifier_checking),
+        other => panic!("expected permission prompt, got {other:?}"),
+    }
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);
+    assert_eq!(
+        state.ui.toasts[0].message,
+        "bash denied by auto mode · destructive filesystem operation · /permissions"
+    );
+    assert_eq!(state.ui.recent_denials.len(), 1);
+    assert_eq!(state.ui.recent_denials[0].display, "Run command");
+    assert_eq!(
+        state.ui.recent_denials[0].reason,
+        "destructive filesystem operation"
+    );
+}
+
+#[test]
+fn classifier_denied_toast_truncates_long_reason() {
+    let reason = "x".repeat(81);
+
+    let message = auto_mode_denied_toast_message("Bash", &reason);
+
+    assert_eq!(
+        message,
+        format!(
+            "bash denied by auto mode · {}… · /permissions",
+            "x".repeat(79)
+        )
+    );
+}
+
+#[test]
+fn classifier_denied_toast_truncates_by_utf16_units_without_splitting_chars() {
+    let exact_utf16_limit = "😀".repeat(40);
+    assert_eq!(
+        auto_mode_denied_toast_message("Bash", &exact_utf16_limit),
+        format!("bash denied by auto mode · {exact_utf16_limit} · /permissions")
+    );
+
+    let over_utf16_limit = format!("{}a", "😀".repeat(40));
+    assert_eq!(
+        auto_mode_denied_toast_message("Bash", &over_utf16_limit),
+        format!(
+            "bash denied by auto mode · {}… · /permissions",
+            "😀".repeat(39)
+        )
+    );
 }
 
 #[test]

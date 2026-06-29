@@ -145,6 +145,18 @@ pub trait McpHandle: Send + Sync {
         resource_uri: &str,
     ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError>;
 
+    /// List direct children of a directory resource from an MCP server.
+    async fn read_resource_directory(
+        &self,
+        _server_name: &str,
+        _resource_uri: &str,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "MCP directory resource listing not supported in this context",
+            coco_error::StatusCode::Internal,
+        )))
+    }
+
     /// Call an MCP tool.
     async fn call_tool(
         &self,

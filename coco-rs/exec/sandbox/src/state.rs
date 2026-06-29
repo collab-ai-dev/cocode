@@ -4,6 +4,7 @@
 //! shared via `Arc` across the system (shell executor, tool context, etc.).
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -96,6 +97,9 @@ pub struct SandboxState {
     violations: Arc<Mutex<ViolationStore>>,
     /// Hot-reloadable configuration.
     mutable: RwLock<MutableConfig>,
+    /// Hosts approved through the sandbox network prompt for this session.
+    /// Consulted by the proxy ask callback before prompting again.
+    session_allowed_hosts: Arc<RwLock<HashSet<String>>>,
     /// Platform-specific sandbox implementation.
     platform: Box<dyn SandboxPlatform>,
     /// Session-unique tag for macOS log stream filtering and command correlation.
@@ -163,6 +167,7 @@ impl SandboxState {
                 proxy_server: None,
                 bridge: None,
             }),
+            session_allowed_hosts: Arc::new(RwLock::new(HashSet::new())),
             platform,
             session_tag: generate_session_tag(),
             approval_bridge: std::sync::RwLock::new(None),
@@ -268,11 +273,20 @@ impl SandboxState {
 
     /// Get a snapshot of the sandbox settings.
     pub fn settings(&self) -> SandboxSettings {
-        self.mutable
+        let mut settings = self
+            .mutable
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .settings
-            .clone()
+            .clone();
+        merge_session_allowed_hosts(
+            &mut settings.network.allowed_domains,
+            &self
+                .session_allowed_hosts
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        settings
     }
 
     /// Get a snapshot of the sandbox config with bridge bind paths merged.
@@ -615,18 +629,38 @@ impl SandboxState {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()?;
+        let session_allowed_hosts = Arc::clone(&self.session_allowed_hosts);
         Some(Arc::new(move |host: String| {
             let bridge = bridge.clone();
+            let session_allowed_hosts = Arc::clone(&session_allowed_hosts);
             Box::pin(async move {
+                let host = normalize_session_allowed_host(&host);
+                if host.is_empty() {
+                    return false;
+                }
+                if session_allowed_hosts
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .contains(&host)
+                {
+                    return true;
+                }
                 let request = crate::bridge::SandboxApprovalRequest {
                     operation: crate::bridge::SandboxOperation::Network,
                     path: host.clone(),
                     reason: format!("network connection to {host}"),
                 };
-                matches!(
+                let approved = matches!(
                     bridge.request_approval(request).await,
                     crate::bridge::SandboxApprovalDecision::Approved
-                )
+                );
+                if approved {
+                    session_allowed_hosts
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(host);
+                }
+                approved
             }) as std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>
         }))
     }
@@ -931,9 +965,7 @@ impl SandboxState {
             extra_writable_binds,
             cmd,
         )?;
-        for (k, v) in &snap.proxy_env {
-            cmd.env(k, v);
-        }
+        apply_sandbox_env(cmd, &config.unset_env_vars, &snap.proxy_env);
         Ok(true)
     }
 
@@ -958,6 +990,38 @@ impl SandboxState {
             enforcement = ?m.enforcement,
             "Sandbox configuration hot-reloaded"
         );
+    }
+}
+
+fn normalize_session_allowed_host(host: &str) -> String {
+    host.trim()
+        .trim_end_matches('.')
+        .trim_matches(['[', ']'])
+        .to_lowercase()
+}
+
+fn merge_session_allowed_hosts(allowed_domains: &mut Vec<String>, hosts: &HashSet<String>) {
+    if hosts.is_empty() {
+        return;
+    }
+    let mut seen: HashSet<String> = allowed_domains.iter().map(|d| d.to_lowercase()).collect();
+    for host in hosts {
+        if seen.insert(host.clone()) {
+            allowed_domains.push(host.clone());
+        }
+    }
+}
+
+fn apply_sandbox_env(
+    cmd: &mut tokio::process::Command,
+    unset_env_vars: &[String],
+    proxy_env: &HashMap<String, String>,
+) {
+    for key in unset_env_vars {
+        cmd.env_remove(key);
+    }
+    for (k, v) in proxy_env {
+        cmd.env(k, v);
     }
 }
 

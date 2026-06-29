@@ -26,8 +26,10 @@ use std::path::PathBuf;
 
 use coco_types::SandboxMode;
 
+use crate::config::CredentialAccessMode;
 use crate::config::EnforcementLevel;
 use crate::config::SandboxConfig;
+use crate::config::SandboxCredentialsConfig;
 use crate::config::SandboxSettings;
 use crate::config::WritableRoot;
 
@@ -84,6 +86,9 @@ pub struct AdapterInputs<'a> {
     /// semantics as [`Self::sourced_permission_rules`].
     ///  `shouldAllowManagedReadPathsOnly`.
     pub sourced_filesystem_allow_read: Option<&'a [(coco_config::SettingSource, Vec<PathBuf>)]>,
+    /// Per-source merged `sandbox.credentials` with file paths already
+    /// resolved against the declaring settings source.
+    pub sourced_sandbox_credentials: Option<&'a SandboxCredentialsConfig>,
 }
 
 /// Output produced by the adapter and consumed by [`crate::SandboxState`].
@@ -115,6 +120,7 @@ pub fn build_runtime_config(inputs: AdapterInputs<'_>) -> AdapterOutput {
     let deny_write_paths = collect_deny_write_paths(&inputs, &settings);
     let (denied_read_paths, denied_read_globs) = collect_deny_read_paths(&inputs, &settings);
     let allowed_read_paths = collect_allow_read_paths(&inputs, &settings);
+    let unset_env_vars = collect_unset_env_vars(&inputs, &settings);
 
     let enforcement = EnforcementLevel::from(inputs.mode);
 
@@ -132,6 +138,7 @@ pub fn build_runtime_config(inputs: AdapterInputs<'_>) -> AdapterOutput {
             || !network_isolated(&settings),
         proxy_active: false,
         extra_bind_ro: Vec::new(),
+        unset_env_vars,
         weaker_network_isolation: settings.enable_weaker_network_isolation,
         allow_pty: settings.allow_pty,
     };
@@ -343,10 +350,60 @@ fn collect_deny_read_paths(
         }
     }
 
+    let credential_files = inputs
+        .sourced_sandbox_credentials
+        .map(|credentials| &credentials.files)
+        .or_else(|| {
+            settings
+                .credentials
+                .as_ref()
+                .map(|credentials| &credentials.files)
+        });
+    if let Some(files) = credential_files {
+        for file in files {
+            if file.mode != CredentialAccessMode::Deny {
+                continue;
+            }
+            let raw = file.path.to_string_lossy();
+            if crate::glob_expansion::looks_like_glob(&raw) {
+                globs.push(raw.into_owned());
+            } else if inputs.sourced_sandbox_credentials.is_some() {
+                paths.push(file.path.clone());
+            } else {
+                paths.push(resolve_filesystem_path(&file.path, inputs.settings_root));
+            }
+        }
+    }
+
     dedup_paths(&mut paths);
     globs.sort();
     globs.dedup();
     (paths, globs)
+}
+
+fn collect_unset_env_vars(inputs: &AdapterInputs<'_>, settings: &SandboxSettings) -> Vec<String> {
+    let mut vars = Vec::new();
+    let credential_env_vars = inputs
+        .sourced_sandbox_credentials
+        .map(|credentials| &credentials.env_vars)
+        .or_else(|| {
+            settings
+                .credentials
+                .as_ref()
+                .map(|credentials| &credentials.env_vars)
+        });
+
+    if let Some(env_vars) = credential_env_vars {
+        for var in env_vars {
+            if var.mode == CredentialAccessMode::Deny {
+                vars.push(var.name.clone());
+            }
+        }
+    }
+
+    vars.sort();
+    vars.dedup();
+    vars
 }
 
 /// Collect allow-read carve-out paths from settings.

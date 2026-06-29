@@ -54,15 +54,15 @@ fn sample_payload() -> PermissionsEditorPayload {
 #[test]
 fn tab_cycles_wrap_both_directions() {
     assert_eq!(
-        PermissionsEditorTab::Allow.cycled(1),
-        PermissionsEditorTab::Ask
-    );
-    assert_eq!(
-        PermissionsEditorTab::Workspace.cycled(1),
+        PermissionsEditorTab::Recent.cycled(1),
         PermissionsEditorTab::Allow
     );
     assert_eq!(
-        PermissionsEditorTab::Allow.cycled(-1),
+        PermissionsEditorTab::Workspace.cycled(1),
+        PermissionsEditorTab::Recent
+    );
+    assert_eq!(
+        PermissionsEditorTab::Recent.cycled(-1),
         PermissionsEditorTab::Workspace
     );
 }
@@ -122,7 +122,7 @@ fn policy_rule_is_read_only() {
 #[test]
 fn from_payload_prepends_readonly_cwd_row() {
     let state = PermissionsEditorState::from_payload(sample_payload());
-    assert_eq!(state.selected_tab, PermissionsEditorTab::Allow);
+    assert_eq!(state.selected_tab, PermissionsEditorTab::Recent);
     // cwd row first, then the one settings dir.
     assert_eq!(state.directories.len(), 2);
     assert!(state.directories[0].is_cwd);
@@ -142,7 +142,8 @@ fn rules_for_partitions_by_behavior() {
 
 #[test]
 fn active_len_includes_add_sentinel() {
-    let state = PermissionsEditorState::from_payload(sample_payload());
+    let mut state = PermissionsEditorState::from_payload(sample_payload());
+    state.selected_tab = PermissionsEditorTab::Allow;
     // Allow tab: 1 sentinel + 2 allow rules.
     assert_eq!(state.active_len(), 3);
 }
@@ -150,6 +151,7 @@ fn active_len_includes_add_sentinel() {
 #[test]
 fn nav_clamps_at_ends_no_wrap() {
     let mut state = PermissionsEditorState::from_payload(sample_payload());
+    state.selected_tab = PermissionsEditorTab::Allow;
     // Allow tab has 3 rows (0..2).
     assert!(!state.nav(-1)); // already at 0
     assert!(state.nav(1));
@@ -162,11 +164,28 @@ fn nav_clamps_at_ends_no_wrap() {
 
 #[test]
 fn focused_resolves_add_then_rules() {
-    let state = PermissionsEditorState::from_payload(sample_payload());
+    let mut state = PermissionsEditorState::from_payload(sample_payload());
+    state.selected_tab = PermissionsEditorTab::Allow;
     assert!(matches!(state.focused(), Focused::Add));
-    let mut state = state;
     state.nav(1);
     assert!(matches!(state.focused(), Focused::Rule(_)));
+}
+
+#[test]
+fn recent_tab_has_no_add_sentinel_and_focuses_denials() {
+    let mut state = PermissionsEditorState::from_payload(sample_payload());
+    state.set_recent_denials(vec![RecentDenialRow {
+        id: 7,
+        tool_name: "Bash".into(),
+        display: "Bash".into(),
+        reason: "destructive filesystem operation".into(),
+        approved: false,
+        retry: false,
+    }]);
+
+    assert_eq!(state.selected_tab, PermissionsEditorTab::Recent);
+    assert_eq!(state.active_len(), 1);
+    assert!(matches!(state.focused(), Focused::RecentDenial(row) if row.id == 7));
 }
 
 #[test]

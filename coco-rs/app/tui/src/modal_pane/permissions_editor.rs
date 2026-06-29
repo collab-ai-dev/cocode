@@ -18,6 +18,7 @@
 
 use tokio::sync::mpsc;
 
+use crate::command::SystemPushKind;
 use crate::command::UserCommand;
 use crate::events::TuiCommand;
 use crate::state::AddForm;
@@ -32,8 +33,11 @@ use crate::state::PermEditorError;
 use crate::state::PermEditorFocused;
 use crate::state::PermRuleRow;
 use crate::state::PermissionsEditorState;
+use crate::state::PermissionsEditorTab;
+use crate::state::RecentDenialRow;
 use crate::state::permissions_editor::source_destination;
 
+use coco_types::PermissionBehavior;
 use coco_types::PermissionRule;
 use coco_types::PermissionUpdate;
 use crossterm::event::KeyCode;
@@ -98,10 +102,13 @@ pub(crate) async fn intercept(
         TuiCommand::CursorUp => Handled::Yes(nav(state, -1)),
         TuiCommand::CursorDown => Handled::Yes(nav(state, 1)),
         TuiCommand::Cancel => {
-            state.ui.dismiss_modal();
+            close_editor(state, command_tx).await;
             Handled::Yes(true)
         }
         TuiCommand::SubmitInput => Handled::Yes(on_submit(state)),
+        TuiCommand::InsertChar(c) if c.eq_ignore_ascii_case(&'r') => {
+            Handled::Yes(toggle_recent_retry(state))
+        }
         // Swallow stray keys (chars in list mode etc.) without burning a
         // frame on a no-op.
         _ => Handled::Yes(false),
@@ -148,6 +155,7 @@ enum SubmitAction {
     OpenAdd,
     DeleteRule(PermRuleRow),
     DeleteDir(PermDirRow),
+    ToggleRecentApproved,
     None,
 }
 
@@ -156,11 +164,13 @@ fn on_submit(state: &mut AppState) -> bool {
         let Some(editor) = editor_ref(state) else {
             return false;
         };
-        // Managed-policy lockdown: no add / delete.
-        if editor.managed_only {
+        // Managed-policy lockdown: no add / delete. Recent-denial
+        // approvals are session-local and remain available.
+        if editor.managed_only && editor.selected_tab != PermissionsEditorTab::Recent {
             return false;
         }
         match editor.focused() {
+            PermEditorFocused::RecentDenial(_) => SubmitAction::ToggleRecentApproved,
             PermEditorFocused::Add => SubmitAction::OpenAdd,
             PermEditorFocused::Rule(rule) if rule.is_editable() => {
                 SubmitAction::DeleteRule(rule.clone())
@@ -174,6 +184,9 @@ fn on_submit(state: &mut AppState) -> bool {
             }
         }
     };
+    if matches!(action, SubmitAction::ToggleRecentApproved) {
+        return toggle_recent_approved(state);
+    }
     let Some(editor) = editor_mut(state) else {
         return false;
     };
@@ -196,8 +209,128 @@ fn on_submit(state: &mut AppState) -> bool {
             });
             true
         }
+        SubmitAction::ToggleRecentApproved => false,
         SubmitAction::None => false,
     }
+}
+
+fn toggle_recent_approved(state: &mut AppState) -> bool {
+    let Some(editor) = editor_mut(state) else {
+        return false;
+    };
+    if editor.selected_tab != PermissionsEditorTab::Recent {
+        return false;
+    }
+    let cursor = editor.active_cursor();
+    let Some(row) = editor.recent_denials.get_mut(cursor) else {
+        return false;
+    };
+    row.approved = !row.approved;
+    if !row.approved {
+        row.retry = false;
+    }
+    true
+}
+
+fn toggle_recent_retry(state: &mut AppState) -> bool {
+    let Some(editor) = editor_mut(state) else {
+        return false;
+    };
+    if editor.selected_tab != PermissionsEditorTab::Recent {
+        return false;
+    }
+    let cursor = editor.active_cursor();
+    let Some(row) = editor.recent_denials.get_mut(cursor) else {
+        return false;
+    };
+    row.retry = !row.retry;
+    if row.retry {
+        row.approved = true;
+    }
+    true
+}
+
+async fn close_editor(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
+    let (retry, approved) = match editor_ref(state) {
+        Some(editor) => (
+            editor
+                .recent_denials
+                .iter()
+                .filter(|row| row.retry)
+                .cloned()
+                .collect::<Vec<_>>(),
+            editor
+                .recent_denials
+                .iter()
+                .filter(|row| row.approved && !row.retry)
+                .cloned()
+                .collect::<Vec<_>>(),
+        ),
+        None => {
+            state.ui.dismiss_modal();
+            return;
+        }
+    };
+
+    if !retry.is_empty() {
+        commit_recent_denial_retry(state, command_tx, retry).await;
+        state.ui.dismiss_modal();
+        return;
+    }
+    if !approved.is_empty() {
+        commit_recent_denial_grant(state, command_tx, approved).await;
+    }
+    state.ui.dismiss_modal();
+}
+
+async fn commit_recent_denial_grant(
+    state: &mut AppState,
+    command_tx: &mpsc::Sender<UserCommand>,
+    rows: Vec<RecentDenialRow>,
+) {
+    let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
+    let labels = rows
+        .iter()
+        .map(RecentDenialRow::grant_label)
+        .collect::<Vec<_>>();
+    state.ui.remove_recent_denials(&ids);
+    let message = permission_granted_message(&labels);
+    let tool_name = labels.join(", ");
+    let _ = command_tx
+        .send(UserCommand::PushSystemMessage {
+            kind: SystemPushKind::PermissionRetry { tool_name, message },
+        })
+        .await;
+}
+
+async fn commit_recent_denial_retry(
+    state: &mut AppState,
+    command_tx: &mpsc::Sender<UserCommand>,
+    rows: Vec<RecentDenialRow>,
+) {
+    let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
+    let labels = rows
+        .iter()
+        .map(RecentDenialRow::grant_label)
+        .collect::<Vec<_>>();
+    state.ui.remove_recent_denials(&ids);
+    let message = permission_granted_message(&labels);
+    let tool_name = labels.join(", ");
+    let _ = command_tx
+        .send(UserCommand::RetryPermissionDenied { tool_name, message })
+        .await;
+}
+
+fn permission_granted_message(labels: &[String]) -> String {
+    let commands = if labels.len() == 1 {
+        "this command"
+    } else {
+        "these commands"
+    };
+    format!(
+        "Permission granted for: {}. You may now retry {commands} if you would like.",
+        labels.join(", ")
+    )
 }
 
 // ── Add form ───────────────────────────────────────────────────────
@@ -450,22 +583,39 @@ fn build_add_update(state: &AppState) -> Option<PermissionUpdate> {
         return None;
     }
     let dest: EditorDestination = form.selected_destination();
-    match editor.selected_tab.behavior() {
-        Some(behavior) => {
-            let value = coco_types::parse_rule_pattern(input);
-            Some(PermissionUpdate::AddRules {
-                rules: vec![PermissionRule {
-                    source: dest.as_rule_source(),
-                    behavior,
-                    value,
-                }],
-                destination: dest.as_update_destination(),
-            })
+    match editor.selected_tab {
+        PermissionsEditorTab::Allow => Some(build_add_rule_update(
+            input,
+            dest,
+            PermissionBehavior::Allow,
+        )),
+        PermissionsEditorTab::Ask => {
+            Some(build_add_rule_update(input, dest, PermissionBehavior::Ask))
         }
-        None => Some(PermissionUpdate::AddDirectories {
+        PermissionsEditorTab::Deny => {
+            Some(build_add_rule_update(input, dest, PermissionBehavior::Deny))
+        }
+        PermissionsEditorTab::Workspace => Some(PermissionUpdate::AddDirectories {
             directories: vec![input.to_string()],
             destination: dest.as_update_destination(),
         }),
+        PermissionsEditorTab::Recent => None,
+    }
+}
+
+fn build_add_rule_update(
+    input: &str,
+    dest: EditorDestination,
+    behavior: PermissionBehavior,
+) -> PermissionUpdate {
+    let value = coco_types::parse_rule_pattern(input);
+    PermissionUpdate::AddRules {
+        rules: vec![PermissionRule {
+            source: dest.as_rule_source(),
+            behavior,
+            value,
+        }],
+        destination: dest.as_update_destination(),
     }
 }
 

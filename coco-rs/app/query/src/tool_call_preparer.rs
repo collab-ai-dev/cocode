@@ -409,6 +409,9 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         }
     }
 
+    let auto_classify = should_auto_classify(ctx.permission_context.mode, auto_mode_state);
+    let suspend_shell_allow_rules = auto_classify && auto_mode_rules.classify_all_shell;
+
     let mut decision = match hook_permission_behavior {
         Some(coco_types::PermissionBehavior::Allow) => PermissionDecision::Allow {
             updated_input: None,
@@ -430,7 +433,7 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
                 reason: hook_permission_reason,
             },
         },
-        None => evaluate_with_rules(tool, effective_input, ctx).await,
+        None => evaluate_with_rules(tool, effective_input, ctx, suspend_shell_allow_rules).await,
     };
 
     //: a tool that *requires* user interaction
@@ -447,7 +450,6 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
     // auto flag is set ().
     // Because each subagent carries its own `permission_context.mode`, a
     // concurrent engine build can no longer race the classifier off.
-    let auto_classify = should_auto_classify(ctx.permission_context.mode, auto_mode_state);
     if matches!(decision, PermissionDecision::Ask { .. })
         && !tool.requires_user_interaction()
         && auto_classify
@@ -662,6 +664,7 @@ async fn evaluate_with_rules(
     tool: &Arc<dyn DynTool>,
     effective_input: &Value,
     ctx: &ToolUseContext,
+    suspend_shell_allow_rules: bool,
 ) -> PermissionDecision {
     use coco_types::ToolCheckResult;
 
@@ -694,6 +697,7 @@ async fn evaluate_with_rules(
             dynamic_read_only,
             sandbox_auto_allow_bash,
             shell_cwd,
+            suspend_shell_allow_rules,
         },
     )
 }

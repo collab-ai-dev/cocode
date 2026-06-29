@@ -375,12 +375,20 @@ fn test_mcp_runtime_config_json_first_env_override() {
     let settings = Settings {
         mcp_runtime: PartialMcpRuntimeSettings {
             tool_timeout_ms: Some(5_000),
+            tool_idle_timeout_ms: Some(4_000),
         },
         ..Default::default()
     };
-    let env = EnvSnapshot::from_pairs([(EnvKey::CocoMcpToolTimeoutMs, "2500")]);
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoMcpToolTimeoutMs, "2500"),
+        (EnvKey::ClaudeCodeMcpToolIdleTimeout, "0"),
+        (EnvKey::CocoMcpToolIdleTimeoutMs, "750"),
+    ]);
 
     let config = McpRuntimeConfig::resolve(&settings, &env);
 
     assert_eq!(config.tool_timeout_ms, Some(2_500));
+    // Native COCO spelling beats the Claude Code compatibility env, and
+    // positive idle values are floored to 1s; 0 still disables when selected.
+    assert_eq!(config.tool_idle_timeout_ms, Some(1_000));
 }

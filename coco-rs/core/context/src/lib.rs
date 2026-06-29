@@ -54,6 +54,7 @@ pub use environment::EnvironmentInfo;
 pub use environment::GitStatus;
 pub use environment::Platform;
 pub use environment::ShellKind;
+pub use environment::build_agent_proxy_env_line;
 pub use environment::get_environment_info;
 pub use file_cache::FileReadCache;
 pub use file_history::DiffStats;

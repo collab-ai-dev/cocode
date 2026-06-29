@@ -113,6 +113,43 @@ pub struct FilesystemConfig {
     pub allow_managed_read_paths_only: bool,
 }
 
+/// Access mode for sandbox-protected credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CredentialAccessMode {
+    /// Deny reads for files/directories or unset an environment variable.
+    Deny,
+}
+
+/// Credential file or directory protected from sandboxed commands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialFileEntry {
+    /// Path to a credential file or directory.
+    pub path: PathBuf,
+    /// Protection mode. Public schema supports only `deny`.
+    pub mode: CredentialAccessMode,
+}
+
+/// Secret environment variable protected from sandboxed commands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialEnvVarEntry {
+    /// Environment variable name.
+    pub name: String,
+    /// Protection mode. Public schema supports only `deny`.
+    pub mode: CredentialAccessMode,
+}
+
+/// Credentials that sandboxed commands must not read from files or env.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SandboxCredentialsConfig {
+    /// Credential files or directories to deny-read inside the sandbox.
+    #[serde(default)]
+    pub files: Vec<CredentialFileEntry>,
+    /// Environment variables to unset before launching sandboxed commands.
+    #[serde(default, alias = "envVars")]
+    pub env_vars: Vec<CredentialEnvVarEntry>,
+}
+
 /// Network access configuration for the sandbox.
 /// The `denied_domains` and `mode` fields are local extensions that
 /// gracefully degrade when consumed by clients that ignore extra fields.
@@ -251,6 +288,10 @@ pub struct SandboxSettings {
     #[serde(default)]
     pub network: NetworkConfig,
 
+    /// Credential files/env vars hidden from sandboxed commands.
+    #[serde(default)]
+    pub credentials: Option<SandboxCredentialsConfig>,
+
     /// Per-command violation ignore patterns.
     #[serde(default)]
     pub ignore_violations: IgnoreViolationsConfig,
@@ -312,6 +353,7 @@ impl Default for SandboxSettings {
             excluded_commands: Vec::new(),
             filesystem: FilesystemConfig::default(),
             network: NetworkConfig::default(),
+            credentials: None,
             ignore_violations: HashMap::new(),
             enable_weaker_nested_sandbox: false,
             enable_weaker_network_isolation: false,
@@ -751,6 +793,111 @@ impl SettingsWithSource {
         }
         out
     }
+
+    /// Merge per-source `sandbox.credentials`, resolving file paths against
+    /// the source that declared them. Returns `None` when no source configured
+    /// credentials.
+    pub fn sourced_sandbox_credentials(
+        &self,
+        project_root: &Path,
+    ) -> Option<SandboxCredentialsConfig> {
+        let mut files = Vec::new();
+        let mut env_vars = Vec::new();
+        let mut any = false;
+
+        for source in [
+            SettingSource::User,
+            SettingSource::Project,
+            SettingSource::Local,
+            SettingSource::Flag,
+            SettingSource::Policy,
+        ] {
+            let Some(raw) = self.per_source.get(&source) else {
+                continue;
+            };
+            let Some(value) = raw.pointer("/sandbox/credentials") else {
+                continue;
+            };
+            let Ok(mut credentials) =
+                serde_json::from_value::<SandboxCredentialsConfig>(value.clone())
+            else {
+                continue;
+            };
+            any = true;
+
+            let root = sandbox_source_root(source, &self.source_paths, project_root);
+            for file in &mut credentials.files {
+                file.path = resolve_credential_path(&file.path, &root);
+            }
+            files.extend(credentials.files);
+            env_vars.extend(credentials.env_vars);
+        }
+
+        if any {
+            dedup_credential_files(&mut files);
+            dedup_credential_env_vars(&mut env_vars);
+            Some(SandboxCredentialsConfig { files, env_vars })
+        } else {
+            None
+        }
+    }
+}
+
+fn sandbox_source_root(
+    source: SettingSource,
+    paths: &std::collections::HashMap<SettingSource, PathBuf>,
+    project_root: &Path,
+) -> PathBuf {
+    let from_source_path = paths.get(&source).and_then(|path| path.parent());
+    match source {
+        SettingSource::User => from_source_path
+            .map(Path::to_path_buf)
+            .unwrap_or_else(crate::global_config::config_home),
+        SettingSource::Project | SettingSource::Local => from_source_path
+            .and_then(|parent| {
+                if parent.file_name().is_some_and(|name| {
+                    name == std::ffi::OsStr::new(coco_utils_common::COCO_CONFIG_DIR_NAME)
+                }) {
+                    parent.parent()
+                } else {
+                    Some(parent)
+                }
+            })
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| project_root.to_path_buf()),
+        SettingSource::Flag | SettingSource::Policy => from_source_path
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| project_root.to_path_buf()),
+        SettingSource::Plugin => project_root.to_path_buf(),
+    }
+}
+
+fn resolve_credential_path(path: &Path, root: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let s = path.to_string_lossy();
+    if s == "~"
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home);
+    }
+    if let Some(rest) = s.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(rest);
+    }
+    root.join(path)
+}
+
+fn dedup_credential_files(files: &mut Vec<CredentialFileEntry>) {
+    let mut seen = std::collections::HashSet::new();
+    files.retain(|file| seen.insert((file.path.clone(), file.mode)));
+}
+
+fn dedup_credential_env_vars(env_vars: &mut Vec<CredentialEnvVarEntry>) {
+    let mut seen = std::collections::HashSet::new();
+    env_vars.retain(|var| seen.insert((var.name.clone(), var.mode)));
 }
 
 /// Walk a JSON pointer that should resolve to an array of strings.

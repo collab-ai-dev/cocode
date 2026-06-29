@@ -1,6 +1,71 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use super::*;
+use tracing::Level;
+use tracing::Metadata;
+use tracing::field::Field;
+use tracing::field::Visit;
+use tracing::subscriber::Interest;
+use tracing_subscriber::layer::SubscriberExt;
+
+struct CapturingLayer {
+    fields: Arc<Mutex<Vec<HashMap<String, String>>>>,
+}
+
+impl<S> tracing_subscriber::Layer<S> for CapturingLayer
+where
+    S: tracing::Subscriber,
+{
+    fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
+        if level_enabled(*metadata.level()) {
+            Interest::always()
+        } else {
+            Interest::never()
+        }
+    }
+
+    fn enabled(
+        &self,
+        metadata: &Metadata<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        level_enabled(*metadata.level())
+    }
+
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut visitor = FieldVisitor::default();
+        event.record(&mut visitor);
+        self.fields.lock().unwrap().push(visitor.fields);
+    }
+}
+
+fn level_enabled(level: Level) -> bool {
+    matches!(level, Level::ERROR | Level::WARN | Level::INFO)
+}
+
+#[derive(Default)]
+struct FieldVisitor {
+    fields: HashMap<String, String>,
+}
+
+impl Visit for FieldVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.fields
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.fields
+            .insert(field.name().to_string(), format!("{value:?}"));
+    }
+}
 
 fn config_home(root: &str) -> PathBuf {
     PathBuf::from(format!(
@@ -961,6 +1026,45 @@ fn test_load_from_markdown_plain_prose_loads_as_body() {
     let skill = parse_skill_markdown(content, Path::new("/tmp/bad.md")).unwrap();
     assert_eq!(skill.name, "bad");
     assert_eq!(skill.prompt, "Just some plain text, not a skill at all.");
+}
+
+#[test]
+fn test_load_from_markdown_malformed_yaml_loads_body_with_empty_metadata() {
+    let content = "---\nmetadata:\n  - [unterminated\n---\nBody still loads.\n";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/bad-yaml.md")).unwrap();
+    assert_eq!(skill.name, "bad-yaml");
+    assert_eq!(skill.prompt, "Body still loads.");
+    assert_eq!(skill.description, "Body still loads.");
+    assert!(!skill.has_user_specified_description);
+}
+
+#[test]
+fn test_load_from_markdown_malformed_yaml_emits_skill_load_yaml_failed_event() {
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(CapturingLayer {
+        fields: Arc::clone(&captured),
+    });
+    let content = "---\nmetadata:\n  - [unterminated\n---\nBody still loads.\n";
+
+    tracing::subscriber::with_default(subscriber, || {
+        parse_skill_markdown(content, Path::new("/tmp/bad-yaml.md")).unwrap();
+    });
+
+    let events = captured.lock().unwrap();
+    assert!(
+        events.iter().any(|fields| {
+            fields
+                .get("event_type")
+                .is_some_and(|v| v == "tengu_feature_sad")
+                && fields
+                    .get("feature_name")
+                    .is_some_and(|v| v == SKILL_LOAD_DIR_FEATURE)
+                && fields
+                    .get("error_code")
+                    .is_some_and(|v| v == SKILL_LOAD_YAML_FAILED)
+        }),
+        "malformed skill YAML should emit the upstream skill_load_yaml_failed telemetry event; got {events:?}"
+    );
 }
 
 #[test]

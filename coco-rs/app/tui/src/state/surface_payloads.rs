@@ -594,21 +594,47 @@ impl WorkflowAgentStatusFilter {
         Self::Interrupted,
     ];
 
-    pub fn from_progress_event(event: &coco_types::WorkflowProgressEvent) -> Option<Self> {
+    pub fn from_progress_event(
+        event: &coco_types::WorkflowProgressEvent,
+        is_running: bool,
+    ) -> Option<Self> {
         match event {
-            coco_types::WorkflowProgressEvent::WorkflowAgent { state, .. } => match state {
+            coco_types::WorkflowProgressEvent::WorkflowAgent {
+                state,
+                started_at,
+                queued_at,
+                skipped,
+                ..
+            } => match state {
+                coco_types::WorkflowAgentState::Done => Some(Self::Done),
+                coco_types::WorkflowAgentState::Error if *skipped => Some(Self::Skipped),
+                coco_types::WorkflowAgentState::Error => Some(Self::Failed),
+                coco_types::WorkflowAgentState::Start
+                | coco_types::WorkflowAgentState::Progress
+                    if !is_running =>
+                {
+                    Some(Self::Interrupted)
+                }
+                coco_types::WorkflowAgentState::Start
+                | coco_types::WorkflowAgentState::Progress
+                    if queued_at.is_some() && started_at.is_none() =>
+                {
+                    Some(Self::Queued)
+                }
                 coco_types::WorkflowAgentState::Start
                 | coco_types::WorkflowAgentState::Progress => Some(Self::Running),
-                coco_types::WorkflowAgentState::Done => Some(Self::Done),
-                coco_types::WorkflowAgentState::Error => Some(Self::Failed),
             },
             coco_types::WorkflowProgressEvent::WorkflowPhase { .. }
             | coco_types::WorkflowProgressEvent::WorkflowLog { .. } => None,
         }
     }
 
-    pub fn matches_event(self, event: &coco_types::WorkflowProgressEvent) -> bool {
-        self == Self::All || Self::from_progress_event(event) == Some(self)
+    pub fn matches_event(
+        self,
+        event: &coco_types::WorkflowProgressEvent,
+        is_running: bool,
+    ) -> bool {
+        self == Self::All || Self::from_progress_event(event, is_running) == Some(self)
     }
 
     pub fn next_with_present(self, present: &[Self]) -> Self {
