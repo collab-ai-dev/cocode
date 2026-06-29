@@ -4,11 +4,13 @@
 //! Here we cover the small pure helpers that downstream code relies on.
 
 use super::most_recent_assistant_exceeds;
+use crate::engine_helpers::compute_tools_delta;
 use coco_messages::AssistantContent;
 use coco_messages::Message;
 use coco_messages::create_assistant_message;
 use coco_messages::create_user_message;
 use coco_types::TokenUsage;
+use std::collections::HashSet;
 
 fn assistant_with_total(total: i64) -> Message {
     let usage = TokenUsage {
@@ -77,4 +79,25 @@ fn uses_normalized_input_and_output_tokens() {
     // Normalized input already includes cache read/write: 100k + 50k = 150k.
     assert!(!most_recent_assistant_exceeds(&msgs, 200_000));
     assert!(most_recent_assistant_exceeds(&msgs, 149_999));
+}
+
+#[test]
+fn compute_tools_delta_ignores_retired_tools_when_removing() {
+    let last_announced = HashSet::from([
+        "Frame".to_string(),
+        "TeamCreate".to_string(),
+        "ActiveMcpTool".to_string(),
+    ]);
+    let delta = compute_tools_delta(&[], &[], &last_announced).expect("active tool removed");
+
+    assert_eq!(delta.removed_names, vec!["ActiveMcpTool".to_string()]);
+}
+
+#[test]
+fn compute_tools_delta_ignores_retired_tools_when_adding() {
+    let current_deferred = vec!["SuggestBackgroundPR".to_string(), "NewMcpTool".to_string()];
+    let delta =
+        compute_tools_delta(&current_deferred, &[], &HashSet::new()).expect("new MCP tool added");
+
+    assert_eq!(delta.added_lines, vec!["- NewMcpTool".to_string()]);
 }

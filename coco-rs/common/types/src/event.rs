@@ -1720,7 +1720,7 @@ impl PermissionDisplayInput {
 /// (TUI-only, never sent to SDK) is preserved via consumer dispatch rules
 /// in `StreamAccumulator` and `handle_core_event()`.
 ///
-/// 23 variants (20 from design §4.1 + 3 local extensions).
+/// TUI-only variants emitted by the engine and local runtime helpers.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1783,6 +1783,14 @@ pub enum TuiOnlyEvent {
     SandboxApprovalRequired {
         request_id: String,
         operation: String,
+    },
+    /// Auto-mode classifier denied a tool call. TUI renders this as a
+    /// non-blocking toast; the transcript still receives the structured
+    /// execution-denied tool result separately.
+    AutoModeDenied {
+        tool_name: String,
+        display: String,
+        reason: String,
     },
     /// Lazily-fetched permission risk explanation is ready for the prompt
     /// `request_id`. `explanation` is `None` when the fetch failed or the
@@ -2348,6 +2356,8 @@ pub struct SkillLock {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PluginDialogPayload {
     pub installed: Vec<PluginDialogInstalledRow>,
+    #[serde(default)]
+    pub skills: Vec<PluginDialogSkillRow>,
     pub marketplaces: Vec<PluginDialogMarketplaceRow>,
     pub errors: Vec<PluginDialogErrorRow>,
 }
@@ -2371,6 +2381,28 @@ pub struct PluginDialogInstalledRow {
     pub mcp_servers: Vec<PluginDialogMcpServerRow>,
     #[serde(default)]
     pub actions: Vec<PluginDialogAction>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginDialogSkillRow {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub source: SkillsDialogSource,
+    pub override_state: SkillOverrideState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_source: Option<SkillLockSource>,
+    pub token_estimate: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<PluginDialogSkillUsage>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginDialogSkillUsage {
+    pub count: i64,
+    pub days_since_use: i64,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

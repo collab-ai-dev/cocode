@@ -241,6 +241,12 @@ fn render_env_block(env: &crate::EnvironmentInfo, additional_dirs: &[String]) ->
     s.push_str(&format!("Platform: {}\n", env.platform.ts_name()));
     s.push_str(&render_shell_line(env.shell));
     s.push_str(&format!("OS Version: {}\n", env.os_version));
+    if let Some(line) = env.agent_proxy_env_line.as_deref()
+        && !line.is_empty()
+    {
+        s.push_str(line);
+        s.push('\n');
+    }
     s.push_str("</env>\n");
     if !env.model.is_empty() {
         s.push_str(&format!("You are powered by the model {}.\n", env.model));

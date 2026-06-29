@@ -9,7 +9,9 @@ use crate::state::ModalState;
 use crate::state::PanePromptState;
 use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
+use crate::state::PermissionsEditorState;
 use crate::state::SlashCommandName;
+use coco_types::PermissionsEditorPayload;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -152,6 +154,54 @@ fn toast_does_not_create_prompt_or_modal() {
     assert!(ui.has_toasts());
     assert!(ui.modal.is_none());
     assert!(ui.interaction.active_prompt.is_none());
+}
+
+#[test]
+fn recent_denials_are_newest_first_and_capped_at_twenty() {
+    let mut ui = UiState::new();
+
+    for idx in 0..25 {
+        ui.record_recent_denial(
+            format!("Tool{idx}"),
+            format!("Tool{idx}"),
+            format!("reason {idx}"),
+        );
+    }
+
+    assert_eq!(ui.recent_denials.len(), 20);
+    assert_eq!(ui.recent_denials[0].display, "Tool24");
+    assert_eq!(ui.recent_denials[19].display, "Tool5");
+}
+
+#[test]
+fn recent_denials_do_not_refresh_open_permissions_editor_snapshot() {
+    let mut ui = UiState::new();
+    ui.record_recent_denial("Bash".into(), "Bash".into(), "first denial".into());
+    let mut editor = PermissionsEditorState::from_payload(PermissionsEditorPayload {
+        rules: vec![],
+        directories: vec![],
+        cwd: "/work".into(),
+        managed_only: false,
+    });
+    editor.set_recent_denials(ui.recent_denials_snapshot());
+    editor.recent_denials[0].approved = true;
+    ui.show_modal(ModalState::PermissionsEditor(editor));
+
+    ui.record_recent_denial(
+        "Write".into(),
+        "Write /tmp/file".into(),
+        "second denial".into(),
+    );
+
+    assert_eq!(ui.recent_denials.len(), 2);
+    match ui.modal.as_ref() {
+        Some(ModalState::PermissionsEditor(editor)) => {
+            assert_eq!(editor.recent_denials.len(), 1);
+            assert_eq!(editor.recent_denials[0].display, "Bash");
+            assert!(editor.recent_denials[0].approved);
+        }
+        other => panic!("expected permissions editor modal, got {other:?}"),
+    }
 }
 
 #[test]

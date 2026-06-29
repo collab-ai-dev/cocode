@@ -22,14 +22,20 @@ use coco_mcp_types::JSONRPC_VERSION;
 use coco_mcp_types::ListPromptsResult;
 use coco_mcp_types::ListResourcesResult;
 use coco_mcp_types::ListToolsResult;
+use coco_mcp_types::ReadResourceDirectoryRequestParams;
+use coco_mcp_types::ReadResourceDirectoryResult;
 use coco_mcp_types::ReadResourceRequestParams;
 use coco_mcp_types::ReadResourceResult;
+use coco_mcp_types::Resource;
+use coco_mcp_types::ServerCapabilities;
 use coco_rmcp_client::McpAuthStatus;
 use coco_rmcp_client::OAuthCredentialsStoreMode;
 use coco_rmcp_client::RmcpClient;
+use coco_rmcp_client::RmcpClientError;
 use coco_rmcp_client::SendElicitation;
 use coco_rmcp_client::determine_streamable_http_auth_status;
 use coco_rmcp_client::perform_oauth_login_return_url;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 use tracing::info;
@@ -48,9 +54,14 @@ use crate::types::ScopedMcpServerConfig;
 
 /// Default MCP tool call timeout (ms) — ~27.8 hours.
 const DEFAULT_TOOL_TIMEOUT_MS: u64 = 100_000_000;
+/// Default remote MCP tool-call idle timeout (ms) — 5 minutes of silence.
+const DEFAULT_TOOL_IDLE_TIMEOUT_MS: u64 = 300_000;
 
 /// Default MCP initialization timeout.
 const DEFAULT_INIT_TIMEOUT: Duration = Duration::from_secs(60);
+const DISCOVERY_RETRY_BACKOFFS_MS: [u64; 3] = [250, 500, 1000];
+const MCP_SKILLS_EXTENSION: &str = "io.modelcontextprotocol/skills";
+const MAX_DIRECTORY_READ_PAGES: usize = 20;
 
 pub type SdkRouteFuture =
     Pin<Box<dyn Future<Output = std::result::Result<serde_json::Value, String>> + Send>>;
@@ -67,6 +78,9 @@ pub struct McpConnectionManager {
     connections: Arc<RwLock<HashMap<String, McpConnectionState>>>,
     /// Holds the underlying rmcp clients, keyed by server name.
     rmcp_clients: Arc<RwLock<HashMap<String, Arc<RmcpClient>>>>,
+    /// Per-server lock used to dedupe headersHelper-triggered reconnects after
+    /// tool-call 401/403 responses.
+    tool_reconnect_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     sdk_route_message: Option<SdkRouteMessage>,
     /// Monotonic counter for inner JSON-RPC `id` values used when
     /// bridging messages through `mcp/routeMessage`. Per-manager so two
@@ -76,6 +90,7 @@ pub struct McpConnectionManager {
     /// from 0 each clone.
     sdk_route_next_id: Arc<AtomicI64>,
     tool_timeout_ms: u64,
+    tool_idle_timeout_ms: u64,
     config_home: PathBuf,
     /// Opt-in sink notified with a server name after a *background* reconnect
     /// attempt settles (post-OAuth login, or an `authenticate()`-triggered
@@ -96,9 +111,11 @@ impl McpConnectionManager {
             configs: HashMap::new(),
             connections: Arc::new(RwLock::new(HashMap::new())),
             rmcp_clients: Arc::new(RwLock::new(HashMap::new())),
+            tool_reconnect_locks: Arc::new(Mutex::new(HashMap::new())),
             sdk_route_message: None,
             sdk_route_next_id: Arc::new(AtomicI64::new(0)),
             tool_timeout_ms: DEFAULT_TOOL_TIMEOUT_MS,
+            tool_idle_timeout_ms: DEFAULT_TOOL_IDLE_TIMEOUT_MS,
             config_home,
             reconnect_notifier: Arc::new(std::sync::OnceLock::new()),
             auth_cache,
@@ -129,6 +146,13 @@ impl McpConnectionManager {
         let mut manager = Self::new(config_home);
         if let Some(tool_timeout_ms) = config.tool_timeout_ms {
             manager.tool_timeout_ms = tool_timeout_ms.max(1) as u64;
+        }
+        if let Some(tool_idle_timeout_ms) = config.tool_idle_timeout_ms {
+            manager.tool_idle_timeout_ms = if tool_idle_timeout_ms <= 0 {
+                0
+            } else {
+                tool_idle_timeout_ms.max(1_000) as u64
+            };
         }
         manager
     }
@@ -448,7 +472,7 @@ impl McpConnectionManager {
             })?;
 
         // Discover tools
-        let tools_result = client.list_tools(None, Some(DEFAULT_INIT_TIMEOUT)).await;
+        let tools_result = list_tools_with_retry(&client, server_name).await;
         let tools: Vec<McpToolDefinition> = match tools_result {
             Ok(result) => result
                 .tools
@@ -475,6 +499,7 @@ impl McpConnectionManager {
         let capabilities = McpCapabilities {
             tools: !tools.is_empty(),
             resources: caps.resources.is_some(),
+            resource_directory_read: server_supports_resource_directory_read(caps),
             prompts: caps.prompts.is_some(),
             channel: false,
             channel_permission: false,
@@ -523,26 +548,199 @@ impl McpConnectionManager {
         tool_name: &str,
         arguments: Option<serde_json::Value>,
     ) -> Result<CallToolResult, McpClientError> {
-        if let Some(config) = self.configs.get(server_name)
-            && matches!(config.config, McpServerConfig::Sdk(_))
-        {
-            return self.call_sdk_tool(server_name, tool_name, arguments).await;
-        }
+        self.call_tool_once(server_name, tool_name, arguments).await
+    }
 
-        let clients = self.rmcp_clients.read().await;
-        let client = clients
+    /// Call an MCP tool, reconnecting and retrying once when a remote
+    /// headersHelper-backed server rejects the call with HTTP 401/403.
+    pub async fn call_tool_with_elicitation(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Option<serde_json::Value>,
+        send_elicitation: SendElicitation,
+    ) -> Result<CallToolResult, McpClientError> {
+        let config = self
+            .configs
             .get(server_name)
+            .map(|config| config.config.clone())
             .ok_or_else(|| McpClientError::ServerNotFound {
                 name: server_name.to_string(),
             })?;
+        if matches!(config, McpServerConfig::Sdk(_)) {
+            return self.call_sdk_tool(server_name, tool_name, arguments).await;
+        }
 
-        let timeout = Duration::from_millis(self.tool_timeout_ms);
-        client
-            .call_tool(tool_name.to_string(), arguments, Some(timeout))
+        let failed_client = self.rmcp_client(server_name).await?;
+        let result = self
+            .call_tool_with_client(
+                server_name,
+                tool_name,
+                arguments.clone(),
+                &config,
+                Arc::clone(&failed_client),
+            )
+            .await;
+        match result {
+            Err(error) if self.should_reconnect_tool_call_auth_error(server_name, &error) => {
+                self.reconnect_and_retry_tool_call(
+                    server_name,
+                    tool_name,
+                    arguments,
+                    config,
+                    failed_client,
+                    send_elicitation,
+                )
+                .await
+            }
+            other => other,
+        }
+    }
+
+    async fn call_tool_once(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> Result<CallToolResult, McpClientError> {
+        let config = self
+            .configs
+            .get(server_name)
+            .map(|config| config.config.clone())
+            .ok_or_else(|| McpClientError::ServerNotFound {
+                name: server_name.to_string(),
+            })?;
+        if matches!(config, McpServerConfig::Sdk(_)) {
+            return self.call_sdk_tool(server_name, tool_name, arguments).await;
+        }
+        let client = self.rmcp_client(server_name).await?;
+        self.call_tool_with_client(server_name, tool_name, arguments, &config, client)
             .await
-            .map_err(|e| McpClientError::ToolCallFailed {
-                message: e.to_string(),
+    }
+
+    async fn rmcp_client(&self, server_name: &str) -> Result<Arc<RmcpClient>, McpClientError> {
+        let clients = self.rmcp_clients.read().await;
+        clients
+            .get(server_name)
+            .cloned()
+            .ok_or_else(|| McpClientError::ServerNotFound {
+                name: server_name.to_string(),
             })
+    }
+
+    async fn call_tool_with_client(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Option<serde_json::Value>,
+        config: &McpServerConfig,
+        client: Arc<RmcpClient>,
+    ) -> Result<CallToolResult, McpClientError> {
+        let timeout = Duration::from_millis(self.tool_timeout_ms);
+        let call = client.call_tool(tool_name.to_string(), arguments, Some(timeout));
+        if let Some(idle_timeout) = self.effective_tool_idle_timeout(config) {
+            tokio::pin!(call);
+            let idle_sleep = tokio::time::sleep(idle_timeout);
+            tokio::pin!(idle_sleep);
+            let mut last_progress_epoch = client.progress_epoch();
+            loop {
+                tokio::select! {
+                    result = &mut call => {
+                        break result.map_err(map_rmcp_tool_call_error);
+                    }
+                    _ = &mut idle_sleep => {
+                        let current_progress_epoch = client.progress_epoch();
+                        if current_progress_epoch != last_progress_epoch {
+                            last_progress_epoch = current_progress_epoch;
+                            idle_sleep.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
+                            continue;
+                        }
+                        break Err(McpClientError::ToolCallIdleTimeout {
+                            message: format!(
+                                "MCP server \"{server_name}\" tool \"{tool_name}\" sent no response or progress for {}s; aborting. Set COCO_MCP_TOOL_IDLE_TIMEOUT_MS or CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT higher or to 0 if this tool is expected to run silently for longer.",
+                                idle_timeout.as_secs()
+                            ),
+                        });
+                    }
+                }
+            }
+        } else {
+            call.await.map_err(map_rmcp_tool_call_error)
+        }
+    }
+
+    async fn reconnect_and_retry_tool_call(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Option<serde_json::Value>,
+        config: McpServerConfig,
+        failed_client: Arc<RmcpClient>,
+        send_elicitation: SendElicitation,
+    ) -> Result<CallToolResult, McpClientError> {
+        let lock = self.tool_reconnect_lock(server_name).await;
+        let _guard = lock.lock().await;
+
+        let current_client = self.rmcp_client(server_name).await?;
+        if Arc::ptr_eq(&current_client, &failed_client) {
+            info!(
+                server = %server_name,
+                tool = %tool_name,
+                "MCP tool call auth failure; reconnecting to refresh headersHelper"
+            );
+            self.disconnect(server_name).await;
+            let connect_result = self.connect(server_name, send_elicitation).await;
+            self.notify_reconnect(server_name);
+            connect_result?;
+        } else {
+            info!(
+                server = %server_name,
+                tool = %tool_name,
+                "MCP tool call auth failure; another request already refreshed headersHelper"
+            );
+        }
+
+        let retry_client = self.rmcp_client(server_name).await?;
+        let result = self
+            .call_tool_with_client(server_name, tool_name, arguments, &config, retry_client)
+            .await;
+        if result
+            .as_ref()
+            .is_err_and(is_tool_call_http_auth_status_error)
+        {
+            self.mark_needs_auth(server_name).await;
+            self.notify_reconnect(server_name);
+        }
+        result
+    }
+
+    async fn tool_reconnect_lock(&self, server_name: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.tool_reconnect_locks.lock().await;
+        Arc::clone(
+            locks
+                .entry(server_name.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    }
+
+    fn should_reconnect_tool_call_auth_error(
+        &self,
+        server_name: &str,
+        error: &McpClientError,
+    ) -> bool {
+        let Some(config) = self.configs.get(server_name) else {
+            return false;
+        };
+        if !mcp_tool_auth_reconnect_applies(&config.config) {
+            return false;
+        }
+        matches!(
+            error,
+            McpClientError::ToolCallHttpStatus {
+                status: 401 | 403,
+                ..
+            }
+        )
     }
 
     async fn do_connect_sdk(
@@ -607,6 +805,7 @@ impl McpConnectionManager {
         let capabilities = McpCapabilities {
             tools: !tools.is_empty(),
             resources: caps.resources.is_some(),
+            resource_directory_read: server_supports_resource_directory_read(caps),
             prompts: caps.prompts.is_some(),
             channel: false,
             channel_permission: false,
@@ -782,6 +981,88 @@ impl McpConnectionManager {
             .await
             .map_err(|e| McpClientError::ToolCallFailed {
                 message: format!("resource read failed: {e}"),
+            })
+    }
+
+    /// List direct children of a directory resource from a connected server.
+    pub async fn read_resource_directory(
+        &self,
+        server_name: &str,
+        resource_uri: &str,
+    ) -> Result<Vec<Resource>, McpClientError> {
+        let server = self
+            .connected_servers()
+            .await
+            .into_iter()
+            .find(|server| server.name == server_name)
+            .ok_or_else(|| McpClientError::ServerNotFound {
+                name: server_name.to_string(),
+            })?;
+        if !server.capabilities.resource_directory_read {
+            return Err(McpClientError::ToolCallFailed {
+                message: format!("server {server_name} does not support directory listing"),
+            });
+        }
+
+        let mut resources = Vec::new();
+        let mut cursor = None;
+        for page in 0..MAX_DIRECTORY_READ_PAGES {
+            let result = self
+                .read_resource_directory_page(server_name, resource_uri, cursor.clone())
+                .await?;
+            resources.extend(result.resources);
+            cursor = result.next_cursor;
+            if cursor.is_none() {
+                return Ok(resources);
+            }
+            if page + 1 == MAX_DIRECTORY_READ_PAGES {
+                warn!(
+                    server = %server_name,
+                    uri = %resource_uri,
+                    pages = MAX_DIRECTORY_READ_PAGES,
+                    "resources/directory/read stopped with more pages pending"
+                );
+            }
+        }
+        Ok(resources)
+    }
+
+    async fn read_resource_directory_page(
+        &self,
+        server_name: &str,
+        resource_uri: &str,
+        cursor: Option<String>,
+    ) -> Result<ReadResourceDirectoryResult, McpClientError> {
+        let timeout = Duration::from_millis(self.tool_timeout_ms);
+        let params = ReadResourceDirectoryRequestParams {
+            uri: resource_uri.to_string(),
+            cursor,
+        };
+        if let Some(route) = self.sdk_route_message.as_ref().cloned() {
+            let response = route_sdk_jsonrpc(
+                &route,
+                server_name,
+                self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+                "resources/directory/read",
+                serde_json::to_value(params).map_err(|e| McpClientError::ToolCallFailed {
+                    message: format!("serialize SDK MCP resources/directory/read: {e}"),
+                })?,
+            )
+            .await?;
+            return parse_sdk_jsonrpc_result(response);
+        }
+
+        let clients = self.rmcp_clients.read().await;
+        let client = clients
+            .get(server_name)
+            .ok_or_else(|| McpClientError::ServerNotFound {
+                name: server_name.to_string(),
+            })?;
+        client
+            .read_resource_directory(params, Some(timeout))
+            .await
+            .map_err(|e| McpClientError::ToolCallFailed {
+                message: format!("resource directory read failed: {e}"),
             })
     }
 
@@ -1005,6 +1286,22 @@ impl McpConnectionManager {
         self.tool_timeout_ms
     }
 
+    pub fn tool_idle_timeout_ms(&self) -> u64 {
+        self.tool_idle_timeout_ms
+    }
+
+    fn effective_tool_idle_timeout(&self, config: &McpServerConfig) -> Option<Duration> {
+        if self.tool_idle_timeout_ms == 0 || !mcp_tool_idle_timeout_applies(config) {
+            return None;
+        }
+        let min_ms = 1_000.min(self.tool_timeout_ms);
+        let clamped_ms = self
+            .tool_idle_timeout_ms
+            .max(min_ms)
+            .min(self.tool_timeout_ms);
+        Some(Duration::from_millis(clamped_ms))
+    }
+
     /// Start watching MCP config files for changes.
     ///
     /// Returns a receiver that emits events when `.mcp.json` files change.
@@ -1022,12 +1319,75 @@ impl McpConnectionManager {
     }
 }
 
+fn mcp_tool_idle_timeout_applies(config: &McpServerConfig) -> bool {
+    matches!(
+        config,
+        McpServerConfig::Sse(_)
+            | McpServerConfig::Http(_)
+            | McpServerConfig::WebSocket(_)
+            | McpServerConfig::ClaudeAiProxy(_)
+    )
+}
+
+fn mcp_tool_auth_reconnect_applies(config: &McpServerConfig) -> bool {
+    match config {
+        McpServerConfig::Sse(config) => config.headers_helper.is_some(),
+        McpServerConfig::Http(config) => config.headers_helper.is_some(),
+        McpServerConfig::WebSocket(config) => config.headers_helper.is_some(),
+        _ => false,
+    }
+}
+
+async fn retry_discovery_list<T, F, Fut>(
+    server_name: &str,
+    method: &str,
+    mut operation: F,
+) -> Result<T, RmcpClientError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = coco_rmcp_client::Result<T>>,
+{
+    for attempt in 0.. {
+        match operation().await {
+            Ok(result) => return Ok(result),
+            Err(error) => {
+                let Some(backoff_ms) = DISCOVERY_RETRY_BACKOFFS_MS.get(attempt).copied() else {
+                    return Err(error);
+                };
+                if !error.is_retryable_discovery_error() {
+                    return Err(error);
+                }
+                warn!(
+                    server = %server_name,
+                    method = %method,
+                    error = %error,
+                    backoff_ms,
+                    "MCP discovery list failed; retrying"
+                );
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            }
+        }
+    }
+    unreachable!("retry loop returns on success or after backoffs are exhausted")
+}
+
+async fn list_tools_with_retry(
+    client: &RmcpClient,
+    server_name: &str,
+) -> Result<ListToolsResult, RmcpClientError> {
+    retry_discovery_list(server_name, "tools/list", || {
+        client.list_tools(None, Some(DEFAULT_INIT_TIMEOUT))
+    })
+    .await
+}
+
 /// List a connected server's resources, mapping into [`McpResource`].
 /// A failure is logged and treated as "no resources" — it must not abort connect.
 async fn fetch_resources(client: &RmcpClient, server_name: &str) -> Vec<McpResource> {
-    match client
-        .list_resources(None, Some(DEFAULT_INIT_TIMEOUT))
-        .await
+    match retry_discovery_list(server_name, "resources/list", || {
+        client.list_resources(None, Some(DEFAULT_INIT_TIMEOUT))
+    })
+    .await
     {
         Ok(result) => result
             .resources
@@ -1049,7 +1409,11 @@ async fn fetch_resources(client: &RmcpClient, server_name: &str) -> Vec<McpResou
 /// List a connected server's prompts, mapping into [`McpPrompt`] (surfaced as
 /// MCP slash-commands). Failures are logged and treated as "no prompts".
 async fn fetch_prompts(client: &RmcpClient, server_name: &str) -> Vec<McpPrompt> {
-    match client.list_prompts(None, Some(DEFAULT_INIT_TIMEOUT)).await {
+    match retry_discovery_list(server_name, "prompts/list", || {
+        client.list_prompts(None, Some(DEFAULT_INIT_TIMEOUT))
+    })
+    .await
+    {
         Ok(result) => result
             .prompts
             .into_iter()
@@ -1287,6 +1651,22 @@ async fn route_sdk_jsonrpc(
     .map_err(|message| McpClientError::ToolCallFailed { message })
 }
 
+fn server_supports_resource_directory_read(capabilities: &ServerCapabilities) -> bool {
+    let Some(resources) = capabilities.resources.as_ref() else {
+        return false;
+    };
+    if resources.directory_read == Some(true) {
+        return true;
+    }
+    resources
+        .extensions
+        .as_ref()
+        .and_then(|extensions| extensions.get(MCP_SKILLS_EXTENSION))
+        .and_then(|extension| extension.get("directoryRead"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
 fn parse_sdk_jsonrpc_result<T>(message: serde_json::Value) -> Result<T, McpClientError>
 where
     T: serde::de::DeserializeOwned,
@@ -1307,6 +1687,27 @@ where
     })
 }
 
+fn map_rmcp_tool_call_error(error: coco_rmcp_client::RmcpClientError) -> McpClientError {
+    let message = error.to_string();
+    match error.http_status() {
+        Some(status) => McpClientError::ToolCallHttpStatus {
+            status: status.as_u16(),
+            message,
+        },
+        None => McpClientError::ToolCallFailed { message },
+    }
+}
+
+fn is_tool_call_http_auth_status_error(error: &McpClientError) -> bool {
+    matches!(
+        error,
+        McpClientError::ToolCallHttpStatus {
+            status: 401 | 403,
+            ..
+        }
+    )
+}
+
 /// MCP client errors.
 #[derive(Debug, thiserror::Error)]
 pub enum McpClientError {
@@ -1322,8 +1723,12 @@ pub enum McpClientError {
     AuthRequired { auth_url: Option<String> },
     #[error("MCP tool call failed: {message}")]
     ToolCallFailed { message: String },
+    #[error("MCP tool call failed with HTTP {status}: {message}")]
+    ToolCallHttpStatus { status: u16, message: String },
     #[error("MCP tool call timed out")]
     ToolCallTimeout,
+    #[error("MCP tool idle timeout: {message}")]
+    ToolCallIdleTimeout { message: String },
 }
 
 // `McpClientError` keeps its `thiserror` shape (many existing call sites
@@ -1351,7 +1756,12 @@ impl coco_error::ErrorExt for McpClientError {
             Self::SessionExpired => StatusCode::AuthenticationFailed,
             Self::AuthRequired { .. } => StatusCode::AuthenticationFailed,
             Self::ToolCallFailed { .. } => StatusCode::Internal,
+            Self::ToolCallHttpStatus {
+                status: 401 | 403, ..
+            } => StatusCode::AuthenticationFailed,
+            Self::ToolCallHttpStatus { .. } => StatusCode::External,
             Self::ToolCallTimeout => StatusCode::Timeout,
+            Self::ToolCallIdleTimeout { .. } => StatusCode::Timeout,
         }
     }
 

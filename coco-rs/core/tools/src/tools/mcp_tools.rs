@@ -26,6 +26,10 @@ const READ_MCP_RESOURCE_DESCRIPTION: &str = "Reads a specific resource from an M
 
 const READ_MCP_RESOURCE_PROMPT: &str = "Reads a specific resource from an MCP server, identified by server name and resource URI.\n\nParameters:\n- server (required): The name of the MCP server from which to read the resource\n- uri (required): The URI of the resource to read";
 
+const READ_MCP_RESOURCE_DIR_DESCRIPTION: &str = "List the direct children of a directory resource on an MCP server.\n- server: The name of the MCP server to read from\n- uri: The URI of the directory resource\n\nOnly usable against a server that has declared support for directory listing. The listing is not recursive.";
+
+const READ_MCP_RESOURCE_DIR_PROMPT: &str = "List the direct children of a directory resource on an MCP server (`resources/directory/read`).\n\nParameters:\n- server (required): The name of the MCP server to read from\n- uri (required): The URI of the directory resource\n\nThe listing is not recursive. Each entry carries its own `uri`; subdirectories appear with mimeType \"inode/directory\" - call this tool again on a subdirectory's `uri` to descend.\n\nOnly usable against a server that has declared support for directory listing; other servers return an error.";
+
 /// Typed input for [`McpAuthTool`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct McpAuthInput {
@@ -480,6 +484,122 @@ impl Tool for ReadMcpResourceTool {
                 display_data: None,
             }),
         }
+    }
+}
+
+/// Typed input for [`ReadMcpResourceDirTool`].
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub struct ReadMcpResourceDirInput {
+    /// The MCP server name
+    #[serde(rename = "server")]
+    pub server_name: String,
+    /// The directory resource URI to list
+    #[serde(rename = "uri")]
+    pub resource_uri: String,
+}
+
+pub struct ReadMcpResourceDirTool;
+
+#[async_trait::async_trait]
+impl Tool for ReadMcpResourceDirTool {
+    type Input = ReadMcpResourceDirInput;
+    coco_tool_runtime::impl_runtime_schema!(ReadMcpResourceDirInput);
+    type Output = Value;
+
+    fn id(&self) -> ToolId {
+        ToolId::Builtin(ToolName::ReadMcpResourceDir)
+    }
+    fn name(&self) -> &str {
+        ToolName::ReadMcpResourceDir.as_str()
+    }
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::Mcp)
+    }
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        coco_tool_runtime::ResultSizeBound::Chars(100_000)
+    }
+    fn description(
+        &self,
+        _input: &ReadMcpResourceDirInput,
+        _options: &DescriptionOptions,
+    ) -> String {
+        READ_MCP_RESOURCE_DIR_DESCRIPTION.into()
+    }
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        READ_MCP_RESOURCE_DIR_PROMPT.into()
+    }
+    fn is_read_only(&self, _input: &ReadMcpResourceDirInput) -> bool {
+        true
+    }
+    fn is_always_read_only(&self) -> bool {
+        true
+    }
+    fn is_concurrency_safe(&self, _input: &ReadMcpResourceDirInput) -> bool {
+        true
+    }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("list the children of an MCP directory resource")
+    }
+    fn to_auto_classifier_input(&self, input: &ReadMcpResourceDirInput) -> Option<String> {
+        Some(format!("{} {}", input.server_name, input.resource_uri))
+    }
+
+    fn render_for_model(&self, out: &Value) -> Vec<ToolResultContentPart> {
+        coco_tool_runtime::render_text_or_json(out)
+    }
+
+    async fn execute(
+        &self,
+        input: ReadMcpResourceDirInput,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<Value>, ToolError> {
+        if input.server_name.is_empty() {
+            return Err(ToolError::InvalidInput {
+                message: "server_name is required".into(),
+                error_code: None,
+            });
+        }
+        if input.resource_uri.is_empty() {
+            return Err(ToolError::InvalidInput {
+                message: "resource_uri is required".into(),
+                error_code: None,
+            });
+        }
+
+        let data = match ctx
+            .mcp
+            .read_resource_directory(&input.server_name, &input.resource_uri)
+            .await
+        {
+            Ok(resources) => {
+                let resources: Vec<Value> = resources
+                    .iter()
+                    .map(|r| {
+                        serde_json::json!({
+                            "uri": r.uri,
+                            "name": r.name,
+                            "mimeType": r.mime_type,
+                        })
+                    })
+                    .collect();
+                serde_json::json!({ "resources": resources })
+            }
+            Err(e) => serde_json::json!({
+                "resources": [],
+                "error": format!("Failed to list directory resource {uri} from {server}: {e}", uri = input.resource_uri, server = input.server_name),
+            }),
+        };
+
+        Ok(ToolResult {
+            data,
+            new_messages: vec![],
+            app_state_patch: None,
+            permission_updates: Vec::new(),
+            display_data: None,
+        })
     }
 }
 

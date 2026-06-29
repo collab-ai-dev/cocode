@@ -944,11 +944,13 @@ fn validate_memory_dir_override(
 #[serde(default)]
 pub struct PartialMcpRuntimeSettings {
     pub tool_timeout_ms: Option<i32>,
+    pub tool_idle_timeout_ms: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpRuntimeConfig {
     pub tool_timeout_ms: Option<i32>,
+    pub tool_idle_timeout_ms: Option<i32>,
 }
 
 impl McpRuntimeConfig {
@@ -957,11 +959,23 @@ impl McpRuntimeConfig {
         if let Some(v) = settings.mcp_runtime.tool_timeout_ms {
             config.tool_timeout_ms = Some(v);
         }
+        if let Some(v) = settings.mcp_runtime.tool_idle_timeout_ms {
+            config.tool_idle_timeout_ms = Some(v);
+        }
         if let Some(v) = env.get_i32(EnvKey::CocoMcpToolTimeoutMs) {
             config.tool_timeout_ms = Some(v);
         }
+        if let Some(v) = env.get_i32(EnvKey::ClaudeCodeMcpToolIdleTimeout) {
+            config.tool_idle_timeout_ms = Some(v);
+        }
+        if let Some(v) = env.get_i32(EnvKey::CocoMcpToolIdleTimeoutMs) {
+            config.tool_idle_timeout_ms = Some(v);
+        }
         if let Some(v) = config.tool_timeout_ms {
             config.tool_timeout_ms = Some(v.max(1));
+        }
+        if let Some(v) = config.tool_idle_timeout_ms {
+            config.tool_idle_timeout_ms = Some(if v <= 0 { 0 } else { v.max(1_000) });
         }
         config
     }

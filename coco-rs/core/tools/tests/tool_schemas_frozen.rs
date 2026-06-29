@@ -102,6 +102,7 @@ fn default_tool_input_schemas_are_frozen() {
     // MCP management
     insert(&mut map, McpAuthTool);
     insert(&mut map, ListMcpResourcesTool);
+    insert(&mut map, ReadMcpResourceDirTool);
     insert(&mut map, ReadMcpResourceTool);
 
     // Scheduling

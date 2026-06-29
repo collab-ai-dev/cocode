@@ -42,6 +42,7 @@ fn popup_matches_suggestions(
             (
                 crate::state::SuggestionKind::At,
                 crate::state::SuggestionKind::Path
+                    | crate::state::SuggestionKind::BashPath
                     | crate::state::SuggestionKind::Directory
                     | crate::state::SuggestionKind::CustomTitle
             )

@@ -19,6 +19,7 @@ pub mod leader_inbox_poller;
 pub mod leader_permission;
 pub mod live_permission_mode;
 pub mod lsp_handle_adapter;
+pub mod mcp_cli;
 pub mod mcp_handle_adapter;
 pub mod model_card_refresh;
 pub mod output;
@@ -528,6 +529,19 @@ pub enum McpAction {
     },
     /// Remove a server.
     Remove {
+        /// Server name.
+        name: String,
+    },
+    /// Authenticate with an MCP server.
+    Login {
+        /// Server name.
+        name: String,
+        /// Print the authorization URL instead of opening a browser.
+        #[arg(long, alias = "headless")]
+        no_browser: bool,
+    },
+    /// Clear stored OAuth credentials for an MCP server.
+    Logout {
         /// Server name.
         name: String,
     },

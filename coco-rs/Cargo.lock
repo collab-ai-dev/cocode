@@ -1123,6 +1123,7 @@ dependencies = [
  "coco-plugins",
  "coco-provider-auth",
  "coco-query",
+ "coco-rmcp-client",
  "coco-sandbox",
  "coco-session",
  "coco-shell",
@@ -1722,9 +1723,11 @@ name = "coco-otel"
 version = "0.1.1"
 dependencies = [
  "chrono",
+ "coco-config",
  "coco-error",
  "coco-utils-absolute-path",
  "coco-utils-common",
+ "coco-utils-string",
  "eventsource-stream",
  "http",
  "opentelemetry",
@@ -2160,6 +2163,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "walkdir",
 ]
 

@@ -18,6 +18,7 @@ use crate::state::SkillOverrideState;
 use crate::state::SkillRow;
 use crate::state::SkillsDialogSource;
 use crate::state::SkillsDialogState;
+use crate::state::plugin_dialog::PluginDialogInstalledItem;
 use crate::state::skills_dialog::skill_override_glyph_and_label;
 use coco_tui_ui::style::UiStyles;
 
@@ -265,7 +266,7 @@ fn render_plugin_tabs(p: &PluginDialogState) -> String {
         .iter()
         .map(|tab| {
             let count = match tab {
-                PluginDialogTab::Installed => p.installed.len(),
+                PluginDialogTab::Installed => p.installed_count(),
                 PluginDialogTab::Marketplaces => p.marketplaces.len(),
                 PluginDialogTab::Errors => p.errors.len(),
             };
@@ -280,82 +281,173 @@ fn render_plugin_tabs(p: &PluginDialogState) -> String {
 }
 
 fn render_installed_tab(p: &PluginDialogState, body: &mut String) {
-    let view = p.filtered_installed_indices();
+    let view = p.filtered_installed_items();
     if view.is_empty() {
         body.push_str("\nNo installed plugins match.\n");
         return;
     }
+    let mut rendered_skills_header = false;
     for (i, idx) in view.iter().enumerate() {
-        let row = &p.installed[*idx];
         let cursor = if i == p.selected_idx { ">" } else { " " };
-        let state = if row.blocked_by_policy {
-            "blocked"
-        } else if row.enabled {
-            "enabled"
-        } else {
-            "disabled"
-        };
-        let version = row
-            .version
-            .as_deref()
-            .map(|v| format!(" v{v}"))
-            .unwrap_or_default();
-        body.push_str(&format!(
-            "\n{cursor} {}{version} · {state} · {}",
-            row.id, row.source
-        ));
-    }
-    if let Some(idx) = view.get(p.selected_idx)
-        && let Some(row) = p.installed.get(*idx)
-    {
-        body.push_str("\n\n");
-        body.push_str(&format!("{}\n", row.name));
-        if let Some(desc) = &row.description {
-            body.push_str(desc);
-            body.push('\n');
-        }
-        body.push_str(&format!("Path: {}\n", row.path));
-        if !row.options.is_empty() {
-            body.push_str("\nOptions\n");
-            for option in &row.options {
-                let required = if option.required {
-                    "required"
-                } else {
-                    "optional"
-                };
-                let current = option
-                    .current_value
-                    .as_ref()
-                    .map_or("unset".to_string(), serde_json::Value::to_string);
-                body.push_str(&format!(
-                    "  {} ({}, {}) = {}\n",
-                    option.key, option.value_type, required, current
-                ));
-            }
-        }
-        if !row.mcp_servers.is_empty() {
-            body.push_str("\nMCP servers\n");
-            for server in &row.mcp_servers {
-                let state = if server.enabled {
+        match *idx {
+            PluginDialogInstalledItem::Plugin(plugin_idx) => {
+                let row = &p.installed[plugin_idx];
+                let state = if row.blocked_by_policy {
+                    "blocked"
+                } else if row.enabled {
                     "enabled"
                 } else {
                     "disabled"
                 };
-                let cfg = if server.needs_config {
-                    ", needs config"
-                } else {
-                    ""
-                };
-                body.push_str(&format!("  {} · {state}{cfg}\n", server.display_name));
-                for tool in &server.tools {
-                    let desc = tool.description.as_deref().unwrap_or("");
-                    body.push_str(&format!("    - {} {}\n", tool.name, desc));
+                let version = row
+                    .version
+                    .as_deref()
+                    .map(|v| format!(" v{v}"))
+                    .unwrap_or_default();
+                body.push_str(&format!(
+                    "\n{cursor} {}{version} · {state} · {}",
+                    row.id, row.source
+                ));
+            }
+            PluginDialogInstalledItem::Skill(skill_idx) => {
+                if !rendered_skills_header {
+                    body.push_str("\n\nSkills");
+                    rendered_skills_header = true;
                 }
+                let row = &p.skills[skill_idx];
+                let lock = row
+                    .lock_source
+                    .map(|source| format!(" · locked by {}", plugin_skill_lock_label(source)))
+                    .unwrap_or_default();
+                let usage = row
+                    .usage
+                    .as_ref()
+                    .map(|usage| format!(" · used {}x, {}d ago", usage.count, usage.days_since_use))
+                    .unwrap_or_default();
+                body.push_str(&format!(
+                    "\n{cursor} {} · {} · {} · ~{} tok{lock}{usage}",
+                    row.name,
+                    plugin_skill_state_label(row.override_state),
+                    plugin_skill_source_label(row.source),
+                    row.token_estimate
+                ));
             }
         }
-        if let Some(action) = row.actions.first() {
-            body.push_str(&format!("\nEnter: {}", action.label));
+    }
+    let Some(item) = view.get(p.selected_idx).copied() else {
+        return;
+    };
+    match item {
+        PluginDialogInstalledItem::Plugin(idx) => {
+            let Some(row) = p.installed.get(idx) else {
+                return;
+            };
+            body.push_str("\n\n");
+            body.push_str(&format!("{}\n", row.name));
+            if let Some(desc) = &row.description {
+                body.push_str(desc);
+                body.push('\n');
+            }
+            body.push_str(&format!("Path: {}\n", row.path));
+            if !row.options.is_empty() {
+                body.push_str("\nOptions\n");
+                for option in &row.options {
+                    let required = if option.required {
+                        "required"
+                    } else {
+                        "optional"
+                    };
+                    let current = option
+                        .current_value
+                        .as_ref()
+                        .map_or("unset".to_string(), serde_json::Value::to_string);
+                    body.push_str(&format!(
+                        "  {} ({}, {}) = {}\n",
+                        option.key, option.value_type, required, current
+                    ));
+                }
+            }
+            if !row.mcp_servers.is_empty() {
+                body.push_str("\nMCP servers\n");
+                for server in &row.mcp_servers {
+                    let state = if server.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    };
+                    let cfg = if server.needs_config {
+                        ", needs config"
+                    } else {
+                        ""
+                    };
+                    body.push_str(&format!("  {} · {state}{cfg}\n", server.display_name));
+                    for tool in &server.tools {
+                        let desc = tool.description.as_deref().unwrap_or("");
+                        body.push_str(&format!("    - {} {}\n", tool.name, desc));
+                    }
+                }
+            }
+            if let Some(action) = row.actions.first() {
+                body.push_str(&format!("\nEnter: {}", action.label));
+            }
         }
+        PluginDialogInstalledItem::Skill(idx) => {
+            let Some(row) = p.skills.get(idx) else {
+                return;
+            };
+            body.push_str("\n\n");
+            body.push_str(&format!("{}\n", row.name));
+            body.push_str(&row.description);
+            body.push('\n');
+            body.push_str(&format!(
+                "Source: {} · State: {} · ~{} tok\n",
+                plugin_skill_source_label(row.source),
+                plugin_skill_state_label(row.override_state),
+                row.token_estimate
+            ));
+            if let Some(lock_source) = row.lock_source {
+                body.push_str(&format!(
+                    "Locked by: {}\n",
+                    plugin_skill_lock_label(lock_source)
+                ));
+            }
+            if let Some(usage) = &row.usage {
+                body.push_str(&format!(
+                    "Usage: {} times, last {} days ago\n",
+                    usage.count, usage.days_since_use
+                ));
+            }
+            body.push_str("\nManage skills with /skills");
+        }
+    }
+}
+
+fn plugin_skill_source_label(source: coco_types::SkillsDialogSource) -> &'static str {
+    match source {
+        coco_types::SkillsDialogSource::BuiltIn => "built-in",
+        coco_types::SkillsDialogSource::Project => "project",
+        coco_types::SkillsDialogSource::User => "user",
+        coco_types::SkillsDialogSource::Policy => "policy",
+        coco_types::SkillsDialogSource::Plugin => "plugin",
+        coco_types::SkillsDialogSource::Mcp => "mcp",
+    }
+}
+
+fn plugin_skill_lock_label(source: coco_types::SkillLockSource) -> &'static str {
+    match source {
+        coco_types::SkillLockSource::Policy => "policy",
+        coco_types::SkillLockSource::Flag => "flag",
+        coco_types::SkillLockSource::Author => "author",
+        coco_types::SkillLockSource::Plugin => "plugin",
+    }
+}
+
+fn plugin_skill_state_label(state: coco_types::SkillOverrideState) -> &'static str {
+    match state {
+        coco_types::SkillOverrideState::On => "on",
+        coco_types::SkillOverrideState::UserInvocableOnly => "user-only",
+        coco_types::SkillOverrideState::NameOnly => "name-only",
+        coco_types::SkillOverrideState::Off => "off",
     }
 }
 

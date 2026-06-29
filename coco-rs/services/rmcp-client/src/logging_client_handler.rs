@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use rmcp::ClientHandler;
 use rmcp::RoleClient;
@@ -24,13 +26,19 @@ use crate::rmcp_client::SendElicitation;
 pub(crate) struct LoggingClientHandler {
     client_info: ClientInfo,
     send_elicitation: Arc<SendElicitation>,
+    progress_epoch: Arc<AtomicU64>,
 }
 
 impl LoggingClientHandler {
-    pub(crate) fn new(client_info: ClientInfo, send_elicitation: SendElicitation) -> Self {
+    pub(crate) fn new(
+        client_info: ClientInfo,
+        send_elicitation: SendElicitation,
+        progress_epoch: Arc<AtomicU64>,
+    ) -> Self {
         Self {
             client_info,
             send_elicitation: Arc::new(send_elicitation),
+            progress_epoch,
         }
     }
 }
@@ -66,6 +74,7 @@ impl ClientHandler for LoggingClientHandler {
         params: ProgressNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
+        self.progress_epoch.fetch_add(1, Ordering::Relaxed);
         info!(
             "MCP server progress notification (token: {:?}, progress: {}, total: {:?}, message: {:?})",
             params.progress_token, params.progress, params.total, params.message

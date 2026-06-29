@@ -93,6 +93,7 @@ pub use mcp_tools::ListMcpResourcesTool;
 pub use mcp_tools::McpAuthServerTool;
 pub use mcp_tools::McpAuthTool;
 pub use mcp_tools::McpTool;
+pub use mcp_tools::ReadMcpResourceDirTool;
 pub use mcp_tools::ReadMcpResourceTool;
 
 // Scheduling (4)

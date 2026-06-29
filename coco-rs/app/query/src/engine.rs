@@ -881,6 +881,12 @@ impl QueryEngine {
                 .record_usage(&provider, &model_id, usage, api_elapsed_ms);
             self.record_session_usage(&event_tx, &provider, &model_id, usage, api_elapsed_ms)
                 .await;
+            coco_otel::events::emit_assistant_response(
+                &response_text,
+                &model_id,
+                response_id.as_deref(),
+                self.query_source_label(),
+            );
 
             self.stamp_assistant_now();
 

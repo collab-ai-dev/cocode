@@ -1,5 +1,6 @@
 use crate::environment::Platform;
 use crate::environment::ShellKind;
+use crate::environment::build_agent_proxy_env_line;
 use crate::environment::get_environment_info;
 
 #[test]
@@ -31,6 +32,22 @@ fn test_get_environment_info() {
     assert_eq!(info.cwd, "/tmp");
     assert_eq!(info.model, "test-model");
     assert!(!info.is_git_repo);
+    assert!(info.agent_proxy_env_line.is_none());
+}
+
+#[test]
+fn build_agent_proxy_env_line_matches_remote_diagnostic_shape() {
+    let line = build_agent_proxy_env_line("/tmp/ca.pem", None);
+    assert_eq!(
+        line,
+        "Outbound HTTPS goes through a pre-configured agent proxy (CA bundle: /tmp/ca.pem). \
+         If a tool fails TLS verification or gets 403/405/407 from the proxy, \
+         run curl -sS \"$HTTPS_PROXY/__agentproxy/status\" for per-tool fixes and proxy state; \
+         never disable TLS verification or unset HTTPS_PROXY."
+    );
+
+    let with_readme = build_agent_proxy_env_line("/tmp/ca.pem", Some("/tmp/README.md"));
+    assert!(with_readme.contains("see /tmp/README.md and run curl -sS"));
 }
 
 #[test]

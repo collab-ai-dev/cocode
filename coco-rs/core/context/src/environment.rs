@@ -99,6 +99,20 @@ pub fn knowledge_cutoff_for_model(model_id: &str) -> Option<String> {
     coco_model_card::knowledge_cutoff(model_id)
 }
 
+/// Build the managed-egress agent-proxy diagnostic line for the system-prompt
+/// `<env>` block.
+pub fn build_agent_proxy_env_line(ca_bundle_path: &str, readme_path: Option<&str>) -> String {
+    let see_readme = readme_path
+        .map(|path| format!("see {path} and "))
+        .unwrap_or_default();
+    format!(
+        "Outbound HTTPS goes through a pre-configured agent proxy (CA bundle: {ca_bundle_path}). \
+         If a tool fails TLS verification or gets 403/405/407 from the proxy, {see_readme}\
+         run curl -sS \"$HTTPS_PROXY/__agentproxy/status\" for per-tool fixes and proxy state; \
+         never disable TLS verification or unset HTTPS_PROXY."
+    )
+}
+
 /// Collected environment information for system prompt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvironmentInfo {
@@ -106,6 +120,11 @@ pub struct EnvironmentInfo {
     pub platform: Platform,
     pub shell: ShellKind,
     pub os_version: String,
+    /// Optional Claude Remote managed-egress agent-proxy diagnostic line.
+    /// Empty in normal local sessions; rendered inside the `<env>` block when
+    /// the remote proxy subsystem supplies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_proxy_env_line: Option<String>,
     pub model: String,
     pub knowledge_cutoff: String,
     pub is_git_repo: bool,
@@ -162,6 +181,7 @@ pub fn get_environment_info(cwd: &Path, model: &str, include_git_status: bool) -
         platform: Platform::current(),
         shell: ShellKind::detect(),
         os_version,
+        agent_proxy_env_line: None,
         model,
         knowledge_cutoff,
         is_git_repo,

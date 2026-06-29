@@ -315,6 +315,32 @@ fn test_cli_fallback_model_overrides_populate_main_chain_in_order() {
 }
 
 #[test]
+fn test_available_models_rejects_cli_fallback_override() {
+    let settings = settings_with(Settings {
+        available_models: Some(vec!["sonnet".into()]),
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("anthropic", "claude-sonnet-4-6")),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let overrides = RuntimeOverrides {
+        fallback_model_overrides: vec![ProviderModelSelection {
+            provider: "anthropic".into(),
+            model_id: "claude-opus-4-7".into(),
+        }],
+        ..Default::default()
+    };
+
+    let err = build_isolated(settings, EnvSnapshot::default(), overrides)
+        .expect_err("available_models must apply after CLI fallback overrides");
+    assert!(
+        err.to_string().contains("available_models allowlist"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn test_cli_fallback_model_rejects_duplicate_of_primary() {
     // Configuring primary + fallback to the same slug makes the
     // fallback useless; hard-fail at startup rather than silently

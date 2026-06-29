@@ -457,6 +457,95 @@ fn test_explicit_at_path_uses_path_kind_and_drops_fuzzy_result() {
 }
 
 #[test]
+fn test_bash_mode_path_token_uses_bash_path_kind() {
+    let input = "!cat src/ma";
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text(input);
+    state.ui.input.textarea.set_cursor(input.len());
+
+    refresh_suggestions(&mut state);
+
+    let sug = state
+        .ui
+        .completion
+        .active
+        .as_ref()
+        .expect("bash path request");
+    assert_eq!(sug.kind, SuggestionKind::BashPath);
+    assert_eq!(sug.query, "src/ma");
+    assert_eq!(sug.trigger_pos, "!cat ".len());
+    assert!(sug.items.is_empty(), "path provider runs asynchronously");
+}
+
+#[test]
+fn test_bash_mode_path_token_after_prefix_uses_command_offset() {
+    let input = "!./sr";
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text(input);
+    state.ui.input.textarea.set_cursor(input.len());
+
+    refresh_suggestions(&mut state);
+
+    let sug = state
+        .ui
+        .completion
+        .active
+        .as_ref()
+        .expect("bash path request");
+    assert_eq!(sug.kind, SuggestionKind::BashPath);
+    assert_eq!(sug.query, "./sr");
+    assert_eq!(sug.trigger_pos, 1);
+}
+
+#[test]
+fn test_bash_mode_plain_command_keeps_history_ghost_available() {
+    let mut state = AppState::new();
+    state.ui.input.history.push(crate::state::ui::HistoryEntry {
+        text: "!cargo test --all".to_string(),
+        pastes: Vec::new(),
+    });
+    state.ui.input.textarea.set_text("!cargo");
+    state.ui.input.textarea.set_cursor("!cargo".len());
+
+    refresh_suggestions(&mut state);
+
+    assert!(state.ui.completion.active.is_none());
+    let ghost = state
+        .ui
+        .input
+        .active_inline_ghost()
+        .expect("bash history ghost");
+    assert_eq!(ghost.text, " test --all");
+}
+
+#[test]
+fn test_bash_path_result_drops_stale_at_result() {
+    let input = "!cat src/ma";
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text(input);
+    state.ui.input.textarea.set_cursor(input.len());
+    refresh_suggestions(&mut state);
+
+    let adopted = apply_async_result(
+        &mut state,
+        SuggestionKind::At,
+        "src/ma",
+        vec![SuggestionItem {
+            label: "src/main.rs".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path {
+                is_directory: false,
+            }),
+        }],
+    );
+
+    assert!(!adopted);
+    let sug = state.ui.completion.active.as_ref().expect("active popup");
+    assert_eq!(sug.kind, SuggestionKind::BashPath);
+    assert!(sug.items.is_empty());
+}
+
+#[test]
 fn test_same_query_different_token_range_gets_fresh_request_key() {
     let mut state = AppState::new();
     state.ui.input.textarea.set_text("@src then @src");

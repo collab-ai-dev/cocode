@@ -8,6 +8,7 @@ use reqwest::ClientBuilder;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
 use tiny_http::Server;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use urlencoding::decode;
@@ -100,9 +101,14 @@ pub async fn perform_oauth_login_return_url(
     .await?;
 
     let authorization_url = flow.authorization_url();
+    let redirect_url_tx = flow.redirect_url_tx();
     let completion = flow.spawn();
 
-    Ok(OauthLoginHandle::new(authorization_url, completion))
+    Ok(OauthLoginHandle::new(
+        authorization_url,
+        completion,
+        redirect_url_tx,
+    ))
 }
 
 fn spawn_callback_server(server: Arc<Server>, tx: oneshot::Sender<(String, String)>) {
@@ -160,16 +166,32 @@ fn parse_oauth_callback(path: &str) -> Option<OauthCallbackResult> {
     })
 }
 
+fn parse_oauth_callback_input(input: &str) -> Option<OauthCallbackResult> {
+    let trimmed = input.trim();
+    if let Some(path_start) = trimmed.find("/callback?") {
+        return parse_oauth_callback(&trimmed[path_start..]);
+    }
+    parse_oauth_callback(trimmed)
+}
+
 pub struct OauthLoginHandle {
     authorization_url: String,
     completion: oneshot::Receiver<Result<()>>,
+    redirect_url_tx: OauthRedirectUrlSubmitter,
 }
 
 impl OauthLoginHandle {
-    fn new(authorization_url: String, completion: oneshot::Receiver<Result<()>>) -> Self {
+    fn new(
+        authorization_url: String,
+        completion: oneshot::Receiver<Result<()>>,
+        redirect_url_tx: mpsc::UnboundedSender<String>,
+    ) -> Self {
         Self {
             authorization_url,
             completion,
+            redirect_url_tx: OauthRedirectUrlSubmitter {
+                tx: redirect_url_tx,
+            },
         }
     }
 
@@ -181,6 +203,10 @@ impl OauthLoginHandle {
         (self.authorization_url, self.completion)
     }
 
+    pub fn redirect_url_submitter(&self) -> OauthRedirectUrlSubmitter {
+        self.redirect_url_tx.clone()
+    }
+
     pub async fn wait(self) -> Result<()> {
         self.completion.await.map_err(|err| {
             RmcpClientError::generic(format!("OAuth login task was cancelled: {err}"))
@@ -188,10 +214,32 @@ impl OauthLoginHandle {
     }
 }
 
+#[derive(Clone)]
+pub struct OauthRedirectUrlSubmitter {
+    tx: mpsc::UnboundedSender<String>,
+}
+
+impl OauthRedirectUrlSubmitter {
+    pub fn submit(&self, redirect_url: &str) -> bool {
+        let Some(callback) = parse_oauth_callback_input(redirect_url) else {
+            return false;
+        };
+        self.tx
+            .send(format!(
+                "/callback?code={}&state={}",
+                urlencoding::encode(&callback.code),
+                urlencoding::encode(&callback.state)
+            ))
+            .is_ok()
+    }
+}
+
 struct OauthLoginFlow {
     auth_url: String,
     oauth_state: OAuthState,
     rx: oneshot::Receiver<(String, String)>,
+    manual_redirect_tx: mpsc::UnboundedSender<String>,
+    manual_redirect_rx: mpsc::UnboundedReceiver<String>,
     guard: CallbackServerGuard,
     server_name: String,
     server_url: String,
@@ -263,6 +311,7 @@ impl OauthLoginFlow {
 
         let (tx, rx) = oneshot::channel();
         spawn_callback_server(server, tx);
+        let (manual_redirect_tx, manual_redirect_rx) = mpsc::unbounded_channel();
 
         let OauthHeaders {
             http_headers,
@@ -284,6 +333,8 @@ impl OauthLoginFlow {
             auth_url,
             oauth_state,
             rx,
+            manual_redirect_tx,
+            manual_redirect_rx,
             guard,
             server_name: server_name.to_string(),
             server_url: server_url.to_string(),
@@ -296,6 +347,10 @@ impl OauthLoginFlow {
 
     fn authorization_url(&self) -> String {
         self.auth_url.clone()
+    }
+
+    fn redirect_url_tx(&self) -> mpsc::UnboundedSender<String> {
+        self.manual_redirect_tx.clone()
     }
 
     async fn finish(mut self) -> Result<()> {
@@ -312,10 +367,9 @@ impl OauthLoginFlow {
         }
 
         let result = async {
-            let (code, csrf_state) = timeout(self.timeout, &mut self.rx)
+            let (code, csrf_state) = timeout(self.timeout, self.wait_for_callback())
                 .await
-                .with_ctx("timed out waiting for OAuth callback")?
-                .with_ctx("OAuth callback was cancelled")?;
+                .with_ctx("timed out waiting for OAuth callback")??;
 
             self.oauth_state
                 .handle_callback(&code, &csrf_state)
@@ -354,6 +408,26 @@ impl OauthLoginFlow {
         result
     }
 
+    async fn wait_for_callback(&mut self) -> Result<(String, String)> {
+        loop {
+            tokio::select! {
+                callback = &mut self.rx => {
+                    return callback.with_ctx("OAuth callback was cancelled");
+                }
+                manual = self.manual_redirect_rx.recv() => {
+                    let Some(redirect_url) = manual else {
+                        continue;
+                    };
+                    if let Some(OauthCallbackResult { code, state }) =
+                        parse_oauth_callback_input(&redirect_url)
+                    {
+                        return Ok((code, state));
+                    }
+                }
+            }
+        }
+    }
+
     fn spawn(self) -> oneshot::Receiver<Result<()>> {
         let server_name_for_logging = self.server_name.clone();
         let (tx, rx) = oneshot::channel();
@@ -371,5 +445,48 @@ impl OauthLoginFlow {
         });
 
         rx
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_oauth_callback_input_accepts_full_redirect_url() {
+        let parsed =
+            parse_oauth_callback_input("http://127.0.0.1:49152/callback?code=abc&state=xyz")
+                .expect("full redirect URL should parse");
+
+        assert_eq!(parsed.code, "abc");
+        assert_eq!(parsed.state, "xyz");
+    }
+
+    #[test]
+    fn parse_oauth_callback_input_accepts_callback_path() {
+        let parsed = parse_oauth_callback_input("/callback?code=a%20b&state=s%2Ft")
+            .expect("callback path should parse");
+
+        assert_eq!(parsed.code, "a b");
+        assert_eq!(parsed.state, "s/t");
+    }
+
+    #[test]
+    fn redirect_url_submitter_rejects_invalid_input() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let submitter = OauthRedirectUrlSubmitter { tx };
+
+        assert!(!submitter.submit("not a redirect URL"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn redirect_url_submitter_accepts_valid_redirect() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let submitter = OauthRedirectUrlSubmitter { tx };
+
+        assert!(submitter.submit("http://127.0.0.1:49152/callback?code=abc&state=xyz"));
+        let sent = rx.try_recv().expect("valid redirect should be submitted");
+        assert_eq!(sent, "/callback?code=abc&state=xyz");
     }
 }

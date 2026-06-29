@@ -62,6 +62,7 @@ pub use permissions_editor::PermEditorError;
 pub use permissions_editor::PermRuleRow;
 pub use permissions_editor::PermissionsEditorState;
 pub use permissions_editor::PermissionsEditorTab;
+pub use permissions_editor::RecentDenialRow;
 pub use plugin_dialog::PluginDialogState;
 pub use plugin_dialog::PluginDialogTab;
 pub use plugin_dialog::PluginHintResponse;

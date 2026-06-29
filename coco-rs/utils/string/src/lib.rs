@@ -133,6 +133,33 @@ pub fn truncate_for_log(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// Truncate by UTF-16 code-unit budget, appending `ellipsis` when truncated.
+///
+/// This matches JavaScript `str.length` / `slice` thresholds while preserving
+/// Rust UTF-8 validity by never splitting a Unicode scalar value.
+pub fn truncate_utf16_units_with_ellipsis(
+    s: &str,
+    max_units: usize,
+    prefix_units: usize,
+    ellipsis: &str,
+) -> String {
+    if s.encode_utf16().count() <= max_units {
+        return s.to_string();
+    }
+
+    let mut prefix = String::new();
+    let mut units = 0;
+    for ch in s.chars() {
+        let next = units + ch.len_utf16();
+        if next > prefix_units {
+            break;
+        }
+        prefix.push(ch);
+        units = next;
+    }
+    format!("{prefix}{ellipsis}")
+}
+
 /// Encodes a byte slice as a lowercase hex string.
 pub fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write;

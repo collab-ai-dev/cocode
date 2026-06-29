@@ -178,6 +178,8 @@ pub use event::PluginDialogMcpServerRow;
 pub use event::PluginDialogMcpToolRow;
 pub use event::PluginDialogOptionRow;
 pub use event::PluginDialogPayload;
+pub use event::PluginDialogSkillRow;
+pub use event::PluginDialogSkillUsage;
 pub use event::PluginInit;
 pub use event::QueuedCommandEditImage;
 pub use event::RateLimitParams;

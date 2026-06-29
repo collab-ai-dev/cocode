@@ -87,8 +87,9 @@ fn classify_at_trigger(tail: &str) -> (SuggestionKind, String) {
 pub fn refresh_suggestions(state: &mut AppState) {
     let text = state.ui.input.text().to_string();
     let cursor = state.ui.input.textarea.cursor();
-    let trigger =
-        detect_command_directory_trigger(state, &text, cursor).or_else(|| detect(&text, cursor));
+    let trigger = detect_bash_path_trigger(&text, cursor)
+        .or_else(|| detect_command_directory_trigger(state, &text, cursor))
+        .or_else(|| detect(&text, cursor));
     let Some(mut trigger) = trigger else {
         state.ui.completion.clear_active();
         state.ui.sync_popup_from_active_suggestions();
@@ -130,7 +131,7 @@ pub fn refresh_suggestions(state: &mut AppState) {
     let mut items = match trigger.kind {
         SuggestionKind::SlashCommand => slash_items(state, &trigger.query),
         SuggestionKind::At => unified_seed_items(state, &trigger.query),
-        SuggestionKind::Path | SuggestionKind::Directory => Vec::new(),
+        SuggestionKind::Path | SuggestionKind::BashPath | SuggestionKind::Directory => Vec::new(),
         SuggestionKind::CustomTitle => resume_items(state, &trigger.query),
         SuggestionKind::Symbol => Vec::new(),
     };
@@ -162,6 +163,7 @@ pub fn refresh_suggestions(state: &mut AppState) {
             trigger.kind,
             SuggestionKind::At
                 | SuggestionKind::Path
+                | SuggestionKind::BashPath
                 | SuggestionKind::Directory
                 | SuggestionKind::Symbol
         )
@@ -295,7 +297,7 @@ fn refresh_inline_ghost(state: &mut AppState) {
         .completion
         .active
         .as_ref()
-        .is_some_and(|s| !s.items.is_empty())
+        .is_some_and(|s| !s.items.is_empty() || s.kind == SuggestionKind::BashPath)
     {
         return;
     }
@@ -439,12 +441,45 @@ fn detect_command_directory_trigger(
     }
 }
 
+fn detect_bash_path_trigger(text: &str, cursor: usize) -> Option<Trigger> {
+    let cursor = cursor.min(text.len());
+    if !text.starts_with('!') {
+        return None;
+    }
+    let mut command_start = 1;
+    if text.as_bytes().get(1) == Some(&b' ') {
+        command_start = 2;
+    }
+    if cursor <= command_start {
+        return None;
+    }
+    let command_prefix = text.get(command_start..cursor)?;
+    let token = current_token(command_prefix, command_prefix.len())?;
+    if !is_bash_path_query(token.text) {
+        return None;
+    }
+    Some(Trigger {
+        kind: SuggestionKind::BashPath,
+        pos: command_start + token.start,
+        query: token.text.to_string(),
+    })
+}
+
 fn is_path_like_query(query: &str) -> bool {
     let query = query.strip_prefix('"').unwrap_or(query);
     query.starts_with("~/")
         || query.starts_with("./")
         || query.starts_with("../")
         || query.starts_with('/')
+}
+
+fn is_bash_path_query(query: &str) -> bool {
+    let query = query.strip_prefix('"').unwrap_or(query);
+    is_path_like_query(query)
+        || query == "~"
+        || query == "."
+        || query == ".."
+        || query.contains('/')
 }
 
 #[cfg(test)]

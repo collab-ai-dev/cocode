@@ -67,6 +67,9 @@ async fn f_cycles_workflow_detail_filter_skipping_empty_statuses() {
             phase_index: None,
             agent_id: None,
             model: None,
+            started_at: None,
+            queued_at: None,
+            last_progress_at: None,
             tokens: None,
             tool_calls: None,
             duration_ms: None,
@@ -74,6 +77,7 @@ async fn f_cycles_workflow_detail_filter_skipping_empty_statuses() {
             result_preview: None,
             prompt_preview: None,
             error: None,
+            skipped: false,
         },
         coco_types::WorkflowProgressEvent::WorkflowAgent {
             index: 1,
@@ -83,6 +87,9 @@ async fn f_cycles_workflow_detail_filter_skipping_empty_statuses() {
             phase_index: None,
             agent_id: None,
             model: None,
+            started_at: None,
+            queued_at: None,
+            last_progress_at: None,
             tokens: None,
             tool_calls: None,
             duration_ms: None,
@@ -90,6 +97,7 @@ async fn f_cycles_workflow_detail_filter_skipping_empty_statuses() {
             result_preview: None,
             prompt_preview: None,
             error: Some("failed".to_string()),
+            skipped: false,
         },
     ];
     state.session.active_tasks = vec![workflow];
@@ -118,5 +126,80 @@ async fn f_cycles_workflow_detail_filter_skipping_empty_statuses() {
         state.ui.modal.as_ref(),
         Some(ModalState::BackgroundTasks(bt))
             if bt.workflow_agent_filter == WorkflowAgentStatusFilter::Done
+    ));
+}
+
+#[tokio::test]
+async fn f_cycles_to_queued_and_skipped_workflow_statuses() {
+    let mut state = AppState::default();
+    let mut workflow = running_task("workflow-1", TaskEntryKind::Workflow);
+    workflow.workflow_progress = vec![
+        coco_types::WorkflowProgressEvent::WorkflowAgent {
+            index: 0,
+            state: coco_types::WorkflowAgentState::Start,
+            label: "Explore".to_string(),
+            phase_title: None,
+            phase_index: None,
+            agent_id: None,
+            model: None,
+            started_at: None,
+            queued_at: Some(1_700_000_000_000),
+            last_progress_at: None,
+            tokens: None,
+            tool_calls: None,
+            duration_ms: None,
+            cached: false,
+            result_preview: None,
+            prompt_preview: None,
+            error: None,
+            skipped: false,
+        },
+        coco_types::WorkflowProgressEvent::WorkflowAgent {
+            index: 1,
+            state: coco_types::WorkflowAgentState::Error,
+            label: "Verify".to_string(),
+            phase_title: None,
+            phase_index: None,
+            agent_id: None,
+            model: None,
+            started_at: None,
+            queued_at: None,
+            last_progress_at: None,
+            tokens: None,
+            tool_calls: None,
+            duration_ms: None,
+            cached: false,
+            result_preview: None,
+            prompt_preview: None,
+            error: Some("skipped by user".to_string()),
+            skipped: true,
+        },
+    ];
+    state.session.active_tasks = vec![workflow];
+    state
+        .ui
+        .show_modal(ModalState::BackgroundTasks(BackgroundTasksState {
+            selected: 0,
+            detail: Some("workflow-1".to_string()),
+            workflow_agent_filter: WorkflowAgentStatusFilter::All,
+        }));
+    let (tx, _rx) = mpsc::channel(4);
+
+    let handled = intercept(&mut state, &TuiCommand::InsertChar('f'), &tx).await;
+
+    assert!(matches!(handled, super::Handled::Yes(true)));
+    assert!(matches!(
+        state.ui.modal.as_ref(),
+        Some(ModalState::BackgroundTasks(bt))
+            if bt.workflow_agent_filter == WorkflowAgentStatusFilter::Queued
+    ));
+
+    let handled = intercept(&mut state, &TuiCommand::InsertChar('f'), &tx).await;
+
+    assert!(matches!(handled, super::Handled::Yes(true)));
+    assert!(matches!(
+        state.ui.modal.as_ref(),
+        Some(ModalState::BackgroundTasks(bt))
+            if bt.workflow_agent_filter == WorkflowAgentStatusFilter::Skipped
     ));
 }

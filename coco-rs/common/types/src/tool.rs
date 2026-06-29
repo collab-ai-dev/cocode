@@ -69,6 +69,8 @@ pub enum ToolName {
     McpAuth,
     #[serde(rename = "ListMcpResourcesTool")]
     ListMcpResources,
+    #[serde(rename = "ReadMcpResourceDirTool")]
+    ReadMcpResourceDir,
     #[serde(rename = "ReadMcpResourceTool")]
     ReadMcpResource,
     // Scheduling (6)
@@ -128,6 +130,7 @@ impl ToolName {
             Self::Lsp => "LSP",
             Self::McpAuth => "McpAuth",
             Self::ListMcpResources => "ListMcpResourcesTool",
+            Self::ReadMcpResourceDir => "ReadMcpResourceDirTool",
             Self::ReadMcpResource => "ReadMcpResourceTool",
             Self::CronCreate => "CronCreate",
             Self::CronDelete => "CronDelete",
@@ -243,6 +246,7 @@ impl FromStr for ToolName {
             "LSP" => Ok(Self::Lsp),
             "McpAuth" => Ok(Self::McpAuth),
             "ListMcpResourcesTool" => Ok(Self::ListMcpResources),
+            "ReadMcpResourceDirTool" => Ok(Self::ReadMcpResourceDir),
             "ReadMcpResourceTool" => Ok(Self::ReadMcpResource),
             "CronCreate" => Ok(Self::CronCreate),
             "CronDelete" => Ok(Self::CronDelete),

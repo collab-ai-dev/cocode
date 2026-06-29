@@ -161,6 +161,7 @@ pub enum McpConnectionState {
 pub struct McpCapabilities {
     pub tools: bool,
     pub resources: bool,
+    pub resource_directory_read: bool,
     pub prompts: bool,
     pub channel: bool,
     pub channel_permission: bool,

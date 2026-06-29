@@ -1,3 +1,8 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+
 use crate::config::EnforcementLevel;
 use crate::config::SandboxBypass;
 use crate::config::SandboxConfig;
@@ -172,6 +177,28 @@ fn test_proxy_env_vars_extended_vars() {
         git_ssh.contains("nc -X 5 -x localhost:1080"),
         "GIT_SSH_COMMAND should route via SOCKS proxy, got: {git_ssh}"
     );
+}
+
+#[test]
+fn test_apply_sandbox_env_unsets_credentials_and_sets_proxy_env() {
+    let mut cmd = tokio::process::Command::new("echo");
+    cmd.env("AWS_SECRET_ACCESS_KEY", "secret");
+    let unset = vec!["AWS_SECRET_ACCESS_KEY".to_string()];
+    let proxy = HashMap::from([(
+        "HTTP_PROXY".to_string(),
+        "http://localhost:3128".to_string(),
+    )]);
+
+    apply_sandbox_env(&mut cmd, &unset, &proxy);
+
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    assert!(envs.iter().any(|(key, value)| {
+        key == &std::ffi::OsStr::new("AWS_SECRET_ACCESS_KEY") && value.is_none()
+    }));
+    assert!(envs.iter().any(|(key, value)| {
+        key == &std::ffi::OsStr::new("HTTP_PROXY")
+            && value.map(|v| v == std::ffi::OsStr::new("http://localhost:3128")) == Some(true)
+    }));
 }
 
 #[tokio::test]
@@ -596,4 +623,58 @@ fn test_network_ask_callback_present_with_bridge_when_not_managed_only() {
         crate::bridge::NoOpSandboxApprovalBridge,
     ));
     assert!(state.build_network_ask_callback().is_some());
+}
+
+#[derive(Debug)]
+struct CountingApproveBridge {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl crate::bridge::SandboxApprovalBridge for CountingApproveBridge {
+    async fn request_approval(
+        &self,
+        _request: crate::bridge::SandboxApprovalRequest,
+    ) -> crate::bridge::SandboxApprovalDecision {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        crate::bridge::SandboxApprovalDecision::Approved
+    }
+}
+
+#[tokio::test]
+async fn test_network_ask_callback_remembers_approved_host_for_session() {
+    let settings = SandboxSettings::enabled();
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        allow_network: true,
+        ..Default::default()
+    };
+    let state = SandboxState::new(
+        EnforcementLevel::WorkspaceWrite,
+        settings,
+        config,
+        crate::platform::create_platform(),
+    );
+    let calls = Arc::new(AtomicUsize::new(0));
+    state.set_approval_bridge(Arc::new(CountingApproveBridge {
+        calls: Arc::clone(&calls),
+    }));
+
+    let callback = state.build_network_ask_callback().expect("callback");
+    assert!(callback("Example.COM.".into()).await);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    assert!(callback("example.com".into()).await);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "second request should use the session host cache"
+    );
+    assert!(
+        state
+            .settings()
+            .network
+            .allowed_domains
+            .contains(&"example.com".to_string())
+    );
 }

@@ -237,7 +237,7 @@ pub struct Settings {
     pub session: SessionSettings,
 
     // === Auto-Mode ===
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "autoMode")]
     pub auto_mode: Option<AutoModeConfig>,
 
     // === Policy ===
@@ -468,6 +468,10 @@ pub struct AutoModeConfig {
     /// (interactive) instead of denying. Default `false` = fail closed
     /// (settings-based equivalent of the old GrowthBook gate).
     pub classifier_unavailable_fail_open: bool,
+    /// When true, Bash/PowerShell allow rules are suspended while auto mode is
+    /// active so shell commands flow through the classifier.
+    #[serde(default, alias = "classifyAllShell")]
+    pub classify_all_shell: bool,
 }
 
 /// An allowed MCP server entry in settings.
@@ -657,6 +661,35 @@ pub struct SettingsWithSource {
     pub merged: Settings,
     pub per_source: HashMap<SettingSource, serde_json::Value>,
     pub source_paths: HashMap<SettingSource, std::path::PathBuf>,
+}
+
+impl SettingsWithSource {
+    /// Whether any settings source enables the stricter auto-mode shell gate.
+    ///
+    /// Claude Code treats this as an OR across user/local/flag/policy sources:
+    /// one layer enabling the flag is enough, and a higher-precedence
+    /// absent/false field does not weaken it.
+    pub fn auto_mode_classify_all_shell_enabled(&self) -> bool {
+        [
+            SettingSource::User,
+            SettingSource::Local,
+            SettingSource::Flag,
+            SettingSource::Policy,
+        ]
+        .iter()
+        .filter_map(|source| self.per_source.get(source))
+        .any(auto_mode_source_classifies_all_shell)
+    }
+}
+
+fn auto_mode_source_classifies_all_shell(value: &serde_json::Value) -> bool {
+    value
+        .pointer("/auto_mode/classify_all_shell")
+        .or_else(|| value.pointer("/auto_mode/classifyAllShell"))
+        .or_else(|| value.pointer("/autoMode/classify_all_shell"))
+        .or_else(|| value.pointer("/autoMode/classifyAllShell"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn default_true() -> bool {

@@ -76,6 +76,7 @@ fn render_tab_strip(focused: PermissionsEditorTab) -> String {
 
 fn tab_label(tab: PermissionsEditorTab) -> String {
     match tab {
+        PermissionsEditorTab::Recent => t!("dialog.perms_tab_recent").to_string(),
         PermissionsEditorTab::Allow => t!("dialog.perms_tab_allow").to_string(),
         PermissionsEditorTab::Ask => t!("dialog.perms_tab_ask").to_string(),
         PermissionsEditorTab::Deny => t!("dialog.perms_tab_deny").to_string(),
@@ -87,6 +88,10 @@ fn render_list(s: &PermissionsEditorState) -> String {
     let mut out = String::new();
     out.push_str(&tab_subtitle(s.selected_tab));
     out.push_str("\n\n");
+
+    if s.selected_tab == PermissionsEditorTab::Recent {
+        return render_recent_denials(s, out);
+    }
 
     let cursor = s.active_cursor();
     let mut row = 0usize;
@@ -146,8 +151,32 @@ fn render_list(s: &PermissionsEditorState) -> String {
     out
 }
 
+fn render_recent_denials(s: &PermissionsEditorState, mut out: String) -> String {
+    if s.recent_denials.is_empty() {
+        out.push_str(&t!("dialog.perms_recent_empty"));
+        out.push('\n');
+        return out;
+    }
+
+    let cursor = s.active_cursor();
+    for (row, denial) in s.recent_denials.iter().enumerate() {
+        let status = if denial.approved { "✓" } else { "✗" };
+        let retry = if denial.retry { " (retry)" } else { "" };
+        out.push_str(&format!(
+            "{} {status} {}{retry}\n",
+            marker(row == cursor),
+            denial.display
+        ));
+        if !denial.reason.is_empty() {
+            out.push_str(&format!("    {}\n", denial.reason));
+        }
+    }
+    out
+}
+
 fn tab_subtitle(tab: PermissionsEditorTab) -> String {
     match tab {
+        PermissionsEditorTab::Recent => t!("dialog.perms_sub_recent").to_string(),
         PermissionsEditorTab::Allow => t!("dialog.perms_sub_allow").to_string(),
         PermissionsEditorTab::Ask => t!("dialog.perms_sub_ask").to_string(),
         PermissionsEditorTab::Deny => t!("dialog.perms_sub_deny").to_string(),
@@ -160,6 +189,7 @@ fn render_add_form(tab: PermissionsEditorTab, form: &AddForm) -> String {
     match form.step {
         AddStep::Input => {
             let prompt = match tab {
+                PermissionsEditorTab::Recent => t!("dialog.perms_input_rule_prompt").to_string(),
                 PermissionsEditorTab::Workspace => t!("dialog.perms_input_dir_prompt").to_string(),
                 _ => t!("dialog.perms_input_rule_prompt").to_string(),
             };
@@ -266,6 +296,8 @@ fn render_hint(s: &PermissionsEditorState) -> String {
         }
     } else if s.delete_confirm.is_some() {
         t!("dialog.perms_hint_confirm").to_string()
+    } else if s.selected_tab == PermissionsEditorTab::Recent {
+        t!("dialog.perms_hint_recent").to_string()
     } else {
         t!("dialog.perms_hint_list").to_string()
     }

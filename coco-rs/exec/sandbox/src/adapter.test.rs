@@ -5,6 +5,8 @@ use coco_types::SandboxMode;
 use pretty_assertions::assert_eq;
 
 use super::*;
+use crate::config::CredentialEnvVarEntry;
+use crate::config::CredentialFileEntry;
 use crate::config::SandboxSettings;
 
 fn empty_inputs<'a>(
@@ -26,6 +28,7 @@ fn empty_inputs<'a>(
         worktree_main_repo: None,
         sourced_permission_allow_rules: None,
         sourced_filesystem_allow_read: None,
+        sourced_sandbox_credentials: None,
     }
 }
 
@@ -534,6 +537,60 @@ fn test_filesystem_deny_read_globs_routed_separately() {
             .any(|p| p == Path::new("/abs/literal")),
         "literal path stays in denied_read_paths",
     );
+}
+
+#[test]
+fn test_sourced_credentials_feed_deny_read_and_unset_env() {
+    let settings = SandboxSettings::default();
+    let credentials = SandboxCredentialsConfig {
+        files: vec![CredentialFileEntry {
+            path: PathBuf::from("/home/user/.aws/credentials"),
+            mode: CredentialAccessMode::Deny,
+        }],
+        env_vars: vec![CredentialEnvVarEntry {
+            name: "AWS_SECRET_ACCESS_KEY".into(),
+            mode: CredentialAccessMode::Deny,
+        }],
+    };
+
+    let inputs = AdapterInputs {
+        sourced_sandbox_credentials: Some(&credentials),
+        ..empty_inputs(&settings, Path::new("/proj"), &[])
+    };
+    let out = build_runtime_config(inputs);
+
+    assert!(
+        out.config
+            .denied_read_paths
+            .contains(&PathBuf::from("/home/user/.aws/credentials"))
+    );
+    assert_eq!(out.config.unset_env_vars, vec!["AWS_SECRET_ACCESS_KEY"]);
+}
+
+#[test]
+fn test_merged_credentials_fallback_resolves_relative_files() {
+    let settings = SandboxSettings {
+        credentials: Some(SandboxCredentialsConfig {
+            files: vec![CredentialFileEntry {
+                path: PathBuf::from("secrets/token"),
+                mode: CredentialAccessMode::Deny,
+            }],
+            env_vars: vec![CredentialEnvVarEntry {
+                name: "TOKEN".into(),
+                mode: CredentialAccessMode::Deny,
+            }],
+        }),
+        ..Default::default()
+    };
+
+    let out = build_runtime_config(empty_inputs(&settings, Path::new("/proj"), &[]));
+
+    assert!(
+        out.config
+            .denied_read_paths
+            .contains(&PathBuf::from("/proj/secrets/token"))
+    );
+    assert_eq!(out.config.unset_env_vars, vec!["TOKEN"]);
 }
 
 // ── Network isolation posture ──────────────────────────────────────────────

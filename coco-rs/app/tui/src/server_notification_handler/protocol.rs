@@ -27,6 +27,7 @@ use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::ModalState;
 use crate::state::PanePromptState;
+use crate::state::WorkflowAgentStatusFilter;
 use crate::state::session::HookEntry;
 use crate::state::session::HookEntryStatus;
 use crate::state::session::McpServerStatus;
@@ -1284,22 +1285,32 @@ fn token_usage_from_session_snapshot(
 fn latest_workflow_progress_summary(
     events: &[coco_types::WorkflowProgressEvent],
 ) -> Option<String> {
-    use coco_types::WorkflowAgentState;
     use coco_types::WorkflowProgressEvent;
     events.last().map(|event| match event {
         WorkflowProgressEvent::WorkflowPhase { title, .. } => format!("▸ {title}"),
-        WorkflowProgressEvent::WorkflowAgent {
-            label,
-            state,
-            cached,
-            ..
-        } => {
-            let verb = match state {
-                WorkflowAgentState::Start | WorkflowAgentState::Progress => {
+        WorkflowProgressEvent::WorkflowAgent { label, cached, .. } => {
+            let status = WorkflowAgentStatusFilter::from_progress_event(event, true)
+                .unwrap_or(WorkflowAgentStatusFilter::Running);
+            let verb = match status {
+                WorkflowAgentStatusFilter::All => unreachable!("agent status cannot be all"),
+                WorkflowAgentStatusFilter::Running => {
                     t!("dialog.workflow_agent_state_running").to_string()
                 }
-                WorkflowAgentState::Done => t!("dialog.workflow_agent_state_done").to_string(),
-                WorkflowAgentState::Error => t!("dialog.workflow_agent_state_error").to_string(),
+                WorkflowAgentStatusFilter::Queued => {
+                    t!("dialog.workflow_filter_status_queued").to_string()
+                }
+                WorkflowAgentStatusFilter::Failed => {
+                    t!("dialog.workflow_filter_status_failed").to_string()
+                }
+                WorkflowAgentStatusFilter::Done => {
+                    t!("dialog.workflow_agent_state_done").to_string()
+                }
+                WorkflowAgentStatusFilter::Skipped => {
+                    t!("dialog.workflow_filter_status_skipped").to_string()
+                }
+                WorkflowAgentStatusFilter::Interrupted => {
+                    t!("dialog.workflow_filter_status_interrupted").to_string()
+                }
             };
             if *cached {
                 format!("{label} — {verb} · {}", t!("dialog.workflow_cached"))

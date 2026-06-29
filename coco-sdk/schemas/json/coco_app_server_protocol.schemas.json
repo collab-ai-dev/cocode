@@ -6111,12 +6111,88 @@
             "$ref": "#/$defs/PluginDialogMarketplaceRow"
           },
           "type": "array"
+        },
+        "skills": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogSkillRow"
+          },
+          "type": "array"
         }
       },
       "required": [
         "installed",
         "marketplaces",
         "errors"
+      ],
+      "type": "object"
+    },
+    "PluginDialogSkillRow": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lock_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillLockSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "override_state": {
+          "$ref": "#/$defs/SkillOverrideState"
+        },
+        "source": {
+          "$ref": "#/$defs/SkillsDialogSource"
+        },
+        "token_estimate": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginDialogSkillUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "source",
+        "override_state",
+        "token_estimate"
+      ],
+      "type": "object"
+    },
+    "PluginDialogSkillUsage": {
+      "properties": {
+        "count": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "days_since_use": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "count",
+        "days_since_use"
       ],
       "type": "object"
     },
@@ -12308,7 +12384,7 @@
       "type": "object"
     },
     "TuiOnlyEvent": {
-      "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n\n23 variants (20 from design \u00a74.1 + 3 local extensions).",
+      "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n\nTUI-only variants emitted by the engine and local runtime helpers.",
       "oneOf": [
         {
           "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.resolution_detail` so the tool's\n`execute()` can branch on the choice.\n\n`original_input` carries the raw tool input so the TUI can derive\npath-scoped read permission updates for classic \"always allow\"\napprovals.",
@@ -12448,6 +12524,31 @@
             "type",
             "request_id",
             "operation"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Auto-mode classifier denied a tool call. TUI renders this as a\nnon-blocking toast; the transcript still receives the structured\nexecution-denied tool result separately.",
+          "properties": {
+            "display": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "tool_name": {
+              "type": "string"
+            },
+            "type": {
+              "const": "auto_mode_denied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool_name",
+            "display",
+            "reason"
           ],
           "type": "object"
         },
@@ -13920,7 +14021,7 @@
       "type": "object"
     },
     "WorkflowProgressEvent": {
-      "description": "Typed workflow progress payload carried by `task/progress`.",
+      "description": "Typed workflow progress payload carried by `task/progress`.\nMirrors Claude's workflow progress wire shape. `WorkflowAgent` is much\nlarger than phase/log events, but boxing the variant fields would add\nindirection to every producer and consumer of this serde payload for no\npractical win: values are stored in task progress vectors and rendered or\nforwarded, not packed into hot inner-loop collections.",
       "oneOf": [
         {
           "properties": {
@@ -13956,6 +14057,14 @@
             "label": {
               "type": "string"
             },
+            "lastProgressAt": {
+              "description": "Epoch millis for the latest observed progress heartbeat.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "model": {
               "description": "Resolved model id for the subagent.",
               "type": [
@@ -13983,10 +14092,31 @@
                 "null"
               ]
             },
+            "queuedAt": {
+              "description": "Epoch millis when the agent entered the workflow queue.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "resultPreview": {
               "description": "Truncated preview of the subagent result.",
               "type": [
                 "string",
+                "null"
+              ]
+            },
+            "skipped": {
+              "default": false,
+              "description": "Error events produced by a user skip are displayed separately\nfrom ordinary failures.",
+              "type": "boolean"
+            },
+            "startedAt": {
+              "description": "Epoch millis when the agent started running.",
+              "format": "int64",
+              "type": [
+                "integer",
                 "null"
               ]
             },

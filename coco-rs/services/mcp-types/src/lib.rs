@@ -702,6 +702,42 @@ impl From<ListResourcesResult> for serde_json::Value {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub enum ReadResourceDirectoryRequest {}
+
+impl ModelContextProtocolRequest for ReadResourceDirectoryRequest {
+    const METHOD: &'static str = "resources/directory/read";
+    type Params = ReadResourceDirectoryRequestParams;
+    type Result = ReadResourceDirectoryResult;
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ReadResourceDirectoryRequestParams {
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+/// The server's response to a resources/directory/read request.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ReadResourceDirectoryResult {
+    #[serde(
+        rename = "nextCursor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub next_cursor: Option<String>,
+    pub resources: Vec<Resource>,
+}
+
+impl From<ReadResourceDirectoryResult> for serde_json::Value {
+    fn from(value: ReadResourceDirectoryResult) -> Self {
+        // Leave this as it should never fail
+        #[expect(clippy::unwrap_used)]
+        serde_json::to_value(value).unwrap()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum ListRootsRequest {}
 
 impl ModelContextProtocolRequest for ListRootsRequest {
@@ -1213,6 +1249,14 @@ pub struct ServerCapabilitiesResources {
     pub list_changed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subscribe: Option<bool>,
+    #[serde(
+        rename = "directoryRead",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub directory_read: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<serde_json::Value>,
 }
 
 /// Present if the server offers any prompt templates.
@@ -1272,6 +1316,7 @@ pub enum ServerResult {
     InitializeResult(InitializeResult),
     ListResourcesResult(ListResourcesResult),
     ListResourceTemplatesResult(ListResourceTemplatesResult),
+    ReadResourceDirectoryResult(ReadResourceDirectoryResult),
     ReadResourceResult(ReadResourceResult),
     ListPromptsResult(ListPromptsResult),
     GetPromptResult(GetPromptResult),

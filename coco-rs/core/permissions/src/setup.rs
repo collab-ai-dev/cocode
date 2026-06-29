@@ -479,6 +479,7 @@ pub fn get_default_rules_for_mode(mode: PermissionMode) -> Vec<PermissionRule> {
                 ToolName::CronList,
                 ToolName::Lsp,
                 ToolName::ListMcpResources,
+                ToolName::ReadMcpResourceDir,
                 ToolName::ReadMcpResource,
                 ToolName::StructuredOutput,
             ];

@@ -196,6 +196,33 @@ impl McpHandle for McpManagerAdapter {
         convert_read_resource_result(result)
     }
 
+    async fn read_resource_directory(
+        &self,
+        server_name: &str,
+        resource_uri: &str,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
+        let manager = self.manager.lock().await.clone();
+        let resources = manager
+            .read_resource_directory(server_name, resource_uri)
+            .await
+            .map_err(|e| {
+                Box::new(coco_error::PlainError::new(
+                    format!("MCP resource directory read failed: {e}"),
+                    coco_error::StatusCode::External,
+                )) as coco_error::BoxedError
+            })?;
+        Ok(resources
+            .into_iter()
+            .map(|r| McpResourceInfo {
+                server_name: server_name.to_string(),
+                uri: r.uri,
+                name: r.name,
+                description: r.description,
+                mime_type: r.mime_type,
+            })
+            .collect())
+    }
+
     async fn call_tool(
         &self,
         server_name: &str,
@@ -203,8 +230,9 @@ impl McpHandle for McpManagerAdapter {
         arguments: Option<Value>,
     ) -> Result<McpToolCallResult, coco_error::BoxedError> {
         let manager = self.manager.lock().await.clone();
+        let send_elicitation = self.send_elicitation_for_server(server_name);
         let result = manager
-            .call_tool(server_name, tool_name, arguments)
+            .call_tool_with_elicitation(server_name, tool_name, arguments, send_elicitation)
             .await
             .map_err(|e| {
                 Box::new(coco_error::PlainError::new(

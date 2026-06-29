@@ -65,23 +65,8 @@ pub fn validate_settings(settings: &Settings) -> Vec<ValidationError> {
         });
     }
 
-    // Validate model allowlist vs selected Main model
-    if let (Some(main), Some(available)) = (&settings.models.main, &settings.available_models)
-        && !is_model_allowed(&main.primary.model_id, Some(available.as_slice()))
-    {
-        let selected = &main.primary.model_id;
-        errors.push(ValidationError {
-            file: None,
-            path: "models.main".into(),
-            message: format!(
-                "Selected Main model '{selected}' is not in the available_models allowlist"
-            ),
-            expected: Some(format!("One of: {}", available.join(", "))),
-            invalid_value: Some(selected.clone()),
-            suggestion: Some(
-                "Either add the Main model to available_models or choose an available model".into(),
-            ),
-        });
+    if let Some(available) = &settings.available_models {
+        validate_model_allowlist(settings, available, &mut errors);
     }
 
     // Validate auto-mode config fields are non-empty strings
@@ -108,6 +93,23 @@ pub fn validate_settings(settings: &Settings) -> Vec<ValidationError> {
         }
     }
 
+    if let Some(credentials) = &settings.sandbox.credentials {
+        for (i, env_var) in credentials.env_vars.iter().enumerate() {
+            if !is_valid_env_var_name(&env_var.name) {
+                errors.push(ValidationError {
+                    file: None,
+                    path: format!("sandbox.credentials.envVars[{i}].name"),
+                    message: "Invalid sandbox credential environment variable name".into(),
+                    expected: Some("Name matching ^[A-Za-z_][A-Za-z0-9_]*$".into()),
+                    invalid_value: Some(env_var.name.clone()),
+                    suggestion: Some(
+                        "Use a POSIX-style environment variable name such as API_TOKEN".into(),
+                    ),
+                });
+            }
+        }
+    }
+
     // Validate hooks
     errors.extend(validate_hooks(settings));
 
@@ -118,6 +120,70 @@ pub fn validate_settings(settings: &Settings) -> Vec<ValidationError> {
     errors.extend(validate_providers(settings));
 
     errors
+}
+
+fn validate_model_allowlist(
+    settings: &Settings,
+    available: &[String],
+    errors: &mut Vec<ValidationError>,
+) {
+    for (path, slots) in [
+        ("models.main", settings.models.main.as_ref()),
+        ("models.fast", settings.models.fast.as_ref()),
+        ("models.plan", settings.models.plan.as_ref()),
+        ("models.explore", settings.models.explore.as_ref()),
+        ("models.review", settings.models.review.as_ref()),
+        ("models.hook_agent", settings.models.hook_agent.as_ref()),
+        ("models.memory", settings.models.memory.as_ref()),
+        ("models.subagent", settings.models.subagent.as_ref()),
+    ] {
+        let Some(slots) = slots else {
+            continue;
+        };
+        validate_selected_model(path, "primary", &slots.primary.model_id, available, errors);
+        for (idx, fallback) in slots.fallbacks.iter().enumerate() {
+            validate_selected_model(
+                path,
+                &format!("fallbacks[{idx}]"),
+                &fallback.model_id,
+                available,
+                errors,
+            );
+        }
+    }
+}
+
+fn validate_selected_model(
+    role_path: &str,
+    slot_path: &str,
+    selected: &str,
+    available: &[String],
+    errors: &mut Vec<ValidationError>,
+) {
+    if is_model_allowed(selected, Some(available)) {
+        return;
+    }
+
+    let full_path = format!("{role_path}.{slot_path}");
+    errors.push(ValidationError {
+        file: None,
+        path: full_path,
+        message: format!("Selected model '{selected}' is not in the available_models allowlist"),
+        expected: Some(format!("One of: {}", available.join(", "))),
+        invalid_value: Some(selected.to_string()),
+        suggestion: Some(
+            "Either add the model to available_models or choose an available model".into(),
+        ),
+    });
+}
+
+fn is_valid_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
 /// Validate provider configurations for safe secret handling.
@@ -605,6 +671,7 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "plan_mode",
     "session",
     "auto_mode",
+    "autoMode",
     "include_co_authored_by",
     "include_git_instructions",
     "allow_managed_hooks_only",

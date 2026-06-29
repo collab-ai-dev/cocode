@@ -11,7 +11,7 @@ use std::sync::Arc;
 fn test_register_all_tools_count() {
     let registry = ToolRegistry::new();
     crate::register_all_tools(&registry);
-    // 42 statically-registered built-ins. Registration is universal; the
+    // 43 statically-registered built-ins. Registration is universal; the
     // 5-layer filter gates per-tool visibility by feature/model/context
     // (e.g. ApplyPatch by ToolOverrides, Workflow by Feature::Workflow, the
     // scheduling tools by Feature::AgentTriggers). Composition:
@@ -19,12 +19,12 @@ fn test_register_all_tools_count() {
     // + 2 web + 4 agent/orchestration (Agent/Workflow/Skill/SendMessage)
     // + 7 task/todo + 4 plan/worktree
     // + 5 util (AskUserQuestion/ToolSearch/Config/SendUserMessage/Lsp)
-    // + 3 mcp + 6 scheduling (Cron{Create,Delete,List}/ScheduleWakeup/
+    // + 4 mcp + 6 scheduling (Cron{Create,Delete,List}/ScheduleWakeup/
     //   Monitor/RemoteTrigger) + 3 shell/repl (PowerShell/Repl/Sleep).
     // `StructuredOutputTool` (conditionally injected via
     // `register_structured_output_tool` when `--json-schema` is parsed) and
     // dynamic `McpTool`s are intentionally excluded from this baseline.
-    assert_eq!(registry.len(), 42, "expected 42 tools registered");
+    assert_eq!(registry.len(), 43, "expected 43 tools registered");
 }
 
 #[test]

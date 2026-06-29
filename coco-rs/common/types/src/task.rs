@@ -398,8 +398,14 @@ pub struct LocalWorkflowExtras {
 }
 
 /// Typed workflow progress payload carried by `task/progress`.
+/// Mirrors Claude's workflow progress wire shape. `WorkflowAgent` is much
+/// larger than phase/log events, but boxing the variant fields would add
+/// indirection to every producer and consumer of this serde payload for no
+/// practical win: values are stored in task progress vectors and rendered or
+/// forwarded, not packed into hot inner-loop collections.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(
     tag = "type",
     rename_all = "snake_case",
@@ -420,6 +426,15 @@ pub enum WorkflowProgressEvent {
         /// Resolved model id for the subagent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
+        /// Epoch millis when the agent started running.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        started_at: Option<i64>,
+        /// Epoch millis when the agent entered the workflow queue.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queued_at: Option<i64>,
+        /// Epoch millis for the latest observed progress heartbeat.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_progress_at: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tokens: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -438,6 +453,10 @@ pub enum WorkflowProgressEvent {
         prompt_preview: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// Error events produced by a user skip are displayed separately
+        /// from ordinary failures.
+        #[serde(default)]
+        skipped: bool,
     },
     WorkflowPhase {
         index: i32,

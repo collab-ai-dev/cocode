@@ -9,6 +9,7 @@ fn empty_env() -> EnvironmentInfo {
         shell: ShellKind::Bash,
         cwd: "/tmp".to_string(),
         os_version: String::new(),
+        agent_proxy_env_line: None,
         model: String::new(),
         knowledge_cutoff: String::new(),
         is_git_repo: false,
@@ -23,6 +24,7 @@ fn env_for_snapshot() -> EnvironmentInfo {
         shell: ShellKind::Zsh,
         cwd: "/repo".to_string(),
         os_version: "Darwin 24.0.0".to_string(),
+        agent_proxy_env_line: None,
         model: "claude-opus-4-7".to_string(),
         knowledge_cutoff: "January 2026".to_string(),
         is_git_repo: true,
@@ -185,6 +187,7 @@ fn unknown_model_omits_knowledge_cutoff_line() {
         shell: ShellKind::Bash,
         cwd: "/tmp".into(),
         os_version: "Linux".into(),
+        agent_proxy_env_line: None,
         model: "future-model-unreleased".into(),
         knowledge_cutoff: String::new(), // empty → omitted by render_env_block
         is_git_repo: false,
@@ -222,6 +225,30 @@ fn known_model_renders_knowledge_cutoff() {
     let prompt = build_system_prompt("ID", &[], &env, None, None, None, None, &[]);
     let text = prompt.full_text();
     assert!(text.contains("Assistant knowledge cutoff is January 2026."));
+}
+
+#[test]
+fn agent_proxy_line_renders_inside_env_before_close() {
+    let mut env = env_for_snapshot();
+    env.agent_proxy_env_line = Some(crate::build_agent_proxy_env_line(
+        "/tmp/agent-ca.pem",
+        Some("/tmp/agent-proxy/README.md"),
+    ));
+
+    let prompt = build_system_prompt("ID", &[], &env, None, None, None, None, &[]);
+    let text = prompt.full_text();
+    let idx_os = text.find("OS Version: Darwin 24.0.0").unwrap();
+    let idx_proxy = text
+        .find("Outbound HTTPS goes through a pre-configured agent proxy")
+        .unwrap();
+    let idx_env_close = text.find("</env>").unwrap();
+
+    assert!(idx_os < idx_proxy);
+    assert!(idx_proxy < idx_env_close);
+    assert!(text.contains("CA bundle: /tmp/agent-ca.pem"));
+    assert!(text.contains("see /tmp/agent-proxy/README.md and run curl -sS"));
+    assert!(text.contains("$HTTPS_PROXY/__agentproxy/status"));
+    assert!(text.contains("never disable TLS verification or unset HTTPS_PROXY"));
 }
 
 /// G9 snapshot test: full byte-level capture of a typical subagent

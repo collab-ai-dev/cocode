@@ -228,6 +228,16 @@ expression: map
       "file_path"
     ]
   },
+  "ReadMcpResourceDirTool": {
+    "properties": [
+      "server",
+      "uri"
+    ],
+    "required": [
+      "server",
+      "uri"
+    ]
+  },
   "ReadMcpResourceTool": {
     "properties": [
       "server",

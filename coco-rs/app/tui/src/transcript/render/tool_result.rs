@@ -194,8 +194,8 @@ fn render_known(
         Agent | Workflow | Skill | SendMessage | TaskCreate | TaskGet | TaskList | TaskUpdate
         | TaskStop | TaskOutput | EnterPlanMode | VerifyPlanExecution | EnterWorktree
         | ExitWorktree | ToolSearch | Config | SendUserMessage | Lsp | McpAuth
-        | ListMcpResources | ReadMcpResource | CronCreate | CronDelete | CronList
-        | ScheduleWakeup | Monitor | RemoteTrigger | Sleep | StructuredOutput => {
+        | ListMcpResources | ReadMcpResourceDir | ReadMcpResource | CronCreate | CronDelete
+        | CronList | ScheduleWakeup | Monitor | RemoteTrigger | Sleep | StructuredOutput => {
             render_structured_default(cx, output, lines)
         }
     }

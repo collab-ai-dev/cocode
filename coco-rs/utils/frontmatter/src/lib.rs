@@ -20,6 +20,9 @@ pub struct Frontmatter {
     pub data: HashMap<String, FrontmatterValue>,
     /// Markdown content after the frontmatter block.
     pub content: String,
+    /// YAML parse error when a frontmatter fence was present but both
+    /// parse attempts failed. The body is still returned and `data` is empty.
+    pub parse_error: Option<String>,
 }
 
 /// A value in the frontmatter YAML.
@@ -145,6 +148,7 @@ pub fn parse(input: &str) -> Frontmatter {
         return Frontmatter {
             data: HashMap::new(),
             content: input.to_string(),
+            parse_error: None,
         };
     }
 
@@ -163,6 +167,7 @@ pub fn parse(input: &str) -> Frontmatter {
         return Frontmatter {
             data: HashMap::new(),
             content: body.to_string(),
+            parse_error: None,
         };
     }
 
@@ -173,17 +178,19 @@ pub fn parse(input: &str) -> Frontmatter {
             .strip_prefix('\n')
             .unwrap_or(&after_first[content_start..]);
 
-        let data = parse_yaml_block(yaml_block);
+        let (data, parse_error) = parse_yaml_block(yaml_block);
 
         Frontmatter {
             data,
             content: content.to_string(),
+            parse_error,
         }
     } else {
         // No closing delimiter — treat entire content as body
         Frontmatter {
             data: HashMap::new(),
             content: input.to_string(),
+            parse_error: None,
         }
     }
 }
@@ -195,34 +202,45 @@ pub fn parse(input: &str) -> Frontmatter {
 ///
 /// Falls through to an empty map when even the retry fails (malformed
 /// frontmatter doesn't poison the body).
-fn parse_yaml_block(yaml: &str) -> HashMap<String, FrontmatterValue> {
+fn parse_yaml_block(yaml: &str) -> (HashMap<String, FrontmatterValue>, Option<String>) {
     let trimmed = yaml.trim();
     if trimmed.is_empty() {
-        return HashMap::new();
+        return (HashMap::new(), None);
     }
     let value: serde_yml::Value = match serde_yml::from_str(yaml) {
         Ok(v) => v,
-        Err(_) => match serde_yml::from_str(&quote_problematic_values(yaml)) {
+        Err(first_err) => match serde_yml::from_str(&quote_problematic_values(yaml)) {
             Ok(v) => v,
-            Err(_) => return HashMap::new(),
+            Err(second_err) => {
+                let second_message = second_err.to_string();
+                let message = if second_message.is_empty() {
+                    first_err.to_string()
+                } else {
+                    second_message
+                };
+                return (HashMap::new(), Some(message));
+            }
         },
     };
     let mapping = match value {
         serde_yml::Value::Mapping(m) => m,
-        _ => return HashMap::new(),
+        _ => return (HashMap::new(), None),
     };
-    mapping
-        .into_iter()
-        .filter_map(|(k, v)| {
-            let key = match k {
-                serde_yml::Value::String(s) => s,
-                serde_yml::Value::Number(n) => n.to_string(),
-                serde_yml::Value::Bool(b) => b.to_string(),
-                _ => return None,
-            };
-            Some((key, yaml_to_frontmatter_value(v)))
-        })
-        .collect()
+    (
+        mapping
+            .into_iter()
+            .filter_map(|(k, v)| {
+                let key = match k {
+                    serde_yml::Value::String(s) => s,
+                    serde_yml::Value::Number(n) => n.to_string(),
+                    serde_yml::Value::Bool(b) => b.to_string(),
+                    _ => return None,
+                };
+                Some((key, yaml_to_frontmatter_value(v)))
+            })
+            .collect(),
+        None,
+    )
 }
 
 /// Pre-process YAML text by wrapping values that contain YAML special

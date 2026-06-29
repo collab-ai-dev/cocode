@@ -20,11 +20,14 @@ use crate::state::interaction::SlashPopupState;
 use crate::state::interaction::SymbolPopupState;
 use crate::state::modal::ModalQueue;
 use crate::state::modal::ModalState;
+use crate::state::permissions_editor::RecentDenialRow;
 use crate::theme::Theme;
 use crate::theme::ThemeRuntimeState;
 use crate::theme::ThemeSetting;
 use coco_tui_ui::constants;
 use coco_tui_ui::double_press::DoublePressTracker;
+
+const RECENT_DENIAL_LIMIT: usize = 20;
 
 /// Exit keys subject to double-press confirmation.
 ///
@@ -98,6 +101,9 @@ pub struct UiState {
     pub(crate) status_line: crate::status_bar::StatusLineRuntime,
     /// Active toast notifications.
     pub toasts: VecDeque<Toast>,
+    /// Session-local `/permissions → Recently denied` ring. Newest first.
+    pub recent_denials: VecDeque<RecentDenialRow>,
+    next_recent_denial_id: i64,
     /// `/skills` dialog Enter → CLI write-local round-trip is in
     /// flight; the `total_edits` count the dialog computed at
     /// dispatch lives here so the [`TuiOnlyEvent::SkillOverridesSaved`]
@@ -223,6 +229,8 @@ impl UiState {
             display_settings: DisplaySettings::default(),
             status_line: crate::status_bar::StatusLineRuntime::default(),
             toasts: VecDeque::new(),
+            recent_denials: VecDeque::new(),
+            next_recent_denial_id: 1,
             pending_skills_save_edits: None,
             terminal_compatibility_warning: None,
             collapsed_tools: HashSet::new(),
@@ -411,6 +419,7 @@ impl UiState {
                     }
                     crate::completion::SuggestionKind::At
                     | crate::completion::SuggestionKind::Path
+                    | crate::completion::SuggestionKind::BashPath
                     | crate::completion::SuggestionKind::Directory
                     | crate::completion::SuggestionKind::CustomTitle => {
                         ComposerPopupState::At(AtPopupState)
@@ -481,6 +490,33 @@ impl UiState {
             self.toasts.pop_front();
         }
         self.toasts.push_back(toast);
+    }
+
+    pub fn record_recent_denial(&mut self, tool_name: String, display: String, reason: String) {
+        let row = RecentDenialRow {
+            id: self.next_recent_denial_id,
+            tool_name,
+            display,
+            reason,
+            approved: false,
+            retry: false,
+        };
+        self.next_recent_denial_id = self.next_recent_denial_id.wrapping_add(1);
+        self.recent_denials.push_front(row);
+        while self.recent_denials.len() > RECENT_DENIAL_LIMIT {
+            self.recent_denials.pop_back();
+        }
+    }
+
+    pub fn recent_denials_snapshot(&self) -> Vec<RecentDenialRow> {
+        self.recent_denials.iter().cloned().collect()
+    }
+
+    pub fn remove_recent_denials(&mut self, ids: &[i64]) {
+        if ids.is_empty() {
+            return;
+        }
+        self.recent_denials.retain(|row| !ids.contains(&row.id));
     }
 
     /// Remove expired toasts.

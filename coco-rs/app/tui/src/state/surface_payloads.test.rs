@@ -1,4 +1,74 @@
 use super::PlanApprovalPromptState;
+use super::WorkflowAgentStatusFilter;
+
+fn workflow_agent_event(
+    state: coco_types::WorkflowAgentState,
+    started_at: Option<i64>,
+    queued_at: Option<i64>,
+    skipped: bool,
+) -> coco_types::WorkflowProgressEvent {
+    coco_types::WorkflowProgressEvent::WorkflowAgent {
+        index: 0,
+        state,
+        label: "agent".to_string(),
+        phase_title: None,
+        phase_index: None,
+        agent_id: None,
+        model: None,
+        started_at,
+        queued_at,
+        last_progress_at: None,
+        tokens: None,
+        tool_calls: None,
+        duration_ms: None,
+        cached: false,
+        result_preview: None,
+        prompt_preview: None,
+        error: None,
+        skipped,
+    }
+}
+
+#[test]
+fn workflow_agent_status_derives_from_progress_fields_and_task_state() {
+    let queued = workflow_agent_event(
+        coco_types::WorkflowAgentState::Start,
+        None,
+        Some(1_700_000_000_000),
+        false,
+    );
+    let running = workflow_agent_event(
+        coco_types::WorkflowAgentState::Progress,
+        Some(1_700_000_000_100),
+        Some(1_700_000_000_000),
+        false,
+    );
+    let skipped = workflow_agent_event(coco_types::WorkflowAgentState::Error, None, None, true);
+    let failed = workflow_agent_event(coco_types::WorkflowAgentState::Error, None, None, false);
+    let interrupted =
+        workflow_agent_event(coco_types::WorkflowAgentState::Progress, None, None, false);
+
+    assert_eq!(
+        WorkflowAgentStatusFilter::from_progress_event(&queued, true),
+        Some(WorkflowAgentStatusFilter::Queued)
+    );
+    assert_eq!(
+        WorkflowAgentStatusFilter::from_progress_event(&running, true),
+        Some(WorkflowAgentStatusFilter::Running)
+    );
+    assert_eq!(
+        WorkflowAgentStatusFilter::from_progress_event(&skipped, true),
+        Some(WorkflowAgentStatusFilter::Skipped)
+    );
+    assert_eq!(
+        WorkflowAgentStatusFilter::from_progress_event(&failed, true),
+        Some(WorkflowAgentStatusFilter::Failed)
+    );
+    assert_eq!(
+        WorkflowAgentStatusFilter::from_progress_event(&interrupted, false),
+        Some(WorkflowAgentStatusFilter::Interrupted)
+    );
+}
 
 #[test]
 fn plan_approval_toggles_between_approve_and_deny() {

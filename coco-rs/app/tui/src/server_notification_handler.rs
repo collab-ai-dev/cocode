@@ -155,6 +155,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::QuestionAsked { .. } => "QuestionAsked",
         E::ElicitationRequested { .. } => "ElicitationRequested",
         E::SandboxApprovalRequired { .. } => "SandboxApprovalRequired",
+        E::AutoModeDenied { .. } => "AutoModeDenied",
         E::PermissionExplanationReady { .. } => "PermissionExplanationReady",
         E::PluginDataReady { .. } => "PluginDataReady",
         E::OutputStylesReady { .. } => "OutputStylesReady",

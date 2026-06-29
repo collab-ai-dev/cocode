@@ -848,6 +848,59 @@ async fn autocomplete_submit_path_directory_drills_into_contents() {
 }
 
 #[tokio::test]
+async fn autocomplete_submit_bash_path_directory_drills_without_at_prefix() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("!cat ./sr");
+    state.ui.input.textarea.set_cursor("!cat ./sr".len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::BashPath,
+        items: vec![SuggestionItem {
+            label: "./src".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path { is_directory: true }),
+        }],
+        selected: 0,
+        query: "./sr".into(),
+        trigger_pos: "!cat ".len(),
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "!cat ./src/");
+    assert!(
+        state.ui.completion.active.is_some(),
+        "directory bash path completion keeps the popup live"
+    );
+}
+
+#[tokio::test]
+async fn autocomplete_submit_bash_path_file_appends_space_and_closes() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("!cat src/ma");
+    state.ui.input.textarea.set_cursor("!cat src/ma".len());
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::BashPath,
+        items: vec![SuggestionItem {
+            label: "src/main.rs".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path {
+                is_directory: false,
+            }),
+        }],
+        selected: 0,
+        query: "src/ma".into(),
+        trigger_pos: "!cat ".len(),
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "!cat src/main.rs ");
+    assert!(state.ui.completion.active.is_none());
+}
+
+#[tokio::test]
 async fn final_quoted_file_accept_closes_quote_and_appends_space() {
     let mut state = AppState::new();
     state.ui.input.textarea.set_text("@\"/tmp/my pro");

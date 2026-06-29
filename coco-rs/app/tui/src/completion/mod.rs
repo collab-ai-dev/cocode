@@ -55,6 +55,10 @@ pub enum SuggestionKind {
     /// Kept distinct from fuzzy `At` so async file-index results cannot
     /// replace path-provider rows for the same visible token.
     Path,
+    /// Path completion for the current token in `!` bash prompt mode.
+    /// Uses the same path provider as `Path`, but accepts without an `@`
+    /// prefix and appends a space only when a file is chosen.
+    BashPath,
     /// Path completion inside a slash-command argument position where
     /// directories should keep the popup open and Enter should submit
     /// the already-typed command instead of forcing the selected row.
@@ -359,6 +363,7 @@ fn selected_insertion(
         SuggestionKind::SlashCommand => insertion(format!("{} ", item.label), false, false),
         SuggestionKind::Symbol => insertion(format!("@#{} ", item.label), false, false),
         SuggestionKind::Directory => format_path_insertion(item, "", &sug.query, dir_accept),
+        SuggestionKind::BashPath => format_path_insertion(item, "", &sug.query, dir_accept),
         SuggestionKind::At | SuggestionKind::Path => {
             format_at_insertion(item, &sug.query, dir_accept)
         }
@@ -378,7 +383,10 @@ fn insertion(replacement: String, keep_popup: bool, should_submit: bool) -> Comp
 fn common_path_prefix_completion(sug: &ActiveSuggestions) -> Option<CompletionInsertion> {
     if !matches!(
         sug.kind,
-        SuggestionKind::At | SuggestionKind::Path | SuggestionKind::Directory
+        SuggestionKind::At
+            | SuggestionKind::Path
+            | SuggestionKind::BashPath
+            | SuggestionKind::Directory
     ) || sug.items.len() < 2
     {
         return None;

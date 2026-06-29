@@ -177,6 +177,114 @@ fn test_content_specific_allow_rule() {
 }
 
 #[test]
+fn test_suspend_shell_allow_rules_ignores_bash_allow_in_auto_mode() {
+    let mut ctx = empty_context(PermissionMode::Auto);
+    ctx.allow_rules.insert(
+        PermissionRuleSource::UserSettings,
+        vec![make_rule(
+            "Bash",
+            Some("git *"),
+            PermissionBehavior::Allow,
+            PermissionRuleSource::UserSettings,
+        )],
+    );
+
+    let result = PermissionEvaluator::evaluate_with_tool_check_and_options(
+        &ToolId::Builtin(ToolName::Bash),
+        &bash_input("git status"),
+        &ctx,
+        None,
+        PermissionEvaluationOptions {
+            suspend_shell_allow_rules: true,
+            ..Default::default()
+        },
+    );
+
+    assert!(matches!(result, PermissionDecision::Ask { .. }));
+}
+
+#[test]
+fn test_suspend_shell_allow_rules_ignores_powershell_allow_in_auto_mode() {
+    let mut ctx = empty_context(PermissionMode::Auto);
+    ctx.allow_rules.insert(
+        PermissionRuleSource::UserSettings,
+        vec![make_rule(
+            "PowerShell",
+            Some("Get-ChildItem *"),
+            PermissionBehavior::Allow,
+            PermissionRuleSource::UserSettings,
+        )],
+    );
+
+    let result = PermissionEvaluator::evaluate_with_tool_check_and_options(
+        &ToolId::Builtin(ToolName::PowerShell),
+        &serde_json::json!({"command": "Get-ChildItem ."}),
+        &ctx,
+        None,
+        PermissionEvaluationOptions {
+            suspend_shell_allow_rules: true,
+            ..Default::default()
+        },
+    );
+
+    assert!(matches!(result, PermissionDecision::Ask { .. }));
+}
+
+#[test]
+fn test_shell_allow_rules_remain_active_when_suspend_flag_is_false() {
+    let mut ctx = empty_context(PermissionMode::Auto);
+    ctx.allow_rules.insert(
+        PermissionRuleSource::UserSettings,
+        vec![make_rule(
+            "Bash",
+            Some("git *"),
+            PermissionBehavior::Allow,
+            PermissionRuleSource::UserSettings,
+        )],
+    );
+
+    let result = PermissionEvaluator::evaluate_with_tool_check_and_options(
+        &ToolId::Builtin(ToolName::Bash),
+        &bash_input("git status"),
+        &ctx,
+        None,
+        PermissionEvaluationOptions {
+            suspend_shell_allow_rules: false,
+            ..Default::default()
+        },
+    );
+
+    assert!(matches!(result, PermissionDecision::Allow { .. }));
+}
+
+#[test]
+fn test_suspend_shell_allow_rules_does_not_ignore_non_shell_allow() {
+    let mut ctx = empty_context(PermissionMode::Auto);
+    ctx.allow_rules.insert(
+        PermissionRuleSource::UserSettings,
+        vec![make_rule(
+            "WebFetch",
+            None,
+            PermissionBehavior::Allow,
+            PermissionRuleSource::UserSettings,
+        )],
+    );
+
+    let result = PermissionEvaluator::evaluate_with_tool_check_and_options(
+        &ToolId::Builtin(ToolName::WebFetch),
+        &serde_json::json!({"url": "https://example.com"}),
+        &ctx,
+        None,
+        PermissionEvaluationOptions {
+            suspend_shell_allow_rules: true,
+            ..Default::default()
+        },
+    );
+
+    assert!(matches!(result, PermissionDecision::Allow { .. }));
+}
+
+#[test]
 fn test_exit_plan_mode_tool_check_ask_is_not_bypassed_by_modes_or_allow_rules() {
     let tool_check =
         |tool_id: &ToolId, _input: &serde_json::Value, _context: &ToolPermissionContext| {

@@ -127,6 +127,7 @@ fn reapply_sandbox(
     let (sourced_allow_rules, _sourced_deny_rules, _sourced_ask_rules) =
         runtime.settings.sourced_permission_rules();
     let sourced_fs_allow_read = runtime.settings.sourced_filesystem_allow_read();
+    let sourced_sandbox_credentials = runtime.settings.sourced_sandbox_credentials(&settings_root);
 
     // Same self-permission deny set as bootstrap — passing `&[]` here silently
     // dropped the S8 protection on the first settings hot-reload, re-opening
@@ -147,6 +148,7 @@ fn reapply_sandbox(
         worktree_main_repo: worktree.as_deref(),
         sourced_permission_allow_rules: Some(&sourced_allow_rules),
         sourced_filesystem_allow_read: Some(&sourced_fs_allow_read),
+        sourced_sandbox_credentials: sourced_sandbox_credentials.as_ref(),
     };
     let out = coco_sandbox::build_runtime_config(inputs);
     state.update_config(out.enforcement, out.settings, out.config);

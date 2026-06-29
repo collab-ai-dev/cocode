@@ -1,6 +1,6 @@
 //! `/permissions` rule-editor overlay state.
 //!
-//! Tabbed overlay (Allow / Ask / Deny / Workspace). The shape mirrors
+//! Tabbed overlay (Recently denied / Allow / Ask / Deny / Workspace). The shape mirrors
 //! the `/agents` dialog (tab strip + per-tab cursor + inline forms) and
 //! reuses [`WizardTextField`] for the add-rule / add-directory text inputs
 //! and [`PermissionAskChoice`]-style option rows for the destination
@@ -23,6 +23,7 @@ use crate::state::WizardTextField;
 /// behavior; Workspace lists additional working directories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionsEditorTab {
+    Recent,
     Allow,
     Ask,
     Deny,
@@ -30,9 +31,16 @@ pub enum PermissionsEditorTab {
 }
 
 impl PermissionsEditorTab {
-    /// The rule list opens on the Allow tab by default.
-    pub const DEFAULT: Self = Self::Allow;
-    pub const ORDER: [Self; 4] = [Self::Allow, Self::Ask, Self::Deny, Self::Workspace];
+    /// The dialog opens on Recently denied, matching Claude Code's
+    /// `/permissions` quick-fix workflow.
+    pub const DEFAULT: Self = Self::Recent;
+    pub const ORDER: [Self; 5] = [
+        Self::Recent,
+        Self::Allow,
+        Self::Ask,
+        Self::Deny,
+        Self::Workspace,
+    ];
 
     /// Cycle to the next tab — wraps. `delta > 0` is right (`→`).
     pub fn cycled(self, delta: i32) -> Self {
@@ -44,6 +52,7 @@ impl PermissionsEditorTab {
     /// Behavior whose rules this tab lists, or `None` for Workspace.
     pub fn behavior(self) -> Option<PermissionBehavior> {
         match self {
+            Self::Recent => None,
             Self::Allow => Some(PermissionBehavior::Allow),
             Self::Ask => Some(PermissionBehavior::Ask),
             Self::Deny => Some(PermissionBehavior::Deny),
@@ -124,6 +133,23 @@ pub struct PermDirRow {
     /// `true` for the read-only current-working-directory row (TS
     /// "Original working directory").
     pub is_cwd: bool,
+}
+
+/// One row in `/permissions → Recently denied`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentDenialRow {
+    pub id: i64,
+    pub tool_name: String,
+    pub display: String,
+    pub reason: String,
+    pub approved: bool,
+    pub retry: bool,
+}
+
+impl RecentDenialRow {
+    pub fn grant_label(&self) -> String {
+        self.display.clone()
+    }
 }
 
 impl PermDirRow {
@@ -245,6 +271,7 @@ pub enum Focused<'a> {
     Add,
     Rule(&'a PermRuleRow),
     Dir(&'a PermDirRow),
+    RecentDenial(&'a RecentDenialRow),
     /// Empty list / out-of-range — no actionable row.
     None,
 }
@@ -255,6 +282,7 @@ pub enum Focused<'a> {
 #[derive(Debug, Clone)]
 pub struct PermissionsEditorState {
     pub selected_tab: PermissionsEditorTab,
+    pub recent_cursor: usize,
     pub allow_cursor: usize,
     pub ask_cursor: usize,
     pub deny_cursor: usize,
@@ -263,6 +291,8 @@ pub struct PermissionsEditorState {
     pub rules: Vec<PermRuleRow>,
     /// Additional directories; index 0 is the read-only cwd row.
     pub directories: Vec<PermDirRow>,
+    /// UI-only session ring of auto-mode denials.
+    pub recent_denials: Vec<RecentDenialRow>,
     pub cwd: String,
     /// Managed-policy lockdown — renders every row read-only and blocks
     /// add / delete.
@@ -304,12 +334,14 @@ impl PermissionsEditorState {
 
         Self {
             selected_tab: PermissionsEditorTab::DEFAULT,
+            recent_cursor: 0,
             allow_cursor: 0,
             ask_cursor: 0,
             deny_cursor: 0,
             workspace_cursor: 0,
             rules,
             directories,
+            recent_denials: Vec::new(),
             cwd: payload.cwd,
             managed_only: payload.managed_only,
             add_form: None,
@@ -331,6 +363,11 @@ impl PermissionsEditorState {
         self.snap_cursors();
     }
 
+    pub fn set_recent_denials(&mut self, recent_denials: Vec<RecentDenialRow>) {
+        self.recent_denials = recent_denials;
+        self.snap_cursors();
+    }
+
     /// Rules of `behavior`, in payload order.
     pub fn rules_for(&self, behavior: PermissionBehavior) -> Vec<&PermRuleRow> {
         self.rules
@@ -342,14 +379,18 @@ impl PermissionsEditorState {
     /// Number of selectable rows in the active tab, including the row-0
     /// "Add…" sentinel.
     pub fn active_len(&self) -> usize {
-        match self.selected_tab.behavior() {
-            Some(behavior) => 1 + self.rules_for(behavior).len(),
-            None => 1 + self.directories.len(),
+        match self.selected_tab {
+            PermissionsEditorTab::Recent => self.recent_denials.len(),
+            PermissionsEditorTab::Workspace => 1 + self.directories.len(),
+            PermissionsEditorTab::Allow => 1 + self.rules_for(PermissionBehavior::Allow).len(),
+            PermissionsEditorTab::Ask => 1 + self.rules_for(PermissionBehavior::Ask).len(),
+            PermissionsEditorTab::Deny => 1 + self.rules_for(PermissionBehavior::Deny).len(),
         }
     }
 
     pub fn active_cursor(&self) -> usize {
         match self.selected_tab {
+            PermissionsEditorTab::Recent => self.recent_cursor,
             PermissionsEditorTab::Allow => self.allow_cursor,
             PermissionsEditorTab::Ask => self.ask_cursor,
             PermissionsEditorTab::Deny => self.deny_cursor,
@@ -359,6 +400,7 @@ impl PermissionsEditorState {
 
     fn active_cursor_mut(&mut self) -> &mut usize {
         match self.selected_tab {
+            PermissionsEditorTab::Recent => &mut self.recent_cursor,
             PermissionsEditorTab::Allow => &mut self.allow_cursor,
             PermissionsEditorTab::Ask => &mut self.ask_cursor,
             PermissionsEditorTab::Deny => &mut self.deny_cursor,
@@ -389,6 +431,8 @@ impl PermissionsEditorState {
         let ask_max = self.rules_for(PermissionBehavior::Ask).len();
         let deny_max = self.rules_for(PermissionBehavior::Deny).len();
         let ws_max = self.directories.len();
+        let recent_max = self.recent_denials.len().saturating_sub(1);
+        self.recent_cursor = self.recent_cursor.min(recent_max);
         self.allow_cursor = self.allow_cursor.min(allow_max);
         self.ask_cursor = self.ask_cursor.min(ask_max);
         self.deny_cursor = self.deny_cursor.min(deny_max);
@@ -398,6 +442,12 @@ impl PermissionsEditorState {
     /// Row under the cursor in the active tab.
     pub fn focused(&self) -> Focused<'_> {
         let cursor = self.active_cursor();
+        if self.selected_tab == PermissionsEditorTab::Recent {
+            return match self.recent_denials.get(cursor) {
+                Some(row) => Focused::RecentDenial(row),
+                None => Focused::None,
+            };
+        }
         if cursor == 0 {
             return Focused::Add;
         }

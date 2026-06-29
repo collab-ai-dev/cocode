@@ -35,6 +35,35 @@ fn channel() -> (
     tokio::sync::mpsc::channel(16)
 }
 
+#[test]
+fn auto_mode_denied_event_surfaces_reason_toast() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    assert!(handle(
+        &mut state,
+        TuiOnlyEvent::AutoModeDenied {
+            tool_name: "Bash".into(),
+            display: "rm -rf /tmp/build".into(),
+            reason: "destructive filesystem operation".into(),
+        },
+        &tx,
+    ));
+
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);
+    assert_eq!(
+        state.ui.toasts[0].message,
+        "bash denied by auto mode · destructive filesystem operation · /permissions"
+    );
+    assert_eq!(state.ui.recent_denials.len(), 1);
+    assert_eq!(state.ui.recent_denials[0].display, "rm -rf /tmp/build");
+    assert_eq!(
+        state.ui.recent_denials[0].reason,
+        "destructive filesystem operation"
+    );
+}
+
 /// Probe: did the handler dispatch a `PushSystemMessage` whose
 /// `Informational` body contains `needle`? Drains the channel; tests
 /// that need more detail should call `rx.try_recv()` themselves.

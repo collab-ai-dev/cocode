@@ -112,6 +112,8 @@ use super::ActiveTurnDrain;
 use super::PermissionsMutation;
 use super::SentinelTrigger;
 use super::add_dir_already_message;
+use super::build_remote_model_change_reminder;
+use super::build_system_message_from_push_kind;
 use super::classify_sentinel_trigger;
 use super::create_slash_metadata_message;
 use super::drain_active_turn;
@@ -122,6 +124,8 @@ use super::parse_slash_command;
 use super::session_plan_file_path;
 use super::should_trigger_title_gen;
 use coco_tool_runtime::TurnAbortController;
+use coco_tui::SystemPushKind;
+use coco_types::ModelRole;
 use coco_types::TurnAbortReason;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -237,6 +241,43 @@ fn title_gen_skipped_with_empty_plan() {
     // ExitPlanMode ran against an empty plan file (e.g. model called
     // Exit before writing anything). No useful context to summarize.
     assert!(!should_trigger_title_gen(true, false, true, true, false));
+}
+
+#[test]
+fn remote_model_change_reminder_is_remote_main_only() {
+    let msg = build_remote_model_change_reminder(ModelRole::Main, "Claude Sonnet 4.6", true)
+        .expect("remote main switch should emit reminder");
+    let text = coco_messages::wrapping::extract_text_from_message(&msg);
+    assert!(text.contains("<system-reminder>"));
+    assert!(text.contains("The model for this session has been changed to Claude Sonnet 4.6."));
+    assert!(text.contains("You are now running as Claude Sonnet 4.6."));
+
+    assert!(
+        build_remote_model_change_reminder(ModelRole::Main, "Claude Sonnet 4.6", false).is_none()
+    );
+    assert!(
+        build_remote_model_change_reminder(ModelRole::Plan, "Claude Sonnet 4.6", true).is_none()
+    );
+}
+
+#[test]
+fn permission_retry_system_push_builds_permission_retry_message() {
+    let msg = build_system_message_from_push_kind(SystemPushKind::PermissionRetry {
+        tool_name: "Bash".into(),
+        message: "Permission granted for: Bash. You may now retry this command if you would like."
+            .into(),
+    });
+
+    match msg {
+        coco_messages::Message::System(coco_messages::SystemMessage::PermissionRetry(retry)) => {
+            assert_eq!(retry.tool_name, "Bash");
+            assert_eq!(
+                retry.message,
+                "Permission granted for: Bash. You may now retry this command if you would like."
+            );
+        }
+        other => panic!("expected PermissionRetry system message, got {other:?}"),
+    }
 }
 
 #[test]

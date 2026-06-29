@@ -96,3 +96,34 @@ fn truncate_for_log_long_shows_length() {
 fn truncate_for_log_exact_length_unchanged() {
     assert_eq!(truncate_for_log("hello", 5), "hello");
 }
+
+#[test]
+fn truncate_utf16_units_with_ellipsis_short_unchanged() {
+    assert_eq!(
+        truncate_utf16_units_with_ellipsis("hello", 5, 4, "…"),
+        "hello"
+    );
+}
+
+#[test]
+fn truncate_utf16_units_with_ellipsis_truncates_ascii() {
+    assert_eq!(
+        truncate_utf16_units_with_ellipsis("x".repeat(81).as_str(), 80, 79, "…"),
+        format!("{}…", "x".repeat(79))
+    );
+}
+
+#[test]
+fn truncate_utf16_units_with_ellipsis_uses_utf16_units() {
+    let exact_utf16_limit = "😀".repeat(40);
+    assert_eq!(
+        truncate_utf16_units_with_ellipsis(&exact_utf16_limit, 80, 79, "…"),
+        exact_utf16_limit
+    );
+
+    let over_utf16_limit = format!("{}a", "😀".repeat(40));
+    assert_eq!(
+        truncate_utf16_units_with_ellipsis(&over_utf16_limit, 80, 79, "…"),
+        format!("{}…", "😀".repeat(39))
+    );
+}

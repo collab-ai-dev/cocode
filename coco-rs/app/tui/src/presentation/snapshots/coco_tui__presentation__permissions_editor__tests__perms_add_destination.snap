@@ -2,7 +2,7 @@
 source: app/tui/src/presentation/permissions_editor.test.rs
 expression: body_only(&state)
 ---
-[Allow]   Ask    Deny    Workspace 
+ Recently denied   [Allow]   Ask    Deny    Workspace 
 
 Where should this be saved?
 

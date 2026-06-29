@@ -12,6 +12,7 @@ use crate::state::DeleteConfirm;
 use crate::state::DeleteTarget;
 use crate::state::PermRuleRow;
 use crate::state::PermissionsEditorState;
+use crate::state::RecentDenialRow;
 use crate::state::WizardTextField;
 use crate::theme::Theme;
 use coco_types::PermissionBehavior;
@@ -21,7 +22,7 @@ use coco_types::PermissionsEditorPayload;
 use coco_types::PermissionsEditorRule;
 
 fn sample_state() -> PermissionsEditorState {
-    PermissionsEditorState::from_payload(PermissionsEditorPayload {
+    let mut state = PermissionsEditorState::from_payload(PermissionsEditorPayload {
         rules: vec![
             PermissionsEditorRule {
                 behavior: PermissionBehavior::Allow,
@@ -48,7 +49,9 @@ fn sample_state() -> PermissionsEditorState {
         }],
         cwd: "/work".into(),
         managed_only: false,
-    })
+    });
+    state.selected_tab = PermissionsEditorTab::Allow;
+    state
 }
 
 fn body_only(state: &PermissionsEditorState) -> String {
@@ -63,6 +66,21 @@ fn body_only(state: &PermissionsEditorState) -> String {
 fn snapshot_allow_tab_list() {
     let state = sample_state();
     insta::assert_snapshot!("perms_allow_list", body_only(&state));
+}
+
+#[test]
+fn snapshot_recent_denied_list_shows_reason() {
+    let mut state = sample_state();
+    state.selected_tab = PermissionsEditorTab::Recent;
+    state.set_recent_denials(vec![RecentDenialRow {
+        id: 1,
+        tool_name: "Bash".into(),
+        display: "Bash".into(),
+        reason: "destructive filesystem operation".into(),
+        approved: false,
+        retry: false,
+    }]);
+    insta::assert_snapshot!("perms_recent_denied_list", body_only(&state));
 }
 
 #[test]

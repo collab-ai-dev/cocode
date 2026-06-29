@@ -1,4 +1,7 @@
 use super::*;
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn test_env_key_as_str() {
@@ -11,7 +14,20 @@ fn test_env_key_as_str() {
         EnvKey::CocoMcpToolTimeoutMs.as_str(),
         "COCO_MCP_TOOL_TIMEOUT_MS"
     );
+    assert_eq!(
+        EnvKey::ClaudeCodeMcpToolIdleTimeout.as_str(),
+        "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT"
+    );
+    assert_eq!(
+        EnvKey::CocoMcpToolIdleTimeoutMs.as_str(),
+        "COCO_MCP_TOOL_IDLE_TIMEOUT_MS"
+    );
     assert_eq!(EnvKey::CocoLoopPersistent.as_str(), "COCO_LOOP_PERSISTENT");
+    assert_eq!(EnvKey::OtelLogUserPrompts.as_str(), "OTEL_LOG_USER_PROMPTS");
+    assert_eq!(
+        EnvKey::OtelLogAssistantResponses.as_str(),
+        "OTEL_LOG_ASSISTANT_RESPONSES"
+    );
 }
 
 #[test]
@@ -78,6 +94,37 @@ fn test_is_env_falsy_values() {
         );
     }
     unsafe { std::env::remove_var("_COCO_TEST_FALSY") };
+}
+
+#[test]
+fn test_log_assistant_responses_enabled_inherits_prompt_logging_when_unset() {
+    let _guard = ENV_LOCK.lock().expect("env test lock");
+    unsafe { std::env::remove_var(EnvKey::OtelLogAssistantResponses) };
+
+    assert!(log_assistant_responses_enabled(true));
+    assert!(!log_assistant_responses_enabled(false));
+}
+
+#[test]
+fn test_log_assistant_responses_enabled_uses_tristate_override() {
+    let _guard = ENV_LOCK.lock().expect("env test lock");
+    for (raw, prompt_enabled, expected) in [
+        ("1", false, true),
+        ("true", false, true),
+        ("0", true, false),
+        ("false", true, false),
+        ("maybe", true, true),
+        ("maybe", false, false),
+    ] {
+        unsafe { std::env::set_var(EnvKey::OtelLogAssistantResponses, raw) };
+        assert_eq!(
+            log_assistant_responses_enabled(prompt_enabled),
+            expected,
+            "assistant response logging for {raw:?}"
+        );
+    }
+
+    unsafe { std::env::remove_var(EnvKey::OtelLogAssistantResponses) };
 }
 
 #[test]

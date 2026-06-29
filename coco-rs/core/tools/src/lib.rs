@@ -65,9 +65,10 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(SendUserMessageTool));
     registry.register(Arc::new(LspTool));
 
-    // MCP management (3)
+    // MCP management (4)
     registry.register(Arc::new(McpAuthTool));
     registry.register(Arc::new(ListMcpResourcesTool));
+    registry.register(Arc::new(ReadMcpResourceDirTool));
     registry.register(Arc::new(ReadMcpResourceTool));
 
     // Scheduling (6)

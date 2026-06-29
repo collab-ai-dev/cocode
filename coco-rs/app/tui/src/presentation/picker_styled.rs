@@ -634,18 +634,21 @@ fn background_tasks_detail_lines(
             let progress = task
                 .map(|task| task.workflow_progress.as_slice())
                 .unwrap_or(&[]);
+            let is_running = task
+                .map(|task| task.status == TaskEntryStatus::Running)
+                .unwrap_or(false);
             if progress.is_empty() {
                 lines.push(dim_line(t!("dialog.workflow_progress_empty"), styles));
             } else {
                 let visible: Vec<&coco_types::WorkflowProgressEvent> = progress
                     .iter()
-                    .filter(|event| workflow_agent_filter.matches_event(event))
+                    .filter(|event| workflow_agent_filter.matches_event(event, is_running))
                     .collect();
                 if visible.is_empty() {
                     lines.push(dim_line(t!("dialog.workflow_progress_empty"), styles));
                 }
                 for event in visible.into_iter().rev().take(8).rev() {
-                    lines.push(workflow_progress_line(event, styles));
+                    lines.push(workflow_progress_line(event, is_running, styles));
                 }
             }
         }
@@ -687,6 +690,7 @@ fn workflow_filter_hint(filter: WorkflowAgentStatusFilter) -> String {
 
 fn workflow_progress_line(
     event: &coco_types::WorkflowProgressEvent,
+    is_running: bool,
     styles: UiStyles<'_>,
 ) -> Line<'static> {
     match event {
@@ -706,7 +710,6 @@ fn workflow_progress_line(
         ]),
         coco_types::WorkflowProgressEvent::WorkflowAgent {
             label,
-            state,
             phase_title,
             model,
             tokens,
@@ -718,19 +721,41 @@ fn workflow_progress_line(
             error,
             ..
         } => {
-            let (icon, state_key, color) = match state {
-                coco_types::WorkflowAgentState::Start
-                | coco_types::WorkflowAgentState::Progress => {
-                    ("●", "dialog.workflow_agent_state_running", styles.accent())
-                }
-                coco_types::WorkflowAgentState::Done => {
-                    ("✓", "dialog.workflow_agent_state_done", styles.text())
-                }
-                coco_types::WorkflowAgentState::Error => {
-                    ("✗", "dialog.workflow_agent_state_error", styles.error())
-                }
+            let status = WorkflowAgentStatusFilter::from_progress_event(event, is_running)
+                .unwrap_or(WorkflowAgentStatusFilter::Running);
+            let (icon, state_text, color) = match status {
+                WorkflowAgentStatusFilter::All => unreachable!("agent status cannot be all"),
+                WorkflowAgentStatusFilter::Running => (
+                    "●",
+                    t!("dialog.workflow_agent_state_running").to_string(),
+                    styles.accent(),
+                ),
+                WorkflowAgentStatusFilter::Queued => (
+                    "○",
+                    t!("dialog.workflow_filter_status_queued").to_string(),
+                    styles.dim(),
+                ),
+                WorkflowAgentStatusFilter::Failed => (
+                    "✗",
+                    t!("dialog.workflow_filter_status_failed").to_string(),
+                    styles.error(),
+                ),
+                WorkflowAgentStatusFilter::Done => (
+                    "✓",
+                    t!("dialog.workflow_agent_state_done").to_string(),
+                    styles.text(),
+                ),
+                WorkflowAgentStatusFilter::Skipped => (
+                    "·",
+                    t!("dialog.workflow_filter_status_skipped").to_string(),
+                    styles.dim(),
+                ),
+                WorkflowAgentStatusFilter::Interrupted => (
+                    "■",
+                    t!("dialog.workflow_filter_status_interrupted").to_string(),
+                    styles.dim(),
+                ),
             };
-            let state_text = t!(state_key).to_string();
             let mut tail = Vec::new();
             if let Some(phase_title) = phase_title {
                 tail.push(

@@ -138,6 +138,7 @@ pub fn tool_name_tone(tool_name: &str) -> ToolNameTone {
         | ToolName::ToolSearch
         | ToolName::Lsp
         | ToolName::ListMcpResources
+        | ToolName::ReadMcpResourceDir
         | ToolName::ReadMcpResource
         | ToolName::CronList => ToolNameTone::ReadOnly,
         ToolName::Bash | ToolName::PowerShell | ToolName::Repl => ToolNameTone::Shell,

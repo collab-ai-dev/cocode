@@ -241,6 +241,47 @@ fn read_mcp_resource_render_uses_json_stringify() {
 }
 
 #[tokio::test]
+async fn read_mcp_resource_dir_lists_direct_children() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.mcp = Arc::new(DirectoryResourceHandle);
+
+    assert!(<ReadMcpResourceDirTool as DynTool>::should_defer(
+        &ReadMcpResourceDirTool
+    ));
+    assert_eq!(
+        <ReadMcpResourceDirTool as DynTool>::to_auto_classifier_input(
+            &ReadMcpResourceDirTool,
+            &json!({"server": "srv", "uri": "mcp://dir"})
+        ),
+        Some("srv mcp://dir".to_string())
+    );
+
+    let result = <ReadMcpResourceDirTool as DynTool>::execute(
+        &ReadMcpResourceDirTool,
+        json!({
+            "server": "srv",
+            "uri": "mcp://dir",
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.data["resources"][0]["uri"], "mcp://dir/file");
+    assert_eq!(result.data["resources"][0]["name"], "file.txt");
+    assert_eq!(result.data["resources"][1]["mimeType"], "inode/directory");
+    let rendered = <ReadMcpResourceDirTool as DynTool>::render_for_model(
+        &ReadMcpResourceDirTool,
+        &result.data,
+    );
+    let ToolResultContentPart::Text { text, .. } = &rendered[0] else {
+        panic!("expected Text part");
+    };
+    assert!(text.starts_with('{'), "expected JSON object, got: {text}");
+    assert!(text.contains("\"mimeType\":\"inode/directory\""));
+}
+
+#[tokio::test]
 async fn mcp_auth_tool_forwards_to_generic_handle() {
     let mut ctx = ToolUseContext::test_default();
     ctx.mcp = Arc::new(AuthHandle {
@@ -632,6 +673,68 @@ struct BlobResourceHandle {
 
 struct AuthHandle {
     message: String,
+}
+
+struct DirectoryResourceHandle;
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::McpHandle for DirectoryResourceHandle {
+    async fn list_resources(
+        &self,
+        _: Option<&str>,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
+        Ok(vec![])
+    }
+
+    async fn read_resource(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError> {
+        unreachable!("not used by ReadMcpResourceDirTool test")
+    }
+
+    async fn read_resource_directory(
+        &self,
+        server_name: &str,
+        resource_uri: &str,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
+        assert_eq!(server_name, "srv");
+        assert_eq!(resource_uri, "mcp://dir");
+        Ok(vec![
+            McpResourceInfo {
+                server_name: server_name.to_string(),
+                uri: "mcp://dir/file".into(),
+                name: "file.txt".into(),
+                description: None,
+                mime_type: Some("text/plain".into()),
+            },
+            McpResourceInfo {
+                server_name: server_name.to_string(),
+                uri: "mcp://dir/subdir".into(),
+                name: "subdir".into(),
+                description: None,
+                mime_type: Some("inode/directory".into()),
+            },
+        ])
+    }
+
+    async fn call_tool(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<serde_json::Value>,
+    ) -> Result<McpToolCallResult, coco_error::BoxedError> {
+        unreachable!("not used by ReadMcpResourceDirTool test")
+    }
+
+    async fn authenticate(&self, _: &str) -> Result<String, coco_error::BoxedError> {
+        unreachable!("not used by ReadMcpResourceDirTool test")
+    }
+
+    async fn connected_servers(&self) -> Vec<String> {
+        vec![]
+    }
 }
 
 /// Echoes back the server name passed to `authenticate`, so a test can assert

@@ -84,6 +84,8 @@ pub enum SystemPushKind {
     },
     /// Bash-mode local command result → `SystemMessage::LocalCommand`.
     LocalCommand { command: String, output: String },
+    /// Permission approval grant → `SystemMessage::PermissionRetry`.
+    PermissionRetry { tool_name: String, message: String },
 }
 
 /// Commands sent from TUI to the core agent loop.
@@ -385,6 +387,9 @@ pub enum UserCommand {
     /// `history_push_and_emit`, so the round-trip surfaces via the
     /// normal `MessageAppended` → `TranscriptView` → render path.
     PushSystemMessage { kind: SystemPushKind },
+    /// Grant a recently denied auto-mode command and immediately re-query
+    /// the model with the updated transcript.
+    RetryPermissionDenied { tool_name: String, message: String },
     /// Push pre-built slash-command transcript messages (echo + result)
     /// into engine `MessageHistory`. Unlike [`Self::PushSystemMessage`],
     /// these are `Message::User` envelopes with command tags; they are

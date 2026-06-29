@@ -23,6 +23,9 @@ use serde::Serialize;
 // Re-export the user-facing settings types so existing callsites that import
 // from `coco_sandbox::*` keep compiling. The canonical location is
 // `coco_config::sandbox_settings`.
+pub use coco_config::CredentialAccessMode;
+pub use coco_config::CredentialEnvVarEntry;
+pub use coco_config::CredentialFileEntry;
 pub use coco_config::FilesystemConfig;
 pub use coco_config::IgnoreViolationsConfig;
 pub use coco_config::MitmProxyConfig;
@@ -30,6 +33,7 @@ pub use coco_config::NetworkConfig;
 pub use coco_config::NetworkMode;
 pub use coco_config::RipgrepConfig;
 pub use coco_config::SandboxBypass;
+pub use coco_config::SandboxCredentialsConfig;
 pub use coco_config::SandboxSettings;
 
 /// Sandbox enforcement level controlling filesystem and network access.
@@ -252,6 +256,9 @@ pub struct SandboxConfig {
     /// Paths to bind-mount into the sandbox (e.g., proxy bridge UDS sockets).
     #[serde(default)]
     pub extra_bind_ro: Vec<PathBuf>,
+    /// Environment variables removed before launching sandboxed commands.
+    #[serde(default)]
+    pub unset_env_vars: Vec<String>,
     /// Allow `com.apple.trustd.agent` mach lookup for Go TLS cert verification.
     /// Required for Go programs (gh, gcloud, terraform, kubectl) that verify
     /// TLS certificates through macOS system services rather than bundled CAs.
@@ -279,6 +286,7 @@ impl Default for SandboxConfig {
             allow_network: false,
             proxy_active: false,
             extra_bind_ro: Vec::new(),
+            unset_env_vars: Vec::new(),
             weaker_network_isolation: false,
             // Mirrors the `#[serde(default = "default_true")]` attribute so
             // `..Default::default()` matches the deserialized default.
