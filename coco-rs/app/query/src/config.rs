@@ -41,9 +41,9 @@ pub(crate) const DEFAULT_CONTEXT_WINDOW: i64 = 200_000;
 pub(crate) const DEFAULT_MAX_STRUCTURED_OUTPUT_RETRIES: u32 = 5;
 
 /// Resolved retry cap: env override wins, otherwise
-/// [`DEFAULT_MAX_STRUCTURED_OUTPUT_RETRIES`]. Single read site shared
-/// by the engine loop (`engine.rs::run_session_loop` terminal cap) and
-/// the session adapter (`engine_session.rs` error-message render).
+/// [`DEFAULT_MAX_STRUCTURED_OUTPUT_RETRIES`]. Used to populate
+/// [`QueryEngineConfig::max_structured_output_retries`] at construction
+/// boundaries so the engine loop does not repeatedly read process env.
 pub(crate) fn max_structured_output_retries() -> u32 {
     coco_config::env::env_opt_u32(coco_config::EnvKey::CocoMaxStructuredOutputRetries)
         .unwrap_or(DEFAULT_MAX_STRUCTURED_OUTPUT_RETRIES)
@@ -160,6 +160,9 @@ pub struct QueryEngineConfig {
     /// turn-reminder path injects a deduped nudge until a valid structured
     /// output attachment appears.
     pub requires_structured_output: bool,
+    /// Maximum failed attempts before a required StructuredOutput contract
+    /// terminates the turn. Defaults from `COCO_MAX_STRUCTURED_OUTPUT_RETRIES`.
+    pub max_structured_output_retries: u32,
     /// Enable streaming tool execution (tools execute during API streaming).
     pub streaming_tool_execution: bool,
     /// Whether this is a non-interactive (SDK/script) session. Drives
@@ -400,6 +403,7 @@ impl Default for QueryEngineConfig {
             max_budget_usd: None,
             output_token_budget: None,
             requires_structured_output: false,
+            max_structured_output_retries: max_structured_output_retries(),
             // Phase 9 landed: safe tools start mid-stream via
             // StreamingHandle, unsafe tools queue for commit_flush.
             // Default ON — the batched-at-end fallback path stays

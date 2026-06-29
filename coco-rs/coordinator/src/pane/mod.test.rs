@@ -193,6 +193,20 @@ async fn test_select_teammate_executor_explicit_tmux_errors_when_unavailable() {
 }
 
 #[tokio::test]
+async fn test_select_teammate_executor_explicit_iterm2_errors_when_unavailable() {
+    let registry = BackendRegistry::new();
+    let result = registry
+        .select_teammate_executor(coco_config::TeammateMode::Iterm2, false)
+        .await;
+    assert!(
+        result.is_err(),
+        "iterm2 should require a registered available pane backend"
+    );
+    let err = result.err().unwrap();
+    assert!(err.contains("iterm2"), "unexpected error: {err}");
+}
+
+#[tokio::test]
 async fn test_select_teammate_executor_auto_falls_back_to_in_process() {
     let registry = BackendRegistry::new();
     let runner = std::sync::Arc::new(crate::runner::InProcessAgentRunner::new(
@@ -261,6 +275,34 @@ async fn test_select_teammate_executor_explicit_tmux_uses_registered_pane() {
     assert_eq!(mailbox[0].summary.as_deref(), Some("initial task"));
 
     let _ = crate::team_file::cleanup_team_directories(&team_name);
+}
+
+#[tokio::test]
+async fn test_select_teammate_executor_explicit_iterm2_uses_registered_pane() {
+    let _teams = crate::test_support::isolate_teams_dir().await;
+    let team_name = format!("iterm-pane-test-{}", uuid::Uuid::new_v4().simple());
+
+    let registry = BackendRegistry::new();
+    let pane = std::sync::Arc::new(FakePaneBackend::new(BackendType::Iterm2, true));
+    registry.register_pane_backend(pane.clone()).await;
+
+    let executor = registry
+        .select_teammate_executor(coco_config::TeammateMode::Iterm2, false)
+        .await
+        .expect("iterm2 pane executor");
+    assert_eq!(executor.backend_type(), BackendType::Iterm2);
+
+    let result = executor
+        .spawn(TeammateSpawnConfig {
+            name: "researcher".into(),
+            team_name,
+            prompt: "initial assignment".into(),
+            cwd: "/tmp".into(),
+            ..Default::default()
+        })
+        .await;
+    assert!(result.success, "spawn failed: {:?}", result.error);
+    assert_eq!(result.pane_id.as_deref(), Some("pane-1"));
 }
 
 #[test]

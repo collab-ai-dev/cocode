@@ -1,6 +1,7 @@
 //! `TaskController` trait implementation — kill + detach.
 
 use coco_tool_runtime::DetachOutcome;
+use coco_types::TaskKilledBy;
 use tracing::{debug, info, instrument};
 
 use super::{TaskRuntime, boxed_msg};
@@ -48,7 +49,17 @@ impl TaskRuntime {
     /// double-notification rationale.
     #[instrument(level = "info", skip(self), fields(task_id = %task_id))]
     pub(super) async fn kill_task_impl(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
-        if let Err(e) = self.manager.kill_running(task_id).await {
+        self.kill_task_impl_with_actor(task_id, TaskKilledBy::User)
+            .await
+    }
+
+    #[instrument(level = "info", skip(self), fields(task_id = %task_id, killed_by = %killed_by.as_str()))]
+    pub(super) async fn kill_task_impl_with_actor(
+        &self,
+        task_id: &str,
+        killed_by: TaskKilledBy,
+    ) -> Result<(), coco_error::BoxedError> {
+        if let Err(e) = self.manager.kill_running_by(task_id, killed_by).await {
             let msg = match e {
                 coco_tasks::KillTaskError::NotFound => {
                     format!("No running task found with ID: {task_id}")
@@ -62,6 +73,7 @@ impl TaskRuntime {
         info!(
             target: "coco::task_runtime",
             task_id,
+            killed_by = killed_by.as_str(),
             "kill_task fired cancel token; driver will finalize state + push notification"
         );
         Ok(())

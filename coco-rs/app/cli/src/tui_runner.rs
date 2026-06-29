@@ -1562,7 +1562,11 @@ async fn run_agent_driver(
                     tracing::warn!(%task_id, "CancelSubagent: task runtime unavailable");
                     continue;
                 };
-                match task_runtime.manager().kill_running(&task_id).await {
+                match task_runtime
+                    .manager()
+                    .kill_running_by(&task_id, coco_types::TaskKilledBy::User)
+                    .await
+                {
                     Ok(()) => info!(%task_id, "CancelSubagent: cancel token fired"),
                     Err(coco_tasks::KillTaskError::NotFound) => {
                         tracing::warn!(%task_id, "CancelSubagent: task id not found")
@@ -4781,7 +4785,7 @@ async fn dispatch_add_dir(
         event_tx,
         "add-dir",
         args,
-        &format!("Added working directory: {}", absolute.display()),
+        &format!("Added {} as a working directory.", absolute.display()),
     )
     .await;
     SlashOutcome::Handled

@@ -37,6 +37,27 @@ fn btw_registration_matches_upstream_command_metadata() {
     assert_eq!(btw.base.safety, coco_types::CommandSafety::AlwaysSafe);
 }
 
+#[tokio::test]
+async fn add_dir_success_message_matches_upstream_wording() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut registry = CommandRegistry::new();
+    register_extended_builtins(&mut registry);
+
+    let result = registry
+        .execute_command(names::ADD_DIR, tmp.path().to_str().expect("utf8 path"))
+        .await
+        .expect("add-dir command should run");
+
+    let crate::CommandResult::Text(text) = result else {
+        panic!("expected text result");
+    };
+    assert!(text.starts_with(ADD_DIR_SENTINEL));
+    assert!(text.contains(&format!(
+        "Added {} as a working directory.",
+        tmp.path().canonicalize().expect("canonical").display()
+    )));
+}
+
 #[test]
 fn test_extended_builtins_no_overlap_with_base() {
     let mut base_registry = CommandRegistry::new();

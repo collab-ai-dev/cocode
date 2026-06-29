@@ -863,6 +863,7 @@ fn test_task_notification_format() {
         kind: NotificationKind::ShellTerminal {
             status: TerminalStatus::Completed,
             exit_code: Some(0),
+            killed_by: None,
         },
     };
     let xml = render_notification(&n);

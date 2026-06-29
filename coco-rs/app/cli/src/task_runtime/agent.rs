@@ -13,7 +13,7 @@ use coco_tool_runtime::{
     AgentCompletionPayload, AgentRegistration, TaskHandle, TeammateTaskRegistration,
     TeammateTaskUpdate, WorkflowTaskRequest,
 };
-use coco_types::{TaskStatus, TaskType};
+use coco_types::{TaskKilledBy, TaskStatus, TaskType};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument, trace, warn};
@@ -216,6 +216,23 @@ impl TaskRuntime {
         warn!(target: "coco::task_runtime", task_id, "task marked Failed");
     }
 
+    /// Mark an agent task stopped after its driver observed cancellation.
+    /// The stop actor is latched by `kill_running_by`; this terminal
+    /// transition preserves that attribution and pushes a killed
+    /// notification instead of a failed one.
+    #[instrument(level = "info", skip(self), fields(task_id = %task_id))]
+    pub async fn mark_stopped(&self, task_id: &str) {
+        self.transition_terminal(task_id, TaskStatus::Killed).await;
+        self.push_agent_notification(
+            task_id,
+            TerminalStatus::Killed,
+            AgentCompletionPayload::default(),
+            None,
+        )
+        .await;
+        info!(target: "coco::task_runtime", task_id, "task marked Killed");
+    }
+
     pub(super) async fn transition_terminal(&self, task_id: &str, status: TaskStatus) {
         debug_assert!(status.is_terminal());
         let _ = self.manager.transition_terminal(task_id, status).await;
@@ -257,6 +274,7 @@ impl TaskRuntime {
                     branch: w.branch,
                 }),
                 error,
+                killed_by: state.killed_by,
             },
         };
         self.notification_sink.push(n).await;
@@ -320,6 +338,13 @@ impl TaskHandle for TaskRuntime {
     // ── Controller (was TaskController) ──
     async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
         self.kill_task_impl(task_id).await
+    }
+    async fn kill_task_with_actor(
+        &self,
+        task_id: &str,
+        killed_by: TaskKilledBy,
+    ) -> Result<(), coco_error::BoxedError> {
+        self.kill_task_impl_with_actor(task_id, killed_by).await
     }
     async fn signal_detach(&self, task_id: &str) -> coco_tool_runtime::DetachOutcome {
         TaskRuntime::signal_detach(self, task_id).await
@@ -471,6 +496,9 @@ impl TaskHandle for TaskRuntime {
     }
     async fn mark_failed(&self, task_id: &str, error: &str) {
         TaskRuntime::mark_failed(self, task_id, error).await
+    }
+    async fn mark_stopped(&self, task_id: &str) {
+        TaskRuntime::mark_stopped(self, task_id).await
     }
     async fn complete_silent(&self, task_id: &str, succeeded: bool) {
         let status = if succeeded {

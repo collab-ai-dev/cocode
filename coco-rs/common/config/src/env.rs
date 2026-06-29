@@ -64,6 +64,8 @@ pub enum EnvKey {
     /// ⇒ force it on (overriding the `include_git_instructions` setting).
     CocoDisableGitInstructions,
     CocoDisableFastMode,
+    /// Truthy => disable the memory-pressure idle background shell reaper.
+    CocoDisableMemoryPressureShellReaper,
     /// Truthy ⇒ skip loading managed/policy-level skills from the platform
     /// managed skills directory.
     CocoDisablePolicySkills,
@@ -324,6 +326,9 @@ impl EnvKey {
             Self::CocoDiagnosticsWireMaxBytes => "COCO_DIAGNOSTICS_WIRE_MAX_BYTES",
             Self::CocoDisableGitInstructions => "COCO_DISABLE_GIT_INSTRUCTIONS",
             Self::CocoDisableFastMode => "COCO_DISABLE_FAST_MODE",
+            Self::CocoDisableMemoryPressureShellReaper => {
+                "COCO_DISABLE_MEMORY_PRESSURE_SHELL_REAPER"
+            }
             Self::CocoDisablePolicySkills => "COCO_DISABLE_POLICY_SKILLS",
             Self::CocoDisableShellSnapshot => "COCO_DISABLE_SHELL_SNAPSHOT",
             Self::CocoFileReadIgnorePatterns => "COCO_FILE_READ_IGNORE_PATTERNS",

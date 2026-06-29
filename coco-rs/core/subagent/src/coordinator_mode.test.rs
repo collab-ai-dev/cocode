@@ -164,6 +164,21 @@ fn render_task_notification_with_result_and_usage() {
 }
 
 #[test]
+fn render_task_notification_killed_uses_stopped_note() {
+    let n = TaskNotification {
+        task_id: "agent-k",
+        status: TaskNotificationStatus::Killed,
+        summary: "Agent \"worker\" was stopped",
+        result: None,
+        usage: None,
+    };
+    let xml = render_task_notification(&n);
+    assert!(xml.contains("<status>killed</status>"));
+    assert!(xml.contains(&format!("<note>{TASK_NOTIFICATION_STOPPED_NOTE}</note>")));
+    assert!(!xml.contains("may notify more than once"));
+}
+
+#[test]
 fn task_notification_status_strings_match_ts() {
     assert_eq!(TaskNotificationStatus::Completed.as_str(), "completed");
     assert_eq!(TaskNotificationStatus::Failed.as_str(), "failed");

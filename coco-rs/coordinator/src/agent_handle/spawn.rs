@@ -1565,7 +1565,7 @@ impl SwarmAgentHandle {
         // - **Detach signal**: external `signal_detach(tid)` (TUI
         // Ctrl+B). Inline caller sets the detached flag and
         // returns `AsyncLaunched` immediately. Engine task keeps
-        // running, eventually calls `mark_completed`/`mark_failed`
+        // running, eventually calls `mark_completed`/`mark_failed`/`mark_stopped`
         // on its own (pushes `<task-notification>` envelope).
         // This is the "detach but keep running" behavior.
         // - **External cancel** (`kill_task(tid)`): engine task's
@@ -1677,7 +1677,7 @@ impl SwarmAgentHandle {
                     biased;
                     () = c.cancelled() => {
                         Err(Box::new(coco_error::PlainError::new(
-                            "task cancelled by leader",
+                            "task cancelled",
                             coco_error::StatusCode::Cancelled,
                         )) as coco_error::BoxedError)
                     }
@@ -1762,6 +1762,10 @@ impl SwarmAgentHandle {
                 .ok()
                 .map(|qr| qr.usage)
                 .unwrap_or_default();
+            let cancelled_error = query_result
+                .as_ref()
+                .err()
+                .is_some_and(|e| e.status_code() == coco_error::StatusCode::Cancelled);
             let response = match query_result {
                 Ok(qr) => {
                     tracing::info!(
@@ -1867,12 +1871,16 @@ impl SwarmAgentHandle {
                             task_registry_for_engine.mark_completed(tid, payload).await;
                         }
                         AgentSpawnStatus::Failed => {
-                            task_registry_for_engine
-                                .mark_failed(
-                                    tid,
-                                    response.error.as_deref().unwrap_or("agent failed"),
-                                )
-                                .await;
+                            if cancelled_error {
+                                task_registry_for_engine.mark_stopped(tid).await;
+                            } else {
+                                task_registry_for_engine
+                                    .mark_failed(
+                                        tid,
+                                        response.error.as_deref().unwrap_or("agent failed"),
+                                    )
+                                    .await;
+                            }
                         }
                         _ => {}
                     }
@@ -2019,6 +2027,7 @@ impl SwarmAgentHandle {
                     .as_ref()
                     .map(|s| s.path.display().to_string()),
                 description: request.description.clone(),
+                killed_by: None,
             };
             if let Err(e) = store_for_meta
                 .write_agent_metadata(&session_for_meta, &task_for_meta, &meta)
@@ -2100,6 +2109,7 @@ impl SwarmAgentHandle {
         let dynamic_mcp_servers_for_task = self.dynamic_mcp_servers().clone();
         let worktree_manager_for_task = self.worktree_manager().cloned();
         let worktree_session_for_task = worktree_session.clone();
+        let description_for_task = request.description.clone();
         let bg_start = std::time::Instant::now();
         tokio::spawn(async move {
             // Fire SubagentStart hooks before kicking off execution and
@@ -2129,10 +2139,10 @@ impl SwarmAgentHandle {
             // `cancel`; the extra select here covers a cancel mid-engine.
             let outcome = tokio::select! {
                 _ = cancel_for_task.cancelled() => {
-                    Err(Box::new(coco_error::PlainError::new(
-                        "task cancelled by leader",
-                        coco_error::StatusCode::Cancelled,
-                    )) as coco_error::BoxedError)
+                Err(Box::new(coco_error::PlainError::new(
+                    "task cancelled",
+                    coco_error::StatusCode::Cancelled,
+                )) as coco_error::BoxedError)
                 }
                 r = engine.execute_query(&effective_prompt, query_config) => r,
             };
@@ -2257,9 +2267,45 @@ impl SwarmAgentHandle {
                         .await;
                 }
                 Err(e) => {
-                    registry_for_task
-                        .mark_failed(&task_id_for_task, &e.to_string())
-                        .await;
+                    let is_cancelled = e.status_code() == coco_error::StatusCode::Cancelled;
+                    let error_text = e.to_string();
+                    if is_cancelled {
+                        let killed_by = registry_for_task
+                            .task_state(&task_id_for_task)
+                            .await
+                            .and_then(|state| state.killed_by);
+                        if let Some(store) = transcript_store_for_task.as_ref()
+                            && !session_id_for_task.is_empty()
+                        {
+                            let meta = coco_tool_runtime::AgentSpawnMetadata {
+                                agent_type: agent_type_for_task.clone(),
+                                worktree_path: worktree_session_for_task
+                                    .as_ref()
+                                    .map(|s| s.path.display().to_string()),
+                                description: description_for_task.clone(),
+                                killed_by,
+                            };
+                            if let Err(write_err) = store
+                                .write_agent_metadata(
+                                    &session_id_for_task,
+                                    &task_id_for_task,
+                                    &meta,
+                                )
+                                .await
+                            {
+                                tracing::debug!(
+                                    error = %write_err,
+                                    agent_id = %task_id_for_task,
+                                    "agent stopped marker write failed"
+                                );
+                            }
+                        }
+                        registry_for_task.mark_stopped(&task_id_for_task).await;
+                    } else {
+                        registry_for_task
+                            .mark_failed(&task_id_for_task, &error_text)
+                            .await;
+                    }
                 }
             }
         });

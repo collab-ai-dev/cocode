@@ -35,6 +35,9 @@ pub fn build_teammate_command(config: &TeammateSpawnConfig) -> String {
     if let Some(model) = &config.model {
         args.push(format!("--models.main={}", shell_quote(model)));
     }
+    if let Some(effort) = config.effort {
+        args.push(format!("--effort={}", effort.as_str()));
+    }
 
     let env_vars = build_inherited_env_vars(config);
     let args_str = args.join(" ");

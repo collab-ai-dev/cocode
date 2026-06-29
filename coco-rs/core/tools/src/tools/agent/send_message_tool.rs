@@ -308,8 +308,8 @@ impl Tool for SendMessageTool {
             None => None,
         };
 
-        // When the target is a known background task in a terminal state
-        // (Completed / Failed / Killed), auto-resume instead of routing
+        // When the target is a completed/failed background task,
+        // auto-resume instead of routing
         // through the team mailbox. The model thinks it's just sending a
         // message; the resume is transparent.
         //
@@ -320,8 +320,25 @@ impl Tool for SendMessageTool {
         // no prompt-prepend.
         if let Some(info) = task_status
             .as_ref()
-            .filter(|i| i.status.is_terminal() && i.task_type() == coco_types::TaskType::BgAgent)
+            .filter(|i| i.status == coco_types::TaskStatus::Killed)
+            .filter(|i| i.task_type() == coco_types::TaskType::BgAgent)
         {
+            return Ok(send_message_result(SendMessageOutput::Direct {
+                success: false,
+                message: format!(
+                    "Agent '{to}' was stopped ({status:?}) and cannot be resumed. Spawn a fresh agent instead.",
+                    status = info.status,
+                ),
+                routing: Some("stopped".to_string()),
+            }));
+        }
+
+        if let Some(info) = task_status.as_ref().filter(|i| {
+            matches!(
+                i.status,
+                coco_types::TaskStatus::Completed | coco_types::TaskStatus::Failed
+            ) && i.task_type() == coco_types::TaskType::BgAgent
+        }) {
             // Resume needs the parent session id to find the persisted
             // transcript on disk. An empty session id makes the lookup
             // path malformed and surfaces a confusing inner error; reject

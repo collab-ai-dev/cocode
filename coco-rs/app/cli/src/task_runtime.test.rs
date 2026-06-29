@@ -31,6 +31,164 @@ fn rt_with_sink(sink: CapturingSink) -> Arc<TaskRuntime> {
     )
 }
 
+async fn insert_background_shell(rt: &TaskRuntime, issuing_agent: Option<&str>) -> String {
+    insert_background_shell_with_output(rt, issuing_agent, None).await
+}
+
+async fn insert_background_shell_with_output(
+    rt: &TaskRuntime,
+    issuing_agent: Option<&str>,
+    output_file: Option<String>,
+) -> String {
+    let task_id = coco_types::generate_task_id(coco_types::TaskType::Shell);
+    rt.manager()
+        .create_task(coco_tasks::TaskCreateRequest {
+            task_id: task_id.clone(),
+            task_type: coco_types::TaskType::Shell,
+            description: "sleep 999".to_string(),
+            output_file,
+            tool_use_id: None,
+            is_backgrounded: true,
+            status: TaskStatus::Running,
+            cancel: CancellationToken::new(),
+            invoking_agent: None,
+            workflow_run_id: String::new(),
+            workflow_name: None,
+            workflow_prompt: None,
+            shell_extras: Some(coco_types::ShellExtras {
+                command: "sleep 999".to_string(),
+                issuing_agent: issuing_agent.map(str::to_string),
+                is_backgrounded: true,
+                ..Default::default()
+            }),
+        })
+        .await
+}
+
+fn now_ms_for_test() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_millis() as i64
+}
+
+#[tokio::test]
+async fn memory_pressure_reaper_marks_idle_top_level_shell_as_system_killed() {
+    let rt = rt();
+    let task_id = insert_background_shell(&rt, None).await;
+
+    let killed = rt
+        .reap_idle_background_shells_for_memory_pressure(i64::MAX / 2, 0)
+        .await;
+
+    assert_eq!(killed, vec![task_id.clone()]);
+    let state = rt.manager().get(&task_id).await.expect("task row");
+    assert_eq!(state.killed_by, Some(coco_types::TaskKilledBy::System));
+    assert!(
+        !state.notified,
+        "system reaper must leave the shell driver free to notify"
+    );
+}
+
+#[tokio::test]
+async fn memory_pressure_reaper_stands_down_while_agent_running() {
+    let rt = rt();
+    let shell_id = insert_background_shell(&rt, None).await;
+    let _agent_id = rt
+        .register_agent_task(
+            "agent",
+            None,
+            None,
+            CancellationToken::new(),
+            AR::Background,
+        )
+        .await;
+
+    let killed = rt
+        .reap_idle_background_shells_for_memory_pressure(i64::MAX / 2, 0)
+        .await;
+
+    assert!(killed.is_empty());
+    let state = rt.manager().get(&shell_id).await.expect("task row");
+    assert_eq!(state.killed_by, None);
+}
+
+#[tokio::test]
+async fn memory_pressure_reaper_keeps_recent_output_file() {
+    let rt = rt();
+    let output_path =
+        std::env::temp_dir().join(format!("coco-reaper-{}.out", uuid::Uuid::new_v4().simple()));
+    tokio::fs::write(&output_path, "recent output")
+        .await
+        .expect("write output file");
+    let task_id =
+        insert_background_shell_with_output(&rt, None, Some(output_path.display().to_string()))
+            .await;
+
+    let killed = rt
+        .reap_idle_background_shells_for_memory_pressure(now_ms_for_test(), 30 * 60 * 1000)
+        .await;
+
+    assert!(killed.is_empty());
+    let state = rt.manager().get(&task_id).await.expect("task row");
+    assert_eq!(state.status, TaskStatus::Running);
+    let _ = tokio::fs::remove_file(output_path).await;
+}
+
+#[tokio::test]
+async fn memory_pressure_reaper_kills_old_output_file() {
+    let rt = rt();
+    let output_path =
+        std::env::temp_dir().join(format!("coco-reaper-{}.out", uuid::Uuid::new_v4().simple()));
+    tokio::fs::write(&output_path, "old output")
+        .await
+        .expect("write output file");
+    let modified_ms = tokio::fs::metadata(&output_path)
+        .await
+        .expect("metadata")
+        .modified()
+        .expect("modified")
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("modified after epoch")
+        .as_millis() as i64;
+    let task_id =
+        insert_background_shell_with_output(&rt, None, Some(output_path.display().to_string()))
+            .await;
+
+    let killed = rt
+        .reap_idle_background_shells_for_memory_pressure(
+            modified_ms + 30 * 60 * 1000 + 1,
+            30 * 60 * 1000,
+        )
+        .await;
+
+    assert_eq!(killed, vec![task_id.clone()]);
+    let state = rt.manager().get(&task_id).await.expect("task row");
+    assert_eq!(state.killed_by, Some(coco_types::TaskKilledBy::System));
+    let _ = tokio::fs::remove_file(output_path).await;
+}
+
+#[tokio::test]
+async fn memory_pressure_reaper_exits_on_shutdown() {
+    let rt = rt();
+    let weak = Arc::downgrade(&rt);
+    let shutdown = CancellationToken::new();
+    rt.start_memory_pressure_shell_reaper(shutdown.clone());
+    drop(rt);
+
+    shutdown.cancel();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if weak.upgrade().is_none() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("reaper should release TaskRuntime after shutdown");
+}
+
 #[tokio::test]
 async fn register_creates_running_task_with_tool_use_id() {
     let rt = rt();
@@ -355,11 +513,11 @@ async fn kill_task_rejects_removed_task() {
     );
 }
 
-/// End-to-end check: the canonical kill path is cancel → driver
-/// observes cancel → driver calls `mark_failed` → ONE notification
+/// End-to-end check: the canonical kill path is cancel -> driver
+/// observes cancel -> driver calls `mark_stopped` -> ONE notification
 /// gets pushed (no race / no duplicate).
 #[tokio::test]
-async fn kill_then_mark_failed_pushes_exactly_one_notification() {
+async fn kill_then_mark_stopped_pushes_exactly_one_notification() {
     let sink = CapturingSink::default();
     let captured = sink.captured.clone();
     let rt = rt_with_sink(sink);
@@ -375,7 +533,7 @@ async fn kill_then_mark_failed_pushes_exactly_one_notification() {
     rt.kill_task(&task_id).await.unwrap();
     // Simulate what the bg-agent closure does in production after
     // observing the cancel.
-    rt.mark_failed(&task_id, "task cancelled by leader").await;
+    rt.mark_stopped(&task_id).await;
     let captured = captured.lock().await;
     assert_eq!(captured.len(), 1, "exactly one notification expected");
     assert!(
@@ -386,6 +544,46 @@ async fn kill_then_mark_failed_pushes_exactly_one_notification() {
         "expected AgentTerminal, got {:?}",
         captured[0].kind
     );
+}
+
+#[tokio::test]
+async fn parent_actor_stop_marks_agent_killed_with_parent_attribution() {
+    let sink = CapturingSink::default();
+    let captured = sink.captured.clone();
+    let rt = rt_with_sink(sink);
+    let task_id = rt
+        .register_agent_task(
+            "child",
+            None,
+            None,
+            CancellationToken::new(),
+            AR::Foreground,
+        )
+        .await;
+
+    coco_tool_runtime::TaskHandle::kill_task_with_actor(
+        &*rt,
+        &task_id,
+        coco_types::TaskKilledBy::Parent,
+    )
+    .await
+    .unwrap();
+    rt.mark_stopped(&task_id).await;
+
+    let state = rt.get_task_status(&task_id).await.unwrap();
+    assert_eq!(state.status, TaskStatus::Killed);
+    assert_eq!(state.killed_by, Some(coco_types::TaskKilledBy::Parent));
+    let captured = captured.lock().await;
+    assert_eq!(captured.len(), 1);
+    let kind = &captured[0].kind;
+    let coco_tasks::NotificationKind::AgentTerminal {
+        status, killed_by, ..
+    } = kind
+    else {
+        panic!("expected AgentTerminal, got {kind:?}");
+    };
+    assert_eq!(*status, coco_tasks::TerminalStatus::Killed);
+    assert_eq!(*killed_by, Some(coco_types::TaskKilledBy::Parent));
 }
 
 #[tokio::test]

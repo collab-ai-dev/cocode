@@ -20,6 +20,7 @@ use coco_llm_types::FinishReason;
 use coco_llm_types::LlmMessage;
 use coco_llm_types::StopReason;
 use coco_llm_types::TextPart;
+use coco_llm_types::ToolCallPart;
 use coco_llm_types::Usage;
 use coco_system_reminder::InvokedSkillEntry;
 use coco_system_reminder::ReminderSources;
@@ -40,6 +41,9 @@ const LISTING_MARKER: &str = "SKILL-LISTING-MARKER";
 struct CapturingTextModel {
     captured_prompts: Arc<Mutex<Vec<Vec<LlmMessage>>>>,
 }
+
+#[derive(Debug)]
+struct InvalidStructuredOutputModel;
 
 #[test]
 fn workflow_keyword_matcher_ignores_code_and_paths() {
@@ -152,6 +156,139 @@ fn structured_output_enforcement_resets_for_next_user_turn() {
     ));
 }
 
+fn structured_output_tools() -> Arc<ToolRegistry> {
+    let registry = ToolRegistry::new();
+    coco_tools::register_structured_output_tool(
+        &registry,
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "answer": { "type": "string" }
+            },
+            "required": ["answer"]
+        }),
+    )
+    .expect("valid structured output schema");
+    Arc::new(registry)
+}
+
+#[tokio::test]
+async fn structured_output_no_tool_turns_stop_at_retry_cap() {
+    let max_retries = 3;
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let model = Arc::new(CapturingTextModel {
+        captured_prompts: captured.clone(),
+    });
+    let client = crate::test_support::model_runtime_registry(model);
+    let config = QueryEngineConfig {
+        model_id: "skill-listing-mock".into(),
+        permission_mode: PermissionMode::Default,
+        max_turns: Some(max_retries as i32 + 1),
+        requires_structured_output: true,
+        max_structured_output_retries: max_retries,
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(
+        config,
+        client,
+        structured_output_tools(),
+        CancellationToken::new(),
+        None,
+    );
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
+
+    let result = engine
+        .run_with_events("answer as json", event_tx, coco_types::TurnId::generate())
+        .await
+        .expect("engine run");
+
+    assert_eq!(
+        result.stop_reason.as_deref(),
+        Some("error_max_structured_output_retries"),
+        "text-only replies should count toward the StructuredOutput retry cap"
+    );
+    let mut events = Vec::new();
+    while let Ok(event) = event_rx.try_recv() {
+        events.push(event);
+    }
+    let turn_ended = events.iter().find_map(|event| match event {
+        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(params)) => {
+            Some(params)
+        }
+        _ => None,
+    });
+    let turn_ended = turn_ended.expect("retry cap should emit TurnEnded");
+    match &turn_ended.outcome {
+        coco_types::TurnOutcome::Failed(outcome) => {
+            assert_eq!(outcome.error.code, coco_types::ErrorCode::Provider);
+            assert!(
+                outcome.error.message.contains("3 attempts"),
+                "failed outcome should include the configured cap"
+            );
+        }
+        other => panic!("expected failed TurnEnded outcome, got {other:?}"),
+    }
+    let prompts = captured.lock().expect("captured prompts lock").clone();
+    assert_eq!(prompts.len(), max_retries as usize);
+    let second_prompt = prompt_text(&prompts[1]);
+    assert_eq!(
+        second_prompt.matches("[structured-output-enforce]").count(),
+        1,
+        "the terminal no-tool branch must not append duplicate enforcement \
+         nudges; pre-turn reminder injection owns the sentinel dedupe"
+    );
+}
+
+#[tokio::test]
+async fn structured_output_tool_failure_cap_emits_failed_turn() {
+    let client =
+        crate::test_support::model_runtime_registry(Arc::new(InvalidStructuredOutputModel));
+    let config = QueryEngineConfig {
+        model_id: "structured-output-invalid-mock".into(),
+        permission_mode: PermissionMode::Default,
+        max_turns: Some(2),
+        requires_structured_output: true,
+        max_structured_output_retries: 1,
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(
+        config,
+        client,
+        structured_output_tools(),
+        CancellationToken::new(),
+        None,
+    );
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
+
+    let result = engine
+        .run_with_events("answer as json", event_tx, coco_types::TurnId::generate())
+        .await
+        .expect("engine run");
+
+    assert_eq!(
+        result.stop_reason.as_deref(),
+        Some("error_max_structured_output_retries")
+    );
+    let mut outcomes = Vec::new();
+    while let Ok(event) = event_rx.try_recv() {
+        if let coco_types::CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(params)) =
+            event
+        {
+            outcomes.push(params.outcome);
+        }
+    }
+    assert_eq!(
+        outcomes.len(),
+        1,
+        "retry cap should emit one terminal event"
+    );
+    assert!(
+        matches!(outcomes[0], coco_types::TurnOutcome::Failed(_)),
+        "retry cap should be a failed turn, got {:?}",
+        outcomes[0]
+    );
+}
+
 #[async_trait]
 impl LanguageModel for CapturingTextModel {
     fn provider(&self) -> &str {
@@ -178,6 +315,54 @@ impl LanguageModel for CapturingTextModel {
             })],
             usage: Usage::new(10, 3),
             finish_reason: FinishReason::new(StopReason::EndTurn),
+            warnings: vec![],
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+
+    async fn do_stream(
+        &self,
+        options: &LanguageModelCallOptions,
+        abort_signal: Option<CancellationToken>,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        let result = self.do_generate(options, abort_signal).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
+#[async_trait]
+impl LanguageModel for InvalidStructuredOutputModel {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "structured-output-invalid-mock"
+    }
+
+    async fn do_generate(
+        &self,
+        _options: &LanguageModelCallOptions,
+        _abort_signal: Option<CancellationToken>,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        Ok(LanguageModelGenerateResult {
+            content: vec![AssistantContentPart::ToolCall(ToolCallPart {
+                tool_call_id: "structured-output-1".into(),
+                tool_name: ToolName::StructuredOutput.as_str().into(),
+                input: serde_json::json!({}),
+                provider_executed: None,
+                provider_metadata: None,
+                invalid: false,
+                invalid_reason: None,
+            })],
+            usage: Usage::new(10, 3),
+            finish_reason: FinishReason::new(StopReason::ToolUse),
             warnings: vec![],
             provider_metadata: None,
             request: None,

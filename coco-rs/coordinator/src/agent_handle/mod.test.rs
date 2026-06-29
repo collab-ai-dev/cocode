@@ -72,6 +72,67 @@ fn create_test_handle_with_registry(
     )
 }
 
+struct MetadataOnlyTranscriptStore {
+    metadata: coco_tool_runtime::AgentSpawnMetadata,
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::AgentTranscriptStore for MetadataOnlyTranscriptStore {
+    async fn append_agent_messages(
+        &self,
+        _: &str,
+        _: &str,
+        _: &[Arc<coco_messages::Message>],
+    ) -> Result<(), coco_error::BoxedError> {
+        Ok(())
+    }
+
+    async fn load_agent_messages(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Option<Vec<Arc<coco_messages::Message>>>, coco_error::BoxedError> {
+        panic!("stopped agents must be rejected before transcript load");
+    }
+
+    async fn write_agent_metadata(
+        &self,
+        _: &str,
+        _: &str,
+        _: &coco_tool_runtime::AgentSpawnMetadata,
+    ) -> Result<(), coco_error::BoxedError> {
+        Ok(())
+    }
+
+    async fn read_agent_metadata(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Option<coco_tool_runtime::AgentSpawnMetadata>, coco_error::BoxedError> {
+        Ok(Some(self.metadata.clone()))
+    }
+}
+
+#[tokio::test]
+async fn resume_agent_rejects_user_stopped_metadata() {
+    let mut handle = create_test_handle();
+    handle.set_transcript_store(Arc::new(MetadataOnlyTranscriptStore {
+        metadata: coco_tool_runtime::AgentSpawnMetadata {
+            agent_type: "general-purpose".into(),
+            worktree_path: None,
+            description: Some("stopped task".into()),
+            killed_by: Some(coco_types::TaskKilledBy::User),
+        },
+    }));
+
+    let err = handle
+        .resume_agent("agent-stopped", "continue".into(), "sess-1".into())
+        .await
+        .expect_err("user-stopped agents must not resume");
+
+    assert!(err.contains("stopped by user"), "got: {err}");
+}
+
 fn test_team_file(team_name: &str) -> TeamFile {
     TeamFile {
         name: team_name.to_string(),
@@ -271,6 +332,7 @@ impl TestAgentTaskRegistry {
                 tool_use_id: tool_use_id.map(str::to_string),
                 start_time: 0,
                 end_time: None,
+                killed_by: None,
                 total_paused_ms: None,
                 output_file: Some(format!("/tmp/{task_id}.out")),
                 output_offset: 0,
@@ -425,6 +487,7 @@ impl coco_tool_runtime::TaskHandle for TestAgentTaskRegistry {
                 tool_use_id: None,
                 start_time: 0,
                 end_time: None,
+                killed_by: None,
                 total_paused_ms: None,
                 output_file: Some(format!("/tmp/{task_id}.out")),
                 output_offset: 0,
@@ -2079,7 +2142,8 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
         "Agent must be allowed below the depth limit; got {default_denied:?}"
     );
 
-    // At the depth limit, `Agent` is denied so the leaf cannot spawn deeper.
+    // At the depth limit, `Agent` stays visible; AgentTool's call-entry
+    // guard rejects actual spawn attempts from that leaf depth.
     handle
         .spawn_agent(AgentSpawnRequest {
             prompt: "do work".into(),
@@ -2093,12 +2157,12 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
         .unwrap();
     let leaf_denied = denied.lock().await.clone().expect("engine ran");
     assert!(
-        leaf_denied.iter().any(|d| d == "Agent"),
-        "Agent must be denied at the depth limit; got {leaf_denied:?}"
+        !leaf_denied.iter().any(|d| d == "Agent"),
+        "Agent must be allowed at the leaf depth; got {leaf_denied:?}"
     );
 
-    // Plan mode at the depth limit: ExitPlanMode is re-admitted; Agent (and
-    // the rest of the block) stay blocked.
+    // Plan mode past the depth limit: ExitPlanMode is re-admitted; Agent
+    // (and the rest of the block) stay blocked.
     handle
         .spawn_agent(AgentSpawnRequest {
             prompt: "do work".into(),
@@ -2106,7 +2170,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
             definition: Some(wildcard_def),
             mode: Some(coco_types::PermissionMode::Plan),
             session_id: "test-session".into(),
-            child_query_depth: coco_subagent::SUBAGENT_DEPTH_LIMIT,
+            child_query_depth: coco_subagent::SUBAGENT_DEPTH_LIMIT + 1,
             ..Default::default()
         })
         .await
@@ -2118,7 +2182,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
     );
     assert!(
         plan_denied.iter().any(|d| d == "Agent"),
-        "plan mode still blocks Agent at the depth limit; got {plan_denied:?}"
+        "plan mode still blocks Agent past the depth limit; got {plan_denied:?}"
     );
 }
 
@@ -2443,6 +2507,7 @@ async fn test_query_local_agent_status_uses_registry_without_team_fallback() {
             tool_use_id: None,
             start_time: 10,
             end_time: Some(25),
+            killed_by: None,
             total_paused_ms: None,
             output_file: Some("/tmp/agent.out".into()),
             output_offset: 0,

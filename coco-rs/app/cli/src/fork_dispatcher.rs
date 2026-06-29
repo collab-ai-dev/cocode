@@ -260,6 +260,7 @@ impl SessionRuntimeForkDispatcher {
             agent_type: fork_label.to_string(),
             worktree_path: None,
             description: Some(agent_id.to_string()),
+            killed_by: None,
         };
         if let Err(e) = store
             .write_agent_metadata(&session_id, agent_id, &metadata)

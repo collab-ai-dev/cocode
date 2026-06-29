@@ -28,6 +28,7 @@ use coco_types::ShellExtras;
 use coco_types::TaskCompletedParams;
 use coco_types::TaskCompletionStatus;
 use coco_types::TaskExtras;
+use coco_types::TaskKilledBy;
 use coco_types::TaskProgress;
 use coco_types::TaskProgressParams;
 use coco_types::TaskStartedParams;
@@ -472,6 +473,7 @@ impl TaskManager {
             tool_use_id: request.tool_use_id,
             start_time: current_time_ms(),
             end_time: None,
+            killed_by: None,
             total_paused_ms: None,
             output_file: request.output_file,
             output_offset: 0,
@@ -503,6 +505,7 @@ impl TaskManager {
             tool_use_id: None,
             start_time: current_time_ms(),
             end_time: None,
+            killed_by: None,
             total_paused_ms: None,
             output_file: request.output_file,
             output_offset: 0,
@@ -629,6 +632,15 @@ impl TaskManager {
     }
 
     pub async fn transition_terminal(&self, id: &str, status: TaskStatus) -> Option<TaskStateBase> {
+        self.transition_terminal_with_actor(id, status, None).await
+    }
+
+    pub async fn transition_terminal_with_actor(
+        &self,
+        id: &str,
+        status: TaskStatus,
+        killed_by: Option<TaskKilledBy>,
+    ) -> Option<TaskStateBase> {
         debug_assert!(status.is_terminal());
         let snapshot = {
             let mut rows = self.rows.write().await;
@@ -638,6 +650,11 @@ impl TaskManager {
             }
             row.status = status;
             row.end_time = Some(current_time_ms());
+            row.killed_by = if status == TaskStatus::Killed {
+                killed_by.or(row.killed_by)
+            } else {
+                None
+            };
             // Dream tasks have no model-facing `<task-notification>`
             // envelope (UI-only). Auto-mark notified so
             // `remove_completed` evicts them without waiting for a reader.
@@ -733,13 +750,24 @@ impl TaskManager {
     }
 
     pub async fn kill_running(&self, id: &str) -> Result<(), KillTaskError> {
+        self.kill_running_by(id, TaskKilledBy::User).await
+    }
+
+    pub async fn kill_running_by(
+        &self,
+        id: &str,
+        killed_by: TaskKilledBy,
+    ) -> Result<(), KillTaskError> {
         let cancel = {
             let mut rows = self.rows.write().await;
             let row = rows.get_mut(id).ok_or(KillTaskError::NotFound)?;
             if row.status.is_terminal() {
                 return Err(KillTaskError::NotRunning);
             }
-            if matches!(row.task_type(), TaskType::Shell | TaskType::Dream) {
+            row.killed_by = Some(killed_by);
+            if matches!(row.task_type(), TaskType::Dream)
+                || (row.task_type() == TaskType::Shell && killed_by != TaskKilledBy::System)
+            {
                 row.notified = true;
             }
             self.controls
@@ -1027,6 +1055,7 @@ impl TaskManager {
             task_id: task_id.to_string(),
             tool_use_id: state.tool_use_id.clone(),
             status,
+            killed_by: state.killed_by,
             output_file,
             summary: state.description.clone(),
             usage: Some(usage),

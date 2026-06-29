@@ -31,6 +31,7 @@
 mod agent;
 mod controller;
 mod reader;
+mod reaper;
 mod shell;
 mod stall;
 mod timers;

@@ -861,7 +861,7 @@ fn add_dir_handler(args: &str) -> String {
         );
     }
     format!(
-        "{ADD_DIR_SENTINEL} {}\nAdded working directory: {}",
+        "{ADD_DIR_SENTINEL} {}\nAdded {} as a working directory.",
         absolute.display(),
         absolute.display()
     )

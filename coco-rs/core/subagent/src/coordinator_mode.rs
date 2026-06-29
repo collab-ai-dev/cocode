@@ -280,7 +280,7 @@ When calling {agent}:\n\
 - Do not set the model parameter. Workers need the default model for the substantive tasks you delegate.\n\
 - Continue workers whose work is complete via {send_message} to take advantage of their loaded context\n\
 - When the user has approved or denied a specific action, quote their exact words in the worker's prompt. A worker's permission and auto-mode evaluation sees only its own transcript \u{2014} it cannot see what the user told you, so an unquoted approval reads as unapproved and the worker will re-ask or stall.\n\
-- After launching agents, briefly tell the user what you launched and end your response. Never fabricate or predict agent results in any format \u{2014} results arrive as separate messages.\n\
+- After launching agents, briefly tell the user what you launched, then continue with non-overlapping work if useful. Never fabricate or predict agent results in any format \u{2014} results arrive as separate messages.\n\
 \n\
 ### {agent} Results\n\
 \n\
@@ -378,7 +378,7 @@ When a worker reports failure (tests failed, build errors, file not found):\n\
 \n\
 ### Stopping Workers\n\
 \n\
-Use {task_stop} to stop a worker you sent in the wrong direction \u{2014} for example, when you realize mid-flight that the approach is wrong, or the user changes requirements after you launched the worker. Pass the `task_id` from the {agent} tool's launch result. Stopped workers can be continued with {send_message}.\n\
+Use {task_stop} to stop a worker you sent in the wrong direction \u{2014} for example, when you realize mid-flight that the approach is wrong, or the user changes requirements after you launched the worker. Pass the `task_id` from the {agent} tool's launch result. Stopped workers are terminal; spawn a fresh worker if more work is needed.\n\
 \n\
 ```\n\
 // Launched a worker to refactor auth to use JWT\n\
@@ -556,6 +556,10 @@ pub struct TaskNotificationUsage {
 /// same task-id notifies again.
 pub const TASK_NOTIFICATION_RECUR_NOTE: &str = "A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.";
 
+/// Model-contract note appended to stopped agent / teammate task-notifications.
+pub const TASK_NOTIFICATION_STOPPED_NOTE: &str =
+    "This agent was stopped and cannot be resumed. Spawn a fresh agent if more work is needed.";
+
 /// Render a [`TaskNotification`] as XML. Whitespace and tag order match
 /// the documented format so the assistant's pattern match succeeds.
 pub fn render_task_notification(n: &TaskNotification<'_>) -> String {
@@ -577,7 +581,13 @@ pub fn render_task_notification(n: &TaskNotification<'_>) -> String {
         out.push_str(&format!("  <duration_ms>{}</duration_ms>\n", u.duration_ms));
         out.push_str("</usage>\n");
     }
-    out.push_str(&format!("<note>{TASK_NOTIFICATION_RECUR_NOTE}</note>\n"));
+    let note = match n.status {
+        TaskNotificationStatus::Completed | TaskNotificationStatus::Failed => {
+            TASK_NOTIFICATION_RECUR_NOTE
+        }
+        TaskNotificationStatus::Killed => TASK_NOTIFICATION_STOPPED_NOTE,
+    };
+    out.push_str(&format!("<note>{note}</note>\n"));
     out.push_str("</task-notification>");
     out
 }

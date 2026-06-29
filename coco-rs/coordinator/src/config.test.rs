@@ -9,6 +9,7 @@ fn test_teammate_mode_default() {
 fn test_teammate_mode_as_str() {
     assert_eq!(TeammateMode::Auto.as_str(), "auto");
     assert_eq!(TeammateMode::Tmux.as_str(), "tmux");
+    assert_eq!(TeammateMode::Iterm2.as_str(), "iterm2");
     assert_eq!(TeammateMode::InProcess.as_str(), "in-process");
 }
 
@@ -18,6 +19,8 @@ fn test_teammate_mode_serde() {
     assert_eq!(json, "\"in-process\"");
     let parsed: TeammateMode = serde_json::from_str("\"tmux\"").unwrap();
     assert_eq!(parsed, TeammateMode::Tmux);
+    let parsed: TeammateMode = serde_json::from_str("\"iterm2\"").unwrap();
+    assert_eq!(parsed, TeammateMode::Iterm2);
 }
 
 #[test]

@@ -9,6 +9,7 @@ fn snap(id: &str, desc: &str, status: TaskRunStatus) -> TaskStatusSnapshot {
         task_id: id.into(),
         description: desc.into(),
         status,
+        killed_by: None,
         task_type: "local_agent".into(),
         delta_summary: None,
         output_file_path: None,
@@ -36,7 +37,26 @@ async fn killed_renders_stopped_message() {
         .content()
         .unwrap()
         .to_string();
-    assert_eq!(text, "Task \"code review\" (42) was stopped by the user.");
+    assert_eq!(text, "Task \"code review\" (42) was stopped.");
+}
+
+#[tokio::test]
+async fn killed_renders_attribution() {
+    let c = SystemReminderConfig::default();
+    let mut stopped = snap("42", "code review", TaskRunStatus::Killed);
+    stopped.killed_by = Some(coco_types::TaskKilledBy::System);
+    let ctx = GeneratorContext::builder(&c)
+        .task_statuses(vec![stopped])
+        .build();
+    let text = TaskStatusGenerator
+        .generate(&ctx)
+        .await
+        .unwrap()
+        .unwrap()
+        .content()
+        .unwrap()
+        .to_string();
+    assert_eq!(text, "Task \"code review\" (42) was stopped by system.");
 }
 
 #[tokio::test]
@@ -47,6 +67,7 @@ async fn running_includes_anti_duplicate_warning() {
             task_id: "42".into(),
             description: "scan repo".into(),
             status: TaskRunStatus::Running,
+            killed_by: None,
             task_type: "local_agent".into(),
             delta_summary: Some("10/100 files".into()),
             output_file_path: Some("/tmp/task-42.log".into()),
@@ -77,6 +98,7 @@ async fn running_without_output_file_includes_tool_refs() {
             task_id: "7".into(),
             description: "lint".into(),
             status: TaskRunStatus::Running,
+            killed_by: None,
             task_type: "local_agent".into(),
             delta_summary: None,
             output_file_path: None,
@@ -103,6 +125,7 @@ async fn completed_includes_delta_when_set() {
             task_id: "x".into(),
             description: "tidy".into(),
             status: TaskRunStatus::Completed,
+            killed_by: None,
             task_type: "local_agent".into(),
             delta_summary: Some("removed 3 files".into()),
             output_file_path: None,
@@ -135,6 +158,7 @@ async fn failed_with_output_file_references_path() {
             task_id: "9".into(),
             description: "build".into(),
             status: TaskRunStatus::Failed,
+            killed_by: None,
             task_type: "local_bash".into(),
             delta_summary: Some("compile error".into()),
             output_file_path: Some("/tmp/task-9.log".into()),

@@ -498,6 +498,10 @@ pub struct AgentMetadata {
     /// a placeholder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Actor that stopped this background agent. Any stopped agent is
+    /// terminal for resume; callers must spawn a fresh agent instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub killed_by: Option<coco_types::TaskKilledBy>,
 }
 
 // ---------------------------------------------------------------------------

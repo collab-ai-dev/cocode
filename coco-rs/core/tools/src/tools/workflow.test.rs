@@ -86,6 +86,7 @@ fn workflow_row(
         tool_use_id: None,
         start_time: 0,
         end_time: None,
+        killed_by: None,
         total_paused_ms: None,
         output_file: output_file.map(str::to_string),
         output_offset: 0,

@@ -48,6 +48,13 @@ impl SwarmAgentHandle {
                 format!("No metadata found for agent {original_agent_id} in session {session_id}")
             })?;
 
+        if let Some(killed_by) = meta.killed_by {
+            return Err(format!(
+                "Agent {original_agent_id} was stopped by {} and will not be resumed. Spawn a fresh agent instead.",
+                killed_by.as_str()
+            ));
+        }
+
         let prior_messages = store
             .load_agent_messages(&session_id, original_agent_id)
             .await

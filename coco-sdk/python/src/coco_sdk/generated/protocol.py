@@ -571,6 +571,12 @@ class TaskCompletionStatus(str, Enum):
     stopped = "stopped"
 
 
+class TaskKilledBy(str, Enum):
+    user = "user"
+    parent = "parent"
+    system = "system"
+
+
 class TaskListStatus(str, Enum):
     pending = "pending"
     in_progress = "in_progress"
@@ -3435,6 +3441,7 @@ class TaskCompletedParams(BaseModel):
     status: TaskCompletionStatus
     summary: str
     task_id: str
+    killed_by: TaskKilledBy | None = None
     tool_use_id: str | None = None
     usage: TaskUsage | None = None
 

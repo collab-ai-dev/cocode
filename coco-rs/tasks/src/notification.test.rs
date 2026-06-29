@@ -11,6 +11,7 @@ fn shell_terminal_completed_with_exit_code() {
         kind: NotificationKind::ShellTerminal {
             status: TerminalStatus::Completed,
             exit_code: Some(0),
+            killed_by: None,
         },
     };
     let xml = render(&n);
@@ -39,6 +40,7 @@ fn shell_terminal_failed_with_exit_code() {
         kind: NotificationKind::ShellTerminal {
             status: TerminalStatus::Failed,
             exit_code: Some(2),
+            killed_by: None,
         },
     };
     let xml = render(&n);
@@ -59,6 +61,7 @@ fn shell_terminal_killed_omits_exit_code() {
         kind: NotificationKind::ShellTerminal {
             status: TerminalStatus::Killed,
             exit_code: None,
+            killed_by: None,
         },
     };
     let xml = render(&n);
@@ -67,6 +70,46 @@ fn shell_terminal_killed_omits_exit_code() {
         xml.contains("<summary>Background command &quot;sleep 999&quot; was stopped</summary>")
     );
     assert!(!xml.contains("(exit code"));
+}
+
+#[test]
+fn shell_terminal_killed_parent_names_parent_agent() {
+    let n = TaskNotification {
+        task_id: "tb03p".into(),
+        tool_use_id: None,
+        agent_id: None,
+        output_file: "/tmp/tb03p.output".into(),
+        description: "sleep 999".into(),
+        kind: NotificationKind::ShellTerminal {
+            status: TerminalStatus::Killed,
+            exit_code: None,
+            killed_by: Some(coco_types::TaskKilledBy::Parent),
+        },
+    };
+    let xml = render(&n);
+    assert!(xml.contains(
+        "<summary>Background command &quot;sleep 999&quot; was stopped by parent agent</summary>"
+    ));
+}
+
+#[test]
+fn shell_terminal_killed_system_names_system() {
+    let n = TaskNotification {
+        task_id: "tb03s".into(),
+        tool_use_id: None,
+        agent_id: None,
+        output_file: "/tmp/tb03s.output".into(),
+        description: "sleep 999".into(),
+        kind: NotificationKind::ShellTerminal {
+            status: TerminalStatus::Killed,
+            exit_code: None,
+            killed_by: Some(coco_types::TaskKilledBy::System),
+        },
+    };
+    let xml = render(&n);
+    assert!(xml.contains(
+        "<summary>Background command &quot;sleep 999&quot; was stopped by system</summary>"
+    ));
 }
 
 #[test]
@@ -91,11 +134,12 @@ fn agent_terminal_completed_includes_result_usage_worktree() {
                 branch: Some("feat/x".into()),
             }),
             error: None,
+            killed_by: None,
         },
     };
     let xml = render(&n);
     assert!(xml.contains("<status>completed</status>"));
-    assert!(xml.contains("<summary>Agent &quot;explore repo&quot; completed</summary>"));
+    assert!(xml.contains("<summary>Agent &quot;explore repo&quot; finished</summary>"));
     assert!(xml.contains("<result>Found 3 callers.</result>"));
     assert!(xml.contains(
         "<usage><total_tokens>1234</total_tokens><tool_uses>5</tool_uses><duration_ms>7890</duration_ms></usage>"
@@ -121,6 +165,7 @@ fn agent_terminal_optional_sections_omitted_when_none() {
             usage: None,
             worktree: None,
             error: None,
+            killed_by: None,
         },
     };
     let xml = render(&n);
@@ -130,6 +175,31 @@ fn agent_terminal_optional_sections_omitted_when_none() {
     // The recur-note is present even on the minimal agent envelope.
     assert!(xml.contains(&format!("<note>{TASK_NOTIFICATION_RECUR_NOTE}</note>")));
     assert!(xml.contains("may notify more than once"));
+}
+
+#[test]
+fn agent_terminal_killed_uses_stopped_note() {
+    let n = TaskNotification {
+        task_id: "ta02k".into(),
+        tool_use_id: None,
+        agent_id: None,
+        output_file: "/tmp/ta02k.output".into(),
+        description: "research".into(),
+        kind: NotificationKind::AgentTerminal {
+            status: TerminalStatus::Killed,
+            result: None,
+            usage: None,
+            worktree: None,
+            error: None,
+            killed_by: Some(coco_types::TaskKilledBy::Parent),
+        },
+    };
+    let xml = render(&n);
+    assert!(
+        xml.contains("<summary>Agent &quot;research&quot; was stopped by parent agent</summary>")
+    );
+    assert!(xml.contains(&format!("<note>{TASK_NOTIFICATION_STOPPED_NOTE}</note>")));
+    assert!(!xml.contains("may notify more than once"));
 }
 
 #[test]
@@ -146,6 +216,7 @@ fn agent_terminal_failed_uses_error_in_summary() {
             usage: None,
             worktree: None,
             error: Some("compiler crash".into()),
+            killed_by: None,
         },
     };
     let xml = render(&n);
@@ -170,6 +241,7 @@ fn agent_worktree_branch_optional() {
                 branch: None,
             }),
             error: None,
+            killed_by: None,
         },
     };
     let xml = render(&n);
@@ -210,6 +282,7 @@ fn escape_xml_handles_5_chars() {
         kind: NotificationKind::ShellTerminal {
             status: TerminalStatus::Completed,
             exit_code: None,
+            killed_by: None,
         },
     };
     let xml = render(&n);
@@ -227,6 +300,7 @@ async fn noop_sink_swallows() {
         kind: NotificationKind::ShellTerminal {
             status: TerminalStatus::Completed,
             exit_code: None,
+            killed_by: None,
         },
     };
     NoOpNotificationSink.push(n).await;

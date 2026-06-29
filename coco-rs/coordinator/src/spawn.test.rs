@@ -17,6 +17,7 @@ fn test_build_teammate_command_basic() {
         prompt: "Find the bug".into(),
         cwd: "/project".into(),
         model: Some("anthropic/claude-opus-4-7".into()),
+        effort: Some(coco_types::ReasoningEffort::High),
         system_prompt: None,
         system_prompt_mode: crate::pane::SystemPromptMode::Default,
         worktree_path: None,
@@ -29,6 +30,7 @@ fn test_build_teammate_command_basic() {
     let cmd = build_teammate_command(&config);
     assert!(cmd.contains("cd /project &&"));
     assert!(cmd.contains("--models.main=anthropic/claude-opus-4-7"));
+    assert!(cmd.contains("--effort=high"));
     // Identity rides COCO_* env, NOT CLI flags (clap defines none of the
     // identity flags and would reject them on the child's launch).
     assert!(!cmd.contains("--agent-id"));

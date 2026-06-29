@@ -31,6 +31,13 @@ fn test_agent_teams_config_defaults_to_main_model_role() {
 }
 
 #[test]
+fn test_teammate_mode_accepts_iterm2() {
+    let mode: TeammateMode = serde_json::from_str("\"iterm2\"").unwrap();
+    assert_eq!(mode, TeammateMode::Iterm2);
+    assert_eq!(mode.as_str(), "iterm2");
+}
+
+#[test]
 fn test_agent_teams_config_resolves_role_overrides() {
     let config = AgentTeamsConfig::resolve(&Settings {
         agent_teams: PartialAgentTeamsSettings {

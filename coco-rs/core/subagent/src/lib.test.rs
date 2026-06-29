@@ -306,12 +306,20 @@ fn subagent_disallowed_tools_gates_agent_on_depth() {
         "Agent must be allowed at depth 4 (< {})",
         crate::SUBAGENT_DEPTH_LIMIT
     );
-    // At the limit: Agent is denied (silent tool removal), no deeper spawn.
+    // At the limit: Agent is still visible to the leaf. The AgentTool
+    // call-entry guard rejects actual spawn attempts from that depth.
     let at_limit =
         crate::subagent_disallowed_tools(/*plan_mode*/ false, crate::SUBAGENT_DEPTH_LIMIT);
     assert!(
-        at_limit.contains(&ToolName::Agent.as_str()),
-        "Agent must be denied at depth {}",
+        !at_limit.contains(&ToolName::Agent.as_str()),
+        "Agent must remain visible at depth {}",
+        crate::SUBAGENT_DEPTH_LIMIT
+    );
+    let too_deep =
+        crate::subagent_disallowed_tools(/*plan_mode*/ false, crate::SUBAGENT_DEPTH_LIMIT + 1);
+    assert!(
+        too_deep.contains(&ToolName::Agent.as_str()),
+        "Agent must be denied past depth {}",
         crate::SUBAGENT_DEPTH_LIMIT
     );
     // The rest of the universal block applies at every depth.
@@ -323,11 +331,11 @@ fn subagent_disallowed_tools_gates_agent_on_depth() {
 
 #[test]
 fn async_clamp_denies_non_async_safe_builtins_keeps_async_safe() {
-    // At the depth limit the clamp denies Agent along with the other
+    // Past the depth limit the clamp denies Agent along with the other
     // non-async-safe builtins.
     let denied = crate::async_subagent_disallowed_tools(
         /*plan_mode*/ false,
-        crate::SUBAGENT_DEPTH_LIMIT,
+        crate::SUBAGENT_DEPTH_LIMIT + 1,
     );
     // Long-lived / interactive tools are denied for background spawns.
     assert!(denied.contains(&ToolName::Repl.as_str()));
@@ -356,13 +364,21 @@ fn async_clamp_gates_agent_on_depth() {
     // Other non-async-safe builtins stay denied regardless of depth.
     assert!(below.contains(&ToolName::Repl.as_str()));
     assert!(below.contains(&ToolName::Workflow.as_str()));
+    let at_limit = crate::async_subagent_disallowed_tools(
+        /*plan_mode*/ false,
+        crate::SUBAGENT_DEPTH_LIMIT,
+    );
+    assert!(
+        !at_limit.contains(&ToolName::Agent.as_str()),
+        "Agent must remain visible at the leaf depth"
+    );
 }
 
 #[test]
 fn async_clamp_readmits_exit_plan_mode_in_plan_mode() {
     let denied = crate::async_subagent_disallowed_tools(
         /*plan_mode*/ true,
-        crate::SUBAGENT_DEPTH_LIMIT,
+        crate::SUBAGENT_DEPTH_LIMIT + 1,
     );
     // ...but re-admitted in plan mode so a plan-mode background spawn can
     // still exit the plan.

@@ -27,6 +27,7 @@ use std::sync::Arc;
 struct RecordingTaskHandle {
     known_ids: std::sync::Mutex<Vec<String>>,
     kill_calls: std::sync::Mutex<Vec<String>>,
+    kill_actor_calls: std::sync::Mutex<Vec<(String, coco_types::TaskKilledBy)>>,
 }
 
 impl RecordingTaskHandle {
@@ -39,6 +40,9 @@ impl RecordingTaskHandle {
     fn killed(&self) -> Vec<String> {
         self.kill_calls.lock().unwrap().clone()
     }
+    fn kill_actor_calls(&self) -> Vec<(String, coco_types::TaskKilledBy)> {
+        self.kill_actor_calls.lock().unwrap().clone()
+    }
 }
 
 fn canned_state(task_id: &str) -> TaskStateBase {
@@ -50,6 +54,7 @@ fn canned_state(task_id: &str) -> TaskStateBase {
         tool_use_id: None,
         start_time: 0,
         end_time: None,
+        killed_by: None,
         total_paused_ms: None,
         output_file: None,
         output_offset: 0,
@@ -154,6 +159,31 @@ impl TaskHandle for RecordingTaskHandle {
             )))
         }
     }
+    async fn kill_task_with_actor(
+        &self,
+        task_id: &str,
+        killed_by: coco_types::TaskKilledBy,
+    ) -> Result<(), coco_error::BoxedError> {
+        if self
+            .known_ids
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|id| id == task_id)
+        {
+            self.kill_calls.lock().unwrap().push(task_id.to_string());
+            self.kill_actor_calls
+                .lock()
+                .unwrap()
+                .push((task_id.to_string(), killed_by));
+            Ok(())
+        } else {
+            Err(Box::new(coco_error::PlainError::new(
+                format!("task not found: {task_id}"),
+                coco_error::StatusCode::Internal,
+            )))
+        }
+    }
     async fn signal_detach(&self, _: &str) -> coco_tool_runtime::DetachOutcome {
         coco_tool_runtime::DetachOutcome::Unknown
     }
@@ -234,6 +264,10 @@ async fn test_task_stop_accepts_task_id_for_background_task() {
         coco_types::TaskType::Shell.wire_name()
     );
     assert_eq!(handle.killed(), vec!["bg-1".to_string()]);
+    assert_eq!(
+        handle.kill_actor_calls(),
+        vec![("bg-1".to_string(), coco_types::TaskKilledBy::Parent)]
+    );
 }
 
 #[tokio::test]

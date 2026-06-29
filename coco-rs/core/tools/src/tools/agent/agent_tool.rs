@@ -484,9 +484,9 @@ impl Tool for AgentTool {
                     "Async agent launched successfully.\nagentId: {agent_id} (internal ID - do not mention to user. Use SendMessage with to: '{agent_id}' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes."
                 );
                 let instructions = match output_file.as_deref() {
-                    None | Some("") => "Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.".to_string(),
+                    None | Some("") => "Briefly tell the user what you launched, then continue with any non-overlapping work if useful. Do not duplicate this agent's work; agent results will arrive in a subsequent message.".to_string(),
                     Some(output_file) => format!(
-                        "Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.\noutput_file: {output_file}\nIf asked, you can check progress before completion by using FileRead or Bash tail on the output file."
+                        "Do not duplicate this agent's work; avoid working with the same files or topics it is using. Work on non-overlapping tasks if useful, or briefly tell the user what you launched.\noutput_file: {output_file}\nIf asked, you can check progress before completion by using FileRead or Bash tail on the output file."
                     ),
                 };
                 format!("{prefix}\n{instructions}")
@@ -561,6 +561,19 @@ impl Tool for AgentTool {
             return Err(ToolError::InvalidInput {
                 message: "description is required and must be non-empty (3-5 word summary)".into(),
                 error_code: None,
+            });
+        }
+
+        if ctx.query_depth >= coco_subagent::SUBAGENT_DEPTH_LIMIT {
+            return Err(ToolError::ExecutionFailed {
+                message: format!(
+                    "Subagent nesting limit reached (depth {} of {}). Complete this task \
+                     directly using your tools instead of spawning another agent.",
+                    ctx.query_depth,
+                    coco_subagent::SUBAGENT_DEPTH_LIMIT
+                ),
+                display_data: None,
+                source: None,
             });
         }
 

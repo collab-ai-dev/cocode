@@ -3229,11 +3229,11 @@ export interface TaskCompletedInput {
 }
 
 /**
- * Matches TS `SDKTaskNotificationMessage` (coreSchemas.ts:1694-1713).
- * TS calls this `task/notification`; coco-rs uses `task/completed` as the
- * wire method for brevity, but fields match TS exactly.
+ * SDK task completion notification. `Killed` tasks are surfaced to SDK
+ * consumers as `status: "stopped"` plus `killed_by` attribution.
  */
 export interface TaskCompletedParams {
+  killed_by?: TaskKilledBy | null;
   output_file: string;
   status: TaskCompletionStatus;
   summary: string;
@@ -3266,6 +3266,11 @@ export interface TaskCreatedInput {
   transcript_path?: string;
   hook_event_name: "TaskCreated";
 }
+
+/**
+ * Actor that caused a running task to be stopped.
+ */
+export type TaskKilledBy = "user" | "parent" | "system";
 
 /**
  * Task status wire format. **Distinct** from [`crate::TaskStatus`],

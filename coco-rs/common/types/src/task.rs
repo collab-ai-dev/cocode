@@ -297,6 +297,26 @@ impl TaskStatus {
     }
 }
 
+/// Actor that caused a running task to be stopped.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskKilledBy {
+    User,
+    Parent,
+    System,
+}
+
+impl TaskKilledBy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Parent => "parent",
+            Self::System => "system",
+        }
+    }
+}
+
 // ─── Per-variant extras ────────────────────────────────────────────────
 
 /// Backgrounded subagent task sidecar.
@@ -720,6 +740,10 @@ pub struct TaskStateBase {
     pub start_time: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_time: Option<i64>,
+    /// Actor that stopped this task. Present only for killed terminal
+    /// transitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub killed_by: Option<TaskKilledBy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_paused_ms: Option<i64>,
     /// Path to the on-disk file backing this task's captured output.

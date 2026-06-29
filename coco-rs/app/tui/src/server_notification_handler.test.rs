@@ -217,6 +217,7 @@ fn test_bg_agent_task_completed_updates_subagent_status() {
                 task_id: "agent-bg-1".into(),
                 tool_use_id: Some("tu-42".into()),
                 status: coco_types::TaskCompletionStatus::Completed,
+                killed_by: None,
                 output_file: String::new(),
                 summary: "Found 7 callers".into(),
                 usage: None,

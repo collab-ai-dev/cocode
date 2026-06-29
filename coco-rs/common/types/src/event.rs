@@ -1354,14 +1354,15 @@ pub struct TaskStartedParams {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Matches TS `SDKTaskNotificationMessage` (coreSchemas.ts:1694-1713).
-/// TS calls this `task/notification`; coco-rs uses `task/completed` as the
-/// wire method for brevity, but fields match TS exactly.
+/// SDK task completion notification. `Killed` tasks are surfaced to SDK
+/// consumers as `status: "stopped"` plus `killed_by` attribution.
 pub struct TaskCompletedParams {
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_id: Option<String>,
     pub status: TaskCompletionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub killed_by: Option<crate::TaskKilledBy>,
     pub output_file: String,
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -47,10 +47,12 @@ pub(crate) fn structured_output_recall_limit_reached(
         && artifacts.structured_output_attempts > 2
 }
 
-pub(crate) fn structured_output_failure_limit_reached(artifacts: &RunArtifacts) -> bool {
+pub(crate) fn structured_output_failure_limit_reached(
+    artifacts: &RunArtifacts,
+    max_retries: u32,
+) -> bool {
     artifacts.structured_output.is_none()
-        && artifacts.structured_output_failed_attempts
-            >= crate::config::max_structured_output_retries()
+        && artifacts.structured_output_failed_attempts >= max_retries
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -103,16 +105,16 @@ impl QueryEngine {
                 self.config.requires_structured_output,
                 &acc.run_artifacts,
             );
-            let structured_output_failure_limit_reached =
-                structured_output_failure_limit_reached(&acc.run_artifacts);
-            let continuation = if streaming_control_prevent.is_some()
-                || structured_output_recall_limit_reached
-                || structured_output_failure_limit_reached
-            {
-                TurnContinuation::Terminal
-            } else {
-                TurnContinuation::Continuing
-            };
+            let structured_output_failure_limit_reached = structured_output_failure_limit_reached(
+                &acc.run_artifacts,
+                self.config.max_structured_output_retries,
+            );
+            let continuation =
+                if streaming_control_prevent.is_some() || structured_output_recall_limit_reached {
+                    TurnContinuation::Terminal
+                } else {
+                    TurnContinuation::Continuing
+                };
             self.finalize_turn_post_tools(
                 &mut *history,
                 event_tx,
@@ -141,6 +143,12 @@ impl QueryEngine {
                 )));
             }
             if structured_output_failure_limit_reached {
+                self.emit_structured_output_retry_cap_failed(
+                    event_tx,
+                    cycle_turn_id.clone(),
+                    usage,
+                )
+                .await;
                 return ToolExecutionBranch::Return(Box::new(make_query_result(
                     consts,
                     &*acc,
@@ -262,11 +270,12 @@ impl QueryEngine {
             self.config.requires_structured_output,
             &acc.run_artifacts,
         );
-        let structured_output_failure_limit_reached =
-            structured_output_failure_limit_reached(&acc.run_artifacts);
-        let continuation = if tool_run_outcome.continue_after_tools
-            && !structured_output_recall_limit_reached
-            && !structured_output_failure_limit_reached
+        let structured_output_failure_limit_reached = structured_output_failure_limit_reached(
+            &acc.run_artifacts,
+            self.config.max_structured_output_retries,
+        );
+        let continuation = if structured_output_failure_limit_reached
+            || (tool_run_outcome.continue_after_tools && !structured_output_recall_limit_reached)
         {
             TurnContinuation::Continuing
         } else {
@@ -311,6 +320,8 @@ impl QueryEngine {
             )));
         }
         if structured_output_failure_limit_reached {
+            self.emit_structured_output_retry_cap_failed(event_tx, cycle_turn_id.clone(), usage)
+                .await;
             return ToolExecutionBranch::Return(Box::new(make_query_result(
                 consts,
                 &*acc,

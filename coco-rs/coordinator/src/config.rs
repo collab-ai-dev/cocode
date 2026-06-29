@@ -14,8 +14,10 @@ pub enum TeammateMode {
     Auto,
     /// Force tmux backend.
     Tmux,
+    /// Force iTerm2 backend.
+    Iterm2,
     /// Force in-process backend. Default — operators opt into panes via
-    /// settings.json (`auto` / `tmux`).
+    /// settings.json (`auto` / `tmux` / `iterm2`).
     #[default]
     InProcess,
 }
@@ -25,6 +27,7 @@ impl TeammateMode {
         match self {
             Self::Auto => "auto",
             Self::Tmux => "tmux",
+            Self::Iterm2 => "iterm2",
             Self::InProcess => "in-process",
         }
     }
@@ -38,6 +41,7 @@ impl From<coco_config::TeammateMode> for TeammateMode {
         match mode {
             coco_config::TeammateMode::Auto => Self::Auto,
             coco_config::TeammateMode::Tmux => Self::Tmux,
+            coco_config::TeammateMode::Iterm2 => Self::Iterm2,
             coco_config::TeammateMode::InProcess => Self::InProcess,
         }
     }

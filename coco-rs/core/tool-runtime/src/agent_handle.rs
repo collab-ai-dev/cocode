@@ -224,10 +224,11 @@ pub struct AgentSpawnRequest {
     /// Query-tracking depth the spawned child will RUN at (= parent's
     /// `ToolUseContext.query_depth + 1`). Filled at the `AgentTool::execute`
     /// boundary from `ctx.query_depth + 1`. Threaded in-process so the
-    /// child engine carries its own depth and the universal subagent
-    /// deny-list can gate the `Agent` tool once the depth reaches
-    /// [`coco_subagent::SUBAGENT_DEPTH_LIMIT`]. Main loop = 0, so a
-    /// top-level spawn runs at depth 1.
+    /// child engine carries its own depth. `AgentTool::execute` rejects
+    /// further spawns once the caller is at
+    /// [`coco_subagent::SUBAGENT_DEPTH_LIMIT`], and the universal
+    /// deny-list also hides `Agent` from any child somehow running beyond
+    /// that depth. Main loop = 0, so a top-level spawn runs at depth 1.
     #[serde(default)]
     pub child_query_depth: i32,
     // Note: the following fields are NOT on `AgentSpawnRequest`. They
