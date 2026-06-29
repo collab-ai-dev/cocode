@@ -51,6 +51,7 @@ const DEFAULT_WEB_FETCH_USER_AGENT: &str = "Claude-User (coco-rs; +https://suppo
 pub enum TeammateMode {
     Auto,
     Tmux,
+    Iterm2,
     #[default]
     InProcess,
 }
@@ -60,6 +61,7 @@ impl TeammateMode {
         match self {
             Self::Auto => "auto",
             Self::Tmux => "tmux",
+            Self::Iterm2 => "iterm2",
             Self::InProcess => "in-process",
         }
     }

@@ -1364,7 +1364,10 @@ impl Tool for TaskStopTool {
             });
         }
 
-        match handle.kill_task(&task_id).await {
+        match handle
+            .kill_task_with_actor(&task_id, coco_types::TaskKilledBy::Parent)
+            .await
+        {
             Ok(()) => {
                 // Command is the shell command for shell tasks, else the
                 // description. Type is the real wire name, not a hardcoded

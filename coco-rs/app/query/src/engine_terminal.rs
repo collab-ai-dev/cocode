@@ -186,6 +186,31 @@ impl QueryEngine {
         )
     }
 
+    pub(crate) async fn emit_structured_output_retry_cap_failed(
+        &self,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        cycle_turn_id: Option<coco_types::TurnId>,
+        usage: TokenUsage,
+    ) {
+        if let Some(id) = cycle_turn_id {
+            let cap = self.config.max_structured_output_retries;
+            let _ = emit_protocol(
+                event_tx,
+                crate::ServerNotification::TurnEnded(coco_types::TurnEndedParams::failed(
+                    id,
+                    Some(usage),
+                    coco_types::ErrorPayload {
+                        message: format!(
+                            "Failed to provide valid structured output after {cap} attempts"
+                        ),
+                        code: coco_types::ErrorCode::Provider,
+                    },
+                )),
+            )
+            .await;
+        }
+    }
+
     pub(crate) async fn handle_no_tool_calls_terminal(
         &self,
         consts: &LoopConstants,
@@ -203,28 +228,24 @@ impl QueryEngine {
             && self.tools.get_by_name("StructuredOutput").is_some()
             && acc.run_artifacts.structured_output.is_none()
         {
-            let max_retries = crate::config::max_structured_output_retries();
-            acc.run_artifacts.structured_output_attempts = acc
+            acc.run_artifacts.structured_output_failed_attempts = acc
                 .run_artifacts
-                .structured_output_attempts
+                .structured_output_failed_attempts
                 .saturating_add(1);
-            if acc.run_artifacts.structured_output_attempts >= max_retries {
-                warn!(
-                    attempts = acc.run_artifacts.structured_output_attempts,
-                    max_retries, "structured output retry cap exceeded"
-                );
-                self.emit_successful_turn_completed(
+            if crate::engine_tool_execution::structured_output_failure_limit_reached(
+                &acc.run_artifacts,
+                self.config.max_structured_output_retries,
+            ) {
+                self.emit_structured_output_retry_cap_failed(
                     event_tx,
-                    history,
-                    usage,
                     cycle_turn_id.clone(),
-                    parsed_stop_reason,
+                    usage,
                 )
                 .await;
                 return NoToolCallsTerminal::Return(Box::new(make_query_result(
                     consts,
-                    &*acc,
-                    &*turn_state,
+                    acc,
+                    turn_state,
                     response_text,
                     /*cancelled*/ false,
                     /*budget_exhausted*/ false,
@@ -233,12 +254,6 @@ impl QueryEngine {
                     history.snapshot(),
                 )));
             }
-            crate::history_sync::history_push_and_emit(
-                history,
-                crate::engine_turn_reminders::structured_output_enforcement_message(),
-                event_tx,
-            )
-            .await;
             turn_state.transition = Some(crate::ContinueReason::NextTurn);
             turn_state.stop_hook_active = false;
             turn_state.max_tokens_recovery_count = 0;

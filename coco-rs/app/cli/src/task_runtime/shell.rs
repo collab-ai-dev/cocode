@@ -415,9 +415,9 @@ async fn apply_shell_terminal_state(
     if let Some(code) = exit_code {
         manager.set_exit_code(task_id, code).await;
     }
-    if manager.transition_terminal(task_id, status).await.is_none() {
+    let Some(state) = manager.transition_terminal(task_id, status).await else {
         return;
-    }
+    };
     if !manager.mark_notified_once(task_id).await {
         return;
     }
@@ -431,6 +431,7 @@ async fn apply_shell_terminal_state(
         kind: NotificationKind::ShellTerminal {
             status: terminal,
             exit_code,
+            killed_by: state.killed_by,
         },
     };
     sink.push(n).await;

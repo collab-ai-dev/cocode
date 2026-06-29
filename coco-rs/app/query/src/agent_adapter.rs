@@ -136,6 +136,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // the caller sets it explicitly when desired, same as the main loop.
             output_token_budget: None,
             requires_structured_output: false,
+            max_structured_output_retries: crate::config::max_structured_output_retries(),
             streaming_tool_execution: true,
             is_non_interactive: true,
             // Hardcoded for ALL subagents: a residual `Ask` fails closed

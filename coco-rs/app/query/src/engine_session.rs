@@ -524,7 +524,7 @@ impl QueryEngine {
             ));
         }
         if stop_reason == "error_max_structured_output_retries" {
-            let cap = crate::config::max_structured_output_retries();
+            let cap = self.config.max_structured_output_retries;
             errors.push(format!(
                 "Failed to provide valid structured output after {cap} attempts"
             ));

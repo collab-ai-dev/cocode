@@ -474,7 +474,7 @@ impl Tool for WorkflowTool {
             text.push_str(&format!("\noutputFile: {output_file}"));
         }
         text.push_str(
-            "\n\nBriefly tell the user what you launched, then end your response. \
+            "\n\nBriefly tell the user what you launched, then continue with any non-overlapping work if useful. \
 Progress and the final result will arrive in a subsequent task notification; \
 you can also tail the output file to check progress.",
         );

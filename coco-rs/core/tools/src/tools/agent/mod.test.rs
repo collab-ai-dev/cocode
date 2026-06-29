@@ -310,6 +310,27 @@ async fn test_agent_tool_input_schema_exposes_eight_user_fields_by_default() {
     );
 }
 
+#[tokio::test]
+async fn test_agent_tool_rejects_spawns_at_depth_limit() {
+    let mut ctx = ctx_with_agent(CapturingAgentHandle::default());
+    ctx.query_depth = coco_subagent::SUBAGENT_DEPTH_LIMIT;
+
+    let result = <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "Check the implementation",
+            "description": "check implementation"
+        }),
+        &ctx,
+    )
+    .await;
+
+    let err = result.expect_err("spawn at the caller depth limit must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("Subagent nesting limit reached"));
+    assert!(msg.contains("depth 5 of 5"));
+}
+
 /// Schema-honesty gate for the team parameters. `team_name` / `mode` / `name`
 /// are model-facing only when `Feature::AgentTeams` is live (all three matter
 /// only to the team-spawn path): when resolvably disabled they drop (so a
@@ -1657,6 +1678,7 @@ impl coco_tool_runtime::TaskHandle for StoppedTaskHandle {
             tool_use_id: None,
             start_time: 0,
             end_time: None,
+            killed_by: None,
             total_paused_ms: None,
             output_file: None,
             output_offset: 0,
@@ -2331,6 +2353,7 @@ mod render_for_model_tests {
         assert!(text.contains("agent-99"), "got: {text}");
         assert!(text.contains("/tmp/agent-99.log"), "got: {text}");
         assert!(text.contains("non-overlapping"), "got: {text}");
+        assert!(!text.contains("end your response"), "got: {text}");
     }
 
     #[test]
@@ -2346,6 +2369,8 @@ mod render_for_model_tests {
             panic!("expected Text part");
         };
         assert!(text.contains("Briefly tell the user"), "got: {text}");
+        assert!(text.contains("non-overlapping"), "got: {text}");
+        assert!(!text.contains("end your response"), "got: {text}");
         assert!(!text.contains("output_file"), "got: {text}");
     }
 

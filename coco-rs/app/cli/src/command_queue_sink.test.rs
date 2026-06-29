@@ -12,6 +12,7 @@ fn shell_terminal(task_id: &str, agent_id: Option<&str>) -> TaskNotification {
         kind: NotificationKind::ShellTerminal {
             status: TerminalStatus::Completed,
             exit_code: Some(0),
+            killed_by: None,
         },
     }
 }
@@ -99,6 +100,7 @@ async fn agent_terminal_envelope_includes_result_usage_worktree() {
                 branch: Some("feat/x".into()),
             }),
             error: None,
+            killed_by: None,
         },
     })
     .await;

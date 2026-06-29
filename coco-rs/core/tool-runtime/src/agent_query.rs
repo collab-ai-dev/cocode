@@ -109,9 +109,11 @@ pub struct AgentQueryConfig {
     /// `ToolUseContext.query_depth + 1`). Threaded from
     /// [`AgentSpawnRequest::child_query_depth`] so the child carries its
     /// own depth; the adapter stamps it onto the child
-    /// `QueryEngineConfig.query_depth` and the universal subagent
-    /// deny-list gates the `Agent` tool once it reaches
-    /// `coco_subagent::SUBAGENT_DEPTH_LIMIT`. Main loop = 0.
+    /// `QueryEngineConfig.query_depth`. `AgentTool::execute` rejects
+    /// further spawns once the caller is at
+    /// `coco_subagent::SUBAGENT_DEPTH_LIMIT`, and the universal deny-list
+    /// also hides `Agent` from any child somehow running beyond that
+    /// depth. Main loop = 0.
     #[serde(default)]
     pub child_query_depth: i32,
     /// Maximum turns for this query.

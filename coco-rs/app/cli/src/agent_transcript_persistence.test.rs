@@ -17,6 +17,7 @@ async fn write_then_read_metadata_roundtrip() {
         agent_type: "Explore".into(),
         worktree_path: Some("/tmp/wt".into()),
         description: Some("look around".into()),
+        killed_by: Some(coco_types::TaskKilledBy::User),
     };
     st.write_agent_metadata("sess-1", "agent-7af2", &meta)
         .await

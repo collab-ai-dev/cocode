@@ -152,6 +152,7 @@ fn running_task() -> coco_types::TaskStateBase {
         tool_use_id: None,
         start_time: 0,
         end_time: None,
+        killed_by: None,
         total_paused_ms: None,
         output_file: None,
         output_offset: 0,

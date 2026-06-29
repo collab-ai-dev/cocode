@@ -307,8 +307,12 @@ impl BackendRegistry {
 
         match mode {
             coco_config::TeammateMode::InProcess => in_process().await,
-            coco_config::TeammateMode::Tmux => {
-                let expected = BackendType::Tmux;
+            coco_config::TeammateMode::Tmux | coco_config::TeammateMode::Iterm2 => {
+                let expected = match mode {
+                    coco_config::TeammateMode::Tmux => BackendType::Tmux,
+                    coco_config::TeammateMode::Iterm2 => BackendType::Iterm2,
+                    _ => unreachable!("explicit pane branch only handles pane modes"),
+                };
                 let pane = self.pane_backend.read().await.clone().ok_or_else(|| {
                     format!("{} teammate backend is not registered", mode.as_str())
                 })?;

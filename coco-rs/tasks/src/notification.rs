@@ -25,6 +25,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use coco_types::TaskKilledBy;
 
 /// One push-notification produced by a background task lifecycle
 /// transition. Carries all fields emitted across shell + agent
@@ -45,7 +46,7 @@ pub struct TaskNotification {
     pub output_file: String,
     /// Human-readable label embedded in the `<summary>` for shell
     /// tasks ("Background command \"$description\" completed") and
-    /// agent tasks ("Agent \"$description\" completed").
+    /// agent tasks ("Agent \"$description\" finished").
     pub description: String,
     /// Per-variant payload. Drives the renderer.
     pub kind: NotificationKind,
@@ -59,6 +60,7 @@ pub enum NotificationKind {
     ShellTerminal {
         status: TerminalStatus,
         exit_code: Option<i32>,
+        killed_by: Option<TaskKilledBy>,
     },
     /// Agent task reached a terminal state. Envelope carries up to three
     /// optional sections — `<result>`, `<usage>`, `<worktree>`.
@@ -71,10 +73,11 @@ pub enum NotificationKind {
         usage: Option<TaskUsage>,
         /// Isolation worktree info rendered as `<worktree>...</worktree>`.
         worktree: Option<Worktree>,
-        /// Summary differs per status (`Agent "..." completed` / `failed: ...`
+        /// Summary differs per status (`Agent "..." finished` / `failed: ...`
         /// / `was stopped`). `None` triggers the default per-status text in
         /// [`render`].
         error: Option<String>,
+        killed_by: Option<TaskKilledBy>,
     },
     /// Shell output appears frozen on an interactive prompt. Explicitly
     /// forbids `<status>` because print.ts treats `<status>` as a terminal
@@ -123,7 +126,11 @@ pub struct Worktree {
 /// (with optional sections) variants.
 pub fn render(n: &TaskNotification) -> String {
     match &n.kind {
-        NotificationKind::ShellTerminal { status, exit_code } => {
+        NotificationKind::ShellTerminal {
+            status,
+            exit_code,
+            killed_by,
+        } => {
             let mut summary = format!("Background command \"{}\"", n.description);
             match status {
                 TerminalStatus::Completed => {
@@ -138,11 +145,9 @@ pub fn render(n: &TaskNotification) -> String {
                         summary.push_str(&format!(" with exit code {code}"));
                     }
                 }
-                TerminalStatus::Killed => summary.push_str(" was stopped"),
+                TerminalStatus::Killed => summary.push_str(killed_suffix(*killed_by)),
             }
-            render_terminal(
-                n, *status, &summary, None, None, None, /*agent_note*/ false,
-            )
+            render_terminal(n, *status, &summary, None, None, None, None)
         }
         NotificationKind::AgentTerminal {
             status,
@@ -150,16 +155,19 @@ pub fn render(n: &TaskNotification) -> String {
             usage,
             worktree,
             error,
+            killed_by,
         } => {
             let summary = match status {
                 TerminalStatus::Completed => {
-                    format!("Agent \"{}\" completed", n.description)
+                    format!("Agent \"{}\" finished", n.description)
                 }
                 TerminalStatus::Failed => {
                     let reason = error.as_deref().unwrap_or("Unknown error");
                     format!("Agent \"{}\" failed: {reason}", n.description)
                 }
-                TerminalStatus::Killed => format!("Agent \"{}\" was stopped", n.description),
+                TerminalStatus::Killed => {
+                    format!("Agent \"{}\"{}", n.description, killed_suffix(*killed_by))
+                }
             };
             render_terminal(
                 n,
@@ -168,10 +176,19 @@ pub fn render(n: &TaskNotification) -> String {
                 result.as_deref(),
                 usage.as_ref(),
                 worktree.as_ref(),
-                /*agent_note*/ true,
+                Some(agent_terminal_note(*status)),
             )
         }
         NotificationKind::Stall { output_tail } => render_stall(n, output_tail),
+    }
+}
+
+fn killed_suffix(killed_by: Option<TaskKilledBy>) -> &'static str {
+    match killed_by {
+        Some(TaskKilledBy::User) => " was stopped by user",
+        Some(TaskKilledBy::Parent) => " was stopped by parent agent",
+        Some(TaskKilledBy::System) => " was stopped by system",
+        None => " was stopped",
     }
 }
 
@@ -180,6 +197,17 @@ pub fn render(n: &TaskNotification) -> String {
 /// comes to rest, the user resumes it, and the same task-id notifies again.
 pub const TASK_NOTIFICATION_RECUR_NOTE: &str = "A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.";
 
+/// Model-contract note appended to stopped agent task-notifications.
+pub const TASK_NOTIFICATION_STOPPED_NOTE: &str =
+    "This agent was stopped and cannot be resumed. Spawn a fresh agent if more work is needed.";
+
+fn agent_terminal_note(status: TerminalStatus) -> &'static str {
+    match status {
+        TerminalStatus::Completed | TerminalStatus::Failed => TASK_NOTIFICATION_RECUR_NOTE,
+        TerminalStatus::Killed => TASK_NOTIFICATION_STOPPED_NOTE,
+    }
+}
+
 fn render_terminal(
     n: &TaskNotification,
     status: TerminalStatus,
@@ -187,7 +215,7 @@ fn render_terminal(
     result: Option<&str>,
     usage: Option<&TaskUsage>,
     worktree: Option<&Worktree>,
-    agent_note: bool,
+    note: Option<&str>,
 ) -> String {
     let mut xml = String::with_capacity(384);
     xml.push_str("<task-notification>\n");
@@ -220,8 +248,8 @@ fn render_terminal(
         }
         xml.push_str("</worktree>");
     }
-    if agent_note {
-        xml.push_str(&format!("\n<note>{TASK_NOTIFICATION_RECUR_NOTE}</note>"));
+    if let Some(note) = note {
+        xml.push_str(&format!("\n<note>{}</note>", escape_xml(note)));
     }
     xml.push_str("\n</task-notification>");
     xml

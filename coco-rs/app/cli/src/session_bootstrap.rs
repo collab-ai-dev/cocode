@@ -453,6 +453,7 @@ pub async fn install_session_late_binds(
         )
         .with_notification_sink(sink),
     );
+    task_runtime.start_memory_pressure_shell_reaper(runtime.shutdown_signal());
     runtime.attach_task_runtime(task_runtime).await;
     let task_list_id = coco_tasks::resolve_task_list_id(None, None, &task_session_id);
     let task_list_root = coco_config::global_config::config_home().join("tasks");

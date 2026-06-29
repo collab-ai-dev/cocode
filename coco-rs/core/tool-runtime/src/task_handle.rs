@@ -277,6 +277,8 @@ pub struct AgentSpawnMetadata {
     pub worktree_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub killed_by: Option<coco_types::TaskKilledBy>,
 }
 
 /// Per-agent transcript persistence trait.
@@ -391,6 +393,14 @@ pub trait TaskHandle: Send + Sync {
         Err(unavail())
     }
 
+    async fn kill_task_with_actor(
+        &self,
+        task_id: &str,
+        _killed_by: coco_types::TaskKilledBy,
+    ) -> Result<(), coco_error::BoxedError> {
+        self.kill_task(task_id).await
+    }
+
     async fn signal_detach(&self, _task_id: &str) -> DetachOutcome {
         DetachOutcome::Unknown
     }
@@ -467,6 +477,8 @@ pub trait TaskHandle: Send + Sync {
     async fn mark_completed(&self, _task_id: &str, _payload: AgentCompletionPayload) {}
 
     async fn mark_failed(&self, _task_id: &str, _error: &str) {}
+
+    async fn mark_stopped(&self, _task_id: &str) {}
 
     /// Sync-path terminal transition WITHOUT a `<task-notification>`
     /// envelope. Does **not** evict the row.

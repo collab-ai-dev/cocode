@@ -476,6 +476,7 @@ pub use task::ShellExtras;
 pub use task::TaskActivity;
 pub use task::TaskExtras;
 pub use task::TaskIdentity;
+pub use task::TaskKilledBy;
 pub use task::TaskProgress;
 pub use task::TaskStateBase;
 pub use task::TaskStatus;

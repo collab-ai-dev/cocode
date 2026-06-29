@@ -2,7 +2,7 @@
 //!
 //! Rendering varies by status:
 //!
-//! - `Killed`: brief "stopped by the user" note.
+//! - `Killed`: brief stopped note with actor attribution when available.
 //! - `Running`: anti-duplicate warning; optional delta summary and
 //!   output-file pointer.
 //! - `Completed` / `Failed`: outcome summary with optional delta.
@@ -55,7 +55,8 @@ fn render_one(t: &TaskStatusSnapshot) -> String {
     let task_output = ToolName::TaskOutput.as_str();
     match t.status {
         TaskRunStatus::Killed => format!(
-            "Task \"{desc}\" ({id}) was stopped by the user.",
+            "Task \"{desc}\" ({id}){}.",
+            killed_suffix(t.killed_by),
             desc = t.description,
             id = t.task_id
         ),
@@ -110,6 +111,15 @@ fn render_one(t: &TaskStatusSnapshot) -> String {
             }
             parts.join(" ")
         }
+    }
+}
+
+fn killed_suffix(killed_by: Option<coco_types::TaskKilledBy>) -> &'static str {
+    match killed_by {
+        Some(coco_types::TaskKilledBy::User) => " was stopped by user",
+        Some(coco_types::TaskKilledBy::Parent) => " was stopped by parent agent",
+        Some(coco_types::TaskKilledBy::System) => " was stopped by system",
+        None => " was stopped",
     }
 }
 

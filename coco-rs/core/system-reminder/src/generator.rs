@@ -1177,8 +1177,8 @@ pub struct QueuedCommandImage {
 }
 
 /// Background-task status snapshot. Rendered differently per status:
-/// `killed` emits a brief "stopped by user"
-/// note; `running` warns against duplicate spawns with optional delta
+/// `killed` emits a brief stopped note with actor attribution when available;
+/// `running` warns against duplicate spawns with optional delta
 /// summary + output-file pointer; `completed` / `failed` surface the
 /// full delta with `(type: ...) (status: ...) (description: ...)`
 /// metadata so the agent can route a follow-up.
@@ -1187,6 +1187,7 @@ pub struct TaskStatusSnapshot {
     pub task_id: String,
     pub description: String,
     pub status: TaskRunStatus,
+    pub killed_by: Option<coco_types::TaskKilledBy>,
     /// Task type used in `(type: ...)` metadata for completed / failed renderings.
     pub task_type: String,
     pub delta_summary: Option<String>,

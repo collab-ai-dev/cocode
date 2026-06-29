@@ -10738,8 +10738,18 @@
       "type": "object"
     },
     "TaskCompletedParams": {
-      "description": "Matches TS `SDKTaskNotificationMessage` (coreSchemas.ts:1694-1713).\nTS calls this `task/notification`; coco-rs uses `task/completed` as the\nwire method for brevity, but fields match TS exactly.",
+      "description": "SDK task completion notification. `Killed` tasks are surfaced to SDK\nconsumers as `status: \"stopped\"` plus `killed_by` attribution.",
       "properties": {
+        "killed_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskKilledBy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "output_file": {
           "type": "string"
         },
@@ -10783,6 +10793,15 @@
         "completed",
         "failed",
         "stopped"
+      ],
+      "type": "string"
+    },
+    "TaskKilledBy": {
+      "description": "Actor that caused a running task to be stopped.",
+      "enum": [
+        "user",
+        "parent",
+        "system"
       ],
       "type": "string"
     },

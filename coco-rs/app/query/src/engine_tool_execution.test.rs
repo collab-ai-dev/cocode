@@ -21,12 +21,19 @@ fn structured_output_recall_limit_requires_contract_success_and_third_attempt() 
 
 #[test]
 fn structured_output_failure_limit_requires_no_success() {
+    let max_retries = 3;
     let mut artifacts = RunArtifacts {
-        structured_output_failed_attempts: crate::config::max_structured_output_retries(),
+        structured_output_failed_attempts: max_retries,
         ..RunArtifacts::default()
     };
-    assert!(structured_output_failure_limit_reached(&artifacts));
+    assert!(structured_output_failure_limit_reached(
+        &artifacts,
+        max_retries
+    ));
 
     artifacts.structured_output = Some(serde_json::json!({"answer": 1}));
-    assert!(!structured_output_failure_limit_reached(&artifacts));
+    assert!(!structured_output_failure_limit_reached(
+        &artifacts,
+        max_retries
+    ));
 }

@@ -104,6 +104,7 @@ impl TaskStatusSource for TaskManager {
                 task_id: t.id,
                 description: t.description,
                 status: map_status(t.status),
+                killed_by: t.killed_by,
                 task_type: task_type_wire_name(task_type).to_string(),
                 delta_summary,
                 output_file_path,

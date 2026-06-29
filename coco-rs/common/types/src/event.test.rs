@@ -619,12 +619,14 @@ fn task_completed_uses_ts_task_notification_shape() {
         task_id: "t1".into(),
         tool_use_id: Some("u1".into()),
         status: TaskCompletionStatus::Completed,
+        killed_by: Some(crate::TaskKilledBy::Parent),
         output_file: "/tmp/out.txt".into(),
         summary: "done".into(),
         usage: None,
     };
     let j = serde_json::to_value(&p).unwrap();
     assert_eq!(j["status"], "completed");
+    assert_eq!(j["killed_by"], "parent");
     assert_eq!(j["output_file"], "/tmp/out.txt");
     assert_eq!(j["summary"], "done");
 }
