@@ -624,6 +624,22 @@ pub(crate) mod test_helpers {
         let msg = coco_messages::create_info_message(title, message);
         push(state, msg);
     }
+
+    /// Push a compaction boundary (`SystemMessage::CompactBoundary`) carrying
+    /// `tokens_after` — the post-compact context size that
+    /// [`crate::presentation::context_usage::render_context_usage`] anchors on.
+    /// Returns the cell uuid.
+    #[allow(dead_code)]
+    pub fn push_compact_boundary(
+        state: &mut SessionState,
+        tokens_before: i64,
+        tokens_after: i64,
+    ) -> Uuid {
+        let msg = coco_messages::create_compact_boundary_message(tokens_before, tokens_after);
+        let uuid = msg.uuid().copied().expect("compact boundary carries uuid");
+        push(state, msg);
+        uuid
+    }
 }
 
 #[cfg(test)]

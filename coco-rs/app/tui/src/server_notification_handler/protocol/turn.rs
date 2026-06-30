@@ -16,11 +16,20 @@ use crate::state::session::TaskEntryStatus;
 use crate::state::session::TokenUsage;
 use crate::state::ui::Toast;
 
-/// Clear UI projections that are scoped to the old conversation tail.
+/// Clear UI projections that are scoped to the old conversation **tail**.
+///
+/// This runs on every transcript rewrite, including the intra-session ones
+/// (compaction / reactive trim / rewind) that arrive via `HistoryReplaced`.
+/// It therefore touches ONLY tail- and turn-scoped projections. Genuinely
+/// session-scoped state — cumulative usage, the active goal, the durable
+/// plan + per-agent todos, the queued-command mirror, and the `/clear` undo
+/// buffer — is deliberately NOT reset here; it must survive a compaction.
+/// That reset lives in the `SessionResetForResume` handler, the only true
+/// session boundary (`/clear` and resume).
+///
 /// Persistent background activity is kept deliberately: teammates are
 /// process-owned rows, and backgrounded running subagents continue after
-/// `/clear` / resume. Everything else is transcript-adjacent and cannot
-/// safely survive a session boundary.
+/// `/clear` / resume.
 pub(super) fn clear_session_boundary_state(state: &mut AppState) {
     let retained_subagent_ids: std::collections::HashSet<String> = state
         .session
@@ -55,15 +64,9 @@ pub(super) fn clear_session_boundary_state(state: &mut AppState) {
     state.session.tool_group_summaries.clear();
     state.session.clear_reasoning_metadata();
     state.session.subagent_summaries.clear();
-    state.session.session_usage = None;
-    state.session.active_goal = None;
-    state.session.token_usage = crate::state::session::TokenUsage::default();
-    state.session.queued_commands.clear();
     state.session.active_hooks.clear();
     state.session.prompt_suggestions.clear();
     state.session.local_command_output.clear();
-    state.session.plan_tasks.clear();
-    state.session.todos_by_agent.clear();
     state.session.expanded_view = coco_types::ExpandedView::None;
     state.session.verification_nudge_pending = false;
     state.session.last_agent_markdown = None;

@@ -1116,6 +1116,22 @@ pub(super) fn handle(
                 "SessionResetForResume",
             );
             clear_session_boundary_state(state);
+            // Session-scoped state is reset ONLY here, at a true session
+            // boundary (`/clear`, or resume into a different session). The
+            // intra-session transcript rewrites that arrive via
+            // `HistoryReplaced` (compaction / reactive trim / rewind) must
+            // keep the running cumulative usage, the active goal, the durable
+            // plan + todos, and the queued-command mirror intact. On resume
+            // the trailing `SessionUsageUpdated` / `ActiveGoalChanged` events
+            // re-hydrate usage and goal for the target session, and the
+            // `/clear` undo buffer is repopulated by the following
+            // `RewindPreClearSnapshot`.
+            state.session.session_usage = None;
+            state.session.token_usage = crate::state::session::TokenUsage::default();
+            state.session.active_goal = None;
+            state.session.plan_tasks.clear();
+            state.session.todos_by_agent.clear();
+            state.session.queued_commands.clear();
             state.session.rewind_pre_clear_messages.clear();
             state.session.transcript.on_session_reset();
             // Conversation id rotates on resume so prompt-cache keys

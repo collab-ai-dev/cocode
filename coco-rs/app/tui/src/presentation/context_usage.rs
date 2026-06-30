@@ -11,6 +11,18 @@ pub(crate) struct RenderContextUsage {
     pub percent: i64,
 }
 
+/// The most recent point in history whose exact token footprint is known —
+/// the baseline the tail estimate is added to.
+#[derive(Debug, Clone, Copy)]
+enum ContextAnchor {
+    /// An assistant message's reported cumulative `usage.total()`.
+    Assistant(i64),
+    /// A compaction boundary's post-compact context size (`tokens_after`).
+    /// Keeps `ctx %` meaningful right after a `/compact`, where no assistant
+    /// usage anchor survives the rewrite.
+    CompactBoundary(i64),
+}
+
 pub(crate) fn render_context_usage(state: &AppState) -> Option<RenderContextUsage> {
     let total = state
         .session
@@ -25,20 +37,47 @@ pub(crate) fn render_context_usage(state: &AppState) -> Option<RenderContextUsag
             messages.push(cell.source.clone());
         }
     }
-    let mut latest: Option<(usize, coco_types::TokenUsage)> = None;
+    let mut anchor: Option<(usize, ContextAnchor)> = None;
     for (idx, msg) in messages.iter().enumerate() {
-        if let coco_messages::Message::Assistant(assistant) = msg.as_ref()
-            && let Some(usage) = assistant.usage
-        {
-            latest = Some((idx, usage));
+        match msg.as_ref() {
+            coco_messages::Message::Assistant(assistant) => {
+                if let Some(usage) = assistant.usage {
+                    anchor = Some((idx, ContextAnchor::Assistant(usage.total())));
+                }
+            }
+            coco_messages::Message::System(coco_messages::SystemMessage::CompactBoundary(
+                boundary,
+            )) => {
+                anchor = Some((idx, ContextAnchor::CompactBoundary(boundary.tokens_after)));
+            }
+            _ => {}
         }
     }
-    let (idx, usage) = latest?;
-    let tail_tokens = coco_messages::estimate_tokens_for_messages(&messages[idx + 1..]);
-    let used = usage.total().saturating_add(tail_tokens);
+    let (idx, anchor) = anchor?;
+    // `tokens_after` already counts the compact-summary message that
+    // immediately follows the boundary, so the tail estimate must skip it to
+    // avoid double-counting; an assistant anchor counts everything after it.
+    let (baseline, tail_start) = match anchor {
+        ContextAnchor::Assistant(total) => (total, idx + 1),
+        ContextAnchor::CompactBoundary(tokens_after) => {
+            let mut start = idx + 1;
+            if messages.get(start).is_some_and(
+                |m| matches!(m.as_ref(), coco_messages::Message::User(u) if u.is_compact_summary),
+            ) {
+                start += 1;
+            }
+            (tokens_after, start)
+        }
+    };
+    let tail_tokens = coco_messages::estimate_tokens_for_messages(&messages[tail_start..]);
+    let used = baseline.saturating_add(tail_tokens);
     Some(RenderContextUsage {
         used,
         total,
         percent: (used * 100 / total.max(1)).clamp(0, 100),
     })
 }
+
+#[cfg(test)]
+#[path = "context_usage.test.rs"]
+mod tests;

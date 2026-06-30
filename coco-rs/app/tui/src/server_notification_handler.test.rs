@@ -818,10 +818,19 @@ fn test_session_reset_preserves_only_persistent_running_subagents() {
     assert_eq!(task_ids, vec!["running-bg", "teammate"]);
 }
 
+/// `HistoryReplaced` is the intra-session transcript-rewrite carrier
+/// (compaction / reactive trim / rewind). It must clear tail-scoped UI
+/// projections but PRESERVE session-scoped state — otherwise a `/compact`
+/// wipes the cumulative usage, active goal, durable plan, and queued-command
+/// mirror (the status-bar "all zeros" bug). Only a true boundary
+/// (`SessionResetForResume`) resets those.
 #[test]
-fn test_history_replaced_applies_same_boundary_cleanup() {
+fn test_history_replaced_clears_tail_but_preserves_session_state() {
     let mut state = AppState::new();
+    // Tail-scoped — cleared on every rewrite.
     state.session.prompt_suggestions = vec!["stale".to_string()];
+    state.ui.streaming = Some(crate::state::StreamingState::default());
+    // Session-scoped — must survive a compaction.
     state
         .session
         .queued_commands
@@ -830,7 +839,17 @@ fn test_history_replaced_applies_same_boundary_cleanup() {
             preview: "queued".to_string(),
             editable: true,
         });
-    state.ui.streaming = Some(crate::state::StreamingState::default());
+    state.session.plan_tasks.push(coco_types::TaskRecord {
+        id: "p1".to_string(),
+        subject: "plan".to_string(),
+        description: String::new(),
+        active_form: None,
+        owner: None,
+        status: coco_types::TaskListStatus::InProgress,
+        blocks: Vec::new(),
+        blocked_by: Vec::new(),
+        metadata: None,
+    });
 
     handle_core_event(
         &mut state,
@@ -841,9 +860,12 @@ fn test_history_replaced_applies_same_boundary_cleanup() {
         }),
     );
 
+    // Tail-scoped cleared.
     assert!(state.session.prompt_suggestions.is_empty());
-    assert!(state.session.queued_commands.is_empty());
     assert!(state.ui.streaming.is_none());
+    // Session-scoped preserved.
+    assert_eq!(state.session.queued_commands.len(), 1);
+    assert_eq!(state.session.plan_tasks.len(), 1);
 }
 
 #[test]
