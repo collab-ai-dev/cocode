@@ -144,10 +144,17 @@ async fn managed_dropin_change_triggers_rebuild() {
     let dropin_path = managed_dir.join("10-language.json");
     std::fs::write(&dropin_path, r#"{ "language": "zh-CN" }"#).unwrap();
 
+    // Match the drop-in event by file name — NOT full-path equality — so a
+    // regression in the emitted path *form* surfaces as the crisp assertion
+    // below rather than an opaque 3s timeout (the original macOS failure mode:
+    // FSEvents canonicalizes `/var` → `/private/var`, so the raw event path
+    // never equalled the configured `dropin_path`).
     let change = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             match change_rx.recv().await {
-                Ok(change) if change.path == dropin_path => break change,
+                Ok(change) if change.path.file_name() == dropin_path.file_name() => {
+                    break change;
+                }
                 Ok(_) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -158,6 +165,14 @@ async fn managed_dropin_change_triggers_rebuild() {
     })
     .await
     .expect("managed drop-in change within timeout");
+    // Path-form consistency: the emitted path must be the CONFIGURED
+    // (non-canonical) drop-in path the caller would recognize, not the raw
+    // canonicalized FSEvents event path. Mirrors the tracked-settings branch.
+    assert_eq!(
+        change.path, dropin_path,
+        "drop-in ConfigChange must carry the configured path form, not the \
+         canonicalized FSEvents event path"
+    );
     assert_eq!(
         change.kind,
         TrackedKind::Settings(coco_config::WatchedKind::Settings(
@@ -212,6 +227,35 @@ fn classify_config_event_matches_direct_json_children_only() {
         )
         .is_none()
     );
+}
+
+#[test]
+fn classify_reanchors_json_child_to_configured_dir_not_event_path() {
+    // Simulate macOS FSEvents: the watcher is configured with the
+    // non-canonical dir (`/var/...`) while notify reports the canonicalized
+    // event path (`/private/var/...`). The emitted ConfigChange must carry
+    // the CONFIGURED path form so consumers can match it against the path
+    // they configured — not the raw canonicalized event path.
+    let configured = PathBuf::from("/var/cfg/managed-settings.d");
+    let canonical = PathBuf::from("/private/var/cfg/managed-settings.d");
+    let kind = TrackedKind::Settings(coco_config::WatchedKind::Settings(
+        coco_config::SettingSource::Policy,
+    ));
+    let tracked_json_dirs = vec![(configured.clone(), canonical.clone(), kind)];
+
+    let matched = classify_config_event(
+        &[canonical.join("10-language.json")],
+        &[],
+        &tracked_json_dirs,
+    )
+    .expect("canonical json child should match via the canonical key");
+
+    assert_eq!(
+        matched.path,
+        configured.join("10-language.json"),
+        "emitted path must be re-anchored to the configured dir, not the canonical event path"
+    );
+    assert_eq!(matched.kind, kind);
 }
 
 #[tokio::test(flavor = "multi_thread")]
