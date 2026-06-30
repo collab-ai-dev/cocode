@@ -434,12 +434,22 @@ fn classify_config_event(
             });
         }
 
-        if let Some((_, _, kind)) = tracked_json_dirs
+        if let Some((dir, _, kind)) = tracked_json_dirs
             .iter()
             .find(|(dir, canonical, _)| is_json_child(dir, p) || is_json_child(canonical, p))
         {
+            // Re-anchor under the CONFIGURED drop-in dir so consumers see the
+            // path form they configured, not the raw event path. macOS
+            // FSEvents canonicalizes event paths (`/var` → `/private/var`),
+            // so emitting `p` verbatim would not match the caller's
+            // configured path. Mirrors the `tracked_keys` branch above, which
+            // emits the tracked path rather than the matched event path.
+            let emitted = p
+                .file_name()
+                .map(|name| dir.join(name))
+                .unwrap_or_else(|| p.clone());
             return Some(ConfigChange {
-                path: p.clone(),
+                path: emitted,
                 kind: *kind,
             });
         }
