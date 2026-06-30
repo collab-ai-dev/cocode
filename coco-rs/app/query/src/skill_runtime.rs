@@ -369,9 +369,9 @@ impl SkillHandle for QuerySkillRuntime {
                     // Skill forks share the parent cwd (no worktree isolation),
                     // so no extra read-scope dirs to inherit.
                     inherited_read_dirs: Vec::new(),
-                    // Skill forks are siblings — they run at the invoker's
-                    // depth, not one level deeper.
-                    child_query_depth: inherit.parent_query_depth,
+                    // Skill forks count toward the same depth cap as other
+                    // forked subagents.
+                    child_query_depth: inherit.parent_query_depth.saturating_add(1),
                     max_turns: None,
                     context_window: None,
                     prompt_cache: None,

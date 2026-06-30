@@ -132,6 +132,89 @@ async fn config_file_appearance_triggers_rebuild() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn managed_dropin_change_triggers_rebuild() {
+    let tmp = TempDir::new().unwrap();
+    let managed_dir = tmp.path().join("managed-settings.d");
+    std::fs::create_dir_all(&managed_dir).unwrap();
+
+    let reloader = spawn_isolated(tmp.path()).await;
+    let mut rx = reloader.publisher().subscribe();
+    let mut change_rx = reloader.subscribe_changes();
+
+    let dropin_path = managed_dir.join("10-language.json");
+    std::fs::write(&dropin_path, r#"{ "language": "zh-CN" }"#).unwrap();
+
+    let change = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match change_rx.recv().await {
+                Ok(change) if change.path == dropin_path => break change,
+                Ok(_) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    panic!("change channel closed")
+                }
+            }
+        }
+    })
+    .await
+    .expect("managed drop-in change within timeout");
+    assert_eq!(
+        change.kind,
+        TrackedKind::Settings(coco_config::WatchedKind::Settings(
+            coco_config::SettingSource::Policy
+        ))
+    );
+
+    let snapshot = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if rx.changed().await.is_err() {
+                break None;
+            }
+            let snap = rx.borrow_and_update().clone();
+            if snap.settings.merged.language.as_deref() == Some("zh-CN") {
+                break Some(snap);
+            }
+        }
+    })
+    .await
+    .expect("managed drop-in rebuild within timeout")
+    .expect("rebuild produced language setting");
+    assert_eq!(snapshot.settings.merged.language.as_deref(), Some("zh-CN"));
+}
+
+#[test]
+fn classify_config_event_matches_direct_json_children_only() {
+    let dir = PathBuf::from("/tmp/managed-settings.d");
+    let kind = TrackedKind::Settings(coco_config::WatchedKind::Settings(
+        coco_config::SettingSource::Policy,
+    ));
+    let tracked_json_dirs = vec![(dir.clone(), dir.clone(), kind)];
+    let tracked_keys = Vec::new();
+
+    let matched = classify_config_event(
+        &[dir.join("policy.json")],
+        &tracked_keys,
+        &tracked_json_dirs,
+    )
+    .expect("json child should match");
+    assert_eq!(matched.path, dir.join("policy.json"));
+    assert_eq!(matched.kind, kind);
+
+    assert!(
+        classify_config_event(&[dir.join("policy.txt")], &tracked_keys, &tracked_json_dirs)
+            .is_none()
+    );
+    assert!(
+        classify_config_event(
+            &[dir.join("nested").join("policy.json")],
+            &tracked_keys,
+            &tracked_json_dirs
+        )
+        .is_none()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn malformed_catalog_keeps_prior_snapshot() {
     let tmp = TempDir::new().unwrap();
     let reloader = spawn_isolated(tmp.path()).await;

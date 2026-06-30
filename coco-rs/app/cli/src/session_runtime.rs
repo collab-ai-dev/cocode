@@ -2902,8 +2902,8 @@ impl SessionRuntime {
             tool_overrides: Some(cfg.tool_overrides.clone()),
             active_shell_tool: cfg.active_shell_tool,
             parent_tool_filter: None,
-            // A fork-mode skill subagent is a sibling — it runs at the
-            // invoker's depth, not one level deeper.
+            // Fork-mode skill subagents count toward the same depth cap as
+            // other forked subagents.
             parent_query_depth: cfg.query_depth,
         };
         let gate = coco_tool_runtime::SkillGateContext {
@@ -3493,6 +3493,9 @@ impl SessionRuntime {
             let mut frs = self.file_read_state.write().await;
             frs.clear();
         }
+        if let Some(sandbox) = &self.sandbox_state {
+            sandbox.clear_session_allowed_hosts();
+        }
         self.denial_tracker.lock().await.clear();
         *self.tool_result_replacement_state.write().await =
             coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX);
@@ -3797,6 +3800,9 @@ impl SessionRuntime {
         self.flush_session_usage_snapshot().await;
         let new_session_id = uuid::Uuid::new_v4().to_string();
         self.adopt_session_id(&new_session_id).await;
+        if let Some(sandbox) = &self.sandbox_state {
+            sandbox.clear_session_allowed_hosts();
+        }
         *self.session_usage_tracker.lock().await = CostTracker::new();
         // Reset the transcript dedup set so the new session writes a
         // fresh JSONL from message #1 — without this, the post-clear

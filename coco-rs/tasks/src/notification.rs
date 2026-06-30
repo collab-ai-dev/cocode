@@ -186,7 +186,7 @@ pub fn render(n: &TaskNotification) -> String {
 fn killed_suffix(killed_by: Option<TaskKilledBy>) -> &'static str {
     match killed_by {
         Some(TaskKilledBy::User) => " was stopped by user",
-        Some(TaskKilledBy::Parent) => " was stopped by parent agent",
+        Some(TaskKilledBy::Parent) => " was stopped by Claude",
         Some(TaskKilledBy::System) => " was stopped by system",
         None => " was stopped",
     }
@@ -194,8 +194,8 @@ fn killed_suffix(killed_by: Option<TaskKilledBy>) -> &'static str {
 
 /// Model-contract note appended to agent task-notifications (not shell). CC adds
 /// the same note so the model understands a notification can recur: the agent
-/// comes to rest, the user resumes it, and the same task-id notifies again.
-pub const TASK_NOTIFICATION_RECUR_NOTE: &str = "A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.";
+/// stops, the user resumes it, and the same task-id notifies again.
+pub const TASK_NOTIFICATION_RECUR_NOTE: &str = "A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.";
 
 /// Model-contract note appended to stopped agent task-notifications.
 pub const TASK_NOTIFICATION_STOPPED_NOTE: &str =

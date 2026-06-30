@@ -71,16 +71,16 @@ fn handle_with_args(requested: &str) -> String {
     }
 }
 
-struct ResolvedBuiltin {
-    provider: &'static str,
-    model_id: String,
-    summary: String,
+pub struct ResolvedBuiltin {
+    pub provider: &'static str,
+    pub model_id: String,
+    pub summary: String,
 }
 
 /// Resolve `input` against the builtin registry. Matches in this
 /// order: alias (sonnet/opus/haiku/gpt5/gemini-pro/deepseek-pro), exact
 /// model_id, case-insensitive model_id, prefix.
-fn resolve_model(input: &str) -> Option<ResolvedBuiltin> {
+pub fn resolve_model(input: &str) -> Option<ResolvedBuiltin> {
     let lower = input.to_ascii_lowercase();
     let alias_match: Option<&str> = match lower.as_str() {
         "sonnet" => Some("claude-sonnet-4-6"),

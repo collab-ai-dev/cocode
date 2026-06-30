@@ -50,7 +50,7 @@ pub async fn run_login(name: &str, no_browser: bool) -> Result<()> {
         )
         .await?;
         println!(
-            "Visit this URL to authorize:\n{}\n\nWaiting for authorization...",
+            "Visit this URL to authorize:\n{}\n\nWaiting for authorization... (^C to cancel)",
             handle.authorization_url()
         );
         wait_for_no_browser_login(name, handle).await?;
@@ -345,27 +345,46 @@ fn closest_name<'a>(needle: &str, names: &'a [&str], max_distance: usize) -> Opt
         .iter()
         .copied()
         .filter_map(|name| {
-            let distance = levenshtein(needle, name);
+            if needle.len().abs_diff(name.len()) > max_distance {
+                return None;
+            }
+            let distance = edit_distance_with_adjacent_transposition(needle, name);
             (distance <= max_distance).then_some((distance, name))
         })
         .min_by_key(|(distance, name)| (*distance, *name))
         .map(|(_, name)| name)
 }
 
-fn levenshtein(a: &str, b: &str) -> usize {
-    let b_chars: Vec<char> = b.chars().collect();
-    let mut prev: Vec<usize> = (0..=b_chars.len()).collect();
-    let mut curr = vec![0; b_chars.len() + 1];
-
-    for (i, a_char) in a.chars().enumerate() {
-        curr[0] = i + 1;
-        for (j, b_char) in b_chars.iter().enumerate() {
-            let cost = usize::from(a_char != *b_char);
-            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
+fn edit_distance_with_adjacent_transposition(a: &str, b: &str) -> usize {
+    if a == b {
+        return 0;
     }
-    prev[b_chars.len()]
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut dp = vec![vec![0; b_chars.len() + 1]; a_chars.len() + 1];
+    for (row, cells) in dp.iter_mut().enumerate() {
+        cells[0] = row;
+    }
+    for (col, cell) in dp[0].iter_mut().enumerate() {
+        *cell = col;
+    }
+
+    for row in 1..=a_chars.len() {
+        for col in 1..=b_chars.len() {
+            let cost = usize::from(a_chars[row - 1] != b_chars[col - 1]);
+            dp[row][col] = (dp[row - 1][col] + 1)
+                .min(dp[row][col - 1] + 1)
+                .min(dp[row - 1][col - 1] + cost);
+            if row > 1
+                && col > 1
+                && a_chars[row - 1] == b_chars[col - 2]
+                && a_chars[row - 2] == b_chars[col - 1]
+            {
+                dp[row][col] = dp[row][col].min(dp[row - 2][col - 2] + 1);
+            }
+        }
+    }
+    dp[a_chars.len()][b_chars.len()]
 }
 
 #[cfg(test)]

@@ -219,6 +219,63 @@ fn test_api_retry_env_max_retries_overrides_settings() {
 }
 
 #[test]
+fn test_api_retry_claude_code_max_retries_alias_overrides_settings() {
+    let settings = Settings {
+        api: PartialApiSettings {
+            retry: Some(PartialApiRetrySettings {
+                max_retries: Some(3),
+                ..Default::default()
+            }),
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::ClaudeCodeMaxRetries, "11")]);
+
+    let config = ApiConfig::resolve(&settings, &env);
+
+    assert_eq!(config.retry.max_retries, 11);
+}
+
+#[test]
+fn test_api_retry_claude_code_max_retries_alias_ignores_negative_values() {
+    let settings = Settings {
+        api: PartialApiSettings {
+            retry: Some(PartialApiRetrySettings {
+                max_retries: Some(3),
+                ..Default::default()
+            }),
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::ClaudeCodeMaxRetries, "-4")]);
+
+    let config = ApiConfig::resolve(&settings, &env);
+
+    assert_eq!(config.retry.max_retries, 3);
+}
+
+#[test]
+fn test_api_retry_claude_code_max_retries_alias_is_clamped_to_upper_cap() {
+    let env = EnvSnapshot::from_pairs([(EnvKey::ClaudeCodeMaxRetries, "99")]);
+
+    let config = ApiConfig::resolve(&Settings::default(), &env);
+
+    assert_eq!(config.retry.max_retries, 15);
+}
+
+#[test]
+fn test_api_retry_coco_env_wins_over_claude_code_alias() {
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::ClaudeCodeMaxRetries, "11"),
+        (EnvKey::CocoApiMaxRetries, "12"),
+    ]);
+
+    let config = ApiConfig::resolve(&Settings::default(), &env);
+
+    assert_eq!(config.retry.max_retries, 12);
+}
+
+#[test]
 fn test_api_retry_env_max_retries_is_clamped_to_lower_bound() {
     let env = EnvSnapshot::from_pairs([(EnvKey::CocoApiMaxRetries, "-4")]);
 

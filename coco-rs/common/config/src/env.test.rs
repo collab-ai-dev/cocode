@@ -11,6 +11,14 @@ fn test_env_key_as_str() {
         "COCO_MAX_TOOL_USE_CONCURRENCY"
     );
     assert_eq!(
+        EnvKey::ClaudeCodeMaxRetries.as_str(),
+        "CLAUDE_CODE_MAX_RETRIES"
+    );
+    assert_eq!(
+        EnvKey::ClaudeCodeRetryWatchdog.as_str(),
+        "CLAUDE_CODE_RETRY_WATCHDOG"
+    );
+    assert_eq!(
         EnvKey::CocoMcpToolTimeoutMs.as_str(),
         "COCO_MCP_TOOL_TIMEOUT_MS"
     );

@@ -60,6 +60,12 @@ const DEFAULT_TOOL_IDLE_TIMEOUT_MS: u64 = 300_000;
 /// Default MCP initialization timeout.
 const DEFAULT_INIT_TIMEOUT: Duration = Duration::from_secs(60);
 const DISCOVERY_RETRY_BACKOFFS_MS: [u64; 3] = [250, 500, 1000];
+const SESSION_INGRESS_MCP_PATHS: [&str; 4] = [
+    "/v2/session_ingress/shttp/mcp/",
+    "/v2/session_ingress/mcp/ws/",
+    "/v2/ccr-sessions/",
+    "/v1/code/",
+];
 const MCP_SKILLS_EXTENSION: &str = "io.modelcontextprotocol/skills";
 const MAX_DIRECTORY_READ_PAGES: usize = 20;
 
@@ -435,9 +441,7 @@ impl McpConnectionManager {
                     self.config_home.clone(),
                 )
                 .await
-                .map_err(|e| McpClientError::SpawnFailed {
-                    message: format!("HTTP connect failed: {e}"),
-                })?
+                .map_err(|e| map_http_connect_error(&http.url, e))?
             }
             McpServerConfig::Sdk(sdk) => {
                 return self.do_connect_sdk(server_name, sdk).await;
@@ -1696,6 +1700,69 @@ fn map_rmcp_tool_call_error(error: coco_rmcp_client::RmcpClientError) -> McpClie
         },
         None => McpClientError::ToolCallFailed { message },
     }
+}
+
+fn map_http_connect_error(url: &str, error: RmcpClientError) -> McpClientError {
+    let message = if error.http_status() == Some(reqwest::StatusCode::NOT_FOUND)
+        && !is_session_ingress_mcp_url(url)
+    {
+        http_endpoint_not_found_message(url)
+    } else {
+        format!("HTTP connect failed: {error}")
+    };
+    McpClientError::SpawnFailed { message }
+}
+
+fn http_endpoint_not_found_message(url: &str) -> String {
+    let display_url =
+        sanitize_mcp_endpoint_url(url).unwrap_or_else(|| "(unparseable url)".to_string());
+    format!("MCP endpoint not found at {display_url}. Check the URL in your MCP config.")
+}
+
+fn sanitize_mcp_endpoint_url(url: &str) -> Option<String> {
+    let mut parsed = reqwest::Url::parse(url).ok()?;
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    Some(parsed.to_string().trim_end_matches('/').to_string())
+}
+
+fn is_session_ingress_mcp_url(url: &str) -> bool {
+    let base = std::env::var("SESSION_INGRESS_URL")
+        .ok()
+        .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok());
+    is_session_ingress_mcp_url_with_base(url, base.as_deref())
+}
+
+fn is_session_ingress_mcp_url_with_base(url: &str, session_ingress_base: Option<&str>) -> bool {
+    let Some(session_ingress_base) = session_ingress_base else {
+        return false;
+    };
+    let Ok(parsed_url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Ok(parsed_base) = reqwest::Url::parse(session_ingress_base) else {
+        return false;
+    };
+    same_origin(&parsed_url, &parsed_base)
+        && SESSION_INGRESS_MCP_PATHS
+            .iter()
+            .any(|path| parsed_url.path().contains(path))
+}
+
+fn same_origin(left: &reqwest::Url, right: &reqwest::Url) -> bool {
+    normalized_origin(left) == normalized_origin(right)
+}
+
+fn normalized_origin(url: &reqwest::Url) -> Option<(String, String, Option<u16>)> {
+    let scheme = match url.scheme() {
+        "wss" => "https",
+        "ws" => "http",
+        scheme => scheme,
+    };
+    let host = url.host_str()?.to_ascii_lowercase();
+    Some((scheme.to_string(), host, url.port_or_known_default()))
 }
 
 fn is_tool_call_http_auth_status_error(error: &McpClientError) -> bool {

@@ -315,7 +315,32 @@ fn test_cli_fallback_model_overrides_populate_main_chain_in_order() {
 }
 
 #[test]
-fn test_available_models_rejects_cli_fallback_override() {
+fn test_available_models_accepts_full_provider_model_name() {
+    let settings = settings_with(Settings {
+        available_models: Some(vec!["anthropic/claude-sonnet-4-6".into()]),
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("anthropic", "claude-sonnet-4-6")),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("runtime config");
+    let main = runtime
+        .model_roles
+        .get(ModelRole::Main)
+        .expect("main model");
+
+    assert_eq!(main.model_id, "claude-sonnet-4-6");
+}
+
+#[test]
+fn test_available_models_rejects_bare_model_name() {
     let settings = settings_with(Settings {
         available_models: Some(vec!["sonnet".into()]),
         models: crate::ModelSelectionSettings {
@@ -324,16 +349,62 @@ fn test_available_models_rejects_cli_fallback_override() {
         },
         ..Default::default()
     });
-    let overrides = RuntimeOverrides {
-        fallback_model_overrides: vec![ProviderModelSelection {
-            provider: "anthropic".into(),
-            model_id: "claude-opus-4-7".into(),
-        }],
-        ..Default::default()
-    };
 
-    let err = build_isolated(settings, EnvSnapshot::default(), overrides)
-        .expect_err("available_models must apply after CLI fallback overrides");
+    let err = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect_err("available_models must require provider/model_id");
+    assert!(
+        err.to_string().contains("available_models allowlist"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_available_models_does_not_fallback_to_allowed_model() {
+    let settings = settings_with(Settings {
+        available_models: Some(vec!["anthropic/claude-sonnet-4-6".into()]),
+        models: crate::ModelSelectionSettings {
+            main: Some(
+                role_slots_of("anthropic", "claude-opus-4-7")
+                    .with_fallback(model_selection("anthropic", "claude-sonnet-4-6")),
+            ),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let err = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect_err("available_models must reject disallowed primary without fallback");
+    assert!(
+        err.to_string().contains("available_models allowlist"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_available_models_empty_allowlist_still_rejects_selected_model() {
+    let settings = settings_with(Settings {
+        available_models: Some(Vec::new()),
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("anthropic", "claude-sonnet-4-6")),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let err = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect_err("empty available_models must still reject every model");
     assert!(
         err.to_string().contains("available_models allowlist"),
         "unexpected error: {err}"

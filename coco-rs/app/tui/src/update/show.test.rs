@@ -214,7 +214,7 @@ fn next_role_cycles_canonical_order() {
 fn build_model_entries_applies_available_model_allowlist_to_catalog() {
     let mut state = AppState::new();
     seed_catalog(&mut state);
-    state.session.available_models = Some(vec!["gpt-5-4".to_string()]);
+    state.session.available_models = Some(vec!["openai/gpt-5-4".to_string()]);
 
     let entries = build_model_entries(&state, ModelRole::Main);
 

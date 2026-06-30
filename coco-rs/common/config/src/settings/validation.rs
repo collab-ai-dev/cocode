@@ -140,11 +140,19 @@ fn validate_model_allowlist(
         let Some(slots) = slots else {
             continue;
         };
-        validate_selected_model(path, "primary", &slots.primary.model_id, available, errors);
+        validate_selected_model(
+            path,
+            "primary",
+            &slots.primary.provider,
+            &slots.primary.model_id,
+            available,
+            errors,
+        );
         for (idx, fallback) in slots.fallbacks.iter().enumerate() {
             validate_selected_model(
                 path,
                 &format!("fallbacks[{idx}]"),
+                &fallback.provider,
                 &fallback.model_id,
                 available,
                 errors,
@@ -156,23 +164,27 @@ fn validate_model_allowlist(
 fn validate_selected_model(
     role_path: &str,
     slot_path: &str,
+    provider: &str,
     selected: &str,
     available: &[String],
     errors: &mut Vec<ValidationError>,
 ) {
-    if is_model_allowed(selected, Some(available)) {
+    if is_model_allowed(provider, selected, Some(available)) {
         return;
     }
 
     let full_path = format!("{role_path}.{slot_path}");
+    let full_model_name = format!("{provider}/{selected}");
     errors.push(ValidationError {
         file: None,
         path: full_path,
-        message: format!("Selected model '{selected}' is not in the available_models allowlist"),
+        message: format!(
+            "Selected model '{full_model_name}' is not in the available_models allowlist"
+        ),
         expected: Some(format!("One of: {}", available.join(", "))),
-        invalid_value: Some(selected.to_string()),
+        invalid_value: Some(full_model_name),
         suggestion: Some(
-            "Either add the model to available_models or choose an available model".into(),
+            "Either add provider/model_id to available_models or choose an available model".into(),
         ),
     });
 }
@@ -670,12 +682,16 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "plans_directory",
     "plan_mode",
     "session",
+    "respondToBashCommands",
+    "respond_to_bash_commands",
     "auto_mode",
     "autoMode",
     "include_co_authored_by",
     "include_git_instructions",
     "allow_managed_hooks_only",
     "strict_plugin_only_customization",
+    "forceRemoteSettingsRefresh",
+    "force_remote_settings_refresh",
     "strict_known_marketplaces",
     "blocked_marketplaces",
     "file_checkpointing_enabled",

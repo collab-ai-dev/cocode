@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::error::Error as StdError;
 
 use coco_mcp_types::CallToolResult;
 use reqwest::ClientBuilder;
@@ -131,6 +132,48 @@ pub(crate) fn apply_default_headers(
     } else {
         builder.default_headers(default_headers.clone())
     }
+}
+
+pub(crate) fn apply_oauth_retry_policy(builder: ClientBuilder, server_url: &str) -> ClientBuilder {
+    let Some(host) = reqwest::Url::parse(server_url)
+        .ok()
+        .and_then(|url| url.host_str().map(ToOwned::to_owned))
+    else {
+        return builder;
+    };
+
+    builder.retry(
+        reqwest::retry::for_host(host)
+            .max_retries_per_request(1)
+            .no_budget()
+            .classify_fn(|req_rep| {
+                let retryable = req_rep.error().is_some_and(is_transient_oauth_error);
+                if retryable {
+                    req_rep.retryable()
+                } else {
+                    req_rep.success()
+                }
+            }),
+    )
+}
+
+pub(crate) fn is_transient_oauth_reqwest_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect() || error.is_body()
+}
+
+fn is_transient_oauth_error(error: &(dyn StdError + 'static)) -> bool {
+    if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+        return is_transient_oauth_reqwest_error(error);
+    }
+
+    let mut source = error.source();
+    while let Some(error) = source {
+        if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            return is_transient_oauth_reqwest_error(error);
+        }
+        source = error.source();
+    }
+    false
 }
 
 #[cfg(unix)]

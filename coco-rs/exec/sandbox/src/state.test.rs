@@ -678,3 +678,50 @@ async fn test_network_ask_callback_remembers_approved_host_for_session() {
             .contains(&"example.com".to_string())
     );
 }
+
+#[tokio::test]
+async fn test_clear_session_allowed_hosts_drops_network_prompt_cache() {
+    let settings = SandboxSettings::enabled();
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        allow_network: true,
+        ..Default::default()
+    };
+    let state = SandboxState::new(
+        EnforcementLevel::WorkspaceWrite,
+        settings,
+        config,
+        crate::platform::create_platform(),
+    );
+    let calls = Arc::new(AtomicUsize::new(0));
+    state.set_approval_bridge(Arc::new(CountingApproveBridge {
+        calls: Arc::clone(&calls),
+    }));
+
+    let callback = state.build_network_ask_callback().expect("callback");
+    assert!(callback("example.com".into()).await);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(
+        state
+            .settings()
+            .network
+            .allowed_domains
+            .contains(&"example.com".to_string())
+    );
+
+    state.clear_session_allowed_hosts();
+    assert!(
+        !state
+            .settings()
+            .network
+            .allowed_domains
+            .contains(&"example.com".to_string())
+    );
+
+    assert!(callback("example.com".into()).await);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "clearing the session cache should make the next request prompt again"
+    );
+}

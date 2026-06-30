@@ -1096,8 +1096,11 @@ async fn run_agent_driver(
                 user_message_id,
                 command,
             } => {
+                drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                 let event_tx_t = event_tx.clone();
                 let runtime_t = runtime.clone();
+                let active_turn_t = active_turn.clone();
+                let turn_done_tx_t = turn_done_tx.clone();
                 // Run from the process's current dir — shell prompt
                 // commands inherit the same cwd the agent is using.
                 // `runtime_config.paths.project_dir` is the explicit
@@ -1110,8 +1113,16 @@ async fn run_agent_driver(
                     .clone()
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                 tokio::spawn(async move {
-                    run_prompt_mode_bash(&cwd, user_message_id, command, runtime_t, event_tx_t)
-                        .await;
+                    run_prompt_mode_bash(
+                        &cwd,
+                        user_message_id,
+                        command,
+                        runtime_t,
+                        event_tx_t,
+                        active_turn_t,
+                        turn_done_tx_t,
+                    )
+                    .await;
                 });
             }
 
@@ -2276,6 +2287,10 @@ enum SlashOutcome {
     /// PreToolUse/PostToolUse for an in-flight call cannot see
     /// different hook sets.
     TriggerReloadHooks,
+}
+
+fn slash_unavailable_in_session_message(name: &str) -> String {
+    format!("/{name} isn't available in this session.")
 }
 
 /// Split `/<name> <args>` into `(name, args)`. Returns `None` when
@@ -3489,6 +3504,33 @@ async fn dispatch_slash_command(
     if name == "logout" {
         return dispatch_provider_logout(args, event_tx).await;
     }
+    if name == "model" && !args.trim().is_empty() {
+        let available_models = runtime
+            .runtime_config
+            .settings
+            .merged
+            .available_models
+            .as_deref();
+        if let Some(resolved) = coco_commands::handlers::model::resolve_model(args)
+            && !coco_config::is_model_allowed(
+                resolved.provider,
+                &resolved.model_id,
+                available_models,
+            )
+        {
+            let full_model_name = format!("{}/{}", resolved.provider, resolved.model_id);
+            emit_slash_text(
+                event_tx,
+                "model",
+                args,
+                &format!(
+                    "Model '{full_model_name}' is restricted by your organization's settings. Run /model to choose a different model.",
+                ),
+            )
+            .await;
+            return SlashOutcome::Handled;
+        }
+    }
     // `/rewind` flows through the standard registry → handler →
     // `DialogSpec::MessageSelector` → `OpenRewindPicker` path. The
     // handler ignores args; this dispatcher does only the
@@ -3501,6 +3543,11 @@ async fn dispatch_slash_command(
     let Some(cmd) = registry_snapshot.get(name) else {
         return SlashOutcome::NotFound;
     };
+    if !cmd.is_active() {
+        let text = slash_unavailable_in_session_message(name);
+        emit_slash_text(event_tx, name, args, &text).await;
+        return SlashOutcome::Handled;
+    }
     if cmd.base.name == "loop" {
         let cwd = runtime.current_cwd.read().await.clone();
         let prompt = coco_skills::bundled::loop_skill::prompt_for_command(
@@ -6282,10 +6329,11 @@ fn build_system_message_from_push_kind(kind: coco_tui::SystemPushKind) -> coco_m
     coco_messages::Message::System(sys)
 }
 
-/// Run a prompt-mode bash submission (`!ls -la`). The model loop is bypassed entirely;
-/// the command runs once in the session cwd via [`coco_shell::ShellExecutor`]
-/// and the merged stdout+stderr is folded back into the transcript as a
-/// `MessageContent::BashOutput`.
+/// Run a prompt-mode bash submission (`!ls -la`). The command runs once in the
+/// session cwd via [`coco_shell::ShellExecutor`] and the merged stdout+stderr
+/// is folded back into the transcript as local-command output. By default this
+/// then starts a model turn so the assistant responds to the shell output;
+/// users can set `respondToBashCommands=false` to keep it context-only.
 /// Output is capped at 200 lines / ~8 KB so a `find /` doesn't fill the
 /// chat scrollback. The TUI's renderer already truncates display to 20
 /// lines (`render_user.rs::BashOutput`) but we keep the wire payload
@@ -6296,12 +6344,15 @@ async fn run_prompt_mode_bash(
     command: String,
     runtime: Arc<crate::session_runtime::SessionRuntime>,
     event_tx: mpsc::Sender<CoreEvent>,
+    active_turn: Arc<Mutex<Option<ActiveTurn>>>,
+    turn_done_tx: mpsc::Sender<uuid::Uuid>,
 ) {
     const MAX_OUTPUT_BYTES: usize = 8 * 1024;
     const MAX_OUTPUT_LINES: usize = 200;
 
     let mut executor = coco_shell::ShellExecutor::new(cwd);
     let exec_opts = coco_shell::ExecOptions::default();
+    let mut command_failed_to_run = false;
     let (output, exit_code) = match executor.execute(&command, &exec_opts).await {
         Ok(result) => {
             let mut merged = String::new();
@@ -6319,16 +6370,28 @@ async fn run_prompt_mode_bash(
                 result.exit_code,
             )
         }
-        Err(err) => (format!("error: {err}"), -1),
+        Err(err) => {
+            command_failed_to_run = true;
+            (format!("error: {err}"), -1)
+        }
     };
 
-    // Push a single SystemLocalCommandMessage into engine MessageHistory
-    // so the chat transcript (TUI + SDK consumers + JSONL) records the
-    // bash invocation via the standard `MessageAppended` event path.
-    // Pairs with Commit 2 deleting the TUI-local `add_message`
-    // optimistic echoes for both the `!cmd` input row and the matching
-    // output row.
+    let should_respond = should_prompt_mode_bash_respond(&runtime) && !command_failed_to_run;
+
+    // Push the local command into engine MessageHistory so the chat transcript
+    // (TUI + SDK consumers + JSONL) records the bash invocation via the
+    // standard `MessageAppended` event path. When the command is context-only,
+    // prepend the carryover "DO NOT respond" caveat so a later model turn does
+    // not comment on stale shell output.
     {
+        let mut h = runtime.history.lock().await;
+        let event_tx_opt = Some(event_tx.clone());
+        if !should_respond {
+            let caveat = coco_messages::create_meta_message(
+                "<local-command-caveat>Caveat: The messages below were generated by the user while running local commands. DO NOT respond to these messages or otherwise consider them in your response unless the user explicitly asks you to.</local-command-caveat>",
+            );
+            coco_query::history_sync::history_push_and_emit(&mut h, caveat, &event_tx_opt).await;
+        }
         let msg = coco_messages::Message::System(coco_messages::SystemMessage::LocalCommand(
             coco_messages::SystemLocalCommandMessage {
                 uuid: uuid::Uuid::new_v4(),
@@ -6336,8 +6399,6 @@ async fn run_prompt_mode_bash(
                 output: output.clone(),
             },
         ));
-        let mut h = runtime.history.lock().await;
-        let event_tx_opt = Some(event_tx.clone());
         coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
     }
 
@@ -6348,6 +6409,23 @@ async fn run_prompt_mode_bash(
             exit_code,
         }))
         .await;
+
+    if should_respond {
+        let messages = {
+            let h = runtime.history.lock().await;
+            h.to_vec()
+        };
+        spawn_history_turn(messages, &runtime, &event_tx, &active_turn, &turn_done_tx).await;
+    }
+}
+
+fn should_prompt_mode_bash_respond(runtime: &crate::session_runtime::SessionRuntime) -> bool {
+    runtime
+        .runtime_config
+        .settings
+        .merged
+        .respond_to_bash_commands
+        .unwrap_or(true)
 }
 
 /// Create a selected `/memory` target if needed and launch the configured

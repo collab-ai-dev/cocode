@@ -47,6 +47,27 @@ async fn test_path_completion_manager_returns_explicit_path_rows() {
 }
 
 #[tokio::test]
+async fn test_bash_path_completion_manager_caps_rows_at_ten() {
+    let dir = temp_completion_dir("bash-path-cap");
+    for index in 0..12 {
+        std::fs::write(dir.join(format!("alpha-{index:02}.txt")), "").expect("write file");
+    }
+    let (tx, mut rx) = create_path_completion_channel();
+    let mut manager = PathCompletionManager::new(tx);
+    let query = format!("{}/a", dir.display());
+
+    manager.search(request_key(SuggestionKind::BashPath, query.clone(), 1));
+
+    let PathCompletionEvent::SearchResult { key, suggestions } =
+        rx.recv().await.expect("path result");
+    assert_eq!(key.kind, SuggestionKind::BashPath);
+    assert_eq!(key.query, query);
+    assert_eq!(suggestions.len(), 10);
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn test_path_completion_manager_filters_directories_only() {
     let dir = temp_completion_dir("directories");
     std::fs::write(dir.join("alpha.txt"), "").expect("write file");

@@ -267,6 +267,10 @@ pub enum EnvKey {
     /// Override `api.retry.max_retries`. Applies after settings.json and is
     /// clamped by `ApiRetryConfig::finalize`.
     CocoApiMaxRetries,
+    /// Claude Code compatibility alias for `CocoApiMaxRetries`.
+    ClaudeCodeMaxRetries,
+    /// Claude Code compatibility opt-in for long unattended retry backoffs.
+    ClaudeCodeRetryWatchdog,
     /// Disable the startup auto-install of the official plugin marketplace
     /// (`anthropics/claude-plugins-official`). When set truthy, coco does not
     /// fetch/register the official marketplace on launch.
@@ -425,6 +429,8 @@ impl EnvKey {
             Self::CocoBareMode => "COCO_BARE_MODE",
             Self::CocoBackgroundTasksDisable => "COCO_BACKGROUND_TASKS_DISABLE",
             Self::CocoApiMaxRetries => "COCO_API_MAX_RETRIES",
+            Self::ClaudeCodeMaxRetries => "CLAUDE_CODE_MAX_RETRIES",
+            Self::ClaudeCodeRetryWatchdog => "CLAUDE_CODE_RETRY_WATCHDOG",
             Self::CocoPluginsDisableOfficialMarketplace => {
                 "COCO_PLUGINS_DISABLE_OFFICIAL_MARKETPLACE"
             }

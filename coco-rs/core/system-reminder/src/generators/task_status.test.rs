@@ -44,7 +44,7 @@ async fn killed_renders_stopped_message() {
 async fn killed_renders_attribution() {
     let c = SystemReminderConfig::default();
     let mut stopped = snap("42", "code review", TaskRunStatus::Killed);
-    stopped.killed_by = Some(coco_types::TaskKilledBy::System);
+    stopped.killed_by = Some(coco_types::TaskKilledBy::Parent);
     let ctx = GeneratorContext::builder(&c)
         .task_statuses(vec![stopped])
         .build();
@@ -56,7 +56,7 @@ async fn killed_renders_attribution() {
         .content()
         .unwrap()
         .to_string();
-    assert_eq!(text, "Task \"code review\" (42) was stopped by system.");
+    assert_eq!(text, "Task \"code review\" (42) was stopped by Claude.");
 }
 
 #[tokio::test]

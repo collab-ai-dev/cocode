@@ -16,12 +16,23 @@ use crate::widgets::suggestion_popup::SuggestionMeta;
 
 const TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_SUGGESTIONS: usize = 15;
+const MAX_BASH_PATH_SUGGESTIONS: usize = 10;
 const MAX_BLOCKING_SCANS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathMode {
     FilesAndDirectories,
+    BashFilesAndDirectories,
     DirectoriesOnly,
+}
+
+impl PathMode {
+    fn max_suggestions(self) -> usize {
+        match self {
+            Self::BashFilesAndDirectories => MAX_BASH_PATH_SUGGESTIONS,
+            Self::FilesAndDirectories | Self::DirectoriesOnly => MAX_SUGGESTIONS,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -52,7 +63,8 @@ impl PathCompletionManager {
 
         let mode = match key.kind {
             SuggestionKind::Directory => PathMode::DirectoriesOnly,
-            SuggestionKind::Path | SuggestionKind::BashPath => PathMode::FilesAndDirectories,
+            SuggestionKind::Path => PathMode::FilesAndDirectories,
+            SuggestionKind::BashPath => PathMode::BashFilesAndDirectories,
             _ => return,
         };
         let tx = self.event_tx.clone();
@@ -154,7 +166,7 @@ fn path_items(query: &str, mode: PathMode) -> Vec<SuggestionItem> {
         );
         b_dir.cmp(&a_dir).then_with(|| a.label.cmp(&b.label))
     });
-    items.truncate(MAX_SUGGESTIONS);
+    items.truncate(mode.max_suggestions());
     items
 }
 

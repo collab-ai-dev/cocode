@@ -341,6 +341,16 @@ impl SandboxState {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(bridge);
     }
 
+    /// Clear hosts approved through sandbox network prompts.
+    /// Called when the owning session changes so one session's "Yes" answers
+    /// do not silently widen the next session's network allowlist.
+    pub fn clear_session_allowed_hosts(&self) {
+        self.session_allowed_hosts
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
     /// Record a sandbox violation into the store so it surfaces to the model
     /// via [`Self::format_violations_since`]. Producers: the Linux executor
     /// (SIGSYS on a seccomp kill) and the egress proxy (denied CONNECT).

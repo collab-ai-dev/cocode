@@ -309,14 +309,44 @@ pub struct ApiConfig {
 impl ApiConfig {
     pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
         let mut config = Self::default();
+        let mut max_retries_source = MaxRetriesSource::Default;
         if let Some(retry) = &settings.api.retry {
             config.retry.apply_settings(retry);
+            if retry.max_retries.is_some() {
+                max_retries_source = MaxRetriesSource::Settings;
+            }
+        }
+        if let Some(v) = env.get_i32(EnvKey::ClaudeCodeMaxRetries)
+            && v >= 0
+        {
+            config.retry.max_retries = v;
+            max_retries_source = MaxRetriesSource::ClaudeCodeEnv;
         }
         if let Some(v) = env.get_i32(EnvKey::CocoApiMaxRetries) {
             config.retry.max_retries = v;
+            max_retries_source = MaxRetriesSource::CocoEnv;
         }
-        config.retry.finalize();
+        config.retry.finalize(max_retries_source);
         config
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MaxRetriesSource {
+    Default,
+    Settings,
+    ClaudeCodeEnv,
+    CocoEnv,
+}
+
+impl MaxRetriesSource {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Default => "default api retry max_retries",
+            Self::Settings => "api.retry.max_retries",
+            Self::ClaudeCodeEnv => "CLAUDE_CODE_MAX_RETRIES",
+            Self::CocoEnv => "COCO_API_MAX_RETRIES",
+        }
     }
 }
 
@@ -355,14 +385,15 @@ impl ApiRetryConfig {
         }
     }
 
-    fn finalize(&mut self) {
+    fn finalize(&mut self, max_retries_source: MaxRetriesSource) {
         self.max_retries = self.max_retries.max(0);
         if self.max_retries > MAX_RETRIES_CAP {
             if !MAX_RETRIES_CLAMP_WARNED.swap(true, Ordering::Relaxed) {
                 tracing::warn!(
+                    source = max_retries_source.label(),
                     requested = self.max_retries,
                     cap = MAX_RETRIES_CAP,
-                    "COCO_API_MAX_RETRIES clamped to retry cap"
+                    "api retry max_retries clamped to retry cap"
                 );
             }
             self.max_retries = MAX_RETRIES_CAP;

@@ -201,6 +201,17 @@ impl RuntimeReloader {
                 watch_set.push((parent.to_path_buf(), RecursiveMode::NonRecursive));
             }
         }
+        let managed_dropin_dir = catalogs.managed_settings.with_extension("d");
+        let tracked_json_dirs = if managed_dropin_dir.is_dir() {
+            watch_set.push((managed_dropin_dir.clone(), RecursiveMode::NonRecursive));
+            vec![(
+                managed_dropin_dir.clone(),
+                canonicalized_path_key(&managed_dropin_dir),
+                TrackedKind::Settings(WatchedKind::Settings(coco_config::SettingSource::Policy)),
+            )]
+        } else {
+            Vec::new()
+        };
 
         // Flag-settings file (CLI `--settings <path>`). Watching its
         // parent dir lets the user edit the file in place and pick up
@@ -222,28 +233,13 @@ impl RuntimeReloader {
         let tracked_keys: Vec<(PathBuf, PathBuf, TrackedKind)> = tracked_files
             .iter()
             .zip(tracked_kinds.iter().copied())
-            .map(|(path, kind)| {
-                let canonical = path
-                    .parent()
-                    .and_then(|parent| std::fs::canonicalize(parent).ok())
-                    .and_then(|canon| path.file_name().map(|name| canon.join(name)))
-                    .unwrap_or_else(|| path.clone());
-                (path.clone(), canonical, kind)
-            })
+            .map(|(path, kind)| (path.clone(), canonicalized_path_key(path), kind))
             .collect();
         let watcher = FileWatcherBuilder::<ConfigChange>::new()
             .throttle_interval(debounce)
             .build(
                 move |ev: &FsEvent| {
-                    ev.paths.iter().find_map(|p| {
-                        tracked_keys
-                            .iter()
-                            .find(|(path, canonical, _)| path == p || canonical == p)
-                            .map(|(path, _, kind)| ConfigChange {
-                                path: path.clone(),
-                                kind: *kind,
-                            })
-                    })
+                    classify_config_event(&ev.paths, &tracked_keys, &tracked_json_dirs)
                 },
                 |_old, new| new,
             )
@@ -413,6 +409,46 @@ fn build_with(
         enabled.clone(),
     )
     .map_err(to_boxed)
+}
+
+fn canonicalized_path_key(path: &std::path::Path) -> PathBuf {
+    path.parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .and_then(|canon| path.file_name().map(|name| canon.join(name)))
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+fn classify_config_event(
+    paths: &[PathBuf],
+    tracked_keys: &[(PathBuf, PathBuf, TrackedKind)],
+    tracked_json_dirs: &[(PathBuf, PathBuf, TrackedKind)],
+) -> Option<ConfigChange> {
+    for p in paths {
+        if let Some((path, _, kind)) = tracked_keys
+            .iter()
+            .find(|(path, canonical, _)| path == p || canonical == p)
+        {
+            return Some(ConfigChange {
+                path: path.clone(),
+                kind: *kind,
+            });
+        }
+
+        if let Some((_, _, kind)) = tracked_json_dirs
+            .iter()
+            .find(|(dir, canonical, _)| is_json_child(dir, p) || is_json_child(canonical, p))
+        {
+            return Some(ConfigChange {
+                path: p.clone(),
+                kind: *kind,
+            });
+        }
+    }
+    None
+}
+
+fn is_json_child(dir: &std::path::Path, path: &std::path::Path) -> bool {
+    path.parent() == Some(dir) && path.extension().is_some_and(|ext| ext == "json")
 }
 
 /// Install every watch in `watch_set`, returning the count of

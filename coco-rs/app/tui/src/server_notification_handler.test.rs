@@ -471,6 +471,42 @@ fn test_mcp_status() {
     );
     assert_eq!(state.session.mcp_servers.len(), 1);
     assert_eq!(state.session.connected_mcp_count(), 0);
+    assert!(!state.session.mcp_servers[0].needs_auth);
+}
+
+#[test]
+fn test_mcp_needs_auth_startup_complete_toast_points_to_mcp() {
+    let mut state = AppState::new();
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::McpStartupStatus(
+            coco_types::McpStartupStatusParams {
+                server: "github".into(),
+                status: coco_types::McpConnectionStatus::NeedsAuth,
+            },
+        )),
+    );
+    assert_eq!(state.session.mcp_servers.len(), 1);
+    assert!(state.session.mcp_servers[0].needs_auth);
+    assert_eq!(state.session.connected_mcp_count(), 0);
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::McpStartupComplete(
+            coco_types::McpStartupCompleteParams {
+                servers: vec!["github".into()],
+                failed: Vec::new(),
+            },
+        )),
+    );
+
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert!(
+        state.ui.toasts[0]
+            .message
+            .contains("Run /mcp to authenticate")
+    );
 }
 
 #[test]

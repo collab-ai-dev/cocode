@@ -80,6 +80,7 @@ use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
 use crate::program_resolver;
 use crate::utils::apply_default_headers;
+use crate::utils::apply_oauth_retry_policy;
 use crate::utils::build_default_headers;
 use crate::utils::convert_call_tool_result;
 use crate::utils::convert_to_mcp;
@@ -470,7 +471,6 @@ fn service_error_is_retryable_for_discovery(error: &rmcp::service::ServiceError)
             rmcp::model::ErrorCode::INVALID_REQUEST
                 | rmcp::model::ErrorCode::METHOD_NOT_FOUND
                 | rmcp::model::ErrorCode::INVALID_PARAMS
-                | rmcp::model::ErrorCode::PARSE_ERROR
         ),
         rmcp::service::ServiceError::TransportSend(_) => true,
         rmcp::service::ServiceError::TransportClosed => true,
@@ -1236,8 +1236,8 @@ async fn create_oauth_transport_and_runtime(
     StreamableHttpClientTransport<AuthClient<SessionAwareHttpClient>>,
     OAuthPersistor,
 )> {
-    let reqwest_client =
-        apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
+    let builder = apply_oauth_retry_policy(reqwest::Client::builder(), url);
+    let reqwest_client = apply_default_headers(builder, &default_headers).build()?;
     // OAuthState uses a raw reqwest::Client for OAuth discovery/token exchange.
     let mut oauth_state = OAuthState::new(url.to_string(), Some(reqwest_client.clone())).await?;
 
@@ -1321,6 +1321,16 @@ mod tests {
             rmcp::model::ErrorData::invalid_params("bad params", None),
         ));
         assert!(!invalid_params.is_retryable_discovery_error());
+
+        let request_timeout = RmcpClientError::Service(ServiceError::Timeout {
+            timeout: std::time::Duration::from_secs(5),
+        });
+        assert!(!request_timeout.is_retryable_discovery_error());
+
+        let parse_error = RmcpClientError::Service(ServiceError::McpError(
+            rmcp::model::ErrorData::parse_error("parse error", None),
+        ));
+        assert!(parse_error.is_retryable_discovery_error());
 
         let transport_closed = RmcpClientError::Service(ServiceError::TransportClosed);
         assert!(transport_closed.is_retryable_discovery_error());

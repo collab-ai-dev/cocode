@@ -272,6 +272,22 @@ fn long_highlighted_rust_code_wraps_without_dropping_styles() {
 }
 
 #[test]
+fn gfm_strikethrough_renders_crossed_out_span() {
+    let lines = render("keep ~~drop~~ done");
+    let span = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.as_ref() == "drop")
+        .expect("strikethrough span should be present");
+
+    assert!(
+        span.style
+            .add_modifier
+            .contains(ratatui::style::Modifier::CROSSED_OUT)
+    );
+}
+
+#[test]
 fn table_renders_box_grid() {
     let md = "| a | b |\n| - | - |\n| 1 | 2 |";
     let lines = render_text(md);

@@ -116,21 +116,39 @@ use super::build_remote_model_change_reminder;
 use super::build_system_message_from_push_kind;
 use super::classify_sentinel_trigger;
 use super::create_slash_metadata_message;
+use super::dispatch_slash_command;
 use super::drain_active_turn;
 use super::format_slash_command_metadata;
 use super::parse_editor_command;
 use super::parse_permissions_mutation;
 use super::parse_slash_command;
 use super::session_plan_file_path;
+use super::should_prompt_mode_bash_respond;
 use super::should_trigger_title_gen;
+use super::slash_unavailable_in_session_message;
+use clap::Parser;
+use coco_config::CatalogPaths;
+use coco_config::EnvSnapshot;
+use coco_config::RoleSlots;
+use coco_config::RuntimeOverrides;
+use coco_config::Settings;
+use coco_config::SettingsWithSource;
 use coco_tool_runtime::TurnAbortController;
 use coco_tui::SystemPushKind;
+use coco_types::CommandArgumentKind;
+use coco_types::CommandBase;
+use coco_types::CommandSafety;
+use coco_types::CommandSource;
+use coco_types::CommandType;
+use coco_types::LocalCommandData;
 use coco_types::ModelRole;
+use coco_types::ProviderModelSelection;
 use coco_types::TurnAbortReason;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tempfile::TempDir;
 use tokio::sync::Mutex;
 
 #[test]
@@ -318,6 +336,192 @@ fn parse_slash_rejects_non_slash() {
 fn parse_slash_rejects_bare_slash() {
     assert_eq!(parse_slash_command("/"), None);
     assert_eq!(parse_slash_command("   /   "), None);
+}
+
+fn inactive_test_command_enabled() -> bool {
+    false
+}
+
+fn inactive_test_command_handler(_args: &str) -> String {
+    "handler should not run".to_string()
+}
+
+async fn build_runtime_with_registry(
+    home: &TempDir,
+    registry: coco_commands::CommandRegistry,
+) -> Arc<crate::session_runtime::SessionRuntime> {
+    build_runtime_with_registry_and_settings(home, registry, Settings::default()).await
+}
+
+async fn build_runtime_with_registry_and_settings(
+    home: &TempDir,
+    registry: coco_commands::CommandRegistry,
+    settings_overrides: Settings,
+) -> Arc<crate::session_runtime::SessionRuntime> {
+    let settings = SettingsWithSource {
+        merged: Settings {
+            models: coco_config::ModelSelectionSettings {
+                main: Some(RoleSlots::new(ProviderModelSelection {
+                    provider: "anthropic".into(),
+                    model_id: "claude-opus-4-7".into(),
+                })),
+                ..Default::default()
+            },
+            available_models: settings_overrides.available_models,
+            respond_to_bash_commands: settings_overrides.respond_to_bash_commands,
+            ..Default::default()
+        },
+        per_source: std::collections::HashMap::new(),
+        source_paths: std::collections::HashMap::new(),
+    };
+    let runtime_config = coco_config::build_runtime_config_with(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        CatalogPaths::empty_in(home.path()),
+        coco_config::parse_enabled_setting_sources(None),
+    )
+    .expect("runtime config");
+    let model_id = coco_cli::headless::resolve_main_model(&runtime_config).model_id;
+    let cli = coco_cli::Cli::try_parse_from(["coco"]).expect("parse cli");
+
+    crate::session_runtime::SessionRuntime::build(crate::session_runtime::SessionRuntimeBuildOpts {
+        cli: &cli,
+        runtime_config: Arc::new(runtime_config),
+        cwd: home.path().to_path_buf(),
+        model_id,
+        system_prompt: "test".to_string(),
+        bypass_permissions_available: false,
+        permission_mode: coco_types::PermissionMode::default(),
+        model_runtimes: None,
+        tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
+        session_manager: Arc::new(coco_session::SessionManager::new(
+            home.path().join("sessions"),
+        )),
+        fast_model_spec: None,
+        permission_bridge: None,
+        command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(registry))),
+        skill_manager: Arc::new(coco_skills::SkillManager::new()),
+        agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+        builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
+        session_id_override: None,
+        is_non_interactive: false,
+    })
+    .await
+    .expect("build runtime")
+}
+
+#[tokio::test]
+async fn prompt_mode_bash_responds_by_default() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+
+    assert!(should_prompt_mode_bash_respond(&runtime));
+}
+
+#[tokio::test]
+async fn prompt_mode_bash_respects_respond_setting_false() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry_and_settings(
+        &home,
+        registry,
+        Settings {
+            respond_to_bash_commands: Some(false),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    assert!(!should_prompt_mode_bash_respond(&runtime));
+}
+
+#[tokio::test]
+async fn model_slash_arg_rejects_unavailable_model() {
+    let mut registry = coco_commands::CommandRegistry::new();
+    coco_commands::register_extended_builtins(&mut registry);
+    let home = TempDir::new().expect("tempdir");
+    let runtime = build_runtime_with_registry_and_settings(
+        &home,
+        registry,
+        Settings {
+            available_models: Some(vec!["anthropic/claude-opus-4-7".to_string()]),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    let outcome = dispatch_slash_command("model", "gpt5", &runtime, &tx).await;
+
+    assert!(matches!(outcome, super::SlashOutcome::Handled));
+    let event = rx.recv().await.expect("slash result event");
+    match event {
+        coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+            name,
+            args,
+            text,
+        }) => {
+            assert_eq!(name, "model");
+            assert_eq!(args, "gpt5");
+            assert!(text.contains("restricted by your organization's settings"));
+            assert!(text.contains("Run /model to choose a different model"));
+            assert!(text.contains("gpt-5-4"));
+        }
+        other => panic!("expected slash result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn inactive_slash_command_emits_session_hint_without_running_handler() {
+    let mut registry = coco_commands::CommandRegistry::new();
+    registry.register(coco_commands::RegisteredCommand {
+        base: CommandBase {
+            name: "blocked".to_string(),
+            description: "inactive command".to_string(),
+            aliases: Vec::new(),
+            availability: Vec::new(),
+            is_hidden: false,
+            argument_hint: None,
+            argument_kind: CommandArgumentKind::None,
+            when_to_use: None,
+            user_invocable: true,
+            is_sensitive: false,
+            loaded_from: Some(CommandSource::Builtin),
+            safety: CommandSafety::AlwaysSafe,
+            supports_non_interactive: false,
+        },
+        command_type: CommandType::Local(LocalCommandData {
+            handler: "blocked".to_string(),
+        }),
+        handler: Some(Arc::new(coco_commands::BuiltinCommand::new(
+            "blocked",
+            inactive_test_command_handler,
+        ))),
+        is_enabled: Some(inactive_test_command_enabled),
+    });
+    let home = TempDir::new().expect("tempdir");
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    let outcome = dispatch_slash_command("blocked", "arg", &runtime, &tx).await;
+
+    assert!(matches!(outcome, super::SlashOutcome::Handled));
+    let event = rx.recv().await.expect("slash result event");
+    match event {
+        coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+            name,
+            args,
+            text,
+        }) => {
+            assert_eq!(name, "blocked");
+            assert_eq!(args, "arg");
+            assert_eq!(text, slash_unavailable_in_session_message("blocked"));
+            assert_ne!(text, "handler should not run");
+        }
+        other => panic!("expected slash result, got {other:?}"),
+    }
 }
 
 #[test]

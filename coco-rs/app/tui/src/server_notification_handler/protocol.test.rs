@@ -9,6 +9,11 @@
 
 use pretty_assertions::assert_eq;
 
+use std::sync::Arc;
+
+use coco_messages::LlmMessage;
+use coco_messages::Message;
+use coco_messages::UserMessage;
 use coco_types::ServerNotification;
 use coco_types::SessionStartedParams;
 use coco_types::TurnAbortReason;
@@ -101,6 +106,23 @@ fn session_started(provider: &str) -> ServerNotification {
     })
 }
 
+fn snapshot_user_message(id: uuid::Uuid, text: &str) -> Arc<Message> {
+    Arc::new(Message::User(UserMessage {
+        message: LlmMessage::User {
+            content: vec![coco_messages::UserContent::text(text)],
+            provider_options: None,
+        },
+        uuid: id,
+        timestamp: "2025-01-01T00:00:00Z".to_string(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    }))
+}
+
 #[test]
 fn clear_session_boundary_state_keeps_running_workflow_tasks() {
     let mut state = AppState::new();
@@ -133,6 +155,44 @@ fn clear_session_boundary_state_keeps_running_workflow_tasks() {
     let task = &state.session.active_tasks[0];
     assert_eq!(task.task_id, "wf_running");
     assert_eq!(task.workflow_progress.len(), 1);
+}
+
+#[test]
+fn clear_session_boundary_state_preserves_pre_clear_rewind_snapshot() {
+    let mut state = AppState::new();
+    let id = uuid::Uuid::new_v4();
+    state.session.rewind_pre_clear_messages = vec![snapshot_user_message(id, "before clear")];
+
+    clear_session_boundary_state(&mut state);
+
+    assert_eq!(state.session.rewind_pre_clear_messages.len(), 1);
+    assert_eq!(
+        state.session.rewind_pre_clear_messages[0]
+            .uuid()
+            .map(std::string::ToString::to_string),
+        Some(id.to_string())
+    );
+}
+
+#[test]
+fn history_replaced_clears_pre_clear_rewind_snapshot() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+    state.session.rewind_pre_clear_messages =
+        vec![snapshot_user_message(uuid::Uuid::new_v4(), "before clear")];
+
+    let consumed = super::handle(
+        &mut state,
+        ServerNotification::HistoryReplaced {
+            messages: Vec::new(),
+            session_id: String::new(),
+            agent_id: None,
+        },
+        &tx,
+    );
+
+    assert!(consumed);
+    assert!(state.session.rewind_pre_clear_messages.is_empty());
 }
 
 /// True if the receiver got a `Rewind { mode: AutoRestore }`. Drains

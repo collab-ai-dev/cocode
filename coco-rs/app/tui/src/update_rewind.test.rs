@@ -135,6 +135,25 @@ fn test_build_rewind_state_uses_pre_clear_snapshot_when_visible_transcript_empty
 }
 
 #[test]
+fn test_build_rewind_state_keeps_pre_clear_rows_with_post_clear_transcript() {
+    let mut state = AppState::new();
+    let before = uuid::Uuid::new_v4();
+    state.session.rewind_pre_clear_messages =
+        vec![std::sync::Arc::new(user_message(before, "before clear"))];
+    let after = test_helpers::push_user_text(&mut state.session, "u-after", "after clear");
+
+    let rewind = build_rewind_state(&state);
+
+    assert_eq!(rewind.messages.len(), 3, "pre-clear + current + synthetic");
+    assert_eq!(rewind.messages[0].message_id, before);
+    assert_eq!(rewind.messages[0].display_text, "before clear");
+    assert_eq!(rewind.messages[0].can_restore_code, Some(false));
+    assert_eq!(rewind.messages[1].message_id, after);
+    assert_eq!(rewind.messages[1].display_text, "after clear");
+    assert!(rewind.messages[2].is_current_prompt);
+}
+
+#[test]
 fn test_handle_rewind_nav() {
     let state = make_state_with_messages(5);
     let mut state = build_rewind_state(&state);

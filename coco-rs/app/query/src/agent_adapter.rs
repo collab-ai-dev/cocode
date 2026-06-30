@@ -124,8 +124,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // This child engine's OWN run depth (= parent + 1, stamped at
             // the AgentTool boundary). For plain spawns the tool-context
             // builder reads this directly; for forks it is overridden by
-            // `fork_isolation.child_query_depth()` (which inherits the
-            // parent's depth — a fork is a sibling, not a nested level).
+            // `fork_isolation.child_query_depth()` so the fork counts toward
+            // the same nesting cap.
             query_depth: config.child_query_depth,
             context_window: config
                 .context_window
@@ -323,10 +323,9 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 if !config.allowed_write_roots.is_empty() {
                     iso.allowed_write_roots = config.allowed_write_roots.clone();
                 }
-                // A fork inherits the PARENT's depth (sibling, not a nested
-                // level). `config.child_query_depth` is `parent + 1`, so the
-                // parent's depth is one less; `child_query_depth()` returns
-                // it unchanged.
+                // `config.child_query_depth` is `parent + 1`; store the
+                // parent depth here and let `child_query_depth()` apply the
+                // fork's own +1 at context-build time.
                 iso.parent_query_depth = config.child_query_depth.saturating_sub(1);
                 std::sync::Arc::new(iso)
             }),
