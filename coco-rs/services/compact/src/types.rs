@@ -39,6 +39,19 @@ pub const MAX_PTL_RETRIES: i32 = 3;
 /// Max streaming retries for the summary LLM call.
 pub const MAX_COMPACT_STREAMING_RETRIES: i32 = 2;
 
+/// Turns after a compact that still count as a rapid refill.
+pub const RAPID_REFILL_TURN_WINDOW: i32 = 3;
+
+/// Rapid refills allowed before the auto-compact thrash breaker trips.
+pub const RAPID_REFILL_BREAKER_COUNT: i32 = 3;
+
+/// User-facing rapid-refill breaker text, matching Claude Code's
+/// auto-compact thrash guidance.
+pub const RAPID_REFILL_BREAKER_MESSAGE: &str = "Autocompact is thrashing: the context refilled to the limit within 3 turns \
+of the previous compact, 3 times in a row. A file being read or a tool output \
+is likely too large for the context window. Try reading in smaller chunks, or \
+use /clear to start fresh.";
+
 // ── Post-compact attachment budgets ─────────────────────────────────
 
 /// Maximum recently-read files to re-inject after compaction.

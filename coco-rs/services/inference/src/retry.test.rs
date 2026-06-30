@@ -59,6 +59,7 @@ fn test_server_retry_after_takes_priority() {
     let err = crate::errors::RateLimitedSnafu {
         retry_after_ms: Some(15000_i64),
         message: "slow down".to_string(),
+        long_context_credits_required: false,
     }
     .build();
 
@@ -113,6 +114,7 @@ fn test_overload_cascade_capped_but_others_get_full_budget() {
     let rate_limited = crate::errors::RateLimitedSnafu {
         retry_after_ms: None,
         message: "slow down".to_string(),
+        long_context_credits_required: false,
     }
     .build();
     let network = crate::errors::NetworkSnafu {

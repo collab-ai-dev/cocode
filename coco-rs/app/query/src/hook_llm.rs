@@ -238,6 +238,7 @@ impl HookLlmHandle for QueryHookLlm {
                     agentic: false,
                     stop_sequences: None,
                     response_format: Some(hook_response_format()),
+                    fallback_min_context_window: None,
                     cancel: None,
                     wire_tap: None,
                 };

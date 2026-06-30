@@ -199,6 +199,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 }
             },
             fast_mode: false,
+            fallback_min_context_window: None,
             session_id: identity.session_id.clone(),
             project_dir: None,
             // Subagent base rules come from the shared parent `app_state`

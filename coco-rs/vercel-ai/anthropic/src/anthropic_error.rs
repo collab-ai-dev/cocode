@@ -6,6 +6,8 @@ use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::APICallError;
 use vercel_ai_provider_utils::ResponseHandler;
 
+pub const LONG_CONTEXT_CREDITS_REQUIRED_HEADER: &str = "x-coco-long-context-credits-required";
+
 /// Anthropic error response shape: `{ type: "error", error: { type, message } }`.
 #[derive(Debug, Deserialize)]
 pub struct AnthropicErrorData {
@@ -36,7 +38,7 @@ impl ResponseHandler<AISdkError> for AnthropicFailedResponseHandler {
         // BEFORE `text()` consumes the response, so `coco-inference` can surface
         // `request-id` / `anthropic-ratelimit-*` for support correlation. These
         // were previously dropped here.
-        let response_headers: std::collections::HashMap<String, String> = response
+        let mut response_headers: std::collections::HashMap<String, String> = response
             .headers()
             .iter()
             .filter_map(|(name, value)| {
@@ -60,6 +62,12 @@ impl ResponseHandler<AISdkError> for AnthropicFailedResponseHandler {
                 )
             }
         };
+        if is_long_context_credits_error(&message) {
+            response_headers.insert(
+                LONG_CONTEXT_CREDITS_REQUIRED_HEADER.to_string(),
+                "true".to_string(),
+            );
+        }
 
         // Attach a typed `APICallError` cause carrying the HTTP status (as
         // OpenAI/Google do). Without it, `coco-inference::wrap_provider_error`
@@ -78,6 +86,11 @@ impl ResponseHandler<AISdkError> for AnthropicFailedResponseHandler {
                 .with_cause(Box::new(api_error)),
         )
     }
+}
+
+fn is_long_context_credits_error(message: &str) -> bool {
+    message.contains("Extra usage is required for long context")
+        || message.contains("Usage credits are required for long context")
 }
 
 #[cfg(test)]

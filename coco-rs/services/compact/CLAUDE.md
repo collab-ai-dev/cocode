@@ -56,8 +56,11 @@ Implemented behaviors:
   summary slice. The legacy `render_summary_prompt_for_debug` remains
   only for diagnostics.
 - `QueryEngine` runs full/partial summaries through a cache-sharing
-  `ForkLabel::Compact` fork with deny-all tool policy when available,
-  falling back to a structured direct call with `tools = None`.
+  `ForkLabel::Compact` fork with deny-all tool policy and a fallback
+  context-window floor equal to the active model's window when available,
+  falling back to a structured direct call with `tools = None`,
+  `query_source = "compact"`, the same fallback floor, and
+  `thinking_level = None` so multi-provider defaults remain in control.
 - Full, partial, and session-memory compaction all restore post-compact
   context in the query layer: files, plan, skills, plan-mode reminder,
   async-agent reminders, SessionStart hook output, deferred-tool/agent/MCP
@@ -71,8 +74,26 @@ Implemented behaviors:
 - `CompactResult.raw_summary` preserves the raw summarizer output for
   PostCompact hooks; formatted continuation text stays only in
   `summary_messages`.
-- Auto LLM compaction records `CompactOutcome` and trips the session
-  failure breaker after `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3`.
+- Auto LLM compaction records `CompactOutcome`, trips the session
+  failure breaker after `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3`,
+  and trips the rapid-refill breaker after three compactions inside
+  three-turn windows. `AutoCompactAttemptDecision` is the typed,
+  discriminated gate result consumed by `app/query`.
+- `resolve_auto_compact_window` models Claude Code's auto-window source
+  precedence (`env/settings` override → clientdata → experiment →
+  model-default → auto) and returns the winning source plus whether it is
+  treated as configured. Runtime clientdata production is not wired yet;
+  callers must thread any server-pushed values explicitly.
+- `resolve_precompute_arm` models the `tengu_amber_moleskin`
+  precompute-buffer arm table as a pure helper: strict all-or-nothing
+  parsing, exact-window match before default arm, scalar fallback on
+  absent/malformed/no-match tables, and a diagnostic malformed payload
+  type. Runtime feature-flag/clientdata production is not wired yet.
+- Auto compaction runs a non-blocking fixed-prefix overflow probe after
+  the threshold gate and before breaker/full-compact routing. It reports
+  when billed input minus estimated message payload already exceeds the
+  auto-compact threshold, including image/document block counts for
+  diagnosis, then continues the normal compaction flow.
 - `strip_images_from_messages` traverses `Message::ToolResult` content
   arrays so image bytes cannot re-trip prompt-too-long during summary.
 - `wrap_system_reminder` delegates to
@@ -172,6 +193,11 @@ Three layers, picked at runtime based on provider capability:
 descriptions and exposes the encoder. `coco-query` checks
 the active runtime snapshot before populating `QueryParams.context_management`;
 non-Anthropic runtime slots always see `None` there and rely on layer 1 / 3.
+The Anthropic 1M-context-without-credits clamp is applied before compact
+thresholds see the window: `services/inference::ModelRuntime` reduces future
+`ModelRuntimeSnapshot.model_info.context_window` values above `200_000` to
+`200_000` after the provider reports the credits rejection, while
+`coco-compact` remains provider-agnostic.
 
 ## QueryEngine Integration
 
@@ -214,9 +240,17 @@ non-Anthropic runtime slots always see `None` there and rely on layer 1 / 3.
 - Threshold helpers: `should_auto_compact`,
   `should_auto_compact_guarded`, `auto_compact_threshold`,
   `effective_context_window`, `calculate_token_warning_state` —
-  **all take `&AutoCompactConfig`**.
-- Reactive: `ReactiveCompactConfig`, `ReactiveCompactState`,
-  `peel_head_for_ptl_retry`, `api_microcompact`,
+  **all take `&AutoCompactConfig`**. Window-source helpers:
+  `resolve_auto_compact_window`, `AutoCompactWindowInputs`,
+  `AutoCompactWindowResolution`, `AutoCompactWindowSource`,
+  `ConfiguredAutoCompactWindow`, `ClientDataAutoCompactWindow`.
+  Precompute arm-table helpers: `resolve_precompute_arm`,
+  `PrecomputeArmInputs`, `PrecomputeArmResolution`,
+  `PrecomputeArmSource`, `PrecomputeSurface`.
+- Reactive / auto state: `ReactiveCompactConfig`,
+  `ReactiveCompactState`, `AutoCompactState`,
+  `AutoCompactAttemptDecision`, `peel_head_for_ptl_retry`,
+  `api_microcompact`,
   `should_reactive_compact(&ReactiveCompactConfig, &AutoCompactConfig)`,
   `calculate_drop_target(&ReactiveCompactConfig, &AutoCompactConfig)`.
 - Time-based MC: `TimeBasedMcConfig` (re-exported from `coco_config`),

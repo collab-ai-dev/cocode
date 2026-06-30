@@ -31,6 +31,8 @@
 //!   `effort: 'low'` on prompt-suggestion forks collapsed cache hit
 //!   rate from 92.7% → 61% by changing `budget_tokens` and busting
 //!   the cache key)
+//! - `fallback_min_context_window: None` — ordinary forks inherit the
+//!   configured fallback chain; compact sets this explicitly.
 //!
 //! Override these only when cache parity isn't a goal. The per-call
 //! `max_output_tokens` lives on `ModelInfo` — to give a fork a
@@ -113,6 +115,10 @@ pub struct ForkedAgentOptions {
     /// parity** for older models that don't have adaptive thinking.
     /// Default `None` preserves the parent's cache key.
     pub effort: Option<coco_types::ReasoningEffort>,
+    /// Optional per-fork fallback context-window floor. Compact forks set
+    /// this to the active parent's window so model fallback cannot move
+    /// summarization onto a smaller-window model.
+    pub fallback_min_context_window: Option<i64>,
     /// Telemetry-only string for cache-break attribution. Defaults to
     /// `fork_label.as_str()` via [`Self::for_label`].
     pub query_source: String,
@@ -145,6 +151,10 @@ impl std::fmt::Debug for ForkedAgentOptions {
             .field("transcript_mode", &self.transcript_mode)
             .field("skip_cache_write", &self.skip_cache_write)
             .field("effort", &self.effort)
+            .field(
+                "fallback_min_context_window",
+                &self.fallback_min_context_window,
+            )
             .field("query_source", &self.query_source)
             .field("fork_label", &self.fork_label)
             .field("can_use_tool_set", &self.can_use_tool.is_some())
@@ -169,6 +179,7 @@ impl ForkedAgentOptions {
             transcript_mode: ForkTranscriptMode::Disabled,
             skip_cache_write: true,
             effort: None,
+            fallback_min_context_window: None,
             query_source: label.as_str().to_string(),
             fork_label: label,
             can_use_tool: None,

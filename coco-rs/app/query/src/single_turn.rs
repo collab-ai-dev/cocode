@@ -56,6 +56,7 @@ pub async fn single_turn_query(
             cache: None,
             stop_sequences: None,
             response_format: None,
+            fallback_min_context_window: None,
             cancel: None,
             wire_tap: None,
         };

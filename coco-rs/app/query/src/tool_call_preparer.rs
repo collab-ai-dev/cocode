@@ -899,6 +899,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     // emit `<thinking>` and `<reason>` freely.
                     stop_sequences: req.stop_sequences.clone(),
                     response_format: None,
+                    fallback_min_context_window: None,
                     cancel: None,
                     wire_tap: None,
                 };

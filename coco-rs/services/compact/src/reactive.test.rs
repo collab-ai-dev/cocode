@@ -125,3 +125,83 @@ fn test_circuit_breaker_failure_after_success_restarts_count() {
         "single failure after reset should be ok"
     );
 }
+
+// --- AutoCompactState / rapid-refill breaker tests ---
+
+#[test]
+fn test_auto_state_initially_allows_compact() {
+    let state = AutoCompactState::new();
+    assert!(state.should_attempt_compact());
+    assert!(!state.rapid_refill_breaker_tripped());
+    assert_eq!(state.next_rapid_refill_streak(), 0);
+    assert_eq!(
+        state.attempt_decision(),
+        AutoCompactAttemptDecision::Proceed {
+            consecutive_rapid_refills: 0,
+        }
+    );
+}
+
+#[test]
+fn test_auto_state_tracks_rapid_refills_within_three_turns() {
+    let mut state = AutoCompactState::new();
+    state.record_success(1000, 0);
+    state.advance_turn();
+    assert_eq!(state.next_rapid_refill_streak(), 1);
+    assert_eq!(
+        state.attempt_decision(),
+        AutoCompactAttemptDecision::Proceed {
+            consecutive_rapid_refills: 1,
+        }
+    );
+
+    state.record_success(2000, state.next_rapid_refill_streak());
+    state.advance_turn();
+    assert_eq!(state.next_rapid_refill_streak(), 2);
+    assert!(!state.rapid_refill_breaker_tripped());
+
+    state.record_success(3000, state.next_rapid_refill_streak());
+    state.advance_turn();
+    assert_eq!(state.next_rapid_refill_streak(), 3);
+    assert!(state.rapid_refill_breaker_tripped());
+    assert_eq!(
+        state.attempt_decision(),
+        AutoCompactAttemptDecision::RapidRefillBreakerTripped {
+            consecutive_rapid_refills: 3,
+        }
+    );
+}
+
+#[test]
+fn test_auto_state_resets_rapid_refill_after_turn_window() {
+    let mut state = AutoCompactState::new();
+    state.record_success(1000, 2);
+    state.advance_turn();
+    state.advance_turn();
+    assert_eq!(state.next_rapid_refill_streak(), 3);
+    state.advance_turn();
+    assert_eq!(state.turns_since_compact(), 3);
+    assert_eq!(state.next_rapid_refill_streak(), 0);
+    assert!(!state.rapid_refill_breaker_tripped());
+}
+
+#[test]
+fn test_auto_state_failure_breaker_is_independent_from_rapid_refill() {
+    let mut state = AutoCompactState::new();
+    state.record_success(1000, 2);
+    state.advance_turn();
+    assert!(state.rapid_refill_breaker_tripped());
+
+    state.record_failure(2000);
+    state.record_failure(3000);
+    state.record_failure(4000);
+    assert!(!state.should_attempt_compact());
+    assert_eq!(state.failure_count(), 3);
+    assert_eq!(state.last_attempt_ms(), 4000);
+    assert_eq!(
+        state.attempt_decision(),
+        AutoCompactAttemptDecision::FailureBreakerOpen {
+            consecutive_failures: 3,
+        }
+    );
+}

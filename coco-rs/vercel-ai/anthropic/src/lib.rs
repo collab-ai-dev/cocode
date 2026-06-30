@@ -42,6 +42,7 @@ pub use anthropic_config::AdapterAccountKind;
 pub use anthropic_config::AnthropicConfig;
 pub use anthropic_config::AnthropicModelCapabilities;
 pub use anthropic_config::ProviderTopology;
+pub use anthropic_error::LONG_CONTEXT_CREDITS_REQUIRED_HEADER;
 pub use anthropic_provider::AnthropicProvider;
 pub use anthropic_provider::AnthropicProviderSettings;
 pub use anthropic_provider::anthropic;

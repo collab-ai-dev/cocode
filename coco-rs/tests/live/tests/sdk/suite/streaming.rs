@@ -41,6 +41,7 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
         cache: None,
         stop_sequences: None,
         response_format: None,
+        fallback_min_context_window: None,
         cancel: None,
         wire_tap: None,
     };
@@ -151,6 +152,7 @@ async fn run_with_tools_choice(
         cache: None,
         stop_sequences: None,
         response_format: None,
+        fallback_min_context_window: None,
         cancel: None,
         wire_tap: None,
     };
@@ -318,6 +320,7 @@ pub async fn run_thinking_with_option_typed_tools(target: &LiveTarget) -> Result
         cache: None,
         stop_sequences: None,
         response_format: None,
+        fallback_min_context_window: None,
         cancel: None,
         wire_tap: None,
     };

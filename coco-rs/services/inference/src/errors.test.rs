@@ -17,6 +17,19 @@ fn test_classify_429_as_rate_limit() {
     assert!(matches!(err, InferenceError::RateLimited { .. }));
     assert_eq!(err.retry_after_ms(), Some(5000));
     assert!(err.is_retryable());
+    assert!(!err.is_long_context_credits_required());
+}
+
+#[test]
+fn test_long_context_credits_429_is_detected() {
+    let err = InferenceError::from_http_status_with_flags(
+        429,
+        "Anthropic API error",
+        None,
+        /*long_context_credits_required*/ true,
+    );
+    assert!(matches!(err, InferenceError::RateLimited { .. }));
+    assert!(err.is_long_context_credits_required());
 }
 
 #[test]

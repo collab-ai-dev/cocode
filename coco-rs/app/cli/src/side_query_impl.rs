@@ -125,6 +125,7 @@ fn build_query_params(request: &SideQueryRequest) -> QueryParams {
         cache: None,
         stop_sequences: None,
         response_format,
+        fallback_min_context_window: None,
         cancel: None,
         wire_tap: None,
     }
