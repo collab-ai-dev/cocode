@@ -36,6 +36,12 @@ pub struct MemoryConfig {
 
     pub searching_past_context_enabled: bool,
 
+    /// Full auto-memory prompt override. When present, runtime prompt
+    /// rendering returns `# auto memory\n{trimmed}` and skips bundled
+    /// taxonomy/index/mounted-index sections. Source of truth:
+    /// `coco_config::MemoryConfig::guidelines`.
+    pub guidelines: Option<String>,
+
     /// Free-form policy text injected verbatim into the auto-memory
     /// system-prompt block. `None` ⇒ no extra section. Source of
     /// truth: `coco_config::MemoryConfig::extra_guidelines`.
@@ -83,6 +89,7 @@ impl From<coco_config::MemoryConfig> for MemoryConfig {
             session_memory_per_section_tokens: c.session_memory_per_section_tokens,
             session_memory_total_tokens: c.session_memory_total_tokens,
             searching_past_context_enabled: c.searching_past_context_enabled,
+            guidelines: c.guidelines,
             extra_guidelines: c.extra_guidelines,
             memory_stores: c.memory_stores,
         }

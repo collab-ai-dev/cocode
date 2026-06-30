@@ -612,6 +612,13 @@ pub struct MemoryConfig {
     /// the `tengu_coral_fern` GrowthBook gate.
     pub searching_past_context_enabled: bool,
 
+    /// Full auto-memory prompt body override. Env-only, mirroring
+    /// Claude Code's `CLAUDE_COWORK_MEMORY_GUIDELINES`: when set, the
+    /// rendered prompt is exactly `# auto memory\n{trimmed}` and the
+    /// standard bundled memory prompt is skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guidelines: Option<String>,
+
     /// Free-form policy text appended verbatim to the auto-memory
     /// system-prompt section (after the standard taxonomy /
     /// how-to-save blocks, before the optional searching-past-context
@@ -690,6 +697,7 @@ impl Default for MemoryConfig {
             session_memory_per_section_tokens: 2_000,
             session_memory_total_tokens: 12_000,
             searching_past_context_enabled: false,
+            guidelines: None,
             extra_guidelines: None,
             memory_stores: Vec::new(),
         }
@@ -769,6 +777,11 @@ impl MemoryConfig {
         if env.is_truthy(EnvKey::CocoMemoryKairos) {
             config.kairos_mode = true;
         }
+        if let Some(text) = env.get_string(EnvKey::CocoCoworkMemoryGuidelines)
+            && !text.trim().is_empty()
+        {
+            config.guidelines = Some(text);
+        }
         if let Some(text) = env.get_string(EnvKey::CocoCoworkMemoryExtraGuidelines)
             && !text.trim().is_empty()
         {
@@ -789,12 +802,41 @@ impl MemoryConfig {
     }
 
     pub fn resolve_with_sources(settings: &SettingsWithSource, env: &EnvSnapshot) -> Self {
+        match Self::try_resolve_with_sources(settings, env) {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::warn!(
+                    target: "coco::config",
+                    error = %err,
+                    "falling back to memory config without mounted stores"
+                );
+                let mut config = Self::resolve_sub_toggles(&settings.merged, env);
+                config.directory = highest_trusted_memory_directory(settings);
+                if let Some(base) = env.get_string(EnvKey::CocoRemoteMemoryDir)
+                    && let Ok(path) = validate_memory_dir_override(&base, TildeExpansion::Reject)
+                {
+                    config.memory_base_override = Some(path);
+                }
+                if let Some(dir) = env.get_string(EnvKey::CocoMemoryPathOverride)
+                    && let Ok(path) = validate_memory_dir_override(&dir, TildeExpansion::Reject)
+                {
+                    config.directory = Some(path);
+                }
+                config
+            }
+        }
+    }
+
+    pub fn try_resolve_with_sources(
+        settings: &SettingsWithSource,
+        env: &EnvSnapshot,
+    ) -> crate::Result<Self> {
         let mut config = Self::resolve_sub_toggles(&settings.merged, env);
 
         // Mounted memory stores (env-only). A non-empty list enables team
         // recall outright (mounted ⇒ enabled) — see `is_team_recall_enabled`.
         if let Some(raw) = env.get_string(EnvKey::CocoMemoryStores) {
-            config.memory_stores = crate::memory_stores::parse_memory_stores(&raw);
+            config.memory_stores = crate::memory_stores::try_parse_memory_stores(&raw)?;
         }
 
         // Path overrides — two distinct semantics:
@@ -841,7 +883,7 @@ impl MemoryConfig {
             }
         }
 
-        config
+        Ok(config)
     }
 
     /// Whether team-memory recall is enabled.

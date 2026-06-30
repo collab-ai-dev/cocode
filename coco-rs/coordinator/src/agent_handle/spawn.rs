@@ -1633,6 +1633,10 @@ impl SwarmAgentHandle {
             }
         }
 
+        let query_cwd_for_engine = query_config
+            .cwd_override
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from(&cwd_for_engine));
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel::<EngineOutcome>();
         let detached_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let detached_flag_for_engine = detached_flag.clone();
@@ -1788,6 +1792,10 @@ impl SwarmAgentHandle {
                         mode_for_engine,
                     )
                     .await;
+                    let paths_written = collect_written_paths_in_messages(
+                        &qr.messages,
+                        query_cwd_for_engine.as_path(),
+                    );
                     AgentSpawnResponse {
                         status: AgentSpawnStatus::Completed,
                         agent_id: Some(agent_id_for_engine.clone()),
@@ -1800,7 +1808,7 @@ impl SwarmAgentHandle {
                         tool_use_counts: count_tool_uses_in_messages(&qr.messages),
                         cache_read_tokens: 0,
                         cache_creation_tokens: 0,
-                        paths_written: Vec::new(),
+                        paths_written,
                         duration_ms,
                         model: Some(model_for_engine.clone()),
                         worktree_path: worktree_path.clone(),
@@ -2332,10 +2340,8 @@ impl SwarmAgentHandle {
 }
 
 /// Walk the child agent's message log and tally `tool_name` from every
-/// assistant tool-call block. Memory telemetry uses the
-/// `Write + Edit + NotebookEdit` count to populate
-/// `MemoryEvent::ExtractionCompleted::files_written` without re-running
-/// the LLM.
+/// assistant tool-call block. Memory telemetry uses this as a legacy
+/// fallback when the spawn driver cannot populate `paths_written`.
 fn count_tool_uses_in_messages(
     messages: &[std::sync::Arc<coco_messages::Message>],
 ) -> std::collections::HashMap<String, i64> {
@@ -2354,6 +2360,102 @@ fn count_tool_uses_in_messages(
         }
     }
     counts
+}
+
+fn collect_written_paths_in_messages(
+    messages: &[std::sync::Arc<coco_messages::Message>],
+    cwd: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    let mut pending: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let mut results: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
+
+    for arc in messages {
+        match arc.as_ref() {
+            coco_messages::Message::Assistant(a) => {
+                let coco_messages::LlmMessage::Assistant { content, .. } = &a.message else {
+                    continue;
+                };
+                for part in content {
+                    let coco_messages::AssistantContent::ToolCall(tc) = part else {
+                        continue;
+                    };
+                    for path in written_paths_from_tool_call(tc, cwd) {
+                        pending.push((tc.tool_call_id.clone(), path));
+                    }
+                }
+            }
+            coco_messages::Message::ToolResult(result) => {
+                results.insert(result.tool_use_id.as_str(), !result.is_error);
+            }
+            _ => {}
+        }
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    pending
+        .into_iter()
+        .filter_map(|(tool_use_id, path)| {
+            if results.get(tool_use_id.as_str()).copied().unwrap_or(false)
+                && seen.insert(path.clone())
+            {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn written_paths_from_tool_call(
+    call: &coco_messages::ToolCallContent,
+    cwd: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    let name = call.tool_name.as_str();
+    if name == coco_types::ToolName::ApplyPatch.as_str() {
+        return apply_patch_paths_from_input(&call.input, cwd);
+    }
+
+    let is_write_tool = name == coco_types::ToolName::Write.as_str()
+        || name == coco_types::ToolName::Edit.as_str()
+        || name == coco_types::ToolName::NotebookEdit.as_str();
+    if !is_write_tool {
+        return Vec::new();
+    }
+
+    let Some(file_path) = call
+        .input
+        .get("file_path")
+        .or_else(|| call.input.get("notebook_path"))
+        .and_then(|v| v.as_str())
+    else {
+        return Vec::new();
+    };
+    let path = std::path::Path::new(file_path);
+    vec![if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }]
+}
+
+fn apply_patch_paths_from_input(
+    input: &serde_json::Value,
+    cwd: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    let patch = input
+        .get("patch")
+        .and_then(|v| v.as_str())
+        .or_else(|| input.as_str());
+    let Some(patch) = patch else {
+        return Vec::new();
+    };
+    let Ok(cwd) = coco_utils_absolute_path::AbsolutePathBuf::from_absolute_path(cwd) else {
+        return Vec::new();
+    };
+    let Ok(parsed) = coco_apply_patch::parse_patch(patch) else {
+        return Vec::new();
+    };
+    coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd).permission_paths
 }
 
 /// Concatenate every assistant text part in the most recent
@@ -2384,4 +2486,74 @@ fn last_assistant_text(messages: &[std::sync::Arc<coco_messages::Message>]) -> O
         };
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn assistant_patch_call(patch: &str) -> Arc<coco_messages::Message> {
+        Arc::new(coco_messages::create_assistant_message(
+            vec![coco_messages::AssistantContent::ToolCall(
+                coco_messages::ToolCallContent::new(
+                    "toolu_patch",
+                    coco_types::ToolName::ApplyPatch.as_str(),
+                    serde_json::json!({"patch": patch}),
+                ),
+            )],
+            "test-model",
+            coco_types::TokenUsage::default(),
+        ))
+    }
+
+    fn tool_result(
+        call_id: &str,
+        tool_name: coco_types::ToolName,
+        is_error: bool,
+    ) -> Arc<coco_messages::Message> {
+        Arc::new(coco_messages::create_tool_result_message(
+            call_id,
+            tool_name.as_str(),
+            coco_types::ToolId::Builtin(tool_name),
+            "ok",
+            is_error,
+        ))
+    }
+
+    #[test]
+    fn collect_written_paths_in_messages_counts_successful_apply_patch() {
+        let cwd = std::env::current_dir().expect("cwd");
+        let patch = "*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n";
+        let messages = vec![
+            assistant_patch_call(patch),
+            tool_result(
+                "toolu_patch",
+                coco_types::ToolName::ApplyPatch,
+                /*is_error*/ false,
+            ),
+        ];
+
+        let paths = collect_written_paths_in_messages(&messages, &cwd);
+
+        assert_eq!(paths, vec![cwd.join("notes.md")]);
+    }
+
+    #[test]
+    fn collect_written_paths_in_messages_ignores_failed_apply_patch() {
+        let cwd = std::env::current_dir().expect("cwd");
+        let patch = "*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n";
+        let messages = vec![
+            assistant_patch_call(patch),
+            tool_result(
+                "toolu_patch",
+                coco_types::ToolName::ApplyPatch,
+                /*is_error*/ true,
+            ),
+        ];
+
+        let paths = collect_written_paths_in_messages(&messages, &cwd);
+
+        assert!(paths.is_empty());
+    }
 }

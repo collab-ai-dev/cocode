@@ -349,6 +349,49 @@ fn memory_config_rejects_tilde_for_env_directory_override() {
 }
 
 #[test]
+fn memory_config_try_resolve_rejects_invalid_memory_stores_env() {
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoMemoryStores, r#"["relative/path"]"#)]);
+    let settings = settings_with_sources(Settings::default());
+
+    let err = MemoryConfig::try_resolve_with_sources(&settings, &env).unwrap_err();
+
+    assert!(err.to_string().contains("COCO_MEMORY_STORES"));
+}
+
+#[test]
+fn memory_config_try_resolve_accepts_memory_stores_env() {
+    let env = EnvSnapshot::from_pairs([(
+        EnvKey::CocoMemoryStores,
+        r#"[{"path": "/mnt/team", "mount": "team", "promptIndex": "MEMORY.md"}]"#,
+    )]);
+    let settings = settings_with_sources(Settings::default());
+
+    let config = MemoryConfig::try_resolve_with_sources(&settings, &env).unwrap();
+
+    assert_eq!(config.memory_stores.len(), 1);
+    assert!(config.is_team_recall_enabled());
+    assert_eq!(config.memory_stores[0].mount.as_deref(), Some("team"));
+    assert_eq!(
+        config.memory_stores[0].prompt_index.as_deref(),
+        Some("MEMORY.md")
+    );
+}
+
+#[test]
+fn memory_config_resolves_full_cowork_memory_guidelines_env() {
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoCoworkMemoryGuidelines, "  custom policy  "),
+        (EnvKey::CocoCoworkMemoryExtraGuidelines, "extra policy"),
+    ]);
+    let settings = settings_with_sources(Settings::default());
+
+    let config = MemoryConfig::try_resolve_with_sources(&settings, &env).unwrap();
+
+    assert_eq!(config.guidelines.as_deref(), Some("  custom policy  "));
+    assert_eq!(config.extra_guidelines.as_deref(), Some("extra policy"));
+}
+
+#[test]
 fn test_sandbox_settings_resolves_mode_and_network() {
     // After feature-gate consolidation, top-level enable/disable lives on
     // `Feature::Sandbox`. The mode + network toggles are coco-rs-specific

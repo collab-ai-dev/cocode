@@ -339,8 +339,8 @@ pub struct QueryEngineConfig {
     /// Layer 4 — agent-level allow/deny list. Top-level sessions use
     /// `unrestricted()`; subagents narrow it from `AgentDefinition`.
     pub tool_filter: ToolFilter,
-    /// Sandboxed write fence — FileWrite / FileEdit / NotebookEdit may
-    /// only target paths under one of these roots. Empty = no fence.
+    /// Sandboxed write fence — file-mutation tools may only target paths
+    /// under one of these roots. Empty = no fence.
     /// Set on subagents launched by the memory crate (extraction /
     /// auto-dream) so the child can only write inside the memdir.
     /// Threaded onto every `ToolUseContext.allowed_write_roots`.

@@ -337,7 +337,7 @@ pub fn build_runtime_config_with(
     validate_roles_against_registry(&model_roles, &model_registry)?;
 
     let features = resolve_features(merged, &env, &overrides);
-    let memory = MemoryConfig::resolve_with_sources(&settings, &env);
+    let memory = MemoryConfig::try_resolve_with_sources(&settings, &env)?;
     let memory_activation = resolve_memory_activation(&features, &env, &memory);
     let tool_overrides = resolve_main_tool_overrides(&model_roles, &model_registry);
     // `skill_overrides` is read from per-tier raw JSON rather than
@@ -485,7 +485,10 @@ fn resolve_memory_activation(
     if env.is_truthy(crate::env::EnvKey::CocoBareMode) {
         return MemoryActivation::disabled(MemoryDisabledReason::BareMode);
     }
-    if env.is_truthy(crate::env::EnvKey::CocoRemote) && memory.memory_base_override.is_none() {
+    if env.is_truthy(crate::env::EnvKey::CocoRemote)
+        && memory.memory_base_override.is_none()
+        && memory.directory.is_none()
+    {
         return MemoryActivation::disabled(MemoryDisabledReason::RemoteWithoutMemoryDir);
     }
     MemoryActivation::active()

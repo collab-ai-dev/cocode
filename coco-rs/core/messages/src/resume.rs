@@ -128,7 +128,13 @@ fn detect_turn_interruption(messages: &[Message]) -> InternalInterruptionState {
                 message_uuid: user.uuid,
             }
         }
-        Message::Attachment(_) => InternalInterruptionState::InterruptedTurn,
+        Message::Attachment(attachment) => {
+            if is_ambient_memory_attachment(attachment.kind) {
+                InternalInterruptionState::None
+            } else {
+                InternalInterruptionState::InterruptedTurn
+            }
+        }
         Message::ToolResult(result) => {
             if is_terminal_tool_result_id(&result.tool_use_id, messages, idx) {
                 InternalInterruptionState::None
@@ -144,7 +150,16 @@ fn detect_turn_interruption(messages: &[Message]) -> InternalInterruptionState {
 
 fn is_turn_relevant_message(message: &Message) -> bool {
     !matches!(message, Message::System(_) | Message::Progress(_))
+        && !matches!(message, Message::Attachment(attachment) if is_ambient_memory_attachment(attachment.kind))
         && !matches!(message, Message::Assistant(assistant) if assistant.api_error.is_some())
+}
+
+fn is_ambient_memory_attachment(kind: coco_types::AttachmentKind) -> bool {
+    matches!(
+        kind,
+        coco_types::AttachmentKind::MemoryIndexWarning
+            | coco_types::AttachmentKind::MemoryUpdateReminder
+    )
 }
 
 fn assistant_tool_use_ids(message: &Message) -> Vec<&str> {
@@ -189,9 +204,11 @@ mod tests {
     use super::*;
     use crate::AssistantMessage;
     use crate::AttachmentBody;
+    use crate::AttachmentMessage;
     use crate::TextContent;
     use crate::ToolCallContent;
     use crate::UserMessage;
+    use coco_types::AttachmentKind;
     use coco_types::ToolId;
     use uuid::Uuid;
 
@@ -251,6 +268,13 @@ mod tests {
             "ok",
             false,
         )
+    }
+
+    fn reminder_attachment(kind: AttachmentKind) -> Message {
+        Message::Attachment(AttachmentMessage::api(
+            kind,
+            LlmMessage::user_text(crate::wrapping::wrap_in_system_reminder("notice")),
+        ))
     }
 
     fn has_visible_no_response_sentinel(messages: &[Message]) -> bool {
@@ -336,6 +360,50 @@ mod tests {
             Some(RESUME_CONTINUATION_PROMPT)
         );
         assert!(!has_visible_no_response_sentinel(&result.messages));
+    }
+
+    #[test]
+    fn trailing_memory_update_attachment_does_not_mark_interrupted_turn() {
+        let result = sanitize_messages_for_resume(vec![
+            user_text("done"),
+            assistant_text("finished"),
+            reminder_attachment(AttachmentKind::MemoryUpdateReminder),
+        ]);
+
+        assert_eq!(result.turn_interruption_state, TurnInterruptionState::None);
+        assert_eq!(result.messages.len(), 3);
+    }
+
+    #[test]
+    fn trailing_memory_warning_attachment_does_not_hide_interrupted_prompt() {
+        let user = user_text("pending");
+        let user_uuid = user.uuid().copied().expect("user uuid");
+        let result = sanitize_messages_for_resume(vec![
+            user,
+            reminder_attachment(AttachmentKind::MemoryIndexWarning),
+        ]);
+
+        assert_eq!(
+            result.turn_interruption_state,
+            TurnInterruptionState::InterruptedPrompt {
+                message_uuid: user_uuid,
+            }
+        );
+    }
+
+    #[test]
+    fn trailing_non_memory_attachment_still_marks_interrupted_turn() {
+        let result = sanitize_messages_for_resume(vec![
+            user_text("done"),
+            assistant_text("finished"),
+            reminder_attachment(AttachmentKind::CriticalSystemReminder),
+        ]);
+
+        assert!(matches!(
+            result.turn_interruption_state,
+            TurnInterruptionState::InterruptedPrompt { .. }
+        ));
+        assert_eq!(result.messages.len(), 4);
     }
 
     #[test]

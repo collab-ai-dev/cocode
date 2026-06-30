@@ -2,7 +2,7 @@
 //!
 //! Mirrors the Claude Code `CLAUDE_MEMORY_STORES` schema. Each entry is
 //! either a bare absolute-path string or an object form. The parser
-//! ([`parse_memory_stores`]) folds the env value into
+//! ([`try_parse_memory_stores`]) folds the env value into
 //! [`crate::sections::MemoryConfig::memory_stores`] during the
 //! RuntimeConfig resolution — leaf crates never read the env directly.
 //!
@@ -10,12 +10,13 @@
 //! enabled" precedence inversion): coco has no rollout flag, so a mounted
 //! store is sufficient on its own.
 //!
-//! NOTE: `prompt_index` / `prompt_index_max_bytes` are parsed and
-//! validated here but currently UNUSED — the network promptIndex fetch +
-//! `<memory path=...>` injection is a deferred (phase 3) change.
+//! `prompt_index` is loaded by `coco-memory` during system-prompt
+//! rendering. `prompt_index_max_bytes` drives post-write compact
+//! reminders when a mounted prompt index approaches its read budget.
 
 use std::collections::HashSet;
 
+use crate::ConfigError;
 use coco_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -60,17 +61,17 @@ pub struct MemoryStore {
     pub mount: Option<String>,
     /// Safe relative path (within the store) to a prompt-index file.
     /// Each `/`-separated segment matches `[A-Za-z0-9._-]+` and is never
-    /// `.` or `..`. DEFERRED (phase 3): parsed-but-unused today.
+    /// `.` or `..`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_index: Option<String>,
-    /// Optional byte cap for the fetched prompt index. DEFERRED (phase
-    /// 3): parsed-but-unused today.
+    /// Optional byte cap for post-write compact reminders on the
+    /// fetched prompt index.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_index_max_bytes: Option<i64>,
 }
 
 /// Wire form of a single entry: a bare absolute-path string OR the
-/// object form. Normalized into [`MemoryStore`] by [`parse_memory_stores`].
+/// object form. Normalized into [`MemoryStore`] by [`try_parse_memory_stores`].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum RawStore {
@@ -89,18 +90,65 @@ struct RawStoreObject {
     scope: StoreScope,
     #[serde(default)]
     mount: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "promptIndex", alias = "prompt_index")]
     prompt_index: Option<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        rename = "promptIndexMaxBytes",
+        alias = "prompt_index_max_bytes"
+    )]
     prompt_index_max_bytes: Option<i64>,
 }
 
+fn invalid_memory_stores(message: impl Into<String>) -> ConfigError {
+    ConfigError::generic(format!("COCO_MEMORY_STORES {}", message.into()))
+}
+
+fn validate_store_path(path: &str) -> Result<(), ConfigError> {
+    if !path.starts_with('/') || path.starts_with("//") {
+        return Err(invalid_memory_stores(
+            "failed validation: path must be path-absolute and must not override the host",
+        ));
+    }
+    Ok(())
+}
+
+fn is_valid_mount_name(mount: &str) -> bool {
+    !mount.is_empty()
+        && mount
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+}
+
+fn sanitize_mount_segment(segment: &str) -> String {
+    segment
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-') {
+                char::from(b)
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
 /// Derive a mount name from a path's last segment.
-fn derive_mount(path: &AbsolutePathBuf) -> Option<String> {
-    path.as_path()
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .filter(|s| !s.is_empty())
+fn derive_mount(path: &str) -> Result<String, ConfigError> {
+    let trimmed = path.trim_end_matches('/');
+    let segment = trimmed.rsplit('/').next().unwrap_or_default();
+    if segment.is_empty() {
+        return Err(invalid_memory_stores(format!(
+            "cannot derive mount name from path: {path}"
+        )));
+    }
+    let mount = sanitize_mount_segment(segment);
+    if mount.is_empty() || mount == "." || mount == ".." {
+        return Err(invalid_memory_stores(format!(
+            "derived mount name is not a valid path segment: {segment}"
+        )));
+    }
+    Ok(mount)
 }
 
 /// Validate a `prompt_index` as a safe relative path: each
@@ -129,28 +177,26 @@ fn is_safe_relative_prompt_index(rel: &str) -> bool {
 /// Parse `COCO_MEMORY_STORES` (JSON array) into validated stores.
 ///
 /// Invariants applied:
-/// - each `path` must be absolute (entries with relative paths are skipped);
+/// - each `path` must be a host-local absolute POSIX path;
 /// - `mount` is derived from the last path segment when absent;
-/// - duplicate mounts are skipped (first wins);
-/// - at most one `scope:"user"` entry is kept (extras skipped);
-/// - `prompt_index` must be a safe relative path, else dropped to `None`.
+/// - explicit `mount` must match `[A-Za-z0-9_-]+`;
+/// - duplicate mounts are rejected;
+/// - more than one `scope:"user"` entry is rejected;
+/// - `promptIndex` must be a safe relative path;
+/// - `promptIndexMaxBytes`, when present, must be positive.
 ///
-/// Returns an empty vec on empty/blank input or invalid JSON (fail-open;
-/// the failure is logged). Never panics.
-pub fn parse_memory_stores(raw: &str) -> Vec<MemoryStore> {
+/// Empty/blank input returns an empty vec. Invalid non-empty input returns
+/// an error so runtime config can fail fast, matching Claude Code's
+/// `CLAUDE_MEMORY_STORES` handling.
+pub fn try_parse_memory_stores(raw: &str) -> Result<Vec<MemoryStore>, ConfigError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let entries: Vec<RawStore> = match serde_json::from_str(trimmed) {
         Ok(v) => v,
         Err(err) => {
-            tracing::warn!(
-                target: "coco::config",
-                error = %err,
-                "ignoring invalid COCO_MEMORY_STORES (not a valid JSON array of stores)"
-            );
-            return Vec::new();
+            return Err(invalid_memory_stores(format!("is not valid JSON: {err}")));
         }
     };
 
@@ -178,77 +224,57 @@ pub fn parse_memory_stores(raw: &str) -> Vec<MemoryStore> {
             ),
         };
 
-        // Reject non-absolute paths explicitly: `AbsolutePathBuf` would
-        // otherwise silently resolve a relative path against the process
-        // CWD. A mounted store path must be absolute (CC `tgi()` parity).
-        if !std::path::Path::new(&path_raw).is_absolute() {
-            tracing::warn!(
-                target: "coco::config",
-                path = %path_raw,
-                "skipping COCO_MEMORY_STORES entry with non-absolute path"
-            );
-            continue;
-        }
+        validate_store_path(&path_raw)?;
         let path = match AbsolutePathBuf::try_from(path_raw.as_str()) {
             Ok(p) => p,
             Err(err) => {
-                tracing::warn!(
-                    target: "coco::config",
-                    path = %path_raw,
-                    error = %err,
-                    "skipping COCO_MEMORY_STORES entry with invalid path"
-                );
-                continue;
+                return Err(invalid_memory_stores(format!(
+                    "failed validation for path {path_raw:?}: {err}"
+                )));
             }
         };
 
-        let mount = match mount
-            .filter(|m| !m.trim().is_empty())
-            .or_else(|| derive_mount(&path))
-        {
-            Some(m) => m,
-            None => {
-                tracing::warn!(
-                    target: "coco::config",
-                    path = %path.display(),
-                    "skipping COCO_MEMORY_STORES entry: cannot derive mount name"
-                );
-                continue;
+        let mount = match mount {
+            Some(m) => {
+                if !is_valid_mount_name(&m) {
+                    return Err(invalid_memory_stores(
+                        "failed validation: mount must match /^[A-Za-z0-9_-]+$/",
+                    ));
+                }
+                m
             }
+            None => derive_mount(&path_raw)?,
         };
         if !seen_mounts.insert(mount.clone()) {
-            tracing::warn!(
-                target: "coco::config",
-                mount = %mount,
-                "skipping COCO_MEMORY_STORES entry: duplicate mount"
-            );
-            continue;
+            return Err(invalid_memory_stores(format!(
+                "has duplicate mount: {mount}"
+            )));
         }
 
         if matches!(scope, StoreScope::User) {
             if user_scope_used {
-                tracing::warn!(
-                    target: "coco::config",
-                    mount = %mount,
-                    "skipping COCO_MEMORY_STORES entry: more than one scope:\"user\" store"
-                );
-                continue;
+                return Err(invalid_memory_stores(
+                    "has more than one scope:\"user\" entry",
+                ));
             }
             user_scope_used = true;
         }
 
-        let prompt_index = prompt_index.filter(|p| {
-            let safe = is_safe_relative_prompt_index(p);
-            if !safe {
-                tracing::warn!(
-                    target: "coco::config",
-                    mount = %mount,
-                    prompt_index = %p,
-                    "dropping unsafe prompt_index (not a safe relative path)"
-                );
-            }
-            safe
-        });
+        if let Some(p) = &prompt_index
+            && !is_safe_relative_prompt_index(p)
+        {
+            return Err(invalid_memory_stores(
+                "failed validation: promptIndex segments must match [A-Za-z0-9._-]+ and must not be . or ..",
+            ));
+        }
+
+        if let Some(max_bytes) = prompt_index_max_bytes
+            && max_bytes <= 0
+        {
+            return Err(invalid_memory_stores(
+                "failed validation: promptIndexMaxBytes must be a positive integer",
+            ));
+        }
 
         out.push(MemoryStore {
             path,
@@ -260,7 +286,24 @@ pub fn parse_memory_stores(raw: &str) -> Vec<MemoryStore> {
         });
     }
 
-    out
+    Ok(out)
+}
+
+/// Backwards-compatible helper for callers that do not participate in
+/// startup config failure. Runtime config resolution uses
+/// [`try_parse_memory_stores`] so invalid env input is fail-fast.
+pub fn parse_memory_stores(raw: &str) -> Vec<MemoryStore> {
+    match try_parse_memory_stores(raw) {
+        Ok(stores) => stores,
+        Err(err) => {
+            tracing::warn!(
+                target: "coco::config",
+                error = %err,
+                "ignoring invalid COCO_MEMORY_STORES"
+            );
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]

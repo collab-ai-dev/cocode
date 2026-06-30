@@ -1,6 +1,17 @@
 use super::*;
 use std::path::Path;
 
+fn native_tools() -> FileMutationPromptTools {
+    FileMutationPromptTools::native()
+}
+
+fn patch_tools() -> FileMutationPromptTools {
+    FileMutationPromptTools {
+        write_tool: coco_types::ToolName::ApplyPatch,
+        edit_tool: coco_types::ToolName::ApplyPatch,
+    }
+}
+
 #[test]
 fn auto_variant_includes_individual_types_and_index() {
     let p = build_system_prompt_section(
@@ -14,6 +25,7 @@ fn auto_variant_includes_individual_types_and_index() {
         None,
         None,
         &[],
+        native_tools(),
     );
     assert!(p.contains("# auto memory"));
     assert!(p.contains("<types>"));
@@ -44,6 +56,7 @@ fn combined_variant_includes_scope_taxonomy_and_team_block() {
         None,
         None,
         &[],
+        native_tools(),
     );
     assert!(p.contains("private directory at `/m`"));
     assert!(p.contains("team directory at `/m/team`"));
@@ -58,7 +71,57 @@ fn combined_variant_includes_scope_taxonomy_and_team_block() {
     assert!(p.contains("personal or team"));
 }
 
+#[test]
+fn system_prompt_renders_native_file_mutation_tools_by_default() {
+    let p = build_system_prompt_section(
+        SystemPromptVariant::Auto,
+        Path::new("/m"),
+        None,
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &[],
+        native_tools(),
+    );
+
+    assert!(p.contains("Write tool"));
+    assert!(!p.contains("apply_patch"));
+}
+
+#[test]
+fn system_prompt_renders_apply_patch_file_mutation_tool() {
+    let p = build_system_prompt_section(
+        SystemPromptVariant::Auto,
+        Path::new("/m"),
+        None,
+        None,
+        None,
+        true,
+        false,
+        None,
+        None,
+        &[],
+        patch_tools(),
+    );
+
+    assert!(p.contains("apply_patch"));
+    assert!(!p.contains("Write"));
+    assert!(!p.contains("Edit"));
+}
+
 fn store(path: &str, mode: StoreMode, scope: StoreScope) -> MemoryStore {
+    store_with_prompt_index(path, mode, scope, None)
+}
+
+fn store_with_prompt_index(
+    path: &str,
+    mode: StoreMode,
+    scope: StoreScope,
+    prompt_index: Option<&str>,
+) -> MemoryStore {
     MemoryStore {
         path: coco_config::parse_memory_stores(&format!("[\"{path}\"]"))
             .into_iter()
@@ -74,7 +137,7 @@ fn store(path: &str, mode: StoreMode, scope: StoreScope) -> MemoryStore {
                 .to_string_lossy()
                 .into_owned(),
         ),
-        prompt_index: None,
+        prompt_index: prompt_index.map(str::to_string),
         prompt_index_max_bytes: None,
     }
 }
@@ -97,15 +160,105 @@ fn mounted_stores_render_rw_ro_and_user_sections() {
         None,
         None,
         &stores,
+        native_tools(),
     );
     assert!(p.contains("## Mounted memory stores"));
     assert!(p.contains("### Team stores (writable)"));
-    assert!(p.contains("/mnt/team-rw"));
+    assert!(p.contains("/m/team/team-rw/"));
+    assert!(p.contains("(mount `team-rw`)"));
+    assert!(p.contains("/m/team/team-rw/MEMORY.md"));
+    assert!(!p.contains("/mnt/team-rw"));
     assert!(p.contains("### Team stores (read-only)"));
-    assert!(p.contains("/mnt/team-ro"));
-    assert!(p.contains("DO NOT write to them"));
+    assert!(p.contains("/m/team/team-ro/"));
+    assert!(p.contains("do not write there because changes will not persist"));
+    assert!(!p.contains("/mnt/team-ro"));
     assert!(p.contains("### Private store"));
     assert!(p.contains("/mnt/user-priv"));
+}
+
+#[test]
+fn mounted_stores_use_prompt_index_targets_for_writable_team_stores() {
+    let stores = vec![store_with_prompt_index(
+        "/mnt/team-rw",
+        StoreMode::Rw,
+        StoreScope::Team,
+        Some("index/MEMORY.md"),
+    )];
+    let p = build_system_prompt_section(
+        SystemPromptVariant::Combined,
+        Path::new("/m"),
+        Some(Path::new("/m/team")),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &stores,
+        native_tools(),
+    );
+    assert!(p.contains("/m/team/team-rw/index/MEMORY.md"));
+    assert!(!p.contains("/m/team/team-rw/MEMORY.md"));
+    assert!(!p.contains("/mnt/team-rw"));
+}
+
+#[test]
+fn team_only_variant_omits_private_directory_and_uses_team_store_targets() {
+    let stores = vec![
+        store_with_prompt_index(
+            "/mnt/team-rw",
+            StoreMode::Rw,
+            StoreScope::Team,
+            Some("index/MEMORY.md"),
+        ),
+        store("/mnt/team-ro", StoreMode::Ro, StoreScope::Team),
+    ];
+    let p = build_system_prompt_section(
+        SystemPromptVariant::TeamOnly,
+        Path::new("/m"),
+        Some(Path::new("/m/team")),
+        Some("- [private](private.md) — should not render"),
+        Some("- [root team](root.md) — should not render"),
+        false,
+        false,
+        None,
+        Some("extra mounted index"),
+        &stores,
+        native_tools(),
+    );
+
+    assert!(p.starts_with("# Memory"));
+    assert!(!p.contains("private directory at"));
+    assert!(!p.contains("## MEMORY.md"));
+    assert!(!p.contains("Team MEMORY.md"));
+    assert!(p.contains("persistent, file-based team memory directory"));
+    assert!(p.contains("There is no separate private memory directory"));
+    assert!(p.contains("/m/team/team-rw/"));
+    assert!(p.contains("/m/team/team-rw/index/MEMORY.md"));
+    assert!(p.contains("read-only team memory at `/m/team/team-ro/`"));
+    assert!(p.contains("extra mounted index"));
+}
+
+#[test]
+fn team_only_read_only_stores_do_not_render_save_instructions() {
+    let stores = vec![store("/mnt/team-ro", StoreMode::Ro, StoreScope::Team)];
+    let p = build_system_prompt_section(
+        SystemPromptVariant::TeamOnly,
+        Path::new("/m"),
+        Some(Path::new("/m/team")),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &stores,
+        native_tools(),
+    );
+
+    assert!(p.contains("read-only access to team memory"));
+    assert!(p.contains("explain that memory is read-only in this session"));
+    assert!(!p.contains("## How to save memories"));
 }
 
 #[test]
@@ -122,6 +275,7 @@ fn mounted_stores_omitted_in_auto_variant() {
         None,
         None,
         &stores,
+        native_tools(),
     );
     // Store prose is combined-only; Auto variant must not render it.
     assert!(!p.contains("## Mounted memory stores"));
@@ -140,6 +294,7 @@ fn skip_index_omits_two_step_block() {
         None,
         None,
         &[],
+        native_tools(),
     );
     assert!(!p.contains("two-step process"));
 }
@@ -157,6 +312,7 @@ fn searching_past_context_substitutes_memory_and_transcript_dir() {
         Some(Path::new("/sess/proj")),
         None,
         &[],
+        native_tools(),
     );
     assert!(p.contains("## Searching past context"));
     assert!(p.contains("/mem/dir"));
@@ -177,6 +333,7 @@ fn searching_past_context_keeps_placeholder_when_transcript_unset() {
         None,
         None,
         &[],
+        native_tools(),
     );
     // Placeholder visible to the model when projectDir isn't resolvable.
     assert!(p.contains("<your sessions directory>"));
@@ -184,7 +341,7 @@ fn searching_past_context_keeps_placeholder_when_transcript_unset() {
 
 #[test]
 fn kairos_variant_describes_daily_log_pattern() {
-    let p = build_kairos_prompt(Path::new("/m"), false, false, None);
+    let p = build_kairos_prompt(Path::new("/m"), false, false, None, native_tools());
     assert!(p.contains("# auto memory"));
     assert!(p.contains("daily log"));
     assert!(p.contains("YYYY-MM-DD.md"));
@@ -195,7 +352,7 @@ fn kairos_variant_describes_daily_log_pattern() {
 
 #[test]
 fn kairos_skip_index_omits_memory_md_block() {
-    let p = build_kairos_prompt(Path::new("/m"), true, false, None);
+    let p = build_kairos_prompt(Path::new("/m"), true, false, None, native_tools());
     assert!(!p.contains("## MEMORY.md"));
 }
 
@@ -206,6 +363,7 @@ fn kairos_searching_past_context_appends_block() {
         false,
         true,
         Some(Path::new("/transcripts")),
+        native_tools(),
     );
     assert!(p.contains("## Searching past context"));
     assert!(p.contains("/transcripts"));
@@ -220,6 +378,7 @@ fn extract_prompt_includes_manifest_and_message_count() {
         "- [project] foo.md (2026-05-09T08:00:00.000Z): hook",
         false,
         false,
+        native_tools(),
     );
     // The count appears twice — both the "most recent" line and the
     // budget-reminder line should reflect it.
@@ -233,11 +392,32 @@ fn extract_prompt_includes_manifest_and_message_count() {
 }
 
 #[test]
+fn extract_prompt_renders_native_file_mutation_tools() {
+    let p = build_extract_prompt(5, "", false, false, native_tools());
+
+    assert!(p.contains("Write for creating"));
+    assert!(p.contains("Edit for updating"));
+    assert!(p.contains("Edit requires a prior Read"));
+    assert!(!p.contains("apply_patch"));
+}
+
+#[test]
+fn extract_prompt_renders_apply_patch_without_native_tool_names() {
+    let p = build_extract_prompt(5, "", false, false, patch_tools());
+
+    assert!(p.contains("apply_patch for creating or updating"));
+    assert!(p.contains("issue all apply_patch calls in parallel"));
+    assert!(!p.contains("Write"));
+    assert!(!p.contains("Edit"));
+    assert!(!p.contains("Edit requires a prior Read"));
+}
+
+#[test]
 fn extract_prompt_omits_manifest_section_when_empty() {
     // When `existingMemories` is empty the whole `## Existing memory files`
     // section is dropped. Rust caller passes `""` from `format_memory_manifest`
     // when the dir is empty.
-    let p = build_extract_prompt(5, "", false, false);
+    let p = build_extract_prompt(5, "", false, false, native_tools());
     assert!(
         !p.contains("Existing memory files"),
         "expected manifest section to be omitted entirely when input is empty, got: {p}"
@@ -250,14 +430,14 @@ fn extract_prompt_omits_manifest_section_when_empty() {
 
 #[test]
 fn extract_combined_includes_team_secret_addendum() {
-    let p = build_extract_prompt(10, "", false, true);
+    let p = build_extract_prompt(10, "", false, true, native_tools());
     assert!(p.contains("avoid saving sensitive data within shared team memories"));
     assert!(p.contains("<scope>always private</scope>"));
 }
 
 #[test]
 fn dream_prompt_includes_four_phases() {
-    let p = build_dream_prompt(Path::new("/m"), Path::new("/p"), &[]);
+    let p = build_dream_prompt(Path::new("/m"), Path::new("/p"), &[], false, native_tools());
     assert!(p.contains("Phase 1 — Orient"));
     assert!(p.contains("Phase 2 — Gather recent signal"));
     assert!(p.contains("Phase 3 — Consolidate"));
@@ -265,19 +445,41 @@ fn dream_prompt_includes_four_phases() {
     // Memory + transcript paths substituted into the body.
     assert!(p.contains("Memory directory: `/m`"));
     assert!(p.contains("Session transcripts: `/p`"));
+    assert!(p.contains("Session logs"));
+    assert!(p.contains("logs/YYYY/MM/DD/<id>-<title>.md"));
+    assert!(p.contains("Reconcile memories against CLAUDE.md"));
+    assert!(!p.contains("Team memory (`team/` subdirectory)"));
 }
 
 #[test]
-fn dream_prompt_includes_bash_readonly_constraint_in_extra_block() {
-    // The `extra` block always includes the read-only Bash constraint
+fn dream_prompt_includes_team_guidance_when_enabled() {
+    let p = build_dream_prompt(Path::new("/m"), Path::new("/p"), &[], true, native_tools());
+    assert!(p.contains("Team memory (`team/` subdirectory)"));
+    assert!(p.contains("ls team/"));
+    assert!(p.contains("be conservative pruning `team/`"));
+}
+
+#[test]
+fn dream_prompt_includes_bash_sandbox_constraint_in_extra_block() {
+    // The `extra` block always includes the Bash sandbox constraint
     // reminder so the dream subagent doesn't waste turns on
-    // writes/redirects that `createAutoMemCanUseTool` would deny.
-    let p = build_dream_prompt(Path::new("/m"), Path::new("/p"), &[]);
+    // unsupported writes/redirects that the dream canUseTool would deny.
+    let p = build_dream_prompt(Path::new("/m"), Path::new("/p"), &[], false, native_tools());
     assert!(
         p.contains("Tool constraints for this run"),
-        "expected bash-readonly constraint in dream prompt's extra block, got: {p}"
+        "expected bash sandbox constraint in dream prompt's extra block, got: {p}"
     );
     assert!(p.contains("Bash is restricted to read-only"));
+    assert!(p.contains("plus deleting `.md` paths inside the memory directory"));
+}
+
+#[test]
+fn dream_prompt_renders_apply_patch_directory_blurb() {
+    let p = build_dream_prompt(Path::new("/m"), Path::new("/p"), &[], false, patch_tools());
+
+    assert!(p.contains("write to it directly with apply_patch"));
+    assert!(!p.contains("Write"));
+    assert!(!p.contains("Edit"));
 }
 
 #[test]
@@ -286,6 +488,8 @@ fn dream_prompt_appends_session_list_after_constraint() {
         Path::new("/m"),
         Path::new("/p"),
         &["s1".into(), "s2".into()],
+        false,
+        native_tools(),
     );
     assert!(p.contains("Tool constraints for this run"));
     assert!(p.contains("Sessions since last consolidation (2)"));

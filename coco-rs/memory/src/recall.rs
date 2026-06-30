@@ -97,21 +97,28 @@ impl PrefetchState {
 
 /// System prompt for the relevance-ranker side-query.
 ///
-/// Multi-LLM neutral wording (no "Claude Code" reference); the
-/// `with_skip_system_prefix(true)` on the request keeps the agent's
-/// preamble out of the ranker so this stays the only system context.
+/// Mirrors CC 2.1.193's SELECT prompt. The current Rust request still
+/// sends a one-shot manifest+query user message; the prompt text keeps
+/// the upstream multi-turn/cache guidance so ranker behavior stays
+/// calibrated as the cache lane is filled in.
 pub const SELECT_MEMORIES_SYSTEM_PROMPT: &str = "\
-You are selecting memories that will be useful to an AI coding assistant as it processes a \
-user's query. You will be given the user's query and a list of available memory files with \
-their filenames and descriptions.\n\
+You are selecting memories that will be useful to Claude Code as it processes a user's query. \
+The first message lists the available memory files with their filenames and descriptions; \
+subsequent messages each contain one user query.\n\
 \n\
-Return a JSON object: {\"selected_memories\": [\"filename.md\", ...]} listing up to 5 filenames \
-for memories that will clearly be useful. Only include memories you are certain will help.\n\
-- If unsure, leave it out. Be selective.\n\
-- If none clearly help, return an empty list.\n\
-- If a list of recently-used tools is provided, do NOT select API/usage references for those \
-tools (the assistant is already exercising them). DO still select warnings, gotchas, or known \
-issues about those tools — active use is exactly when those matter.";
+Return a list of filenames for the memories that will clearly be useful to Claude Code as it \
+processes the user's query (up to 5). Only include memories that you are certain will be helpful \
+based on their name and description.\n\
+- If you are unsure if a memory will be useful in processing the user's query, then do not include \
+it in your list. Be selective and discerning.\n\
+- If there are no memories in the list that would clearly be useful, feel free to return an empty \
+list.\n\
+- Be especially conservative with user-profile and project-overview memories ([user], [project]). \
+These describe the user's ongoing focus, not what every question is about. A profile saying \
+\"works on DB performance\" is NOT relevant to a question that merely contains the word \
+\"performance\" unless the question is actually about that DB work. Match on what the question IS \
+ABOUT, not on surface keyword overlap with who the user is.\n\
+- Do not re-select memories you already returned for an earlier query in this conversation.";
 
 /// Build the user-side prompt for the recall ranker.
 ///
@@ -124,7 +131,6 @@ issues about those tools — active use is exactly when those matter.";
 /// - [<type>] <filename> (<iso-ts>): <description>
 /// ...
 ///
-/// Recently used tools: <tool>, <tool>
 /// ```
 ///
 /// Uses [`format_memory_manifest`] for the bullet body so the manifest
@@ -136,7 +142,6 @@ pub fn build_selection_prompt(
     query: &str,
     scanned: &[ScannedMemory],
     state: &PrefetchState,
-    recent_tools: &[String],
 ) -> String {
     let visible: Vec<ScannedMemory> = scanned
         .iter()
@@ -150,12 +155,6 @@ pub fn build_selection_prompt(
         out.push_str("(none)");
     } else {
         out.push_str(&format_memory_manifest(&visible));
-    }
-    if !recent_tools.is_empty() {
-        out.push_str(&format!(
-            "\n\nRecently used tools: {}",
-            recent_tools.join(", ")
-        ));
     }
     out
 }

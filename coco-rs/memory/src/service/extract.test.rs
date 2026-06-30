@@ -1,6 +1,9 @@
 use super::*;
 use crate::config::MemoryConfig;
 use crate::service::test_support::RecordingHandle;
+use coco_types::ToolId;
+use coco_types::ToolName;
+use coco_types::ToolOverrides;
 use tempfile::tempdir;
 
 fn config() -> MemoryConfig {
@@ -29,6 +32,15 @@ fn turn_input(message_count: i32, has_writes: bool) -> TurnInput {
         last_message_id: Some("uuid".into()),
         has_memory_writes: Box::new(move || has_writes),
     }
+}
+
+fn patch_overrides() -> std::sync::Arc<ToolOverrides> {
+    std::sync::Arc::new(
+        ToolOverrides::none()
+            .with_extra(ToolId::Builtin(ToolName::ApplyPatch))
+            .with_excluded(ToolId::Builtin(ToolName::Write))
+            .with_excluded(ToolId::Builtin(ToolName::Edit)),
+    )
 }
 
 #[tokio::test]
@@ -110,6 +122,33 @@ async fn fires_with_constraints_and_fork_messages() {
         calls[0].active_shell_tool,
         coco_types::ActiveShellTool::Disabled
     );
+}
+
+#[tokio::test]
+async fn spawned_prompt_uses_apply_patch_when_configured() {
+    let temp = tempdir().unwrap();
+    let handle = std::sync::Arc::new(RecordingHandle::default());
+    let agent: coco_tool_runtime::AgentHandleRef = handle.clone();
+    let svc = ExtractService::with_shared_agent_and_notices(
+        temp.path().into(),
+        config(),
+        std::sync::Arc::new(std::sync::RwLock::new(agent)),
+        std::sync::Arc::new(crate::telemetry::NoopEmitter),
+        crate::notice::NoticeInbox::default(),
+        crate::service::MemoryForkToolConfig::new(
+            coco_types::ActiveShellTool::Disabled,
+            patch_overrides(),
+        ),
+        "test-session".into(),
+    );
+
+    let outcome = svc.force(turn_input(20, false)).await;
+    assert!(matches!(outcome, ExtractOutcome::Completed { .. }));
+    let calls = handle.calls();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].prompt.contains("apply_patch"));
+    assert!(!calls[0].prompt.contains("Write"));
+    assert!(!calls[0].prompt.contains("Edit requires a prior Read"));
 }
 
 #[tokio::test]

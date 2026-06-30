@@ -622,6 +622,23 @@ impl QueryEngine {
                     &runtime,
                 )
                 .await;
+            for warning in report.index_warnings {
+                let bounded = truncate_memory_reminder(&warning);
+                let msg = coco_messages::wrapping::create_system_reminder_message_with_kind(
+                    coco_types::AttachmentKind::MemoryIndexWarning,
+                    &bounded,
+                );
+                crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+            }
+            for update in report.memory_updates {
+                let in_context_paths = self.memory_update_in_context_paths(&update.paths).await;
+                let reminder = format_memory_update_reminder(&update, &in_context_paths);
+                let msg = coco_messages::wrapping::create_system_reminder_message_with_kind(
+                    coco_types::AttachmentKind::MemoryUpdateReminder,
+                    &reminder,
+                );
+                crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+            }
             for notice in report.notices {
                 let msg =
                     coco_messages::Message::System(coco_messages::SystemMessage::MemorySaved(
@@ -1282,6 +1299,28 @@ impl QueryEngine {
         });
     }
 
+    async fn memory_update_in_context_paths(&self, paths: &[String]) -> Vec<String> {
+        let read_paths: std::collections::HashSet<std::path::PathBuf> =
+            match self.file_read_state.as_ref() {
+                Some(frs) => frs
+                    .read()
+                    .await
+                    .iter_entries()
+                    .map(|(path, _)| path.to_path_buf())
+                    .collect(),
+                None => std::collections::HashSet::new(),
+            };
+        let loaded_nested = self.loaded_nested_memory_paths.lock().await;
+        paths
+            .iter()
+            .filter(|path| {
+                let path_buf = std::path::PathBuf::from(path.as_str());
+                read_paths.contains(&path_buf) || loaded_nested.contains(&path_buf)
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Build the `FinalizeTurnContext` from engine-side state and
     /// dispatch into `MemoryRuntime::finalize_turn`. The runtime
     /// black-boxes the SM + extract + dream + KAIROS-rollover +
@@ -1335,7 +1374,7 @@ impl QueryEngine {
         };
 
         // Gap 4 — direct-edit toast. Walk the just-finished assistant
-        // turn for Write/Edit/NotebookEdit calls and pair each with its
+        // turn for file-mutation calls and pair each with its
         // matching ToolResult so memory's `classify_written_path` pass
         // can decide whether to emit a `ManualEdit` notice.
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -1358,8 +1397,70 @@ impl QueryEngine {
     }
 }
 
-/// Walk the last assistant turn for Write / Edit / NotebookEdit tool
-/// calls and pair each with its matching `ToolResult` so memory's
+fn format_memory_update_reminder(
+    update: &coco_memory::MemoryUpdateNotice,
+    in_context_paths: &[String],
+) -> String {
+    const MAX_PATHS: usize = 10;
+
+    let source_label = match update.source {
+        coco_memory::MemoryUpdateSource::Dream => "Background memory consolidation",
+    };
+    let mut lines = vec![format!(
+        "{source_label} updated your memory directory: {}",
+        update.summary
+    )];
+    if !update.paths.is_empty() {
+        lines.push(format!(
+            "Files changed: {}",
+            format_bounded_path_list(&update.paths, MAX_PATHS)
+        ));
+    }
+    if !in_context_paths.is_empty() {
+        lines.push(format!(
+            "Your loaded copy of {} is now stale relative to disk - Read it again if you need current contents.",
+            format_bounded_path_list(in_context_paths, MAX_PATHS)
+        ));
+    }
+    lines.push(
+        "This is ambient context - do not narrate it to the user unless they ask or it is directly relevant to their request."
+            .to_string(),
+    );
+    truncate_memory_reminder(&lines.join("\n"))
+}
+
+fn format_bounded_path_list(paths: &[String], max_paths: usize) -> String {
+    let shown = paths
+        .iter()
+        .take(max_paths)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let omitted = paths.len().saturating_sub(max_paths);
+    if omitted == 0 {
+        shown
+    } else {
+        format!("{shown} ({omitted} more omitted)")
+    }
+}
+
+fn truncate_memory_reminder(text: &str) -> String {
+    const MAX_MEMORY_REMINDER_BYTES: usize = 4 * 1024;
+    if text.len() <= MAX_MEMORY_REMINDER_BYTES {
+        return text.to_string();
+    }
+
+    let suffix = format!(
+        "\n... omitted {} bytes",
+        text.len().saturating_sub(MAX_MEMORY_REMINDER_BYTES)
+    );
+    let budget = MAX_MEMORY_REMINDER_BYTES.saturating_sub(suffix.len());
+    let head = coco_utils_string::take_bytes_at_char_boundary(text, budget);
+    format!("{head}{suffix}")
+}
+
+/// Walk the last assistant turn for file-mutation tool calls and pair
+/// each with its matching `ToolResult` so memory's
 /// post-write classification (Gap 4) can decide whether the call
 /// produced a `ManualEdit` notice.
 ///
@@ -1406,6 +1507,13 @@ fn extract_recent_tool_writes<M: std::borrow::Borrow<coco_messages::Message>>(
             continue;
         };
         let name = tc.tool_name.as_str();
+        if name == coco_types::ToolName::ApplyPatch.as_str() {
+            for path in apply_patch_paths_from_input(&tc.input, cwd) {
+                pending.push((tc.tool_call_id.clone(), name.to_string(), path));
+            }
+            continue;
+        }
+
         let is_write_tool = name == coco_types::ToolName::Write.as_str()
             || name == coco_types::ToolName::Edit.as_str()
             || name == coco_types::ToolName::NotebookEdit.as_str();
@@ -1453,6 +1561,26 @@ fn extract_recent_tool_writes<M: std::borrow::Borrow<coco_messages::Message>>(
             },
         )
         .collect()
+}
+
+fn apply_patch_paths_from_input(
+    input: &serde_json::Value,
+    cwd: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    let patch = input
+        .get("patch")
+        .and_then(|v| v.as_str())
+        .or_else(|| input.as_str());
+    let Some(patch) = patch else {
+        return Vec::new();
+    };
+    let Ok(cwd) = coco_utils_absolute_path::AbsolutePathBuf::from_absolute_path(cwd) else {
+        return Vec::new();
+    };
+    let Ok(parsed) = coco_apply_patch::parse_patch(patch) else {
+        return Vec::new();
+    };
+    coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd).permission_paths
 }
 
 /// Build a [`crate::prompt_suggestion::SuggestionContext`] from the
@@ -1644,7 +1772,7 @@ fn count_tool_calls_since<M: std::borrow::Borrow<coco_messages::Message>>(
 }
 
 /// Detect whether any assistant turn since `since_uuid` wrote into the
-/// memory directory via Write / Edit / NotebookEdit. Used by
+/// memory directory via a file-mutation tool. Used by
 /// `ExtractService::maybe_extract` to skip extraction when the user
 /// just curated memory directly. When `since_uuid` is `None` (or
 /// the cursor uuid isn't found, e.g. compaction trimmed it), walk the
@@ -1683,6 +1811,17 @@ fn main_agent_wrote_memory<M: std::borrow::Borrow<coco_messages::Message>>(
             // Compare against the canonical typed names instead of
             // raw string literals.
             let name = call.tool_name.as_str();
+            if name == coco_types::ToolName::ApplyPatch.as_str() {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+                if apply_patch_paths_from_input(&call.input, &cwd)
+                    .iter()
+                    .any(|path| coco_memory::path::is_auto_mem_file(path, memory_dir))
+                {
+                    return true;
+                }
+                continue;
+            }
+
             let is_write_tool = name == coco_types::ToolName::Write.as_str()
                 || name == coco_types::ToolName::Edit.as_str()
                 || name == coco_types::ToolName::NotebookEdit.as_str();
@@ -1705,7 +1844,7 @@ fn main_agent_wrote_memory<M: std::borrow::Borrow<coco_messages::Message>>(
                     .map(|cwd| cwd.join(path))
                     .unwrap_or_else(|_| path.to_path_buf())
             };
-            if absolute.starts_with(memory_dir) {
+            if coco_memory::path::is_auto_mem_file(&absolute, memory_dir) {
                 return true;
             }
         }

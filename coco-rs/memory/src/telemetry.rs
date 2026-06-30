@@ -18,6 +18,15 @@ pub enum MemoryEvent {
     /// Memory subsystem is gated off.
     MemdirDisabled { reason: DisableReason },
 
+    /// Mounted team promptIndex fetch outcome. Mirrors upstream's
+    /// `tengu_feature_ok/sad` events with
+    /// `feature_name=memory_prompt_index`.
+    MemoryPromptIndex {
+        mount: String,
+        prompt_index: String,
+        outcome: MemoryPromptIndexOutcome,
+    },
+
     /// Extraction agent ran a tool that wasn't allow-listed.
     ExtractionToolDenied { tool_name: String },
 
@@ -61,12 +70,25 @@ pub enum MemoryEvent {
     AutoDreamFired {
         hours_since_last: i64,
         sessions_since_last: i32,
+        team_memory_enabled: bool,
+    },
+
+    /// Auto-dream skipped at an upstream-observed telemetry branch.
+    AutoDreamSkipped {
+        reason: AutoDreamSkipReason,
+        session_count: Option<i32>,
+        min_required: Option<i32>,
     },
 
     /// Auto-dream consolidation completed.
     AutoDreamCompleted {
         sessions_reviewed: i32,
-        files_changed: i32,
+        /// `files_touched_count` field on `tengu_auto_dream_completed`.
+        files_touched_count: i32,
+        /// `team_memory_enabled` field on `tengu_auto_dream_completed`.
+        team_memory_enabled: bool,
+        /// `daily_logs_found` field on `tengu_auto_dream_completed`.
+        daily_logs_found: i32,
         /// `cache_read` field on `tengu_auto_dream_completed`.
         cache_read_tokens: i64,
         /// `cache_created` field on `tengu_auto_dream_completed`.
@@ -78,7 +100,10 @@ pub enum MemoryEvent {
 
     /// Auto-dream consolidation subagent failed. Lock mtime is rolled
     /// back so the next time-gate window doesn't restart at "now".
-    AutoDreamFailed,
+    AutoDreamFailed {
+        phase: AutoDreamFailurePhase,
+        error_class: String,
+    },
 
     /// `/dream` forced a consolidation bypassing the three gates. Lock
     /// is still acquired (concurrency-safe) and the lock mtime is
@@ -129,6 +154,58 @@ pub enum MemoryEvent {
         /// New active day (`%Y-%m-%d`).
         today: String,
     },
+}
+
+/// Outcome label for a mounted team promptIndex fetch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryPromptIndexOutcome {
+    Ok,
+    Error,
+    Timeout,
+    UnsafePath,
+}
+
+impl MemoryPromptIndexOutcome {
+    pub fn error_code(self) -> Option<&'static str> {
+        match self {
+            Self::Ok => None,
+            Self::Error => Some("error"),
+            Self::Timeout => Some("timeout"),
+            Self::UnsafePath => Some("unsafe_path"),
+        }
+    }
+}
+
+/// Reason labels used by `tengu_auto_dream_skipped`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoDreamSkipReason {
+    Sessions,
+    Lock,
+}
+
+impl AutoDreamSkipReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sessions => "sessions",
+            Self::Lock => "lock",
+        }
+    }
+}
+
+/// Phase labels used by `tengu_auto_dream_failed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoDreamFailurePhase {
+    Fork,
+    Completion,
+}
+
+impl AutoDreamFailurePhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fork => "fork",
+            Self::Completion => "completion",
+        }
+    }
 }
 
 /// Reason auto-memory was disabled.
@@ -212,6 +289,31 @@ impl MemoryTelemetryEmitter for TracingEmitter {
                 reason = reason.as_str(),
                 "memdir disabled"
             ),
+            MemoryEvent::MemoryPromptIndex {
+                mount,
+                prompt_index,
+                outcome: MemoryPromptIndexOutcome::Ok,
+            } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_feature_ok",
+                feature_name = "memory_prompt_index",
+                mount = %mount,
+                promptIndex = %prompt_index,
+                "mounted memory prompt index fetched"
+            ),
+            MemoryEvent::MemoryPromptIndex {
+                mount,
+                prompt_index,
+                outcome,
+            } => tracing::warn!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_feature_sad",
+                feature_name = "memory_prompt_index",
+                error_code = outcome.error_code().unwrap_or("error"),
+                mount = %mount,
+                promptIndex = %prompt_index,
+                "mounted memory prompt index fetch failed"
+            ),
             MemoryEvent::ExtractionToolDenied { tool_name } => tracing::info!(
                 target: "coco_memory::telemetry",
                 event_type = "tengu_auto_mem_tool_denied",
@@ -263,16 +365,42 @@ impl MemoryTelemetryEmitter for TracingEmitter {
             MemoryEvent::AutoDreamFired {
                 hours_since_last,
                 sessions_since_last,
+                team_memory_enabled,
             } => tracing::info!(
                 target: "coco_memory::telemetry",
                 event_type = "tengu_auto_dream_fired",
                 hours_since_last,
                 sessions_since_last,
+                team_memory_enabled,
                 "auto-dream fired"
+            ),
+            MemoryEvent::AutoDreamSkipped {
+                reason: AutoDreamSkipReason::Sessions,
+                session_count,
+                min_required,
+            } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_auto_dream_skipped",
+                reason = "sessions",
+                session_count = session_count.unwrap_or_default(),
+                min_required = min_required.unwrap_or_default(),
+                "auto-dream skipped"
+            ),
+            MemoryEvent::AutoDreamSkipped {
+                reason: AutoDreamSkipReason::Lock,
+                session_count: _,
+                min_required: _,
+            } => tracing::info!(
+                target: "coco_memory::telemetry",
+                event_type = "tengu_auto_dream_skipped",
+                reason = "lock",
+                "auto-dream skipped"
             ),
             MemoryEvent::AutoDreamCompleted {
                 sessions_reviewed,
-                files_changed,
+                files_touched_count,
+                team_memory_enabled,
+                daily_logs_found,
                 cache_read_tokens,
                 cache_creation_tokens,
                 output_tokens,
@@ -281,16 +409,20 @@ impl MemoryTelemetryEmitter for TracingEmitter {
                 target: "coco_memory::telemetry",
                 event_type = "tengu_auto_dream_completed",
                 sessions_reviewed,
-                files_changed,
+                files_touched_count,
+                team_memory_enabled,
+                daily_logs_found,
                 cache_read = cache_read_tokens,
                 cache_created = cache_creation_tokens,
                 output = output_tokens,
                 duration_ms,
                 "auto-dream completed"
             ),
-            MemoryEvent::AutoDreamFailed => tracing::warn!(
+            MemoryEvent::AutoDreamFailed { phase, error_class } => tracing::warn!(
                 target: "coco_memory::telemetry",
                 event_type = "tengu_auto_dream_failed",
+                phase = phase.as_str(),
+                error_class = %error_class,
                 "auto-dream failed"
             ),
             MemoryEvent::AutoDreamManual => tracing::info!(
@@ -409,6 +541,37 @@ impl MemoryTelemetryEmitter for OtelEmitter {
                 self.manager
                     .counter("tengu_memdir_disabled", 1, &[("reason", reason.as_str())]);
             }
+            MemoryEvent::MemoryPromptIndex {
+                mount,
+                prompt_index,
+                outcome: MemoryPromptIndexOutcome::Ok,
+            } => {
+                self.manager.counter(
+                    "tengu_feature_ok",
+                    1,
+                    &[
+                        ("feature_name", "memory_prompt_index"),
+                        ("mount", mount.as_str()),
+                        ("promptIndex", prompt_index.as_str()),
+                    ],
+                );
+            }
+            MemoryEvent::MemoryPromptIndex {
+                mount,
+                prompt_index,
+                outcome,
+            } => {
+                self.manager.counter(
+                    "tengu_feature_sad",
+                    1,
+                    &[
+                        ("feature_name", "memory_prompt_index"),
+                        ("error_code", outcome.error_code().unwrap_or("error")),
+                        ("mount", mount.as_str()),
+                        ("promptIndex", prompt_index.as_str()),
+                    ],
+                );
+            }
             MemoryEvent::ExtractionToolDenied { tool_name } => {
                 self.manager.counter(
                     "tengu_auto_mem_tool_denied",
@@ -470,8 +633,13 @@ impl MemoryTelemetryEmitter for OtelEmitter {
             MemoryEvent::AutoDreamFired {
                 hours_since_last,
                 sessions_since_last,
+                team_memory_enabled,
             } => {
-                self.manager.counter("tengu_auto_dream_fired", 1, &[]);
+                self.manager.counter(
+                    "tengu_auto_dream_fired",
+                    1,
+                    &[("team_memory_enabled", bool_str(team_memory_enabled))],
+                );
                 self.manager
                     .histogram("dream.hours_since_last", hours_since_last, &[]);
                 self.manager.histogram(
@@ -480,19 +648,60 @@ impl MemoryTelemetryEmitter for OtelEmitter {
                     &[],
                 );
             }
+            MemoryEvent::AutoDreamSkipped {
+                reason: AutoDreamSkipReason::Sessions,
+                session_count,
+                min_required,
+            } => {
+                self.manager.counter(
+                    "tengu_auto_dream_skipped",
+                    1,
+                    &[("reason", AutoDreamSkipReason::Sessions.as_str())],
+                );
+                if let Some(count) = session_count {
+                    self.manager
+                        .histogram("dream.skipped.session_count", count as i64, &[]);
+                }
+                if let Some(min) = min_required {
+                    self.manager
+                        .histogram("dream.skipped.min_required", min as i64, &[]);
+                }
+            }
+            MemoryEvent::AutoDreamSkipped {
+                reason: AutoDreamSkipReason::Lock,
+                session_count: _,
+                min_required: _,
+            } => {
+                self.manager.counter(
+                    "tengu_auto_dream_skipped",
+                    1,
+                    &[("reason", AutoDreamSkipReason::Lock.as_str())],
+                );
+            }
             MemoryEvent::AutoDreamCompleted {
                 sessions_reviewed,
-                files_changed,
+                files_touched_count,
+                team_memory_enabled,
+                daily_logs_found,
                 cache_read_tokens,
                 cache_creation_tokens,
                 output_tokens,
                 duration_ms,
             } => {
-                self.manager.counter("tengu_auto_dream_completed", 1, &[]);
+                self.manager.counter(
+                    "tengu_auto_dream_completed",
+                    1,
+                    &[("team_memory_enabled", bool_str(team_memory_enabled))],
+                );
                 self.manager
                     .histogram("dream.sessions_reviewed", sessions_reviewed as i64, &[]);
+                self.manager.histogram(
+                    "dream.files_touched_count",
+                    files_touched_count as i64,
+                    &[],
+                );
                 self.manager
-                    .histogram("dream.files_changed", files_changed as i64, &[]);
+                    .histogram("dream.daily_logs_found", daily_logs_found as i64, &[]);
                 self.manager
                     .histogram("dream.cache_read_tokens", cache_read_tokens, &[]);
                 self.manager
@@ -505,8 +714,15 @@ impl MemoryTelemetryEmitter for OtelEmitter {
                     &[],
                 );
             }
-            MemoryEvent::AutoDreamFailed => {
-                self.manager.counter("tengu_auto_dream_failed", 1, &[]);
+            MemoryEvent::AutoDreamFailed { phase, error_class } => {
+                self.manager.counter(
+                    "tengu_auto_dream_failed",
+                    1,
+                    &[
+                        ("phase", phase.as_str()),
+                        ("error_class", error_class.as_str()),
+                    ],
+                );
             }
             MemoryEvent::AutoDreamManual => {
                 self.manager.counter("tengu_auto_dream_manual", 1, &[]);

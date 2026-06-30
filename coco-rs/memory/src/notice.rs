@@ -49,7 +49,7 @@ impl NoticeVerb {
     /// shows up in multiple notices from one drain. A fork's
     /// `Saved`/`Improved` is a more precise signal than the engine's
     /// post-write `ManualEdit` classification (which fires for any
-    /// Edit/Write of a memory-managed file). When both fire for the
+    /// successful edit-tool write of a memory-managed file). When both fire for the
     /// same path same turn the user should see one toast, not two.
     fn priority(self) -> u8 {
         match self {
@@ -67,6 +67,22 @@ pub struct MemoryUserNotice {
     /// (the index is mechanical and not user-relevant).
     pub written_paths: Vec<String>,
     pub verb: NoticeVerb,
+}
+
+/// Source of a model-visible memory update reminder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryUpdateSource {
+    /// Auto-dream consolidated files in the background.
+    Dream,
+}
+
+/// Queued model-visible notice that memory files changed underneath
+/// the main conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryUpdateNotice {
+    pub source: MemoryUpdateSource,
+    pub summary: String,
+    pub paths: Vec<String>,
 }
 
 /// Append-only mailbox shared between memory services and the engine
@@ -180,6 +196,46 @@ impl NoticeInbox {
     }
 
     /// Test helper — `true` when no notices are queued.
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Append-only mailbox for model-visible memory update reminders.
+#[derive(Debug, Default, Clone)]
+pub struct MemoryUpdateInbox {
+    inner: Arc<Mutex<Vec<MemoryUpdateNotice>>>,
+}
+
+impl MemoryUpdateInbox {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&self, notice: MemoryUpdateNotice) {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(notice);
+    }
+
+    pub fn drain(&self) -> Vec<MemoryUpdateNotice> {
+        let mut g = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *g)
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("MemoryUpdateInbox mutex poisoned — invariant broken")
+            .len()
+    }
+
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0

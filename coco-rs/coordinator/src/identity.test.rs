@@ -95,6 +95,21 @@ async fn test_resolve_teammate_identity_from_env_vars() {
     // Tier-1 (task-local) is absent outside a `run_with_teammate_context`
     // scope; clear tier-2 so resolution falls through to the env tier.
     clear_dynamic_team_context();
+
+    if let Some(cached) = INHERITED_ENV.get() {
+        let id = resolve_teammate_identity().expect("cached identity resolves");
+        assert_eq!(id.agent_id, cached.agent_id.as_deref().unwrap_or_default());
+        assert_eq!(
+            id.agent_name,
+            cached.agent_name.as_deref().unwrap_or_default()
+        );
+        assert_eq!(
+            id.team_name,
+            cached.team_name.as_deref().unwrap_or_default()
+        );
+        return;
+    }
+
     // SAFETY: serialized via the held `ENV_LOCK` guard; nextest isolates per
     // process.
     unsafe {

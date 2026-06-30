@@ -10,7 +10,7 @@
 //! | `PromptSuggestion` | predict next user prompt | deny-all |
 //! | `SideQuestion` | `/btw` answer-once side query | deny-all |
 //! | `Compact` | `/compact` summarizer | deny-all |
-//! | `ExtractMemories` | post-turn memory write | auto-mem (Read/Glob/Grep + read-only Bash + Edit/Write within memory_dir) |
+//! | `ExtractMemories` | post-turn memory write | auto-mem (Read/Glob/Grep + read-only Bash + model edit tool within memory_dir) |
 //! | `SessionMemoryAuto` | auto session-memory rebuild | session-mem (Edit only on exact path) |
 //! | `SessionMemoryManual` | `/summary` slash | session-mem |
 //! | `AgentSummary` | 30s subagent progress snapshot | deny-all |

@@ -70,7 +70,7 @@ pub fn truncate_entrypoint_content(raw: &str) -> EntrypointTruncation {
 
     if truncated.len() > MAX_ENTRYPOINT_BYTES {
         // Cut at the last newline before the cap so we don't sever a line.
-        let cap = MAX_ENTRYPOINT_BYTES;
+        let cap = truncated.floor_char_boundary(MAX_ENTRYPOINT_BYTES);
         let cut = truncated[..cap].rfind('\n').unwrap_or(cap);
         truncated.truncate(cut);
     }
@@ -78,7 +78,9 @@ pub fn truncate_entrypoint_content(raw: &str) -> EntrypointTruncation {
     let reason = match (line_truncated, byte_truncated) {
         (true, false) => format!("{line_count} lines (limit: {MAX_ENTRYPOINT_LINES})"),
         (false, true) => format!(
-            "{byte_count} bytes (limit: {MAX_ENTRYPOINT_BYTES}) — index entries are too long"
+            "{} (limit: {}) — index entries are too long",
+            format_byte_count(byte_count),
+            format_byte_count(MAX_ENTRYPOINT_BYTES)
         ),
         _ => format!("{line_count} lines and {byte_count} bytes"),
     };
@@ -125,6 +127,29 @@ fn parse_index_line(line: &str) -> Option<MemoryIndexEntry> {
         file: line[file_start..file_end].to_string(),
         hook,
     })
+}
+
+pub(crate) fn format_byte_count(bytes: usize) -> String {
+    let kb = bytes as f64 / 1024.0;
+    if kb < 1.0 {
+        return format!("{bytes} bytes");
+    }
+    if kb < 1024.0 {
+        return format_scaled_bytes(kb, "KB");
+    }
+    let mb = kb / 1024.0;
+    if mb < 1024.0 {
+        return format_scaled_bytes(mb, "MB");
+    }
+    format_scaled_bytes(mb / 1024.0, "GB")
+}
+
+fn format_scaled_bytes(value: f64, suffix: &str) -> String {
+    let mut formatted = format!("{value:.1}");
+    if formatted.ends_with(".0") {
+        formatted.truncate(formatted.len() - 2);
+    }
+    format!("{formatted}{suffix}")
 }
 
 #[cfg(test)]

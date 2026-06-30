@@ -15,7 +15,7 @@ fn test_parse_memory_stores_invalid_json_returns_empty() {
 
 #[test]
 fn test_parse_memory_stores_bare_string_defaults() {
-    let stores = parse_memory_stores(r#"["/mnt/team-mem"]"#);
+    let stores = try_parse_memory_stores(r#"["/mnt/team-mem"]"#).unwrap();
     assert_eq!(stores.len(), 1);
     let s = &stores[0];
     assert_eq!(s.path.as_path(), std::path::Path::new("/mnt/team-mem"));
@@ -35,10 +35,10 @@ fn test_parse_memory_stores_object_form() {
         "mode": "ro",
         "scope": "user",
         "mount": "shared-ro",
-        "prompt_index": "index/MEMORY.md",
-        "prompt_index_max_bytes": 25000
+        "promptIndex": "index/MEMORY.md",
+        "promptIndexMaxBytes": 25000
     }]"#;
-    let stores = parse_memory_stores(json);
+    let stores = try_parse_memory_stores(json).unwrap();
     assert_eq!(stores.len(), 1);
     let s = &stores[0];
     assert_eq!(s.mode, StoreMode::Ro);
@@ -51,7 +51,7 @@ fn test_parse_memory_stores_object_form() {
 #[test]
 fn test_parse_memory_stores_object_defaults() {
     // Object with only `path` → mode=rw, scope=team, mount derived.
-    let stores = parse_memory_stores(r#"[{"path": "/data/proj-mem"}]"#);
+    let stores = try_parse_memory_stores(r#"[{"path": "/data/proj-mem"}]"#).unwrap();
     assert_eq!(stores.len(), 1);
     assert_eq!(stores[0].mode, StoreMode::Rw);
     assert_eq!(stores[0].scope, StoreScope::Team);
@@ -60,52 +60,60 @@ fn test_parse_memory_stores_object_defaults() {
 
 #[test]
 fn test_parse_memory_stores_mount_derivation_explicit_wins() {
-    let stores = parse_memory_stores(r#"[{"path": "/a/b/c", "mount": "custom"}]"#);
+    let stores = try_parse_memory_stores(r#"[{"path": "/a/b/c", "mount": "custom"}]"#).unwrap();
     assert_eq!(stores[0].mount.as_deref(), Some("custom"));
 }
 
 #[test]
-fn test_parse_memory_stores_dedupe_by_mount() {
-    // Two entries with the same derived mount — first wins, second dropped.
-    let json = r#"["/x/team", "/y/team"]"#;
-    let stores = parse_memory_stores(json);
-    assert_eq!(stores.len(), 1);
-    assert_eq!(stores[0].path.as_path(), std::path::Path::new("/x/team"));
-    assert_eq!(stores[0].mount.as_deref(), Some("team"));
+fn test_parse_memory_stores_sanitizes_derived_mount() {
+    let stores = try_parse_memory_stores(r#"["/x/team.mem"]"#).unwrap();
+    assert_eq!(stores[0].mount.as_deref(), Some("team-mem"));
 }
 
 #[test]
-fn test_parse_memory_stores_dedupe_by_explicit_mount() {
+fn test_parse_memory_stores_rejects_duplicate_mount() {
+    let json = r#"["/x/team", "/y/team"]"#;
+    let err = try_parse_memory_stores(json).unwrap_err();
+    assert!(err.to_string().contains("duplicate mount"));
+}
+
+#[test]
+fn test_parse_memory_stores_rejects_duplicate_explicit_mount() {
     let json = r#"[
         {"path": "/x/a", "mount": "m"},
         {"path": "/y/b", "mount": "m"}
     ]"#;
-    let stores = parse_memory_stores(json);
-    assert_eq!(stores.len(), 1);
-    assert_eq!(stores[0].path.as_path(), std::path::Path::new("/x/a"));
+    let err = try_parse_memory_stores(json).unwrap_err();
+    assert!(err.to_string().contains("duplicate mount"));
 }
 
 #[test]
-fn test_parse_memory_stores_at_most_one_user_scope() {
+fn test_parse_memory_stores_rejects_invalid_explicit_mount() {
+    let err = try_parse_memory_stores(r#"[{"path": "/x/a", "mount": "bad.mount"}]"#).unwrap_err();
+    assert!(err.to_string().contains("mount must match"));
+}
+
+#[test]
+fn test_parse_memory_stores_rejects_more_than_one_user_scope() {
     let json = r#"[
         {"path": "/u/one", "scope": "user"},
         {"path": "/u/two", "scope": "user"},
         {"path": "/t/three", "scope": "team"}
     ]"#;
-    let stores = parse_memory_stores(json);
-    // first user kept, second user dropped, team kept
-    assert_eq!(stores.len(), 2);
-    assert_eq!(stores[0].scope, StoreScope::User);
-    assert_eq!(stores[0].path.as_path(), std::path::Path::new("/u/one"));
-    assert_eq!(stores[1].scope, StoreScope::Team);
-    assert_eq!(stores[1].path.as_path(), std::path::Path::new("/t/three"));
+    let err = try_parse_memory_stores(json).unwrap_err();
+    assert!(err.to_string().contains("more than one scope"));
 }
 
 #[test]
-fn test_parse_memory_stores_skips_relative_path() {
-    let stores = parse_memory_stores(r#"["relative/path", "/abs/keep"]"#);
-    assert_eq!(stores.len(), 1);
-    assert_eq!(stores[0].path.as_path(), std::path::Path::new("/abs/keep"));
+fn test_parse_memory_stores_rejects_relative_path() {
+    let err = try_parse_memory_stores(r#"["relative/path", "/abs/keep"]"#).unwrap_err();
+    assert!(err.to_string().contains("path-absolute"));
+}
+
+#[test]
+fn test_parse_memory_stores_rejects_host_override_path() {
+    let err = try_parse_memory_stores(r#"["//host/share"]"#).unwrap_err();
+    assert!(err.to_string().contains("override the host"));
 }
 
 #[test]
@@ -130,10 +138,15 @@ fn test_prompt_index_path_safety_reject() {
 }
 
 #[test]
-fn test_parse_memory_stores_drops_unsafe_prompt_index() {
-    // unsafe prompt_index → dropped to None, the store is still kept.
+fn test_parse_memory_stores_rejects_unsafe_prompt_index() {
     let json = r#"[{"path": "/s/store", "prompt_index": "../escape.md"}]"#;
-    let stores = parse_memory_stores(json);
-    assert_eq!(stores.len(), 1);
-    assert_eq!(stores[0].prompt_index, None);
+    let err = try_parse_memory_stores(json).unwrap_err();
+    assert!(err.to_string().contains("promptIndex segments"));
+}
+
+#[test]
+fn test_parse_memory_stores_rejects_non_positive_prompt_index_max_bytes() {
+    let json = r#"[{"path": "/s/store", "promptIndexMaxBytes": 0}]"#;
+    let err = try_parse_memory_stores(json).unwrap_err();
+    assert!(err.to_string().contains("promptIndexMaxBytes"));
 }

@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 coco-config.workspace = true
+coco-apply-patch.workspace = true
 coco-error.workspace = true
 coco-types.workspace = true
 coco-tool-runtime.workspace = true
@@ -20,7 +21,9 @@ coco-secret-redact.workspace = true
 coco-file-watch.workspace = true
 coco-shell-parser.workspace = true
 coco-utils-json-repair.workspace = true
+coco-utils-string.workspace = true
 coco-utils-common.workspace = true
+coco-utils-absolute-path.workspace = true
 arc-swap.workspace = true
 async-trait.workspace = true
 

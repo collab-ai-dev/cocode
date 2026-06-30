@@ -1,12 +1,15 @@
 //! Per-fork canUseTool policies for memory-related forks.
 //!
-//! Two production policies + one shared helper:
+//! Three production policies + one shared helper:
 //!
-//! - [`create_auto_mem_handle`] — used by ExtractMemories and AutoDream.
+//! - [`create_auto_mem_handle`] — used by ExtractMemories.
 //!   Allows `Read` / `Glob` / `Grep` unconditionally, read-only `Bash`
 //!   via [`coco_shell_parser::safety::is_known_safe_command`], and
-//!   `Edit` / `Write` only on paths under `memory_dir`. Everything
-//!   else is denied.
+//!   `Edit` / `Write` / `apply_patch` only on `.md` paths under
+//!   `memory_dir`. Everything else is denied.
+//! - [`create_auto_dream_handle_with_telemetry`] — used by AutoDream.
+//!   Same as auto-mem, plus `rm` for absolute `.md` paths under
+//!   `memory_dir` so dream can prune stale topic files.
 //! - [`create_session_mem_handle`] — used by SessionMemory (auto +
 //!   manual). Allows `Edit` ONLY on the exact `memory_path`, allows
 //!   `Read`, denies everything else. Tighter than auto-mem because
@@ -41,6 +44,7 @@ const TOOL_GREP: &str = "Grep";
 const TOOL_BASH: &str = "Bash";
 const TOOL_EDIT: &str = "Edit";
 const TOOL_WRITE: &str = "Write";
+const TOOL_APPLY_PATCH: &str = "apply_patch";
 
 /// Build the auto-mem canUseTool handle.
 ///
@@ -48,13 +52,14 @@ const TOOL_WRITE: &str = "Write";
 /// - `Read` / `Glob` / `Grep` ⇒ Allow unconditionally.
 /// - `Bash` ⇒ Allow when [`coco_shell_parser::safety::is_known_safe_command`]
 ///   returns `true`; else Deny.
-/// - `Edit` / `Write` ⇒ Allow when `input.file_path` resolves under
-///   `memory_dir`; else Deny.
+/// - `Edit` / `Write` / `apply_patch` ⇒ Allow when every affected path
+///   is a `.md` path under `memory_dir`; else Deny.
 /// - Everything else ⇒ Deny.
 pub fn create_auto_mem_handle(memory_dir: PathBuf) -> CanUseToolHandleRef {
     Arc::new(AutoMemHandle {
         memory_dir,
         telemetry: Arc::new(NoopEmitter),
+        allow_rm_md_bash: false,
     })
 }
 
@@ -69,12 +74,39 @@ pub fn create_auto_mem_handle_with_telemetry(
     Arc::new(AutoMemHandle {
         memory_dir,
         telemetry,
+        allow_rm_md_bash: false,
+    })
+}
+
+/// Build the auto-dream handle without telemetry.
+pub fn create_auto_dream_handle(memory_dir: PathBuf) -> CanUseToolHandleRef {
+    Arc::new(AutoMemHandle {
+        memory_dir,
+        telemetry: Arc::new(NoopEmitter),
+        allow_rm_md_bash: true,
+    })
+}
+
+/// Build the auto-dream handle with a telemetry emitter wired in.
+///
+/// Auto-dream matches the v2.1.193 policy: read-only shell commands are
+/// allowed, and `rm` may delete absolute `.md` paths inside the memory
+/// directory so the consolidation pass can prune stale memories.
+pub fn create_auto_dream_handle_with_telemetry(
+    memory_dir: PathBuf,
+    telemetry: Arc<dyn MemoryTelemetryEmitter>,
+) -> CanUseToolHandleRef {
+    Arc::new(AutoMemHandle {
+        memory_dir,
+        telemetry,
+        allow_rm_md_bash: true,
     })
 }
 
 struct AutoMemHandle {
     memory_dir: PathBuf,
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
+    allow_rm_md_bash: bool,
 }
 
 impl std::fmt::Debug for AutoMemHandle {
@@ -91,7 +123,7 @@ impl CanUseToolHandle for AutoMemHandle {
         &self,
         tool_name: &str,
         input: &Value,
-        _ctx: &CanUseToolCallContext,
+        ctx: &CanUseToolCallContext,
     ) -> CanUseToolDecision {
         let decision = match tool_name {
             TOOL_READ | TOOL_GLOB | TOOL_GREP => allow(DecisionReason::Other {
@@ -102,6 +134,11 @@ impl CanUseToolHandle for AutoMemHandle {
                     allow(DecisionReason::Other {
                         reason: "auto_mem: read-only bash".into(),
                     })
+                } else if self.allow_rm_md_bash && bash_is_rm_md_under_root(input, &self.memory_dir)
+                {
+                    allow(DecisionReason::Other {
+                        reason: "auto_mem: rm .md within memory_dir".into(),
+                    })
                 } else {
                     deny(
                         "auto_mem: bash command not in known-safe set".to_string(),
@@ -110,14 +147,29 @@ impl CanUseToolHandle for AutoMemHandle {
                 }
             }
             TOOL_EDIT | TOOL_WRITE => {
-                if input_path_under_root(input, &self.memory_dir) {
+                if input_path_is_md_under_root(input, &self.memory_dir, &ctx.cwd) {
                     allow(DecisionReason::Other {
                         reason: "auto_mem: write within memory_dir".into(),
                     })
                 } else {
                     deny(
                         format!(
-                            "auto_mem: {tool_name} only allowed under {}",
+                            "auto_mem: {tool_name} only allowed for .md paths under {}",
+                            self.memory_dir.display()
+                        ),
+                        "auto_mem_write_outside_dir",
+                    )
+                }
+            }
+            TOOL_APPLY_PATCH => {
+                if apply_patch_paths_are_md_under_root(input, &self.memory_dir, &ctx.cwd) {
+                    allow(DecisionReason::Other {
+                        reason: "auto_mem: patch .md within memory_dir".into(),
+                    })
+                } else {
+                    deny(
+                        format!(
+                            "auto_mem: {tool_name} only allowed for .md paths under {}",
                             self.memory_dir.display()
                         ),
                         "auto_mem_write_outside_dir",
@@ -255,8 +307,101 @@ fn bash_is_read_only(input: &Value) -> bool {
         .all(|argv| coco_shell_parser::safety::is_known_safe_command(argv))
 }
 
-/// True when `input.file_path` (or `input.notebook_path`) is a
-/// descendant of `root`.
+fn bash_is_rm_md_under_root(input: &Value, root: &Path) -> bool {
+    let Some(cmd) = input.get("command").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    let trimmed = cmd.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let mut parser = coco_shell_parser::ShellParser::new();
+    let parsed = parser.parse(trimmed);
+    let Some(commands) = parsed.try_extract_safe_commands() else {
+        return false;
+    };
+    let [argv] = commands.as_slice() else {
+        return false;
+    };
+    let Some(program) = argv.first() else {
+        return false;
+    };
+    if program != "rm" {
+        return false;
+    }
+
+    let mut saw_path = false;
+    let mut end_of_options = false;
+    for arg in argv.iter().skip(1) {
+        if !end_of_options {
+            if arg == "--" {
+                end_of_options = true;
+                continue;
+            }
+            if arg.starts_with('-') {
+                if arg == "--recursive" || arg.chars().skip(1).any(|c| matches!(c, 'r' | 'R')) {
+                    return false;
+                }
+                continue;
+            }
+        }
+        if arg.contains(['*', '?', '[']) {
+            return false;
+        }
+        let path = Path::new(arg);
+        if !path.is_absolute() || !path_is_md_under_root(path, root) {
+            return false;
+        }
+        saw_path = true;
+    }
+    saw_path
+}
+
+fn input_path_is_md_under_root(input: &Value, root: &Path, cwd: &Path) -> bool {
+    let path_str = input
+        .get("file_path")
+        .or_else(|| input.get("notebook_path"))
+        .or_else(|| input.get("path"))
+        .and_then(|v| v.as_str());
+    let Some(p) = path_str else {
+        return false;
+    };
+    let candidate = Path::new(p);
+    let absolute = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        cwd.join(candidate)
+    };
+    path_is_md_under_root(&absolute, root)
+}
+
+fn apply_patch_paths_are_md_under_root(input: &Value, root: &Path, cwd: &Path) -> bool {
+    let Some(patch) = input.get("patch").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    let Ok(cwd) = coco_utils_absolute_path::AbsolutePathBuf::from_absolute_path(cwd) else {
+        return false;
+    };
+    let Ok(parsed) = coco_apply_patch::parse_patch(patch) else {
+        return false;
+    };
+    let path_effects = coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd);
+    !path_effects.permission_paths.is_empty()
+        && path_effects
+            .permission_paths
+            .iter()
+            .all(|path| path_is_md_under_root(path, root))
+}
+
+fn path_is_md_under_root(candidate: &Path, root: &Path) -> bool {
+    if !candidate.to_string_lossy().ends_with(".md") {
+        return false;
+    }
+    path_under_root(candidate, root)
+}
+
+/// True when `candidate` is a descendant of `root`.
 ///
 /// Two-pass containment check:
 ///
@@ -274,17 +419,7 @@ fn bash_is_read_only(input: &Value) -> bool {
 ///    benign "root doesn't exist yet" case; the symlink-escape vector
 ///    requires the symlink to actually exist on disk and so always
 ///    takes the canonical path.
-fn input_path_under_root(input: &Value, root: &Path) -> bool {
-    let path_str = input
-        .get("file_path")
-        .or_else(|| input.get("notebook_path"))
-        .or_else(|| input.get("path"))
-        .and_then(|v| v.as_str());
-    let Some(p) = path_str else {
-        return false;
-    };
-    let candidate = Path::new(p);
-
+fn path_under_root(candidate: &Path, root: &Path) -> bool {
     // Two-pass containment:
     //
     // (a) Lexical normalization first — collapses `.` and `..`

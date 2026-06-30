@@ -143,6 +143,8 @@ class AttachmentKind(str, Enum):
     teammate_shutdown_batch = "teammate_shutdown_batch"
     bagel_console = "bagel_console"
     critical_system_reminder = "critical_system_reminder"
+    memory_index_warning = "memory_index_warning"
+    memory_update_reminder = "memory_update_reminder"
     slash_command_metadata = "slash_command_metadata"
     user_context = "user_context"
     tool_search_usage_reminder = "tool_search_usage_reminder"

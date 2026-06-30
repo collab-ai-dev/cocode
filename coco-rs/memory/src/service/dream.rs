@@ -22,11 +22,16 @@ use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_types::ActiveShellTool;
 use coco_types::ModelRole;
+use coco_types::ToolOverrides;
 
 use crate::config::MemoryConfig;
 use crate::lock;
 use crate::lock::LockOutcome;
+use crate::prompt::FileMutationPromptTools;
 use crate::prompt::build_dream_prompt;
+use crate::service::MemoryForkToolConfig;
+use crate::telemetry::AutoDreamFailurePhase;
+use crate::telemetry::AutoDreamSkipReason;
 use crate::telemetry::MemoryEvent;
 use crate::telemetry::MemoryTelemetryEmitter;
 use crate::telemetry::NoopEmitter;
@@ -75,6 +80,103 @@ impl Drop for ConsolidatingGuard {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct DreamNoticeChannels {
+    notices: crate::notice::NoticeInbox,
+    memory_updates: crate::notice::MemoryUpdateInbox,
+}
+
+impl DreamNoticeChannels {
+    pub(crate) fn new(
+        notices: crate::notice::NoticeInbox,
+        memory_updates: crate::notice::MemoryUpdateInbox,
+    ) -> Self {
+        Self {
+            notices,
+            memory_updates,
+        }
+    }
+}
+
+fn error_class_from_message(error: &str) -> String {
+    let trimmed = error.trim();
+    if trimmed.is_empty() {
+        return "Error".to_string();
+    }
+
+    let Some((prefix, _)) = trimmed.split_once(':') else {
+        return "Error".to_string();
+    };
+    let class = prefix.trim();
+    if class.is_empty()
+        || !class
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        "Error".to_string()
+    } else {
+        class.to_string()
+    }
+}
+
+async fn count_daily_logs(memory_dir: &std::path::Path) -> i32 {
+    let logs_dir = memory_dir.join("logs");
+    let mut stack = vec![logs_dir.clone()];
+    let mut count = 0_i32;
+
+    while let Some(dir) = stack.pop() {
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && dir == logs_dir => return 0,
+            Err(e) => {
+                tracing::debug!(
+                    target: "coco_memory::dream",
+                    path = %dir.display(),
+                    error = %e,
+                    "countDailyLogs failed"
+                );
+                return 0;
+            }
+        };
+
+        loop {
+            let entry = match entries.next_entry().await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::debug!(
+                        target: "coco_memory::dream",
+                        path = %dir.display(),
+                        error = %e,
+                        "countDailyLogs failed"
+                    );
+                    return 0;
+                }
+            };
+            let path = entry.path();
+            let file_type = match entry.file_type().await {
+                Ok(file_type) => file_type,
+                Err(e) => {
+                    tracing::debug!(
+                        target: "coco_memory::dream",
+                        path = %path.display(),
+                        error = %e,
+                        "countDailyLogs failed"
+                    );
+                    return 0;
+                }
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+                count += 1;
+            }
+        }
+    }
+
+    count
+}
+
 /// Auto-dream service.
 pub struct DreamService {
     session_id: ArcSwap<String>,
@@ -83,10 +185,15 @@ pub struct DreamService {
     agent: crate::service::extract::AgentSlot,
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
     active_shell_tool: ActiveShellTool,
+    tool_overrides: Arc<ToolOverrides>,
     /// User-visible notice channel — engine drains the inbox once per
     /// turn and injects a `SystemMemorySavedMessage` with `verb:
     /// "Improved"`.
     notices: crate::notice::NoticeInbox,
+    /// Model-visible update channel — engine drains this once per turn
+    /// and tells the main model background consolidation changed files
+    /// it may have cached in context.
+    memory_updates: crate::notice::MemoryUpdateInbox,
     /// Scan-throttle stamp. `std::sync::Mutex` (not tokio) because the
     /// critical section is two cheap operations on `Option<Instant>`
     /// — no `.await` inside, no need for the async runtime hop.
@@ -134,7 +241,7 @@ impl DreamService {
             agent,
             telemetry,
             crate::notice::NoticeInbox::default(),
-            ActiveShellTool::Disabled,
+            MemoryForkToolConfig::disabled(),
             "test-session".to_string(),
         )
     }
@@ -147,7 +254,27 @@ impl DreamService {
         agent: crate::service::extract::AgentSlot,
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
         notices: crate::notice::NoticeInbox,
-        active_shell_tool: ActiveShellTool,
+        tool_config: MemoryForkToolConfig,
+        session_id: String,
+    ) -> Self {
+        Self::with_shared_agent_and_notice_channels(
+            memory_dir,
+            config,
+            agent,
+            telemetry,
+            DreamNoticeChannels::new(notices, crate::notice::MemoryUpdateInbox::default()),
+            tool_config,
+            session_id,
+        )
+    }
+
+    pub(crate) fn with_shared_agent_and_notice_channels(
+        memory_dir: PathBuf,
+        config: MemoryConfig,
+        agent: crate::service::extract::AgentSlot,
+        telemetry: Arc<dyn MemoryTelemetryEmitter>,
+        channels: DreamNoticeChannels,
+        tool_config: MemoryForkToolConfig,
         session_id: String,
     ) -> Self {
         Self {
@@ -156,8 +283,10 @@ impl DreamService {
             config,
             agent,
             telemetry,
-            active_shell_tool,
-            notices,
+            active_shell_tool: tool_config.active_shell_tool,
+            tool_overrides: tool_config.tool_overrides,
+            notices: channels.notices,
+            memory_updates: channels.memory_updates,
             last_scan_at: std::sync::Mutex::new(None),
             consolidating: Arc::new(AtomicBool::new(false)),
         }
@@ -238,6 +367,8 @@ impl DreamService {
         if self.config.kairos_mode {
             return DreamOutcome::Skipped(SkipReason::KairosMode);
         }
+        // No team-server "has content" gate here: coco-rs intentionally
+        // supports personal-only background dream without team sync.
 
         // Within-process exclusion. Claim BEFORE the time/scan/session
         // gates so a concurrent auto-dream + manual `/dream` from the
@@ -266,13 +397,13 @@ impl DreamService {
             });
         }
 
-        // Snapshot the prior scan-throttle stamp so we can roll back
-        // on Failed / cancellation. `lastSessionScanAt` only advances
-        // on a real-fired consolidation; if we update before the fork
-        // runs and the fork fails, retries within 10 min would be
-        // needlessly throttled.
-        let prior_scan_at: Option<Instant> = if !force {
-            // Scan throttle — `SESSION_SCAN_INTERVAL_MS = 600_000`.
+        // Scan throttle — `SESSION_SCAN_INTERVAL_MS = 600_000`.
+        // Upstream treats this as a session-scan attempt throttle:
+        // once the time gate passes and we pay the transcript scan,
+        // the stamp stays even if the session gate, lock, or fork
+        // later fails. That prevents every following turn from
+        // re-walking transcripts while the time gate remains open.
+        if !force {
             let mut last = self
                 .last_scan_at
                 .lock()
@@ -282,12 +413,8 @@ impl DreamService {
             {
                 return DreamOutcome::Skipped(SkipReason::ScanThrottled);
             }
-            let prev = *last;
             *last = Some(Instant::now());
-            prev
-        } else {
-            None
-        };
+        }
 
         // Session enumeration — lazy, invoked only after the time +
         // scan gates pass so callers don't pay the directory walk on
@@ -296,12 +423,11 @@ impl DreamService {
 
         if !force && (sessions_since_last.len() as i32) < self.config.dream_min_sessions {
             let sessions_seen = sessions_since_last.len() as i32;
-            // Roll back the scan-throttle stamp — no consolidation
-            // actually fired, so the next gate-pass should be allowed
-            // to scan again without waiting 10 min. Gated on `!force`
-            // because under force we never mutated `last_scan_at`;
-            // calling restore would clobber a real auto-set value.
-            self.restore_scan_at_if_unforced(force, prior_scan_at);
+            self.telemetry.emit(MemoryEvent::AutoDreamSkipped {
+                reason: AutoDreamSkipReason::Sessions,
+                session_count: Some(sessions_seen),
+                min_required: Some(self.config.dream_min_sessions),
+            });
             return DreamOutcome::Skipped(SkipReason::SessionGate { sessions_seen });
         }
 
@@ -312,11 +438,14 @@ impl DreamService {
         let lock_guard = match lock::try_acquire(&self.memory_dir) {
             LockOutcome::Acquired(g) => g,
             LockOutcome::Held => {
-                self.restore_scan_at_if_unforced(force, prior_scan_at);
+                self.telemetry.emit(MemoryEvent::AutoDreamSkipped {
+                    reason: AutoDreamSkipReason::Lock,
+                    session_count: None,
+                    min_required: None,
+                });
                 return DreamOutcome::Skipped(SkipReason::LockHeld);
             }
             LockOutcome::Error(e) => {
-                self.restore_scan_at_if_unforced(force, prior_scan_at);
                 return DreamOutcome::Failed { reason: e };
             }
         };
@@ -328,13 +457,25 @@ impl DreamService {
         } else {
             hours_since_initial
         };
+        let team_memory_enabled = self.config.is_team_recall_enabled();
         self.telemetry.emit(MemoryEvent::AutoDreamFired {
             hours_since_last,
             sessions_since_last: sessions_seen,
+            team_memory_enabled,
         });
 
         let start = Instant::now();
-        let prompt = build_dream_prompt(&self.memory_dir, transcript_dir, &sessions_since_last);
+        let daily_logs_found = count_daily_logs(&self.memory_dir).await;
+        let prompt = build_dream_prompt(
+            &self.memory_dir,
+            transcript_dir,
+            &sessions_since_last,
+            team_memory_enabled,
+            FileMutationPromptTools {
+                write_tool: self.tool_overrides.write_tool(),
+                edit_tool: self.tool_overrides.edit_tool(),
+            },
+        );
         // Synthetic AgentDefinition pinning `ModelRole::Memory`. See
         // `extract.rs` for the design rationale. Single-source-of-truth:
         // model routing flows through `AgentDefinition.model_role`
@@ -362,11 +503,15 @@ impl DreamService {
             // Keep the background subagent's tool-uses out of the user's
             // main JSONL transcript.
             skip_transcript: true,
-            // `canUseTool: createAutoMemCanUseTool(memoryRoot)`.
-            can_use_tool: Some(crate::can_use_tool::create_auto_mem_handle_with_telemetry(
-                self.memory_dir.clone(),
-                self.telemetry.clone(),
-            )),
+            // `canUseTool: createAutoMemCanUseTool(memoryRoot)` —
+            // dream variant also permits `rm` of `.md` files under
+            // the memory directory so stale topics can be pruned.
+            can_use_tool: Some(
+                crate::can_use_tool::create_auto_dream_handle_with_telemetry(
+                    self.memory_dir.clone(),
+                    self.telemetry.clone(),
+                ),
+            ),
             require_can_use_tool: false,
             fork_label: Some(coco_types::ForkLabel::AutoDream),
             active_shell_tool: self.active_shell_tool,
@@ -391,7 +536,7 @@ impl DreamService {
                 tracing::info!(
                     target: "coco_memory::dream",
                     duration_ms,
-                    files_changed = resp.total_tool_use_count,
+                    files_touched_count = resp.paths_written.len(),
                     sessions_reviewed = sessions_seen,
                     cache_read = resp.cache_read_tokens,
                     cache_create = resp.cache_creation_tokens,
@@ -408,18 +553,32 @@ impl DreamService {
                     })
                     .map(|p| p.display().to_string())
                     .collect();
+                let files_touched_count = resp.paths_written.len() as i32;
                 self.telemetry.emit(MemoryEvent::AutoDreamCompleted {
                     sessions_reviewed: sessions_seen,
-                    files_changed: resp.total_tool_use_count as i32,
+                    files_touched_count,
+                    team_memory_enabled,
+                    daily_logs_found,
                     cache_read_tokens: resp.cache_read_tokens,
                     cache_creation_tokens: resp.cache_creation_tokens,
                     output_tokens: resp.output_tokens,
                     duration_ms,
                 });
                 if !topic_paths.is_empty() {
+                    let count = topic_paths.len();
+                    let noun = if count == 1 {
+                        "memory file"
+                    } else {
+                        "memory files"
+                    };
                     self.notices.push(crate::notice::MemoryUserNotice {
-                        written_paths: topic_paths,
+                        written_paths: topic_paths.clone(),
                         verb: crate::notice::NoticeVerb::Improved,
+                    });
+                    self.memory_updates.push(crate::notice::MemoryUpdateNotice {
+                        source: crate::notice::MemoryUpdateSource::Dream,
+                        summary: format!("consolidated {count} {noun}"),
+                        paths: topic_paths,
                     });
                 }
                 if force {
@@ -441,41 +600,20 @@ impl DreamService {
                 tracing::warn!(
                     target: "coco_memory::dream",
                     error = %e,
-                    "auto-dream subagent failed; rolling back lock + scan throttle"
+                    "auto-dream subagent failed; rolling back lock"
                 );
                 // Drop on the guard will rollback the lock mtime
                 // automatically (rollback_on_drop is true by
                 // default), restoring the prior cadence reference.
-                // Roll back the scan-throttle stamp only on the
-                // auto path — under force we never mutated it.
                 drop(lock_guard);
-                self.restore_scan_at_if_unforced(force, prior_scan_at);
-                self.telemetry.emit(MemoryEvent::AutoDreamFailed);
+                self.telemetry.emit(MemoryEvent::AutoDreamFailed {
+                    phase: AutoDreamFailurePhase::Fork,
+                    error_class: error_class_from_message(&e),
+                });
                 let _ = prior_mtime_ms; // kept for tracing breadcrumb
                 DreamOutcome::Failed { reason: e }
             }
         }
-    }
-
-    /// Restore `last_scan_at` to its pre-attempt value, but only when
-    /// the call wasn't forced. Under `force=true` we never mutate
-    /// `last_scan_at` (the force path bypasses the scan throttle
-    /// entirely), so writing back `prior_scan_at = None` would clobber
-    /// any value the auto path had set — corrupting the throttle so
-    /// every subsequent auto turn scans freely.
-    ///
-    /// Used on SessionGate / LockHeld / Failed paths in the auto
-    /// branch so a real retry within 10 min isn't blocked by a
-    /// phantom scan stamp.
-    fn restore_scan_at_if_unforced(&self, force: bool, prior: Option<Instant>) {
-        if force {
-            return;
-        }
-        let mut last = self
-            .last_scan_at
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *last = prior;
     }
 
     /// Wall-clock helper so callers don't have to import `SystemTime`.

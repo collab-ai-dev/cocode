@@ -14,6 +14,7 @@ use super::deny_all_handle;
 fn ctx() -> CanUseToolCallContext {
     CanUseToolCallContext {
         tool_use_id: "test-id".into(),
+        cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")),
         abort: crate::TurnAbortSignal::from_token(tokio_util::sync::CancellationToken::new()),
         require_can_use_tool: false,
         messages: Arc::new(Vec::new()),

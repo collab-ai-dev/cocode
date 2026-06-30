@@ -1787,7 +1787,7 @@
       ]
     },
     "AttachmentKind": {
-      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 65 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
+      "description": "Every `AttachmentKind` discriminator, plus coco-rs-synthetic\nreminder kinds. 67 variants.\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match `AttachmentKind` exactly, so transcripts round-trip.",
       "oneOf": [
         {
           "type": "string",
@@ -1859,6 +1859,16 @@
           "description": "User-supplied per-turn critical instruction\n(`toolUseContext.criticalSystemReminder_EXPERIMENTAL`).\n**coco-rs dual role**: also serves as the generic carrier kind for\n`coco_messages::create_meta_message` / `create_system_reminder_message`\n(post-Phase-2 drop-in for the old `User{is_meta:true}` shape). The\nreminder-generator path reads `ctx.config.critical_instruction`\nfor the standard case; engine-internal meta injection reuses the\nsame kind because API-visible + UI-hidden wrapped text is exactly\nits visibility profile. Both paths land in `Message::Attachment`\nwith `AttachmentBody::Api(LlmMessage)`.",
           "type": "string",
           "const": "critical_system_reminder"
+        },
+        {
+          "description": "Memory index size warning emitted after a main-agent memory edit.",
+          "type": "string",
+          "const": "memory_index_warning"
+        },
+        {
+          "description": "Background memory consolidation notice emitted after auto-dream.",
+          "type": "string",
+          "const": "memory_update_reminder"
         },
         {
           "description": "TS-style slash-command metadata (`<command-name>`, optional args)\ninjected before expanded prompt content.",

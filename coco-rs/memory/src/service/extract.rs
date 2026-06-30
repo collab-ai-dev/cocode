@@ -36,13 +36,16 @@ use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_types::ActiveShellTool;
 use coco_types::ModelRole;
+use coco_types::ToolOverrides;
 use coco_types::messages::Message;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
 use crate::config::MemoryConfig;
+use crate::prompt::FileMutationPromptTools;
 use crate::prompt::build_extract_prompt;
 use crate::scan;
+use crate::service::MemoryForkToolConfig;
 use crate::telemetry::MemoryEvent;
 use crate::telemetry::MemoryTelemetryEmitter;
 use crate::telemetry::NoopEmitter;
@@ -135,6 +138,7 @@ pub struct ExtractService {
     agent: AgentSlot,
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
     active_shell_tool: ActiveShellTool,
+    tool_overrides: Arc<ToolOverrides>,
     /// User-visible save notices land here on a successful
     /// extraction; the engine drains it once per turn and injects a
     /// `SystemMemorySavedMessage` into history.
@@ -254,7 +258,7 @@ impl ExtractService {
             agent,
             telemetry,
             crate::notice::NoticeInbox::default(),
-            ActiveShellTool::Disabled,
+            MemoryForkToolConfig::disabled(),
             "test-session".to_string(),
         )
     }
@@ -267,7 +271,7 @@ impl ExtractService {
         agent: AgentSlot,
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
         notices: crate::notice::NoticeInbox,
-        active_shell_tool: ActiveShellTool,
+        tool_config: MemoryForkToolConfig,
         session_id: String,
     ) -> Self {
         let (tx, rx) = watch::channel(false);
@@ -277,7 +281,8 @@ impl ExtractService {
             config,
             agent,
             telemetry,
-            active_shell_tool,
+            active_shell_tool: tool_config.active_shell_tool,
+            tool_overrides: tool_config.tool_overrides,
             notices,
             state: Mutex::new(ExtractState::default()),
             in_progress: Arc::new(AtomicBool::new(false)),
@@ -631,6 +636,10 @@ impl ExtractService {
             &manifest,
             self.config.skip_index,
             self.config.team_memory_enabled,
+            FileMutationPromptTools {
+                write_tool: self.tool_overrides.write_tool(),
+                edit_tool: self.tool_overrides.edit_tool(),
+            },
         );
         tracing::info!(
             target: "coco_memory::extract",
@@ -682,8 +691,9 @@ impl ExtractService {
             // to the user's transcript — its tool-uses race the main
             // thread's writer and pollute the JSONL.
             skip_transcript: true,
-            // Allows Read/Glob/Grep, read-only Bash, Edit/Write
-            // within memory_dir; denies everything else. The
+            // Allows Read/Glob/Grep, read-only Bash, and the model's
+            // available edit tool for `.md` files within memory_dir;
+            // denies everything else. The
             // canUseTool gate runs at tool-runtime step 3.5,
             // composing with the `allowed_write_roots` fence above
             // (callback = inner ring; field = outer ring).

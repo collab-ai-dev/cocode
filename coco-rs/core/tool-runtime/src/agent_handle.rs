@@ -46,8 +46,8 @@ pub struct AgentSpawnConstraints {
     /// `None` defers to the engine's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<i32>,
-    /// FileWrite / FileEdit / NotebookEdit on the child are restricted to
-    /// paths that are descendants of one of these roots. Empty = no
+    /// File-mutation tools on the child are restricted to paths that are
+    /// descendants of one of these roots. Empty = no
     /// restriction. Tools enforce via `ToolUseContext::allowed_write_roots`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_write_roots: Vec<PathBuf>,
@@ -418,8 +418,8 @@ pub struct AgentSpawnResponse {
     #[serde(default)]
     pub output_tokens: i64,
     /// Per-tool invocation counts (e.g. `Write → 3`, `Read → 7`).
-    /// Memory telemetry uses this to count `files_written` for the
-    /// extraction agent without re-parsing the agent's transcript.
+    /// Memory telemetry uses this as a fallback when the spawn driver
+    /// did not populate [`Self::paths_written`].
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub tool_use_counts: std::collections::HashMap<String, i64>,
     /// Cache-read tokens (`cache_read_input_tokens`) — the portion
@@ -435,10 +435,10 @@ pub struct AgentSpawnResponse {
     #[serde(default)]
     pub cache_creation_tokens: i64,
     /// Absolute file paths the agent wrote during this spawn, in call
-    /// order. Populated by the spawn driver from observed
-    /// `Write` / `Edit` / `NotebookEdit` tool_use blocks. Memory
-    /// telemetry filters this to exclude the `MEMORY.md` index when
-    /// reporting `files_written`.
+    /// order. Populated by the spawn driver from successful file
+    /// mutation calls (`Write` / `Edit` / `NotebookEdit` / `apply_patch`).
+    /// Memory telemetry filters this to exclude the `MEMORY.md` index
+    /// when reporting `files_written`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths_written: Vec<PathBuf>,
     /// Duration in milliseconds.
