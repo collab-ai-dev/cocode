@@ -628,6 +628,15 @@ impl ApiClient {
                     }
 
                     let delay = self.retry.delay_for_attempt(attempt, &e);
+                    if !self.retry.should_wait_for_retry(delay) {
+                        warn!(
+                            error_class = e.error_class(),
+                            attempt,
+                            delay_ms = i64::try_from(delay.as_millis()).unwrap_or(i64::MAX),
+                            "retry delay exceeds retry watchdog threshold; giving up"
+                        );
+                        return Err(e);
+                    }
                     info!(
                         error_class = e.error_class(),
                         attempt,
@@ -770,6 +779,15 @@ impl ApiClient {
                         params.query_source.as_deref(),
                     ) {
                         let delay = self.retry.delay_for_attempt(attempt, &err);
+                        if !self.retry.should_wait_for_retry(delay) {
+                            warn!(
+                                error_class = err.error_class(),
+                                attempt,
+                                delay_ms = i64::try_from(delay.as_millis()).unwrap_or(i64::MAX),
+                                "stream retry delay exceeds retry watchdog threshold; giving up"
+                            );
+                            return Err(err);
+                        }
                         warn!(
                             error_class = err.error_class(),
                             attempt,

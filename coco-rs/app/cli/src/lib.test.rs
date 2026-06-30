@@ -1,3 +1,4 @@
+use clap::CommandFactory;
 use clap::Parser;
 
 use super::Cli;
@@ -80,6 +81,18 @@ fn pr_e3_defaults_leave_existing_flags_untouched() {
     assert!(
         cli.fallback_model.is_empty(),
         "no-arg invocation must leave fallback_model empty"
+    );
+}
+
+#[test]
+fn help_lists_background_flag_alias() {
+    let mut command = Cli::command();
+    let help = command.render_long_help().to_string();
+
+    assert!(help.contains("--bg"), "help must list --bg");
+    assert!(
+        help.contains("--background"),
+        "help must list visible --background alias"
     );
 }
 

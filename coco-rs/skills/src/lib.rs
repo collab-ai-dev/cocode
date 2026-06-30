@@ -178,7 +178,7 @@ fn default_true() -> bool {
 }
 
 fn emit_tengu_feature_sad(feature_name: &'static str, error_code: &'static str) {
-    tracing::info!(
+    tracing::warn!(
         target: "coco_skills::telemetry",
         event_type = "tengu_feature_sad",
         feature_name,
@@ -989,6 +989,9 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
         tracing::error!(
             path = %path.display(),
             error = %parse_error,
+            event_type = "tengu_feature_sad",
+            feature_name = SKILL_LOAD_DIR_FEATURE,
+            error_code = SKILL_LOAD_YAML_FAILED,
             "[skills] YAML frontmatter in {} failed to parse and was ignored: {}",
             path.display(),
             parse_error

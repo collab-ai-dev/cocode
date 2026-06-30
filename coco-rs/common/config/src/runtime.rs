@@ -384,6 +384,9 @@ fn validate_roles_against_available_models(
         return Ok(());
     };
 
+    // `available_models` is a strict provider/model_id allowlist.
+    // It does not imply fallback selection: any configured primary or
+    // fallback outside the allowlist fails startup.
     for (role, slots) in &roles.roles {
         ensure_model_allowed(role.as_str(), "primary", &slots.primary, available_models)?;
         for (idx, spec) in slots.fallbacks.iter().enumerate() {
@@ -404,7 +407,7 @@ fn ensure_model_allowed(
     spec: &ModelSpec,
     available_models: &[String],
 ) -> Result<(), ConfigError> {
-    if is_model_allowed(&spec.model_id, Some(available_models)) {
+    if is_model_allowed(&spec.provider, &spec.model_id, Some(available_models)) {
         return Ok(());
     }
 

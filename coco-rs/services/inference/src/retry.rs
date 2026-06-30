@@ -1,10 +1,12 @@
 use std::time::Duration;
 
 use crate::errors::InferenceError;
+use coco_config::EnvKey;
 
 /// Max in-client retries for capacity/overload errors before letting the
 /// model-runtime fallback chain take over.
 const MAX_CAPACITY_RETRIES: i32 = 3;
+const RETRY_AFTER_TOO_LONG_MS: u64 = 60_000;
 
 /// Query sources that retry on a capacity cascade (503/529). Every other tagged
 /// source is background and throws immediately so it doesn't amplify a saturated
@@ -103,6 +105,14 @@ impl RetryConfig {
         Duration::from_millis(jittered as u64)
     }
 
+    /// Whether a retry delay is acceptable for the interactive retry loop.
+    ///
+    /// Claude Code caps normal sleeps at 60s and requires the explicit
+    /// `CLAUDE_CODE_RETRY_WATCHDOG` opt-in for longer unattended backoffs.
+    pub fn should_wait_for_retry(&self, delay: Duration) -> bool {
+        retry_delay_allowed(delay, retry_watchdog_enabled())
+    }
+
     /// Whether a retry should be attempted for this error at this attempt count.
     ///
     /// Only the overload cascade (503/529, [`InferenceError::Overloaded`]) is
@@ -173,6 +183,14 @@ impl RetryConfig {
             _ => false,
         }
     }
+}
+
+fn retry_watchdog_enabled() -> bool {
+    coco_config::env::is_env_truthy(EnvKey::ClaudeCodeRetryWatchdog)
+}
+
+fn retry_delay_allowed(delay: Duration, watchdog_enabled: bool) -> bool {
+    watchdog_enabled || delay <= Duration::from_millis(RETRY_AFTER_TOO_LONG_MS)
 }
 
 #[cfg(test)]

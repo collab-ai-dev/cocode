@@ -61,7 +61,6 @@ pub(super) fn clear_session_boundary_state(state: &mut AppState) {
     state.session.queued_commands.clear();
     state.session.active_hooks.clear();
     state.session.prompt_suggestions.clear();
-    state.session.rewind_pre_clear_messages.clear();
     state.session.local_command_output.clear();
     state.session.plan_tasks.clear();
     state.session.todos_by_agent.clear();

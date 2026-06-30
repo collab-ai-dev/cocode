@@ -318,11 +318,10 @@ impl Tool for SendMessageTool {
         // messages stay on the (resumed) task and surface via the
         // `agent_pending_messages` reminder on the next turn. No drain,
         // no prompt-prepend.
-        if let Some(info) = task_status
-            .as_ref()
-            .filter(|i| i.status == coco_types::TaskStatus::Killed)
-            .filter(|i| i.task_type() == coco_types::TaskType::BgAgent)
-        {
+        if let Some(info) = task_status.as_ref().filter(|i| {
+            i.task_type() == coco_types::TaskType::BgAgent
+                && (i.status == coco_types::TaskStatus::Killed || i.killed_by.is_some())
+        }) {
             return Ok(send_message_result(SendMessageOutput::Direct {
                 success: false,
                 message: format!(

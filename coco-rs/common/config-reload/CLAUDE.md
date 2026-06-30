@@ -29,3 +29,6 @@ Catalog paths (`providers.json`, `models.json`) may not exist at startup.
 The watcher subscribes to the **parent directory** non-recursively and filters
 events by the exact path in the classify closure, so a first-time `touch` of
 `~/.coco/providers.json` triggers a rebuild.
+
+If `managed-settings.d/` exists at startup, the watcher also subscribes to that
+directory non-recursively and treats direct `*.json` children as policy changes.

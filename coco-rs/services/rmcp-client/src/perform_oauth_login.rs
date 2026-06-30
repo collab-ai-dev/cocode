@@ -22,6 +22,7 @@ use crate::WrappedOAuthTokenResponse;
 use crate::oauth::compute_expires_at_millis;
 use crate::save_oauth_tokens;
 use crate::utils::apply_default_headers;
+use crate::utils::apply_oauth_retry_policy;
 use crate::utils::build_default_headers;
 use coco_async_utils::clock::SystemClock;
 
@@ -318,7 +319,8 @@ impl OauthLoginFlow {
             env_http_headers,
         } = headers;
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
-        let http_client = apply_default_headers(ClientBuilder::new(), &default_headers).build()?;
+        let builder = apply_oauth_retry_policy(ClientBuilder::new(), server_url);
+        let http_client = apply_default_headers(builder, &default_headers).build()?;
 
         let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();

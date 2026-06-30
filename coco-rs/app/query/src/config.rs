@@ -136,8 +136,9 @@ pub struct QueryEngineConfig {
     pub bypass_permissions_available: bool,
     /// This engine's OWN query-tracking depth (0 = main loop, 1+ =
     /// subagent). Stamped onto every `ToolUseContext.query_depth` for
-    /// plain (non-fork) spawns; forks override it by inheriting the
-    /// parent's depth via [`crate::fork_context::ForkContextOverrides::child_query_depth`].
+    /// plain (non-fork) spawns; forks override it with
+    /// [`crate::fork_context::ForkContextOverrides::child_query_depth`] so
+    /// they count toward the same depth cap.
     /// The spawn path sets this to `parent + 1` so a child can read its
     /// own depth and gate nested `Agent` spawning at
     /// `coco_subagent::SUBAGENT_DEPTH_LIMIT`. Defaults to 0.

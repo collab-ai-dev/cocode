@@ -331,6 +331,78 @@ async fn test_agent_tool_rejects_spawns_at_depth_limit() {
     assert!(msg.contains("depth 5 of 5"));
 }
 
+fn allow_agent_rule(content: &str) -> coco_types::PermissionRule {
+    coco_types::PermissionRule {
+        source: coco_types::PermissionRuleSource::UserSettings,
+        behavior: coco_types::PermissionBehavior::Allow,
+        value: coco_types::PermissionRuleValue {
+            tool_pattern: coco_types::ToolName::Agent.as_str().to_string(),
+            rule_content: Some(content.to_string()),
+        },
+    }
+}
+
+#[tokio::test]
+async fn test_agent_tool_rejects_subagent_type_outside_allow_list() {
+    let handle = Arc::new(CapturingAgentHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    ctx.permission_context
+        .allow_rules
+        .entry(coco_types::PermissionRuleSource::UserSettings)
+        .or_default()
+        .push(allow_agent_rule("Explore, Plan"));
+
+    let result = <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "Build the feature",
+            "description": "build feature",
+            "subagent_type": "Build",
+        }),
+        &ctx,
+    )
+    .await;
+
+    let err = result.expect_err("subagent_type outside Agent(...) allow-list must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("Unknown subagent_type 'Build'"));
+    assert!(msg.contains("Available agents: Explore, Plan"));
+    assert!(handle.last_request.lock().await.is_none());
+}
+
+#[tokio::test]
+async fn test_agent_tool_allows_subagent_type_inside_allow_list() {
+    let handle = Arc::new(CapturingAgentHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    ctx.permission_context
+        .allow_rules
+        .entry(coco_types::PermissionRuleSource::UserSettings)
+        .or_default()
+        .push(allow_agent_rule("Explore, Plan"));
+
+    <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "Explore the code",
+            "description": "explore code",
+            "subagent_type": "Explore",
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let request = handle
+        .last_request
+        .lock()
+        .await
+        .clone()
+        .expect("allowed type should spawn");
+    assert_eq!(request.subagent_type.as_deref(), Some("Explore"));
+}
+
 /// Schema-honesty gate for the team parameters. `team_name` / `mode` / `name`
 /// are model-facing only when `Feature::AgentTeams` is live (all three matter
 /// only to the team-spawn path): when resolvably disabled they drop (so a
@@ -1662,6 +1734,7 @@ async fn test_send_message_shutdown_response_reject_without_reason_rejected() {
 struct StoppedTaskHandle {
     status: coco_types::TaskStatus,
     task_type: coco_types::TaskType,
+    killed_by: Option<coco_types::TaskKilledBy>,
 }
 
 #[async_trait::async_trait]
@@ -1678,7 +1751,7 @@ impl coco_tool_runtime::TaskHandle for StoppedTaskHandle {
             tool_use_id: None,
             start_time: 0,
             end_time: None,
-            killed_by: None,
+            killed_by: self.killed_by,
             total_paused_ms: None,
             output_file: None,
             output_offset: 0,
@@ -1844,6 +1917,7 @@ fn ctx_with_resume_handle_and_status(
     ctx.task_handle = Some(Arc::new(StoppedTaskHandle {
         status,
         task_type: coco_types::TaskType::BgAgent,
+        killed_by: None,
     }));
     ctx.session_id_for_history = Some("sess-test".into());
     ctx
@@ -1856,7 +1930,11 @@ fn ctx_with_resume_handle_status_and_type(
 ) -> ToolUseContext {
     let mut ctx = ToolUseContext::test_default();
     ctx.agent = handle;
-    ctx.task_handle = Some(Arc::new(StoppedTaskHandle { status, task_type }));
+    ctx.task_handle = Some(Arc::new(StoppedTaskHandle {
+        status,
+        task_type,
+        killed_by: None,
+    }));
     ctx.session_id_for_history = Some("sess-test".into());
     ctx
 }
@@ -1919,6 +1997,7 @@ async fn test_send_message_rejects_resume_with_empty_session_id() {
     ctx.task_handle = Some(Arc::new(StoppedTaskHandle {
         status: coco_types::TaskStatus::Completed,
         task_type: coco_types::TaskType::BgAgent,
+        killed_by: None,
     }));
     // session_id_for_history left at None.
     let result = <SendMessageTool as DynTool>::execute(
@@ -1968,6 +2047,42 @@ async fn test_send_message_does_not_resume_running_task() {
     assert!(
         handle.last_resume.lock().await.is_none(),
         "no resume on Running"
+    );
+}
+
+#[tokio::test]
+async fn test_send_message_does_not_resume_stopped_terminal_task() {
+    let handle = Arc::new(ResumeRecordingHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    ctx.task_handle = Some(Arc::new(StoppedTaskHandle {
+        status: coco_types::TaskStatus::Completed,
+        task_type: coco_types::TaskType::BgAgent,
+        killed_by: Some(coco_types::TaskKilledBy::User),
+    }));
+    ctx.session_id_for_history = Some("sess-test".into());
+
+    let result = <SendMessageTool as DynTool>::execute(
+        &SendMessageTool,
+        serde_json::json!({
+            "to": "agent-stopped",
+            "message": "follow up",
+            "summary": "follow up",
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.data["success"], false);
+    assert_eq!(result.data["routing"], "stopped");
+    assert!(
+        handle.last_resume.lock().await.is_none(),
+        "terminal agents with a stop marker must not be resumed"
+    );
+    assert!(
+        handle.last_send.lock().await.is_none(),
+        "stopped agents must not fall through to mailbox send"
     );
 }
 
@@ -2353,6 +2468,11 @@ mod render_for_model_tests {
         assert!(text.contains("agent-99"), "got: {text}");
         assert!(text.contains("/tmp/agent-99.log"), "got: {text}");
         assert!(text.contains("non-overlapping"), "got: {text}");
+        assert!(
+            text.contains("Do NOT read or tail this file"),
+            "got: {text}"
+        );
+        assert!(!text.contains("FileRead or Bash tail"), "got: {text}");
         assert!(!text.contains("end your response"), "got: {text}");
     }
 

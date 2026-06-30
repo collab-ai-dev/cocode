@@ -552,9 +552,9 @@ pub struct TaskNotificationUsage {
 
 /// Model-contract note appended to agent / teammate task-notifications. CC adds
 /// the same note in `enqueueAgentNotification` so the model understands a
-/// notification can recur: an agent comes to rest, the user resumes it, and the
+/// notification can recur: an agent stops, the user resumes it, and the
 /// same task-id notifies again.
-pub const TASK_NOTIFICATION_RECUR_NOTE: &str = "A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.";
+pub const TASK_NOTIFICATION_RECUR_NOTE: &str = "A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.";
 
 /// Model-contract note appended to stopped agent / teammate task-notifications.
 pub const TASK_NOTIFICATION_STOPPED_NOTE: &str =

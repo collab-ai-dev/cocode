@@ -236,6 +236,15 @@ pub struct Settings {
     #[serde(default)]
     pub session: SessionSettings,
 
+    /// Whether the model responds after an input-box `!` bash command runs.
+    /// Unset defaults to true at the prompt-mode dispatch site.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "respondToBashCommands",
+        alias = "respond_to_bash_commands"
+    )]
+    pub respond_to_bash_commands: Option<bool>,
+
     // === Auto-Mode ===
     #[serde(skip_serializing_if = "Option::is_none", alias = "autoMode")]
     pub auto_mode: Option<AutoModeConfig>,
@@ -250,6 +259,16 @@ pub struct Settings {
     /// `strictPluginOnlyCustomization` (`utils/settings/pluginOnlyPolicy.ts`).
     #[serde(default)]
     pub strict_plugin_only_customization: StrictPluginOnlyCustomization,
+    /// Managed policy compatibility flag. Claude Code ORs this across policy
+    /// tiers so a lower tier can force a startup remote-settings refresh; coco-rs
+    /// has no remote-settings fetch today, but preserving the merged setting
+    /// keeps the config surface aligned.
+    #[serde(
+        default,
+        rename = "forceRemoteSettingsRefresh",
+        alias = "force_remote_settings_refresh"
+    )]
+    pub force_remote_settings_refresh: bool,
     /// Managed allowlist of approved marketplace names. When non-empty, only
     /// these marketplaces may be installed from.
     #[serde(default)]
@@ -680,6 +699,14 @@ impl SettingsWithSource {
         .filter_map(|source| self.per_source.get(source))
         .any(auto_mode_source_classifies_all_shell)
     }
+
+    /// Whether managed policy explicitly requests a remote-settings refresh.
+    /// Mirrors Claude Code's policy-tier OR behavior.
+    pub fn force_remote_settings_refresh_enabled(&self) -> bool {
+        self.per_source
+            .get(&SettingSource::Policy)
+            .is_some_and(source_force_remote_settings_refresh)
+    }
 }
 
 fn auto_mode_source_classifies_all_shell(value: &serde_json::Value) -> bool {
@@ -688,6 +715,14 @@ fn auto_mode_source_classifies_all_shell(value: &serde_json::Value) -> bool {
         .or_else(|| value.pointer("/auto_mode/classifyAllShell"))
         .or_else(|| value.pointer("/autoMode/classify_all_shell"))
         .or_else(|| value.pointer("/autoMode/classifyAllShell"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn source_force_remote_settings_refresh(value: &serde_json::Value) -> bool {
+    value
+        .pointer("/forceRemoteSettingsRefresh")
+        .or_else(|| value.pointer("/force_remote_settings_refresh"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
 }
@@ -833,9 +868,21 @@ pub fn load_settings_with(
             managed_path,
         )?;
     }
+    for path in policy::managed_dropin_paths(managed_path)? {
+        load_and_merge(
+            &mut per_source,
+            &mut source_paths,
+            &mut merged,
+            SettingSource::Policy,
+            &path,
+        )?;
+    }
 
-    let settings: Settings = serde_json::from_value(merged)
+    let mut settings: Settings = serde_json::from_value(merged)
         .with_ctx("failed to deserialize merged settings into Settings struct")?;
+    settings.force_remote_settings_refresh = per_source
+        .get(&SettingSource::Policy)
+        .is_some_and(source_force_remote_settings_refresh);
 
     // Surface structured validation warnings (invalid mode combos, bad rules
     // that survived per-source filtering, …) at load time instead of silently
@@ -886,8 +933,21 @@ fn load_and_merge(
             err.message
         );
     }
-    per_source.insert(source, value.clone());
-    source_paths.insert(source, path.to_path_buf());
+    if let Some(existing) = per_source.get_mut(&source) {
+        let preserve_force_remote_refresh = source == SettingSource::Policy
+            && (source_force_remote_settings_refresh(existing)
+                || source_force_remote_settings_refresh(&value));
+        merge::deep_merge(existing, &value);
+        if preserve_force_remote_refresh && let Some(obj) = existing.as_object_mut() {
+            obj.insert(
+                "forceRemoteSettingsRefresh".to_string(),
+                serde_json::Value::Bool(true),
+            );
+        }
+    } else {
+        per_source.insert(source, value.clone());
+        source_paths.insert(source, path.to_path_buf());
+    }
     merge::deep_merge(merged, &value);
     Ok(())
 }

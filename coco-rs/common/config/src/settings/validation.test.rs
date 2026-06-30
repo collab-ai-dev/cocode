@@ -147,7 +147,7 @@ fn test_validate_settings_bypass_conflict() {
 #[test]
 fn test_validate_settings_model_not_in_allowlist() {
     let settings = Settings {
-        available_models: Some(vec!["haiku".into()]),
+        available_models: Some(vec!["anthropic/claude-haiku-4-5".into()]),
         ..settings_with_main("claude-opus-4-6")
     };
     let errors = validate_settings(&settings);
@@ -160,20 +160,15 @@ fn test_validate_settings_model_not_in_allowlist() {
 }
 
 #[test]
-fn test_validate_settings_model_matches_family_alias() {
+fn test_validate_settings_model_requires_provider_model_fullname() {
     let settings = Settings {
         available_models: Some(vec!["opus".into()]),
         ..settings_with_main("claude-opus-4-6")
     };
     let errors = validate_settings(&settings);
-    // "opus" should match "claude-opus-4-6" as a family alias
-    let model_errors: Vec<_> = errors
-        .iter()
-        .filter(|e| e.path.starts_with("models.main"))
-        .collect();
     assert!(
-        model_errors.is_empty(),
-        "should not flag opus match: {model_errors:?}"
+        errors.iter().any(|e| e.path == "models.main.primary"),
+        "expected bare family allowlist error: {errors:?}"
     );
 }
 
@@ -193,7 +188,7 @@ fn test_validate_settings_empty_available_models_denies_selected_model() {
 #[test]
 fn test_validate_settings_available_models_checks_non_main_roles_and_fallbacks() {
     let settings = Settings {
-        available_models: Some(vec!["sonnet".into()]),
+        available_models: Some(vec!["anthropic/claude-sonnet-4-6".into()]),
         models: crate::ModelSelectionSettings {
             main: Some(role_selection("claude-sonnet-4-6")),
             plan: Some(

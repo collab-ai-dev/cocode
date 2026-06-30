@@ -16,8 +16,10 @@ use crate::OAuthCredentialsStoreMode;
 use crate::oauth::has_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
+use crate::utils::is_transient_oauth_reqwest_error;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
+const OAUTH_RETRY_DELAY: Duration = Duration::from_millis(500);
 const OAUTH_DISCOVERY_HEADER: &str = "MCP-Protocol-Version";
 const OAUTH_DISCOVERY_VERSION: &str = "2024-11-05";
 
@@ -71,12 +73,7 @@ async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMa
         let mut discovery_url = base_url.clone();
         discovery_url.set_path(&candidate_path);
 
-        let response = match client
-            .get(discovery_url.clone())
-            .header(OAUTH_DISCOVERY_HEADER, OAUTH_DISCOVERY_VERSION)
-            .send()
-            .await
-        {
+        let response = match send_oauth_discovery_request(&client, discovery_url.clone()).await {
             Ok(response) => response,
             Err(err) => {
                 last_error = Some(err.into());
@@ -106,6 +103,27 @@ async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMa
     }
 
     Ok(false)
+}
+
+async fn send_oauth_discovery_request(
+    client: &Client,
+    discovery_url: Url,
+) -> std::result::Result<reqwest::Response, reqwest::Error> {
+    for attempt in 0..=1 {
+        let result = client
+            .get(discovery_url.clone())
+            .header(OAUTH_DISCOVERY_HEADER, OAUTH_DISCOVERY_VERSION)
+            .send()
+            .await;
+        match result {
+            Ok(response) => return Ok(response),
+            Err(error) if attempt == 0 && is_transient_oauth_reqwest_error(&error) => {
+                tokio::time::sleep(OAUTH_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("OAuth discovery returns after the first retry")
 }
 
 #[derive(Debug, Deserialize)]

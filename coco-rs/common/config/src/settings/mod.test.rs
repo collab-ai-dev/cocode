@@ -51,6 +51,28 @@ fn test_parse_settings_accepts_ts_permission_policy_key() {
 }
 
 #[test]
+fn test_parse_settings_accepts_force_remote_settings_refresh_keys() {
+    let settings = parse_settings(r#"{ "forceRemoteSettingsRefresh": true }"#)
+        .expect("parse camel-case force remote refresh");
+    assert!(settings.force_remote_settings_refresh);
+
+    let settings = parse_settings(r#"{ "force_remote_settings_refresh": true }"#)
+        .expect("parse snake-case force remote refresh");
+    assert!(settings.force_remote_settings_refresh);
+}
+
+#[test]
+fn test_parse_settings_accepts_respond_to_bash_commands_keys() {
+    let settings = parse_settings(r#"{ "respondToBashCommands": false }"#)
+        .expect("parse camel-case respondToBashCommands");
+    assert_eq!(settings.respond_to_bash_commands, Some(false));
+
+    let settings = parse_settings(r#"{ "respond_to_bash_commands": true }"#)
+        .expect("parse snake-case respond_to_bash_commands");
+    assert_eq!(settings.respond_to_bash_commands, Some(true));
+}
+
+#[test]
 fn test_plan_mode_clear_context_default_is_enabled() {
     let settings = parse_settings("{}").expect("parse empty settings");
     assert!(settings.plan_mode.show_clear_context_on_exit);
@@ -345,6 +367,136 @@ fn test_load_settings_with_accepts_jsonc_layers() {
     assert!(settings.per_source.contains_key(&SettingSource::Project));
     assert!(settings.per_source.contains_key(&SettingSource::Flag));
     assert!(settings.per_source.contains_key(&SettingSource::Policy));
+}
+
+#[test]
+fn test_load_settings_with_merges_managed_dropin_directory() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cwd = tmp.path().join("project");
+    std::fs::create_dir_all(cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME))
+        .expect("project settings dir");
+
+    let user_path = tmp.path().join("settings.json");
+    let managed_path = tmp.path().join("managed-settings.json");
+    let managed_dir = managed_path.with_extension("d");
+    std::fs::create_dir_all(&managed_dir).expect("managed drop-in dir");
+
+    std::fs::write(
+        &managed_path,
+        r#"{
+            "language": "en",
+            "forceRemoteSettingsRefresh": false,
+            "strict_known_marketplaces": ["base"]
+        }"#,
+    )
+    .expect("write managed settings");
+    std::fs::write(
+        managed_dir.join("10-refresh.json"),
+        r#"{
+            "forceRemoteSettingsRefresh": true,
+            "strict_known_marketplaces": ["refresh"]
+        }"#,
+    )
+    .expect("write first managed fragment");
+    std::fs::write(
+        managed_dir.join("20-language.json"),
+        r#"{
+            "language": "zh-CN",
+            "strict_known_marketplaces": ["language"]
+        }"#,
+    )
+    .expect("write second managed fragment");
+
+    let settings = load_settings_with(
+        &cwd,
+        None,
+        &user_path,
+        &managed_path,
+        &all_setting_sources(),
+    )
+    .expect("load settings");
+
+    assert_eq!(settings.merged.language.as_deref(), Some("zh-CN"));
+    assert!(settings.merged.force_remote_settings_refresh);
+    assert_eq!(
+        settings.merged.strict_known_marketplaces,
+        ["base", "refresh", "language"]
+    );
+
+    let policy = settings
+        .per_source
+        .get(&SettingSource::Policy)
+        .expect("policy source");
+    assert_eq!(policy["language"], "zh-CN");
+    assert_eq!(policy["forceRemoteSettingsRefresh"], true);
+    assert_eq!(
+        policy["strict_known_marketplaces"],
+        serde_json::json!(["base", "refresh", "language"])
+    );
+}
+
+#[test]
+fn test_force_remote_settings_refresh_is_policy_only() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cwd = tmp.path().join("project");
+    std::fs::create_dir_all(cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME))
+        .expect("project settings dir");
+
+    let user_path = tmp.path().join("settings.json");
+    let managed_path = tmp.path().join("managed-settings.json");
+    let flag_path = tmp.path().join("flag-settings.json");
+
+    std::fs::write(&user_path, r#"{"forceRemoteSettingsRefresh": true}"#)
+        .expect("write user settings");
+    std::fs::write(&flag_path, r#"{"forceRemoteSettingsRefresh": false}"#)
+        .expect("write flag settings");
+    std::fs::write(&managed_path, r#"{"forceRemoteSettingsRefresh": false}"#)
+        .expect("write managed settings");
+
+    let settings = load_settings_with(
+        &cwd,
+        Some(&flag_path),
+        &user_path,
+        &managed_path,
+        &all_setting_sources(),
+    )
+    .expect("load settings");
+
+    assert!(!settings.merged.force_remote_settings_refresh);
+    assert!(!settings.force_remote_settings_refresh_enabled());
+}
+
+#[test]
+fn test_force_remote_settings_refresh_is_or_across_policy_files() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cwd = tmp.path().join("project");
+    std::fs::create_dir_all(cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME))
+        .expect("project settings dir");
+
+    let user_path = tmp.path().join("settings.json");
+    let managed_path = tmp.path().join("managed-settings.json");
+    let managed_dir = managed_path.with_extension("d");
+    std::fs::create_dir_all(&managed_dir).expect("managed drop-in dir");
+
+    std::fs::write(&managed_path, r#"{"forceRemoteSettingsRefresh": true}"#)
+        .expect("write managed settings");
+    std::fs::write(
+        managed_dir.join("10-refresh.json"),
+        r#"{"forceRemoteSettingsRefresh": false}"#,
+    )
+    .expect("write managed fragment");
+
+    let settings = load_settings_with(
+        &cwd,
+        None,
+        &user_path,
+        &managed_path,
+        &all_setting_sources(),
+    )
+    .expect("load settings");
+
+    assert!(settings.merged.force_remote_settings_refresh);
+    assert!(settings.force_remote_settings_refresh_enabled());
 }
 
 #[test]

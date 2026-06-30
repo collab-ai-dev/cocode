@@ -117,7 +117,7 @@ fn render_one(t: &TaskStatusSnapshot) -> String {
 fn killed_suffix(killed_by: Option<coco_types::TaskKilledBy>) -> &'static str {
     match killed_by {
         Some(coco_types::TaskKilledBy::User) => " was stopped by user",
-        Some(coco_types::TaskKilledBy::Parent) => " was stopped by parent agent",
+        Some(coco_types::TaskKilledBy::Parent) => " was stopped by Claude",
         Some(coco_types::TaskKilledBy::System) => " was stopped by system",
         None => " was stopped",
     }

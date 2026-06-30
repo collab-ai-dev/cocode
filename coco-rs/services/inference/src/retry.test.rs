@@ -71,6 +71,21 @@ fn test_server_retry_after_takes_priority() {
 }
 
 #[test]
+fn test_retry_delay_guard_allows_default_ceiling() {
+    assert!(retry_delay_allowed(Duration::from_millis(60_000), false));
+}
+
+#[test]
+fn test_retry_delay_guard_rejects_long_backoff_without_watchdog() {
+    assert!(!retry_delay_allowed(Duration::from_millis(60_001), false));
+}
+
+#[test]
+fn test_retry_delay_guard_allows_long_backoff_with_watchdog() {
+    assert!(retry_delay_allowed(Duration::from_millis(60_001), true));
+}
+
+#[test]
 fn test_should_retry_within_limit() {
     let config = RetryConfig {
         max_retries: 3,

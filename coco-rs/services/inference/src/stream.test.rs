@@ -283,6 +283,14 @@ async fn process_stream_with_config_uses_custom_stall_threshold() {
     assert_eq!(metrics.total_stall_ms, 2_000);
 }
 
+#[test]
+fn default_process_stream_config_uses_twenty_second_stall_threshold() {
+    assert_eq!(
+        default_process_stream_config().stall_threshold,
+        Duration::from_secs(20)
+    );
+}
+
 // ─── AssistantTurnSnapshot accumulator tests ─────────────────────────
 //
 // The accumulator is private; we exercise it through the public

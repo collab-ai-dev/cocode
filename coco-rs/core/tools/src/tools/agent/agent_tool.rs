@@ -486,7 +486,7 @@ impl Tool for AgentTool {
                 let instructions = match output_file.as_deref() {
                     None | Some("") => "Briefly tell the user what you launched, then continue with any non-overlapping work if useful. Do not duplicate this agent's work; agent results will arrive in a subsequent message.".to_string(),
                     Some(output_file) => format!(
-                        "Do not duplicate this agent's work; avoid working with the same files or topics it is using. Work on non-overlapping tasks if useful, or briefly tell the user what you launched.\noutput_file: {output_file}\nIf asked, you can check progress before completion by using FileRead or Bash tail on the output file."
+                        "Do not duplicate this agent's work; avoid working with the same files or topics it is using. Work on non-overlapping tasks if useful, or briefly tell the user what you launched.\noutput_file: {output_file}\nDo NOT read or tail this file with tools; it is the full subagent transcript and results will arrive in a subsequent message."
                     ),
                 };
                 format!("{prefix}\n{instructions}")
@@ -726,6 +726,24 @@ impl Tool for AgentTool {
             .zip(definition_lookup_type)
             .and_then(|(cat, name)| cat.find_active(name).cloned())
             .map(std::sync::Arc::new);
+
+        if !is_fork_spawn
+            && !is_team_spawn
+            && let Some(requested_type) = explicit_subagent_type.as_deref()
+            && let Some(allowed_agent_types) =
+                allowed_agent_types_from_rules(&ctx.permission_context)
+            && !allowed_agent_types
+                .iter()
+                .any(|allowed| allowed == requested_type)
+        {
+            return Err(ToolError::InvalidInput {
+                message: format!(
+                    "Unknown subagent_type '{requested_type}'. Available agents: {}.",
+                    allowed_agent_types.join(", ")
+                ),
+                error_code: Some("subagent_type_not_found".into()),
+            });
+        }
 
         // Child permission mode +
         // :
@@ -1281,6 +1299,27 @@ fn find_agent_deny_rule<'a>(
         r.value.tool_pattern == ToolName::Agent.as_str()
             && r.value.rule_content.as_deref() == Some(agent_type)
     })
+}
+
+fn allowed_agent_types_from_rules(
+    context: &coco_types::ToolPermissionContext,
+) -> Option<Vec<String>> {
+    let mut allowed = std::collections::BTreeSet::new();
+    for rule in context.allow_rules.values().flatten() {
+        if rule.value.tool_pattern != ToolName::Agent.as_str() {
+            continue;
+        }
+        let content = rule.value.rule_content.as_deref()?;
+        let rule_text = format!("{}({content})", rule.value.tool_pattern);
+        if let Some(parsed) = coco_subagent::parse_allowed_agent_types(&rule_text) {
+            allowed.extend(parsed.names);
+        }
+    }
+    if allowed.is_empty() {
+        None
+    } else {
+        Some(allowed.into_iter().collect())
+    }
 }
 
 #[cfg(test)]

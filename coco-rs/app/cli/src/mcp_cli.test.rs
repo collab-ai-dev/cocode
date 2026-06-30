@@ -24,6 +24,12 @@ fn suggest_server_not_found_uses_closest_match_within_two_edits() {
 }
 
 #[test]
+fn closest_name_counts_adjacent_transposition_as_one_edit() {
+    let names = ["github"];
+    assert_eq!(closest_name("githbu", &names, 1), Some("github"));
+}
+
+#[test]
 fn suggest_server_not_found_truncates_configured_names() {
     let configs = (0..10)
         .map(|idx| scoped(&format!("server-{idx}")))

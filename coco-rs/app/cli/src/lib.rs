@@ -130,7 +130,7 @@ pub struct Cli {
     pub verbose: bool,
 
     /// Run the conversation in the background.
-    #[arg(long, alias = "background")]
+    #[arg(long, visible_alias = "background")]
     pub bg: bool,
 
     /// Resume a specific session by ID (shorthand for `resume <id>`).

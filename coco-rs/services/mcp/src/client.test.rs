@@ -333,6 +333,40 @@ async fn discovery_retry_list_retries_transient_failure_once() {
 }
 
 #[test]
+fn http_endpoint_not_found_message_sanitizes_config_url() {
+    assert_eq!(
+        http_endpoint_not_found_message(
+            "https://user:pass@mcp.example.test/api/?token=secret#frag",
+        ),
+        "MCP endpoint not found at https://mcp.example.test/api. Check the URL in your MCP config."
+    );
+}
+
+#[test]
+fn http_endpoint_not_found_message_handles_unparseable_url() {
+    assert_eq!(
+        http_endpoint_not_found_message("not a url"),
+        "MCP endpoint not found at (unparseable url). Check the URL in your MCP config."
+    );
+}
+
+#[test]
+fn session_ingress_mcp_url_matches_only_known_paths_on_same_origin() {
+    assert!(is_session_ingress_mcp_url_with_base(
+        "https://api.anthropic.test/v2/session_ingress/shttp/mcp/server",
+        Some("https://api.anthropic.test"),
+    ));
+    assert!(!is_session_ingress_mcp_url_with_base(
+        "https://api.anthropic.test/custom/mcp",
+        Some("https://api.anthropic.test"),
+    ));
+    assert!(!is_session_ingress_mcp_url_with_base(
+        "https://other.anthropic.test/v2/session_ingress/shttp/mcp/server",
+        Some("https://api.anthropic.test"),
+    ));
+}
+
+#[test]
 fn auth_descriptor_reports_http_transport_and_url() {
     let mut manager = McpConnectionManager::new(std::env::temp_dir());
     register_http(&mut manager, "remote", None);

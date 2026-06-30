@@ -157,6 +157,7 @@ pub(super) fn handle(
         // === MCP ===
         ServerNotification::McpStartupStatus(p) => {
             let connected = matches!(p.status, coco_types::McpConnectionStatus::Connected);
+            let needs_auth = matches!(p.status, coco_types::McpConnectionStatus::NeedsAuth);
             if let Some(server) = state
                 .session
                 .mcp_servers
@@ -164,16 +165,29 @@ pub(super) fn handle(
                 .find(|s| s.name == p.server)
             {
                 server.connected = connected;
+                server.needs_auth = needs_auth;
             } else {
                 state.session.mcp_servers.push(McpServerStatus {
                     name: p.server,
                     connected,
+                    needs_auth,
                     tool_count: 0,
                 });
             }
             true
         }
         ServerNotification::McpStartupComplete(p) => {
+            let needs_auth_count = state
+                .session
+                .mcp_servers
+                .iter()
+                .filter(|server| server.needs_auth)
+                .count();
+            if needs_auth_count > 0 {
+                state.ui.add_toast(Toast::warning(
+                    t!("toast.mcp_needs_auth", count = needs_auth_count).to_string(),
+                ));
+            }
             if !p.failed.is_empty() {
                 state.ui.add_toast(Toast::warning(
                     t!("toast.mcp_failed_to_start", count = p.failed.len()).to_string(),
@@ -1102,6 +1116,7 @@ pub(super) fn handle(
                 "SessionResetForResume",
             );
             clear_session_boundary_state(state);
+            state.session.rewind_pre_clear_messages.clear();
             state.session.transcript.on_session_reset();
             // Conversation id rotates on resume so prompt-cache keys
             // do not collide with the prior run's break points.
@@ -1149,6 +1164,7 @@ pub(super) fn handle(
                 "HistoryReplaced (bulk hydration)",
             );
             clear_session_boundary_state(state);
+            state.session.rewind_pre_clear_messages.clear();
             state
                 .session
                 .transcript

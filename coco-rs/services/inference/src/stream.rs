@@ -27,7 +27,7 @@ use vercel_ai_provider::LanguageModelV4StreamResult;
 pub use vercel_ai::StreamMetrics;
 pub use vercel_ai::StreamProcessorConfig;
 
-const DEFAULT_PROCESS_STREAM_STALL_THRESHOLD: Duration = Duration::from_secs(30);
+const DEFAULT_PROCESS_STREAM_STALL_THRESHOLD: Duration = Duration::from_secs(20);
 
 // ─── AssistantTurnSnapshot — per-turn full-fidelity assistant content ────
 //
@@ -541,7 +541,7 @@ pub async fn process_stream(
 ///
 /// Idle timeout is **disabled by default** (the original behavior — a hard
 /// idle abort would risk killing a legitimately slow reasoning stream); the
-/// 30s stall threshold is the soft warn. A hard idle backstop is opt-in
+/// 20s stall threshold is the soft warn. A hard idle backstop is opt-in
 /// **per-provider** via `ProviderClientOptions.stream_idle_timeout_secs`,
 /// applied by [`crate::client::ApiClient::with_stream_idle_timeout`] — NOT a
 /// hardcoded global.

@@ -909,6 +909,7 @@ pub struct TokenUsage {
 pub struct McpServerStatus {
     pub name: String,
     pub connected: bool,
+    pub needs_auth: bool,
     pub tool_count: i32,
 }
 

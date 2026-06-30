@@ -670,16 +670,26 @@ pub async fn run_chat_with_options(
     } else {
         std::env::current_dir()?
     };
+    // Resolve the session id before any local no-model-turn exits. A
+    // print-mode local command should still leave a resumable transcript, and
+    // `--session-id` is the automation-facing way to address that session.
+    let session_id = opts
+        .session_id_override
+        .clone()
+        .or_else(|| cli.session_id.clone())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     if let Some(goal_args) = parse_headless_goal_slash(prompt) {
         match coco_commands::parse_goal_command_args(goal_args) {
             Err(text) => {
                 return Ok(headless_local_goal_text_outcome(
                     cli,
                     &cwd,
+                    &session_id,
                     goal_args,
                     text,
                     opts.prior_messages,
-                ));
+                )
+                .await);
             }
             Ok(coco_commands::GoalCommandRequest::Status) => {
                 let text =
@@ -688,10 +698,12 @@ pub async fn run_chat_with_options(
                 return Ok(headless_local_goal_text_outcome(
                     cli,
                     &cwd,
+                    &session_id,
                     "",
                     text,
                     opts.prior_messages,
-                ));
+                )
+                .await);
             }
             Ok(coco_commands::GoalCommandRequest::Clear) => {
                 if crate::goal_command::find_restorable_goal_condition(&opts.prior_messages)
@@ -700,10 +712,12 @@ pub async fn run_chat_with_options(
                     return Ok(headless_local_goal_text_outcome(
                         cli,
                         &cwd,
+                        &session_id,
                         "clear",
                         "No goal set".to_string(),
                         opts.prior_messages,
-                    ));
+                    )
+                    .await);
                 }
             }
             Ok(coco_commands::GoalCommandRequest::Set { .. }) => {}
@@ -746,14 +760,9 @@ pub async fn run_chat_with_options(
     let main_model = resolve_main_model(&runtime_config);
     let provider_api = main_model.provider_api;
     let model_id = main_model.model_id.clone();
-    // Resolve the session id up front so the registry's header-template vars
-    // (`${SESSION_ID}`) and the `SessionRuntime` share one id. For
-    // resume/continue/fork the override is already `Some`; a fresh run mints
-    // one here and threads it into the build opts below.
-    let session_id = opts
-        .session_id_override
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    // Use the early-resolved session id so header-template vars
+    // (`${SESSION_ID}`), no-model-turn local persistence, and the
+    // `SessionRuntime` share one id.
     let model_runtimes = Arc::new(coco_inference::ModelRuntimeRegistry::new(
         Arc::new(runtime_config.clone()),
         Some(crate::provider_login::shared_resolver()),
@@ -1026,6 +1035,14 @@ pub async fn run_chat_with_options(
         match coco_commands::parse_goal_command_args(goal_args) {
             Err(text) => {
                 append_headless_slash_text(&mut prefix_messages, "goal", goal_args, &text);
+                persist_headless_local_transcript_messages(
+                    cli,
+                    &cwd,
+                    &session_id,
+                    &prior_messages,
+                    &prefix_messages,
+                )
+                .await;
                 let mut final_messages = prior_messages;
                 final_messages.extend(prefix_messages);
                 return Ok(headless_text_outcome(
@@ -1063,6 +1080,14 @@ pub async fn run_chat_with_options(
                 match outcome {
                     crate::goal_command::GoalOutcome::Text(text) => {
                         append_headless_slash_text(&mut prefix_messages, "goal", &args, &text);
+                        persist_headless_local_transcript_messages(
+                            cli,
+                            &cwd,
+                            &session_id,
+                            &prior_messages,
+                            &prefix_messages,
+                        )
+                        .await;
                         let mut final_messages = prior_messages;
                         final_messages.extend(prefix_messages);
                         return Ok(headless_text_outcome(
@@ -1082,6 +1107,14 @@ pub async fn run_chat_with_options(
                         append_headless_goal_status(&mut prefix_messages, status);
                         runtime.persist_goal_metadata(None).await;
                         append_headless_slash_text(&mut prefix_messages, "goal", &args, &text);
+                        persist_headless_local_transcript_messages(
+                            cli,
+                            &cwd,
+                            &session_id,
+                            &prior_messages,
+                            &prefix_messages,
+                        )
+                        .await;
                         let mut final_messages = prior_messages;
                         final_messages.extend(prefix_messages);
                         return Ok(headless_text_outcome(
@@ -1237,15 +1270,26 @@ fn append_headless_goal_status(
     )));
 }
 
-fn headless_local_goal_text_outcome(
+async fn headless_local_goal_text_outcome(
     cli: &Cli,
     cwd: &Path,
+    session_id: &str,
     args: &str,
     response_text: String,
     prior_messages: Vec<std::sync::Arc<coco_messages::Message>>,
 ) -> RunChatOutcome {
+    let mut local_messages = Vec::new();
+    append_headless_slash_text(&mut local_messages, "goal", args, &response_text);
+    persist_headless_local_transcript_messages(
+        cli,
+        cwd,
+        session_id,
+        &prior_messages,
+        &local_messages,
+    )
+    .await;
     let mut final_messages = prior_messages;
-    append_headless_slash_text(&mut final_messages, "goal", args, &response_text);
+    final_messages.extend(local_messages);
     headless_text_outcome(
         cli,
         cwd,
@@ -1293,6 +1337,46 @@ fn headless_text_outcome(
         effective_cwd: cwd.to_path_buf(),
         additional_dirs: resolve_additional_dirs(cli, cwd),
         tool_filter_summary: summarize_tool_filter(cli),
+    }
+}
+
+async fn persist_headless_local_transcript_messages(
+    cli: &Cli,
+    cwd: &Path,
+    session_id: &str,
+    prior_messages: &[std::sync::Arc<coco_messages::Message>],
+    local_messages: &[std::sync::Arc<coco_messages::Message>],
+) {
+    if cli.no_session_persistence || local_messages.is_empty() {
+        return;
+    }
+    let config_home = coco_config::global_config::config_home();
+    let paths = Arc::new(coco_paths::ProjectPaths::new(config_home, cwd));
+    let store = coco_session::TranscriptStore::new(paths);
+    let mut seen: std::collections::HashSet<uuid::Uuid> = prior_messages
+        .iter()
+        .filter_map(|message| message.uuid().copied())
+        .collect();
+    let starting_parent_uuid = prior_messages
+        .iter()
+        .rev()
+        .find_map(|message| message.uuid().map(std::string::ToString::to_string));
+    let git_branch = coco_git::get_current_branch(cwd)
+        .ok()
+        .flatten()
+        .filter(|branch| !branch.is_empty());
+    let options = coco_session::storage::ChainWriteOptions {
+        cwd: cwd.display().to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        is_sidechain: false,
+        agent_id: None,
+        starting_parent_uuid,
+        git_branch,
+    };
+    let message_refs: Vec<&coco_messages::Message> =
+        local_messages.iter().map(AsRef::as_ref).collect();
+    if let Err(e) = store.append_message_chain(session_id, message_refs, &mut seen, options) {
+        tracing::warn!(error = %e, session_id, "failed to persist headless local transcript messages");
     }
 }
 
@@ -1400,7 +1484,45 @@ pub fn resolve_additional_dirs_display(cli: &Cli, cwd: &Path) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use clap::Parser;
+
+    use super::RunChatOptions;
     use super::parse_headless_goal_slash;
+    use super::run_chat_with_options;
+    use crate::Cli;
+
+    static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ConfigDirGuard {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl ConfigDirGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let previous = std::env::var_os(coco_utils_common::COCO_CONFIG_DIR_ENV);
+            // SAFETY: tests using this helper hold CONFIG_ENV_LOCK for the
+            // guard's lifetime.
+            unsafe { std::env::set_var(coco_utils_common::COCO_CONFIG_DIR_ENV, path) };
+            Self { previous }
+        }
+    }
+
+    impl Drop for ConfigDirGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => {
+                    // SAFETY: tests using this helper hold CONFIG_ENV_LOCK.
+                    unsafe { std::env::set_var(coco_utils_common::COCO_CONFIG_DIR_ENV, value) };
+                }
+                None => {
+                    // SAFETY: tests using this helper hold CONFIG_ENV_LOCK.
+                    unsafe { std::env::remove_var(coco_utils_common::COCO_CONFIG_DIR_ENV) };
+                }
+            }
+        }
+    }
 
     #[test]
     fn parse_headless_goal_slash_accepts_exact_goal_command() {
@@ -1417,5 +1539,42 @@ mod tests {
         assert_eq!(parse_headless_goal_slash("goal finish"), None);
         assert_eq!(parse_headless_goal_slash("/goalx finish"), None);
         assert_eq!(parse_headless_goal_slash("/loop 5m /goal done"), None);
+    }
+
+    #[test]
+    fn local_goal_print_run_writes_resumable_zero_turn_transcript() {
+        let _lock = CONFIG_ENV_LOCK.lock().expect("config env lock");
+        let config_home = tempfile::tempdir().expect("config home");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let _guard = ConfigDirGuard::set(config_home.path());
+        let cli = Cli::parse_from(["coco", "--print", "--session-id", "zero-model-turn-session"]);
+
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let outcome = rt
+            .block_on(run_chat_with_options(
+                &cli,
+                Some("/goal"),
+                RunChatOptions {
+                    cwd: Some(cwd.path().to_path_buf()),
+                    ..Default::default()
+                },
+            ))
+            .expect("local goal run");
+
+        assert_eq!(outcome.turns, 0);
+        let paths = coco_paths::ProjectPaths::new(config_home.path().to_path_buf(), cwd.path());
+        let transcript = paths.transcript("zero-model-turn-session");
+        assert!(
+            coco_session::recovery::can_resume_session(&transcript),
+            "local no-model-turn run must create a resumable transcript at {}",
+            transcript.display()
+        );
+        let conversation = coco_session::recovery::load_conversation_for_resume(&transcript)
+            .expect("zero-turn transcript should load");
+        assert_eq!(conversation.turn_count, 0);
+        assert!(
+            !conversation.messages.is_empty(),
+            "resume should recover the local slash-command transcript"
+        );
     }
 }
