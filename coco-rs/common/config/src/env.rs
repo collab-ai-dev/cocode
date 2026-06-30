@@ -134,15 +134,16 @@ pub enum EnvKey {
     CocoTeamMemorySyncUrl,
     /// JSON array of mounted memory stores. Each entry is either a bare
     /// absolute-path string or an object
-    /// `{ path, mode:"rw"|"ro", scope:"user"|"team", mount?, prompt_index?,
-    /// prompt_index_max_bytes? }`. Parsed into `MemoryConfig::memory_stores`.
+    /// `{ path, mode:"rw"|"ro", scope:"user"|"team", mount?, promptIndex?,
+    /// promptIndexMaxBytes? }`. Parsed into `MemoryConfig::memory_stores`.
     /// A non-empty list enables team recall outright (mounted ⇒ enabled).
     CocoMemoryStores,
-    /// Free-form policy / guidance text injected verbatim into the
-    /// auto-memory system-prompt section's "extra guidelines" slot.
-    /// Used by deployments to push operator-controlled memory governance
-    /// into the model's context without modifying the crate-bundled
-    /// prompt copy.
+    /// Full auto-memory system-prompt body override. When set, memory
+    /// prompt rendering returns `# auto memory\n{value}` and skips the
+    /// crate-bundled taxonomy / index blocks.
+    CocoCoworkMemoryGuidelines,
+    /// Free-form policy / guidance text appended verbatim to the
+    /// standard auto-memory system-prompt section.
     CocoCoworkMemoryExtraGuidelines,
     CocoMcpToolTimeoutMs,
     /// Claude Code compatibility knob for remote MCP tool-call silence.
@@ -366,6 +367,7 @@ impl EnvKey {
             Self::CocoMemoryKairos => "COCO_MEMORY_KAIROS",
             Self::CocoTeamMemorySyncUrl => "COCO_TEAM_MEMORY_SYNC_URL",
             Self::CocoMemoryStores => "COCO_MEMORY_STORES",
+            Self::CocoCoworkMemoryGuidelines => "COCO_COWORK_MEMORY_GUIDELINES",
             Self::CocoCoworkMemoryExtraGuidelines => "COCO_COWORK_MEMORY_EXTRA_GUIDELINES",
             Self::CocoMcpToolTimeoutMs => "COCO_MCP_TOOL_TIMEOUT_MS",
             Self::ClaudeCodeMcpToolIdleTimeout => "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT",

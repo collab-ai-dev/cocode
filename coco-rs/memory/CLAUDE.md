@@ -16,8 +16,7 @@ src/
 ├── recall.rs             relevant-memory selection (LLM ranker prompt + heuristic fallback + PrefetchState)
 ├── compact_truncate.rs   pure session-memory section truncation
 ├── prompt/
-│   ├── builders.rs       compose system / extract / dream / session-update prompts
-│   └── text/*.md         verbatim include_str! blocks (taxonomy, what-not-to-save, …)
+│   └── builders.rs       inlined system / extract / dream / session-update prompt builders
 ├── service/
 │   ├── extract.rs        ExtractService — turn-end fork via AgentHandle (fork_context_messages, max_turns=5, memdir-only fence, stash + trailing run, 60s drain)
 │   ├── dream.rs          DreamService — 3-gate scheduler (24h/5-session/10-min throttle), PID lock, 4-phase fork
@@ -49,7 +48,7 @@ src/
 
 - All LLM calls go through `coco-tool-runtime::SideQuery` or `AgentHandle`. **Never hardcode a model_id.**
 - The recall ranker uses `SideQueryRequest::with_model_role(ModelRole::Memory)` so the operator picks provider+model in `settings.models.memory`.
-- The forked extraction / dream agents inherit the parent session's `tool_overrides`, `features`, `parent_tool_filter`. The constraints layer (`AgentSpawnConstraints`) only narrows: `max_turns: 5`, `allowed_write_roots: [memdir]`.
+- The forked extraction / dream agents inherit the parent session's `tool_overrides`, `features`, `parent_tool_filter`. The memory runtime keeps a runtime-only `Arc<ToolOverrides>` and derives prompt-visible write/edit tool names from it; do not branch prompt text on model names. The constraints layer (`AgentSpawnConstraints`) only narrows: `max_turns: 5`, `allowed_write_roots: [memdir]`.
 - `MemoryConfig` (in `coco-config`) is the single source of truth for sub-toggles (extraction / team / dream / session-memory / kairos). Sub-toggles never become `Feature` variants — `Feature::AutoMemory` is the one upstream gate.
 
 ## Invariants
@@ -60,11 +59,19 @@ src/
 - `ExtractService::run` always sets `isolation = "fork"` + `fork_context_messages` so the child sees the parent's slice.
 - The write fence resolves relative paths against `ToolUseContext::cwd_override` before checking, so a model passing `./notes.md` lands inside the fence as expected.
 - `DreamService::maybe_consolidate` checks gates in order (time → scan throttle → session) and accepts `enumerate_sessions` as `FnOnce()` — the closure runs **only** after the time + scan gates pass so callers don't pay enumeration cost on every turn.
-- `DreamService` rolls the lock mtime back on failure so the time-gate doesn't reset to "now"; the failure path also emits `MemoryEvent::AutoDreamFailed` for telemetry coverage.
+- `DreamService` intentionally does **not** mirror CC 2.1.193's server-backed `teamMemoryServerStatus === "has-content"` default gate. Team-server collaboration is not wired here; personal-only background dream is supported when the local dream gates pass.
+- `DreamService` stamps the scan throttle before session enumeration and leaves it in place on session-gate, lock, or fork failure; only an acquired lock is rolled back/released. This matches CC 2.1.193's anti-spin scheduling behavior, and the failure path emits `MemoryEvent::AutoDreamFailed { phase, error_class }` for telemetry coverage. The current Rust failure surface is the forked `AgentHandle::spawn_agent` call, so it reports `phase: Fork`; `error_class` is a stable class prefix, not the full error string.
+- `DreamService` emits `MemoryEvent::AutoDreamSkipped` only for the upstream-instrumented skip branches: insufficient sessions (`reason: sessions`, with `session_count`/`min_required`) and held cross-process lock (`reason: lock`). Time gate, scan throttle, disabled, and KAIROS skips remain silent, matching CC 2.1.193.
+- `build_dream_prompt` mirrors CC 2.1.193's standard dream prompt: session logs are `logs/YYYY/MM/DD/<id>-<title>.md`, Phase 3 includes CLAUDE.md reconciliation rules, and the `team/` pruning guidance is included only when team recall is enabled.
+- `MemoryEvent::AutoDreamFired` / `AutoDreamCompleted` carry `team_memory_enabled` using `MemoryConfig::is_team_recall_enabled()`. Completed telemetry reports `files_touched_count` from `AgentSpawnResponse::paths_written.len()` only (the closest Rust analogue of CC's task-registry `filesTouched.length`); tool-use counts are not treated as file touches. It also reports `daily_logs_found` by recursively counting `.md` files under `logs/`; missing/unreadable logs return `0`, matching CC's best-effort behavior.
 - `MemoryRuntime::finalize_turn` is the engine's per-turn entry point. It schedules extraction, session-memory, and auto-dream in the runtime-owned turn-end scheduler; auto-dream calls the installed `SessionEnumerator` lazily and threads the runtime's `transcript_dir`.
+- After successful main-agent file mutation calls (`Edit`/`Write`/`NotebookEdit`, or `apply_patch` for models whose edit tool is patch-based), `MemoryRuntime::finalize_turn` checks edited memory indexes against the CC 80% warning / 70% compact-target rule. Local `MEMORY.md` uses the 200-line + 25 KB caps; mounted team `promptIndex` files use `promptIndexMaxBytes ?? 25 KB`. Warnings return as model-visible `<system-reminder>` attachments via `FinalizeTurnReport::index_warnings`.
+- `COCO_COWORK_MEMORY_GUIDELINES` mirrors CC's `CLAUDE_COWORK_MEMORY_GUIDELINES`: when set and non-empty, `render_system_prompt_section` returns only `# auto memory\n{trimmed}` and skips bundled taxonomy, root `MEMORY.md`, mounted prompt indexes, and `extra_guidelines`.
+- Mounted stores follow CC's `w$t` routing: when `memory_stores` is non-empty and there is no writable `scope:"user"` store, the system prompt uses the team-only `g0i` shape. It does not expose a private memory directory or append root private/team `MEMORY.md`; mounted `promptIndex` content is the loaded index surface.
+- Mounted team `promptIndex` loads emit `MemoryEvent::MemoryPromptIndex` for every configured fetch. Existing files and missing files are `Ok` (missing renders as an empty index); unreadable files emit `Error` and are omitted from the prompt. This mirrors CC's `tengu_feature_ok/sad` `memory_prompt_index` telemetry shape.
 - `ExtractService` emits `ExtractionCoalesced` when a request stashes for a trailing run and `ExtractionError` on subagent failure — full telemetry coverage.
 - `SessionMemoryService` writes the 9-section template if missing, then asks the agent to Edit-only — never overwrites the file wholesale.
-- `MemoryEvent::ExtractionCompleted::files_written` sums real `Write + Edit + NotebookEdit` invocations from `AgentSpawnResponse::tool_use_counts` — no fabricated counts.
+- `MemoryEvent::ExtractionCompleted::files_written` prefers real paths from `AgentSpawnResponse::paths_written` (including `apply_patch` for patch-based models) and falls back to native write tool counts only for legacy drivers — no fabricated counts.
 
 ## Per-Fork canUseTool Policies (PR 4)
 
@@ -77,7 +84,8 @@ permission rule pipeline.
 
 | Helper | Used by | Policy |
 |---|---|---|
-| `create_auto_mem_handle(memory_dir)` | `ExtractService`, `DreamService` | Allow `Read`/`Glob`/`Grep` unrestricted; Allow `Bash` IFF [`coco_shell_parser::safety::is_known_safe_command`] returns true AND command has no shell metachars (`>`, `\|`, `;`, `&`, …); Allow `Edit`/`Write` IFF `input.file_path` lexically resolves under `memory_dir`; Deny everything else |
+| `create_auto_mem_handle(memory_dir)` | `ExtractService` | Allow `Read`/`Glob`/`Grep` unrestricted; Allow `Bash` IFF [`coco_shell_parser::safety::is_known_safe_command`] returns true AND command has no shell metachars (`>`, `\|`, `;`, `&`, …); Allow `Edit`/`Write` IFF `input.file_path` resolves against the canUseTool cwd to a `.md` path under `memory_dir`; Allow `apply_patch` when every affected path resolves against the same cwd to a `.md` path under `memory_dir` (tool visibility is still controlled by model `ToolOverrides`); Deny everything else |
+| `create_auto_dream_handle(memory_dir)` | `DreamService` | Same as extract, plus allow simple `rm` of absolute `.md` paths under `memory_dir` (no recursive flags, globs, redirects, pipelines, or outside paths). Mirrors CC 2.1.193 auto-dream pruning. |
 | `create_session_mem_handle(memory_path)` | `SessionMemoryService` | Allow `Read`; Allow `Edit` IFF `input.file_path == memory_path` (exact match); Deny everything else |
 
 The fence is **defense-in-depth**: callback (inner ring) + the

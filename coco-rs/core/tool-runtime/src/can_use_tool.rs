@@ -118,6 +118,9 @@ pub enum CanUseToolDecision {
 pub struct CanUseToolCallContext {
     /// The model-emitted tool_use_id for this call.
     pub tool_use_id: String,
+    /// Effective working directory for this tool call. Relative tool
+    /// paths resolve against this directory.
+    pub cwd: std::path::PathBuf,
     /// Turn abort signal; the callback should respect it for any async work
     /// (e.g. fs lookups) and may inspect the structured reason.
     pub abort: TurnAbortSignal,
@@ -137,6 +140,7 @@ impl std::fmt::Debug for CanUseToolCallContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CanUseToolCallContext")
             .field("tool_use_id", &self.tool_use_id)
+            .field("cwd", &self.cwd)
             .field("require_can_use_tool", &self.require_can_use_tool)
             .field("abort_cancelled", &self.abort.is_aborted())
             .finish_non_exhaustive()

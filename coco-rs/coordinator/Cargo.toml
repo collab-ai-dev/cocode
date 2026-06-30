@@ -25,6 +25,7 @@ workspace = true
 # define a trait abstraction (`CoordinatorAppState`) that `app/state`
 # implements, keeping the dep one-directional.
 coco-types.workspace = true
+coco-apply-patch.workspace = true
 coco-config.workspace = true
 coco-subagent.workspace = true
 coco-tool-runtime.workspace = true
@@ -52,6 +53,7 @@ coco-messages.workspace = true
 # diagnostic enums that haven't been migrated yet.
 coco-error.workspace = true
 coco-utils-common.workspace = true
+coco-utils-absolute-path.workspace = true
 snafu.workspace = true
 
 serde = { workspace = true, features = ["derive"] }

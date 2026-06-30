@@ -26,7 +26,7 @@
   - `McpTool` — schema from MCP server (external stdio/SSE or SDK in-process transport via `McpServerConfig::Sdk`). Re-connection is idempotent: the registry deregisters prior tools for that server first.
   - `StructuredOutputTool` — schema from `--json-schema` or workflow `agent(prompt, {schema})`. Registered only when `register_structured_output_tool()` is called (headless print / SDK NDJSON paths, or a workflow child engine's private registry).
   - Both **MUST** override `input_json_schema()` — the blanket default derives from `Self::Input = Value` which produces schemas that strict OpenAI-compatible providers (DeepSeek etc.) reject as `type: null`. Any future `type Input = Value` tool inherits the same obligation. See [docs/coco-rs/tool-schema-source-plan.md](../../../docs/coco-rs/tool-schema-source-plan.md) for the long-term refactor (three-source design: TypedSchema / ManualSchema / DynamicSchema, with sanitize-preserve strict-subset).
-- All file-mutation tools (Edit/Write/NotebookEdit/Bash) invoke the team-mem secret guard + file-history tracking helpers before touching disk.
+- All file-mutation tools (Edit/Write/NotebookEdit/apply_patch/Bash) invoke the team-mem secret guard + file-history tracking helpers before touching disk.
 - One file per tool. Utility tools live in their own modules: `ask_user_question.rs`, `tool_search.rs`, `config.rs`, `brief.rs`, `lsp_tool.rs`, `notebook_edit.rs`. (`lsp_tool.rs` is suffixed because `lsp.rs` holds the shared DTOs + formatters that the tool consumes.)
 
 ### Task/Todo defer policy

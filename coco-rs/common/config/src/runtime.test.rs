@@ -799,6 +799,34 @@ fn remote_memory_dir_is_base_override() {
 }
 
 #[test]
+fn memory_activation_allows_remote_with_path_override() {
+    let mut settings = settings_with_main("anthropic", "claude-sonnet-4-6");
+    settings
+        .merged
+        .features
+        .insert(coco_types::Feature::AutoMemory.key().to_string(), true);
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::from_pairs([
+            (EnvKey::CocoRemote, "true"),
+            (
+                EnvKey::CocoMemoryPathOverride,
+                "/tmp/coco-remote-memory-full",
+            ),
+        ]),
+        RuntimeOverrides::default(),
+    )
+    .expect("resolve");
+
+    assert!(runtime.memory_activation.active);
+    assert_eq!(runtime.memory.memory_base_override, None);
+    assert_eq!(
+        runtime.memory.directory,
+        Some(std::path::PathBuf::from("/tmp/coco-remote-memory-full"))
+    );
+}
+
+#[test]
 fn memory_activation_disables_remote_with_invalid_memory_dir() {
     let mut settings = settings_with_main("anthropic", "claude-sonnet-4-6");
     settings

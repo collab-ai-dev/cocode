@@ -49,9 +49,8 @@ pub trait LspHandle: Send + Sync {
     ) -> Result<Value, coco_error::BoxedError>;
 
     /// Best-effort `textDocument/didSave` notification. Called by file
-    /// mutation tools (Write / Edit / NotebookEdit) AFTER successful
-    /// disk write so the LSP server re-indexes and emits fresh
-    /// diagnostics. Errors are silently swallowed — failing to notify
+    /// mutation tools AFTER successful disk write so the LSP server
+    /// re-indexes and emits fresh diagnostics. Errors are silently swallowed — failing to notify
     /// must never fail the user's tool call.
     ///
     /// The Rust handle implementation is responsible for both — clearing

@@ -140,7 +140,7 @@ fn system_message_summary(msg: &Message) -> Option<String> {
             (false, Some(msg)) => format!("bridge disconnected · {msg}"),
             (false, None) => "bridge disconnected".to_string(),
         },
-        SystemMessage::MemorySaved(_) => "memory saved".to_string(),
+        SystemMessage::MemorySaved(m) => memory_saved_summary(m),
         SystemMessage::AwaySummary(_) => "away summary".to_string(),
         SystemMessage::AgentsKilled(_) => "agents killed".to_string(),
         SystemMessage::ApiMetrics(_) => "API metrics".to_string(),
@@ -157,4 +157,10 @@ fn system_message_summary(msg: &Message) -> Option<String> {
         | SystemMessage::ContextUsage(_)
         | SystemMessage::UserInterruption(_) => return None,
     })
+}
+
+fn memory_saved_summary(msg: &coco_messages::SystemMemorySavedMessage) -> String {
+    let count = msg.written_paths.len();
+    let noun = if count == 1 { "memory" } else { "memories" };
+    format!("{} {count} {noun}", msg.verb)
 }

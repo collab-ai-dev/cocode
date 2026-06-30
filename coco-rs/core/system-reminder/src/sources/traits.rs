@@ -165,9 +165,9 @@ pub trait MemorySource: Send + Sync + Debug {
     /// prompt text this turn). Empty input → typically empty result.
     ///
     /// `recent_tools` lists tool names the model has used since the
-    /// last user turn, fed into the LLM ranker so it can deprioritize
-    /// tool reference docs the model is actively exercising. Empty slice
-    /// when the engine has no signal yet.
+    /// last user turn. Sources may use it as a ranking hint; the
+    /// memory runtime currently keeps it for interface compatibility
+    /// with older ranker prompts.
     async fn relevant_memories(
         &self,
         agent_id: Option<&str>,

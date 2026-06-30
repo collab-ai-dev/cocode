@@ -35,6 +35,15 @@ fn truncates_when_byte_cap_exceeded_with_few_lines() {
 }
 
 #[test]
+fn truncates_multibyte_long_line_at_char_boundary() {
+    let content = "界".repeat((MAX_ENTRYPOINT_BYTES / "界".len()) + 100);
+    let out = truncate_entrypoint_content(&content);
+    assert!(out.byte_truncated);
+    assert!(out.content.contains("> WARNING:"));
+    assert!(out.content.contains("limit: 24.4KB"));
+}
+
+#[test]
 fn parses_well_formed_pointer_lines() {
     let content = "# Memory Index\n\n- [User Role](user_role.md) — data scientist\n- [No Mocks](feedback_no_mocks.md) — integration tests must hit a real db\n";
     let idx = parse_memory_index(content);
@@ -50,4 +59,11 @@ fn ignores_commentary_lines() {
     let content = "# Memory Index\n\nSome prose.\n- [a](a.md) — h\n";
     let idx = parse_memory_index(content);
     assert_eq!(idx.entries.len(), 1);
+}
+
+#[test]
+fn formats_byte_counts_like_upstream() {
+    assert_eq!(format_byte_count(999), "999 bytes");
+    assert_eq!(format_byte_count(1024), "1KB");
+    assert_eq!(format_byte_count(MAX_ENTRYPOINT_BYTES), "24.4KB");
 }

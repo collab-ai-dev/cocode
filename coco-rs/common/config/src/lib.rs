@@ -66,6 +66,7 @@ pub use memory_stores::MemoryStore;
 pub use memory_stores::StoreMode;
 pub use memory_stores::StoreScope;
 pub use memory_stores::parse_memory_stores;
+pub use memory_stores::try_parse_memory_stores;
 pub use model::ExhaustedRetryPolicy;
 pub use model::FallbackPolicy;
 pub use model::ModelInfo;

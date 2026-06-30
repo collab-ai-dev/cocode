@@ -16,6 +16,10 @@
 // asserts the field flips on/off.
 
 use super::build_suggestion_context;
+use super::extract_recent_tool_writes;
+use super::format_memory_update_reminder;
+use super::main_agent_wrote_memory;
+use super::truncate_memory_reminder;
 use crate::CoreEvent;
 use crate::ServerNotification;
 use crate::config::QueryEngineConfig;
@@ -67,6 +71,48 @@ fn assistant_msg(text: &str, request_id: Option<&str>) -> coco_messages::Message
         request_id: request_id.map(str::to_string),
         api_error: None,
     })
+}
+
+fn assistant_write_call(tool_name: &str, file_path: &str) -> coco_messages::Message {
+    coco_messages::create_assistant_message(
+        vec![coco_messages::AssistantContent::ToolCall(
+            coco_messages::ToolCallContent::new(
+                "toolu_write",
+                tool_name,
+                serde_json::json!({"file_path": file_path}),
+            ),
+        )],
+        "test-model",
+        TokenUsage::default(),
+    )
+}
+
+fn assistant_patch_call(patch: &str) -> coco_messages::Message {
+    coco_messages::create_assistant_message(
+        vec![coco_messages::AssistantContent::ToolCall(
+            coco_messages::ToolCallContent::new(
+                "toolu_patch",
+                coco_types::ToolName::ApplyPatch.as_str(),
+                serde_json::json!({"patch": patch}),
+            ),
+        )],
+        "test-model",
+        TokenUsage::default(),
+    )
+}
+
+fn tool_result(call_id: &str, tool_name: &str, is_error: bool) -> coco_messages::Message {
+    coco_messages::create_tool_result_message(
+        call_id,
+        tool_name,
+        coco_types::ToolId::Builtin(
+            tool_name
+                .parse()
+                .unwrap_or(coco_types::ToolName::StructuredOutput),
+        ),
+        "ok",
+        is_error,
+    )
 }
 
 struct DummyModel;
@@ -168,6 +214,170 @@ async fn build_suggestion_context_pending_permission_reflects_counter() {
         !ctx.pending_permission,
         "guard drop should decrement counter"
     );
+}
+
+#[test]
+fn main_agent_wrote_memory_only_counts_markdown_inside_memory_dir() {
+    let memory_dir = std::path::Path::new("/m");
+
+    let md_write = vec![assistant_write_call(
+        coco_types::ToolName::Write.as_str(),
+        "/m/notes.md",
+    )];
+    assert!(main_agent_wrote_memory(&md_write, memory_dir, None));
+
+    let non_md_write = vec![assistant_write_call(
+        coco_types::ToolName::Write.as_str(),
+        "/m/notes.txt",
+    )];
+    assert!(!main_agent_wrote_memory(&non_md_write, memory_dir, None));
+
+    let outside_write = vec![assistant_write_call(
+        coco_types::ToolName::Write.as_str(),
+        "/outside/notes.md",
+    )];
+    assert!(!main_agent_wrote_memory(&outside_write, memory_dir, None));
+}
+
+#[test]
+fn main_agent_wrote_memory_counts_apply_patch_memory_targets() {
+    let patch = "*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n";
+    let messages = vec![assistant_patch_call(patch)];
+    let cwd = std::env::current_dir().expect("cwd");
+
+    assert!(main_agent_wrote_memory(
+        &messages, &cwd, /*since_cursor*/ None,
+    ));
+}
+
+#[test]
+fn main_agent_wrote_memory_ignores_apply_patch_outside_memory_dir() {
+    let patch = "*** Begin Patch\n*** Add File: outside.md\n+hello\n*** End Patch\n";
+    let messages = vec![assistant_patch_call(patch)];
+
+    assert!(!main_agent_wrote_memory(
+        &messages,
+        std::path::Path::new("/definitely-not-the-cwd"),
+        /*since_cursor*/ None,
+    ));
+}
+
+#[test]
+fn main_agent_wrote_memory_respects_since_cursor() {
+    let old_write = assistant_write_call(coco_types::ToolName::Write.as_str(), "/m/old.md");
+    let cursor = old_write
+        .uuid()
+        .expect("assistant message should have uuid")
+        .to_string();
+    let newer_non_memory_write =
+        assistant_write_call(coco_types::ToolName::Write.as_str(), "/tmp/new.md");
+    let messages = vec![old_write, newer_non_memory_write];
+
+    assert!(!main_agent_wrote_memory(
+        &messages,
+        std::path::Path::new("/m"),
+        Some(&cursor),
+    ));
+}
+
+#[test]
+fn extract_recent_tool_writes_collects_successful_apply_patch_targets() {
+    let cwd = std::env::current_dir().expect("cwd");
+    let patch = "*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n";
+    let messages = vec![
+        assistant_patch_call(patch),
+        tool_result(
+            "toolu_patch",
+            coco_types::ToolName::ApplyPatch.as_str(),
+            /*is_error*/ false,
+        ),
+    ];
+
+    let writes = extract_recent_tool_writes(&messages, &cwd);
+
+    assert_eq!(writes.len(), 1);
+    assert_eq!(
+        writes[0].tool_name,
+        coco_types::ToolName::ApplyPatch.as_str()
+    );
+    assert_eq!(writes[0].file_path, cwd.join("notes.md"));
+    assert!(writes[0].succeeded);
+}
+
+#[test]
+fn extract_recent_tool_writes_marks_failed_apply_patch_targets_unsuccessful() {
+    let cwd = std::env::current_dir().expect("cwd");
+    let patch = "*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n";
+    let messages = vec![
+        assistant_patch_call(patch),
+        tool_result(
+            "toolu_patch",
+            coco_types::ToolName::ApplyPatch.as_str(),
+            /*is_error*/ true,
+        ),
+    ];
+
+    let writes = extract_recent_tool_writes(&messages, &cwd);
+
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].file_path, cwd.join("notes.md"));
+    assert!(!writes[0].succeeded);
+}
+
+#[test]
+fn memory_update_reminder_matches_ambient_dream_shape() {
+    let update = coco_memory::MemoryUpdateNotice {
+        source: coco_memory::MemoryUpdateSource::Dream,
+        summary: "consolidated 2 memory files".into(),
+        paths: vec!["/m/a.md".into(), "/m/b.md".into()],
+    };
+
+    let rendered = format_memory_update_reminder(&update, &["/m/b.md".into()]);
+
+    assert!(rendered.contains(
+        "Background memory consolidation updated your memory directory: consolidated 2 memory files"
+    ));
+    assert!(rendered.contains("Files changed: /m/a.md, /m/b.md"));
+    assert!(rendered.contains(
+        "Your loaded copy of /m/b.md is now stale relative to disk - Read it again if you need current contents."
+    ));
+    assert!(rendered.contains(
+        "This is ambient context - do not narrate it to the user unless they ask or it is directly relevant to their request."
+    ));
+}
+
+#[test]
+fn memory_update_reminder_caps_paths_and_total_bytes() {
+    let paths = (0..12)
+        .map(|idx| format!("/m/{idx}.md"))
+        .collect::<Vec<_>>();
+    let update = coco_memory::MemoryUpdateNotice {
+        source: coco_memory::MemoryUpdateSource::Dream,
+        summary: "consolidated files".into(),
+        paths,
+    };
+
+    let rendered = format_memory_update_reminder(&update, &[]);
+
+    assert!(rendered.contains("(2 more omitted)"));
+
+    let update = coco_memory::MemoryUpdateNotice {
+        source: coco_memory::MemoryUpdateSource::Dream,
+        summary: "x".repeat(8 * 1024),
+        paths: vec!["/m/a.md".into()],
+    };
+    let rendered = format_memory_update_reminder(&update, &[]);
+
+    assert!(rendered.len() <= 4 * 1024);
+    assert!(rendered.contains("omitted"));
+}
+
+#[test]
+fn memory_index_warning_is_capped_utf8_safely() {
+    let rendered = truncate_memory_reminder(&"火".repeat(3 * 1024));
+
+    assert!(rendered.len() <= 4 * 1024);
+    assert!(rendered.ends_with("bytes"));
 }
 
 #[tokio::test]

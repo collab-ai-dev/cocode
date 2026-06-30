@@ -22,6 +22,21 @@ fn test_create_system_reminder_message() {
 }
 
 #[test]
+fn test_create_system_reminder_message_with_kind() {
+    let msg = create_system_reminder_message_with_kind(
+        coco_types::AttachmentKind::MemoryUpdateReminder,
+        "memory changed",
+    );
+    assert!(matches!(
+        msg,
+        Message::Attachment(ref a)
+            if a.kind == coco_types::AttachmentKind::MemoryUpdateReminder
+    ));
+    let text = extract_text_from_message(&msg);
+    assert!(text.contains("memory changed"));
+}
+
+#[test]
 fn test_extract_text_from_user_message() {
     let msg = crate::creation::create_user_message("hello");
     let text = extract_text_from_message(&msg);

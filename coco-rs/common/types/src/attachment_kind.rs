@@ -23,7 +23,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Every `AttachmentKind` discriminator, plus coco-rs-synthetic
-/// reminder kinds. 65 variants.
+/// reminder kinds. 67 variants.
 /// Wire format is snake_case via `#[serde(rename_all = "snake_case")]`
 /// to match `AttachmentKind` exactly, so transcripts round-trip.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -49,6 +49,10 @@ pub enum AttachmentKind {
     /// its visibility profile. Both paths land in `Message::Attachment`
     /// with `AttachmentBody::Api(LlmMessage)`.
     CriticalSystemReminder,
+    /// Memory index size warning emitted after a main-agent memory edit.
+    MemoryIndexWarning,
+    /// Background memory consolidation notice emitted after auto-dream.
+    MemoryUpdateReminder,
     /// TS-style slash-command metadata (`<command-name>`, optional args)
     /// injected before expanded prompt content.
     SlashCommandMetadata,
@@ -144,6 +148,8 @@ impl AttachmentKind {
             Self::TodoReminder => "todo_reminder",
             Self::TaskReminder => "task_reminder",
             Self::CriticalSystemReminder => "critical_system_reminder",
+            Self::MemoryIndexWarning => "memory_index_warning",
+            Self::MemoryUpdateReminder => "memory_update_reminder",
             Self::SlashCommandMetadata => "slash_command_metadata",
             Self::CompactionReminder => "compaction_reminder",
             Self::DateChange => "date_change",
@@ -225,6 +231,8 @@ impl AttachmentKind {
             | TodoReminder
             | TaskReminder
             | CriticalSystemReminder
+            | MemoryIndexWarning
+            | MemoryUpdateReminder
             | SlashCommandMetadata
             | CompactionReminder
             | DateChange
@@ -321,6 +329,8 @@ impl AttachmentKind {
             | AgentMention
             | BudgetUsd
             | CriticalSystemReminder
+            | MemoryIndexWarning
+            | MemoryUpdateReminder
             | SlashCommandMetadata
             | EditedImageFile
             | EditedTextFile
@@ -412,10 +422,10 @@ impl AttachmentKind {
         }
     }
 
-    /// Every variant in declaration order. Length must equal 65 (61 TS
+    /// Every variant in declaration order. Length must equal 67 (61 TS
     /// `Attachment` union members + coco-rs-synthetic `UserContext`,
     /// `SlashCommandMetadata`, `WorkflowKeywordRequest`, and
-    /// `ToolSearchUsageReminder` reminders) — enforced by the parity test.
+    /// memory reminder kinds) — enforced by the parity test.
     pub const fn all() -> &'static [AttachmentKind] {
         &[
             Self::PlanMode,
@@ -426,6 +436,8 @@ impl AttachmentKind {
             Self::TodoReminder,
             Self::TaskReminder,
             Self::CriticalSystemReminder,
+            Self::MemoryIndexWarning,
+            Self::MemoryUpdateReminder,
             Self::SlashCommandMetadata,
             Self::CompactionReminder,
             Self::DateChange,
@@ -596,6 +608,14 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         },
         CriticalSystemReminder => Coverage::Reminder {
             generator: "CriticalSystemReminderGenerator",
+        },
+        MemoryIndexWarning => Coverage::OutsideReminder {
+            owner_crate: "app/query",
+            note: "memory index size warning emitted after main-agent memory edits",
+        },
+        MemoryUpdateReminder => Coverage::OutsideReminder {
+            owner_crate: "app/query",
+            note: "background auto-dream memory update reminder",
         },
         SlashCommandMetadata => Coverage::OutsideReminder {
             owner_crate: "app/cli",

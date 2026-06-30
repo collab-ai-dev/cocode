@@ -168,6 +168,8 @@ TS source: `services/autoDream/`.
 
 Background memory consolidation. Fires a forked subagent when the three gates plus the lock all pass. The dream agent merges related entries, resolves contradictions, and prunes stale `MEMORY.md` pointers.
 
+Unlike CC 2.1.193's server-backed team-memory fallback, coco-rs does not gate default auto-dream on `teamMemoryServerStatus === "has-content"`. That upstream status is produced by team sync pull/push and is out of scope while server team collaboration is unwired. Personal-only background dream is the supported default behavior.
+
 Gate sequence:
 
 1. **Time gate**: `hours_since(last_consolidation) >= dream_min_hours` (default 24)
@@ -293,7 +295,7 @@ Optional sections:
 - `watcher::spawn_watcher(WatcherConfig)` — file-watch driven push trigger
 - Constants matching TS: `MAX_FILE_SIZE_BYTES = 250_000`, `MAX_PUT_BODY_BYTES = 200_000`, `SYNC_TIMEOUT_MS`
 
-**Wiring status**: implemented but not yet driven from `app/cli`. `team_memory_enabled` flips on the system-prompt Combined variant today; the watcher + auth-token plumbing into the session lifecycle is the remaining integration step. Path validation against URL-encoded / fullwidth traversals is the security check that should land alongside the wire-up.
+**Wiring status**: implemented but not yet driven from `app/cli`. `team_memory_enabled` flips on the system-prompt Combined variant today; the watcher + auth-token plumbing into the session lifecycle is the remaining integration step. Path validation against URL-encoded / fullwidth traversals is the security check that should land alongside the wire-up. Auto-dream must not depend on team sync or a server-side team-content status while this remains unwired.
 
 ## Configuration (`coco_config::MemoryConfig`)
 

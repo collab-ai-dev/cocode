@@ -23,7 +23,11 @@ pub enum SessionFileType {
 
 /// Predicate: is `path` under `memory_dir.personal`?
 pub fn is_auto_mem_file(path: &Path, memory_dir: &Path) -> bool {
-    is_within_memory_dir(path, memory_dir)
+    is_markdown_file(path) && is_within_memory_dir(path, memory_dir)
+}
+
+fn is_markdown_file(path: &Path) -> bool {
+    path.to_string_lossy().ends_with(".md")
 }
 
 /// Anything we manage automatically: personal memory, team memory,
@@ -102,10 +106,10 @@ pub fn classify_written_path(
     }
     // Team subtree first (it's a subdir of memory_dir).
     let team_dir = memory_dir.join("team");
-    if is_within_memory_dir(path, &team_dir) {
+    if is_auto_mem_file(path, &team_dir) {
         return WriteClassification::TeamMem;
     }
-    if is_within_memory_dir(path, memory_dir) {
+    if is_auto_mem_file(path, memory_dir) {
         return WriteClassification::AutoMem;
     }
     // Curated CLAUDE.md / AGENTS.md / rules/*.md by basename.

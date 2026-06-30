@@ -145,6 +145,7 @@ async fn run_fork_sets_side_question_tool_policy() {
 
     let ctx = CanUseToolCallContext {
         tool_use_id: "toolu_1".into(),
+        cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")),
         abort: coco_tool_runtime::TurnAbortSignal::from_token(CancellationToken::new()),
         require_can_use_tool: options.require_can_use_tool,
         messages: Arc::new(Vec::new()),

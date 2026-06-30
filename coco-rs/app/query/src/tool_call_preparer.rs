@@ -584,6 +584,11 @@ async fn resolve_can_use_tool_decision(
     let handle = ctx.can_use_tool.clone()?;
     let cb_ctx = coco_tool_runtime::CanUseToolCallContext {
         tool_use_id: tool_call.tool_call_id.clone(),
+        cwd: ctx
+            .cwd_override
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| std::path::PathBuf::from("/")),
         abort: ctx.abort.turn_signal(),
         require_can_use_tool: ctx.require_can_use_tool,
         messages: ctx.messages.clone(),

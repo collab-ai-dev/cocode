@@ -7,12 +7,14 @@ use coco_tool_runtime::TurnAbortSignal;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+use super::create_auto_dream_handle;
 use super::create_auto_mem_handle;
 use super::create_session_mem_handle;
 
 fn ctx() -> CanUseToolCallContext {
     CanUseToolCallContext {
         tool_use_id: "test".into(),
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         abort: TurnAbortSignal::from_token(CancellationToken::new()),
         require_can_use_tool: false,
         messages: Arc::new(Vec::new()),
@@ -61,8 +63,38 @@ async fn test_auto_mem_denies_mutating_bash() {
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let cases = [
         json!({"command": "rm -rf /"}),
+        json!({"command": "rm /memdir/old.md"}),
         json!({"command": "echo bad > /etc/passwd"}),
         json!({"command": "curl http://evil"}),
+    ];
+    for cmd in cases {
+        let d = h.check("Bash", &cmd, &ctx()).await;
+        assert_denied(&d, &cmd.to_string());
+    }
+}
+
+#[tokio::test]
+async fn test_auto_dream_allows_rm_md_inside_memdir() {
+    let h = create_auto_dream_handle(PathBuf::from("/memdir"));
+    let cases = [
+        json!({"command": "rm /memdir/old.md"}),
+        json!({"command": "rm -f -- /memdir/old.md '/memdir/second.md'"}),
+    ];
+    for cmd in cases {
+        let d = h.check("Bash", &cmd, &ctx()).await;
+        assert_allowed(&d, &cmd.to_string());
+    }
+}
+
+#[tokio::test]
+async fn test_auto_dream_denies_unsafe_rm() {
+    let h = create_auto_dream_handle(PathBuf::from("/memdir"));
+    let cases = [
+        json!({"command": "rm -rf /memdir/old.md"}),
+        json!({"command": "rm /tmp/old.md"}),
+        json!({"command": "rm /memdir/old.txt"}),
+        json!({"command": "rm /memdir/*.md"}),
+        json!({"command": "rm /memdir/old.md; rm /tmp/x.md"}),
     ];
     for cmd in cases {
         let d = h.check("Bash", &cmd, &ctx()).await;
@@ -110,6 +142,37 @@ async fn test_auto_mem_allows_edit_within_memdir() {
 }
 
 #[tokio::test]
+async fn test_auto_mem_allows_relative_edit_resolved_against_context_cwd() {
+    let mut ctx = ctx();
+    ctx.cwd = PathBuf::from("/memdir");
+    let h = create_auto_mem_handle(PathBuf::from("/memdir"));
+    let d = h
+        .check("Edit", &json!({"file_path": "notes.md"}), &ctx)
+        .await;
+    assert_allowed(&d, "relative edit within memdir cwd");
+}
+
+#[tokio::test]
+async fn test_auto_mem_denies_relative_escape_from_context_cwd() {
+    let mut ctx = ctx();
+    ctx.cwd = PathBuf::from("/memdir/nested");
+    let h = create_auto_mem_handle(PathBuf::from("/memdir"));
+    let d = h
+        .check("Write", &json!({"file_path": "../../outside.md"}), &ctx)
+        .await;
+    assert_denied(&d, "relative escape from memdir cwd");
+}
+
+#[tokio::test]
+async fn test_auto_mem_denies_non_md_write_within_memdir() {
+    let h = create_auto_mem_handle(PathBuf::from("/memdir"));
+    let d = h
+        .check("Write", &json!({"file_path": "/memdir/notes.txt"}), &ctx())
+        .await;
+    assert_denied(&d, "non-md write within memdir");
+}
+
+#[tokio::test]
 async fn test_auto_mem_denies_edit_outside_memdir() {
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let d = h
@@ -127,6 +190,42 @@ async fn test_auto_mem_denies_traversal_escape() {
         .check("Edit", &json!({"file_path": "/memdir/../x"}), &ctx())
         .await;
     assert_denied(&d, "traversal escape");
+}
+
+#[tokio::test]
+async fn test_auto_mem_allows_apply_patch_for_relative_md_under_memdir() {
+    let mut ctx = ctx();
+    ctx.cwd = PathBuf::from("/memdir");
+    let h = create_auto_mem_handle(PathBuf::from("/memdir"));
+    let patch = "*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n";
+
+    let d = h.check("apply_patch", &json!({"patch": patch}), &ctx).await;
+
+    assert_allowed(&d, "apply_patch relative md under memdir");
+}
+
+#[tokio::test]
+async fn test_auto_mem_denies_apply_patch_with_non_md_path() {
+    let mut ctx = ctx();
+    ctx.cwd = PathBuf::from("/memdir");
+    let h = create_auto_mem_handle(PathBuf::from("/memdir"));
+    let patch = "*** Begin Patch\n*** Add File: notes.txt\n+hello\n*** End Patch\n";
+
+    let d = h.check("apply_patch", &json!({"patch": patch}), &ctx).await;
+
+    assert_denied(&d, "apply_patch non-md path");
+}
+
+#[tokio::test]
+async fn test_auto_mem_denies_apply_patch_with_mixed_escape() {
+    let mut ctx = ctx();
+    ctx.cwd = PathBuf::from("/memdir");
+    let h = create_auto_mem_handle(PathBuf::from("/memdir"));
+    let patch = "*** Begin Patch\n*** Add File: ok.md\n+hello\n*** Add File: ../outside.md\n+bad\n*** End Patch\n";
+
+    let d = h.check("apply_patch", &json!({"patch": patch}), &ctx).await;
+
+    assert_denied(&d, "apply_patch mixed escape");
 }
 
 #[tokio::test]

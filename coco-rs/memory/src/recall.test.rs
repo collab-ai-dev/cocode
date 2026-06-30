@@ -110,6 +110,47 @@ fn empty_input_is_malformed() {
     );
 }
 
+#[test]
+fn select_prompt_matches_upstream_conservatism_rules() {
+    assert!(SELECT_MEMORIES_SYSTEM_PROMPT.contains("The first message lists"));
+    assert!(
+        SELECT_MEMORIES_SYSTEM_PROMPT
+            .contains("Be especially conservative with user-profile and project-overview memories")
+    );
+    assert!(SELECT_MEMORIES_SYSTEM_PROMPT.contains(
+        "Do not re-select memories you already returned for an earlier query in this conversation."
+    ));
+    assert!(
+        !SELECT_MEMORIES_SYSTEM_PROMPT.contains("recently-used tools"),
+        "CC 2.1.193 removed the recent-tools ranker guidance"
+    );
+}
+
+#[test]
+fn selection_prompt_omits_recent_tools_section() {
+    let state = PrefetchState::new();
+    let scanned = vec![crate::scan::ScannedMemory {
+        path: std::path::PathBuf::from("/mem/api.md"),
+        filename: "api.md".into(),
+        mtime_ms: 0,
+        size_bytes: 42,
+        frontmatter: Some(crate::store::MemoryFrontmatter {
+            name: "API".into(),
+            description: "Usage details".into(),
+            memory_type: crate::store::MemoryEntryType::Reference,
+        }),
+    }];
+
+    let prompt = build_selection_prompt("Use the API", &scanned, &state);
+
+    assert!(prompt.contains("Query: Use the API"));
+    assert!(prompt.contains("Available memories:"));
+    assert!(
+        !prompt.contains("Recently used tools"),
+        "CC 2.1.193 no longer feeds recent tool names into the recall prompt"
+    );
+}
+
 fn mk_response(text: Option<&str>, tool_input: Option<serde_json::Value>) -> SideQueryResponse {
     SideQueryResponse {
         text: text.map(str::to_string),

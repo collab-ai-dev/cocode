@@ -435,8 +435,8 @@ pub struct ToolUseContext {
     pub cwd_override: Option<PathBuf>,
 
     // ── Sandboxed-write fence ──
-    /// FileWrite / FileEdit / NotebookEdit are restricted to paths under
-    /// one of these roots. Empty = no restriction. Threaded in by the
+    /// File-mutation tools are restricted to paths under one of these roots.
+    /// Empty = no restriction. Threaded in by the
     /// memory crate's forked extraction / auto-dream agents (and any
     /// future caller that needs a memdir-only fence). File-mutation
     /// tools must reject paths outside the fence before touching disk.

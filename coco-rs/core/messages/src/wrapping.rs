@@ -11,8 +11,19 @@ pub fn wrap_in_system_reminder(text: &str) -> String {
 
 /// Create a system-reminder meta message.
 pub fn create_system_reminder_message(text: &str) -> Message {
-    Message::Attachment(crate::AttachmentMessage::api(
+    create_system_reminder_message_with_kind(
         coco_types::AttachmentKind::CriticalSystemReminder,
+        text,
+    )
+}
+
+/// Create a system-reminder attachment with a specific reminder kind.
+pub fn create_system_reminder_message_with_kind(
+    kind: coco_types::AttachmentKind,
+    text: &str,
+) -> Message {
+    Message::Attachment(crate::AttachmentMessage::api(
+        kind,
         LlmMessage::user_text(wrap_in_system_reminder(text)),
     ))
 }

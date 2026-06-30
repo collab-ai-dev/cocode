@@ -43,6 +43,33 @@ fn clones_share_storage() {
 }
 
 #[test]
+fn memory_update_inbox_drains_fifo_and_clears() {
+    let inbox = MemoryUpdateInbox::new();
+    let clone = inbox.clone();
+    inbox.push(MemoryUpdateNotice {
+        source: MemoryUpdateSource::Dream,
+        summary: "consolidated 1 memory file".into(),
+        paths: vec!["a.md".into()],
+    });
+    clone.push(MemoryUpdateNotice {
+        source: MemoryUpdateSource::Dream,
+        summary: "consolidated 2 memory files".into(),
+        paths: vec!["b.md".into(), "c.md".into()],
+    });
+
+    assert_eq!(inbox.len(), 2);
+    let drained = inbox.drain();
+    assert_eq!(drained.len(), 2);
+    assert_eq!(drained[0].paths, vec!["a.md".to_string()]);
+    assert_eq!(
+        drained[1].paths,
+        vec!["b.md".to_string(), "c.md".to_string()]
+    );
+    assert_eq!(clone.len(), 0);
+    assert!(clone.drain().is_empty());
+}
+
+#[test]
 fn cross_source_dedup_picks_highest_priority_verb() {
     // When the same path is reported by multiple sources in one turn,
     // the higher-priority verb wins: Saved (3) > Improved (2) > ManualEdit (1).

@@ -33,6 +33,9 @@ pub mod team_sync;
 pub mod telemetry;
 
 pub use config::MemoryConfig;
+pub use notice::MemoryUpdateInbox;
+pub use notice::MemoryUpdateNotice;
+pub use notice::MemoryUpdateSource;
 pub use notice::MemoryUserNotice;
 pub use notice::NoticeInbox;
 pub use notice::NoticeVerb;

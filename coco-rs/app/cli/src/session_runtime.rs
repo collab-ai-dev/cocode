@@ -931,6 +931,7 @@ impl SessionRuntime {
             .with_transcript_dir(transcript_root)
             .with_telemetry(memory_telemetry)
             .with_active_shell_tool(active_shell_tool)
+            .with_tool_overrides(runtime_config.tool_overrides.clone())
             .with_auto_compact_enabled(auto_compact_enabled)
             .build();
             info!(

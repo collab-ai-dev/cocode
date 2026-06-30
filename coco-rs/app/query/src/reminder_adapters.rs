@@ -377,10 +377,9 @@ impl MemorySource for MemoryAdapter {
         // was wired in at session bootstrap, otherwise the recency
         // heuristic. Either way we get up to 5 freshness-tagged
         // entries the system-reminder generator renders.
-        // `recent_tools` is the engine's
-        // `collect_recent_successful_tools(history)` snapshot — threaded
-        // into the ranker's user prompt so reference docs for tools the
-        // model is actively exercising rank lower.
+        // `recent_tools` is retained by the generic memory-source
+        // interface. The current CC 2.1.193-aligned memory ranker no
+        // longer includes a recently-used-tools section in its prompt.
         self.runtime
             .recall(input, recent_tools)
             .await

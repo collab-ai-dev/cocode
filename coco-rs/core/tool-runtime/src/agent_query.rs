@@ -232,8 +232,8 @@ pub struct AgentQueryConfig {
     /// once at the wire boundary instead.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fork_context_messages: Vec<Arc<Message>>,
-    /// FileWrite / FileEdit / NotebookEdit are restricted to paths under one
-    /// of these roots. Empty = no restriction. Threaded into the child's
+    /// File-mutation tools are restricted to paths under one of these roots.
+    /// Empty = no restriction. Threaded into the child's
     /// `ToolUseContext::allowed_write_roots` so file-mutation tools can
     /// reject out-of-fence paths before they hit disk. Used by memory
     /// extraction / auto-dream subagents.
