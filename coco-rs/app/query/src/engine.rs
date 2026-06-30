@@ -312,9 +312,10 @@ pub struct QueryEngine {
     /// failures so we stop hammering the same recovery path after
     /// `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES`.
     pub(crate) reactive_state: Arc<tokio::sync::Mutex<coco_compact::ReactiveCompactState>>,
-    /// Auto compaction circuit breaker. Manual compaction is excluded;
-    /// successful auto/session-memory compaction resets this state.
-    pub(crate) auto_compact_state: Arc<tokio::sync::Mutex<coco_compact::ReactiveCompactState>>,
+    /// Auto compaction circuit breakers. Manual compaction is excluded;
+    /// successful auto/session-memory compaction resets failure state and
+    /// carries the rapid-refill streak.
+    pub(crate) auto_compact_state: Arc<tokio::sync::Mutex<coco_compact::AutoCompactState>>,
     /// Optional handle to the running-task manager — when present,
     /// `try_full_compact` snapshots running async agents and re-emits
     /// them as post-compact `task_status` attachments. `None` ⇒ no running-task

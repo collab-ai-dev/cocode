@@ -197,6 +197,7 @@ fn test_error_log_from_inference_error() {
     let error = crate::errors::RateLimitedSnafu {
         retry_after_ms: Some(5000_i64),
         message: "too many requests".to_string(),
+        long_context_credits_required: false,
     }
     .build();
     let log = ErrorLog::from_inference_error(

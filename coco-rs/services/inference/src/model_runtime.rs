@@ -50,6 +50,7 @@ use std::time::Instant;
 
 use coco_config::FallbackPolicy;
 use coco_config::ModelInfo;
+use coco_config::PositiveTokens;
 use coco_config::RecoveryProbePolicy;
 use coco_config::RuntimeConfig;
 use coco_llm_types::LlmMessage;
@@ -75,6 +76,7 @@ use crate::model_factory;
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 const RECOVERY_PROBE_MAX_TOKENS: i64 = 8;
 const RECOVERY_PROBE_PROMPT: &str = "Reply with OK.";
+const STANDARD_CONTEXT_WINDOW_TOKENS: u32 = 200_000;
 
 /// Outcome of calling [`ModelRuntime::advance`] after a capacity error
 /// in the active slot.
@@ -160,6 +162,7 @@ pub struct ModelRuntime {
     policy: FallbackPolicy,
     chain_cycle: i32,
     recovery: Option<RecoveryState>,
+    long_context_1m_credits_blocked: bool,
 }
 
 /// Prebuilt model slot used by tests and embedders that already own a
@@ -264,6 +267,7 @@ impl ModelRuntime {
             policy: FallbackPolicy::default(),
             chain_cycle: 1,
             recovery: None,
+            long_context_1m_credits_blocked: false,
         }
     }
 
@@ -289,6 +293,20 @@ impl ModelRuntime {
         self.slots.len() > 1
     }
 
+    pub fn long_context_1m_credits_blocked(&self) -> bool {
+        self.long_context_1m_credits_blocked
+    }
+
+    fn record_error_side_effects(&mut self, error: &InferenceError) {
+        if error.is_long_context_credits_required() && !self.long_context_1m_credits_blocked {
+            self.long_context_1m_credits_blocked = true;
+            tracing::warn!(
+                model_id = self.current_model_id(),
+                "1M long-context usage credits unavailable; clamping runtime context window to 200k"
+            );
+        }
+    }
+
     /// Step forward in the chain. On success the active slot moves
     /// from N to N+1; `switched_at` refreshes but `next_backoff` and
     /// `attempts` carry forward so the probe ramp is monotonic
@@ -300,6 +318,21 @@ impl ModelRuntime {
 
     /// Time-injected variant of [`Self::advance`] for tests.
     pub(crate) fn advance_at(&mut self, now: Instant) -> AdvanceOutcome {
+        self.advance_at_with_min_context_window(now, None)
+    }
+
+    fn advance_with_min_context_window(
+        &mut self,
+        min_context_window: Option<i64>,
+    ) -> AdvanceOutcome {
+        self.advance_at_with_min_context_window(Instant::now(), min_context_window)
+    }
+
+    fn advance_at_with_min_context_window(
+        &mut self,
+        now: Instant,
+        min_context_window: Option<i64>,
+    ) -> AdvanceOutcome {
         // A forward hop while a probe is in-flight means the
         // probe's underlying turn hit a capacity error on primary.
         // Finalize the probe as a failure first so bookkeeping
@@ -312,13 +345,32 @@ impl ModelRuntime {
         if self.recovery.and_then(|r| r.probing).is_some() {
             self.finalize_probe(ProbeOutcome::Failure, now);
         }
-        if self.active + 1 >= self.slots.len() {
+        let Some(next) = self.next_eligible_slot(self.active + 1, min_context_window) else {
             return AdvanceOutcome::Exhausted;
-        }
-        self.active += 1;
+        };
+        self.active = next;
         self.on_switch_i13(now);
         self.update_recovery_on_forward_advance(now);
         AdvanceOutcome::Switched(self.current_model_id().to_string())
+    }
+
+    fn next_eligible_slot(&self, start: usize, min_context_window: Option<i64>) -> Option<usize> {
+        (start..self.slots.len())
+            .find(|&idx| self.slot_meets_min_context_window(idx, min_context_window))
+    }
+
+    fn slot_meets_min_context_window(
+        &self,
+        slot_index: usize,
+        min_context_window: Option<i64>,
+    ) -> bool {
+        let Some(min_context_window) = min_context_window.filter(|value| *value > 0) else {
+            return true;
+        };
+        let Some(info) = self.slots[slot_index].model_info() else {
+            return true;
+        };
+        i64::from(info.context_window) >= min_context_window
     }
 
     /// Decide whether the upcoming turn should probe primary.
@@ -957,7 +1009,7 @@ impl ModelRuntimeRegistry {
                 ModelRuntimeFeedbackOutcome::Failed { events: Vec::new() }
             };
         }
-        let transition = mutex_lock(&runtime).finish_call_transition(token, outcome);
+        let transition = mutex_lock(&runtime).finish_call_transition(token, outcome, None);
         match transition {
             ModelRuntimeTransition::Switched(events) => {
                 self.handle_runtime_events(runtime, &events);
@@ -1170,6 +1222,15 @@ impl ModelRuntimeRegistry {
         Ok(runtime.snapshot(source))
     }
 
+    pub fn primary_model_info_for_source(
+        &self,
+        source: ModelRuntimeSource,
+    ) -> Result<Option<ModelInfo>, InferenceError> {
+        let runtime = self.runtime_for_source(source)?;
+        let runtime = mutex_lock(&runtime);
+        Ok(runtime.primary_model_info())
+    }
+
     pub fn rebind_role_primary(
         self: &Arc<Self>,
         role: ModelRole,
@@ -1328,17 +1389,37 @@ impl ModelRuntime {
 
     pub fn snapshot(&self, source: ModelRuntimeSource) -> ModelRuntimeSnapshot {
         let client = self.current_client();
+        let model_info = client
+            .model_info()
+            .cloned()
+            .map(|info| self.apply_long_context_credits_clamp(info));
         ModelRuntimeSnapshot {
             source,
             provider: client.model_identity().provider.clone(),
             provider_api: client.fingerprint().api,
             model_id: client.model_identity().model_id.clone(),
-            model_info: client.model_info().cloned(),
+            model_info,
             supports_prompt_cache: client.supports_prompt_cache(),
             supports_server_side_context_edits: client.supports_server_side_context_edits(),
             runtime_snapshot: client.fingerprint().to_snapshot(),
             active_slot: self.active,
         }
+    }
+
+    fn primary_model_info(&self) -> Option<ModelInfo> {
+        self.slots
+            .first()
+            .and_then(|client| client.model_info().cloned())
+            .map(|info| self.apply_long_context_credits_clamp(info))
+    }
+
+    fn apply_long_context_credits_clamp(&self, mut info: ModelInfo) -> ModelInfo {
+        if self.long_context_1m_credits_blocked
+            && info.context_window.get() > STANDARD_CONTEXT_WINDOW_TOKENS
+        {
+            info.context_window = PositiveTokens::new(STANDARD_CONTEXT_WINDOW_TOKENS);
+        }
+        info
     }
 
     pub async fn reset_active_cache_break_detector(runtime: Arc<std::sync::Mutex<Self>>) {
@@ -1395,8 +1476,17 @@ impl ModelRuntime {
                 events: Vec::new(),
             },
             Err(error) => {
+                {
+                    let mut guard = mutex_lock(&runtime);
+                    guard.record_error_side_effects(&error);
+                }
                 let outcome = communication_outcome_from_error(&error);
-                let transition = finish_transition(&runtime, &token, outcome);
+                let transition = finish_transition(
+                    &runtime,
+                    &token,
+                    outcome,
+                    params.fallback_min_context_window,
+                );
                 match transition {
                     ModelRuntimeTransition::Switched(events) => {
                         ModelStreamOpenOutcome::Retry { events }
@@ -1433,9 +1523,13 @@ impl ModelRuntime {
         let (client, token, snapshot) = call_context(&runtime, source.clone());
         match client.query(params).await {
             Ok(result) => {
-                let events =
-                    finish_transition(&runtime, &token, ModelCommunicationOutcome::Success)
-                        .into_events();
+                let events = finish_transition(
+                    &runtime,
+                    &token,
+                    ModelCommunicationOutcome::Success,
+                    params.fallback_min_context_window,
+                )
+                .into_events();
                 ModelRuntimeQueryOutcome::Success {
                     result,
                     token: token.clone(),
@@ -1444,8 +1538,17 @@ impl ModelRuntime {
                 }
             }
             Err(error) => {
+                {
+                    let mut guard = mutex_lock(&runtime);
+                    guard.record_error_side_effects(&error);
+                }
                 let outcome = communication_outcome_from_error(&error);
-                let transition = finish_transition(&runtime, &token, outcome);
+                let transition = finish_transition(
+                    &runtime,
+                    &token,
+                    outcome,
+                    params.fallback_min_context_window,
+                );
                 match transition {
                     ModelRuntimeTransition::Switched(events) => {
                         ModelRuntimeQueryOutcome::Retry { events }
@@ -1479,7 +1582,8 @@ impl ModelRuntime {
         token: &ModelCallHandle,
         outcome: ModelCommunicationOutcome,
     ) -> Vec<ModelRuntimeEvent> {
-        self.finish_call_transition(token, outcome).into_events()
+        self.finish_call_transition(token, outcome, None)
+            .into_events()
     }
 
     pub fn record_outcome(
@@ -1494,13 +1598,15 @@ impl ModelRuntime {
             generation: self.generation,
             slot_index: self.active,
         };
-        self.finish_call_transition(&token, outcome).into_events()
+        self.finish_call_transition(&token, outcome, None)
+            .into_events()
     }
 
     fn finish_call_transition(
         &mut self,
         token: &ModelCallHandle,
         outcome: ModelCommunicationOutcome,
+        fallback_min_context_window: Option<i64>,
     ) -> ModelRuntimeTransition {
         if token.runtime_id != self.instance_id {
             return ModelRuntimeTransition::Noop;
@@ -1522,7 +1628,13 @@ impl ModelRuntime {
                     return ModelRuntimeTransition::Exhausted;
                 }
                 let from_model_id = self.current_model_id().to_string();
-                match self.advance() {
+                let advance = match fallback_min_context_window {
+                    Some(min_context_window) => {
+                        self.advance_with_min_context_window(Some(min_context_window))
+                    }
+                    None => self.advance(),
+                };
+                match advance {
                     AdvanceOutcome::Switched(to_model_id) => {
                         ModelRuntimeTransition::Switched(vec![
                             ModelRuntimeEvent::FallbackSwitched {
@@ -1532,7 +1644,13 @@ impl ModelRuntime {
                             },
                         ])
                     }
-                    AdvanceOutcome::Exhausted => self.retry_chain_or_exhaust(),
+                    AdvanceOutcome::Exhausted => {
+                        if fallback_min_context_window.is_some() {
+                            ModelRuntimeTransition::Exhausted
+                        } else {
+                            self.retry_chain_or_exhaust()
+                        }
+                    }
                 }
             }
         }
@@ -1589,8 +1707,9 @@ fn finish_transition(
     runtime: &std::sync::Mutex<ModelRuntime>,
     token: &ModelCallHandle,
     outcome: ModelCommunicationOutcome,
+    fallback_min_context_window: Option<i64>,
 ) -> ModelRuntimeTransition {
-    mutex_lock(runtime).finish_call_transition(token, outcome)
+    mutex_lock(runtime).finish_call_transition(token, outcome, fallback_min_context_window)
 }
 
 fn build_role_runtime(
@@ -1674,6 +1793,7 @@ fn recovery_probe_params() -> QueryParams {
         agentic: false,
         stop_sequences: None,
         response_format: None,
+        fallback_min_context_window: None,
         cancel: None,
         wire_tap: None,
     }

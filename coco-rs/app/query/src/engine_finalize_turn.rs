@@ -475,6 +475,10 @@ impl QueryEngine {
         {
             state.turn_counter = state.turn_counter.saturating_add(1);
         }
+        {
+            let mut state = self.auto_compact_state.lock().await;
+            state.advance_turn();
+        }
 
         // Drain command queue: all priorities land before the next API
         // call. Slash commands excluded (processed post-turn).
@@ -689,6 +693,27 @@ impl QueryEngine {
             );
         }
         if auto_compact_needed {
+            if let Some(report) = coco_compact::prefix_overflow_check(
+                history.as_slice(),
+                clamped_context_window,
+                self.config.max_output_tokens,
+                auto_cfg,
+                /*snip_tokens_freed*/ 0,
+            ) {
+                warn!(
+                    target: "coco_query::compact_decision",
+                    prefix_tokens = report.prefix_tokens,
+                    threshold_tokens = report.threshold_tokens,
+                    total_input_tokens = report.total_input_tokens,
+                    messages_estimate = report.messages_estimate,
+                    snip_tokens_freed = report.snip_tokens_freed,
+                    document_block_count = report.document_block_count,
+                    image_block_count = report.image_block_count,
+                    would_have_blocked = true,
+                    "autocompact: fixed prefix exceeds threshold; compaction may not help"
+                );
+            }
+
             // Step 1: threshold micro_compact (count-based). Opt-in via
             // `compact.micro.count_based_enabled` (default off). When off,
             // go straight to SM/LLM compaction below.
@@ -752,33 +777,60 @@ impl QueryEngine {
                 );
             }
             if still_over_threshold {
-                let should_attempt_auto = {
+                let attempt_decision = {
                     let state = self.auto_compact_state.lock().await;
-                    state.should_attempt_reactive_compact()
+                    state.attempt_decision()
                 };
-                if should_attempt_auto {
-                    // Step 2 → 3: SM-first → full LLM. `try_full_compact` owns the
-                    // branch internally so manual `/compact` benefits too.
-                    let outcome = self
-                        .try_full_compact(
-                            history,
-                            event_tx,
-                            coco_types::CompactTrigger::Auto,
-                            /*custom_instructions*/ None,
-                        )
-                        .await;
-                    let now_ms = chrono::Utc::now().timestamp_millis();
-                    let mut state = self.auto_compact_state.lock().await;
-                    match outcome {
-                        coco_compact::CompactOutcome::Applied => state.record_success(now_ms),
-                        coco_compact::CompactOutcome::Failed => state.record_failure(now_ms),
-                        coco_compact::CompactOutcome::Skipped => {}
+
+                match attempt_decision {
+                    coco_compact::AutoCompactAttemptDecision::FailureBreakerOpen {
+                        consecutive_failures,
+                    } => {
+                        warn!(
+                            consecutive_failures,
+                            threshold = coco_compact::types::MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
+                            "auto compaction skipped after repeated failures"
+                        );
                     }
-                } else {
-                    warn!(
-                        threshold = coco_compact::types::MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
-                        "auto compaction skipped after repeated failures"
-                    );
+                    coco_compact::AutoCompactAttemptDecision::RapidRefillBreakerTripped {
+                        consecutive_rapid_refills,
+                    } => {
+                        warn!(
+                            consecutive_rapid_refills,
+                            turn_window = coco_compact::types::RAPID_REFILL_TURN_WINDOW,
+                            "auto compaction skipped after rapid context refill"
+                        );
+                        let msg = coco_messages::create_assistant_error_message(
+                            coco_compact::types::RAPID_REFILL_BREAKER_MESSAGE,
+                            None,
+                            Some("invalid_request"),
+                        );
+                        crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+                    }
+                    coco_compact::AutoCompactAttemptDecision::Proceed {
+                        consecutive_rapid_refills,
+                    } => {
+                        // Step 2 → 3: SM-first → full LLM. `try_full_compact`
+                        // owns the branch internally so manual `/compact`
+                        // benefits too.
+                        let outcome = self
+                            .try_full_compact(
+                                history,
+                                event_tx,
+                                coco_types::CompactTrigger::Auto,
+                                /*custom_instructions*/ None,
+                            )
+                            .await;
+                        let now_ms = chrono::Utc::now().timestamp_millis();
+                        let mut state = self.auto_compact_state.lock().await;
+                        match outcome {
+                            coco_compact::CompactOutcome::Applied => {
+                                state.record_success(now_ms, consecutive_rapid_refills);
+                            }
+                            coco_compact::CompactOutcome::Failed => state.record_failure(now_ms),
+                            coco_compact::CompactOutcome::Skipped => {}
+                        }
+                    }
                 }
             }
         }

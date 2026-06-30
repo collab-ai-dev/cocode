@@ -195,6 +195,45 @@ fn new_engine(
     engine
 }
 
+fn new_engine_with_context_window(
+    model: Arc<dyn coco_inference::LanguageModel>,
+    dispatcher: Option<Arc<dyn ForkDispatcher>>,
+    context_window: u32,
+) -> QueryEngine {
+    let model_info = coco_config::ModelInfo::from_partial(
+        "mock",
+        "mock-model",
+        coco_config::PartialModelInfo {
+            context_window: Some(coco_config::PositiveTokens::new(context_window)),
+            max_output_tokens: Some(coco_config::PositiveTokens::new(8_192)),
+            ..Default::default()
+        },
+    )
+    .expect("valid test model info");
+    let model_runtimes = Arc::new(
+        coco_inference::ModelRuntimeRegistry::from_prebuilt_language_model(
+            coco_types::ModelRole::Main,
+            coco_inference::PrebuiltLanguageModelSlot::new(
+                model,
+                coco_inference::RetryConfig::default(),
+            )
+            .with_model_info(model_info),
+        ),
+    );
+    let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
+    let mut engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        model_runtimes,
+        tools,
+        CancellationToken::new(),
+        None,
+    );
+    if let Some(dispatcher) = dispatcher {
+        engine = engine.with_fork_dispatcher(dispatcher);
+    }
+    engine
+}
+
 fn new_engine_for_model(model: Arc<dyn coco_inference::LanguageModel>) -> QueryEngine {
     let model_runtimes = crate::test_support::model_runtime_registry(model);
     let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
@@ -325,6 +364,25 @@ fn compact_attempt(summary_request: &str) -> coco_compact::CompactSummaryAttempt
         pre_compact_tokens: 42,
         max_summary_tokens: 20_000,
     }
+}
+
+#[test]
+fn compact_summary_query_params_are_tagged_as_compact() {
+    let params = super::compact_summary_query_params(
+        vec![LlmMessage::user_text("summarize")],
+        /*max_summary_tokens*/ 123,
+        Some(200_000),
+    );
+
+    assert_eq!(params.query_source.as_deref(), Some("compact"));
+    assert_eq!(params.max_tokens, Some(123));
+    assert!(params.thinking_level.is_none());
+    assert_eq!(params.fallback_min_context_window, Some(200_000));
+    assert!(params.tools.is_none());
+    assert!(params.tool_choice.is_none());
+    assert!(params.context_management.is_none());
+    assert!(params.cache.is_none());
+    assert!(!params.agentic);
 }
 
 fn assistant_msg(text: &str) -> coco_messages::Message {
@@ -767,7 +825,7 @@ async fn manual_compact_with_args_passes_instructions_to_summarizer() {
 async fn compact_summary_uses_cache_safe_fork_with_deny_all_tools() {
     let model = Arc::new(CapturingModel::default());
     let dispatcher = Arc::new(CapturingCompactDispatcher::default());
-    let engine = new_engine(model, Some(dispatcher.clone()));
+    let engine = new_engine_with_context_window(model, Some(dispatcher.clone()), 200_000);
     engine.save_cache_safe_params(empty_cache()).await;
 
     let response = engine
@@ -797,6 +855,7 @@ async fn compact_summary_uses_cache_safe_fork_with_deny_all_tools() {
     assert!(options.skip_cache_write);
     assert!(options.can_use_tool.is_some());
     assert!(options.require_can_use_tool);
+    assert_eq!(options.fallback_min_context_window, Some(200_000));
 
     let cache = dispatcher
         .cache

@@ -189,6 +189,10 @@ pub struct QueryEngineConfig {
     pub thinking_level: Option<ThinkingLevel>,
     /// Whether the main model call should request fast-mode behavior.
     pub fast_mode: bool,
+    /// Optional per-call model-fallback floor. When set, `QueryParams`
+    /// asks the inference runtime to skip fallback slots whose known
+    /// context window is smaller than this value.
+    pub fallback_min_context_window: Option<i64>,
     /// Session identifier for hook orchestration context.
     pub session_id: String,
     /// Project root directory for hook orchestration context.
@@ -415,6 +419,7 @@ impl Default for QueryEngineConfig {
             verbose: false,
             thinking_level: None,
             fast_mode: false,
+            fallback_min_context_window: None,
             session_id: String::new(),
             project_dir: None,
             live_permission_rules: None,

@@ -51,6 +51,7 @@ pub async fn run(provider: &str, model_id: &str) -> Result<()> {
         cache: None,
         stop_sequences: None,
         response_format: None,
+        fallback_min_context_window: None,
         cancel: None,
         wire_tap: None,
     };

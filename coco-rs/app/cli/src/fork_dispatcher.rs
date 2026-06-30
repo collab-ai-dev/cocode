@@ -135,6 +135,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
                 budget_tokens: None,
                 options: std::collections::HashMap::new(),
             }),
+            fallback_min_context_window: options.fallback_min_context_window,
             // Per-fork plumbing — thread the canUseTool callback,
             // fork_label, and query_source override onto the child
             // engine config so the tool-call preparer's canUseTool gate

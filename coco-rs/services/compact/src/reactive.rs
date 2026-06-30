@@ -22,6 +22,8 @@ use coco_messages::Message;
 
 use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
 use crate::types::MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES;
+use crate::types::RAPID_REFILL_BREAKER_COUNT;
+use crate::types::RAPID_REFILL_TURN_WINDOW;
 
 /// Reactive compact configuration.
 #[derive(Debug, Clone)]
@@ -116,6 +118,122 @@ impl ReactiveCompactState {
     /// Timestamp of the last attempt (0 if none).
     pub fn last_attempt_ms(&self) -> i64 {
         self.last_attempt_ms
+    }
+}
+
+/// Mutable state for the proactive auto-compact dispatcher.
+///
+/// Claude Code keeps two independent guards here: a consecutive-failure
+/// circuit breaker and a rapid-refill breaker. The latter trips when the
+/// session compacts three times with fewer than three turns between
+/// compactions, which usually means summarizing history cannot keep the
+/// fixed prompt prefix under the threshold.
+#[derive(Debug, Clone, Default)]
+pub struct AutoCompactState {
+    failure_count: i32,
+    last_attempt_ms: i64,
+    compacted: bool,
+    turns_since_compact: i32,
+    consecutive_rapid_refills: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoCompactAttemptDecision {
+    FailureBreakerOpen { consecutive_failures: i32 },
+    RapidRefillBreakerTripped { consecutive_rapid_refills: i32 },
+    Proceed { consecutive_rapid_refills: i32 },
+}
+
+impl AutoCompactState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Advance the per-compact turn counter at a turn boundary.
+    pub fn advance_turn(&mut self) {
+        if self.compacted {
+            self.turns_since_compact = self.turns_since_compact.saturating_add(1);
+        }
+    }
+
+    /// Whether the consecutive-failure circuit breaker still allows
+    /// another auto-compact attempt.
+    pub fn should_attempt_compact(&self) -> bool {
+        self.failure_count < MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES
+    }
+
+    /// Rapid-refill streak that the next successful attempt would carry.
+    pub fn next_rapid_refill_streak(&self) -> i32 {
+        if self.compacted && self.turns_since_compact < RAPID_REFILL_TURN_WINDOW {
+            self.consecutive_rapid_refills.saturating_add(1)
+        } else {
+            0
+        }
+    }
+
+    /// Whether the next attempt should be blocked by the rapid-refill
+    /// breaker.
+    pub fn rapid_refill_breaker_tripped(&self) -> bool {
+        self.next_rapid_refill_streak() >= RAPID_REFILL_BREAKER_COUNT
+    }
+
+    /// Discriminated decision for the next auto-compact attempt.
+    ///
+    /// Mirrors Claude Code's dispatcher shape: failure breaker, rapid
+    /// refill breaker, and proceed are mutually exclusive outcomes.
+    pub fn attempt_decision(&self) -> AutoCompactAttemptDecision {
+        if !self.should_attempt_compact() {
+            return AutoCompactAttemptDecision::FailureBreakerOpen {
+                consecutive_failures: self.failure_count,
+            };
+        }
+
+        let consecutive_rapid_refills = self.next_rapid_refill_streak();
+        if consecutive_rapid_refills >= RAPID_REFILL_BREAKER_COUNT {
+            return AutoCompactAttemptDecision::RapidRefillBreakerTripped {
+                consecutive_rapid_refills,
+            };
+        }
+
+        AutoCompactAttemptDecision::Proceed {
+            consecutive_rapid_refills,
+        }
+    }
+
+    /// Record a successful auto/session-memory compact.
+    pub fn record_success(&mut self, timestamp_ms: i64, consecutive_rapid_refills: i32) {
+        self.failure_count = 0;
+        self.last_attempt_ms = timestamp_ms;
+        self.compacted = true;
+        self.turns_since_compact = 0;
+        self.consecutive_rapid_refills = consecutive_rapid_refills.max(0);
+    }
+
+    /// Record a failed auto-compact attempt.
+    pub fn record_failure(&mut self, timestamp_ms: i64) {
+        self.failure_count += 1;
+        self.last_attempt_ms = timestamp_ms;
+    }
+
+    /// Reset all auto-compact breaker state.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn failure_count(&self) -> i32 {
+        self.failure_count
+    }
+
+    pub fn last_attempt_ms(&self) -> i64 {
+        self.last_attempt_ms
+    }
+
+    pub fn turns_since_compact(&self) -> i32 {
+        self.turns_since_compact
+    }
+
+    pub fn consecutive_rapid_refills(&self) -> i32 {
+        self.consecutive_rapid_refills
     }
 }
 

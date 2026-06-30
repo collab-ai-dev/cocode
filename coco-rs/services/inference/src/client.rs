@@ -126,6 +126,12 @@ pub struct QueryParams {
     /// json tool fallback).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<vercel_ai_provider::ResponseFormat>,
+    /// Optional per-call guard for model fallback. When set, the
+    /// runtime skips fallback slots whose known `ModelInfo.context_window`
+    /// is smaller than this value. Unknown windows stay eligible so
+    /// custom/test models are not accidentally disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_min_context_window: Option<i64>,
     /// Optional cancellation token. When set, the retry loop checks it at the
     /// top of each attempt and makes the backoff sleep interruptible, so a user
     /// interrupt doesn't have to wait out a long capacity backoff (TS
@@ -843,6 +849,11 @@ impl ApiClient {
                 parts.join(" ")
             })
             .unwrap_or_default();
+        let long_context_credits_required = headers.is_some_and(|h| {
+            h.keys().any(|k| {
+                k.eq_ignore_ascii_case(vercel_ai_anthropic::LONG_CONTEXT_CREDITS_REQUIRED_HEADER)
+            })
+        });
         if request_id.is_some() || !ratelimit.is_empty() {
             tracing::debug!(
                 provider = self.model.provider(),
@@ -879,7 +890,12 @@ impl ApiClient {
         // errors. Without this every provider error collapsed to a
         // non-retryable `ProviderError` and the retry policy was dead.
         if status != 0 {
-            return InferenceError::from_http_status(status, &message, /*retry_after*/ None);
+            return InferenceError::from_http_status_with_flags(
+                status,
+                &message,
+                /*retry_after*/ None,
+                long_context_credits_required,
+            );
         }
 
         // No HTTP status. Trust ONLY the adapter's explicit retryability hint:

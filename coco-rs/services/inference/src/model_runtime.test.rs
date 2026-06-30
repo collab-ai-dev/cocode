@@ -17,6 +17,8 @@ use crate::QueryParams;
 use crate::RetryConfig;
 use crate::client::ApiClient;
 use coco_config::FallbackPolicy;
+use coco_config::ModelInfo;
+use coco_config::PositiveTokens;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::StopReason;
@@ -105,6 +107,16 @@ fn stub_client(id: &'static str) -> Arc<ApiClient> {
         Arc::new(StubModel { id }),
         RetryConfig::default(),
     ))
+}
+
+fn stub_client_with_context_window(id: &'static str, context_window: u32) -> Arc<ApiClient> {
+    PrebuiltLanguageModelSlot::new(Arc::new(StubModel { id }), RetryConfig::default())
+        .with_model_info(ModelInfo {
+            model_id: id.to_string(),
+            context_window: PositiveTokens::new(context_window),
+            ..ModelInfo::default()
+        })
+        .into_client()
 }
 
 fn capacity_client(id: &'static str) -> Arc<ApiClient> {
@@ -233,6 +245,96 @@ fn test_new_walks_every_slot_in_order() {
 }
 
 #[test]
+fn test_capacity_fallback_skips_slots_below_min_context_window() {
+    let mut rt = ModelRuntime::new(
+        stub_client_with_context_window("primary", 200_000),
+        vec![
+            stub_client_with_context_window("small-fallback", 128_000),
+            stub_client_with_context_window("large-fallback", 200_000),
+        ],
+    );
+    let token = role_token(&rt, coco_types::ModelRole::Main);
+
+    let transition = rt.finish_call_transition(
+        &token,
+        ModelCommunicationOutcome::Capacity {
+            retry_after_ms: None,
+        },
+        Some(200_000),
+    );
+
+    assert_eq!(rt.current_model_id(), "large-fallback");
+    assert_eq!(rt.active_index(), 2);
+    assert_eq!(
+        transition.into_events(),
+        vec![ModelRuntimeEvent::FallbackSwitched {
+            source: ModelRuntimeSource::Role(coco_types::ModelRole::Main),
+            from_model_id: "primary".to_string(),
+            to_model_id: "large-fallback".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn test_capacity_fallback_exhausts_when_all_slots_below_min_context_window() {
+    let mut rt = ModelRuntime::new(
+        stub_client_with_context_window("primary", 200_000),
+        vec![stub_client_with_context_window("small-fallback", 128_000)],
+    );
+    let token = role_token(&rt, coco_types::ModelRole::Main);
+
+    let transition = rt.finish_call_transition(
+        &token,
+        ModelCommunicationOutcome::Capacity {
+            retry_after_ms: None,
+        },
+        Some(200_000),
+    );
+
+    assert_eq!(rt.current_model_id(), "primary");
+    assert_eq!(rt.active_index(), 0);
+    assert_eq!(transition, ModelRuntimeTransition::Exhausted);
+}
+
+#[test]
+fn test_primary_model_info_uses_primary_even_after_fallback_switch() {
+    let mut rt = ModelRuntime::new(
+        stub_client_with_context_window("primary", 1_000_000),
+        vec![stub_client_with_context_window("fallback", 200_000)],
+    );
+    assert_eq!(rt.advance(), AdvanceOutcome::Switched("fallback".into()));
+    assert_eq!(rt.active_index(), 1);
+
+    let primary = rt
+        .primary_model_info()
+        .expect("primary model info should be present");
+
+    assert_eq!(primary.context_window, PositiveTokens::new(1_000_000));
+}
+
+#[test]
+fn test_primary_model_info_applies_long_context_credits_clamp() {
+    let mut rt = ModelRuntime::new(
+        stub_client_with_context_window("primary", 1_000_000),
+        vec![stub_client_with_context_window("fallback", 200_000)],
+    );
+    assert_eq!(rt.advance(), AdvanceOutcome::Switched("fallback".into()));
+    let err = InferenceError::from_http_status_with_flags(
+        429,
+        "Anthropic API error",
+        None,
+        /*long_context_credits_required*/ true,
+    );
+    rt.record_error_side_effects(&err);
+
+    let primary = rt
+        .primary_model_info()
+        .expect("primary model info should be present");
+
+    assert_eq!(primary.context_window, PositiveTokens::new(200_000));
+}
+
+#[test]
 fn test_new_with_empty_fallbacks_is_primary_only() {
     let rt = ModelRuntime::new(stub_client("primary"), Vec::new());
     assert_eq!(rt.slot_count(), 1);
@@ -250,6 +352,56 @@ fn test_current_client_returns_active_slot() {
     assert_eq!(rt.current_client().model_id(), "fb1");
     rt.advance();
     assert_eq!(rt.current_client().model_id(), "fb2");
+}
+
+#[test]
+fn test_long_context_credits_error_clamps_snapshot_window() {
+    let mut rt = ModelRuntime::new(
+        stub_client_with_context_window("primary", 1_000_000),
+        Vec::new(),
+    );
+
+    let before = rt.snapshot(ModelRuntimeSource::Role(coco_types::ModelRole::Main));
+    assert_eq!(
+        before.model_info.unwrap().context_window,
+        PositiveTokens::new(1_000_000)
+    );
+
+    let err = InferenceError::from_http_status_with_flags(
+        429,
+        "Anthropic API error",
+        None,
+        /*long_context_credits_required*/ true,
+    );
+    rt.record_error_side_effects(&err);
+
+    assert!(rt.long_context_1m_credits_blocked());
+    let after = rt.snapshot(ModelRuntimeSource::Role(coco_types::ModelRole::Main));
+    assert_eq!(
+        after.model_info.unwrap().context_window,
+        PositiveTokens::new(200_000)
+    );
+}
+
+#[test]
+fn test_long_context_credits_clamp_does_not_widen_standard_window() {
+    let mut rt = ModelRuntime::new(
+        stub_client_with_context_window("primary", 200_000),
+        Vec::new(),
+    );
+    let err = InferenceError::from_http_status_with_flags(
+        429,
+        "Anthropic API error",
+        None,
+        /*long_context_credits_required*/ true,
+    );
+    rt.record_error_side_effects(&err);
+
+    let snapshot = rt.snapshot(ModelRuntimeSource::Role(coco_types::ModelRole::Main));
+    assert_eq!(
+        snapshot.model_info.unwrap().context_window,
+        PositiveTokens::new(200_000)
+    );
 }
 
 #[test]

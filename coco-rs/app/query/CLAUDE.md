@@ -145,6 +145,16 @@ in cache writes) by changing `budget_tokens`. The inference layer
 logs `tracing::warn!` when this field is `Some` so any regression
 leaves a trail.
 
+Compact summarization tags both the cache-sharing fork and direct no-tools
+fallback as `query_source = "compact"`. Inference uses that source to share
+the main-thread cache-break key and to classify compact fallback/retry
+behavior consistently with Claude Code's `querySource: "compact"` summarizer
+call. Compact summarization also passes the active model's context window as
+`fallback_min_context_window`, so capacity fallback cannot switch the summary
+call onto a smaller-window model. The direct no-tools path leaves
+`thinking_level = None` deliberately: multi-provider compact calls should not
+force an explicit off-toggle that some models/providers do not support.
+
 ### promptSuggestion 9-step guard + 12-rule filter
 
 Post-turn promptSuggestion runs through `prompt_suggestion::try_generate_suggestion`:

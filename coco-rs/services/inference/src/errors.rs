@@ -33,6 +33,7 @@ pub enum InferenceError {
     RateLimited {
         retry_after_ms: Option<i64>,
         message: String,
+        long_context_credits_required: bool,
         #[snafu(implicit)]
         location: Location,
     },
@@ -119,6 +120,21 @@ pub enum InferenceError {
 }
 
 impl InferenceError {
+    /// Whether this error is Anthropic's 1M-context usage-credit failure.
+    ///
+    /// The provider-specific string match is contained in the adapter; this
+    /// crate carries the typed flag so upper layers do not inspect raw text.
+    #[must_use]
+    pub fn is_long_context_credits_required(&self) -> bool {
+        match self {
+            Self::RateLimited {
+                long_context_credits_required,
+                ..
+            } => *long_context_credits_required,
+            _ => false,
+        }
+    }
+
     /// Suggested retry delay in milliseconds.
     pub fn retry_after_ms(&self) -> Option<i64> {
         match self {
@@ -131,6 +147,21 @@ impl InferenceError {
 
     /// Classify from an HTTP status code and body.
     pub fn from_http_status(status: i32, body: &str, retry_after: Option<i64>) -> Self {
+        Self::from_http_status_with_flags(
+            status,
+            body,
+            retry_after,
+            /*long_context_credits_required*/ false,
+        )
+    }
+
+    /// Classify from an HTTP status plus adapter-owned side-channel flags.
+    pub fn from_http_status_with_flags(
+        status: i32,
+        body: &str,
+        retry_after: Option<i64>,
+        long_context_credits_required: bool,
+    ) -> Self {
         match status {
             400 => {
                 if body.contains("context_length_exceeded")
@@ -159,11 +190,15 @@ impl InferenceError {
                 message: truncate_body(body),
             }
             .build(),
-            429 => inference_error::RateLimitedSnafu {
-                retry_after_ms: retry_after,
-                message: truncate_body(body),
+            429 => {
+                let message = truncate_body(body);
+                inference_error::RateLimitedSnafu {
+                    retry_after_ms: retry_after,
+                    message,
+                    long_context_credits_required,
+                }
+                .build()
             }
-            .build(),
             // Overload cascade (503 Service Unavailable / 529 Overloaded) — the
             // capacity-pressure bucket. Bounded in-client (MAX_CAPACITY_RETRIES)
             // so the model-runtime fallback chain engages fast rather than
@@ -253,6 +288,7 @@ impl InferenceError {
                 inference_error::RateLimitedSnafu {
                     retry_after_ms: None,
                     message: msg.to_string(),
+                    long_context_credits_required: false,
                 }
                 .build(),
             );

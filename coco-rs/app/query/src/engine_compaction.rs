@@ -35,6 +35,8 @@ use crate::ServerNotification;
 use crate::emit::emit_protocol;
 use crate::engine::QueryEngine;
 
+const COMPACT_QUERY_SOURCE: &str = "compact";
+
 /// Manual `/compact` invocation context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManualCompactRequest {
@@ -669,6 +671,7 @@ impl QueryEngine {
                 "compact summary: tools disabled",
             ));
             options.require_can_use_tool = true;
+            options.fallback_min_context_window = self.compact_fallback_min_context_window();
             options.overrides.abort = Some(self.cancel.clone());
 
             match dispatcher
@@ -793,44 +796,21 @@ impl QueryEngine {
             return Err("compact_summary_aborted: cancelled".to_string());
         }
 
-        // Compaction-source attribution for fallback telemetry. The
-        // summarize call routes through the shared `Role(Main)` runtime,
-        // so a `FallbackSwitched` event emitted here is indistinguishable
-        // from a main-loop fallback unless we tag the query source. CC
-        // emits `tengu_model_fallback_triggered { query_source: "compact" }`;
-        // coco-rs's native shape is a `query_source` span/event field on
-        // the existing `FallbackSwitched` carrier (see
-        // `common/otel/CLAUDE.md` standard field names).
-        let query_source = self.query_source_label().to_string();
-
         let mut prompt = coco_messages::normalize_messages_for_api(&attempt.context_messages);
         prompt.push(LlmMessage::user_text(&attempt.summary_request));
 
+        let source = ModelRuntimeSource::Role(coco_types::ModelRole::Main);
+        let fallback_min_context_window = self.compact_fallback_min_context_window();
+
         loop {
-            let params = QueryParams {
-                prompt: prompt.clone(),
-                max_tokens: Some(attempt.max_summary_tokens),
-                thinking_level: None,
-                fast_mode: false,
-                tools: None,
-                tool_choice: None,
-                context_management: None,
-                query_source: None,
-                agent_id: None,
-                time_since_last_assistant_ms: None,
-                agentic: false,
-                cache: None,
-                stop_sequences: None,
-                response_format: None,
-                cancel: None,
-                wire_tap: None,
-            };
+            let params = compact_summary_query_params(
+                prompt.clone(),
+                attempt.max_summary_tokens,
+                fallback_min_context_window,
+            );
             match self
                 .model_runtimes
-                .query_once(
-                    ModelRuntimeSource::Role(coco_types::ModelRole::Main),
-                    &params,
-                )
+                .query_once(source.clone(), &params)
                 .await
             {
                 ModelRuntimeQueryOutcome::Success { result, .. } => {
@@ -873,12 +853,20 @@ impl QueryEngine {
                     break Ok(coco_compact::CompactSummaryResponse { summary });
                 }
                 ModelRuntimeQueryOutcome::Retry { events } => {
-                    log_compact_fallback_events(&query_source, &events);
+                    log_compact_fallback_events(COMPACT_QUERY_SOURCE, &events);
                     continue;
                 }
                 ModelRuntimeQueryOutcome::Failed { error, .. } => break Err(error.to_string()),
             }
         }
+    }
+
+    fn compact_fallback_min_context_window(&self) -> Option<i64> {
+        self.model_runtimes
+            .primary_model_info_for_source(ModelRuntimeSource::Role(coco_types::ModelRole::Main))
+            .ok()
+            .flatten()
+            .map(|info| i64::from(info.context_window))
     }
 
     async fn create_post_compact_delta_attachments<M: std::borrow::Borrow<Message>>(
@@ -1903,6 +1891,37 @@ fn log_compact_fallback_events(query_source: &str, events: &[coco_inference::Mod
             to_model_id = record.to_model_id,
             "model fallback triggered during compaction summarize"
         );
+    }
+}
+
+fn compact_summary_query_params(
+    prompt: Vec<LlmMessage>,
+    max_summary_tokens: i64,
+    fallback_min_context_window: Option<i64>,
+) -> QueryParams {
+    QueryParams {
+        prompt,
+        max_tokens: Some(max_summary_tokens),
+        // Multi-provider compact helper: do not force an explicit
+        // "disable thinking" override here. Some providers/models have
+        // no supported off-toggle, and `None` lets inference apply the
+        // resolved model default without emitting unsupported provider
+        // options.
+        thinking_level: None,
+        fast_mode: false,
+        tools: None,
+        tool_choice: None,
+        context_management: None,
+        query_source: Some(COMPACT_QUERY_SOURCE.to_string()),
+        agent_id: None,
+        time_since_last_assistant_ms: None,
+        agentic: false,
+        cache: None,
+        stop_sequences: None,
+        response_format: None,
+        fallback_min_context_window,
+        cancel: None,
+        wire_tap: None,
     }
 }
 

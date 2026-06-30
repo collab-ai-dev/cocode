@@ -256,6 +256,7 @@ pub async fn generate_tool_use_summary(
                 agentic: false,
                 stop_sequences: None,
                 response_format: None,
+                fallback_min_context_window: None,
                 cancel: None,
                 wire_tap: None,
             };

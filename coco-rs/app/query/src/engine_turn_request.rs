@@ -209,6 +209,7 @@ impl QueryEngine {
             cache: self.config.prompt_cache.clone(),
             stop_sequences: None,
             response_format: None,
+            fallback_min_context_window: self.config.fallback_min_context_window,
             // Interruptible backoff: a user interrupt cancels a long capacity
             // retry instead of waiting it out.
             cancel: Some(self.cancel.clone()),

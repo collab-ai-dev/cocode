@@ -128,7 +128,7 @@ impl QueryEngine {
                 coco_compact::ReactiveCompactState::new(),
             )),
             auto_compact_state: Arc::new(tokio::sync::Mutex::new(
-                coco_compact::ReactiveCompactState::new(),
+                coco_compact::AutoCompactState::new(),
             )),
             running_tasks: None,
             last_compact_state: Arc::new(std::sync::Mutex::new(None)),

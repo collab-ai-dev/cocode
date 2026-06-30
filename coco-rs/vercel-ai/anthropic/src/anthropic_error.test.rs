@@ -13,3 +13,16 @@ fn deserializes_anthropic_error() {
         Some("invalid_request_error")
     );
 }
+
+#[test]
+fn detects_long_context_credits_error_messages() {
+    assert!(is_long_context_credits_error(
+        "Extra usage is required for long context"
+    ));
+    assert!(is_long_context_credits_error(
+        "Usage credits are required for long context"
+    ));
+    assert!(!is_long_context_credits_error(
+        "usage credits are required for another feature"
+    ));
+}
