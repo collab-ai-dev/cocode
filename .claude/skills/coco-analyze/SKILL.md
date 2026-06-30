@@ -8,7 +8,7 @@ argument-hint: "[pid] [focus…]"
 
 - Arguments — `[pid] [focus…]`: `$ARGUMENTS`
 - Project directory: !`echo "${CLAUDE_PROJECT_DIR:-$(pwd)}"`
-- coco-rs config home: !`echo "${COCO_CONFIG_HOME:-${COCO_HOME:-$HOME/.coco}}"`
+- coco-rs config home: !`echo "${COCO_CONFIG_DIR:-$HOME/.cocode}"`
 - Resolver location (you run it yourself — see "Run the resolver" below):
   !`sub=".claude/skills/coco-analyze/resolve.py"; SK=""; ROOT="$PWD"; for c in "$CLAUDE_PROJECT_DIR" "$PWD" "$HOME"; do d="$c"; while [ -n "$d" ] && [ "$d" != "/" ]; do if [ -f "$d/$sub" ]; then SK="$d/$sub"; ROOT="$d"; break 2; fi; d=$(dirname "$d"); done; done; if [ -z "$SK" ]; then echo "ERROR: coco-analyze resolve.py not found (cwd=$PWD CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-unset})"; else echo "SCRIPT=$SK"; echo "CWD=${CLAUDE_PROJECT_DIR:-$ROOT}"; fi`
 
@@ -32,8 +32,8 @@ That is why the auto-run was removed — you run the resolver yourself instead:
 
 ## What this skill does
 
-Analyze a coco-rs run by joining four artifact sources it writes under `~/.coco`
-(override with `COCO_CONFIG_HOME`). The resolver you run (see "Run the resolver"
+Analyze a coco-rs run by joining four artifact sources it writes under `~/.cocode`
+(override with `COCO_CONFIG_DIR`). The resolver you run (see "Run the resolver"
 above) locates and triages them; your job is to read the relevant ones and explain
 what happened — a clean run, or a concrete failure with its root cause.
 
@@ -45,17 +45,17 @@ turns, user inputs, cost); you read the files to reach a verdict.
 
 1. **cwd → project.** A coco-rs run's project dir is the project directory
    (`$CLAUDE_PROJECT_DIR`, falling back to `pwd`) *or* its `coco-rs/` subdirectory.
-   The on-disk project folder under `~/.coco/projects/` is the absolute cwd with every
+   The on-disk project folder under `~/.cocode/projects/` is the absolute cwd with every
    `/`, `.`, `_` replaced by `-` (e.g. `/Users/x/codex/coco-rs` → `-Users-x-codex-coco-rs`).
-2. **PID → cwd + session_id.** `~/.coco/sessions/pids/<pid>.json` maps a process to
+2. **PID → cwd + session_id.** `~/.cocode/sessions/pids/<pid>.json` maps a process to
    `{cwd, session_id, started_at}`. **This file survives after the process exits**, so
    a stale PID still resolves. If the pid file was reaped, the resolver recovers
    `cwd` + `session_id` by parsing the log file's startup lines instead.
-3. **session_id → transcript + wire.** `~/.coco/projects/<proj>/<session_id>.jsonl`
-   is the transcript; `~/.coco/projects/<proj>/<session_id>/wire/` holds raw provider
+3. **session_id → transcript + wire.** `~/.cocode/projects/<proj>/<session_id>.jsonl`
+   is the transcript; `~/.cocode/projects/<proj>/<session_id>/wire/` holds raw provider
    HTTP; `.../usage.json` holds token/cost totals. The resolver finds these by globbing
    the session_id directly, so it never has to guess the sanitized name.
-4. **PID → logs.** `~/.coco/logs/coco.<pid>.log.<YYYY-MM-DD>` (rotated daily; there may
+4. **PID → logs.** `~/.cocode/logs/coco.<pid>.log.<YYYY-MM-DD>` (rotated daily; there may
    be several dated files per pid). The resolver picks the newest and counts WARN/ERROR.
 
 > File **location** is format-independent (filenames + JSON schemas). Only the

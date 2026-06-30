@@ -5,13 +5,13 @@ Given a coco-rs PID (possibly already exited) or the current working directory,
 locate the matching log file, session transcript, wire-capture dir and usage
 file, then print a triage report with absolute paths so the agent can dig in.
 
-Resolution chain (mirrors how coco-rs lays files out under ~/.coco):
-  1. PID  -> ~/.coco/sessions/pids/<pid>.json -> {cwd, session_id, started_at}
+Resolution chain (mirrors how coco-rs lays files out under ~/.cocode):
+  1. PID  -> ~/.cocode/sessions/pids/<pid>.json -> {cwd, session_id, started_at}
             (falls back to parsing the log file if the pid file was reaped)
   2. cwd  -> caller's $PWD or $PWD/coco-rs -> matching pid file(s)
-  3. session_id -> ~/.coco/projects/*/<session_id>.jsonl   (glob, no guessing)
+  3. session_id -> ~/.cocode/projects/*/<session_id>.jsonl   (glob, no guessing)
   4. project dir = parent of that jsonl; wire = <proj>/<sid>/wire
-  5. log  -> newest ~/.coco/logs/coco.<pid>.log*
+  5. log  -> newest ~/.cocode/logs/coco.<pid>.log*
 
 Usage:
   resolve.py [PID]            # explicit pid (running or exited)
@@ -29,7 +29,34 @@ import sys
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser("~")
-COCO = os.environ.get("COCO_CONFIG_HOME") or os.environ.get("COCO_HOME") or os.path.join(HOME, ".coco")
+
+# Config-home resolution mirrors the coco binary
+# (coco-rs/utils/common/src/coco_home.rs): the `COCO_CONFIG_DIR` env var
+# overrides, otherwise the default lives at `~/.cocode`.
+COCO_CONFIG_DIR_ENV = "COCO_CONFIG_DIR"
+COCO_CONFIG_DIR_NAME = ".cocode"
+
+
+def find_coco_home() -> str:
+    """Locate the coco config home, mirroring `coco_utils_common::find_coco_home`.
+
+    Honors `COCO_CONFIG_DIR`; otherwise defaults to `~/.cocode`. Because this is
+    a triage tool and the dir name has churned (`.coco` -> `.cocode`), when no
+    override is set it prefers whichever candidate is actually populated, and
+    falls back to the canonical `~/.cocode` so "not found" errors name the real
+    path.
+    """
+    env = os.environ.get(COCO_CONFIG_DIR_ENV)
+    if env:
+        return env
+    default = os.path.join(HOME, COCO_CONFIG_DIR_NAME)
+    for cand in (default, os.path.join(HOME, ".coco")):
+        if any(os.path.isdir(os.path.join(cand, s)) for s in ("sessions", "projects", "logs")):
+            return cand
+    return default
+
+
+COCO = find_coco_home()
 PIDS_DIR = os.path.join(COCO, "sessions", "pids")
 LOGS_DIR = os.path.join(COCO, "logs")
 PROJECTS_DIR = os.path.join(COCO, "projects")
