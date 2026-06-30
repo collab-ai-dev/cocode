@@ -195,6 +195,67 @@ fn history_replaced_clears_pre_clear_rewind_snapshot() {
     assert!(state.session.rewind_pre_clear_messages.is_empty());
 }
 
+/// Cumulative session usage that the status bar mirrors.
+fn state_with_usage() -> AppState {
+    let mut state = AppState::new();
+    state.session.token_usage = crate::state::session::TokenUsage {
+        input_tokens: 795_283,
+        output_tokens: 6_211,
+        reasoning_tokens: 0,
+        cache_read_tokens: 698_752,
+        cache_creation_tokens: 0,
+    };
+    state.session.session_usage = Some(coco_types::SessionUsageSnapshot::default());
+    state
+}
+
+/// A true session boundary (`/clear`, resume) zeroes the cumulative usage
+/// the status bar shows — `SessionResetForResume` is `/clear`'s ONLY usage
+/// reset hook (no `SessionUsageUpdated` follows it).
+#[test]
+fn session_reset_for_resume_zeroes_cumulative_usage() {
+    let mut state = state_with_usage();
+    let (tx, _rx) = channel();
+
+    super::handle(
+        &mut state,
+        ServerNotification::SessionResetForResume {
+            session_id: "s2".into(),
+            agent_id: None,
+        },
+        &tx,
+    );
+
+    assert_eq!(state.session.token_usage.input_tokens, 0);
+    assert_eq!(state.session.token_usage.output_tokens, 0);
+    assert_eq!(state.session.token_usage.cache_read_tokens, 0);
+    assert!(state.session.session_usage.is_none());
+}
+
+/// An intra-session transcript rewrite (compaction / reactive trim / rewind)
+/// arrives via `HistoryReplaced` and MUST keep the running cumulative usage —
+/// regressing this is the `/compact` "status bar all zeros" bug.
+#[test]
+fn history_replaced_preserves_cumulative_usage() {
+    let mut state = state_with_usage();
+    let (tx, _rx) = channel();
+
+    super::handle(
+        &mut state,
+        ServerNotification::HistoryReplaced {
+            messages: Vec::new(),
+            session_id: String::new(),
+            agent_id: None,
+        },
+        &tx,
+    );
+
+    assert_eq!(state.session.token_usage.input_tokens, 795_283);
+    assert_eq!(state.session.token_usage.output_tokens, 6_211);
+    assert_eq!(state.session.token_usage.cache_read_tokens, 698_752);
+    assert!(state.session.session_usage.is_some());
+}
+
 /// True if the receiver got a `Rewind { mode: AutoRestore }`. Drains
 /// the channel; tests that need to inspect the message id should call
 /// `rx.try_recv()` directly.
