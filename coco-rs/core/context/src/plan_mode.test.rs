@@ -309,6 +309,7 @@ fn att(rt: ReminderType, is_sub: bool, path: &str, exists: bool) -> PlanModeAtta
     PlanModeAttachment {
         reminder_type: rt,
         workflow: PlanWorkflow::default(),
+        custom_instructions: None,
         phase4_variant: Phase4Variant::default(),
         explore_agent_count: 3,
         plan_agent_count: 1,
@@ -327,6 +328,7 @@ fn reminder_full_main_agent_includes_workflow_and_plan_file() {
     let att = PlanModeAttachment {
         reminder_type: ReminderType::Full,
         workflow: PlanWorkflow::default(),
+        custom_instructions: None,
         phase4_variant: Phase4Variant::default(),
         explore_agent_count: 3,
         plan_agent_count: 1,
@@ -356,6 +358,7 @@ fn reminder_names_model_specific_file_tool() {
     let mk = |exists: bool| PlanModeAttachment {
         reminder_type: ReminderType::Full,
         workflow: PlanWorkflow::default(),
+        custom_instructions: None,
         phase4_variant: Phase4Variant::default(),
         explore_agent_count: 3,
         plan_agent_count: 1,
@@ -415,6 +418,56 @@ fn reminder_sparse_is_short_and_references_plan_file() {
 }
 
 #[test]
+fn reminder_full_custom_workflow_replaces_builtin_workflow() {
+    let mut att = att(ReminderType::Full, false, "/tmp/plans/custom.md", false);
+    att.custom_instructions =
+        Some("1. Interview the user.\n2. Update the plan file after each answer.".to_string());
+    let out = render_plan_mode_reminder(&att);
+
+    assert!(out.contains("Plan mode is active"));
+    assert!(out.contains("/tmp/plans/custom.md"));
+    assert!(out.contains("## Plan Workflow"));
+    assert!(out.contains("1. Interview the user."));
+    assert!(out.contains("### Call ExitPlanMode"));
+    assert!(
+        out.contains(
+            "Use AskUserQuestion ONLY to clarify requirements or choose between approaches"
+        )
+    );
+    assert!(out.contains("Phrases like \"Is this plan okay?\""));
+    assert!(out.contains("only file you are allowed to edit"));
+    assert!(!out.contains("### Phase 1: Initial Understanding"));
+    assert!(!out.contains("## Iterative Planning Workflow"));
+}
+
+#[test]
+fn reminder_full_custom_workflow_is_bounded() {
+    let mut att = att(ReminderType::Full, false, "/tmp/plans/custom.md", false);
+    let oversized = format!(
+        "{}TAIL-MUST-NOT-APPEAR",
+        "规划".repeat(PLAN_MODE_CUSTOM_INSTRUCTIONS_MAX_BYTES)
+    );
+    att.custom_instructions = Some(oversized);
+
+    let out = render_plan_mode_reminder(&att);
+
+    assert!(out.contains(PLAN_MODE_CUSTOM_INSTRUCTIONS_TRUNCATION_MARKER));
+    assert!(!out.contains("TAIL-MUST-NOT-APPEAR"));
+    assert!(out.contains("### Call ExitPlanMode"));
+}
+
+#[test]
+fn reminder_sparse_custom_workflow_refers_to_prior_workflow() {
+    let mut att = att(ReminderType::Sparse, false, "/tmp/plans/custom.md", true);
+    att.custom_instructions = Some("Use the bespoke workflow.".to_string());
+    let out = render_plan_mode_reminder(&att);
+
+    assert!(out.contains("Follow the plan workflow described earlier."));
+    assert!(!out.contains("Follow 5-phase workflow."));
+    assert!(!out.contains("Use the bespoke workflow."));
+}
+
+#[test]
 fn reminder_reentry_has_reentry_heading_and_plan_state() {
     let att = att(ReminderType::Reentry, false, "/tmp/plans/foo.md", true);
     let out = render_plan_mode_reminder(&att);
@@ -424,6 +477,23 @@ fn reminder_reentry_has_reentry_heading_and_plan_state() {
     // Distinct from Full + Sparse.
     assert!(!out.contains("## Plan Workflow"));
     assert!(!out.contains("Plan mode still active"));
+}
+
+#[test]
+fn reminder_reentry_takes_priority_over_sub_agent_rendering() {
+    let att = att(
+        ReminderType::Reentry,
+        true,
+        "/tmp/plans/foo-agent-a1.md",
+        true,
+    );
+    let out = render_plan_mode_reminder(&att);
+    assert!(out.contains("## Re-entering Plan Mode"));
+    assert!(out.contains("/tmp/plans/foo-agent-a1.md"));
+    assert!(
+        !out.contains("Plan mode is active. The user indicated"),
+        "reentry is a boundary attachment, not the steady-state sub-agent prompt: {out}"
+    );
 }
 
 #[test]
@@ -448,6 +518,8 @@ fn phase4_standard_includes_context_section() {
     a.phase4_variant = Phase4Variant::Standard;
     let out = render_plan_mode_reminder(&a);
     assert!(out.contains("Begin with a **Context** section"));
+    assert!(out.contains("Name the critical files to be modified"));
+    assert!(out.contains("representative paths"));
     assert!(!out.contains("Hard limit: 40 lines"));
 }
 
@@ -538,6 +610,15 @@ fn five_phase_without_agents_falls_back_to_interview_workflow() {
 }
 
 #[test]
+fn sparse_without_agents_uses_interview_workflow_hint() {
+    let mut a = att(ReminderType::Sparse, false, "/p.md", false);
+    a.explore_plan_agents_available = false;
+    let out = render_plan_mode_reminder(&a);
+    assert!(out.contains("Follow iterative workflow"));
+    assert!(!out.contains("Follow 5-phase workflow"));
+}
+
+#[test]
 fn interview_omits_explore_agent_sentence_when_unavailable() {
     let mut a = att(ReminderType::Full, false, "/p.md", false);
     a.workflow = PlanWorkflow::Interview;
@@ -545,6 +626,68 @@ fn interview_omits_explore_agent_sentence_when_unavailable() {
     let out = render_plan_mode_reminder(&a);
     assert!(out.contains("Iterative Planning Workflow"));
     assert!(!out.contains("agent type to parallelize"));
+}
+
+// ── derive_exit_plan_mode_state ──
+
+#[test]
+fn derive_exit_state_uses_non_empty_disk_plan_even_when_mtime_precedes_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "derive-stale-mtime";
+    let plans_dir = tmp.path();
+    write_plan(session_id, plans_dir, "# Saved Plan\n\n- implement", None).unwrap();
+
+    let state = derive_exit_plan_mode_state(
+        Some(session_id),
+        Some(plans_dir),
+        None,
+        Some(i64::MAX),
+        None,
+    );
+
+    assert_eq!(
+        state.outcome,
+        coco_types::ExitPlanModeOutcome::ImplementationPlan
+    );
+    assert_eq!(state.plan.as_deref(), Some("# Saved Plan\n\n- implement"));
+    assert!(state.plan_file_path.is_some());
+    assert!(!state.plan_was_edited);
+}
+
+#[test]
+fn derive_exit_state_uses_disk_plan_when_mtime_follows_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "derive-edited-mtime";
+    let plans_dir = tmp.path();
+    write_plan(session_id, plans_dir, "# Saved Plan\n\n- implement", None).unwrap();
+
+    let state = derive_exit_plan_mode_state(Some(session_id), Some(plans_dir), None, Some(1), None);
+
+    assert_eq!(
+        state.outcome,
+        coco_types::ExitPlanModeOutcome::ImplementationPlan
+    );
+    assert_eq!(state.plan.as_deref(), Some("# Saved Plan\n\n- implement"));
+    assert!(state.plan_file_path.is_some());
+    assert!(!state.plan_was_edited);
+}
+
+#[test]
+fn derive_exit_state_treats_missing_or_empty_disk_plan_as_no_plan() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "derive-empty-plan";
+    let plans_dir = tmp.path();
+    write_plan(session_id, plans_dir, "   \n\t", None).unwrap();
+
+    let state = derive_exit_plan_mode_state(Some(session_id), Some(plans_dir), None, None, None);
+
+    assert_eq!(
+        state.outcome,
+        coco_types::ExitPlanModeOutcome::NoImplementationPlan
+    );
+    assert_eq!(state.plan, None);
+    assert_eq!(state.plan_file_path, None);
+    assert!(!state.plan_was_edited);
 }
 
 // ── verify_plan_was_edited ──
@@ -651,6 +794,7 @@ fn snapshot_attachment(phase4: Phase4Variant, workflow: PlanWorkflow) -> PlanMod
     PlanModeAttachment {
         reminder_type: ReminderType::Full,
         workflow,
+        custom_instructions: None,
         phase4_variant: phase4,
         explore_agent_count: 3,
         plan_agent_count: 1,

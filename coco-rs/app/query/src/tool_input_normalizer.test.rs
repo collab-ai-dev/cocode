@@ -44,7 +44,7 @@ fn test_normalize_observable_tool_input_exit_strips_stale_internal_fields() {
             "outcome": "implementation_plan",
             "plan": "stale",
             "planFilePath": "/tmp/stale.md",
-            "user_choice": "yes-accept-edits-clear-context"
+            "user_choice": "yes-accept-edits"
         }),
         ToolInputNormalizationContext::default(),
     );

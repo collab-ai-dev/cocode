@@ -162,6 +162,38 @@ async fn enter_interview_workflow_full_content_differs_from_five_phase() {
 }
 
 #[tokio::test]
+async fn enter_custom_workflow_threads_to_full_content() {
+    let c = cfg();
+    let ctx = GeneratorContext::builder(&c)
+        .is_plan_mode(true)
+        .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
+        .plan_exists(false)
+        .explore_plan_agents_available(true)
+        .plan_mode_custom_instructions(Some(
+            "Use a one-question-at-a-time planning loop.".to_string(),
+        ))
+        .plan_mode_attachments_since_exit(0)
+        .build();
+
+    let g = PlanModeEnterGenerator;
+    let text = g
+        .generate(&ctx)
+        .await
+        .unwrap()
+        .unwrap()
+        .content()
+        .unwrap()
+        .to_string();
+
+    assert!(text.contains("Use a one-question-at-a-time planning loop."));
+    assert!(text.contains("### Call ExitPlanMode"));
+    assert!(
+        !text.contains("### Phase 1: Initial Understanding"),
+        "custom workflow should replace 5-phase body: {text}"
+    );
+}
+
+#[tokio::test]
 async fn enter_phase4_variant_affects_full_five_phase_only() {
     let c = cfg();
     let standard = GeneratorContext::builder(&c)
@@ -271,6 +303,25 @@ async fn exit_none_without_flag() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn exit_emits_when_history_has_open_plan_mode_cycle() {
+    let c = cfg();
+    let ctx = GeneratorContext::builder(&c)
+        .needs_plan_mode_exit_attachment(false)
+        .plan_mode_turns_since_attachment(Some(1))
+        .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
+        .plan_exists(true)
+        .build();
+    let r = PlanModeExitGenerator
+        .generate(&ctx)
+        .await
+        .unwrap()
+        .expect("emits");
+    assert_eq!(r.attachment_type, AttachmentType::PlanModeExit);
+    let text = r.content().expect("text");
+    assert!(text.contains("Exited Plan Mode"), "banner text: {text}");
 }
 
 #[tokio::test]
@@ -409,7 +460,7 @@ async fn reentry_requires_existing_plan() {
 }
 
 #[tokio::test]
-async fn reentry_skipped_for_sub_agent() {
+async fn reentry_emits_for_sub_agent() {
     let c = cfg();
     let ctx = GeneratorContext::builder(&c)
         .is_plan_mode(true)
@@ -418,13 +469,16 @@ async fn reentry_skipped_for_sub_agent() {
         .is_sub_agent(true)
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .build();
+    let r = PlanModeReentryGenerator
+        .generate(&ctx)
+        .await
+        .unwrap()
+        .expect("emits");
+    assert_eq!(r.attachment_type, AttachmentType::PlanModeReentry);
+    let text = r.content().expect("text");
     assert!(
-        PlanModeReentryGenerator
-            .generate(&ctx)
-            .await
-            .unwrap()
-            .is_none(),
-        "sub-agents must be gated out of Reentry"
+        text.contains("Re-entering Plan Mode"),
+        "reentry remains a boundary reminder for sub-agents: {text}"
     );
 }
 

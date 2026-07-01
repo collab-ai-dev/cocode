@@ -17,6 +17,7 @@ use coco_llm_types::ToolResultContent;
 use coco_llm_types::Usage;
 use coco_tool_runtime::ToolRegistry;
 use coco_tools::AskUserQuestionTool;
+use coco_tools::EnterPlanModeTool;
 use coco_tools::ExitPlanModeTool;
 use coco_tools::ReadTool;
 use tokio_util::sync::CancellationToken;
@@ -1679,6 +1680,33 @@ fn tool_result_text<M: std::borrow::Borrow<coco_messages::Message>>(
     })
 }
 
+fn user_image_base64_after_tool_result<M: std::borrow::Borrow<coco_messages::Message>>(
+    messages: &[M],
+    tool_use_id: &str,
+) -> Option<(String, String)> {
+    let result_index = messages.iter().position(|message| {
+        let coco_messages::Message::ToolResult(result) = message.borrow() else {
+            return false;
+        };
+        result.tool_use_id == tool_use_id
+    })?;
+    messages.iter().skip(result_index + 1).find_map(|message| {
+        let coco_messages::Message::User(user) = message.borrow() else {
+            return None;
+        };
+        let coco_messages::LlmMessage::User { content, .. } = &user.message else {
+            return None;
+        };
+        content.iter().find_map(|part| {
+            let coco_messages::UserContent::File(file) = part else {
+                return None;
+            };
+            let base64 = file.data.as_data()?.as_base64()?;
+            Some((file.media_type.clone(), base64.to_string()))
+        })
+    })
+}
+
 fn assistant_text_contains<M: std::borrow::Borrow<coco_messages::Message>>(
     messages: &[M],
     needle: &str,
@@ -2132,6 +2160,135 @@ async fn rejected_ask_user_question_streaming_completion_is_non_error() {
         assistant_idx < result_idx,
         "assistant tool call must be appended before redirect result"
     );
+}
+
+#[tokio::test]
+async fn rejected_enter_plan_mode_streaming_completion_is_non_error() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "enter_plan_rejected_1".into(),
+        tool_name: "EnterPlanMode".into(),
+        input: serde_json::json!({}),
+        final_text: "continuing without plan mode".into(),
+    });
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(EnterPlanModeTool));
+    let tools = Arc::new(registry);
+    let client = crate::test_support::model_runtime_registry(model);
+    let cancel = CancellationToken::new();
+    let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Rejected));
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
+        .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
+    let collector = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(ev) = event_rx.recv().await {
+            events.push(ev);
+        }
+        events
+    });
+
+    let result = engine
+        .run_with_events("plan first", event_tx, coco_types::TurnId::generate())
+        .await
+        .expect("should succeed");
+    let events = collector.await.unwrap();
+
+    assert_eq!(result.response_text, "continuing without plan mode");
+    assert!(result.permission_denials.is_empty());
+    assert_eq!(bridge.calls().len(), 1);
+    let feedback = tool_result_text(&result.final_messages, "enter_plan_rejected_1")
+        .expect("EnterPlanMode rejection should be a neutral tool result");
+    assert_eq!(feedback, "User declined to enter plan mode");
+    assert!(
+        tool_result_error_text(&result.final_messages, "enter_plan_rejected_1").is_none(),
+        "EnterPlanMode rejection must not be stored as an error"
+    );
+
+    let (queued, started, completed, completed_is_error) =
+        tool_lifecycle_counts(&events, "enter_plan_rejected_1");
+    assert_eq!(queued, 1);
+    assert_eq!(started, 0, "rejected EnterPlanMode is never executed");
+    assert_eq!(completed, 1);
+    assert_eq!(completed_is_error, Some(false));
+}
+
+#[tokio::test]
+async fn rejected_exit_plan_mode_streaming_completion_is_plan_rejection_not_permission_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "exit-plan-rejected-session";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "## Plan\n- implement", None).unwrap();
+
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "exit_plan_rejected_1".into(),
+        tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+        input: serde_json::json!({}),
+        final_text: "revising plan".into(),
+    });
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(ExitPlanModeTool));
+    let tools = Arc::new(registry);
+    let client = crate::test_support::model_runtime_registry(model);
+    let cancel = CancellationToken::new();
+    let config = QueryEngineConfig {
+        session_id: session_id.into(),
+        permission_mode: PermissionMode::Plan,
+        ..Default::default()
+    };
+    let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Rejected));
+    let app_state = Arc::new(tokio::sync::RwLock::new(ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            ..Default::default()
+        },
+        plan_mode_entry_ms: Some(1),
+        ..Default::default()
+    }));
+    let engine = QueryEngine::new(config, client, tools, cancel, None)
+        .with_config_home(tmp.path().to_path_buf())
+        .with_app_state(app_state)
+        .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
+    let collector = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(ev) = event_rx.recv().await {
+            events.push(ev);
+        }
+        events
+    });
+
+    let result = engine
+        .run_with_events("exit plan", event_tx, coco_types::TurnId::generate())
+        .await
+        .expect("should succeed");
+    let events = collector.await.unwrap();
+
+    assert_eq!(result.response_text, "revising plan");
+    assert!(result.permission_denials.is_empty());
+    assert_eq!(bridge.calls().len(), 1);
+    let feedback = tool_result_text(&result.final_messages, "exit_plan_rejected_1")
+        .expect("ExitPlanMode rejection should be a neutral plan-rejection tool result");
+    assert!(
+        feedback.starts_with("The agent proposed a plan that was rejected by the user."),
+        "feedback: {feedback}"
+    );
+    assert!(feedback.contains("Rejected plan:\n## Plan\n- implement"));
+    assert!(feedback.contains("User feedback:\nrecorded"));
+    assert!(
+        tool_result_error_text(&result.final_messages, "exit_plan_rejected_1").is_none(),
+        "ExitPlanMode rejection must not be stored as a permission error"
+    );
+
+    let (queued, started, completed, completed_is_error) =
+        tool_lifecycle_counts(&events, "exit_plan_rejected_1");
+    assert_eq!(queued, 1);
+    assert_eq!(started, 0, "rejected ExitPlanMode is never executed");
+    assert_eq!(completed, 1);
+    assert_eq!(completed_is_error, Some(false));
 }
 
 #[tokio::test]
@@ -3827,6 +3984,7 @@ impl Tool for AskingMockTool {
 /// assert the engine supplied the expected fields (tool name, input).
 struct RecordingBridge {
     decision: ToolPermissionDecision,
+    content_blocks: Option<Vec<Value>>,
     calls: StdMutex<Vec<ToolPermissionRequest>>,
 }
 
@@ -3834,8 +3992,13 @@ impl RecordingBridge {
     fn new(decision: ToolPermissionDecision) -> Self {
         Self {
             decision,
+            content_blocks: None,
             calls: StdMutex::new(Vec::new()),
         }
+    }
+    fn with_content_blocks(mut self, content_blocks: Vec<Value>) -> Self {
+        self.content_blocks = Some(content_blocks);
+        self
     }
     fn calls(&self) -> Vec<ToolPermissionRequest> {
         self.calls.lock().unwrap().clone()
@@ -3854,7 +4017,7 @@ impl ToolPermissionBridge for RecordingBridge {
             feedback: Some("recorded".into()),
             applied_updates: Vec::new(),
             updated_input: None,
-            content_blocks: None,
+            content_blocks: self.content_blocks.clone(),
             detail: None,
         })
     }
@@ -3959,6 +4122,46 @@ async fn ask_branch_consults_bridge_and_executes_on_approved() {
 }
 
 #[tokio::test]
+async fn approved_permission_content_blocks_are_appended_after_tool_result() {
+    let model = Arc::new(AskingToolThenTextMock {
+        call_count: AtomicI32::new(0),
+    });
+    let client = crate::test_support::model_runtime_registry(model);
+
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(AskingMockTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let bridge = Arc::new(
+        RecordingBridge::new(ToolPermissionDecision::Approved).with_content_blocks(vec![
+            serde_json::json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "iVBORw0KGgo="
+                }
+            }),
+        ]),
+    );
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
+        .with_permission_bridge(bridge as Arc<dyn ToolPermissionBridge>);
+
+    let result = engine
+        .run("please run asking_mock")
+        .await
+        .expect("should succeed");
+
+    assert_eq!(result.permission_denials.len(), 0);
+    let (media_type, data) =
+        user_image_base64_after_tool_result(&result.final_messages, "ask_call_1")
+            .expect("permission image should follow the approved tool result");
+    assert_eq!(media_type, "image/png");
+    assert_eq!(data, "iVBORw0KGgo=");
+}
+
+#[tokio::test]
 async fn ask_branch_consults_bridge_and_records_denial_on_rejected() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
@@ -3987,6 +4190,46 @@ async fn ask_branch_consults_bridge_and_records_denial_on_rejected() {
     assert_eq!(result.permission_denials.len(), 1);
     assert_eq!(result.permission_denials[0].tool_name, "asking_mock");
     assert_eq!(result.response_text, "done");
+}
+
+#[tokio::test]
+async fn rejected_permission_content_blocks_are_appended_after_tool_result() {
+    let model = Arc::new(AskingToolThenTextMock {
+        call_count: AtomicI32::new(0),
+    });
+    let client = crate::test_support::model_runtime_registry(model);
+
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(AskingMockTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let bridge = Arc::new(
+        RecordingBridge::new(ToolPermissionDecision::Rejected).with_content_blocks(vec![
+            serde_json::json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "iVBORw0KGgo="
+                }
+            }),
+        ]),
+    );
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
+        .with_permission_bridge(bridge as Arc<dyn ToolPermissionBridge>);
+
+    let result = engine
+        .run("please run asking_mock")
+        .await
+        .expect("should succeed");
+
+    assert_eq!(result.permission_denials.len(), 1);
+    let (media_type, data) =
+        user_image_base64_after_tool_result(&result.final_messages, "ask_call_1")
+            .expect("permission image should follow the rejected tool result");
+    assert_eq!(media_type, "image/png");
+    assert_eq!(data, "iVBORw0KGgo=");
 }
 
 #[tokio::test]

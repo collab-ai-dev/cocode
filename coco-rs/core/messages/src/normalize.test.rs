@@ -1,4 +1,5 @@
 use crate::*;
+use coco_types::AttachmentKind;
 use uuid::Uuid;
 
 use super::ensure_user_first;
@@ -101,6 +102,13 @@ fn user_with_files() -> Message {
     })
 }
 
+fn plan_mode_attachment(text: &str) -> Message {
+    Message::Attachment(AttachmentMessage::api(
+        AttachmentKind::PlanMode,
+        LlmMessage::user_text(crate::wrapping::wrap_in_system_reminder(text)),
+    ))
+}
+
 fn tombstone_msg() -> Message {
     Message::Tombstone(TombstoneMessage {
         uuid: Uuid::new_v4(),
@@ -113,6 +121,34 @@ fn test_filters_virtual_messages() {
     let msgs = vec![user_msg("hello"), virtual_msg("ghost"), assistant_msg("hi")];
     let result = normalize_messages_for_api(&arc_vec(&msgs));
     assert_eq!(result.len(), 2); // virtual filtered out
+}
+
+#[test]
+fn plan_mode_attachment_after_image_user_keeps_image_part() {
+    let msgs = vec![user_with_files(), plan_mode_attachment("stay in plan mode")];
+
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
+
+    let Some(LlmMessage::User { content, .. }) = result.first() else {
+        panic!("expected first API message to be user, got {result:?}");
+    };
+    assert!(
+        content
+            .iter()
+            .any(|part| matches!(part, UserContent::File(file) if file.media_type == "image/png")),
+        "plan-mode reminder normalization must not strip the user's pasted image: {content:?}"
+    );
+    assert!(
+        result.iter().any(|message| {
+            let LlmMessage::User { content, .. } = message else {
+                return false;
+            };
+            content.iter().any(|part| {
+                matches!(part, UserContent::Text(text) if text.text.contains("stay in plan mode"))
+            })
+        }),
+        "plan-mode reminder should still reach the model: {result:?}"
+    );
 }
 
 #[test]

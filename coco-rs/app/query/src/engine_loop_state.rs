@@ -395,6 +395,9 @@ impl QueryEngine {
                 self.config.is_teammate && self.config.plan_mode_required,
             );
         }
+        if let Some(mode) = self.config.live_permission_mode.clone() {
+            pr_init = pr_init.with_live_permission_mode(mode);
+        }
         // Install the protocol-event sink so leader-pending-approval
         // polling can surface `PlanApprovalRequested` to the TUI in
         // addition to injecting the LLM-prompt attachment. Absent sink

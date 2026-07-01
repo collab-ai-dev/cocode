@@ -16,7 +16,7 @@ pub fn prompt() -> String {
 
 const TEMPLATE: &str = r#"# Debug Skill
 
-Help the user debug an issue they're encountering in this current Claude Code session.
+Help the user debug an issue they're encountering in this current Coco session.
 
 ## Session Log
 

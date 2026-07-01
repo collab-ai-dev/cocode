@@ -37,9 +37,10 @@ pub(crate) fn permission_content(
     current_mode: coco_types::PermissionMode,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
+    let is_enter_plan = p.tool_name == coco_types::ToolName::EnterPlanMode.as_str();
     let is_exit_plan = matches!(p.detail, PermissionDetail::ExitPlanMode { .. });
     let exit_plan_has_plan = is_exit_plan && exit_plan_has_implementation_plan(p);
-    let detail = if is_exit_plan {
+    let detail = if is_enter_plan || is_exit_plan {
         String::new()
     } else {
         permission_detail_for_prompt(p)
@@ -59,7 +60,9 @@ pub(crate) fn permission_content(
         .as_ref()
         .map(|b| format!(" · @{}", b.name))
         .unwrap_or_default();
-    let title = if is_exit_plan {
+    let title = if is_enter_plan {
+        format!(" {}{worker_suffix} ", t!("dialog.enter_plan_mode"))
+    } else if is_exit_plan {
         format!(
             " {}{worker_suffix} ",
             if exit_plan_has_plan {
@@ -223,9 +226,12 @@ pub(crate) fn exit_plan_prompt_lines(
     if let Some(choices) = &p.choices {
         let items: Vec<SelectItem> = choices
             .iter()
-            .map(|choice| {
+            .enumerate()
+            .map(|(idx, choice)| {
                 let mut item = SelectItem::new(choice.label.clone());
-                if let Some(description) = &choice.description {
+                if let Some(feedback) = exit_plan_feedback_display(p, choice, idx) {
+                    item = item.with_secondary(feedback);
+                } else if let Some(description) = &choice.description {
                     item = item.with_secondary(description.clone());
                 }
                 item
@@ -249,6 +255,28 @@ pub(crate) fn exit_plan_prompt_lines(
     lines
 }
 
+fn exit_plan_feedback_display(
+    p: &PermissionPromptState,
+    choice: &coco_types::PermissionAskChoice,
+    idx: usize,
+) -> Option<String> {
+    if choice.value != coco_types::ExitPlanChoice::No.as_str() || idx != p.selected_choice {
+        return None;
+    }
+    let PermissionDetail::ExitPlanMode { feedback_input, .. } = &p.detail else {
+        return None;
+    };
+    if feedback_input.value.is_empty() {
+        Some("Tell the agent what to change".to_string())
+    } else {
+        Some(render_prefix_with_cursor(
+            &feedback_input.value,
+            feedback_input.cursor,
+            true,
+        ))
+    }
+}
+
 /// Temporary source-backed display of the pending plan while the exit-plan
 /// prompt is waiting for a choice. This deliberately looks like normal
 /// transcript output rather than a centered modal.
@@ -261,6 +289,8 @@ pub(crate) fn exit_plan_pending_history_lines(
     let PermissionDetail::ExitPlanMode {
         outcome,
         plan,
+        edited_plan: _,
+        feedback_input: _,
         plan_file_path,
         allowed_prompts,
     } = &p.detail

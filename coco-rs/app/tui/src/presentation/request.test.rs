@@ -140,6 +140,46 @@ fn permission_content_hints_approve_deny_only_shortcuts() {
 }
 
 #[test]
+fn permission_content_renders_enter_plan_mode_source_title_without_raw_input() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "{}".to_string(),
+    });
+    state.tool_name = coco_types::ToolName::EnterPlanMode.as_str().to_string();
+    state.description =
+        "The agent wants to enter plan mode to explore and design an implementation approach."
+            .to_string();
+    state.choices = Some(vec![
+        PermissionAskChoice {
+            value: "yes".into(),
+            label: "Yes, enter plan mode".into(),
+            description: None,
+        },
+        PermissionAskChoice {
+            value: "no".into(),
+            label: "No, start implementing now".into(),
+            description: None,
+        },
+    ]);
+
+    let (title, body, _) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
+
+    assert_eq!(title, " Enter plan mode? ");
+    assert!(
+        body.contains("The agent wants to enter plan mode"),
+        "body: {body}"
+    );
+    assert!(body.contains("Yes, enter plan mode"), "body: {body}");
+    assert!(body.contains("No, start implementing now"), "body: {body}");
+    assert!(!body.contains("{}"), "body: {body}");
+}
+
+#[test]
 fn permission_content_hints_add_directories_session_and_local() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
@@ -289,6 +329,8 @@ fn permission_content_renders_exit_plan_mode_without_raw_input_keys() {
     let mut state = permission_prompt(PermissionDetail::ExitPlanMode {
         outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
         plan: Some("# Plan\n\n- Update code".to_string()),
+        edited_plan: None,
+        feedback_input: crate::state::PrefixInputState::new(String::new()),
         plan_file_path: Some("/tmp/plan.md".to_string()),
         allowed_prompts: vec![],
     });
@@ -341,6 +383,8 @@ fn permission_content_uses_no_plan_title_for_exit_plan_without_plan() {
     let state = permission_prompt(PermissionDetail::ExitPlanMode {
         outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
         plan: Some("User asked for a read-only explanation.".to_string()),
+        edited_plan: None,
+        feedback_input: crate::state::PrefixInputState::new(String::new()),
         plan_file_path: None,
         allowed_prompts: vec![],
     });
@@ -362,6 +406,8 @@ fn exit_plan_prompt_lines_render_only_decision_rows() {
     let mut state = permission_prompt(PermissionDetail::ExitPlanMode {
         outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
         plan: Some("# Goal\n\n- Step one".to_string()),
+        edited_plan: None,
+        feedback_input: crate::state::PrefixInputState::new(String::new()),
         plan_file_path: Some("/tmp/plan.md".to_string()),
         allowed_prompts: vec![],
     });
@@ -406,13 +452,66 @@ fn exit_plan_prompt_lines_use_no_plan_copy_without_plan() {
     let mut state = permission_prompt(PermissionDetail::ExitPlanMode {
         outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
         plan: Some("This was a read-only question.".to_string()),
+        edited_plan: None,
+        feedback_input: crate::state::PrefixInputState::new(String::new()),
         plan_file_path: None,
         allowed_prompts: vec![],
     });
     state.choices = Some(vec![
         PermissionAskChoice {
             value: coco_types::ExitPlanChoice::KeepDefault.as_str().to_string(),
-            label: "Yes, exit plan mode".to_string(),
+            label: "Yes".to_string(),
+            description: None,
+        },
+        PermissionAskChoice {
+            value: coco_types::ExitPlanChoice::No.as_str().to_string(),
+            label: "No".to_string(),
+            description: None,
+        },
+    ]);
+
+    let lines = exit_plan_prompt_lines(&state, UiStyles::new(&theme), 8);
+    let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+    // No-plan exit: the bottom prompt drops the bold title too, leaving the
+    // descriptive proceed line + choices.
+    assert!(
+        joined.contains("cocode wants to exit plan mode"),
+        "{joined}"
+    );
+    assert!(!joined.contains("Would you like to proceed?"), "{joined}");
+    assert!(
+        !joined.contains("without an implementation plan"),
+        "{joined}"
+    );
+    assert!(joined.contains("Yes"), "{joined}");
+    assert!(joined.contains("No"), "{joined}");
+    assert!(!joined.contains("auto-accept"), "{joined}");
+    assert!(!joined.contains("manually approve edits"), "{joined}");
+    assert!(!joined.contains("Ready to code?"), "{joined}");
+    assert!(
+        lines.iter().any(|line| line_text(line).is_empty()),
+        "prompt should leave space before choices: {joined}"
+    );
+}
+
+#[test]
+fn exit_plan_prompt_lines_render_feedback_input_on_no_row() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::ExitPlanMode {
+        outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+        plan: Some("# Goal\n\n- Step one".to_string()),
+        edited_plan: None,
+        feedback_input: crate::state::PrefixInputState::new("split it up".to_string()),
+        plan_file_path: None,
+        allowed_prompts: vec![],
+    });
+    state.selected_choice = 1;
+    state.choices = Some(vec![
+        PermissionAskChoice {
+            value: coco_types::ExitPlanChoice::KeepDefault.as_str().to_string(),
+            label: "Yes, manually approve edits".to_string(),
             description: None,
         },
         PermissionAskChoice {
@@ -425,22 +524,8 @@ fn exit_plan_prompt_lines_use_no_plan_copy_without_plan() {
     let lines = exit_plan_prompt_lines(&state, UiStyles::new(&theme), 8);
     let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-    // No-plan exit: the bottom prompt drops the bold title too, leaving the
-    // descriptive proceed line + choices.
-    assert!(joined.contains("Would you like to proceed?"), "{joined}");
-    assert!(
-        joined.contains("without an implementation plan"),
-        "{joined}"
-    );
-    assert!(joined.contains("Yes, exit plan mode"), "{joined}");
     assert!(joined.contains("No, keep planning"), "{joined}");
-    assert!(!joined.contains("auto-accept"), "{joined}");
-    assert!(!joined.contains("manually approve edits"), "{joined}");
-    assert!(!joined.contains("Ready to code?"), "{joined}");
-    assert!(
-        lines.iter().any(|line| line_text(line).is_empty()),
-        "prompt should leave space before choices: {joined}"
-    );
+    assert!(joined.contains("split it up"), "{joined}");
 }
 
 #[test]
@@ -450,6 +535,8 @@ fn exit_plan_pending_history_lines_render_plan_without_choices() {
     let mut state = permission_prompt(PermissionDetail::ExitPlanMode {
         outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
         plan: Some("# Goal\n\n- Step one".to_string()),
+        edited_plan: None,
+        feedback_input: crate::state::PrefixInputState::new(String::new()),
         plan_file_path: Some("/tmp/plan.md".to_string()),
         allowed_prompts: vec![],
     });
@@ -481,6 +568,8 @@ fn exit_plan_pending_history_lines_lead_with_ready_to_code_title() {
     let state = permission_prompt(PermissionDetail::ExitPlanMode {
         outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
         plan: Some("# Goal\n\n- Step one".to_string()),
+        edited_plan: None,
+        feedback_input: crate::state::PrefixInputState::new(String::new()),
         plan_file_path: None,
         allowed_prompts: vec![],
     });
@@ -515,6 +604,8 @@ fn exit_plan_pending_history_lines_render_no_plan_notice_without_file() {
     let state = permission_prompt(PermissionDetail::ExitPlanMode {
         outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
         plan: Some("User asked for a read-only explanation.".to_string()),
+        edited_plan: None,
+        feedback_input: crate::state::PrefixInputState::new(String::new()),
         plan_file_path: Some("/tmp/plan.md".to_string()),
         allowed_prompts: vec![],
     });

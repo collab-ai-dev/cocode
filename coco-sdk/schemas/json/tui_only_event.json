@@ -947,6 +947,57 @@
       ]
     },
     {
+      "description": "ExitPlanMode prompt-local plan editor completed.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "Edited plan content read back from the editor target.",
+          "type": "string"
+        },
+        "modified": {
+          "description": "Whether the edited content differs from the prompt's initial plan.",
+          "type": "boolean"
+        },
+        "request_id": {
+          "description": "Permission request id of the active ExitPlanMode prompt.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "exit_plan_prompt_editor_completed"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "content",
+        "modified"
+      ]
+    },
+    {
+      "description": "ExitPlanMode prompt-local plan editor failed before content could be read back.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "User-visible failure summary.",
+          "type": "string"
+        },
+        "request_id": {
+          "description": "Permission request id of the active ExitPlanMode prompt.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "exit_plan_prompt_editor_failed"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "error"
+      ]
+    },
+    {
       "description": "Request the foreground TUI to leave raw mode / alt-screen before\nthe CLI runner starts an interactive editor process.",
       "type": "object",
       "properties": {
@@ -3486,7 +3537,7 @@
           "type": "string"
         },
         "value": {
-          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-default-keep-context\"`,\n`\"yes-accept-edits-clear-context\"`, `\"no\"`).",
+          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-default-keep-context\"`, `\"yes-accept-edits\"`,\n`\"no\"`).",
           "type": "string"
         }
       },

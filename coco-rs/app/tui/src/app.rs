@@ -1101,6 +1101,8 @@ fn is_external_editor_completion(event: &CoreEvent) -> bool {
                 | TuiOnlyEvent::MemoryFileOpenFailed { .. }
                 | TuiOnlyEvent::PlanFileOpened { .. }
                 | TuiOnlyEvent::PlanFileOpenFailed { .. }
+                | TuiOnlyEvent::ExitPlanPromptEditorCompleted { .. }
+                | TuiOnlyEvent::ExitPlanPromptEditorFailed { .. }
                 | TuiOnlyEvent::PromptEditorCompleted { .. }
                 | TuiOnlyEvent::PromptEditorFailed { .. }
         )

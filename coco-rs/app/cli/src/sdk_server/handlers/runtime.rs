@@ -97,6 +97,9 @@ pub(super) async fn handle_set_permission_mode(
         mode = ?params.mode,
         "SdkServer: control/setPermissionMode"
     );
+    let fallback_previous_mode = session
+        .permission_mode
+        .unwrap_or(coco_types::PermissionMode::Default);
     session.permission_mode = Some(params.mode);
 
     let app_state = session.app_state.clone();
@@ -107,12 +110,19 @@ pub(super) async fn handle_set_permission_mode(
     // SAME live base the transition writes — this session's `app_state` (the
     // per-SessionHandle base the engine runs against), NOT the SessionRuntime
     // base. Reading the session's own base keeps strip/restore coherent.
-    let live_allow_rules = app_state.read().await.permissions.allow_rules.clone();
+    let (previous_mode, live_allow_rules) = {
+        let guard = app_state.read().await;
+        (
+            guard.permissions.mode.unwrap_or(fallback_previous_mode),
+            guard.permissions.allow_rules.clone(),
+        )
+    };
     let change = crate::live_permission_mode::apply_to_app_state(
         &app_state,
-        coco_types::PermissionMode::Default,
+        previous_mode,
         params.mode,
         &live_allow_rules,
+        coco_permissions::PlanModeAutoOptions::default(),
     )
     .await;
     crate::live_permission_mode::publish_outbound_if_changed(

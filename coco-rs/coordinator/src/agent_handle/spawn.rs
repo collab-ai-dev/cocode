@@ -1364,13 +1364,14 @@ impl SwarmAgentHandle {
             skill_overrides: request.skill_overrides.clone(),
             parent_tool_filter: request.parent_tool_filter.clone(),
             active_shell_tool: request.active_shell_tool,
+            use_auto_mode_during_plan: request.use_auto_mode_during_plan,
             preserve_tool_use_results,
             is_teammate: false,
             is_in_process_teammate: false,
             plan_mode_required: false,
             // Subagents/teammates never inherit the leader's bypass capability
             // (A7b) — always gated. See the teammate site in `mod.rs`.
-            bypass_permissions_available: false,
+            permission_mode_availability: coco_types::PermissionModeAvailability::default(),
             cwd_override,
             fork_context_messages,
             allowed_write_roots: request

@@ -54,6 +54,7 @@ pub(crate) struct ToolResultContext {
     pub effective_input: ValidatedInput,
     pub approval_feedback: Option<String>,
     pub permission_resolution_detail: Option<coco_types::PermissionResolutionDetail>,
+    pub approval_content_message: Option<Message>,
 }
 
 pub(crate) struct PendingToolPreparation<'a> {
@@ -275,20 +276,24 @@ pub(crate) async fn prepare_one_pending_tool_call(
         return None;
     }
 
-    let (effective_input, approval_feedback, permission_resolution_detail) =
-        resolve_effective_input_from_permission(
-            args.event_tx,
-            args.history,
-            args.ctx,
-            tc,
-            &tool_id,
-            &tool,
-            permission_outcome,
-            effective_input,
-            args.completion_event_mode,
-            args.deferred_tool_completions.as_deref_mut(),
-        )
-        .await?;
+    let (
+        effective_input,
+        approval_feedback,
+        permission_resolution_detail,
+        approval_content_message,
+    ) = resolve_effective_input_from_permission(
+        args.event_tx,
+        args.history,
+        args.ctx,
+        tc,
+        &tool_id,
+        &tool,
+        permission_outcome,
+        effective_input,
+        args.completion_event_mode,
+        args.deferred_tool_completions.as_deref_mut(),
+    )
+    .await?;
 
     Some((
         PendingToolCall {
@@ -308,6 +313,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
             effective_input,
             approval_feedback,
             permission_resolution_detail,
+            approval_content_message,
         },
     ))
 }
@@ -999,15 +1005,18 @@ async fn resolve_effective_input_from_permission(
     ValidatedInput,
     Option<String>,
     Option<coco_types::PermissionResolutionDetail>,
+    Option<Message>,
 )> {
     match permission_outcome {
         PermissionOutcome::Denied => None,
         PermissionOutcome::Aborted => None,
-        PermissionOutcome::Allow {
-            updated_input,
-            approval_feedback,
-            resolution_detail,
-        } => {
+        PermissionOutcome::Allow(allow) => {
+            let crate::permission_controller::PermissionAllowOutcome {
+                updated_input,
+                approval_feedback,
+                resolution_detail,
+                approval_content_message,
+            } = *allow;
             if let Some(updated_input) = updated_input {
                 return validate_effective_input_or_complete_error(
                     event_tx,
@@ -1021,9 +1030,21 @@ async fn resolve_effective_input_from_permission(
                     deferred_tool_completions,
                 )
                 .await
-                .map(|input| (input, approval_feedback, resolution_detail));
+                .map(|input| {
+                    (
+                        input,
+                        approval_feedback,
+                        resolution_detail,
+                        approval_content_message,
+                    )
+                });
             }
-            Some((effective_input, approval_feedback, resolution_detail))
+            Some((
+                effective_input,
+                approval_feedback,
+                resolution_detail,
+                approval_content_message,
+            ))
         }
     }
 }

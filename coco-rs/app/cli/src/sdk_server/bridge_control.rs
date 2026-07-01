@@ -72,6 +72,9 @@ impl SdkBridgeControlHandler {
                 "no active session",
             ));
         };
+        let fallback_previous_mode = session
+            .permission_mode
+            .unwrap_or(coco_types::PermissionMode::Default);
         session.permission_mode = Some(mode);
 
         // Release the session lock before acquiring app_state — keeps
@@ -81,12 +84,19 @@ impl SdkBridgeControlHandler {
         // Strip provenance from THIS session's live base (the per-SessionHandle
         // base the engine runs against) — the same base `apply_to_app_state`
         // writes, so strip/restore stay coherent.
-        let live_allow_rules = app_state.read().await.permissions.allow_rules.clone();
+        let (previous_mode, live_allow_rules) = {
+            let guard = app_state.read().await;
+            (
+                guard.permissions.mode.unwrap_or(fallback_previous_mode),
+                guard.permissions.allow_rules.clone(),
+            )
+        };
         let change = crate::live_permission_mode::apply_to_app_state(
             &app_state,
-            coco_types::PermissionMode::Default,
+            previous_mode,
             mode,
             &live_allow_rules,
+            coco_permissions::PlanModeAutoOptions::default(),
         )
         .await;
         crate::live_permission_mode::publish_sdk_state_outbound_if_changed(

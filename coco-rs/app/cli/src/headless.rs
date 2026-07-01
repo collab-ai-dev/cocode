@@ -838,7 +838,10 @@ pub async fn run_chat_with_options(
             cwd: cwd.clone(),
             model_id: model_id.clone(),
             system_prompt,
-            bypass_permissions_available,
+            permission_mode_availability: coco_types::PermissionModeAvailability::new(
+                bypass_permissions_available,
+                startup.auto_available,
+            ),
             permission_mode,
             model_runtimes: Some(model_runtimes),
             tools: tools.clone(),
@@ -984,7 +987,10 @@ pub async fn run_chat_with_options(
     config.avoid_permission_prompts = true;
     config.session_id = session_id.clone();
     config.permission_mode = permission_mode;
-    config.bypass_permissions_available = bypass_permissions_available;
+    config.permission_mode_availability = coco_types::PermissionModeAvailability::new(
+        bypass_permissions_available,
+        startup.auto_available,
+    );
     config.permission_rule_source_roots = permission_rule_source_roots.clone();
     // Seed --add-dir + settings additionalDirectories into the session
     // working-dir allowlist. Lives ONLY on the live base now.
@@ -1002,6 +1008,9 @@ pub async fn run_chat_with_options(
     config.cwd_override = Some(cwd.clone());
     config.tool_filter = build_tool_filter(cli);
     config.plans_directory = settings.merged.plans_directory.clone();
+    if let Some(instructions) = cli.plan_mode_instructions.clone() {
+        config.plan_mode_settings.custom_instructions = Some(instructions);
+    }
 
     tracing::info!(
         target: "coco_cli::headless",

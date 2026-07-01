@@ -3837,6 +3837,13 @@
         "json_schema": {
           "description": "JSON schema for structured output."
         },
+        "planModeInstructions": {
+          "description": "Custom workflow body for the plan-mode system reminder.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "prompt_suggestions": {
           "description": "Enable prompt suggestions in the output stream.",
           "type": [
@@ -5296,7 +5303,7 @@
           "type": "string"
         },
         "value": {
-          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-default-keep-context\"`,\n`\"yes-accept-edits-clear-context\"`, `\"no\"`).",
+          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-default-keep-context\"`, `\"yes-accept-edits\"`,\n`\"no\"`).",
           "type": "string"
         }
       },
@@ -13335,6 +13342,57 @@
           "required": [
             "type",
             "path",
+            "error"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ExitPlanMode prompt-local plan editor completed.",
+          "properties": {
+            "content": {
+              "description": "Edited plan content read back from the editor target.",
+              "type": "string"
+            },
+            "modified": {
+              "description": "Whether the edited content differs from the prompt's initial plan.",
+              "type": "boolean"
+            },
+            "request_id": {
+              "description": "Permission request id of the active ExitPlanMode prompt.",
+              "type": "string"
+            },
+            "type": {
+              "const": "exit_plan_prompt_editor_completed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "content",
+            "modified"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ExitPlanMode prompt-local plan editor failed before content could be read back.",
+          "properties": {
+            "error": {
+              "description": "User-visible failure summary.",
+              "type": "string"
+            },
+            "request_id": {
+              "description": "Permission request id of the active ExitPlanMode prompt.",
+              "type": "string"
+            },
+            "type": {
+              "const": "exit_plan_prompt_editor_failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
             "error"
           ],
           "type": "object"

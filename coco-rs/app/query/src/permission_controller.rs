@@ -3,7 +3,9 @@ use std::sync::Arc;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
 use coco_hooks::orchestration::PermissionRequestDecision;
+use coco_llm_types::FilePart;
 use coco_llm_types::ToolCallPart;
+use coco_llm_types::UserContentPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_types::CoreEvent;
@@ -18,19 +20,26 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::helpers::ToolCompletionEventMode;
-use crate::helpers::complete_tool_call_clarification;
+use crate::helpers::complete_tool_call_clarification_messages;
+use crate::helpers::complete_tool_call_with_error_messages_mode;
 use crate::helpers::complete_tool_call_with_error_mode;
 use crate::session_state::SessionStateTracker;
 use coco_types::ToolName;
 
+const PLAN_REJECTION_PREFIX: &str = "The agent proposed a plan that was rejected by the user. \
+The user chose to stay in plan mode rather than proceed with implementation.\n\nRejected plan:\n";
+
 pub(crate) enum PermissionOutcome {
-    Allow {
-        updated_input: Option<serde_json::Value>,
-        approval_feedback: Option<String>,
-        resolution_detail: Option<coco_types::PermissionResolutionDetail>,
-    },
+    Allow(Box<PermissionAllowOutcome>),
     Denied,
     Aborted,
+}
+
+pub(crate) struct PermissionAllowOutcome {
+    pub(crate) updated_input: Option<serde_json::Value>,
+    pub(crate) approval_feedback: Option<String>,
+    pub(crate) resolution_detail: Option<coco_types::PermissionResolutionDetail>,
+    pub(crate) approval_content_message: Option<coco_messages::Message>,
 }
 
 struct PermissionAskPayload {
@@ -38,6 +47,20 @@ struct PermissionAskPayload {
     suggestions: Vec<coco_types::PermissionUpdate>,
     choices: Option<Vec<coco_types::PermissionAskChoice>>,
     detail: Option<coco_types::PermissionRequestDetail>,
+}
+
+fn allow_outcome(
+    updated_input: Option<serde_json::Value>,
+    approval_feedback: Option<String>,
+    resolution_detail: Option<coco_types::PermissionResolutionDetail>,
+    approval_content_message: Option<coco_messages::Message>,
+) -> PermissionOutcome {
+    PermissionOutcome::Allow(Box::new(PermissionAllowOutcome {
+        updated_input,
+        approval_feedback,
+        resolution_detail,
+        approval_content_message,
+    }))
 }
 
 pub(crate) struct PermissionController<'a> {
@@ -104,11 +127,9 @@ impl<'a> PermissionController<'a> {
         tool_id: &ToolId,
     ) -> PermissionOutcome {
         match decision {
-            PermissionDecision::Allow { updated_input, .. } => PermissionOutcome::Allow {
-                updated_input,
-                approval_feedback: None,
-                resolution_detail: None,
-            },
+            PermissionDecision::Allow { updated_input, .. } => {
+                allow_outcome(updated_input, None, None, None)
+            }
             PermissionDecision::Deny { message, reason } => {
                 warn!(tool = tool_call.tool_name, %message, "tool permission denied");
                 self.record_denial(tool_call, tool_input);
@@ -216,11 +237,7 @@ impl<'a> PermissionController<'a> {
                                 self.state_tracker
                                     .transition_to(SessionState::Running, self.event_tx)
                                     .await;
-                                return PermissionOutcome::Allow {
-                                    updated_input,
-                                    approval_feedback: None,
-                                    resolution_detail: None,
-                                };
+                                return allow_outcome(updated_input, None, None, None);
                             }
                             PermissionRequestDecision::Deny { message, .. } => {
                                 let feedback = message
@@ -300,11 +317,7 @@ impl<'a> PermissionController<'a> {
             self.state_tracker
                 .transition_to(SessionState::Running, self.event_tx)
                 .await;
-            return PermissionOutcome::Allow {
-                updated_input: None,
-                approval_feedback: None,
-                resolution_detail: None,
-            };
+            return allow_outcome(None, None, None, None);
         };
 
         let request = coco_tool_runtime::ToolPermissionRequest {
@@ -326,6 +339,7 @@ impl<'a> PermissionController<'a> {
             // Cross-process teammates are badged in `leader_permission`.
             worker_badge: None,
         };
+        let request_detail = request.detail.clone();
 
         let bridge_result = tokio::select! {
             biased;
@@ -346,33 +360,57 @@ impl<'a> PermissionController<'a> {
                     // can substitute it for the original tool input. Used
                     // by `AskUserQuestion` to splice user-selected
                     // `answers` into the tool's data envelope.
-                    PermissionOutcome::Allow {
-                        updated_input: resolution.updated_input,
-                        approval_feedback: resolution.feedback,
-                        resolution_detail: resolution.detail,
-                    }
+                    allow_outcome(
+                        resolution.updated_input,
+                        resolution.feedback,
+                        resolution.detail,
+                        content_blocks_to_user_message(resolution.content_blocks.as_deref()),
+                    )
                 }
                 coco_tool_runtime::ToolPermissionDecision::Rejected => {
                     let feedback = resolution
                         .feedback
                         .unwrap_or_else(|| "Permission denied by client".into());
-                    // AskUserQuestion's "Chat about this" / "Skip interview" reach
-                    // here as `approved: false` + feedback. That is a deliberate
-                    // user REDIRECT, not a permission denial: render the feedback
-                    // as a neutral tool result (no red "Permission denied:" prefix)
-                    // and do NOT count it as a denial. The model still gets the
-                    // feedback and re-engages.
-                    if tool_call.tool_name == ToolName::AskUserQuestion.as_str() {
-                        warn!(tool = tool_call.tool_name, "approval bridge: clarify");
-                        complete_tool_call_clarification(
+                    let content_blocks_message =
+                        content_blocks_to_user_message(resolution.content_blocks.as_deref());
+                    // AskUserQuestion's "Chat about this" / "Skip interview"
+                    // and EnterPlanMode's "No" are deliberate user redirects,
+                    // not security denials. ExitPlanMode rejection is also a
+                    // deliberate plan-mode continuation: the model must see
+                    // the rejected plan and feedback, not a generic permission
+                    // error that implies an unavailable tool.
+                    let neutral_feedback =
+                        if tool_call.tool_name == ToolName::AskUserQuestion.as_str() {
+                            Some(feedback.clone())
+                        } else if tool_call.tool_name == ToolName::EnterPlanMode.as_str() {
+                            Some("User declined to enter plan mode".to_string())
+                        } else if tool_call.tool_name == ToolName::ExitPlanMode.as_str() {
+                            exit_plan_rejection_feedback(&request_detail, &feedback)
+                        } else {
+                            None
+                        };
+                    if let Some(neutral_feedback) = neutral_feedback {
+                        warn!(tool = tool_call.tool_name, "approval bridge: redirected");
+                        let mut messages = vec![coco_messages::create_tool_result_message(
+                            &tool_call.tool_call_id,
+                            &tool_call.tool_name,
+                            tool_id.clone(),
+                            &neutral_feedback,
+                            /*is_error*/ false,
+                        )];
+                        if let Some(message) = content_blocks_message {
+                            messages.push(message);
+                        }
+                        complete_tool_call_clarification_messages(
                             self.event_tx,
                             self.history,
                             &tool_call.tool_call_id,
                             &tool_call.tool_name,
                             tool_id,
-                            &feedback,
+                            &neutral_feedback,
                             self.completion_event_mode,
                             self.deferred_tool_completions.as_deref_mut(),
+                            messages,
                         )
                         .await;
                         self.state_tracker
@@ -383,7 +421,16 @@ impl<'a> PermissionController<'a> {
                     warn!(tool = tool_call.tool_name, "approval bridge: rejected");
                     self.record_denial(tool_call, tool_input);
                     let output = format!("Permission denied: {feedback}");
-                    complete_tool_call_with_error_mode(
+                    let mut messages = vec![coco_messages::create_error_tool_result(
+                        &tool_call.tool_call_id,
+                        &tool_call.tool_name,
+                        tool_id.clone(),
+                        &output,
+                    )];
+                    if let Some(message) = content_blocks_message {
+                        messages.push(message);
+                    }
+                    complete_tool_call_with_error_messages_mode(
                         self.event_tx,
                         self.history,
                         &tool_call.tool_call_id,
@@ -393,6 +440,7 @@ impl<'a> PermissionController<'a> {
                         coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
                         self.completion_event_mode,
                         self.deferred_tool_completions.as_deref_mut(),
+                        messages,
                     )
                     .await;
                     self.state_tracker
@@ -457,6 +505,78 @@ impl<'a> PermissionController<'a> {
             tool_use_id: tool_call.tool_call_id.clone(),
             tool_input: tool_input.clone(),
         });
+    }
+}
+
+fn content_blocks_to_user_message(
+    blocks: Option<&[serde_json::Value]>,
+) -> Option<coco_messages::Message> {
+    let parts: Vec<UserContentPart> = blocks?
+        .iter()
+        .filter_map(content_block_to_user_part)
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(coco_messages::create_user_message_with_parts(parts))
+    }
+}
+
+fn exit_plan_rejection_feedback(
+    detail: &Option<coco_types::PermissionRequestDetail>,
+    feedback: &str,
+) -> Option<String> {
+    let Some(coco_types::PermissionRequestDetail::ExitPlanMode { outcome, plan, .. }) = detail
+    else {
+        return None;
+    };
+    if !outcome.has_implementation_plan() {
+        return None;
+    }
+    let plan = plan
+        .as_deref()
+        .filter(|plan| !plan.trim().is_empty())
+        .unwrap_or("No plan found");
+    let trimmed_feedback = feedback.trim();
+    let feedback_suffix = if trimmed_feedback.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nUser feedback:\n{trimmed_feedback}")
+    };
+    Some(format!("{PLAN_REJECTION_PREFIX}{plan}{feedback_suffix}"))
+}
+
+fn content_block_to_user_part(block: &serde_json::Value) -> Option<UserContentPart> {
+    match block.get("type").and_then(serde_json::Value::as_str) {
+        Some("text") => block
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .map(UserContentPart::text),
+        Some("image") => {
+            let source = block.get("source")?;
+            match source.get("type").and_then(serde_json::Value::as_str) {
+                Some("base64") => {
+                    let data = source.get("data")?.as_str()?;
+                    let media_type = source
+                        .get("media_type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("image/png");
+                    Some(UserContentPart::File(FilePart::from_base64(
+                        data, media_type,
+                    )))
+                }
+                Some("url") => {
+                    let url = source.get("url")?.as_str()?;
+                    let media_type = source
+                        .get("media_type")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("image/*");
+                    Some(UserContentPart::File(FilePart::from_url(url, media_type)))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 

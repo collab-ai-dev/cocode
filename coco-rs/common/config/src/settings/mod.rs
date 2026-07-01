@@ -246,6 +246,15 @@ pub struct Settings {
     pub respond_to_bash_commands: Option<bool>,
 
     // === Auto-Mode ===
+    /// Whether plan mode uses auto-mode classifier semantics when auto is
+    /// available. Default-on; resolved per source by
+    /// [`SettingsWithSource::use_auto_mode_during_plan_enabled`].
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "useAutoModeDuringPlan",
+        alias = "use_auto_mode_during_plan"
+    )]
+    pub use_auto_mode_during_plan: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", alias = "autoMode")]
     pub auto_mode: Option<AutoModeConfig>,
 
@@ -538,6 +547,11 @@ pub struct WorktreeConfig {
 pub struct PlanModeSettings {
     /// Which workflow the Full plan-mode reminder should emit.
     pub workflow: PlanModeWorkflow,
+    /// Optional custom plan-mode workflow body. Mirrors Claude Code's
+    /// `planModeInstructions` init option while keeping the standard
+    /// read-only and ExitPlanMode wrapper text.
+    #[serde(default, alias = "planModeInstructions")]
+    pub custom_instructions: Option<String>,
     /// Phase-4 prompt variant (five-phase workflow only).
     /// Ignored when `workflow = interview`.
     pub phase4_variant: PlanPhase4Variant,
@@ -592,6 +606,7 @@ impl Default for PlanModeSettings {
     fn default() -> Self {
         Self {
             workflow: PlanModeWorkflow::default(),
+            custom_instructions: None,
             phase4_variant: PlanPhase4Variant::default(),
             explore_agent_count: default_explore_agent_count(),
             plan_agent_count: default_plan_agent_count(),
@@ -700,6 +715,22 @@ impl SettingsWithSource {
         .any(auto_mode_source_classifies_all_shell)
     }
 
+    /// Whether plan mode should use auto-mode classifier semantics when auto
+    /// mode is available. Claude Code treats this as default-on and excludes
+    /// project settings: any trusted source explicitly setting `false`
+    /// disables it.
+    pub fn use_auto_mode_during_plan_enabled(&self) -> bool {
+        [
+            SettingSource::Policy,
+            SettingSource::Flag,
+            SettingSource::User,
+            SettingSource::Local,
+        ]
+        .iter()
+        .filter_map(|source| self.per_source.get(source))
+        .all(|source| !source_disables_auto_mode_during_plan(source))
+    }
+
     /// Whether managed policy explicitly requests a remote-settings refresh.
     /// Mirrors Claude Code's policy-tier OR behavior.
     pub fn force_remote_settings_refresh_enabled(&self) -> bool {
@@ -717,6 +748,14 @@ fn auto_mode_source_classifies_all_shell(value: &serde_json::Value) -> bool {
         .or_else(|| value.pointer("/autoMode/classifyAllShell"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
+}
+
+fn source_disables_auto_mode_during_plan(value: &serde_json::Value) -> bool {
+    value
+        .pointer("/useAutoModeDuringPlan")
+        .or_else(|| value.pointer("/use_auto_mode_during_plan"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(false)
 }
 
 fn source_force_remote_settings_refresh(value: &serde_json::Value) -> bool {

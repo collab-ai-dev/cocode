@@ -110,7 +110,7 @@ impl ToolPermissionBridge for SdkPermissionBridge {
             runtime
                 .fire_notification_hooks(
                     "permission_prompt",
-                    "Claude Code needs your permission to use a tool",
+                    "Coco needs your permission to use a tool",
                     Some(&title),
                 )
                 .await;

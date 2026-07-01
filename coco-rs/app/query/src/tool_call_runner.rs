@@ -158,7 +158,7 @@ impl<'a> ToolCallRunner<'a> {
         let mut plans: Vec<ToolCallPlan> = Vec::with_capacity(pending.len());
         for (idx, pending_call) in pending.into_iter().enumerate() {
             let tool_id = pending_call.tool.id();
-            plans.push(ToolCallPlan::Runnable(PreparedToolCall {
+            plans.push(ToolCallPlan::Runnable(Box::new(PreparedToolCall {
                 tool_use_id: pending_call.tool_use_id,
                 tool_id,
                 tool: pending_call.tool,
@@ -170,7 +170,8 @@ impl<'a> ToolCallRunner<'a> {
                 // plan itself need not carry it.
                 permission_resolution_detail: None,
                 approval_feedback: None,
-            }));
+                approval_content_message: None,
+            })));
         }
 
         // 3. Emit ToolUseStarted for each Runnable plan before
@@ -248,6 +249,8 @@ impl<'a> ToolCallRunner<'a> {
                             ctx_entry.and_then(|c| c.approval_feedback.clone());
                         call_ctx.permission_resolution_detail =
                             ctx_entry.and_then(|c| c.permission_resolution_detail.clone());
+                        let approval_content_message =
+                            ctx_entry.and_then(|c| c.approval_content_message.clone());
 
                         // Pre-execute abort guard: when the turn is already
                         // aborted before the tool runs,
@@ -286,6 +289,7 @@ impl<'a> ToolCallRunner<'a> {
                             orchestration_ctx,
                             hook_tx,
                             tool_output_store: shared_ctx.tool_output_store.clone(),
+                            approval_content_message,
                         })
                         .await
                     }

@@ -190,6 +190,8 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::MemoryFileOpenFailed { .. } => "MemoryFileOpenFailed",
         E::PlanFileOpened { .. } => "PlanFileOpened",
         E::PlanFileOpenFailed { .. } => "PlanFileOpenFailed",
+        E::ExitPlanPromptEditorCompleted { .. } => "ExitPlanPromptEditorCompleted",
+        E::ExitPlanPromptEditorFailed { .. } => "ExitPlanPromptEditorFailed",
         E::ExternalEditorPrepare { .. } => "ExternalEditorPrepare",
         E::PromptEditorCompleted { .. } => "PromptEditorCompleted",
         E::PromptEditorFailed { .. } => "PromptEditorFailed",

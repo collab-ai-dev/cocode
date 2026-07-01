@@ -209,15 +209,18 @@ impl ToolExecutor {
                     // — but still emit one Completed outcome so the
                     // per-call invariant (one Queued → one Completed)
                     // holds.
-                    let (outcome, _effects) = unstamped.stamp_and_extract_effects(completion_seq);
+                    let (outcome, _effects) =
+                        (*unstamped).stamp_and_extract_effects(completion_seq);
                     completion_seq += 1;
                     on_outcome(outcome);
                 }
                 PlanBlock::SerialUnsafe(prepared) => {
-                    self.emit_interruptibility(interruptible_set(std::slice::from_ref(&prepared)))
-                        .await;
+                    self.emit_interruptibility(interruptible_set(std::slice::from_ref(
+                        prepared.as_ref(),
+                    )))
+                    .await;
                     let runtime = self.make_runtime(prepared.model_index);
-                    let unstamped = run_one(prepared, runtime).await;
+                    let unstamped = run_one(*prepared, runtime).await;
                     let (outcome, effects) = unstamped.stamp_and_extract_effects(completion_seq);
                     completion_seq += 1;
                     // Apply patch BEFORE the next tool's context build.
@@ -417,8 +420,8 @@ pub(crate) fn is_shell_tool_id(tool_id: &ToolId) -> bool {
 /// the stamp path.
 enum PlanBlock {
     ConcurrentSafe(Vec<PreparedToolCall>),
-    SerialUnsafe(PreparedToolCall),
-    EarlyOutcome(UnstampedToolCallOutcome),
+    SerialUnsafe(Box<PreparedToolCall>),
+    EarlyOutcome(Box<UnstampedToolCallOutcome>),
 }
 
 /// Partition a flat plan list into batches.
@@ -446,7 +449,7 @@ fn partition_plans(plans: Vec<ToolCallPlan>) -> Vec<PlanBlock> {
             ToolCallPlan::Runnable(prepared) => {
                 let is_safe = prepared.is_concurrency_safe;
                 if is_safe {
-                    safe_batch.push(prepared);
+                    safe_batch.push(*prepared);
                 } else {
                     flush_safe(&mut safe_batch, &mut blocks);
                     blocks.push(PlanBlock::SerialUnsafe(prepared));

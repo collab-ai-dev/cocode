@@ -278,7 +278,10 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             cwd: cwd.clone(),
             model_id: model_id.clone(),
             system_prompt,
-            bypass_permissions_available,
+            permission_mode_availability: coco_types::PermissionModeAvailability::new(
+                bypass_permissions_available,
+                auto_mode_available,
+            ),
             permission_mode,
             model_runtimes: None,
             tools,
@@ -1163,6 +1166,23 @@ async fn run_agent_driver(
                 .await;
             }
 
+            UserCommand::OpenPlanPromptEditor {
+                request_id,
+                initial_content,
+                plan_file_path,
+            } => {
+                prepare_external_editor_request(
+                    &mut pending_editor_requests,
+                    PendingEditorRequest::PlanPrompt {
+                        request_id,
+                        initial_content,
+                        path: plan_file_path,
+                    },
+                    &event_tx,
+                )
+                .await;
+            }
+
             UserCommand::OpenPromptEditor { initial_content } => {
                 prepare_external_editor_request(
                     &mut pending_editor_requests,
@@ -1183,6 +1203,14 @@ async fn run_agent_driver(
                     }
                     PendingEditorRequest::Plan { path } => {
                         run_open_plan_file(path, event_tx.clone()).await;
+                    }
+                    PendingEditorRequest::PlanPrompt {
+                        request_id,
+                        initial_content,
+                        path,
+                    } => {
+                        run_plan_prompt_editor(request_id, initial_content, path, event_tx.clone())
+                            .await;
                     }
                     PendingEditorRequest::Prompt { initial_content } => {
                         run_prompt_editor(initial_content, event_tx.clone()).await;
@@ -1748,7 +1776,7 @@ async fn run_agent_driver(
                 let cur_session_id = runtime.current_session_id().await;
                 let cfg = runtime.current_engine_config().await;
                 if mode == coco_types::PermissionMode::BypassPermissions
-                    && !cfg.bypass_permissions_available
+                    && !cfg.permission_mode_availability.bypass_permissions
                 {
                     warn!(
                         session_id = %cur_session_id,
@@ -1761,7 +1789,7 @@ async fn run_agent_driver(
                     &runtime,
                     mode,
                     &event_tx,
-                    cfg.bypass_permissions_available,
+                    cfg.permission_mode_availability.bypass_permissions,
                 )
                 .await;
                 info!(
@@ -3979,7 +4007,7 @@ async fn dispatch_plan(
             runtime,
             coco_types::PermissionMode::Plan,
             event_tx,
-            cfg.bypass_permissions_available,
+            cfg.permission_mode_availability.bypass_permissions,
         )
         .await;
         info!(
@@ -4139,6 +4167,11 @@ enum PendingEditorRequest {
     },
     Plan {
         path: std::path::PathBuf,
+    },
+    PlanPrompt {
+        request_id: String,
+        initial_content: String,
+        path: Option<std::path::PathBuf>,
     },
     Prompt {
         initial_content: String,
@@ -6476,6 +6509,40 @@ async fn run_open_plan_file(path: std::path::PathBuf, event_tx: mpsc::Sender<Cor
     let _ = event_tx.send(CoreEvent::Tui(event)).await;
 }
 
+async fn run_plan_prompt_editor(
+    request_id: String,
+    initial_content: String,
+    path: Option<std::path::PathBuf>,
+    event_tx: mpsc::Sender<CoreEvent>,
+) {
+    let event_request_id = request_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        open_plan_prompt_editor_blocking(&initial_content, path.as_deref())
+    })
+    .await;
+
+    let event = match result {
+        Ok(Ok((content, modified))) => TuiOnlyEvent::ExitPlanPromptEditorCompleted {
+            request_id: event_request_id,
+            content,
+            modified,
+        },
+        Ok(Err(error)) => TuiOnlyEvent::ExitPlanPromptEditorFailed {
+            request_id: event_request_id,
+            error,
+        },
+        Err(err) => {
+            warn!(error = %err, "exit-plan prompt editor task panicked");
+            TuiOnlyEvent::ExitPlanPromptEditorFailed {
+                request_id: event_request_id,
+                error: format!("plan editor task failed: {err}"),
+            }
+        }
+    };
+
+    let _ = event_tx.send(CoreEvent::Tui(event)).await;
+}
+
 async fn emit_editor_prepare_failed(
     request: PendingEditorRequest,
     error: String,
@@ -6491,6 +6558,12 @@ async fn emit_editor_prepare_failed(
             path: path.display().to_string(),
             error: message,
         },
+        PendingEditorRequest::PlanPrompt { request_id, .. } => {
+            TuiOnlyEvent::ExitPlanPromptEditorFailed {
+                request_id,
+                error: message,
+            }
+        }
         PendingEditorRequest::Prompt { .. } => TuiOnlyEvent::PromptEditorFailed { error: message },
         // Agent editor preparation failure is surfaced via the
         // generic prompt-editor channel (no dedicated wire event).
@@ -6878,6 +6951,28 @@ fn open_prompt_editor_blocking(initial_content: &str) -> Result<(String, bool), 
     }
 
     result
+}
+
+fn open_plan_prompt_editor_blocking(
+    initial_content: &str,
+    path: Option<&std::path::Path>,
+) -> Result<(String, bool), String> {
+    let Some(path) = path else {
+        return open_prompt_editor_blocking(initial_content);
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create plans directory: {err}"))?;
+    }
+    if !path.exists() {
+        std::fs::write(path, initial_content)
+            .map_err(|err| format!("failed to write plan file: {err}"))?;
+    }
+    run_editor_on_file(path)?;
+    let content =
+        std::fs::read_to_string(path).map_err(|err| format!("failed to read plan file: {err}"))?;
+    let modified = content != initial_content;
+    Ok((content, modified))
 }
 
 fn resolve_editor_command() -> Result<(String, Vec<String>), String> {

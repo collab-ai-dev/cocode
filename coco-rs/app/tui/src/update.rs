@@ -143,6 +143,9 @@ pub async fn handle_command(
     if crate::bottom_pane::permission::intercept_prefix_edit(state, &cmd) {
         return true;
     }
+    if crate::bottom_pane::permission::intercept_exit_plan_feedback_edit(state, &cmd) {
+        return true;
+    }
 
     // When the footer background-tasks pill holds focus (parked there by
     // pressing Down at the bottom of the composer), Enter opens the dialog
@@ -1153,6 +1156,29 @@ pub async fn handle_command(
             true
         }
         TuiCommand::OpenPlanEditor => {
+            if let Some(crate::state::PanePromptState::Permission(p)) =
+                state.ui.interaction.active_prompt.as_ref()
+                && let crate::state::PermissionDetail::ExitPlanMode {
+                    plan,
+                    edited_plan,
+                    plan_file_path,
+                    ..
+                } = &p.detail
+            {
+                let initial_content = edited_plan
+                    .as_ref()
+                    .or(plan.as_ref())
+                    .cloned()
+                    .unwrap_or_default();
+                let _ = command_tx
+                    .send(UserCommand::OpenPlanPromptEditor {
+                        request_id: p.request_id.clone(),
+                        initial_content,
+                        plan_file_path: plan_file_path.as_deref().map(std::path::PathBuf::from),
+                    })
+                    .await;
+                return true;
+            }
             let _ = command_tx.send(UserCommand::OpenPlanEditor).await;
             true
         }

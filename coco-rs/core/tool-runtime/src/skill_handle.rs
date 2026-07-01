@@ -49,6 +49,7 @@ pub struct SubagentInheritance {
     pub features: Option<Arc<Features>>,
     pub tool_overrides: Option<Arc<ToolOverrides>>,
     pub active_shell_tool: ActiveShellTool,
+    pub use_auto_mode_during_plan: bool,
     /// Parent's Layer 4 filter; the child's own `allowed_tools` /
     /// `disallowed_tools` is intersected with this via
     /// [`ToolFilter::narrow_with`].
@@ -67,6 +68,7 @@ impl Default for SubagentInheritance {
             features: None,
             tool_overrides: None,
             active_shell_tool: ActiveShellTool::Disabled,
+            use_auto_mode_during_plan: true,
             parent_tool_filter: None,
             parent_query_depth: 0,
         }

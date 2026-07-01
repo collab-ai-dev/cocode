@@ -172,6 +172,8 @@ pub struct TurnHandoff {
     /// mode propagate across turns AND mid-session mode toggles
     /// reach the engine. `appState` is session-lifetime.
     pub app_state: Arc<RwLock<coco_types::ToolAppState>>,
+    /// SDK initialize-scoped `planModeInstructions`, copied onto the session.
+    pub plan_mode_instructions: Option<String>,
     /// Session-scoped permission-mode override set by
     /// `control/setPermissionMode`. Used by `sdk_runner::run_turn`
     /// as a fallback when the `turn/start` params don't carry an
@@ -334,6 +336,11 @@ pub struct SdkServerState {
     /// reads concurrently with other initialize-time accessors.
     pub pending_sdk_agents: RwLock<Vec<coco_types::AgentDefinition>>,
 
+    /// Last `initialize.planModeInstructions` value. `session/start` snapshots
+    /// it onto the new session so later initialize calls do not mutate an
+    /// already-active session.
+    pub pending_plan_mode_instructions: RwLock<Option<String>>,
+
     /// Last `RegisterMcpToolsReport` per MCP server (v4.2). Written by the
     /// register call sites; read by `handle_mcp_status` to source the
     /// registered `tool_count` + skipped / tombstoned tools. Cleared on
@@ -365,6 +372,7 @@ impl Default for SdkServerState {
             bypass_permissions_available: std::sync::atomic::AtomicBool::new(false),
             session_runtime: RwLock::new(None),
             pending_sdk_agents: RwLock::new(Vec::new()),
+            pending_plan_mode_instructions: RwLock::new(None),
             mcp_registration_reports: RwLock::new(HashMap::new()),
         }
     }
@@ -646,6 +654,8 @@ pub struct SessionHandle {
     /// API (wrote only `SessionHandle.permission_mode`, which no
     /// reader consumed).
     pub app_state: Arc<RwLock<coco_types::ToolAppState>>,
+    /// Session-scoped plan-mode workflow override from SDK initialize.
+    pub plan_mode_instructions: Option<String>,
 }
 
 impl SessionHandle {
@@ -665,6 +675,7 @@ impl SessionHandle {
             stats: SessionStats::default(),
             history: Arc::new(Mutex::new(Vec::new())),
             app_state: Arc::new(RwLock::new(coco_types::ToolAppState::default())),
+            plan_mode_instructions: None,
         }
     }
 
@@ -678,6 +689,7 @@ impl SessionHandle {
             model: self.model.clone(),
             history: Arc::clone(&self.history),
             app_state: Arc::clone(&self.app_state),
+            plan_mode_instructions: self.plan_mode_instructions.clone(),
             permission_mode: self.permission_mode,
         }
     }

@@ -841,6 +841,13 @@
         "json_schema": {
           "description": "JSON schema for structured output."
         },
+        "planModeInstructions": {
+          "description": "Custom workflow body for the plan-mode system reminder.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "prompt_suggestions": {
           "description": "Enable prompt suggestions in the output stream.",
           "type": [

@@ -359,3 +359,61 @@ fn count_human_turns_since_attachment_returns_zero_when_missing() {
         0
     );
 }
+
+// ── human_turns_since_any_attachment_until_reset ──
+
+#[test]
+fn human_turns_since_any_attachment_until_reset_counts_from_latest_marker() {
+    let msgs = vec![
+        attachment(AttachmentKind::PlanMode),
+        user("one"),
+        assistant_text("reply"),
+        user("two"),
+    ];
+
+    assert_eq!(
+        human_turns_since_any_attachment_until_reset(
+            &msgs,
+            &[AttachmentKind::PlanMode, AttachmentKind::PlanModeReentry],
+            AttachmentKind::PlanModeExit,
+        ),
+        Some(2)
+    );
+}
+
+#[test]
+fn human_turns_since_any_attachment_until_reset_accepts_reentry_marker() {
+    let msgs = vec![
+        attachment(AttachmentKind::PlanModeReentry),
+        user("one"),
+        assistant_text("reply"),
+    ];
+
+    assert_eq!(
+        human_turns_since_any_attachment_until_reset(
+            &msgs,
+            &[AttachmentKind::PlanMode, AttachmentKind::PlanModeReentry],
+            AttachmentKind::PlanModeExit,
+        ),
+        Some(1)
+    );
+}
+
+#[test]
+fn human_turns_since_any_attachment_until_reset_stops_at_exit_boundary() {
+    let msgs = vec![
+        attachment(AttachmentKind::PlanMode),
+        user("old cycle"),
+        attachment(AttachmentKind::PlanModeExit),
+        user("new cycle"),
+    ];
+
+    assert_eq!(
+        human_turns_since_any_attachment_until_reset(
+            &msgs,
+            &[AttachmentKind::PlanMode, AttachmentKind::PlanModeReentry],
+            AttachmentKind::PlanModeExit,
+        ),
+        None
+    );
+}

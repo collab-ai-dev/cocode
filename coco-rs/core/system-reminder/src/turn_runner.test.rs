@@ -4,6 +4,7 @@ use coco_config::SystemReminderConfig;
 use coco_context::Phase4Variant;
 use coco_context::PlanWorkflow;
 use coco_messages::MessageHistory;
+use coco_types::AttachmentKind;
 use coco_types::LiveToolPermissionState;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
@@ -23,6 +24,7 @@ fn minimal_input<'a>(
         plan_file_path: None,
         plan_exists: false,
         plan_workflow: PlanWorkflow::FivePhase,
+        plan_mode_custom_instructions: None,
         phase4_variant: Phase4Variant::Standard,
         explore_agent_count: 3,
         plan_agent_count: 1,
@@ -106,6 +108,54 @@ async fn default_registry_fires_plan_reminder_in_plan_mode() {
 
     let types: std::collections::HashSet<_> = out.iter().map(|r| r.attachment_type).collect();
     assert!(types.contains(&AttachmentType::PlanMode), "got: {types:?}");
+}
+
+#[tokio::test]
+async fn plan_mode_exit_boundary_resets_reentry_cadence() {
+    let config = SystemReminderConfig::default();
+    let app_state = ToolAppState {
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut history = MessageHistory::default();
+    history.push(coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::api(
+            AttachmentKind::PlanMode,
+            coco_messages::LlmMessage::user_text("old plan reminder"),
+        ),
+    ));
+    history.push(coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::api(
+            AttachmentKind::PlanModeExit,
+            coco_messages::LlmMessage::user_text("old exit reminder"),
+        ),
+    ));
+    history.push(coco_messages::Message::User(coco_messages::UserMessage {
+        message: coco_messages::LlmMessage::user_text("plan again"),
+        uuid: uuid::Uuid::new_v4(),
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    }));
+
+    let orchestrator = SystemReminderOrchestrator::new(config.clone()).with_default_generators();
+    let out = run_turn_reminders(&orchestrator, minimal_input(&config, &app_state, &history)).await;
+    let plan = out
+        .iter()
+        .find(|r| r.attachment_type == AttachmentType::PlanMode)
+        .expect("plan-mode reminder should fire after an exit boundary");
+    let text = plan.content().expect("text");
+    assert!(
+        text.contains("Iterative Planning Workflow"),
+        "first reminder after exit boundary should be full: {text}"
+    );
 }
 
 #[tokio::test]

@@ -115,15 +115,15 @@ pub struct PromptOptions {
     /// Fork-mode flag — when true, `AgentTool::prompt` adds the fork
     /// guidance section.
     pub fork_enabled: bool,
-    /// Plan-mode interview-phase flag. When true, `EnterPlanModeTool::prompt`
-    /// omits the `## What Happens in Plan Mode` section because the
-    /// detailed iterative workflow already arrives via the plan-mode
-    /// attachment. Source is `settings.plan_mode.workflow == Interview`
-    /// only (no Growthbook / no env var; see `core/context/CLAUDE.md`).
+    /// Plan-mode interview-phase flag. Source is
+    /// `settings.plan_mode.workflow == Interview` only (no Growthbook /
+    /// no env var; see `core/context/CLAUDE.md`). Current 2.1.193-compatible
+    /// EnterPlanMode prompt does not branch on this flag; the workflow-specific
+    /// text arrives via plan-mode attachments.
     pub is_plan_interview_phase: bool,
     /// Host build embeds search tools (`bfs` / `ugrep`) inside the Bash
-    /// tool. `AgentTool::prompt` swaps the "When NOT to use" section's
-    /// FileRead/Glob/Grep hints for `find` / `grep` via Bash.
+    /// tool. Tool prompts can swap FileRead/Glob/Grep hints for
+    /// `find` / `grep` via Bash when this is true.
     pub has_embedded_search_tools: bool,
     /// Agent-team tools are available in this session. Task prompts use
     /// this to include teammate/owner coordination guidance only when

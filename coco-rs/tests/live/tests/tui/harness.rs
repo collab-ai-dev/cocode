@@ -330,9 +330,9 @@ impl TuiHarness {
         let engine_cfg = QueryEngineConfig {
             model_id: model.model_id().to_string(),
             permission_mode: cfg.permission_mode,
-            bypass_permissions_available: matches!(
-                cfg.permission_mode,
-                PermissionMode::BypassPermissions
+            permission_mode_availability: coco_types::PermissionModeAvailability::new(
+                matches!(cfg.permission_mode, PermissionMode::BypassPermissions),
+                false,
             ),
             context_window: 200_000,
             max_output_tokens: 2_048,

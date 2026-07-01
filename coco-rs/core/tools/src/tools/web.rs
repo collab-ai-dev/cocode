@@ -665,15 +665,15 @@ impl Tool for WebFetchTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::WebFetch)
     }
-    /// Short UI label: `Claude wants to fetch content from ${hostname}`, or
+    /// Short UI label: `The agent wants to fetch content from ${hostname}`, or
     /// a generic fallback when the URL can't be parsed. The long model-
     /// facing guidance lives in [`Self::prompt`].
     fn description(&self, input: &WebFetchInput, _options: &DescriptionOptions) -> String {
         let host = extract_host(&input.url);
         if host.is_empty() {
-            "Claude wants to fetch content from this URL".into()
+            "The agent wants to fetch content from this URL".into()
         } else {
-            format!("Claude wants to fetch content from {host}")
+            format!("The agent wants to fetch content from {host}")
         }
     }
     /// Model-facing tool description. Always prepends the authenticated/private
@@ -1511,10 +1511,10 @@ fn web_search_prompt_text() -> String {
     let current_month_year = current_month_year_local();
     format!(
         "
-- Allows Claude to search the web and use the results to inform responses
+- Allows the agent to search the web and use the results to inform responses
 - Provides up-to-date information for current events and recent data
 - Returns search result information formatted as search result blocks, including links as markdown hyperlinks
-- Use this tool for accessing information beyond Claude's knowledge cutoff
+- Use this tool for accessing information beyond the model's knowledge cutoff
 - Searches are performed automatically within a single API call
 
 CRITICAL REQUIREMENT - You MUST follow this:
@@ -1609,10 +1609,10 @@ impl Tool for WebSearchTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::WebSearch)
     }
-    /// Short UI label: `Claude wants to search the web for: ${input.query}`.
+    /// Short UI label: `The agent wants to search the web for: ${input.query}`.
     /// The long model-facing guidance lives in [`Self::prompt`].
     fn description(&self, input: &WebSearchInput, _options: &DescriptionOptions) -> String {
-        format!("Claude wants to search the web for: {}", input.query)
+        format!("The agent wants to search the web for: {}", input.query)
     }
     /// Model-facing tool description.
     async fn prompt(&self, _options: &PromptOptions) -> String {

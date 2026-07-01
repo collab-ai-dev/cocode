@@ -268,6 +268,7 @@ impl QueryEngine {
                     call_ctx.permission_resolution_detail =
                         prepared.permission_resolution_detail.clone();
                     call_ctx.approval_feedback = prepared.approval_feedback.clone();
+                    let approval_content_message = prepared.approval_content_message.clone();
                     let execute_result = tokio::select! {
                         r = prepared.tool.execute(effective_input.as_value().clone(), &call_ctx) => r,
                         () = call_ctx.abort.cancelled() => Err(coco_tool_runtime::ToolError::Cancelled),
@@ -285,6 +286,7 @@ impl QueryEngine {
                             orchestration_ctx,
                             hook_tx: hook_tx.as_ref(),
                             tool_output_store: ctx.tool_output_store.clone(),
+                            approval_content_message,
                         },
                     )
                     .await

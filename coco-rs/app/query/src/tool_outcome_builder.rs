@@ -55,6 +55,10 @@ pub(crate) struct RunOneTail<'a> {
     /// checks `tool.max_result_size_bound()` against the rendered
     /// output and persists when over threshold.
     pub tool_output_store: Option<coco_tool_runtime::ToolOutputStore>,
+    /// Optional user message built from permission approval content blocks.
+    /// Appended on the success path so the next model turn receives images
+    /// or other content supplied alongside the approval.
+    pub approval_content_message: Option<Message>,
 }
 
 fn plain_text_parts(parts: &[ToolResultContentPart]) -> Option<String> {
@@ -189,6 +193,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
         orchestration_ctx,
         hook_tx,
         tool_output_store,
+        approval_content_message,
     } = args;
     let is_mcp = tool.is_mcp();
     let order = ToolMessageOrder::for_tool(&*tool);
@@ -201,7 +206,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             let structured_output = tool_result.structured_output();
             let ToolResult {
                 data,
-                new_messages,
+                mut new_messages,
                 app_state_patch,
                 permission_updates,
                 display_data,
@@ -344,6 +349,10 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             } else {
                 None
             };
+
+            if let Some(message) = approval_content_message {
+                new_messages.insert(0, message);
+            }
 
             // `with_structured_output` already pushed the silent
             // attachment onto `new_messages`; no re-push here.

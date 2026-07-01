@@ -34,6 +34,7 @@ use crate::turn_counting::count_assistant_turns_since_attachment;
 use crate::turn_counting::count_assistant_turns_since_tool;
 use crate::turn_counting::count_attachments_since_attachment;
 use crate::turn_counting::count_human_turns_since_attachment;
+use crate::turn_counting::human_turns_since_any_attachment_until_reset;
 use crate::turn_counting::human_turns_since_attachment_opt;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
@@ -71,6 +72,8 @@ pub struct TurnReminderInput<'a> {
     pub plan_exists: bool,
     /// Selected plan workflow (from settings.json → engine config).
     pub plan_workflow: PlanWorkflow,
+    /// Optional custom workflow body for plan-mode reminders.
+    pub plan_mode_custom_instructions: Option<String>,
     /// Phase-4 variant (from settings.json).
     pub phase4_variant: Phase4Variant,
     /// Explore / plan sub-agent counts referenced in the 5-phase Full prompt.
@@ -239,6 +242,7 @@ pub async fn run_turn_reminders(
         plan_file_path,
         plan_exists,
         plan_workflow,
+        plan_mode_custom_instructions,
         phase4_variant,
         explore_agent_count,
         plan_agent_count,
@@ -319,8 +323,11 @@ pub async fn run_turn_reminders(
     // (replacing the in-memory throttle): human turns since the last
     // attachment (`None` = first turn in this mode → always emit), plus the
     // attachment count since the last exit for the Full-vs-Sparse cycle.
-    let plan_mode_turns_since_attachment =
-        human_turns_since_attachment_opt(messages, AttachmentKind::PlanMode);
+    let plan_mode_turns_since_attachment = human_turns_since_any_attachment_until_reset(
+        messages,
+        &[AttachmentKind::PlanMode, AttachmentKind::PlanModeReentry],
+        AttachmentKind::PlanModeExit,
+    );
     let plan_mode_attachments_since_exit = count_attachments_since_attachment(
         messages,
         AttachmentKind::PlanMode,
@@ -345,6 +352,7 @@ pub async fn run_turn_reminders(
         .agent_id(agent_id)
         .is_sub_agent(is_sub_agent)
         .plan_workflow(plan_workflow)
+        .plan_mode_custom_instructions(plan_mode_custom_instructions)
         .phase4_variant(phase4_variant)
         .agent_counts(explore_agent_count, plan_agent_count)
         .explore_plan_agents_available(explore_plan_agents_available)

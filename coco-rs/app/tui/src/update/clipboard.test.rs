@@ -6,6 +6,10 @@ use pretty_assertions::assert_eq;
 use super::copy_last_message_with;
 use super::paste_from_clipboard_with;
 use crate::state::AppState;
+use crate::state::PanePromptState;
+use crate::state::PermissionDetail;
+use crate::state::PermissionPromptState;
+use crate::state::PrefixInputState;
 use crate::state::ui::ToastSeverity;
 use coco_tui_ui::clipboard_copy::ClipboardLease;
 use coco_tui_ui::paste::ImageData;
@@ -140,6 +144,63 @@ async fn paste_pill_round_trips_through_resolve_structured() {
     assert_eq!(resolved.images.len(), 1);
     assert_eq!(resolved.images[0].mime, "image/png");
     assert_eq!(resolved.images[0].bytes, png);
+}
+
+#[tokio::test]
+async fn paste_image_on_exit_plan_no_row_inserts_feedback_pill() {
+    let mut state = AppState::new();
+    state
+        .ui
+        .push_prompt(PanePromptState::Permission(PermissionPromptState {
+            request_id: "req-1".into(),
+            tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+            description: "Exit plan mode?".into(),
+            detail: PermissionDetail::ExitPlanMode {
+                outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+                plan: Some("# Plan".into()),
+                edited_plan: None,
+                feedback_input: PrefixInputState::new(String::new()),
+                plan_file_path: None,
+                allowed_prompts: vec![],
+            },
+            risk_level: None,
+            show_always_allow: false,
+            classifier_checking: false,
+            classifier_auto_approved: None,
+            choices: Some(vec![coco_types::PermissionAskChoice {
+                value: coco_types::ExitPlanChoice::No.as_str().to_string(),
+                label: "No, keep planning".to_string(),
+                description: None,
+            }]),
+            selected_choice: 0,
+            display_input: coco_types::PermissionDisplayInput::Empty,
+            original_input: None,
+            cwd: None,
+            permission_suggestions: vec![],
+            worker_badge: None,
+            explanation_visible: false,
+            explanation: crate::state::ExplainerFetch::NotFetched,
+            prefix_input: None,
+        }));
+
+    paste_from_clipboard_with(&mut state, || async {
+        Ok(Some(ImageData {
+            bytes: vec![1, 2, 3],
+            mime: "image/png".to_string(),
+        }))
+    })
+    .await;
+
+    assert_eq!(state.ui.input.text(), "");
+    let Some(PanePromptState::Permission(prompt)) = state.ui.interaction.active_prompt.as_ref()
+    else {
+        panic!("expected permission prompt")
+    };
+    let PermissionDetail::ExitPlanMode { feedback_input, .. } = &prompt.detail else {
+        panic!("expected ExitPlanMode detail")
+    };
+    assert_eq!(feedback_input.value, "[Image #1]");
+    assert_eq!(state.ui.paste_manager.entries().len(), 1);
 }
 
 #[tokio::test]

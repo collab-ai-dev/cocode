@@ -189,7 +189,7 @@ Only use minute 0 or 30 when the user names that exact time and clearly means it
 \n\
 ## Durability\n\
 \n\
-By default (durable: false) the job lives only in this Claude session — nothing is written to disk, and the job is gone when Claude exits. Pass durable: true to write to {task_path} so the job survives restarts. Only use durable: true when the user explicitly asks for the task to persist (\"keep doing this every day\", \"set this up permanently\"). Most \"remind me in 5 minutes\" / \"check back in an hour\" requests should stay session-only.\n\
+By default (durable: false) the job lives only in this session — nothing is written to disk, and the job is gone when Coco exits. Pass durable: true to write to {task_path} so the job survives restarts. Only use durable: true when the user explicitly asks for the task to persist (\"keep doing this every day\", \"set this up permanently\"). Most \"remind me in 5 minutes\" / \"check back in an hour\" requests should stay session-only.\n\
 \n\
 ## Runtime behavior\n\
 \n\

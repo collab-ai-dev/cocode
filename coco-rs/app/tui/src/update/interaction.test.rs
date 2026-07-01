@@ -9,7 +9,9 @@ use crate::state::MemoryDialogScope;
 use crate::state::MemoryDialogState;
 use crate::state::ModalState;
 use crate::state::PanePromptState;
+use crate::state::PermissionDetail;
 use crate::state::ui::ToastSeverity;
+use base64::Engine as _;
 use tokio::sync::mpsc;
 
 #[tokio::test]
@@ -142,6 +144,8 @@ fn permission_with_allowed_prompts(values: &[&str], selected: usize) -> AppState
         detail: PermissionDetail::ExitPlanMode {
             outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
             plan: Some("# Plan".into()),
+            edited_plan: None,
+            feedback_input: crate::state::PrefixInputState::new(String::new()),
             plan_file_path: Some("/tmp/plan.md".into()),
             allowed_prompts: vec![coco_types::ExitPlanModeAllowedPrompt {
                 tool: "Bash".into(),
@@ -166,18 +170,27 @@ fn permission_with_allowed_prompts(values: &[&str], selected: usize) -> AppState
     s
 }
 
+fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+    use image::ColorType;
+    use image::ImageEncoder;
+    use image::codecs::png::PngEncoder;
+
+    let pixels = vec![128_u8; (width * height * 4) as usize];
+    let mut out = Vec::new();
+    PngEncoder::new(&mut out)
+        .write_image(&pixels, width, height, ColorType::Rgba8.into())
+        .expect("encode test PNG");
+    out
+}
+
 #[tokio::test]
 async fn confirm_with_choice_sends_exit_plan_resolution_detail() {
-    // Selecting "yes-accept-edits-clear-context" should send approved=true
+    // Selecting "yes-accept-edits" should send approved=true
     // with a typed resolution detail — the engine reads this off
     // ToolUseContext to flag history clear.
     let mut s = permission_with_choices(
-        &[
-            "yes-accept-edits-keep-context",
-            "yes-accept-edits-clear-context",
-            "no",
-        ],
-        1, // "yes-accept-edits-clear-context"
+        &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
+        1, // "yes-accept-edits"
     );
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -205,15 +218,78 @@ async fn confirm_with_choice_sends_exit_plan_resolution_detail() {
 }
 
 #[tokio::test]
+async fn confirm_with_choice_sends_edited_exit_plan() {
+    let mut s = permission_with_allowed_prompts(&["yes-accept-edits-keep-context", "no"], 0);
+    if let Some(PanePromptState::Permission(p)) = s.ui.interaction.active_prompt.as_mut()
+        && let PermissionDetail::ExitPlanMode {
+            plan, edited_plan, ..
+        } = &mut p.detail
+    {
+        *plan = Some("# Edited plan".into());
+        *edited_plan = Some("# Edited plan".into());
+    }
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+
+    confirm(&mut s, &tx).await;
+
+    let UserCommand::ApprovalResponse {
+        resolution_detail, ..
+    } = rx.try_recv().expect("approval sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert!(matches!(
+        resolution_detail,
+        Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+            choice: coco_types::ExitPlanChoice::KeepAcceptEdits,
+            edited_plan: Some(ref plan),
+        }) if plan == "# Edited plan"
+    ));
+}
+
+#[tokio::test]
+async fn confirm_with_no_choice_does_not_send_edited_exit_plan() {
+    let mut s = permission_with_allowed_prompts(&["yes-accept-edits-keep-context", "no"], 1);
+    if let Some(PanePromptState::Permission(p)) = s.ui.interaction.active_prompt.as_mut()
+        && let PermissionDetail::ExitPlanMode {
+            plan,
+            edited_plan,
+            feedback_input,
+            ..
+        } = &mut p.detail
+    {
+        *plan = Some("# Edited plan".into());
+        *edited_plan = Some("# Edited plan".into());
+        feedback_input.value = "split it up".into();
+    }
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+
+    confirm(&mut s, &tx).await;
+
+    let UserCommand::ApprovalResponse {
+        approved,
+        feedback,
+        resolution_detail,
+        ..
+    } = rx.try_recv().expect("approval sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert!(!approved);
+    assert_eq!(feedback.as_deref(), Some("split it up"));
+    assert!(matches!(
+        resolution_detail,
+        Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+            choice: coco_types::ExitPlanChoice::No,
+            edited_plan: None,
+        })
+    ));
+}
+
+#[tokio::test]
 async fn confirm_with_allowed_prompts_sends_session_rules() {
-    let mut s = permission_with_allowed_prompts(
-        &[
-            "yes-default-keep-context",
-            "yes-accept-edits-clear-context",
-            "no",
-        ],
-        0,
-    );
+    let mut s =
+        permission_with_allowed_prompts(&["yes-default-keep-context", "yes-accept-edits", "no"], 0);
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
 
@@ -245,18 +321,17 @@ async fn confirm_with_allowed_prompts_sends_session_rules() {
 }
 
 #[tokio::test]
-async fn confirm_with_no_choice_sends_approved_false() {
-    // "no" is the sentinel for deny; engine treats it as a regular
-    // denial (tool doesn't execute). Typed detail still carries the
-    // value so logs/audits see what the user picked.
-    let mut s = permission_with_choices(
-        &[
-            "yes-accept-edits-keep-context",
-            "yes-accept-edits-clear-context",
-            "no",
-        ],
-        2, // "no"
+async fn confirm_with_no_choice_sends_feedback_text() {
+    let mut s = permission_with_allowed_prompts(
+        &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
+        2,
     );
+    if let Some(PanePromptState::Permission(p)) = s.ui.interaction.active_prompt.as_mut()
+        && let PermissionDetail::ExitPlanMode { feedback_input, .. } = &mut p.detail
+    {
+        feedback_input.value = "Use smaller steps".into();
+        feedback_input.cursor = feedback_input.value.len();
+    }
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
 
@@ -274,10 +349,7 @@ async fn confirm_with_no_choice_sends_approved_false() {
     };
     assert!(!approved, "'no' choice should deny");
     assert!(permission_updates.is_empty());
-    assert_eq!(
-        feedback.as_deref(),
-        Some("User rejected the plan. Stay in plan mode and continue planning.")
-    );
+    assert_eq!(feedback.as_deref(), Some("Use smaller steps"));
     assert!(updated_input.is_none());
     assert!(matches!(
         resolution_detail,
@@ -286,6 +358,151 @@ async fn confirm_with_no_choice_sends_approved_false() {
             edited_plan: None,
         })
     ));
+}
+
+#[tokio::test]
+async fn confirm_with_no_choice_sends_feedback_image_blocks() {
+    let mut s = permission_with_allowed_prompts(
+        &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
+        2,
+    );
+    let pill =
+        s.ui.paste_manager
+            .add_image_data(vec![0x89, 0x50], "image/png".to_string());
+    if let Some(PanePromptState::Permission(p)) = s.ui.interaction.active_prompt.as_mut()
+        && let PermissionDetail::ExitPlanMode { feedback_input, .. } = &mut p.detail
+    {
+        feedback_input.value = pill;
+        feedback_input.cursor = feedback_input.value.len();
+    }
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+    confirm(&mut s, &tx).await;
+
+    let cmd = rx.try_recv().expect("approval sent");
+    let UserCommand::ApprovalResponse {
+        approved,
+        feedback,
+        content_blocks,
+        ..
+    } = cmd
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert!(!approved, "'no' choice should deny");
+    assert_eq!(feedback.as_deref(), Some("(See attached image)"));
+    let blocks = content_blocks.expect("image content blocks");
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0]["type"], "image");
+    assert_eq!(blocks[0]["source"]["type"], "base64");
+    assert_eq!(blocks[0]["source"]["media_type"], "image/png");
+    assert_eq!(blocks[0]["source"]["data"], "iVA=");
+}
+
+#[tokio::test]
+async fn confirm_with_no_choice_normalizes_feedback_image_blocks() {
+    let mut s = permission_with_allowed_prompts(
+        &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
+        2,
+    );
+    let original = png_bytes(
+        coco_utils_image::MAX_WIDTH + 64,
+        coco_utils_image::MAX_HEIGHT + 64,
+    );
+    let pill =
+        s.ui.paste_manager
+            .add_image_data(original, "image/png".to_string());
+    if let Some(PanePromptState::Permission(p)) = s.ui.interaction.active_prompt.as_mut()
+        && let PermissionDetail::ExitPlanMode { feedback_input, .. } = &mut p.detail
+    {
+        feedback_input.value = pill;
+        feedback_input.cursor = feedback_input.value.len();
+    }
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+    confirm(&mut s, &tx).await;
+
+    let cmd = rx.try_recv().expect("approval sent");
+    let UserCommand::ApprovalResponse {
+        content_blocks: Some(blocks),
+        ..
+    } = cmd
+    else {
+        panic!("expected ApprovalResponse with image content blocks")
+    };
+    let encoded = blocks[0]["source"]["data"]
+        .as_str()
+        .expect("base64 image data");
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .expect("decode image data");
+    let normalized = image::load_from_memory(&decoded).expect("normalized image bytes");
+    assert!(normalized.width() <= coco_utils_image::MAX_WIDTH);
+    assert!(normalized.height() <= coco_utils_image::MAX_HEIGHT);
+    assert_eq!(blocks[0]["source"]["media_type"], "image/png");
+}
+
+#[tokio::test]
+async fn confirm_with_empty_no_feedback_keeps_exit_plan_prompt_open() {
+    let mut s = permission_with_allowed_prompts(
+        &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
+        2,
+    );
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+
+    confirm(&mut s, &tx).await;
+
+    assert!(
+        rx.try_recv().is_err(),
+        "empty no feedback should not submit"
+    );
+    assert!(
+        s.ui.has_active_surface(),
+        "prompt remains open for feedback"
+    );
+}
+
+#[tokio::test]
+async fn confirm_with_no_plan_no_choice_denies_without_feedback() {
+    let mut s = permission_with_allowed_prompts(&["yes-default-keep-context", "no"], 1);
+    if let Some(PanePromptState::Permission(p)) = s.ui.interaction.active_prompt.as_mut()
+        && let PermissionDetail::ExitPlanMode {
+            outcome,
+            plan,
+            plan_file_path,
+            allowed_prompts,
+            ..
+        } = &mut p.detail
+    {
+        *outcome = coco_types::ExitPlanModeOutcome::NoImplementationPlan;
+        *plan = None;
+        *plan_file_path = None;
+        allowed_prompts.clear();
+    }
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+
+    confirm(&mut s, &tx).await;
+
+    let UserCommand::ApprovalResponse {
+        approved,
+        feedback,
+        resolution_detail,
+        ..
+    } = rx.try_recv().expect("approval sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert!(!approved);
+    assert_eq!(feedback, None);
+    assert!(matches!(
+        resolution_detail,
+        Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+            choice: coco_types::ExitPlanChoice::No,
+            edited_plan: None,
+        })
+    ));
+    assert!(
+        !s.ui.has_active_surface(),
+        "state dismissed after no-plan deny"
+    );
 }
 
 #[tokio::test]
@@ -309,13 +526,7 @@ async fn approve_with_choice_takes_same_path_as_confirm() {
     // Pressing 'y' (Approve) when choices are present must commit the
     // currently-focused choice, not the implicit yes — otherwise the
     // tool would see updated_input=None and lose the user's pick.
-    let mut s = permission_with_choices(
-        &[
-            "yes-accept-edits-keep-context",
-            "yes-accept-edits-clear-context",
-        ],
-        1,
-    );
+    let mut s = permission_with_choices(&["yes-accept-edits-keep-context", "yes-accept-edits"], 1);
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     approve(&mut s, &tx).await;
 

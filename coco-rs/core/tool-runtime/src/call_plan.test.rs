@@ -156,7 +156,7 @@ fn test_early_outcome_plan_can_wrap_unstamped_outcome() {
     // EarlyOutcome is the plan variant for pre-execution failures.
     // The outcome body is unstamped so the executor can stamp it when
     // it reaches the barrier block — not before.
-    let plan = ToolCallPlan::EarlyOutcome(UnstampedToolCallOutcome {
+    let plan = ToolCallPlan::EarlyOutcome(Box::new(UnstampedToolCallOutcome {
         tool_use_id: "tu-1".into(),
         tool_id: ToolId::Custom("unknown-tool".into()),
         model_index: 0,
@@ -167,7 +167,7 @@ fn test_early_outcome_plan_can_wrap_unstamped_outcome() {
         prevent_continuation: None,
         structured_output: None,
         effects: ToolSideEffects::none(),
-    });
+    }));
     match plan {
         ToolCallPlan::EarlyOutcome(o) => {
             assert_eq!(o.error_kind, Some(ToolCallErrorKind::UnknownTool));
@@ -231,8 +231,9 @@ fn test_runnable_plan_carries_prepared_call() {
         model_index: 5,
         permission_resolution_detail: None,
         approval_feedback: None,
+        approval_content_message: None,
     };
-    let plan = ToolCallPlan::Runnable(prepared);
+    let plan = ToolCallPlan::Runnable(Box::new(prepared));
     match plan {
         ToolCallPlan::Runnable(p) => {
             assert_eq!(p.tool_use_id, "tu-1");

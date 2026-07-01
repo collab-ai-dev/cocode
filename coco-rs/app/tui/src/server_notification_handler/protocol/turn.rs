@@ -238,7 +238,7 @@ pub(super) fn on_turn_interrupted_outcome(
     }
 
     // The user interruption message renders as the dim
-    // `Interrupted · What should Claude do instead?` chat row. Only fires
+    // interrupted chat row. Only fires
     // for UserCancel — SystemPreempt means a sibling op
     // (Clear/Compact/Rewind/Shutdown) is about to mutate history anyway.
     // Skipped when auto-restore truncated to the last user prompt: the

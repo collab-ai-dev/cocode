@@ -205,7 +205,10 @@ pub async fn run_session(
     let config = QueryEngineConfig {
         model_id: model_id.to_string(),
         permission_mode,
-        bypass_permissions_available: bypass_available,
+        permission_mode_availability: coco_types::PermissionModeAvailability::new(
+            bypass_available,
+            false,
+        ),
         context_window: session_cfg.context_window,
         max_output_tokens: session_cfg.max_output_tokens,
         max_turns: session_cfg.max_turns,
@@ -328,7 +331,10 @@ pub async fn run_session_with_steering(
     let config = QueryEngineConfig {
         model_id: model_id.to_string(),
         permission_mode,
-        bypass_permissions_available: bypass_available,
+        permission_mode_availability: coco_types::PermissionModeAvailability::new(
+            bypass_available,
+            false,
+        ),
         context_window: session_cfg.context_window,
         max_output_tokens: session_cfg.max_output_tokens,
         max_turns: session_cfg.max_turns,

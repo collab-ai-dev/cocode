@@ -58,6 +58,15 @@ async fn execute_and_apply_patch(
 async fn enter_plan_mode_rejects_in_agent_context() {
     let mut ctx = ctx_with_mode(PermissionMode::Default);
     ctx.agent_id = Some(AgentId::new("aabcdef0"));
+    let validation =
+        <EnterPlanModeTool as DynTool>::validate_input(&EnterPlanModeTool, &json!({}), &ctx);
+    match validation {
+        ValidationResult::Invalid { message, .. } => {
+            assert!(message.contains("agent contexts"));
+        }
+        ValidationResult::Valid => panic!("expected EnterPlanMode validation to reject agents"),
+    }
+
     let result = <EnterPlanModeTool as DynTool>::execute(&EnterPlanModeTool, json!({}), &ctx).await;
     assert!(result.is_err(), "agent contexts must be rejected");
     assert!(result.unwrap_err().to_string().contains("agent"));
@@ -102,6 +111,53 @@ async fn enter_plan_mode_stashes_previous_mode() {
 }
 
 #[tokio::test]
+async fn enter_plan_mode_with_auto_stashes_dangerous_allow_rules() {
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let app_state = Arc::new(RwLock::new(ToolAppState {
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Default),
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
+    let mut ctx = ctx_with_mode(PermissionMode::Default);
+    ctx.app_state = Some(app_state.clone().into());
+    ctx.use_auto_mode_during_plan = true;
+    ctx.permission_mode_availability = coco_types::PermissionModeAvailability::new(
+        /*bypass_permissions*/ false, /*auto*/ true,
+    );
+    ctx.permission_context
+        .allow_rules
+        .entry(coco_types::PermissionRuleSource::UserSettings)
+        .or_default()
+        .push(coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::UserSettings,
+            behavior: coco_types::PermissionBehavior::Allow,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: ToolName::Agent.as_str().into(),
+                rule_content: None,
+            },
+        });
+
+    let _ = execute_and_apply_patch(&EnterPlanModeTool, json!({}), &ctx, &app_state)
+        .await
+        .unwrap();
+
+    let guard = app_state.read().await;
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Plan));
+    assert_eq!(
+        guard.permissions.pre_plan_mode,
+        Some(PermissionMode::Default)
+    );
+    assert!(
+        guard.permissions.stripped_dangerous_rules.is_some(),
+        "plan mode with auto semantics must stash dangerous allow rules"
+    );
+}
+
+#[tokio::test]
 async fn enter_plan_mode_idempotent_does_not_stash_self() {
     // Calling enter while already in plan mode must NOT overwrite the
     // stash with Plan itself — otherwise exit would have nowhere to
@@ -142,7 +198,75 @@ fn enter_plan_mode_schema_has_no_parameters() {
     );
 }
 
+#[test]
+fn enter_plan_mode_is_eagerly_loaded_by_design() {
+    assert!(!<EnterPlanModeTool as DynTool>::should_defer(
+        &EnterPlanModeTool
+    ));
+    assert_eq!(
+        <EnterPlanModeTool as DynTool>::search_hint(&EnterPlanModeTool),
+        Some("switch to plan mode to design an approach before coding")
+    );
+}
+
+#[tokio::test]
+async fn enter_plan_mode_requires_user_confirmation() {
+    let ctx = ctx_with_mode(PermissionMode::Default);
+    let decision =
+        <EnterPlanModeTool as DynTool>::check_permissions(&EnterPlanModeTool, &json!({}), &ctx)
+            .await;
+    let coco_types::ToolCheckResult::Ask {
+        message,
+        choices: Some(choices),
+        detail,
+        ..
+    } = decision
+    else {
+        panic!("expected EnterPlanMode to ask for approval");
+    };
+    assert_eq!(message, super::ENTER_PLAN_MODE_APPROVAL_MESSAGE);
+    assert!(
+        !message.contains("Claude") && !message.contains("claude"),
+        "approval copy should use provider-neutral agent naming"
+    );
+    assert!(detail.is_none());
+    assert_eq!(choices.len(), 2);
+    assert_eq!(choices[0].value, "yes");
+    assert_eq!(choices[0].label, "Yes, enter plan mode");
+    assert_eq!(choices[0].description, None);
+    assert_eq!(choices[1].value, "no");
+    assert_eq!(choices[1].label, "No, start implementing now");
+}
+
 // ── ExitPlanModeTool ──
+
+#[test]
+fn exit_plan_choice_wire_values_match_2_1_193() {
+    assert_eq!(
+        coco_types::ExitPlanChoice::ClearBypassPermissions.as_str(),
+        "yes-bypass-permissions"
+    );
+    assert_eq!(
+        coco_types::ExitPlanChoice::ClearAcceptEdits.as_str(),
+        "yes-accept-edits"
+    );
+    assert_eq!(
+        coco_types::ExitPlanChoice::from_wire("yes-bypass-permissions"),
+        Some(coco_types::ExitPlanChoice::ClearBypassPermissions)
+    );
+    assert_eq!(
+        coco_types::ExitPlanChoice::from_wire("yes-accept-edits"),
+        Some(coco_types::ExitPlanChoice::ClearAcceptEdits)
+    );
+    assert_eq!(
+        coco_types::ExitPlanChoice::from_wire("yes-bypass-permissions-clear-context"),
+        None
+    );
+    assert_eq!(
+        coco_types::ExitPlanChoice::from_wire("yes-accept-edits-clear-context"),
+        None
+    );
+}
 
 #[test]
 fn exit_plan_mode_rejects_when_not_in_plan_mode() {
@@ -167,6 +291,17 @@ fn exit_plan_mode_allows_when_in_plan_mode() {
     let input = implementation_plan_input();
     let vr = <ExitPlanModeTool as DynTool>::validate_input(&ExitPlanModeTool, &input, &ctx);
     assert!(matches!(vr, ValidationResult::Valid));
+}
+
+#[test]
+fn exit_plan_mode_is_eagerly_loaded_by_design() {
+    assert!(!<ExitPlanModeTool as DynTool>::should_defer(
+        &ExitPlanModeTool
+    ));
+    assert_eq!(
+        <ExitPlanModeTool as DynTool>::search_hint(&ExitPlanModeTool),
+        Some("present plan for approval and start coding (plan mode only)")
+    );
 }
 
 #[test]
@@ -241,7 +376,157 @@ async fn exit_plan_mode_tool_embeds_typed_tui_choices() {
 }
 
 #[tokio::test]
+async fn exit_plan_mode_choices_prefer_bypass_over_auto_when_both_available() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-auto-over-bypass-choices";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.plan_mode_settings.show_clear_context_on_exit = true;
+    ctx.permission_context.bypass_available = true;
+    ctx.permission_mode_availability = coco_types::PermissionModeAvailability::new(
+        /*bypass_permissions*/ true, /*auto*/ true,
+    );
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(
+        std::sync::Arc::new(tokio::sync::RwLock::new(ToolAppState {
+            plan_mode_entry_ms: Some(1),
+            ..Default::default()
+        }))
+        .into(),
+    );
+
+    let decision = <ExitPlanModeTool as DynTool>::check_permissions(
+        &ExitPlanModeTool,
+        &implementation_plan_input(),
+        &ctx,
+    )
+    .await;
+    let coco_types::ToolCheckResult::Ask {
+        choices: Some(choices),
+        ..
+    } = decision
+    else {
+        panic!("expected ExitPlanMode choices");
+    };
+
+    let values = choices
+        .iter()
+        .map(|choice| choice.value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        vec![
+            coco_types::ExitPlanChoice::ClearBypassPermissions.as_str(),
+            coco_types::ExitPlanChoice::KeepAcceptEdits.as_str(),
+            coco_types::ExitPlanChoice::KeepDefault.as_str(),
+            coco_types::ExitPlanChoice::No.as_str(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn exit_plan_mode_choices_use_auto_when_bypass_unavailable() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-auto-choices";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.plan_mode_settings.show_clear_context_on_exit = true;
+    ctx.permission_context.bypass_available = false;
+    ctx.permission_mode_availability = coco_types::PermissionModeAvailability::new(
+        /*bypass_permissions*/ false, /*auto*/ true,
+    );
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(
+        std::sync::Arc::new(tokio::sync::RwLock::new(ToolAppState {
+            plan_mode_entry_ms: Some(1),
+            ..Default::default()
+        }))
+        .into(),
+    );
+
+    let decision = <ExitPlanModeTool as DynTool>::check_permissions(
+        &ExitPlanModeTool,
+        &implementation_plan_input(),
+        &ctx,
+    )
+    .await;
+    let coco_types::ToolCheckResult::Ask {
+        choices: Some(choices),
+        ..
+    } = decision
+    else {
+        panic!("expected ExitPlanMode choices");
+    };
+
+    let values = choices
+        .iter()
+        .map(|choice| choice.value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        vec![
+            coco_types::ExitPlanChoice::ClearAuto.as_str(),
+            coco_types::ExitPlanChoice::KeepAuto.as_str(),
+            coco_types::ExitPlanChoice::KeepDefault.as_str(),
+            coco_types::ExitPlanChoice::No.as_str(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn exit_plan_mode_no_plan_choices_match_simple_source_dialog() {
+    use tempfile::tempdir;
+
+    let tmp = tempdir().unwrap();
+    let app_state = plan_mode_app_state(Some(PermissionMode::AcceptEdits), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some("exit-no-plan-choices".into());
+    ctx.app_state = Some(app_state.into());
+
+    let decision = <ExitPlanModeTool as DynTool>::check_permissions(
+        &ExitPlanModeTool,
+        &implementation_plan_input(),
+        &ctx,
+    )
+    .await;
+    let coco_types::ToolCheckResult::Ask {
+        choices: Some(choices),
+        ..
+    } = decision
+    else {
+        panic!("expected ExitPlanMode choices");
+    };
+
+    let labels = choices
+        .iter()
+        .map(|choice| choice.label.as_str())
+        .collect::<Vec<_>>();
+    let values = choices
+        .iter()
+        .map(|choice| choice.value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec!["Yes", "No"]);
+    assert_eq!(
+        values,
+        vec![
+            coco_types::ExitPlanChoice::KeepDefault.as_str(),
+            coco_types::ExitPlanChoice::No.as_str(),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn exit_plan_mode_clear_context_choice_sets_pending_flag() {
+    use std::sync::Arc;
     use tempfile::tempdir;
     let tmp = tempdir().unwrap();
     let session_id = "exit-clear-ctx";
@@ -253,6 +538,9 @@ async fn exit_plan_mode_clear_context_choice_sets_pending_flag() {
     ctx.config_home = Some(tmp.path().to_path_buf());
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
+    let mut features = coco_types::Features::with_defaults();
+    features.enable(coco_types::Feature::AgentTeams);
+    ctx.features = Arc::new(features);
     set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::ClearAcceptEdits);
 
     let _ = execute_and_apply_patch(
@@ -274,6 +562,14 @@ async fn exit_plan_mode_clear_context_choice_sets_pending_flag() {
             .as_deref()
             .unwrap_or_default()
             .starts_with("Implement the following plan:\n\n# plan\n\nPlan file path: ")
+    );
+    assert!(
+        guard
+            .pending_plan_implementation_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("spawning named teammates with the Agent tool (pass a `name`)"),
+        "clear-context implementation handoff should preserve the source-compatible team hint"
     );
 }
 
@@ -374,6 +670,99 @@ async fn exit_plan_mode_ignores_stale_choice_json() {
     let guard = app_state.read().await;
     assert!(!guard.pending_clear_message_history);
     assert_eq!(guard.permissions.mode, Some(PermissionMode::Default));
+}
+
+#[tokio::test]
+async fn exit_plan_mode_ts_auto_keep_choice_sets_auto_mode() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-auto-keep";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = plan_mode_app_state(Some(PermissionMode::Default), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.permission_mode_availability = coco_types::PermissionModeAvailability::new(
+        /*bypass_permissions*/ false, /*auto*/ true,
+    );
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(app_state.clone().into());
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::KeepAuto);
+
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
+    let guard = app_state.read().await;
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Auto));
+    assert!(!guard.pending_clear_message_history);
+}
+
+#[tokio::test]
+async fn exit_plan_mode_ts_auto_clear_choice_sets_auto_and_pending_flag() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-auto-clear";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = plan_mode_app_state(Some(PermissionMode::Default), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.permission_mode_availability = coco_types::PermissionModeAvailability::new(
+        /*bypass_permissions*/ false, /*auto*/ true,
+    );
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(app_state.clone().into());
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::ClearAuto);
+
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
+    let guard = app_state.read().await;
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Auto));
+    assert!(guard.pending_clear_message_history);
+}
+
+#[tokio::test]
+async fn exit_plan_mode_stale_auto_choice_falls_back_to_default() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-auto-stale";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = plan_mode_app_state(Some(PermissionMode::AcceptEdits), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.permission_mode_availability = coco_types::PermissionModeAvailability::new(
+        /*bypass_permissions*/ false, /*auto*/ false,
+    );
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(app_state.clone().into());
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::KeepAuto);
+
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
+    let guard = app_state.read().await;
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Default));
+    assert!(!guard.pending_clear_message_history);
 }
 
 #[tokio::test]
@@ -712,9 +1101,8 @@ async fn exit_plan_mode_from_auto_with_no_restore_target_fires_auto_exit_flag() 
     let plans_dir = coco_context::resolve_plans_directory(&config_home, None, None);
     coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
 
-    // Simulate "Auto was active during plan" on app_state — the
-    // shared store is the source of truth
-    // (`appState.toolPermissionContext.strippedDangerousRules`).
+    // Simulate "Auto was active during plan". `AutoModeState` is the
+    // authoritative signal, snapshotted onto ToolUseContext.
     let app_state = Arc::new(RwLock::new(ToolAppState {
         permissions: LiveToolPermissionState {
             mode: Some(PermissionMode::Plan),
@@ -728,6 +1116,7 @@ async fn exit_plan_mode_from_auto_with_no_restore_target_fires_auto_exit_flag() 
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
     ctx.app_state = Some(app_state.clone().into());
+    ctx.auto_mode_active = true;
 
     let _ = execute_and_apply_patch(
         &ExitPlanModeTool,
@@ -743,6 +1132,49 @@ async fn exit_plan_mode_from_auto_with_no_restore_target_fires_auto_exit_flag() 
         guard.needs_auto_mode_exit_attachment,
         "auto-mode-exit flag must be set when auto was active during plan \
          and restore is not Auto"
+    );
+}
+
+#[tokio::test]
+async fn exit_plan_mode_with_stale_auto_stash_but_inactive_auto_skips_auto_exit_flag() {
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::RwLock;
+
+    let tmp = tempdir().unwrap();
+    let config_home = tmp.path().to_path_buf();
+    let session_id = "test-stale-auto-stash-from-plan";
+    let plans_dir = coco_context::resolve_plans_directory(&config_home, None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = Arc::new(RwLock::new(ToolAppState {
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
+            ..Default::default()
+        },
+        plan_mode_entry_ms: Some(1),
+        ..Default::default()
+    }));
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(config_home);
+    ctx.session_id_for_history = Some(session_id.to_string());
+    ctx.app_state = Some(app_state.clone().into());
+    ctx.auto_mode_active = false;
+
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
+
+    let guard = app_state.read().await;
+    assert!(
+        !guard.needs_auto_mode_exit_attachment,
+        "stale stripped rules must not masquerade as active auto during plan",
     );
 }
 
@@ -846,6 +1278,41 @@ async fn exit_plan_mode_reads_plan_from_disk() {
 }
 
 #[tokio::test]
+async fn exit_plan_mode_reads_existing_plan_without_entry_timestamp() {
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::RwLock;
+
+    let tmp = tempdir().unwrap();
+    let config_home = tmp.path().to_path_buf();
+    let session_id = "test-session-read-disk-without-entry";
+    let plans_dir = coco_context::resolve_plans_directory(&config_home, None, None);
+    coco_context::write_plan(session_id, &plans_dir, "## Plan\n- existing", None).unwrap();
+
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(config_home);
+    ctx.session_id_for_history = Some(session_id.to_string());
+    ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
+
+    let result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        result.data.get("outcome").and_then(Value::as_str),
+        Some("implementation_plan")
+    );
+    assert_eq!(
+        result.data.get("plan").and_then(Value::as_str),
+        Some("## Plan\n- existing")
+    );
+}
+
+#[tokio::test]
 async fn exit_plan_mode_approved_edit_wins_over_disk() {
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -894,6 +1361,11 @@ async fn exit_plan_mode_approved_edit_wins_over_disk() {
     };
     assert_eq!(display.plan, "edited plan from CCR");
     assert!(display.plan_was_edited);
+    assert_eq!(
+        coco_context::get_plan(session_id, &plans_dir, None).as_deref(),
+        Some("edited plan from CCR"),
+        "approved UI edits must be persisted back to the plan file"
+    );
 }
 
 #[tokio::test]
@@ -1022,6 +1494,38 @@ async fn exit_plan_mode_no_plan_notice_is_not_saved_as_plan() {
         guard.pending_plan_mode_exit_outcome,
         Some(coco_types::ExitPlanModeOutcome::NoImplementationPlan)
     );
+}
+
+#[tokio::test]
+async fn exit_plan_mode_no_plan_approval_exits_to_default_mode() {
+    use tempfile::tempdir;
+
+    let tmp = tempdir().unwrap();
+    let app_state = plan_mode_app_state(Some(PermissionMode::AcceptEdits), None);
+
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some("test-session-no-plan-default".to_string());
+    ctx.app_state = Some(app_state.clone().into());
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::KeepDefault);
+
+    let result = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        result.data.get("outcome").and_then(Value::as_str),
+        Some("no_implementation_plan")
+    );
+    let guard = app_state.read().await;
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Default));
+    assert_eq!(guard.permissions.pre_plan_mode, None);
+    assert!(!guard.pending_clear_message_history);
 }
 
 #[tokio::test]
@@ -1205,20 +1709,22 @@ async fn teammate_exit_plan_writes_approval_request_to_team_lead() {
     ctx.plan_mode_required = true;
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
-    ctx.app_state = Some(
-        Arc::new(tokio::sync::RwLock::new(ToolAppState {
-            plan_mode_entry_ms: Some(1),
+    let app_state = Arc::new(tokio::sync::RwLock::new(ToolAppState {
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
             ..Default::default()
-        }))
-        .into(),
-    );
+        },
+        plan_mode_entry_ms: Some(1),
+        ..Default::default()
+    }));
+    ctx.app_state = Some(app_state.clone().into());
     ctx.mailbox = capture.clone();
     // The tool falls back to `ctx.agent_id` when env vars aren't set,
     // so we can control identity without mutating the global env
     // (`env::set_var` is unsafe in newer Rust + banned by CLAUDE.md).
     ctx.agent_id = Some(coco_types::AgentId::new("alice"));
 
-    let result = <ExitPlanModeTool as DynTool>::execute(
+    let mut result = <ExitPlanModeTool as DynTool>::execute(
         &ExitPlanModeTool,
         implementation_plan_input(),
         &ctx,
@@ -1276,15 +1782,27 @@ async fn teammate_exit_plan_writes_approval_request_to_team_lead() {
             .starts_with("plan_approval-alice-default-")
     );
 
-    // Teammate exit does NOT flip live mode — teammate stays in Plan
-    // until the leader responds. ExitPlanModeTool::execute returns
-    // early on the teammate branch (ExitPlanModeV2Tool.ts:264-313),
-    // leaving app_state.permission_mode untouched.
     drop(captured);
-    // No post-processing needed — the execute above already captured
-    // the final state. Verify app_state wasn't mode-flipped (we
-    // didn't set it, so it's whatever Default is — the point is that
-    // no Plan→Default write happened on the teammate branch).
+    let patch = result
+        .app_state_patch
+        .take()
+        .expect("teammate approval branch marks awaiting approval");
+    {
+        let mut guard = app_state.write().await;
+        patch(&mut guard);
+    }
+    let guard = app_state.read().await;
+    // Teammate exit does NOT flip live mode — teammate stays in Plan
+    // until the leader responds. The patch only records the pending
+    // approval request for UI/reminder state.
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Plan));
+    assert!(guard.awaiting_plan_approval);
+    assert_eq!(
+        guard.awaiting_plan_approval_request_id.as_deref(),
+        result.data.get("requestId").and_then(Value::as_str)
+    );
+    assert!(!guard.has_exited_plan_mode);
+    assert!(!guard.needs_plan_mode_exit_attachment);
 }
 
 #[tokio::test]
@@ -1314,6 +1832,51 @@ async fn teammate_exit_plan_with_empty_plan_errors() {
             .unwrap_err()
             .to_string()
             .contains("No plan file found")
+    );
+}
+
+#[tokio::test]
+async fn teammate_exit_plan_with_blank_plan_file_errors() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let config_home = tmp.path().to_path_buf();
+    let session_id = "test-teammate-blank-plan";
+    let plans_dir = coco_context::resolve_plans_directory(&config_home, None, None);
+    coco_context::write_plan(session_id, &plans_dir, "   \n\t", Some("alice")).unwrap();
+
+    let capture = Arc::new(CapturingMailbox::default());
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.is_teammate = true;
+    ctx.plan_mode_required = true;
+    ctx.config_home = Some(config_home);
+    ctx.session_id_for_history = Some(session_id.to_string());
+    ctx.app_state = Some(
+        Arc::new(tokio::sync::RwLock::new(ToolAppState {
+            plan_mode_entry_ms: Some(1),
+            ..Default::default()
+        }))
+        .into(),
+    );
+    ctx.mailbox = capture.clone();
+    ctx.agent_id = Some(coco_types::AgentId::new("alice"));
+
+    let result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await;
+
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("No plan file found")
+    );
+    assert!(
+        capture.captured.lock().await.is_empty(),
+        "blank required plan must not be sent to the leader"
     );
 }
 
@@ -1362,6 +1925,55 @@ async fn voluntary_teammate_exits_locally_without_mailbox_write() {
         capture.captured.lock().await.is_empty(),
         "voluntary teammate must NOT write to mailbox"
     );
+}
+
+#[tokio::test]
+async fn voluntary_teammate_outside_plan_does_not_set_exit_latches() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let config_home = tmp.path().to_path_buf();
+    let session_id = "voluntary-teammate-outside-plan";
+    let plans_dir = coco_context::resolve_plans_directory(&config_home, None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# stale plan", None).unwrap();
+
+    let mut ctx = ctx_with_mode(PermissionMode::Default);
+    ctx.is_teammate = true;
+    ctx.plan_mode_required = false;
+    ctx.config_home = Some(config_home);
+    ctx.session_id_for_history = Some(session_id.to_string());
+    let app_state = Arc::new(tokio::sync::RwLock::new(ToolAppState {
+        permissions: LiveToolPermissionState {
+            mode: Some(PermissionMode::Default),
+            ..Default::default()
+        },
+        plan_mode_entry_ms: Some(1),
+        ..Default::default()
+    }));
+    ctx.app_state = Some(app_state.clone().into());
+
+    let result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    let mut result = result;
+    let patch = result
+        .app_state_patch
+        .take()
+        .expect("normal exit path still returns a patch");
+    {
+        let mut guard = app_state.write().await;
+        patch(&mut guard);
+    }
+
+    let guard = app_state.read().await;
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::Default));
+    assert!(!guard.has_exited_plan_mode);
+    assert!(!guard.needs_plan_mode_exit_attachment);
+    assert!(guard.pending_plan_mode_exit_outcome.is_none());
+    assert!(!guard.pending_clear_message_history);
 }
 
 #[tokio::test]
@@ -1462,10 +2074,16 @@ fn build_instructions_awaiting_leader_approval_variant() {
         "requestId": "plan_approval-alice-team-a-deadbeef",
         "filePath": "/tmp/plan.md",
     }));
-    assert!(out.contains("submitted to the team lead"));
-    assert!(out.contains("plan_approval-alice-team-a-deadbeef"));
-    assert!(out.contains("/tmp/plan.md"));
-    assert!(out.contains("Do NOT proceed"));
+    let expected = "Your plan has been submitted to the team lead for approval.\n\n\
+Plan file: /tmp/plan.md\n\n\
+**What happens next:**\n\
+1. Wait for the team lead to review your plan\n\
+2. You will receive a message in your inbox with approval/rejection\n\
+3. If approved, you can proceed with implementation\n\
+4. If rejected, refine your plan based on the feedback\n\n\
+**Important:** Do NOT proceed until you receive approval. Check your inbox for response.\n\n\
+Request ID: plan_approval-alice-team-a-deadbeef";
+    ts_assert_eq!(out, expected);
 }
 
 // ── build_instructions ──
@@ -1477,7 +2095,10 @@ fn build_instructions_agent_variant() {
         "isAgent": true,
         "plan": "x"
     }));
-    assert!(out.contains("respond with"));
+    ts_assert_eq!(
+        out,
+        "User has approved the plan. There is nothing else needed from you now. Please respond with \"ok\""
+    );
 }
 
 #[test]
@@ -1486,7 +2107,23 @@ fn build_instructions_empty_plan() {
         "outcome": "no_implementation_plan",
         "plan": "   "
     }));
-    assert!(out.contains("no implementation plan"));
+    assert_eq!(
+        out,
+        "User has approved exiting plan mode. You can now proceed."
+    );
+}
+
+#[test]
+fn build_instructions_empty_plan_follows_source_even_without_outcome() {
+    let out = ExitPlanModeTool::build_instructions(&json!({
+        "plan": "   ",
+        "filePath": "/tmp/plan.md",
+    }));
+    assert_eq!(
+        out,
+        "User has approved exiting plan mode. You can now proceed."
+    );
+    assert!(!out.contains("Approved Plan"));
 }
 
 #[test]
@@ -1496,7 +2133,10 @@ fn build_instructions_no_plan_notice() {
         "plan": "User asked for a read-only explanation.",
         "filePath": "/tmp/plan.md",
     }));
-    assert!(out.contains("no implementation plan"));
+    assert_eq!(
+        out,
+        "User has approved exiting plan mode. You can now proceed."
+    );
     assert!(!out.contains("/tmp/plan.md"));
     assert!(!out.contains("Approved Plan"));
 }
@@ -1508,10 +2148,46 @@ fn build_instructions_with_plan_and_edited_flag() {
         "plan": "step 1",
         "filePath": "/tmp/plan.md",
         "planWasEdited": true,
+        "hasTaskTool": true,
     }));
     assert!(out.contains("(edited by user)"));
     assert!(out.contains("/tmp/plan.md"));
+    assert!(out.contains("spawning named teammates with the Agent tool (pass a `name`)"));
     assert!(out.contains("step 1"));
+}
+
+#[test]
+fn build_instructions_approved_plan_marker_matches_source_contract() {
+    let out = ExitPlanModeTool::build_instructions(&json!({
+        "outcome": "implementation_plan",
+        "plan": "step 1\nstep 2",
+        "filePath": "/tmp/plan.md",
+        "planWasEdited": true,
+    }));
+    let expected = "User has approved your plan. You can now start coding. Start with updating your todo list if applicable\n\n\
+Your plan has been saved to: /tmp/plan.md\n\
+You can refer back to it if needed during implementation.\n\n\
+## Approved Plan (edited by user):\n\
+step 1\n\
+step 2";
+    ts_assert_eq!(out, expected);
+}
+
+#[test]
+fn build_instructions_unedited_approved_plan_marker_matches_source_contract() {
+    let out = ExitPlanModeTool::build_instructions(&json!({
+        "outcome": "implementation_plan",
+        "plan": "step 1\nstep 2",
+        "filePath": "/tmp/plan.md",
+        "planWasEdited": false,
+    }));
+    let expected = "User has approved your plan. You can now start coding. Start with updating your todo list if applicable\n\n\
+Your plan has been saved to: /tmp/plan.md\n\
+You can refer back to it if needed during implementation.\n\n\
+## Approved Plan:\n\
+step 1\n\
+step 2";
+    ts_assert_eq!(out, expected);
 }
 
 #[tokio::test]
@@ -1680,30 +2356,27 @@ async fn enter_plan_mode_prompt_five_phase_matches_ts_byte_precise() {
 }
 
 #[tokio::test]
-async fn enter_plan_mode_prompt_interview_omits_what_happens() {
-    // When `isPlanModeInterviewPhaseEnabled()`, `whatHappens` is `''`,
-    // so the `## What Happens in Plan Mode` block disappears. The
-    // surrounding structure (Examples, Important Notes) stays.
+async fn enter_plan_mode_prompt_interview_option_still_matches_2_1_193() {
+    // Upstream 2.1.193 does not gate the EnterPlanMode tool prompt on the
+    // interview workflow. The workflow-specific text is injected later by
+    // plan_mode attachments.
     let opts = PromptOptions {
         is_plan_interview_phase: true,
         ..Default::default()
     };
     let actual = <EnterPlanModeTool as DynTool>::prompt(&EnterPlanModeTool, &opts).await;
-    assert!(
-        !actual.contains("## What Happens in Plan Mode"),
-        "interview-phase prompt must omit 'What Happens' section"
-    );
-    assert!(
-        !actual.contains("Exit plan mode with ExitPlanMode when ready to implement"),
-        "interview-phase prompt must omit the 6-step list inside 'What Happens'"
-    );
-    // Surrounding structure still present.
-    assert!(actual.contains("## Examples"));
-    assert!(actual.contains("## Important Notes"));
-    assert!(actual.contains("- This tool REQUIRES user approval"));
-    // The condition #7 mention of AskUserQuestion is in the upper
-    // section (NOT inside WHAT_HAPPENS_SECTION) so it stays.
-    assert!(actual.contains("If you would use AskUserQuestion to clarify"));
+    ts_assert_eq!(actual, TS_ENTER_PLAN_MODE_PROMPT_FIVE_PHASE);
+}
+
+#[tokio::test]
+async fn enter_plan_mode_prompt_uses_shell_search_aliases_when_embedded_tools_available() {
+    let opts = PromptOptions {
+        has_embedded_search_tools: true,
+        ..Default::default()
+    };
+    let actual = <EnterPlanModeTool as DynTool>::prompt(&EnterPlanModeTool, &opts).await;
+    assert!(actual.contains("using `find`/Glob, `grep`/Grep, and Read tools"));
+    assert!(!actual.contains("using Glob, Grep, and Read tools"));
 }
 
 const TS_EXIT_PLAN_MODE_PROMPT: &str =
@@ -1735,7 +2408,6 @@ async fn exit_plan_mode_prompt_matches_ts_byte_precise() {
 
 #[test]
 fn enter_plan_mode_build_instructions_five_phase_matches_ts() {
-    // Non-interview branch.
     let confirmation = "Hello.";
     let expected = "Hello.\n\nIn plan mode, you should:\n\
                     1. Thoroughly explore the codebase to understand existing patterns\n\
@@ -1746,29 +2418,16 @@ fn enter_plan_mode_build_instructions_five_phase_matches_ts() {
                     6. When ready, use ExitPlanMode to present your plan for approval\n\n\
                     Remember: DO NOT write or edit any files yet. \
                     This is a read-only exploration and planning phase.";
-    let actual = EnterPlanModeTool::build_instructions(confirmation, false);
-    ts_assert_eq!(actual, expected);
-}
-
-#[test]
-fn enter_plan_mode_build_instructions_interview_matches_ts() {
-    // Interview branch.
-    let confirmation = "Hello.";
-    let expected = "Hello.\n\nDO NOT write or edit any files except the plan file. \
-                    Detailed workflow instructions will follow.";
-    let actual = EnterPlanModeTool::build_instructions(confirmation, true);
+    let actual = EnterPlanModeTool::build_instructions(confirmation);
     ts_assert_eq!(actual, expected);
 }
 
 #[tokio::test]
-async fn enter_plan_mode_execute_data_carries_short_confirmation_and_flag() {
-    // Post `Tool::render_for_model` migration: `execute` writes ONLY
-    // the short confirmation + the `isInterviewPhase` flag into
-    // `data`. The full workflow splice now lives in `render_for_model`
-    // (covered by `enter_plan_mode_render_for_model_*` below). This
-    // matches the expected `execute` output shape exactly.
+async fn enter_plan_mode_execute_data_carries_short_confirmation_only() {
+    // Upstream 2.1.193's output schema carries only `message`.
+    // The full workflow splice lives in `render_for_model`.
     let mut ctx = ctx_with_mode(PermissionMode::Default);
-    ctx.is_plan_interview_phase = false;
+    ctx.is_plan_interview_phase = true;
     let result = <EnterPlanModeTool as DynTool>::execute(&EnterPlanModeTool, json!({}), &ctx)
         .await
         .unwrap();
@@ -1781,30 +2440,17 @@ async fn enter_plan_mode_execute_data_carries_short_confirmation_and_flag() {
         msg,
         "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach."
     );
-    assert_eq!(
-        result.data.get("isInterviewPhase").and_then(Value::as_bool),
-        Some(false)
-    );
-
-    let mut ctx = ctx_with_mode(PermissionMode::Default);
-    ctx.is_plan_interview_phase = true;
-    let result = <EnterPlanModeTool as DynTool>::execute(&EnterPlanModeTool, json!({}), &ctx)
-        .await
-        .unwrap();
-    assert_eq!(
-        result.data.get("isInterviewPhase").and_then(Value::as_bool),
-        Some(true)
+    assert!(
+        result.data.get("isInterviewPhase").is_none(),
+        "2.1.193 EnterPlanMode output does not expose an interview flag"
     );
 }
 
 #[test]
-fn enter_plan_mode_render_for_model_five_phase_branch() {
-    // Renderer pulls the workflow flag out of `data` (written by
-    // `execute`) and produces a single Text part with the full
-    // 6-step splice.
+fn enter_plan_mode_render_for_model_matches_2_1_193_result() {
+    // Renderer produces the fixed 6-step splice used by upstream 2.1.193.
     let data = json!({
         "message": "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.",
-        "isInterviewPhase": false,
     });
     let parts = <EnterPlanModeTool as DynTool>::render_for_model(&EnterPlanModeTool, &data);
     let [coco_tool_runtime::ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
@@ -1816,7 +2462,7 @@ fn enter_plan_mode_render_for_model_five_phase_branch() {
 }
 
 #[test]
-fn enter_plan_mode_render_for_model_interview_branch() {
+fn enter_plan_mode_render_for_model_ignores_legacy_interview_flag() {
     let data = json!({
         "message": "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.",
         "isInterviewPhase": true,
@@ -1826,8 +2472,8 @@ fn enter_plan_mode_render_for_model_interview_branch() {
         panic!("expected single Text part, got {parts:?}");
     };
     assert!(text.starts_with("Entered plan mode."));
-    assert!(text.contains("DO NOT write or edit any files except the plan file"));
-    assert!(!text.contains("In plan mode, you should:"));
+    assert!(text.contains("In plan mode, you should:"));
+    assert!(text.contains("6. When ready, use ExitPlanMode"));
 }
 
 #[test]

@@ -102,11 +102,11 @@ impl PrefetchState {
 /// the upstream multi-turn/cache guidance so ranker behavior stays
 /// calibrated as the cache lane is filled in.
 pub const SELECT_MEMORIES_SYSTEM_PROMPT: &str = "\
-You are selecting memories that will be useful to Claude Code as it processes a user's query. \
+You are selecting memories that will be useful to the agent as it processes a user's query. \
 The first message lists the available memory files with their filenames and descriptions; \
 subsequent messages each contain one user query.\n\
 \n\
-Return a list of filenames for the memories that will clearly be useful to Claude Code as it \
+Return a list of filenames for the memories that will clearly be useful to the agent as it \
 processes the user's query (up to 5). Only include memories that you are certain will be helpful \
 based on their name and description.\n\
 - If you are unsure if a memory will be useful in processing the user's query, then do not include \

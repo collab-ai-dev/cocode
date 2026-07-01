@@ -129,6 +129,49 @@ fn install_permission_prompt(state: &mut AppState) {
     ));
 }
 
+fn install_exit_plan_prompt_on_no(state: &mut AppState) {
+    state.ui.push_prompt(PanePromptState::Permission(
+        crate::state::PermissionPromptState {
+            request_id: "r1".into(),
+            tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+            description: "Exit plan mode?".into(),
+            detail: crate::state::PermissionDetail::ExitPlanMode {
+                outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+                plan: Some("# Plan".into()),
+                edited_plan: None,
+                feedback_input: crate::state::PrefixInputState::new(String::new()),
+                plan_file_path: None,
+                allowed_prompts: vec![],
+            },
+            risk_level: None,
+            show_always_allow: false,
+            classifier_checking: false,
+            classifier_auto_approved: None,
+            choices: Some(vec![
+                coco_types::PermissionAskChoice {
+                    value: coco_types::ExitPlanChoice::KeepDefault.as_str().into(),
+                    label: "Yes, manually approve edits".into(),
+                    description: None,
+                },
+                coco_types::PermissionAskChoice {
+                    value: coco_types::ExitPlanChoice::No.as_str().into(),
+                    label: "No, keep planning".into(),
+                    description: None,
+                },
+            ]),
+            selected_choice: 1,
+            display_input: coco_types::PermissionDisplayInput::Empty,
+            original_input: None,
+            cwd: None,
+            permission_suggestions: vec![],
+            worker_badge: None,
+            explanation_visible: false,
+            explanation: crate::state::ExplainerFetch::NotFetched,
+            prefix_input: None,
+        },
+    ));
+}
+
 #[test]
 fn test_default_context_is_chat() {
     let state = AppState::new();
@@ -294,6 +337,25 @@ fn test_shell_prefix_edit_context_and_keys() {
         Some(TuiCommand::InsertChar('y'))
     ));
     // Enter commits the focused allow row.
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Enter)),
+        Some(TuiCommand::SurfaceConfirm)
+    ));
+}
+
+#[test]
+fn test_exit_plan_no_row_uses_feedback_input_context() {
+    let mut state = AppState::new();
+    install_exit_plan_prompt_on_no(&mut state);
+
+    assert_eq!(
+        active_context(&state),
+        KeybindingContext::ExitPlanFeedbackInput
+    );
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('n'))),
+        Some(TuiCommand::InsertChar('n'))
+    ));
     assert!(matches!(
         map_key(&state, press(KeyCode::Enter)),
         Some(TuiCommand::SurfaceConfirm)

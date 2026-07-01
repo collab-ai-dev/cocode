@@ -98,6 +98,13 @@ async fn main() -> Result<()> {
             "--no-session-persistence can only be used in print mode (-p / --print) or SDK mode"
         );
     }
+    if cli.plan_mode_instructions.is_some()
+        && !(cli.non_interactive
+            || cli.prompt.is_some()
+            || !std::io::IsTerminal::is_terminal(&std::io::stdout()))
+    {
+        anyhow::bail!("--plan-mode-instructions can only be used in print mode (-p / --print)");
+    }
 
     if let Some(cmd) = &cli.command {
         match cmd {
@@ -530,7 +537,10 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
             cwd: cwd.clone(),
             model_id,
             system_prompt: system_prompt.clone().unwrap_or_default(),
-            bypass_permissions_available,
+            permission_mode_availability: coco_types::PermissionModeAvailability::new(
+                bypass_permissions_available,
+                resources.startup.auto_available,
+            ),
             permission_mode,
             model_runtimes: None,
             tools: resources.tools,

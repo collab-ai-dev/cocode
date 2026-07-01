@@ -72,7 +72,7 @@ impl PermissionModeChoice {
                  risky ones still prompt for confirmation."
             }
             Self::Plan => {
-                "Claude plans changes but does not execute them. Switch to a write mode \
+                "The agent plans changes but does not execute them. Switch to a write mode \
                  after reviewing the strategy."
             }
             Self::Bypass => {
@@ -122,7 +122,7 @@ pub fn permission_mode_description(mode: PermissionMode) -> &'static str {
              Read-only tools are auto-approved."
         }
         PermissionMode::Plan => {
-            "Claude will plan changes but not execute them. \
+            "The agent will plan changes but not execute them. \
              Use this to review a strategy before switching to a write-capable mode."
         }
         PermissionMode::AcceptEdits => {

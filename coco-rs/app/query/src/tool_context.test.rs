@@ -63,6 +63,7 @@ fn factory_with_live_rules(
         task_handle: None,
         permission_bridge: None,
         app_state: None,
+        auto_mode_state: None,
         file_read_state: None,
         file_history: None,
         config_home: None,
@@ -933,6 +934,17 @@ fn session_rule(
     }
 }
 
+fn user_allow_rule(tool_pattern: &str) -> coco_types::PermissionRule {
+    coco_types::PermissionRule {
+        source: coco_types::PermissionRuleSource::UserSettings,
+        behavior: coco_types::PermissionBehavior::Allow,
+        value: coco_types::PermissionRuleValue {
+            tool_pattern: tool_pattern.into(),
+            rule_content: None,
+        },
+    }
+}
+
 #[tokio::test]
 async fn test_factory_returns_base_allow_rules_when_live_rules_empty() {
     // Zero-clone fast path: when the live store is empty, the
@@ -1055,6 +1067,46 @@ async fn test_factory_isolates_per_arc_engines() {
             .allow_rules
             .contains_key(&coco_types::PermissionRuleSource::Command)
     );
+}
+
+#[tokio::test]
+async fn test_factory_strips_dangerous_allow_rules_in_plan_auto_mode() {
+    let mut base_allow = std::collections::HashMap::new();
+    base_allow.insert(
+        coco_types::PermissionRuleSource::UserSettings,
+        vec![user_allow_rule(coco_types::ToolName::Agent.as_str())],
+    );
+    let permissions = coco_types::LiveToolPermissionState {
+        mode: Some(PermissionMode::Plan),
+        pre_plan_mode: Some(PermissionMode::Default),
+        allow_rules: base_allow,
+        ..Default::default()
+    };
+    let config = QueryEngineConfig {
+        permission_mode_availability: coco_types::PermissionModeAvailability::new(
+            /*bypass_permissions*/ false, /*auto*/ true,
+        ),
+        use_auto_mode_during_plan: true,
+        ..test_config()
+    };
+    let auto_mode_state = Arc::new(coco_permissions::AutoModeState::new());
+    auto_mode_state.set_active(true);
+
+    let ctx = ToolContextFactory {
+        auto_mode_state: Some(auto_mode_state),
+        ..factory_with_base_rules(config, permissions)
+    }
+    .build(Default::default())
+    .await;
+
+    assert!(
+        ctx.permission_context
+            .allow_rules
+            .get(&coco_types::PermissionRuleSource::UserSettings)
+            .is_none_or(Vec::is_empty),
+        "Plan mode with auto semantics must remove dangerous Agent allow rules before evaluation",
+    );
+    assert!(ctx.auto_mode_active);
 }
 
 #[tokio::test]

@@ -106,7 +106,7 @@ fn test_build_prompt_shape() {
         let UserContentPart::Text(t) = &content[0] else {
             panic!("expected text part");
         };
-        assert!(t.text.contains("evaluating a hook in Claude Code"));
+        assert!(t.text.contains("evaluating a hook in Coco"));
     } else {
         panic!("first message should be System");
     }

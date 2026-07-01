@@ -236,7 +236,29 @@ impl QueryEngine {
         .await;
 
         if let Some(state) = self.app_state.as_ref() {
-            let permission_mode_after_tools = state.read().await.permissions.mode;
+            let permissions_after_tools = {
+                let mut guard = state.write().await;
+                if let Some(auto_state) = self.auto_mode_state.as_ref() {
+                    let allow_rules = guard.permissions.allow_rules.clone();
+                    let plan_auto_options = coco_permissions::PlanModeAutoOptions {
+                        use_auto_mode_during_plan: self.config.use_auto_mode_during_plan,
+                        auto_mode_available: self.config.permission_mode_availability.auto,
+                    };
+                    let _ = coco_permissions::reconcile_plan_auto_mode_in_app_state(
+                        &mut guard,
+                        &allow_rules,
+                        plan_auto_options,
+                        auto_state,
+                    );
+                    if guard.permissions.mode != Some(coco_types::PermissionMode::Plan) {
+                        auto_state.set_active(
+                            guard.permissions.mode == Some(coco_types::PermissionMode::Auto),
+                        );
+                    }
+                }
+                guard.permissions.clone()
+            };
+            let permission_mode_after_tools = permissions_after_tools.mode;
             if permission_mode_after_tools != permission_mode_before_tools
                 && let Some(mode) = permission_mode_after_tools
             {
@@ -245,7 +267,10 @@ impl QueryEngine {
                     coco_types::ServerNotification::PermissionModeChanged(
                         coco_types::PermissionModeChangedParams {
                             mode,
-                            bypass_available: self.config.bypass_permissions_available,
+                            bypass_available: self
+                                .config
+                                .permission_mode_availability
+                                .bypass_permissions,
                         },
                     ),
                 )

@@ -74,6 +74,9 @@ pub struct PlanModeReminder {
     /// Optional protocol-event sink for surfacing plan-approval requests
     /// to the leader's TUI as `ServerNotification::PlanApprovalRequested`.
     event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    /// Teammate live permission-mode override. In-process teammates read this
+    /// ahead of app_state, so approval responses must update it too.
+    live_permission_mode: Option<Arc<RwLock<PermissionMode>>>,
 }
 
 impl PlanModeReminder {
@@ -95,6 +98,7 @@ impl PlanModeReminder {
             team_name: None,
             is_teammate_awaiting: false,
             event_tx: None,
+            live_permission_mode: None,
         }
     }
 
@@ -126,6 +130,13 @@ impl PlanModeReminder {
         self.agent_name = Some(agent_name);
         self.team_name = Some(team_name);
         self.is_teammate_awaiting = is_teammate_awaiting;
+        self
+    }
+
+    /// Install the live permission-mode override used by teammate query
+    /// engines. Main sessions leave this unset and use app_state directly.
+    pub fn with_live_permission_mode(mut self, mode: Arc<RwLock<PermissionMode>>) -> Self {
+        self.live_permission_mode = Some(mode);
         self
     }
 
@@ -278,10 +289,23 @@ impl PlanModeReminder {
             )
             .await;
 
+            let target_mode = resp
+                .approved
+                .then_some(resp.permission_mode.unwrap_or(PermissionMode::Default));
+            if let (Some(mode_store), Some(mode)) = (&self.live_permission_mode, target_mode) {
+                *mode_store.write().await = mode;
+            }
+
             let mut guard = app_state.write().await;
             guard.awaiting_plan_approval = false;
             guard.awaiting_plan_approval_request_id = None;
-            if let Some(mode) = resp.permission_mode {
+            if let Some(mode) = target_mode {
+                guard.permissions.mode = Some(mode);
+                guard.permissions.pre_plan_mode = None;
+                guard.has_exited_plan_mode = true;
+                guard.needs_plan_mode_exit_attachment = true;
+                guard.pending_plan_mode_exit_outcome =
+                    Some(coco_types::ExitPlanModeOutcome::ImplementationPlan);
                 guard.last_permission_mode = Some(mode);
             }
             drop(guard);

@@ -684,6 +684,8 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "session",
     "respondToBashCommands",
     "respond_to_bash_commands",
+    "useAutoModeDuringPlan",
+    "use_auto_mode_during_plan",
     "auto_mode",
     "autoMode",
     "include_co_authored_by",

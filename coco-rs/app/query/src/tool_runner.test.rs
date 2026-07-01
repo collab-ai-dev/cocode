@@ -44,8 +44,8 @@ fn tool_result_text(message: &Message) -> &str {
 
 #[tokio::test]
 async fn deferred_tool_call_before_tool_search_does_not_schema_validate() {
-    // WebFetch is a genuinely deferred, default-enabled tool. (Plan-mode tools
-    // are no longer deferred, so they can't exercise the not-yet-loaded path.)
+    // WebFetch has required input fields, so it exercises the deferred-before-
+    // schema-validation path with deliberately malformed input.
     let tools = registry_with(Arc::new(coco_tools::tools::WebFetchTool));
     let ctx = ToolUseContext::test_default()
         .with_tool_search_strategy(coco_tool_runtime::ToolSearchStrategy::ClientSidePromotion)

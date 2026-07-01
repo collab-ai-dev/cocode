@@ -138,6 +138,11 @@ pub struct GeneratorContext<'a> {
     /// sub-agent which render workflow-independent text.
     pub plan_workflow: PlanWorkflow,
 
+    /// Optional custom plan-mode workflow body. Full main-agent reminders
+    /// keep the standard safety wrapper and use this instead of a built-in
+    /// workflow; Sparse reminders refer back to it.
+    pub plan_mode_custom_instructions: Option<String>,
+
     /// Plan-mode Phase-4 variant. Only affects Full 5-phase rendering.
     pub phase4_variant: Phase4Variant,
 
@@ -377,11 +382,10 @@ pub struct GeneratorContext<'a> {
     pub skill_discovery: Option<SkillDiscoveryPayload>,
 
     // ── History-derived plan/auto cadence (filled by the engine turn-scan) ──
-    /// Human turns since the last `plan_mode` attachment in history. `None`
-    /// means no prior plan-mode attachment this segment (first plan turn →
-    /// always emit); `Some(n)` emits only when `n` ≥ the plan-mode cadence.
-    /// Replaces the old in-memory throttle's `last_generated_turn` — history
-    /// is the source of truth, so cadence survives compaction.
+    /// Human turns since the last `plan_mode` or `plan_mode_reentry`
+    /// attachment before any `plan_mode_exit` boundary. `None` means no open
+    /// plan-mode cycle (first plan turn → always emit); `Some(n)` emits only
+    /// when `n` ≥ the plan-mode cadence.
     pub plan_mode_turns_since_attachment: Option<i32>,
 
     /// Count of `plan_mode` attachments since the last `plan_mode_exit`,
@@ -425,6 +429,7 @@ pub struct GeneratorContextBuilder<'a> {
     agent_id: Option<String>,
     is_sub_agent: bool,
     plan_workflow: PlanWorkflow,
+    plan_mode_custom_instructions: Option<String>,
     phase4_variant: Phase4Variant,
     explore_agent_count: i32,
     plan_agent_count: i32,
@@ -507,6 +512,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             agent_id: None,
             is_sub_agent: false,
             plan_workflow: PlanWorkflow::default(),
+            plan_mode_custom_instructions: None,
             phase4_variant: Phase4Variant::default(),
             explore_agent_count: DEFAULT_EXPLORE_AGENT_COUNT,
             plan_agent_count: DEFAULT_PLAN_AGENT_COUNT,
@@ -645,6 +651,11 @@ impl<'a> GeneratorContextBuilder<'a> {
 
     pub fn plan_workflow(mut self, w: PlanWorkflow) -> Self {
         self.plan_workflow = w;
+        self
+    }
+
+    pub fn plan_mode_custom_instructions(mut self, instructions: Option<String>) -> Self {
+        self.plan_mode_custom_instructions = instructions;
         self
     }
 
@@ -977,6 +988,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             agent_id: self.agent_id,
             is_sub_agent: self.is_sub_agent,
             plan_workflow: self.plan_workflow,
+            plan_mode_custom_instructions: self.plan_mode_custom_instructions,
             phase4_variant: self.phase4_variant,
             explore_agent_count: clamp_agents(self.explore_agent_count),
             plan_agent_count: clamp_agents(self.plan_agent_count),

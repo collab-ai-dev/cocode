@@ -72,7 +72,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         cwd,
         model_id,
         system_prompt: "test".to_string(),
-        bypass_permissions_available: false,
+        permission_mode_availability: coco_types::PermissionModeAvailability::default(),
         permission_mode: coco_types::PermissionMode::default(),
         model_runtimes: None,
         tools,

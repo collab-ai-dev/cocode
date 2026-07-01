@@ -264,7 +264,7 @@ fn goal_registration_matches_upstream_interactive_metadata() {
     let goal = registry.get(names::GOAL).expect("/goal registered");
     assert_eq!(
         goal.base.description,
-        "Set a goal Claude checks before stopping"
+        "Set a goal the agent checks before stopping"
     );
     assert_eq!(
         goal.base.argument_hint.as_deref(),

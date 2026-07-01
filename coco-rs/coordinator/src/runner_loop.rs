@@ -406,7 +406,7 @@ pub async fn run_in_process_teammate(
             permission_mode: Some(permission_mode),
             extra_permission_rules: Vec::new(),
             live_permission_rules: Some(live_permission_rules),
-            live_permission_mode: Some(live_permission_mode),
+            live_permission_mode: Some(live_permission_mode.clone()),
             cancel: Some(current_turn_cancel.clone()),
             session_id: config.session_id.clone(),
             agent_id: config.identity.agent_id.clone(),
@@ -610,31 +610,37 @@ pub async fn run_in_process_teammate(
         // (now in `query_result.response_text`); send it to the leader
         // and block until a matching `PlanApprovalResponse` arrives.
         if plan_approval_pending {
-            let plan_content = query_result.response_text.clone().unwrap_or_default();
-            let request_id = uuid::Uuid::new_v4().to_string();
-            let plan_envelope = mailbox::create_plan_approval_request_message(
-                &config.identity.agent_name,
-                &request_id,
-                "",
-                &plan_content,
-            );
-            let envelope_message = mailbox::TeammateMessage {
-                from: config.identity.agent_name.clone(),
-                text: plan_envelope,
-                timestamp: chrono::Utc::now().to_rfc3339(),
-                read: false,
-                color: config
-                    .identity
-                    .color
-                    .as_ref()
-                    .map(|c| c.as_str().to_string()),
-                summary: Some("plan approval request".to_string()),
+            let request_id = match existing_plan_approval_request_id(&query_result.messages) {
+                Some(id) => id,
+                None => {
+                    let plan_content = query_result.response_text.clone().unwrap_or_default();
+                    let request_id = uuid::Uuid::new_v4().to_string();
+                    let plan_envelope = mailbox::create_plan_approval_request_message(
+                        &config.identity.agent_name,
+                        &request_id,
+                        "",
+                        &plan_content,
+                    );
+                    let envelope_message = mailbox::TeammateMessage {
+                        from: config.identity.agent_name.clone(),
+                        text: plan_envelope,
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        read: false,
+                        color: config
+                            .identity
+                            .color
+                            .as_ref()
+                            .map(|c| c.as_str().to_string()),
+                        summary: Some("plan approval request".to_string()),
+                    };
+                    let _ = mailbox::write_to_mailbox(
+                        TEAM_LEAD_NAME,
+                        envelope_message,
+                        &config.identity.team_name,
+                    );
+                    request_id
+                }
             };
-            let _ = mailbox::write_to_mailbox(
-                TEAM_LEAD_NAME,
-                envelope_message,
-                &config.identity.team_name,
-            );
 
             match crate::runner_loop_wait::wait_for_plan_approval(
                 &config.identity,
@@ -644,14 +650,19 @@ pub async fn run_in_process_teammate(
             .await
             {
                 None => break,
-                Some((true, _)) => {
+                Some(decision) if decision.approved => {
                     plan_approval_pending = false;
+                    let target_mode = decision
+                        .permission_mode
+                        .unwrap_or(coco_types::PermissionMode::Default);
+                    *live_permission_mode.write().await = target_mode;
                 }
-                Some((false, feedback)) => {
+                Some(decision) => {
                     // Plan rejected — re-prompt the model with the
                     // leader's feedback. The next turn writes a revised
                     // plan, which loops through this gate again.
-                    let feedback_text = feedback
+                    let feedback_text = decision
+                        .feedback
                         .unwrap_or_else(|| "Plan rejected by leader. Please revise.".to_string());
                     current_prompt = teammate::format_as_teammate_message(
                         TEAM_LEAD_NAME,
@@ -1260,6 +1271,52 @@ async fn claim_first_available_task(
     }
 
     None
+}
+
+fn existing_plan_approval_request_id(messages: &[Arc<Message>]) -> Option<String> {
+    messages
+        .iter()
+        .rev()
+        .find_map(|message| plan_approval_request_id_from_message(message.as_ref()))
+}
+
+fn plan_approval_request_id_from_message(message: &Message) -> Option<String> {
+    let Message::ToolResult(result) = message else {
+        return None;
+    };
+    if result.is_error {
+        return None;
+    }
+
+    let coco_types::LlmMessage::Tool { content, .. } = &result.message else {
+        return None;
+    };
+
+    content.iter().find_map(|part| {
+        let coco_types::ToolContent::ToolResult(result) = part else {
+            return None;
+        };
+        if result.tool_name != coco_types::ToolName::ExitPlanMode.as_str() {
+            return None;
+        }
+        let coco_types::ToolResultOutput::Text { value, .. } = &result.output else {
+            return None;
+        };
+        if !value.contains("Your plan has been submitted to the team lead for approval.") {
+            return None;
+        }
+        extract_plan_approval_request_id(value)
+    })
+}
+
+fn extract_plan_approval_request_id(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("Request ID:")
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+    })
 }
 
 /// Read a team's `team_allowed_paths` and convert them into `Allow`

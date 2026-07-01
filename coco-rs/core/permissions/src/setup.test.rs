@@ -63,6 +63,17 @@ fn test_permission_mode_description_non_empty() {
     }
 }
 
+#[test]
+fn test_plan_permission_descriptions_use_generic_agent_name() {
+    let choice_desc = PermissionModeChoice::Plan.description();
+    assert!(choice_desc.contains("The agent plans changes"));
+    assert!(!choice_desc.contains("Claude"));
+
+    let mode_desc = permission_mode_description(PermissionMode::Plan);
+    assert!(mode_desc.contains("The agent will plan changes"));
+    assert!(!mode_desc.contains("Claude"));
+}
+
 // ── is_default_mode ──
 
 #[test]

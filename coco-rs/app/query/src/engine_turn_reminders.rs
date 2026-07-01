@@ -524,6 +524,7 @@ impl QueryEngine {
             plan_file_path: reminder_plan_path,
             plan_exists: reminder_plan_exists,
             plan_workflow: workflow_rm,
+            plan_mode_custom_instructions: pm_settings.custom_instructions.clone(),
             phase4_variant: phase4_rm,
             explore_agent_count: pm_settings.explore_agent_count,
             plan_agent_count: pm_settings.plan_agent_count,

@@ -188,7 +188,7 @@ fn task_notification_status_strings_match_ts() {
 #[test]
 fn coordinator_system_prompt_contains_role_section_and_tool_names() {
     let p = coordinator_system_prompt(false);
-    assert!(p.contains("You are Claude Code"));
+    assert!(p.contains("You are Coco"));
     assert!(p.contains("## 1. Your Role"));
     assert!(p.contains("## 2. Your Tools"));
     assert!(p.contains("Agent"));

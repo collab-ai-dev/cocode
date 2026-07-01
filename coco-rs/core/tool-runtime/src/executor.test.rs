@@ -183,6 +183,7 @@ fn prepared_from(
         model_index,
         permission_resolution_detail: None,
         approval_feedback: None,
+        approval_content_message: None,
     }
 }
 
@@ -259,9 +260,9 @@ async fn test_execute_with_concurrent_batch_surfaces_in_completion_order() {
     });
 
     let plans = vec![
-        ToolCallPlan::Runnable(prepared_from(a, "A", 0)),
-        ToolCallPlan::Runnable(prepared_from(b, "B", 1)),
-        ToolCallPlan::Runnable(prepared_from(c, "C", 2)),
+        ToolCallPlan::Runnable(Box::new(prepared_from(a, "A", 0))),
+        ToolCallPlan::Runnable(Box::new(prepared_from(b, "B", 1))),
+        ToolCallPlan::Runnable(Box::new(prepared_from(c, "C", 2))),
     ];
 
     let exec = ToolExecutor::new();
@@ -305,7 +306,7 @@ async fn test_execute_with_bash_failure_aborts_concurrent_sibling_runtime() {
         name: "read".into(),
     });
     let plans = vec![
-        ToolCallPlan::Runnable(PreparedToolCall {
+        ToolCallPlan::Runnable(Box::new(PreparedToolCall {
             tool_use_id: "bash-call".into(),
             tool_id: ToolId::Builtin(coco_types::ToolName::Bash),
             parsed_input: crate::ValidatedInput::validate(bash_tool.as_ref(), json!({}))
@@ -315,8 +316,9 @@ async fn test_execute_with_bash_failure_aborts_concurrent_sibling_runtime() {
             model_index: 0,
             permission_resolution_detail: None,
             approval_feedback: None,
-        }),
-        ToolCallPlan::Runnable(prepared_from(read_tool, "read-call", 1)),
+            approval_content_message: None,
+        })),
+        ToolCallPlan::Runnable(Box::new(prepared_from(read_tool, "read-call", 1))),
     ];
     let observed_reason = Arc::new(Mutex::new(None));
     let observed_reason_for_run = observed_reason.clone();
@@ -365,8 +367,8 @@ async fn test_execute_with_concurrent_batch_applies_patches_in_model_order() {
     let b = Arc::new(SafeTool { name: "b".into() });
 
     let plans = vec![
-        ToolCallPlan::Runnable(prepared_from(a, "A", 0)),
-        ToolCallPlan::Runnable(prepared_from(b, "B", 1)),
+        ToolCallPlan::Runnable(Box::new(prepared_from(a, "A", 0))),
+        ToolCallPlan::Runnable(Box::new(prepared_from(b, "B", 1))),
     ];
 
     // Vary completion order: B finishes first (so completion_seq 0),
@@ -410,8 +412,8 @@ async fn test_execute_with_serial_tool_applies_patch_before_next_context() {
     let u2 = Arc::new(UnsafeTool { name: "u2".into() });
 
     let plans = vec![
-        ToolCallPlan::Runnable(prepared_from(u1, "u1", 0)),
-        ToolCallPlan::Runnable(prepared_from(u2, "u2", 1)),
+        ToolCallPlan::Runnable(Box::new(prepared_from(u1, "u1", 0))),
+        ToolCallPlan::Runnable(Box::new(prepared_from(u2, "u2", 1))),
     ];
 
     // u1 writes has_exited_plan_mode = true. When u2's run_one
@@ -467,8 +469,8 @@ async fn test_execute_with_early_outcome_is_barrier_between_safe_batches() {
     let c = Arc::new(SafeTool { name: "c".into() });
 
     let plans = vec![
-        ToolCallPlan::Runnable(prepared_from(a, "A", 0)),
-        ToolCallPlan::EarlyOutcome(UnstampedToolCallOutcome {
+        ToolCallPlan::Runnable(Box::new(prepared_from(a, "A", 0))),
+        ToolCallPlan::EarlyOutcome(Box::new(UnstampedToolCallOutcome {
             tool_use_id: "B".into(),
             tool_id: ToolId::Custom("unknown".into()),
             model_index: 1,
@@ -479,8 +481,8 @@ async fn test_execute_with_early_outcome_is_barrier_between_safe_batches() {
             prevent_continuation: None,
             structured_output: None,
             effects: ToolSideEffects::none(),
-        }),
-        ToolCallPlan::Runnable(prepared_from(c, "C", 2)),
+        })),
+        ToolCallPlan::Runnable(Box::new(prepared_from(c, "C", 2))),
     ];
 
     let exec = ToolExecutor::new();
@@ -522,9 +524,9 @@ async fn test_execute_with_every_plan_gets_one_outcome() {
     let b = Arc::new(UnsafeTool { name: "b".into() });
 
     let plans = vec![
-        ToolCallPlan::Runnable(prepared_from(a, "A", 0)),
-        ToolCallPlan::EarlyOutcome(empty_unstamped("B", 1)),
-        ToolCallPlan::Runnable(prepared_from(b, "C", 2)),
+        ToolCallPlan::Runnable(Box::new(prepared_from(a, "A", 0))),
+        ToolCallPlan::EarlyOutcome(Box::new(empty_unstamped("B", 1))),
+        ToolCallPlan::Runnable(Box::new(prepared_from(b, "C", 2))),
     ];
 
     let exec = ToolExecutor::new();

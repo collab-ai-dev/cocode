@@ -266,7 +266,7 @@ pub fn create_progress_message(tool_use_id: &str, data: serde_json::Value) -> Me
 
 /// Literal text content for a Ctrl+C cancellation marker that lives in
 /// the message history.
-/// Rendered specially as the dim "Interrupted · What should Claude do instead?" row.
+/// Rendered specially as the dim interrupted row.
 pub const INTERRUPT_MESSAGE: &str = "[Request interrupted by user]";
 
 /// Variant of [`INTERRUPT_MESSAGE`] used when the cancel happened while a
