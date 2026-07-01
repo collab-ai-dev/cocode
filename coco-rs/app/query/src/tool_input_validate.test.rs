@@ -144,6 +144,7 @@ struct MockTool {
     id: ToolId,
     name: String,
     runtime_schema: coco_tool_runtime::ToolInputSchema,
+    validation_error_steer: Option<String>,
 }
 
 impl MockTool {
@@ -153,7 +154,13 @@ impl MockTool {
             name: name.as_str().to_string(),
             runtime_schema: coco_tool_runtime::ToolInputSchema::from_value(schema)
                 .expect("mock tool schema must be valid"),
+            validation_error_steer: None,
         }
+    }
+
+    fn with_validation_error_steer(mut self, steer: &str) -> Self {
+        self.validation_error_steer = Some(steer.to_string());
+        self
     }
 }
 
@@ -186,6 +193,9 @@ impl coco_tool_runtime::traits::Tool for MockTool {
     fn is_concurrency_safe(&self, _input: &serde_json::Value) -> bool {
         true
     }
+    fn validation_error_steer(&self, _input: &serde_json::Value) -> Option<String> {
+        self.validation_error_steer.clone()
+    }
     async fn execute(
         &self,
         _input: serde_json::Value,
@@ -193,6 +203,36 @@ impl coco_tool_runtime::traits::Tool for MockTool {
     ) -> Result<coco_messages::ToolResult<serde_json::Value>, ToolError> {
         unreachable!("MockTool::execute should not run in validate tests")
     }
+}
+
+#[tokio::test]
+async fn schema_violation_appends_tool_validation_error_steer() {
+    let tool: StdArc<dyn DynTool> = StdArc::new(
+        MockTool::new(
+            ToolName::Bash,
+            json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+                "additionalProperties": false,
+            }),
+        )
+        .with_validation_error_steer("Use `command` as a top-level string."),
+    );
+    let (tc, _validated) = run_pipeline(r#"{"cmd": "ls"}"#, "Bash", Some(&tool)).await;
+    assert!(tc.invalid);
+    let message = match tc.invalid_reason.unwrap() {
+        ToolInputInvalidReason::SchemaViolation { message } => message,
+        other => panic!("expected SchemaViolation, got {other:?}"),
+    };
+    assert!(
+        message.contains("required parameter `command` is missing"),
+        "schema error missing: {message}"
+    );
+    assert!(
+        message.contains("Use `command` as a top-level string."),
+        "steer missing: {message}"
+    );
 }
 
 fn bash_tool() -> StdArc<dyn DynTool> {

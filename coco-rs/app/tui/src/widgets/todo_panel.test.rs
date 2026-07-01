@@ -74,7 +74,7 @@ fn v1_renders_when_no_v2() {
 }
 
 #[test]
-fn v2_sort_orders_in_progress_first() {
+fn v2_sort_orders_by_id_when_not_truncated() {
     let mut state = AppState::new();
     state
         .session
@@ -91,12 +91,11 @@ fn v2_sort_orders_in_progress_first() {
     let mut out = Vec::new();
     append_lines(&state, &mut out);
     let joined = lines_text(&out).join("\n");
-    // active should appear before pending, which appears before done.
-    let pos_active = joined.find("active thing").expect("active missing");
-    let pos_pending = joined.find("later thing").expect("pending missing");
     let pos_done = joined.find("done thing").expect("done missing");
-    assert!(pos_active < pos_pending);
-    assert!(pos_pending < pos_done);
+    let pos_pending = joined.find("later thing").expect("pending missing");
+    let pos_active = joined.find("active thing").expect("active missing");
+    assert!(pos_done < pos_pending);
+    assert!(pos_pending < pos_active);
 }
 
 #[test]
@@ -132,22 +131,38 @@ fn state_at(now_ms: i64) -> AppState {
 }
 
 #[test]
-fn recently_completed_lifts_above_pending() {
+fn recently_completed_lifts_above_pending_when_truncated() {
     let mut state = state_at(T0_MS);
     state
         .session
         .plan_tasks
-        .push(task("1", "pending thing", TaskListStatus::Pending));
+        .push(task("1", "old done", TaskListStatus::Completed));
     state
         .session
         .plan_tasks
-        .push(task("2", "just done", TaskListStatus::Completed));
+        .push(task("2", "pending thing", TaskListStatus::Pending));
+    state
+        .session
+        .plan_tasks
+        .push(task("3", "active thing", TaskListStatus::InProgress));
+    state
+        .session
+        .plan_tasks
+        .push(task("4", "just done", TaskListStatus::Completed));
+    state
+        .session
+        .plan_tasks
+        .push(task("5", "pending other", TaskListStatus::Pending));
+    state
+        .session
+        .plan_tasks
+        .push(task("6", "pending third", TaskListStatus::Pending));
     // Stamp completion 5 seconds ago — well within the 30s window.
     state
         .ui
         .ephemeral
         .task_completion_timestamps
-        .insert("2".into(), T0_MS - 5_000);
+        .insert("4".into(), T0_MS - 5_000);
     let mut out = Vec::new();
     append_lines(&state, &mut out);
     let joined = lines_text(&out).join("\n");
@@ -160,22 +175,38 @@ fn recently_completed_lifts_above_pending() {
 }
 
 #[test]
-fn old_completed_sorts_below_pending() {
+fn old_completed_sorts_below_pending_when_truncated() {
     let mut state = state_at(T0_MS);
     state
         .session
         .plan_tasks
-        .push(task("1", "pending thing", TaskListStatus::Pending));
+        .push(task("1", "active thing", TaskListStatus::InProgress));
     state
         .session
         .plan_tasks
-        .push(task("2", "long ago done", TaskListStatus::Completed));
+        .push(task("2", "pending thing", TaskListStatus::Pending));
+    state
+        .session
+        .plan_tasks
+        .push(task("3", "long ago done", TaskListStatus::Completed));
+    state
+        .session
+        .plan_tasks
+        .push(task("4", "older done b", TaskListStatus::Completed));
+    state
+        .session
+        .plan_tasks
+        .push(task("5", "older done c", TaskListStatus::Completed));
+    state
+        .session
+        .plan_tasks
+        .push(task("6", "hidden old done", TaskListStatus::Completed));
     // 45 seconds ago — outside the 30s window.
     state
         .ui
         .ephemeral
         .task_completion_timestamps
-        .insert("2".into(), T0_MS - 45_000);
+        .insert("3".into(), T0_MS - 45_000);
     let mut out = Vec::new();
     append_lines(&state, &mut out);
     let joined = lines_text(&out).join("\n");
@@ -184,6 +215,103 @@ fn old_completed_sorts_below_pending() {
     assert!(
         pos_pending < pos_done,
         "older completed should trail pending: {joined}"
+    );
+    assert!(
+        joined.contains("… +1 completed"),
+        "hidden old completed summary missing: {joined}"
+    );
+}
+
+#[test]
+fn v2_truncated_matches_ts_priority_and_summary() {
+    let mut state = state_at(T0_MS);
+    state
+        .session
+        .plan_tasks
+        .push(task("1", "old completed", TaskListStatus::Completed));
+    state
+        .session
+        .plan_tasks
+        .push(task("2", "blocked pending", TaskListStatus::Pending));
+    state
+        .session
+        .plan_tasks
+        .push(task("3", "unblocked pending", TaskListStatus::Pending));
+    state
+        .session
+        .plan_tasks
+        .push(task("4", "recent completed", TaskListStatus::Completed));
+    state
+        .session
+        .plan_tasks
+        .push(task("5", "other pending", TaskListStatus::Pending));
+    state
+        .session
+        .plan_tasks
+        .push(task("6", "active blocker", TaskListStatus::InProgress));
+    state.session.plan_tasks[1].blocked_by.push("6".into());
+    state
+        .ui
+        .ephemeral
+        .task_completion_timestamps
+        .insert("4".into(), T0_MS - 5_000);
+
+    let mut out = Vec::new();
+    append_lines(&state, &mut out);
+    let joined = lines_text(&out).join("\n");
+    let pos_recent = joined
+        .find("recent completed")
+        .expect("recent completed missing");
+    let pos_active = joined.find("active blocker").expect("active missing");
+    let pos_unblocked = joined
+        .find("unblocked pending")
+        .expect("unblocked pending missing");
+    let pos_other = joined.find("other pending").expect("other pending missing");
+    let pos_blocked = joined
+        .find("#2 blocked pending")
+        .expect("blocked pending missing");
+    assert!(pos_recent < pos_active);
+    assert!(pos_active < pos_unblocked);
+    assert!(pos_unblocked < pos_other);
+    assert!(pos_other < pos_blocked);
+    assert!(
+        !joined.contains("old completed"),
+        "old completed should be hidden: {joined}"
+    );
+    assert!(
+        joined.contains("… +1 completed"),
+        "hidden summary missing: {joined}"
+    );
+}
+
+#[test]
+fn v2_blocked_by_only_shows_unresolved_blockers() {
+    let mut state = AppState::new();
+    state
+        .session
+        .plan_tasks
+        .push(task("1", "done blocker", TaskListStatus::Completed));
+    state
+        .session
+        .plan_tasks
+        .push(task("2", "open blocker", TaskListStatus::Pending));
+    state
+        .session
+        .plan_tasks
+        .push(task("3", "blocked item", TaskListStatus::Pending));
+    state.session.plan_tasks[2].blocked_by.push("1".into());
+    state.session.plan_tasks[2].blocked_by.push("2".into());
+
+    let mut out = Vec::new();
+    append_lines(&state, &mut out);
+    let joined = lines_text(&out).join("\n");
+    assert!(
+        joined.contains("blocked item [blocked by 2]"),
+        "only open blockers should render: {joined}"
+    );
+    assert!(
+        !joined.contains("blocked by 1"),
+        "completed blocker should not render: {joined}"
     );
 }
 

@@ -117,6 +117,36 @@ async fn test_sequential_ids() {
 }
 
 #[tokio::test]
+async fn test_list_tasks_sorts_by_numeric_id() {
+    let (_dir, store) = fresh_store();
+    fs::create_dir_all(&store.tasks_dir).unwrap();
+    for id in ["10", "2", "1"] {
+        store
+            .write_task_unlocked(&Task {
+                id: id.to_string(),
+                subject: format!("task {id}"),
+                description: String::new(),
+                active_form: None,
+                owner: None,
+                status: TaskStatus::Pending,
+                blocks: Vec::new(),
+                blocked_by: Vec::new(),
+                metadata: None,
+            })
+            .unwrap();
+    }
+
+    let ids: Vec<String> = store
+        .list_tasks()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|task| task.id)
+        .collect();
+    assert_eq!(ids, ["1", "2", "10"]);
+}
+
+#[tokio::test]
 async fn test_update_status_transitions() {
     let (_dir, store) = fresh_store();
     let t = store
@@ -176,6 +206,53 @@ async fn test_delete_cascades_blocks() {
     let c = store.get_task(&c.id).await.unwrap().unwrap();
     assert!(b.blocked_by.is_empty());
     assert!(c.blocked_by.is_empty());
+}
+
+#[tokio::test]
+async fn test_block_task_returns_true_for_duplicate_edge_when_tasks_exist() {
+    let (_dir, store) = fresh_store();
+    let a = store
+        .create_task("a".into(), "".into(), None, None)
+        .await
+        .unwrap();
+    let b = store
+        .create_task("b".into(), "".into(), None, None)
+        .await
+        .unwrap();
+
+    assert!(store.block_task(&a.id, &b.id).await.unwrap());
+    assert!(
+        store.block_task(&a.id, &b.id).await.unwrap(),
+        "matches Claude Code: duplicate dependency edges still report that both tasks exist",
+    );
+}
+
+#[tokio::test]
+async fn test_concurrent_block_task_preserves_multiple_blockers() {
+    let (_dir, store) = fresh_store();
+    let a = store
+        .create_task("a".into(), "".into(), None, None)
+        .await
+        .unwrap();
+    let b = store
+        .create_task("b".into(), "".into(), None, None)
+        .await
+        .unwrap();
+    let c = store
+        .create_task("c".into(), "".into(), None, None)
+        .await
+        .unwrap();
+
+    let (ab, bb) = tokio::join!(
+        store.block_task(&a.id, &c.id),
+        store.block_task(&b.id, &c.id)
+    );
+    assert!(ab.unwrap());
+    assert!(bb.unwrap());
+
+    let mut blocked_by = store.get_task(&c.id).await.unwrap().unwrap().blocked_by;
+    blocked_by.sort();
+    assert_eq!(blocked_by, [a.id, b.id]);
 }
 
 #[tokio::test]

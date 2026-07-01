@@ -206,7 +206,7 @@ pub trait HookHandle: Send + Sync {
         error_message: &str,
     ) -> PostToolUseOutcome;
 
-    /// Run TaskCreated hooks before TaskCreateTool persists the task.
+    /// Run TaskCreated hooks after TaskCreateTool persists the task.
     ///
     /// Default impl is a no-op so existing test doubles don't need
     /// updating. The real `QueryHookHandle` overrides it.

@@ -4,6 +4,74 @@
 //! runtimes, spawns tokio tasks, etc.) so we exercise only the
 //! decomposed pure logic here.
 
+#[test]
+fn latest_todo_write_todos_reads_last_tool_call_input() {
+    let older = coco_messages::create_assistant_message(
+        vec![coco_messages::AssistantContent::tool_call(
+            "toolu_1",
+            coco_types::ToolName::TodoWrite.as_str(),
+            serde_json::json!({
+                "todos": [
+                    {
+                        "content": "old item",
+                        "status": "pending",
+                        "activeForm": "Doing old item"
+                    }
+                ]
+            }),
+        )],
+        "test-model",
+        Default::default(),
+    );
+    let newer = coco_messages::create_assistant_message(
+        vec![coco_messages::AssistantContent::tool_call(
+            "toolu_2",
+            coco_types::ToolName::TodoWrite.as_str(),
+            serde_json::json!({
+                "todos": [
+                    {
+                        "content": "new item",
+                        "status": "in_progress",
+                        "activeForm": "Doing new item"
+                    }
+                ]
+            }),
+        )],
+        "test-model",
+        Default::default(),
+    );
+
+    let todos = super::latest_todo_write_todos(&[older, newer]).expect("todos restored");
+    assert_eq!(todos.len(), 1);
+    assert_eq!(todos[0].content, "new item");
+    assert_eq!(todos[0].status, "in_progress");
+    assert_eq!(todos[0].active_form, "Doing new item");
+}
+
+#[test]
+fn latest_todo_write_todos_clears_all_completed_snapshot() {
+    let message = coco_messages::create_assistant_message(
+        vec![coco_messages::AssistantContent::tool_call(
+            "toolu_1",
+            coco_types::ToolName::TodoWrite.as_str(),
+            serde_json::json!({
+                "todos": [
+                    {
+                        "content": "done item",
+                        "status": "completed",
+                        "activeForm": "Doing done item"
+                    }
+                ]
+            }),
+        )],
+        "test-model",
+        Default::default(),
+    );
+
+    let todos = super::latest_todo_write_todos(&[message]).expect("todos restored");
+    assert!(todos.is_empty());
+}
+
 #[cfg(test)]
 mod agent_template_tests {
     use super::super::build_agent_template;

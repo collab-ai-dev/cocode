@@ -191,6 +191,7 @@ async fn build_todo_patch(
 ) -> AppStatePatch {
     let items = todo_list.read(&key).await;
     Box::new(move |state: &mut coco_types::ToolAppState| {
+        state.plan_tasks.clear();
         if items.is_empty() {
             state.todos_by_agent.remove(&key);
         } else {
@@ -216,6 +217,174 @@ fn todo_key(ctx: &ToolUseContext) -> String {
 
 const TASK_CREATE_DESCRIPTION: &str = "Create a new task in the task list";
 const TASK_CREATE_SEARCH_HINT: &str = "create a task in the task list";
+
+fn is_non_empty_string(value: &Value) -> bool {
+    value.as_str().is_some_and(|s| !s.trim().is_empty())
+}
+
+fn has_batch_task_shape(map: &serde_json::Map<String, Value>) -> bool {
+    map.contains_key("tasks") || map.contains_key("todos")
+}
+
+fn has_agent_task_shape(map: &serde_json::Map<String, Value>) -> bool {
+    map.contains_key("prompt") || map.contains_key("subagent_type")
+}
+
+fn has_subject_and_description(map: &serde_json::Map<String, Value>) -> bool {
+    is_non_empty_string(map.get("subject").unwrap_or(&Value::Null))
+        && is_non_empty_string(map.get("description").unwrap_or(&Value::Null))
+}
+
+fn task_create_subject_from_description(description: &str) -> String {
+    let trimmed = description.trim();
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= 80 {
+        return trimmed.to_string();
+    }
+
+    let prefix: String = chars.iter().take(80).collect();
+    let word_cut = prefix.rfind(' ');
+    match word_cut {
+        Some(cut) if cut > 40 => prefix[..cut].trim().to_string(),
+        _ => prefix.trim().to_string(),
+    }
+}
+
+fn coerce_non_empty_string_alias(
+    map: &mut serde_json::Map<String, Value>,
+    aliases: &[&str],
+    target: &str,
+) -> bool {
+    if map.contains_key(target) {
+        return false;
+    }
+    for alias in aliases {
+        let Some(value) = map.get(*alias) else {
+            continue;
+        };
+        if !is_non_empty_string(value) {
+            continue;
+        }
+        if let Some(value) = map.remove(*alias) {
+            map.insert(target.to_string(), value);
+            return true;
+        }
+    }
+    false
+}
+
+fn coerce_task_create_input(input: &Value) -> Option<Value> {
+    let mut changed = false;
+    let mut map = input.as_object()?.clone();
+
+    if has_batch_task_shape(&map) {
+        return None;
+    }
+    if has_agent_task_shape(&map) && !has_subject_and_description(&map) {
+        return None;
+    }
+
+    if !map.contains_key("subject") && !map.contains_key("description") {
+        match map.remove("task") {
+            Some(Value::String(task)) if !task.trim().is_empty() => {
+                map.insert("description".to_string(), Value::String(task));
+                changed = true;
+            }
+            Some(Value::Object(task)) => {
+                if has_batch_task_shape(&task) {
+                    return None;
+                }
+                if has_agent_task_shape(&task) && !has_subject_and_description(&task) {
+                    return None;
+                }
+                map.extend(task);
+                changed = true;
+            }
+            Some(other) => {
+                map.insert("task".to_string(), other);
+            }
+            None => {}
+        }
+    }
+
+    changed |= coerce_non_empty_string_alias(&mut map, &["title", "name"], "subject");
+    changed |= coerce_non_empty_string_alias(&mut map, &["content"], "description");
+    changed |= coerce_non_empty_string_alias(&mut map, &["active_form"], "activeForm");
+
+    if is_non_empty_string(map.get("subject").unwrap_or(&Value::Null))
+        && !map.contains_key("description")
+    {
+        if let Some(subject) = map.get("subject").cloned() {
+            map.insert("description".to_string(), subject);
+            changed = true;
+        }
+    } else if is_non_empty_string(map.get("description").unwrap_or(&Value::Null))
+        && !map.contains_key("subject")
+        && let Some(description) = map.get("description").and_then(Value::as_str)
+    {
+        map.insert(
+            "subject".to_string(),
+            Value::String(task_create_subject_from_description(description)),
+        );
+        changed = true;
+    }
+
+    if has_subject_and_description(&map) {
+        let before_len = map.len();
+        map.retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "subject" | "description" | "activeForm" | "metadata"
+            )
+        });
+        changed |= map.len() != before_len;
+
+        if map.contains_key("activeForm")
+            && map
+                .get("activeForm")
+                .is_none_or(|value| value.as_str().is_none())
+        {
+            map.remove("activeForm");
+            changed = true;
+        }
+        if map.contains_key("metadata") && !map.get("metadata").is_some_and(Value::is_object) {
+            map.remove("metadata");
+            changed = true;
+        }
+    }
+
+    changed.then_some(Value::Object(map))
+}
+
+fn task_create_validation_error_steer(input: &Value) -> Option<String> {
+    let map = input.as_object()?;
+    let task = map.get("task").and_then(Value::as_object);
+    if has_batch_task_shape(map) || task.is_some_and(has_batch_task_shape) {
+        return Some(
+            "TaskCreate creates ONE task per call and has no `tasks` or `todos` parameter. Call TaskCreate once per task, passing `subject` (a brief title) and `description` (what needs to be done) as top-level string parameters."
+                .to_string(),
+        );
+    }
+    if (has_agent_task_shape(map) || task.is_some_and(has_agent_task_shape))
+        && !has_subject_and_description(map)
+    {
+        return Some(
+            "This call used Agent-tool parameters (`prompt`/`subagent_type`). TaskCreate adds an item to the task list and takes `subject` and `description` string parameters. To delegate work to a subagent, use the Agent tool instead."
+                .to_string(),
+        );
+    }
+    None
+}
+
+fn coerce_task_update_input(input: &Value) -> Option<Value> {
+    let mut changed = false;
+    let mut map = input.as_object()?.clone();
+
+    changed |= coerce_non_empty_string_alias(&mut map, &["id", "task_id"], "taskId");
+    changed |= coerce_non_empty_string_alias(&mut map, &["active_form"], "activeForm");
+
+    changed.then_some(Value::Object(map))
+}
 
 fn task_create_prompt(agent_teams_available: bool) -> String {
     let teammate_context = if agent_teams_available {
@@ -481,8 +650,17 @@ impl Tool for TaskCreateTool {
     }
 
     fn is_concurrency_safe(&self, _input: &TaskCreateInput) -> bool {
-        true
+        false
     }
+
+    fn coerce_input(&self, input: &Value) -> Option<Value> {
+        coerce_task_create_input(input)
+    }
+
+    fn validation_error_steer(&self, input: &Value) -> Option<String> {
+        task_create_validation_error_steer(input)
+    }
+
     // Defer policy for the Task*/Todo family is set explicitly here (not via
     // the trait default) so it stays greppable. Deliberate divergence from the
     // TS reference, which defers all of these: coco-rs keeps the high-frequency
@@ -915,6 +1093,9 @@ impl Tool for TaskUpdateTool {
     fn is_concurrency_safe(&self, _input: &TaskUpdateInput) -> bool {
         true
     }
+    fn coerce_input(&self, input: &Value) -> Option<Value> {
+        coerce_task_update_input(input)
+    }
     fn should_defer(&self) -> bool {
         false
     }
@@ -987,10 +1168,11 @@ impl Tool for TaskUpdateTool {
         let existing = match ctx.task_list.get_task(&task_id).await {
             Ok(Some(t)) => t,
             Ok(None) => {
+                let patch = build_task_list_patch(&ctx.task_list, false).await;
                 return Ok(ToolResult {
                     data: project_update_error(&task_id, "Task not found"),
                     new_messages: vec![],
-                    app_state_patch: None,
+                    app_state_patch: Some(patch),
                     permission_updates: Vec::new(),
                     display_data: None,
                 });
@@ -1127,10 +1309,14 @@ impl Tool for TaskUpdateTool {
                 )
                 .await;
             if let Some(reason) = outcome.blocking_reason {
-                return Err(ToolError::ExecutionFailed {
-                    message: format!("TaskCompleted hook feedback:\n{reason}"),
+                let patch = build_task_list_patch(&ctx.task_list, false).await;
+                let error = format!("TaskCompleted hook feedback:\n{reason}");
+                return Ok(ToolResult {
+                    data: project_update_error(&task_id, &error),
+                    new_messages: vec![],
+                    app_state_patch: Some(patch),
+                    permission_updates: Vec::new(),
                     display_data: None,
-                    source: None,
                 });
             }
         }
@@ -1149,34 +1335,26 @@ impl Tool for TaskUpdateTool {
 
         // Add blocks / blockedBy edges (these go through block_task).
         if let Some(add_blocks) = input.add_blocks.as_deref() {
-            let mut any_added = false;
-            for id in add_blocks {
-                let added = ctx
-                    .task_list
-                    .block_task(&task_id, id)
-                    .await
-                    .unwrap_or(false);
-                if added {
-                    any_added = true;
-                }
+            let new_blocks: Vec<&String> = add_blocks
+                .iter()
+                .filter(|id| !existing.blocks.iter().any(|block| block == *id))
+                .collect();
+            for id in &new_blocks {
+                let _ = ctx.task_list.block_task(&task_id, id).await;
             }
-            if any_added {
+            if !new_blocks.is_empty() {
                 updated_fields.push("blocks");
             }
         }
         if let Some(add_blocked) = input.add_blocked_by.as_deref() {
-            let mut any_added = false;
-            for id in add_blocked {
-                let added = ctx
-                    .task_list
-                    .block_task(id, &task_id)
-                    .await
-                    .unwrap_or(false);
-                if added {
-                    any_added = true;
-                }
+            let new_blocked_by: Vec<&String> = add_blocked
+                .iter()
+                .filter(|id| !existing.blocked_by.iter().any(|blocker| blocker == *id))
+                .collect();
+            for id in &new_blocked_by {
+                let _ = ctx.task_list.block_task(id, &task_id).await;
             }
-            if any_added {
+            if !new_blocked_by.is_empty() {
                 updated_fields.push("blockedBy");
             }
         }
@@ -1666,6 +1844,13 @@ fn task_status_wire_string(status: coco_types::TaskStatus) -> &'static str {
 const TODO_WRITE_DESCRIPTION: &str = "Update the todo list for the current session. To be used proactively and often to track progress and pending tasks. Make sure that at least one task is in_progress at all times. Always provide both content (imperative) and activeForm (present continuous) for each task.";
 
 /// Prompt for [`TodoWriteTool`].
+///
+/// Keep the long TS prompt for now. Claude Code 2.1.193 selects between a
+/// compact and long TodoWrite prompt with `qIa(model)`, but coco-rs
+/// `PromptOptions` does not currently carry the active model into tool prompt
+/// rendering. Until that selector is wired intentionally, prefer the long
+/// prompt because it is the stricter, higher-context default for multi-provider
+/// sessions.
 const TODO_WRITE_PROMPT: &str = "Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
 It also helps the user understand the progress of the task and overall progress of their requests.
 
@@ -1888,6 +2073,11 @@ impl Tool for TodoWriteTool {
     fn should_defer(&self) -> bool {
         false
     }
+
+    fn strict(&self) -> bool {
+        true
+    }
+
     fn search_hint(&self) -> Option<&str> {
         Some("manage the session task checklist")
     }

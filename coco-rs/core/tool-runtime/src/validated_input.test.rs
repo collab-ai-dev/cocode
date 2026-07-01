@@ -27,6 +27,7 @@ struct EmptyOutput {}
 /// apply_patch does. `coerces: false` turns it into a plain function tool.
 struct PatchTool {
     coerces: bool,
+    object_coerces: bool,
 }
 
 #[async_trait::async_trait]
@@ -56,6 +57,14 @@ impl Tool for PatchTool {
         self.coerces.then(|| json!({ "patch": raw }))
     }
 
+    fn coerce_input(&self, input: &Value) -> Option<Value> {
+        if !self.object_coerces {
+            return None;
+        }
+        let raw_patch = input.get("rawPatch")?.as_str()?;
+        Some(json!({ "patch": raw_patch }))
+    }
+
     async fn execute(
         &self,
         _input: PatchInput,
@@ -72,11 +81,24 @@ impl Tool for PatchTool {
 }
 
 fn freeform_tool() -> Arc<dyn DynTool> {
-    Arc::new(PatchTool { coerces: true })
+    Arc::new(PatchTool {
+        coerces: true,
+        object_coerces: false,
+    })
 }
 
 fn function_tool() -> Arc<dyn DynTool> {
-    Arc::new(PatchTool { coerces: false })
+    Arc::new(PatchTool {
+        coerces: false,
+        object_coerces: false,
+    })
+}
+
+fn object_coercing_tool() -> Arc<dyn DynTool> {
+    Arc::new(PatchTool {
+        coerces: false,
+        object_coerces: true,
+    })
 }
 
 #[test]
@@ -99,6 +121,14 @@ fn test_validate_object_input_passes_through_unchanged() {
     let input = json!({ "patch": "body" });
     let validated = ValidatedInput::validate(tool.as_ref(), input.clone()).expect("valid object");
     assert_eq!(validated.into_value(), input);
+}
+
+#[test]
+fn test_validate_object_input_can_coerce_before_schema() {
+    let tool = object_coercing_tool();
+    let validated = ValidatedInput::validate(tool.as_ref(), json!({ "rawPatch": "body" }))
+        .expect("object input should coerce before schema validation");
+    assert_eq!(validated.into_value(), json!({ "patch": "body" }));
 }
 
 #[test]

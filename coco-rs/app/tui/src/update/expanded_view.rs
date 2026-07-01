@@ -1,5 +1,11 @@
 //! `app:toggleTodos` handler — cycle the right-rail expanded view.
 //!
+//! INTENTIONAL UI DIVERGENCE: Claude Code TS 2.1.193's
+//! `app:toggleTodos` flips only `tasks <-> none`. coco-rs instead treats
+//! the right-rail activity area as one user-facing view switcher and includes
+//! the live teammate/subagent stage when it exists. Keep this documented so
+//! TS parity audits don't repeatedly "fix" the cycle back to two states.
+//!
 //! Three-state cycle when there are running teammates, two-state otherwise:
 //!
 //! * has running teammates: `None → Tasks → Teammates → None`

@@ -273,6 +273,12 @@ impl QueryEngine {
         // `turn_runner` for counting turns since the last task mutation,
         // but no longer for V2-mode detection.
         let reminder_task_v2_enabled = self.config.features.enabled(Feature::TaskV2);
+        let reminder_app_state_snapshot = build_reminder_app_state_snapshot(
+            &app_state_snapshot,
+            self.task_list.as_ref(),
+            reminder_task_v2_enabled,
+        )
+        .await;
         // `plan_mode` feature gate (default on). When off, every plan-mode
         // reminder is suppressed — mirrors the hidden EnterPlanMode/ExitPlanMode
         // tools and the Plan rung removed from the TUI mode cycle.
@@ -531,7 +537,7 @@ impl QueryEngine {
             explore_plan_agents_available: reminder_explore_plan_agents_available,
             is_plan_interview_phase: false,
             plan_mode_feature_enabled: reminder_plan_mode_enabled,
-            app_state: &app_state_snapshot,
+            app_state: &reminder_app_state_snapshot,
             fallback_permission_mode: self.config.permission_mode,
             is_auto_classifier_active: reminder_auto_classifier_active,
             tools: reminder_tools,
@@ -788,6 +794,38 @@ fn active_agent_mentions(
                 .then_some(coco_system_reminder::AgentMentionEntry { agent_type })
         })
         .collect()
+}
+
+async fn build_reminder_app_state_snapshot(
+    base: &ToolAppState,
+    task_list: Option<&coco_tool_runtime::TaskListHandleRef>,
+    task_v2_enabled: bool,
+) -> ToolAppState {
+    let mut snapshot = base.clone();
+    if !task_v2_enabled {
+        return snapshot;
+    }
+    let Some(task_list) = task_list else {
+        return snapshot;
+    };
+    match task_list.list_tasks().await {
+        Ok(mut tasks) => {
+            tasks.retain(|task| {
+                !task
+                    .metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.contains_key("_internal"))
+            });
+            snapshot.plan_tasks = tasks;
+        }
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "failed to refresh V2 task reminder snapshot from task list",
+            );
+        }
+    }
+    snapshot
 }
 
 const WORKFLOW_KEYWORD: &str = "ultracode";

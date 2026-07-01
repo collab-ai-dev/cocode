@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use coco_llm_types::ToolCallPart;
 use coco_llm_types::ToolInputInvalidReason;
+use coco_tool_runtime::SchemaIssue;
 use coco_tool_runtime::ValidatedInput;
 use coco_tool_runtime::traits::DynTool;
 // Canonical formatter lives next to `SchemaIssue` in `coco-tool-runtime`;
@@ -28,6 +29,20 @@ pub use coco_tool_runtime::format_schema_error;
 use serde_json::Value;
 
 use crate::tool_input_parse::parse_tool_arguments_or_empty;
+
+pub(crate) fn format_schema_error_with_steer(
+    tool_name: &str,
+    tool: &dyn DynTool,
+    input: &Value,
+    issues: &[SchemaIssue],
+) -> String {
+    let mut message = format_schema_error(tool_name, issues);
+    if let Some(steer) = tool.validation_error_steer(input) {
+        message.push_str("\n\n");
+        message.push_str(&steer);
+    }
+    message
+}
 
 /// Recover stringified JSON nested inside what the schema expects to
 /// be an object/array.
@@ -109,10 +124,16 @@ pub fn validate_tool_call(
     //    the schema (v4.2). A schema-compile failure is impossible here: a
     //    tool is only registered if its schema compiled at construction, so
     //    the only outcomes are clean or classified issues.
+    let validation_input = candidate.clone();
     match ValidatedInput::validate(tool.as_ref(), candidate) {
         Ok(validated) => Some(validated),
         Err(issues) => {
-            let message = format_schema_error(&tc.tool_name, &issues);
+            let message = format_schema_error_with_steer(
+                &tc.tool_name,
+                tool.as_ref(),
+                &validation_input,
+                &issues,
+            );
             tc.invalid = true;
             tc.invalid_reason = Some(ToolInputInvalidReason::SchemaViolation { message });
             None

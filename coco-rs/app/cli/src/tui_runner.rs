@@ -32,6 +32,9 @@ use tracing::warn;
 use coco_config::EnvKey;
 use coco_config::env;
 use coco_context::FileHistoryState;
+use coco_messages::AssistantContent;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
 use coco_query::CoreEvent;
 use coco_query::QueuePriority;
 use coco_query::QueuedCommand;
@@ -2388,6 +2391,20 @@ async fn hydrate_resume_plan(
     runtime
         .seed_tool_result_replacement_state(&plan.prior_messages, &plan.session_id, None)
         .await;
+    let restored_v1_todos = if runtime
+        .runtime_config
+        .features
+        .enabled(coco_types::Feature::TaskV2)
+    {
+        None
+    } else {
+        latest_todo_write_todos(&plan.prior_messages)
+    };
+    if let Some(todos) = restored_v1_todos.clone() {
+        runtime
+            .seed_todo_list_snapshot(plan.session_id.clone(), todos)
+            .await;
+    }
     let cfg = runtime.current_engine_config().await;
     let goal = goal_command::restore_goal_from_history(
         &plan
@@ -2431,6 +2448,24 @@ async fn hydrate_resume_plan(
             },
         ))
         .await;
+    if let Some(todos) = restored_v1_todos {
+        let mut todos_by_agent = HashMap::new();
+        if !todos.is_empty() {
+            todos_by_agent.insert(plan.session_id.clone(), todos);
+        }
+        let _ = event_tx
+            .send(CoreEvent::Protocol(
+                coco_types::ServerNotification::TaskPanelChanged(
+                    coco_types::TaskPanelChangedParams {
+                        plan_tasks: Vec::new(),
+                        todos_by_agent,
+                        expanded_view: coco_types::ExpandedView::None,
+                        verification_nudge_pending: false,
+                    },
+                ),
+            ))
+            .await;
+    }
     let _ = event_tx
         .send(CoreEvent::Protocol(
             coco_types::ServerNotification::SessionUsageUpdated(Box::new(
@@ -2448,6 +2483,46 @@ async fn hydrate_resume_plan(
             coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
         }))
         .await;
+}
+
+#[derive(serde::Deserialize)]
+struct TodoWriteTranscriptInput {
+    todos: Vec<coco_types::TodoRecord>,
+}
+
+fn todo_write_store_snapshot(todos: Vec<coco_types::TodoRecord>) -> Vec<coco_types::TodoRecord> {
+    if !todos.is_empty() && todos.iter().all(|todo| todo.status == "completed") {
+        Vec::new()
+    } else {
+        todos
+    }
+}
+
+fn latest_todo_write_todos(messages: &[Message]) -> Option<Vec<coco_types::TodoRecord>> {
+    for message in messages.iter().rev() {
+        let Message::Assistant(assistant) = message else {
+            continue;
+        };
+        let LlmMessage::Assistant { content, .. } = &assistant.message else {
+            continue;
+        };
+        for part in content.iter().rev() {
+            let AssistantContent::ToolCall(call) = part else {
+                continue;
+            };
+            if call.tool_name != coco_types::ToolName::TodoWrite.as_str() {
+                continue;
+            }
+            match serde_json::from_value::<TodoWriteTranscriptInput>(call.input.clone()) {
+                Ok(input) => return Some(todo_write_store_snapshot(input.todos)),
+                Err(err) => {
+                    warn!(error = %err, "failed to restore TodoWrite state from transcript input");
+                    return None;
+                }
+            }
+        }
+    }
+    None
 }
 
 async fn dispatch_resume(

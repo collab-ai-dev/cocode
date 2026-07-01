@@ -166,6 +166,17 @@ pub fn sanitize_path_component(input: &str) -> String {
         .collect()
 }
 
+fn compare_task_ids(a: &str, b: &str) -> std::cmp::Ordering {
+    match (a.parse::<i64>(), b.parse::<i64>()) {
+        (Ok(a), Ok(b)) => a.cmp(&b),
+        _ => a.cmp(b),
+    }
+}
+
+fn sort_tasks_by_id(tasks: &mut [Task]) {
+    tasks.sort_by(|a, b| compare_task_ids(&a.id, &b.id));
+}
+
 /// Optional hook notification sink. Implemented by `coco-hooks` in the
 /// app layer — kept as a trait here so `coco-tasks` stays dependency-
 /// free from the hook system.
@@ -331,6 +342,7 @@ impl TaskListStore {
                 out.push(task);
             }
         }
+        sort_tasks_by_id(&mut out);
         Ok(out)
     }
 
@@ -554,25 +566,37 @@ impl TaskListStore {
     /// Add a `blocks` / `blockedBy` edge between two tasks.
     /// Returns `false` if either task is missing.
     pub async fn block_task(&self, from_id: &str, to_id: &str) -> crate::Result<bool> {
-        let (Some(mut from), Some(mut to)) =
-            (self.get_task(from_id).await?, self.get_task(to_id).await?)
-        else {
+        if self.get_task(from_id).await?.is_none() || self.get_task(to_id).await?.is_none() {
             return Ok(false);
-        };
+        }
 
         let mut changed = false;
-        if !from.blocks.iter().any(|id| id == to_id) {
-            from.blocks.push(to_id.to_string());
-            self.with_task_lock(from_id, || self.write_task_unlocked(&from))
-                .await?;
-            changed = true;
-        }
-        if !to.blocked_by.iter().any(|id| id == from_id) {
-            to.blocked_by.push(from_id.to_string());
-            self.with_task_lock(to_id, || self.write_task_unlocked(&to))
-                .await?;
-            changed = true;
-        }
+        changed |= self
+            .with_task_lock(from_id, || {
+                let Some(mut from) = self.read_task_unlocked(from_id)? else {
+                    return Ok(false);
+                };
+                if from.blocks.iter().any(|id| id == to_id) {
+                    return Ok(false);
+                }
+                from.blocks.push(to_id.to_string());
+                self.write_task_unlocked(&from)?;
+                Ok(true)
+            })
+            .await?;
+        changed |= self
+            .with_task_lock(to_id, || {
+                let Some(mut to) = self.read_task_unlocked(to_id)? else {
+                    return Ok(false);
+                };
+                if to.blocked_by.iter().any(|id| id == from_id) {
+                    return Ok(false);
+                }
+                to.blocked_by.push(from_id.to_string());
+                self.write_task_unlocked(&to)?;
+                Ok(true)
+            })
+            .await?;
         if changed {
             self.notify();
         }

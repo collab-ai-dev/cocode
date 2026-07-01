@@ -7,7 +7,8 @@
 //! - **Freeform/custom tools** (OpenAI Responses `type:"custom"`, e.g.
 //!   apply_patch) — a bare string the model emits under a grammar. The tool
 //!   wraps it into the typed JSON its schema expects via
-//!   [`DynTool::coerce_raw_string_input`] (apply_patch: `{"patch": raw}`).
+//!   [`DynTool::coerce_input`] / [`DynTool::coerce_raw_string_input`]
+//!   (apply_patch: `{"patch": raw}`).
 //!
 //! History/wire carriers (`ToolCallPart.input`) intentionally keep the raw
 //! shape — the OpenAI Responses round-trip replays a custom tool call's input
@@ -25,7 +26,7 @@ use serde_json::Value;
 use crate::schema::SchemaIssue;
 use crate::traits::DynTool;
 
-/// Tool input that has passed freeform coercion + runtime schema validation
+/// Tool input that has passed tool-local coercion + runtime schema validation
 /// for a specific tool. See the module docs for the seam this type pins.
 #[derive(Debug, Clone)]
 pub struct ValidatedInput(Value);
@@ -33,17 +34,22 @@ pub struct ValidatedInput(Value);
 impl ValidatedInput {
     /// Coerce and validate `input` against `tool`'s runtime schema.
     ///
-    /// A bare-string input is first offered to the tool's
+    /// Any input is first offered to [`DynTool::coerce_input`]. If that
+    /// returns `None`, a bare-string input is offered to
     /// [`DynTool::coerce_raw_string_input`] (freeform tools wrap it into
     /// their typed JSON; function tools return `None` and the string falls
     /// through to schema validation, which reports the type mismatch).
     pub fn validate(tool: &dyn DynTool, input: Value) -> Result<Self, Vec<SchemaIssue>> {
-        let input = match input {
-            Value::String(raw) => match tool.coerce_raw_string_input(&raw) {
-                Some(coerced) => coerced,
-                None => Value::String(raw),
-            },
-            other => other,
+        let input = if let Some(coerced) = tool.coerce_input(&input) {
+            coerced
+        } else {
+            match input {
+                Value::String(raw) => match tool.coerce_raw_string_input(&raw) {
+                    Some(coerced) => coerced,
+                    None => Value::String(raw),
+                },
+                other => other,
+            }
         };
         tool.runtime_validation_schema().validate(&input)?;
         Ok(Self(input))

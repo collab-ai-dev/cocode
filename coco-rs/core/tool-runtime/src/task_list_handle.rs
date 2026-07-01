@@ -19,6 +19,17 @@ pub use coco_types::TodoRecord;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+fn compare_task_ids(a: &str, b: &str) -> std::cmp::Ordering {
+    match (a.parse::<i64>(), b.parse::<i64>()) {
+        (Ok(a), Ok(b)) => a.cmp(&b),
+        _ => a.cmp(b),
+    }
+}
+
+fn sort_records_by_id(tasks: &mut [TaskRecord]) {
+    tasks.sort_by(|a, b| compare_task_ids(&a.id, &b.id));
+}
+
 /// Shared verification-nudge gate used by both V1 `TodoWrite` and V2
 /// `TaskUpdate`.
 ///
@@ -217,14 +228,16 @@ impl TaskListHandle for InMemoryTaskListHandle {
     }
 
     async fn list_tasks(&self) -> Result<Vec<TaskRecord>, coco_error::BoxedError> {
-        Ok(self
+        let mut tasks: Vec<TaskRecord> = self
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .tasks
             .values()
             .cloned()
-            .collect())
+            .collect();
+        sort_records_by_id(&mut tasks);
+        Ok(tasks)
     }
 
     async fn update_task(
@@ -298,20 +311,17 @@ impl TaskListHandle for InMemoryTaskListHandle {
         if !guard.tasks.contains_key(from_id) || !guard.tasks.contains_key(to_id) {
             return Ok(false);
         }
-        let mut changed = false;
         if let Some(t) = guard.tasks.get_mut(from_id)
             && !t.blocks.iter().any(|b| b == to_id)
         {
             t.blocks.push(to_id.to_string());
-            changed = true;
         }
         if let Some(t) = guard.tasks.get_mut(to_id)
             && !t.blocked_by.iter().any(|b| b == from_id)
         {
             t.blocked_by.push(from_id.to_string());
-            changed = true;
         }
-        Ok(changed)
+        Ok(true)
     }
 
     async fn claim_task(
@@ -514,5 +524,32 @@ impl TodoListHandle for InMemoryTodoListHandle {
         } else {
             guard.insert(key.to_string(), items);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn in_memory_list_tasks_sorts_by_numeric_id() {
+        let store = InMemoryTaskListHandle::new();
+        for subject in [
+            "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        ] {
+            store
+                .create_task(subject.to_string(), String::new(), None, None)
+                .await
+                .unwrap();
+        }
+
+        let ids: Vec<String> = store
+            .list_tasks()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|task| task.id)
+            .collect();
+        assert_eq!(ids, ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
     }
 }
