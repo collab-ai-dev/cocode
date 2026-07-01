@@ -20,6 +20,9 @@ use crate::command::SystemPushKind;
 use crate::command::UserCommand;
 use crate::state::AppState;
 use crate::state::ModalState;
+use crate::state::PanePromptState;
+use crate::state::PermissionDetail;
+use crate::state::PermissionPromptState;
 use crate::state::SuggestionKind;
 use crate::state::rewind::RestoreType;
 use crate::state::ui::ToastSeverity;
@@ -795,6 +798,67 @@ fn prompt_editor_completed_replaces_input_and_moves_cursor_to_end() {
     assert!(consumed);
     assert_eq!(state.ui.input.text(), "edited prompt");
     assert_eq!(state.ui.input.textarea.cursor(), "edited prompt".len());
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Info);
+}
+
+#[test]
+fn exit_plan_prompt_editor_completed_updates_active_prompt_plan() {
+    let mut state = AppState::new();
+    state
+        .ui
+        .push_prompt(PanePromptState::Permission(PermissionPromptState {
+            request_id: "req-1".into(),
+            tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+            description: "Exit plan mode?".into(),
+            detail: PermissionDetail::ExitPlanMode {
+                outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+                plan: Some("# Original".into()),
+                edited_plan: None,
+                feedback_input: crate::state::PrefixInputState::new(String::new()),
+                plan_file_path: Some("/tmp/plan.md".into()),
+                allowed_prompts: vec![],
+            },
+            risk_level: None,
+            show_always_allow: false,
+            classifier_checking: false,
+            classifier_auto_approved: None,
+            choices: None,
+            selected_choice: 0,
+            display_input: coco_types::PermissionDisplayInput::Empty,
+            original_input: None,
+            cwd: None,
+            permission_suggestions: vec![],
+            worker_badge: None,
+            explanation_visible: false,
+            explanation: crate::state::ExplainerFetch::NotFetched,
+            prefix_input: None,
+        }));
+    let (tx, _rx) = channel();
+
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::ExitPlanPromptEditorCompleted {
+            request_id: "req-1".into(),
+            content: "# Edited".into(),
+            modified: true,
+        },
+        &tx,
+    );
+
+    assert!(consumed);
+    let Some(PanePromptState::Permission(prompt)) = state.ui.interaction.active_prompt.as_ref()
+    else {
+        panic!("expected active permission prompt")
+    };
+    let PermissionDetail::ExitPlanMode {
+        plan, edited_plan, ..
+    } = &prompt.detail
+    else {
+        panic!("expected ExitPlanMode detail")
+    };
+    assert_eq!(plan.as_deref(), Some("# Edited"));
+    assert_eq!(edited_plan.as_deref(), Some("# Edited"));
     assert_eq!(state.ui.toasts.len(), 1);
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Info);
 }

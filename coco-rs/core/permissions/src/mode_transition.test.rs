@@ -20,6 +20,28 @@ fn make_context(mode: PermissionMode, bypass: bool) -> ToolPermissionContext {
     }
 }
 
+fn dangerous_agent_allow_rules() -> coco_types::PermissionRulesBySource {
+    let mut live = coco_types::PermissionRulesBySource::new();
+    live.entry(coco_types::PermissionRuleSource::UserSettings)
+        .or_default()
+        .push(coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::UserSettings,
+            behavior: coco_types::PermissionBehavior::Allow,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: "Agent".into(),
+                rule_content: None,
+            },
+        });
+    live
+}
+
+fn plan_auto_options() -> PlanModeAutoOptions {
+    PlanModeAutoOptions {
+        use_auto_mode_during_plan: true,
+        auto_mode_available: true,
+    }
+}
+
 // ── get_next_permission_mode ──
 
 #[test]
@@ -305,6 +327,7 @@ fn app_state_transition_enter_plan_stashes_previous_mode_and_timestamp() {
         PermissionMode::AcceptEdits,
         PermissionMode::Plan,
         &coco_types::PermissionRulesBySource::new(),
+        PlanModeAutoOptions::default(),
     );
 
     assert!(modified);
@@ -323,18 +346,7 @@ fn app_state_transition_default_to_auto_stashes_dangerous_allow_rules() {
     // P1: entering Auto snapshots+strips dangerous classifier-bypassing allow
     // rules into the stash (provenance for the exit banner / restore). The
     // evaluator-facing strip is additionally applied at context-build time.
-    let mut live = coco_types::PermissionRulesBySource::new();
-    live.entry(coco_types::PermissionRuleSource::UserSettings)
-        .or_default()
-        .push(coco_types::PermissionRule {
-            source: coco_types::PermissionRuleSource::UserSettings,
-            behavior: coco_types::PermissionBehavior::Allow,
-            // Any `Agent` allow rule bypasses the sub-agent classifier → dangerous.
-            value: coco_types::PermissionRuleValue {
-                tool_pattern: "Agent".into(),
-                rule_content: None,
-            },
-        });
+    let live = dangerous_agent_allow_rules();
 
     let mut state = coco_types::ToolAppState {
         permissions: coco_types::LiveToolPermissionState {
@@ -349,6 +361,7 @@ fn app_state_transition_default_to_auto_stashes_dangerous_allow_rules() {
         PermissionMode::Default,
         PermissionMode::Auto,
         &live,
+        PlanModeAutoOptions::default(),
     );
 
     assert!(modified);
@@ -376,6 +389,7 @@ fn app_state_transition_plan_to_default_sets_exit_latches_and_clears_stash() {
         PermissionMode::Plan,
         PermissionMode::Default,
         &coco_types::PermissionRulesBySource::new(),
+        PlanModeAutoOptions::default(),
     );
 
     assert!(modified);
@@ -407,6 +421,7 @@ fn app_state_transition_plan_to_plan_preserves_existing_entry_timestamp() {
         PermissionMode::Plan,
         PermissionMode::Plan,
         &coco_types::PermissionRulesBySource::new(),
+        PlanModeAutoOptions::default(),
     );
 
     assert!(!modified);
@@ -434,6 +449,7 @@ fn app_state_transition_plan_to_auto_preserves_classifier_stash() {
         PermissionMode::Plan,
         PermissionMode::Auto,
         &coco_types::PermissionRulesBySource::new(),
+        PlanModeAutoOptions::default(),
     );
 
     assert!(modified);
@@ -446,4 +462,241 @@ fn app_state_transition_plan_to_auto_preserves_classifier_stash() {
         state.permissions.stripped_dangerous_rules.is_some(),
         "Plan→Auto keeps classifier stash because Auto remains active"
     );
+}
+
+#[test]
+fn app_state_transition_default_to_plan_with_auto_stashes_dangerous_allow_rules() {
+    let live = dangerous_agent_allow_rules();
+    let mut state = coco_types::ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(PermissionMode::Default),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let modified = apply_permission_mode_transition_to_app_state(
+        &mut state,
+        PermissionMode::Default,
+        PermissionMode::Plan,
+        &live,
+        plan_auto_options(),
+    );
+
+    assert!(modified);
+    assert_eq!(state.permissions.mode, Some(PermissionMode::Plan));
+    assert_eq!(
+        state.permissions.pre_plan_mode,
+        Some(PermissionMode::Default)
+    );
+    assert!(
+        state.permissions.stripped_dangerous_rules.is_some(),
+        "Plan mode with auto semantics must stash dangerous allow rules"
+    );
+    assert!(!state.needs_auto_mode_exit_attachment);
+}
+
+#[test]
+fn app_state_transition_bypass_to_plan_with_auto_does_not_stash() {
+    let live = dangerous_agent_allow_rules();
+    let mut state = coco_types::ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(PermissionMode::BypassPermissions),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let modified = apply_permission_mode_transition_to_app_state(
+        &mut state,
+        PermissionMode::BypassPermissions,
+        PermissionMode::Plan,
+        &live,
+        plan_auto_options(),
+    );
+
+    assert!(modified);
+    assert_eq!(
+        state.permissions.pre_plan_mode,
+        Some(PermissionMode::BypassPermissions)
+    );
+    assert!(
+        state.permissions.stripped_dangerous_rules.is_none(),
+        "Bypass-origin plan mode must not activate auto semantics"
+    );
+}
+
+#[test]
+fn app_state_transition_auto_to_plan_with_auto_preserves_stash() {
+    let mut state = coco_types::ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(PermissionMode::Auto),
+            stripped_dangerous_rules: Some(dangerous_agent_allow_rules()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let modified = apply_permission_mode_transition_to_app_state(
+        &mut state,
+        PermissionMode::Auto,
+        PermissionMode::Plan,
+        &coco_types::PermissionRulesBySource::new(),
+        plan_auto_options(),
+    );
+
+    assert!(modified);
+    assert_eq!(state.permissions.mode, Some(PermissionMode::Plan));
+    assert_eq!(state.permissions.pre_plan_mode, Some(PermissionMode::Auto));
+    assert!(
+        state.permissions.stripped_dangerous_rules.is_some(),
+        "Auto-origin plan mode keeps auto's dangerous-rule stash"
+    );
+    assert!(!state.needs_auto_mode_exit_attachment);
+}
+
+#[test]
+fn app_state_transition_auto_to_plan_without_auto_clears_stash_and_sets_exit_banner() {
+    let mut state = coco_types::ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(PermissionMode::Auto),
+            stripped_dangerous_rules: Some(dangerous_agent_allow_rules()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let modified = apply_permission_mode_transition_to_app_state(
+        &mut state,
+        PermissionMode::Auto,
+        PermissionMode::Plan,
+        &coco_types::PermissionRulesBySource::new(),
+        PlanModeAutoOptions {
+            use_auto_mode_during_plan: false,
+            auto_mode_available: true,
+        },
+    );
+
+    assert!(modified);
+    assert_eq!(state.permissions.mode, Some(PermissionMode::Plan));
+    assert_eq!(state.permissions.pre_plan_mode, Some(PermissionMode::Auto));
+    assert!(
+        state.permissions.stripped_dangerous_rules.is_none(),
+        "Auto-origin plan mode without auto semantics exits classifier territory"
+    );
+    assert!(state.needs_auto_mode_exit_attachment);
+}
+
+#[test]
+fn reconcile_plan_auto_mode_activates_auto_mid_plan_and_stashes_dangerous_rules() {
+    let auto_state = AutoModeState::new();
+    let mut state = coco_types::ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            pre_plan_mode: Some(PermissionMode::Default),
+            ..Default::default()
+        },
+        needs_auto_mode_exit_attachment: true,
+        ..Default::default()
+    };
+
+    let changed = reconcile_plan_auto_mode_in_app_state(
+        &mut state,
+        &dangerous_agent_allow_rules(),
+        plan_auto_options(),
+        &auto_state,
+    );
+
+    assert!(changed);
+    assert!(auto_state.is_active());
+    assert!(!state.needs_auto_mode_exit_attachment);
+    assert!(
+        state.permissions.stripped_dangerous_rules.is_some(),
+        "activation should keep restore provenance for dangerous allow rules"
+    );
+}
+
+#[test]
+fn reconcile_plan_auto_mode_deactivates_auto_mid_plan_and_clears_stale_stash() {
+    let auto_state = AutoModeState::new();
+    auto_state.set_active(true);
+    let mut state = coco_types::ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            pre_plan_mode: Some(PermissionMode::Default),
+            stripped_dangerous_rules: Some(dangerous_agent_allow_rules()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let changed = reconcile_plan_auto_mode_in_app_state(
+        &mut state,
+        &dangerous_agent_allow_rules(),
+        PlanModeAutoOptions {
+            use_auto_mode_during_plan: false,
+            auto_mode_available: true,
+        },
+        &auto_state,
+    );
+
+    assert!(changed);
+    assert!(!auto_state.is_active());
+    assert!(state.needs_auto_mode_exit_attachment);
+    assert!(
+        state.permissions.stripped_dangerous_rules.is_none(),
+        "deactivation should leave stale stripped rules unavailable as an auto-active proxy"
+    );
+}
+
+#[test]
+fn reconcile_plan_auto_mode_never_activates_from_bypass_origin() {
+    let auto_state = AutoModeState::new();
+    let mut state = coco_types::ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            pre_plan_mode: Some(PermissionMode::BypassPermissions),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let changed = reconcile_plan_auto_mode_in_app_state(
+        &mut state,
+        &dangerous_agent_allow_rules(),
+        plan_auto_options(),
+        &auto_state,
+    );
+
+    assert!(!changed);
+    assert!(!auto_state.is_active());
+    assert!(state.permissions.stripped_dangerous_rules.is_none());
+}
+
+#[test]
+fn reconcile_plan_auto_mode_never_activates_without_pre_plan_mode() {
+    let auto_state = AutoModeState::new();
+    let mut state = coco_types::ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            pre_plan_mode: None,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let changed = reconcile_plan_auto_mode_in_app_state(
+        &mut state,
+        &dangerous_agent_allow_rules(),
+        plan_auto_options(),
+        &auto_state,
+    );
+
+    assert!(
+        !changed,
+        "2.1.193 transitionPlanAutoMode returns unchanged without prePlanMode"
+    );
+    assert!(!auto_state.is_active());
+    assert!(state.permissions.stripped_dangerous_rules.is_none());
+    assert!(!state.needs_auto_mode_exit_attachment);
 }

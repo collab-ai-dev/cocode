@@ -246,7 +246,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         ),
         (
             names::GOAL,
-            "Set a goal Claude checks before stopping",
+            "Set a goal the agent checks before stopping",
             &[],
             goal_handler,
             true,

@@ -644,3 +644,25 @@ impl PermissionMode {
         }
     }
 }
+
+/// Session capabilities for optional permission modes.
+///
+/// This is not a mode enum: these capabilities are independent. A session can
+/// expose bypass permissions, Auto mode, both, or neither.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub struct PermissionModeAvailability {
+    pub bypass_permissions: bool,
+    pub auto: bool,
+}
+
+impl PermissionModeAvailability {
+    pub const fn new(bypass_permissions: bool, auto: bool) -> Self {
+        Self {
+            bypass_permissions,
+            auto,
+        }
+    }
+}

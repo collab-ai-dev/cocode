@@ -152,6 +152,7 @@ fn builder_chains_all_setters() {
         .is_plan_reentry(true)
         .is_plan_interview_phase(true)
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
+        .plan_mode_custom_instructions(Some("Custom plan workflow".to_string()))
         .agent_id(Some("sub-1".to_string()))
         .last_human_turn_uuid(Some(uuid))
         .user_input(Some("hello".to_string()))
@@ -164,6 +165,10 @@ fn builder_chains_all_setters() {
     assert!(ctx.is_plan_reentry);
     assert!(ctx.is_plan_interview_phase);
     assert_eq!(ctx.plan_file_path, Some(PathBuf::from("/tmp/plan.md")));
+    assert_eq!(
+        ctx.plan_mode_custom_instructions.as_deref(),
+        Some("Custom plan workflow")
+    );
     assert_eq!(ctx.agent_id.as_deref(), Some("sub-1"));
     assert_eq!(ctx.last_human_turn_uuid, Some(uuid));
     assert_eq!(ctx.user_input.as_deref(), Some("hello"));

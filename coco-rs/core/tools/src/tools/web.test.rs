@@ -7,6 +7,7 @@ use super::extract_host;
 use super::parse_duckduckgo_html;
 use super::percent_decode;
 use super::strip_html_tags;
+use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
@@ -337,6 +338,20 @@ fn test_parse_ddg_html_multiple_results() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_websearch_description_uses_generic_agent_name() {
+    let desc = <WebSearchTool as DynTool>::description(
+        &WebSearchTool,
+        &json!({"query": "rust async cancellation"}),
+        &DescriptionOptions::default(),
+    );
+    assert_eq!(
+        desc,
+        "The agent wants to search the web for: rust async cancellation"
+    );
+    assert!(!desc.contains("Claude"));
+}
+
+#[test]
 fn test_websearch_is_read_only() {
     assert!(<WebSearchTool as DynTool>::is_read_only(
         &WebSearchTool,
@@ -495,6 +510,17 @@ fn test_html_to_markdown_decodes_entities() {
 // ---------------------------------------------------------------------------
 // WebFetchTool trait contract
 // ---------------------------------------------------------------------------
+
+#[test]
+fn test_webfetch_description_uses_generic_agent_name() {
+    let desc = <WebFetchTool as DynTool>::description(
+        &WebFetchTool,
+        &json!({"url": "https://example.com/docs", "prompt": "summarize"}),
+        &DescriptionOptions::default(),
+    );
+    assert_eq!(desc, "The agent wants to fetch content from example.com");
+    assert!(!desc.contains("Claude"));
+}
 
 #[test]
 fn test_webfetch_is_read_only() {

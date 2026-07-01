@@ -209,14 +209,17 @@ pub struct AgentQueryConfig {
     /// request to the leader (required) or exits locally (voluntary).
     #[serde(default)]
     pub plan_mode_required: bool,
-    /// Parent session's bypass-permissions capability. In-process subagents
-    /// inherit the parent's capability through this field instead of argv
-    /// forwarding — the engine threads it into
-    /// `ToolPermissionContext.bypass_available` so child plan-mode
-    /// auto-allow and Shift+Tab cycle behave consistently with the
-    /// parent. Defaults to `false` so legacy callers stay safe.
+    /// Parent session's optional permission-mode capabilities. In-process
+    /// subagents inherit these instead of argv forwarding so child plan-mode
+    /// approval and Shift+Tab cycle behave consistently with the parent.
+    /// Defaults empty so legacy callers stay safe.
     #[serde(default)]
-    pub bypass_permissions_available: bool,
+    pub permission_mode_availability: coco_types::PermissionModeAvailability,
+    /// Whether plan mode uses auto-mode classifier semantics when auto is
+    /// available. In-process children inherit this from the parent session;
+    /// defaults true to match Claude Code's opt-out setting.
+    #[serde(default = "default_use_auto_mode_during_plan")]
+    pub use_auto_mode_during_plan: bool,
     /// Working-directory override for this subagent. Set by worktree
     /// isolation to the freshly-created worktree path, or by explicit
     /// `cwd:` tool input. Child `ToolUseContext.cwd_override` reads
@@ -372,7 +375,8 @@ impl Default for AgentQueryConfig {
             is_teammate: false,
             is_in_process_teammate: false,
             plan_mode_required: false,
-            bypass_permissions_available: false,
+            permission_mode_availability: coco_types::PermissionModeAvailability::default(),
+            use_auto_mode_during_plan: default_use_auto_mode_during_plan(),
             cwd_override: None,
             fork_context_messages: Vec::new(),
             allowed_write_roots: Vec::new(),
@@ -395,6 +399,10 @@ impl Default for AgentQueryConfig {
 
 fn default_active_shell_tool() -> coco_types::ActiveShellTool {
     coco_types::ActiveShellTool::Disabled
+}
+
+fn default_use_auto_mode_during_plan() -> bool {
+    true
 }
 
 /// Result of a multi-turn agent query.

@@ -323,7 +323,7 @@ fn hook(event: HookEventType, command: &str) -> coco_hooks::HookDefinition {
 }
 
 #[tokio::test]
-async fn plan_mode_snapshot_omits_always_loaded_exit_plan_mode() {
+async fn plan_mode_snapshot_omits_eager_exit_plan_mode() {
     let registry = coco_tool_runtime::ToolRegistry::new();
     registry.register(Arc::new(coco_tools::ExitPlanModeTool));
     let app_state = Arc::new(RwLock::new(ToolAppState {
@@ -333,22 +333,71 @@ async fn plan_mode_snapshot_omits_always_loaded_exit_plan_mode() {
         },
         ..ToolAppState::default()
     }));
-    let engine = new_engine_with_tools(Arc::new(CapturingModel::default()), Arc::new(registry))
+    let mut engine = new_engine_with_tools(Arc::new(CapturingModel::default()), Arc::new(registry))
         .with_app_state(app_state);
+    engine.config.plan_mode_settings.custom_instructions =
+        Some("Use the compact snapshot workflow.".to_string());
 
     let attachment = engine
         .snapshot_plan_mode_attachment()
         .await
         .expect("plan mode should snapshot");
 
-    // ExitPlanMode is non-deferred (always loaded), so it never lands in the
-    // snapshot's deferred-tools list — the post-compact "reload via ToolSearch"
-    // path no longer applies to it (it survives compaction already loaded).
     assert!(
         attachment.deferred_tools.is_empty(),
-        "always-loaded ExitPlanMode must not be listed as deferred: {:?}",
+        "eager-loaded ExitPlanMode must not be listed as deferred: {:?}",
         attachment.deferred_tools
     );
+    assert_eq!(
+        attachment.custom_instructions.as_deref(),
+        Some("Use the compact snapshot workflow.")
+    );
+    assert!(
+        !attachment.explore_plan_agents_available,
+        "post-compact plan-mode snapshot must not advertise Explore/Plan agents when Agent is not loaded"
+    );
+}
+
+#[test]
+fn current_plan_attachment_uses_agent_scoped_plan_file() {
+    let model = Arc::new(CapturingModel::default());
+    let config_home = tempfile::tempdir().expect("temp config home");
+    let mut engine = new_engine(model, None).with_config_home(config_home.path().to_path_buf());
+    engine.config.session_id = "agent-plan-compact".to_string();
+    engine.config.agent_id = Some("agent-a".to_string());
+
+    let plans_dir = coco_context::resolve_plans_directory(
+        config_home.path(),
+        engine.config.project_dir.as_deref(),
+        engine.config.plans_directory.as_deref(),
+    );
+    coco_context::write_plan(
+        &engine.config.session_id,
+        &plans_dir,
+        "# Main Plan\n\n- wrong scope",
+        /*agent_id*/ None,
+    )
+    .expect("main plan write succeeds");
+    coco_context::write_plan(
+        &engine.config.session_id,
+        &plans_dir,
+        "# Agent Plan\n\n- correct scope",
+        engine.config.agent_id.as_deref(),
+    )
+    .expect("agent plan write succeeds");
+
+    let attachment = engine
+        .create_current_plan_attachment()
+        .expect("agent plan attachment");
+    let LlmMessage::User { content, .. } = attachment.as_api_message().unwrap() else {
+        panic!("expected user attachment message");
+    };
+    let text = match &content[0] {
+        UserContentPart::Text(text) => &text.text,
+        _ => panic!("expected text part"),
+    };
+    assert!(text.contains("# Agent Plan"), "{text}");
+    assert!(!text.contains("# Main Plan"), "{text}");
 }
 
 fn compact_attempt(summary_request: &str) -> coco_compact::CompactSummaryAttempt {
@@ -819,6 +868,68 @@ async fn manual_compact_with_args_passes_instructions_to_summarizer() {
     let rendered_prompt = format!("{:?}", options.prompt);
     assert!(rendered_prompt.contains("Additional Instructions"));
     assert!(rendered_prompt.contains("focus on auth regressions"));
+}
+
+#[tokio::test]
+async fn session_memory_compact_reinjects_plan_mode_full_attachment() {
+    let model = Arc::new(CapturingModel::default());
+    let app_state = Arc::new(RwLock::new(ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(coco_types::PermissionMode::Plan),
+            ..Default::default()
+        },
+        ..ToolAppState::default()
+    }));
+    let config_home = tempfile::tempdir().expect("temp config home");
+    let mut engine = new_engine(model.clone(), None)
+        .with_config_home(config_home.path().to_path_buf())
+        .with_app_state(app_state)
+        .with_session_memory_text("## Session Memory\n\n- Important prior context".to_string());
+    engine.config.session_id = "sm-plan-mode-compact".to_string();
+    engine.config.compact.session_memory.enabled = true;
+    engine.config.compact.session_memory.min_tokens = 0;
+    engine.config.compact.session_memory.min_text_block_messages = 0;
+    engine.config.compact.session_memory.max_tokens = 100_000;
+    engine.config.plan_mode_settings.custom_instructions =
+        Some("Use the SM post-compact workflow.".to_string());
+
+    let plans_dir = coco_context::resolve_plans_directory(
+        config_home.path(),
+        engine.config.project_dir.as_deref(),
+        engine.config.plans_directory.as_deref(),
+    );
+    coco_context::write_plan(
+        &engine.config.session_id,
+        &plans_dir,
+        "# Active Plan\n\n- Keep planning",
+        /*agent_id*/ None,
+    )
+    .expect("plan write succeeds");
+
+    let mut history = compactable_history();
+    let outcome = engine
+        .run_manual_compact(
+            &mut history,
+            &None,
+            crate::ManualCompactRequest::new(/*custom_instructions*/ None),
+        )
+        .await;
+
+    assert_eq!(outcome, coco_compact::CompactOutcome::Applied);
+    assert!(
+        model
+            .options
+            .lock()
+            .expect("model options lock poisoned")
+            .is_none(),
+        "session-memory compact should bypass the LLM summarizer"
+    );
+    let rendered = format!("{:?}", history.as_slice());
+    assert!(rendered.contains("Session Memory"));
+    assert!(rendered.contains("Plan mode is active."));
+    assert!(rendered.contains("Use the SM post-compact workflow."));
+    assert!(rendered.contains("A plan file already exists at"));
+    assert!(rendered.contains("<system-reminder>"));
 }
 
 #[tokio::test]

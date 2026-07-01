@@ -648,6 +648,46 @@ pub(super) fn handle(
             state.ui.add_toast(Toast::warning(text));
             true
         }
+        TuiOnlyEvent::ExitPlanPromptEditorCompleted {
+            request_id,
+            content,
+            modified,
+        } => {
+            let mut updated = false;
+            if let Some(crate::state::PanePromptState::Permission(p)) =
+                state.ui.interaction.active_prompt.as_mut()
+                && p.request_id == request_id
+                && let crate::state::PermissionDetail::ExitPlanMode {
+                    plan, edited_plan, ..
+                } = &mut p.detail
+            {
+                if modified {
+                    *plan = Some(content.clone());
+                    *edited_plan = Some(content);
+                }
+                updated = true;
+            }
+            let text = if updated {
+                if modified {
+                    "Plan saved!".to_string()
+                } else {
+                    "Plan unchanged".to_string()
+                }
+            } else {
+                "Plan editor completed for a stale prompt".to_string()
+            };
+            state.ui.add_toast(Toast::info(text));
+            true
+        }
+        TuiOnlyEvent::ExitPlanPromptEditorFailed {
+            request_id: _,
+            error,
+        } => {
+            state
+                .ui
+                .add_toast(Toast::warning(format!("Plan editor failed: {error}")));
+            true
+        }
         TuiOnlyEvent::ExternalEditorPrepare { .. } => false,
         TuiOnlyEvent::PromptEditorCompleted { content, modified } => {
             state.ui.input.set_text(&content);
@@ -771,6 +811,8 @@ fn permission_detail_for_approval(
         return crate::state::PermissionDetail::ExitPlanMode {
             outcome,
             plan,
+            edited_plan: None,
+            feedback_input: crate::state::PrefixInputState::new(String::new()),
             plan_file_path,
             allowed_prompts,
         };

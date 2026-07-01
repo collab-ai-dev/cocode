@@ -174,7 +174,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let debug_prompt = debug::prompt();
         let mut debug_skill = bundled(
             "debug",
-            "Debug your current Claude Code session by reading the session debug log. Includes all event logging",
+            "Debug your current Coco session by reading the session debug log. Includes all event logging",
             &debug_prompt,
             vec![
                 ToolName::Bash.as_str(),

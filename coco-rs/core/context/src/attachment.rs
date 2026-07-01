@@ -321,6 +321,11 @@ pub struct PlanModeAttachment {
     /// Ignored for Sparse / Reentry (they share one text across workflows).
     #[serde(default)]
     pub workflow: PlanWorkflow,
+    /// Optional custom plan-mode workflow body. When set, Full main-agent
+    /// reminders keep the standard safety wrapper but replace the default
+    /// workflow section.
+    #[serde(default, alias = "customInstructions")]
+    pub custom_instructions: Option<String>,
     /// Phase-4 "Final Plan" prompt strictness.
     /// Only relevant for `(Full, FivePhase, main-agent)`.
     #[serde(default)]

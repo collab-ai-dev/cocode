@@ -79,13 +79,13 @@ const STOP_HOOK_TRANSCRIPT_MAX_BYTES: usize = 64 * 1024;
 const STOP_HOOK_TRANSCRIPT_RETRY_BYTES: usize = 32 * 1024;
 
 /// System prompt prepended to every Prompt hook evaluation.
-const HOOK_PROMPT_SYSTEM: &str = "You are evaluating a hook in Claude Code.
+const HOOK_PROMPT_SYSTEM: &str = "You are evaluating a hook in Coco.
 
 Your response must be a JSON object matching one of the following schemas:
 1. If the condition is met, return: {\"ok\": true}
 2. If the condition is not met, return: {\"ok\": false, \"reason\": \"Reason for why it is not met\"}";
 
-const STOP_HOOK_PROMPT_SYSTEM: &str = r#"You are evaluating a stop-condition hook in Claude Code. Read the conversation transcript carefully, then judge whether the user-provided condition is satisfied.
+const STOP_HOOK_PROMPT_SYSTEM: &str = r#"You are evaluating a stop-condition hook in Coco. Read the conversation transcript carefully, then judge whether the user-provided condition is satisfied.
 
 Your response must be a JSON object with one of these shapes:
 - {"ok": true, "reason": "<quote evidence from the transcript that satisfies the condition>"}

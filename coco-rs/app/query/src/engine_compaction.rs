@@ -292,7 +292,7 @@ impl QueryEngine {
                     coco_context::get_plan_file_path(
                         &self.config.session_id,
                         &plans_dir,
-                        /*agent_id*/ None,
+                        self.config.agent_id.as_deref(),
                     )
                 });
                 let max_files_to_restore =
@@ -564,6 +564,11 @@ impl QueryEngine {
         let pre_tokens = result.pre_compact_tokens;
         let post_tokens = result.post_compact_tokens;
         if let Some(att) = self.create_current_plan_attachment() {
+            result.attachments.push(att);
+        }
+        if let Some(pm) = self.snapshot_plan_mode_attachment().await
+            && let Some(att) = coco_compact::create_plan_mode_attachment_if_needed(true, pm)
+        {
             result.attachments.push(att);
         }
         if let Some(request) = manual_request {
@@ -1042,14 +1047,23 @@ impl QueryEngine {
         let plan_path = coco_context::get_plan_file_path(
             &self.config.session_id,
             &plans_dir,
-            /*agent_id*/ None,
+            self.config.agent_id.as_deref(),
         );
-        let plan_content =
-            coco_context::get_plan(&self.config.session_id, &plans_dir, /*agent_id*/ None);
+        let plan_content = coco_context::get_plan(
+            &self.config.session_id,
+            &plans_dir,
+            self.config.agent_id.as_deref(),
+        );
         coco_compact::create_plan_attachment_if_needed(&plan_path, plan_content.as_deref())
     }
 
-    fn explore_plan_agents_available(&self) -> bool {
+    fn explore_plan_agents_available(&self, loaded_tools: &[String]) -> bool {
+        if !loaded_tools
+            .iter()
+            .any(|name| name == coco_types::ToolName::Agent.as_str())
+        {
+            return false;
+        }
         let agents = self.current_agent_types();
         agents
             .iter()
@@ -1073,7 +1087,7 @@ impl QueryEngine {
         if !in_plan_mode {
             return None;
         }
-        let (_, deferred_tools) = self
+        let (loaded_tools, deferred_tools) = self
             .current_tool_search_partitions(&app_state_snapshot)
             .await;
 
@@ -1110,10 +1124,11 @@ impl QueryEngine {
         Some(coco_compact::PlanModeAttachment {
             reminder_type: coco_context::ReminderType::Full,
             workflow,
+            custom_instructions: self.config.plan_mode_settings.custom_instructions.clone(),
             phase4_variant: phase4,
             explore_agent_count: self.config.plan_mode_settings.explore_agent_count,
             plan_agent_count: self.config.plan_mode_settings.plan_agent_count,
-            explore_plan_agents_available: self.explore_plan_agents_available(),
+            explore_plan_agents_available: self.explore_plan_agents_available(&loaded_tools),
             is_sub_agent: self.config.agent_id.is_some(),
             plan_file_path,
             plan_exists,
@@ -1281,7 +1296,7 @@ impl QueryEngine {
             if !in_plan_mode {
                 None
             } else {
-                let (_, deferred_tools) = self
+                let (loaded_tools, deferred_tools) = self
                     .current_tool_search_partitions(&app_state_snapshot)
                     .await;
                 let pm = &self.config.plan_mode_settings;
@@ -1326,10 +1341,12 @@ impl QueryEngine {
                 Some(coco_compact::PlanModeAttachment {
                     reminder_type: coco_context::ReminderType::Full,
                     workflow,
+                    custom_instructions: pm.custom_instructions.clone(),
                     phase4_variant: phase4,
                     explore_agent_count: pm.explore_agent_count,
                     plan_agent_count: pm.plan_agent_count,
-                    explore_plan_agents_available: self.explore_plan_agents_available(),
+                    explore_plan_agents_available: self
+                        .explore_plan_agents_available(&loaded_tools),
                     is_sub_agent: agent_id_for_attachments.is_some(),
                     plan_file_path: plan_path,
                     plan_exists: plan_exists_flag,
@@ -1361,7 +1378,7 @@ impl QueryEngine {
                     coco_context::get_plan_file_path(
                         &session_id,
                         &plans_dir,
-                        /*agent_id*/ None,
+                        agent_id_for_attachments.as_deref(),
                     )
                 });
 
@@ -1386,10 +1403,13 @@ impl QueryEngine {
                     let plan_path = coco_context::get_plan_file_path(
                         &session_id,
                         &plans_dir,
-                        /*agent_id*/ None,
+                        agent_id_for_attachments.as_deref(),
                     );
-                    let plan_content =
-                        coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None);
+                    let plan_content = coco_context::get_plan(
+                        &session_id,
+                        &plans_dir,
+                        agent_id_for_attachments.as_deref(),
+                    );
                     if let Some(att) = coco_compact::create_plan_attachment_if_needed(
                         &plan_path,
                         plan_content.as_deref(),

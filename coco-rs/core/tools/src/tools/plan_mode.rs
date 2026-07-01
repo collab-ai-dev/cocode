@@ -74,23 +74,38 @@ struct ExitPlanModeOutput {
 const APPROVAL_FEEDBACK_CONTEXT_CHAR_LIMIT: usize = 4_000;
 const APPROVAL_FEEDBACK_TRUNCATION_MARKER: &str =
     "\n\n[Approval feedback truncated. The approved plan is saved at the plan file path above.]";
+const ENTER_PLAN_MODE_APPROVAL_MESSAGE: &str = concat!(
+    "The agent wants to enter plan mode to explore and design an implementation approach.\n\n",
+    "In plan mode, the agent will:\n",
+    "- Explore the codebase thoroughly\n",
+    "- Identify existing patterns\n",
+    "- Design an implementation strategy\n",
+    "- Present a plan for your approval\n\n",
+    "No code changes will be made until you approve the plan."
+);
+const PLAN_MODE_TEAM_HINT: &str = "\n\nIf this plan can be broken down into multiple independent \
+tasks, consider spawning named teammates with the Agent tool (pass a `name`) to parallelize the \
+work.";
 
 /// Build the cross-turn `AppStatePatch` that flips state into plan
 /// mode. Captures the current mode (so `ExitPlanMode` knows where to
 /// restore) and stamps the entry timestamp so `ExitPlanMode` can
 /// optionally compare against the plan-file mtime. The same shape is
-/// applied at two entry sites in coco-rs: the tool's own `execute`
+/// applied at two entry sites in this implementation: the tool's own `execute`
 /// and the `/plan <description>` slash command, which flips state
 /// directly without re-prompting the user.
-pub fn build_enter_plan_mode_patch(current_mode: PermissionMode) -> coco_types::AppStatePatch {
+pub fn build_enter_plan_mode_patch(
+    current_mode: PermissionMode,
+    live_allow_rules: coco_types::PermissionRulesBySource,
+    plan_auto_options: coco_permissions::PlanModeAutoOptions,
+) -> coco_types::AppStatePatch {
     Box::new(move |state| {
-        // Plan entry only — the Auto-entry stash branch is inert here, so an
-        // empty allow-rules map suffices.
         coco_permissions::apply_permission_mode_transition_to_app_state(
             state,
             current_mode,
             PermissionMode::Plan,
-            &coco_types::PermissionRulesBySource::new(),
+            &live_allow_rules,
+            plan_auto_options,
         );
         state.pending_plan_mode_exit_outcome = None;
     })
@@ -106,18 +121,18 @@ pub struct EnterPlanModeTool;
 /// `ToolName::AskUserQuestion.as_str()` so a future tool rename
 /// propagates without a doc edit. Names like `EnterPlanMode` /
 /// `ExitPlanMode` stay as literals — the wire names are stable.
-fn enter_plan_mode_prompt(is_plan_interview_phase: bool) -> String {
+fn enter_plan_mode_prompt(has_embedded_search_tools: bool) -> String {
     let aq = coco_types::ToolName::AskUserQuestion.as_str();
-    // Empty string when the iterative interview workflow is active
-    // (the model gets the detailed loop via the plan-mode attachment instead).
-    let what_happens = if is_plan_interview_phase {
-        String::new()
+    let exploration_tools = if has_embedded_search_tools {
+        "`find`/Glob, `grep`/Grep, and Read tools"
     } else {
-        format!(
-            "## What Happens in Plan Mode
+        "Glob, Grep, and Read tools"
+    };
+    let what_happens = format!(
+        "## What Happens in Plan Mode
 
 In plan mode, you'll:
-1. Thoroughly explore the codebase using Glob, Grep, and Read tools
+1. Thoroughly explore the codebase using {exploration_tools}
 2. Understand existing patterns and architecture
 3. Design an implementation approach
 4. Present your plan to the user for approval
@@ -125,8 +140,7 @@ In plan mode, you'll:
 6. Exit plan mode with ExitPlanMode when ready to implement
 
 "
-        )
-    };
+    );
     format!(
         "Use this tool proactively when you're about to start a non-trivial implementation task. Getting user sign-off on your approach before writing code prevents wasted effort and ensures alignment. This tool transitions you into plan mode where you can explore the codebase and design an implementation approach for user approval.
 
@@ -215,10 +229,8 @@ pub struct EnterPlanModeInput {}
 impl Tool for EnterPlanModeTool {
     type Input = EnterPlanModeInput;
     coco_tool_runtime::impl_runtime_schema!(EnterPlanModeInput);
-    /// Output is `Value` — the renderer reads `message` +
-    /// `isInterviewPhase` positionally. Could be a typed
-    /// `{message, isInterviewPhase}` struct in a follow-up; current
-    /// shape stays compatible with the existing test fixtures.
+    /// Output is `Value` — the renderer reads the 2.1.193-compatible
+    /// `message` field and appends the fixed tool-result reminder.
     type Output = Value;
 
     fn id(&self) -> ToolId {
@@ -233,7 +245,7 @@ impl Tool for EnterPlanModeTool {
             .into()
     }
     async fn prompt(&self, options: &PromptOptions) -> String {
-        enter_plan_mode_prompt(options.is_plan_interview_phase)
+        enter_plan_mode_prompt(options.has_embedded_search_tools)
     }
     fn user_facing_name(&self) -> &str {
         ""
@@ -247,10 +259,14 @@ impl Tool for EnterPlanModeTool {
     fn is_concurrency_safe(&self, _input: &EnterPlanModeInput) -> bool {
         true
     }
-    // Not deferred: `should_defer` stays the trait default `false` so the
-    // model can call `EnterPlanMode` directly, with no `ToolSearch` round-trip
-    // (same rationale as the Task/Todo tools). `search_hint` is kept anyway —
-    // it's inert while non-deferred, but ready if `should_defer` is flipped on.
+    fn should_defer(&self) -> bool {
+        // This implementation intentionally keeps the Plan Mode entry/exit tools eagerly
+        // loaded even though upstream defers them. Plan mode is a permission
+        // state machine, and hiding either half behind ToolSearch makes entry
+        // or post-compact exit depend on an extra tool-discovery round trip.
+        false
+    }
+
     fn search_hint(&self) -> Option<&str> {
         Some("switch to plan mode to design an approach before coding")
     }
@@ -259,6 +275,43 @@ impl Tool for EnterPlanModeTool {
     /// hidden — the model never sees this tool.
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::PlanMode)
+    }
+
+    fn validate_input(
+        &self,
+        _input: &EnterPlanModeInput,
+        ctx: &ToolUseContext,
+    ) -> ValidationResult {
+        if ctx.agent_id.is_some() {
+            return ValidationResult::invalid(
+                "EnterPlanMode tool cannot be used in agent contexts",
+            );
+        }
+        ValidationResult::Valid
+    }
+
+    async fn check_permissions(
+        &self,
+        _input: &EnterPlanModeInput,
+        _ctx: &ToolUseContext,
+    ) -> coco_types::ToolCheckResult {
+        coco_types::ToolCheckResult::Ask {
+            message: ENTER_PLAN_MODE_APPROVAL_MESSAGE.into(),
+            suggestions: vec![],
+            choices: Some(vec![
+                coco_types::PermissionAskChoice {
+                    value: "yes".into(),
+                    label: "Yes, enter plan mode".into(),
+                    description: None,
+                },
+                coco_types::PermissionAskChoice {
+                    value: "no".into(),
+                    label: "No, start implementing now".into(),
+                    description: None,
+                },
+            ]),
+            detail: None,
+        }
     }
 
     async fn execute(
@@ -286,17 +339,22 @@ impl Tool for EnterPlanModeTool {
             None => ctx.permission_context.mode,
         };
 
+        let live_allow_rules = ctx.permission_context.allow_rules.clone();
+        let plan_auto_options = coco_permissions::PlanModeAutoOptions {
+            use_auto_mode_during_plan: ctx.use_auto_mode_during_plan,
+            auto_mode_available: ctx.permission_mode_availability.auto,
+        };
+
         // Queue the mutation. Executor applies it post-execute under a
         // write lock (`AppStateReadHandle` has no write surface). The
         // patch builder is shared with `dispatch_plan` so a typed `/plan
         // <description>` and a tool-driven entry land identical
         // app-state shape.
-        let patch = build_enter_plan_mode_patch(current_mode);
+        let patch = build_enter_plan_mode_patch(current_mode, live_allow_rules, plan_auto_options);
 
         Ok(
             ToolResult::data(serde_json::json!({
                 "message": "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.",
-                "isInterviewPhase": ctx.is_plan_interview_phase,
             }))
             .with_patch(patch),
         )
@@ -307,12 +365,8 @@ impl Tool for EnterPlanModeTool {
             .get("message")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let is_interview = data
-            .get("isInterviewPhase")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
         vec![ToolResultContentPart::Text {
-            text: Self::build_instructions(message, is_interview),
+            text: Self::build_instructions(message),
             provider_options: None,
         }]
     }
@@ -320,20 +374,9 @@ impl Tool for EnterPlanModeTool {
 
 impl EnterPlanModeTool {
     /// Build the instructions text returned to the model as tool_result content.
-    /// Two variants gated on the interview-phase flag — the terse "DO NOT write"
-    /// version when the iterative interview workflow will deliver detailed steps
-    /// via the plan-mode attachment, otherwise the 6-step fallback that doubles
-    /// as the workflow primer.
-    pub fn build_instructions(confirmation: &str, is_plan_interview_phase: bool) -> String {
-        if is_plan_interview_phase {
-            format!(
-                "{confirmation}
-
-DO NOT write or edit any files except the plan file. Detailed workflow instructions will follow."
-            )
-        } else {
-            format!(
-                "{confirmation}
+    pub fn build_instructions(confirmation: &str) -> String {
+        format!(
+            "{confirmation}
 
 In plan mode, you should:
 1. Thoroughly explore the codebase to understand existing patterns
@@ -344,8 +387,7 @@ In plan mode, you should:
 6. When ready, use ExitPlanMode to present your plan for approval
 
 Remember: DO NOT write or edit any files yet. This is a read-only exploration and planning phase."
-            )
-        }
+        )
     }
 }
 
@@ -422,12 +464,12 @@ fn build_exit_plan_mode_no_plan_choices() -> Vec<coco_types::PermissionAskChoice
     vec![
         coco_types::PermissionAskChoice {
             value: ExitPlanChoice::KeepDefault.as_str().into(),
-            label: "Yes, exit plan mode".into(),
+            label: "Yes".into(),
             description: None,
         },
         coco_types::PermissionAskChoice {
             value: ExitPlanChoice::No.as_str().into(),
-            label: "No, keep planning".into(),
+            label: "No".into(),
             description: None,
         },
     ]
@@ -450,6 +492,12 @@ fn build_exit_plan_mode_choices_for_state(
                     "Start fresh and run implementation without approval prompts.".into(),
                 ),
             });
+        } else if ctx.permission_mode_availability.auto {
+            choices.push(coco_types::PermissionAskChoice {
+                value: ExitPlanChoice::ClearAuto.as_str().into(),
+                label: "Yes, clear context and use auto mode".into(),
+                description: Some("Start fresh and use auto mode during implementation.".into()),
+            });
         } else {
             choices.push(coco_types::PermissionAskChoice {
                 value: ExitPlanChoice::ClearAcceptEdits.as_str().into(),
@@ -459,9 +507,18 @@ fn build_exit_plan_mode_choices_for_state(
         }
     }
     choices.push(coco_types::PermissionAskChoice {
-        value: ExitPlanChoice::KeepAcceptEdits.as_str().into(),
+        value: if ctx.permission_context.bypass_available {
+            ExitPlanChoice::KeepAcceptEdits.as_str()
+        } else if ctx.permission_mode_availability.auto {
+            ExitPlanChoice::KeepAuto.as_str()
+        } else {
+            ExitPlanChoice::KeepAcceptEdits.as_str()
+        }
+        .into(),
         label: if ctx.permission_context.bypass_available {
             "Yes, and bypass permissions".into()
+        } else if ctx.permission_mode_availability.auto {
+            "Yes, and use auto mode".into()
         } else {
             "Yes, auto-accept edits".into()
         },
@@ -573,9 +630,13 @@ impl Tool for ExitPlanModeTool {
     fn is_concurrency_safe(&self, _input: &ExitPlanModeInput) -> bool {
         true
     }
-    // Not deferred (trait default `false`) — kept loaded alongside
-    // `EnterPlanModeTool` so neither plan-mode tool needs a `ToolSearch` hop.
-    // `search_hint` kept but inert while non-deferred (ready if re-deferred).
+    fn should_defer(&self) -> bool {
+        // Paired with EnterPlanModeTool: keep the exit path always visible
+        // while plan mode is active so the model is never trapped in planning
+        // because ToolSearch failed to rediscover ExitPlanMode.
+        false
+    }
+
     fn search_hint(&self) -> Option<&str> {
         Some("present plan for approval and start coding (plan mode only)")
     }
@@ -599,9 +660,8 @@ impl Tool for ExitPlanModeTool {
 
         if ctx.permission_context.mode != PermissionMode::Plan {
             return ValidationResult::invalid_with_code(
-                "You are not in plan mode. This tool is only for exiting plan mode \
-                 after writing a plan. If your plan was already approved, continue \
-                 with implementation.",
+                "You are not in plan mode. To enter plan mode, call the EnterPlanMode tool first. \
+                 If your plan was already approved, continue with implementation.",
                 "1",
             );
         }
@@ -784,24 +844,40 @@ impl Tool for ExitPlanModeTool {
         // EnterPlanMode.execute). Fall back to `ctx.permission_context`
         // for callers without app_state.
         // Auto-mode-exit banner: fires when auto was effectively active
-        // during the plan but we're not restoring to Auto. In Rust
-        // "auto was active" = `stripped_dangerous_rules.is_some()` OR
-        // `pre_plan_mode == Some(Auto)`.
-        let (pre_plan_from_state, stripped_from_state) = match ctx.app_state.as_ref() {
-            Some(state) => {
-                let guard = state.read().await;
-                (
-                    guard.permissions.pre_plan_mode,
-                    guard.permissions.stripped_dangerous_rules.is_some(),
-                )
-            }
-            None => (
-                ctx.permission_context.pre_plan_mode,
-                ctx.permission_context.stripped_dangerous_rules.is_some(),
-            ),
-        };
+        // during the plan but we're not restoring to Auto. `AutoModeState`
+        // is the authoritative signal; `pre_plan_mode` and
+        // `stripped_dangerous_rules` can be stale after mid-plan
+        // plan-auto reconciliation.
+        let (current_mode_from_state, pre_plan_from_state, stripped_from_state) =
+            match ctx.app_state.as_ref() {
+                Some(state) => {
+                    let guard = state.read().await;
+                    (
+                        guard
+                            .permissions
+                            .mode
+                            .unwrap_or(ctx.permission_context.mode),
+                        guard.permissions.pre_plan_mode,
+                        guard.permissions.stripped_dangerous_rules.is_some(),
+                    )
+                }
+                None => (
+                    ctx.permission_context.mode,
+                    ctx.permission_context.pre_plan_mode,
+                    ctx.permission_context.stripped_dangerous_rules.is_some(),
+                ),
+            };
+        let was_in_plan_mode = current_mode_from_state == PermissionMode::Plan;
         let restore_mode = if has_implementation_plan {
             match choice {
+                Some(ExitPlanChoice::ClearAuto | ExitPlanChoice::KeepAuto)
+                    if ctx.permission_mode_availability.auto =>
+                {
+                    PermissionMode::Auto
+                }
+                Some(ExitPlanChoice::ClearAuto | ExitPlanChoice::KeepAuto) => {
+                    PermissionMode::Default
+                }
                 Some(ExitPlanChoice::ClearBypassPermissions)
                     if ctx.permission_context.bypass_available =>
                 {
@@ -824,10 +900,12 @@ impl Tool for ExitPlanModeTool {
                 }
             }
         } else {
-            pre_plan_from_state.unwrap_or(PermissionMode::Default)
+            // Upstream empty-plan confirmation is a simplified Yes/No
+            // path: approving it exits to manual approval, regardless of the
+            // mode that was active before plan mode.
+            PermissionMode::Default
         };
-        let auto_was_active_during_plan =
-            stripped_from_state || pre_plan_from_state == Some(PermissionMode::Auto);
+        let auto_was_active_during_plan = ctx.auto_mode_active;
         let restoring_to_auto = restore_mode == PermissionMode::Auto;
         let needs_auto_exit = auto_was_active_during_plan && !restoring_to_auto;
 
@@ -874,11 +952,7 @@ impl Tool for ExitPlanModeTool {
                 .as_deref()
                 .map(|path| format!("\n\nPlan file path: {path}"))
                 .unwrap_or_default();
-            let team_hint = if has_task_tool {
-                "\n\nIf this plan can be broken down into multiple independent tasks, consider spawning teammates with Agent({name:...}) to parallelize the work."
-            } else {
-                ""
-            };
+            let team_hint = if has_task_tool { PLAN_MODE_TEAM_HINT } else { "" };
             let feedback_suffix = bounded_approval_feedback_suffix(ctx.approval_feedback.as_deref());
             format!(
                 "Implement the following plan:\n\n{}{plan_file_hint}{transcript_hint}{team_hint}{feedback_suffix}",
@@ -893,28 +967,31 @@ impl Tool for ExitPlanModeTool {
 
         // Queue the full ExitPlanMode transition.
         let patch: coco_types::AppStatePatch = Box::new(move |state| {
-            state.permissions.mode = Some(restore_mode);
-            state.permissions.pre_plan_mode = None;
-            state.has_exited_plan_mode = true;
-            state.needs_plan_mode_exit_attachment = true;
-            state.pending_plan_mode_exit_outcome = Some(outcome);
-            state.pending_plan_verification = pending_verification_plan
-                .clone()
-                .map(PendingPlanVerificationState::new);
-            if needs_auto_exit {
-                state.needs_auto_mode_exit_attachment = true;
-            }
-            // Dangerous-rules stash management on Auto boundary.
-            // (The strip happens on Plan→Auto, restore on
-            // Auto→non-Auto exit path.)
-            if restoring_to_auto && state.permissions.stripped_dangerous_rules.is_none() {
-                state.permissions.stripped_dangerous_rules = snapshotted_stripped_rules;
-            } else if !restoring_to_auto && state.permissions.stripped_dangerous_rules.is_some() {
-                state.permissions.stripped_dangerous_rules = None;
-            }
-            if clear_history_requested {
-                state.pending_clear_message_history = true;
-                state.pending_plan_implementation_message = post_clear_message;
+            if was_in_plan_mode {
+                state.permissions.mode = Some(restore_mode);
+                state.permissions.pre_plan_mode = None;
+                state.has_exited_plan_mode = true;
+                state.needs_plan_mode_exit_attachment = true;
+                state.pending_plan_mode_exit_outcome = Some(outcome);
+                state.pending_plan_verification = pending_verification_plan
+                    .clone()
+                    .map(PendingPlanVerificationState::new);
+                if needs_auto_exit {
+                    state.needs_auto_mode_exit_attachment = true;
+                }
+                // Dangerous-rules stash management on Auto boundary.
+                // (The strip happens on Plan→Auto, restore on
+                // Auto→non-Auto exit path.)
+                if restoring_to_auto && state.permissions.stripped_dangerous_rules.is_none() {
+                    state.permissions.stripped_dangerous_rules = snapshotted_stripped_rules;
+                } else if !restoring_to_auto && state.permissions.stripped_dangerous_rules.is_some()
+                {
+                    state.permissions.stripped_dangerous_rules = None;
+                }
+                if clear_history_requested {
+                    state.pending_clear_message_history = true;
+                    state.pending_plan_implementation_message = post_clear_message;
+                }
             }
         });
 
@@ -1044,16 +1121,13 @@ impl ExitPlanModeTool {
                 .to_string();
         }
 
-        if out.outcome == ExitPlanModeOutcome::NoImplementationPlan {
-            return "User has approved exiting plan mode. There is no implementation plan to execute."
-                .to_string();
-        }
         let plan_text = out.plan.as_deref().unwrap_or("");
+        if out.outcome == ExitPlanModeOutcome::NoImplementationPlan || plan_text.trim().is_empty() {
+            return "User has approved exiting plan mode. You can now proceed.".to_string();
+        }
 
         let team_hint = if out.has_task_tool.unwrap_or(false) {
-            "\n\nIf this plan can be broken down into multiple independent tasks, \
-             consider spawning teammates with Agent({name:...}) to parallelize \
-             the work."
+            PLAN_MODE_TEAM_HINT
         } else {
             ""
         };

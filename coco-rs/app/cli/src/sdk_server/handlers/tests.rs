@@ -490,6 +490,46 @@ async fn initialize_then_session_start_sequence() {
     server_task.await.unwrap();
 }
 
+#[tokio::test]
+async fn initialize_plan_mode_instructions_are_session_scoped() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+
+    client
+        .send(req(
+            1,
+            "initialize",
+            serde_json::json!({
+                "planModeInstructions": "Use the SDK custom workflow."
+            }),
+        ))
+        .await
+        .unwrap();
+    let init_reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(init_reply, JsonRpcMessage::Response(_)));
+    assert_eq!(
+        state.pending_plan_mode_instructions.read().await.as_deref(),
+        Some("Use the SDK custom workflow.")
+    );
+
+    client
+        .send(req(2, "session/start", serde_json::json!({})))
+        .await
+        .unwrap();
+    let start_reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(start_reply, JsonRpcMessage::Response(_)));
+
+    let slot = state.session.read().await;
+    let session = slot.as_ref().expect("session installed");
+    assert_eq!(
+        session.plan_mode_instructions.as_deref(),
+        Some("Use the SDK custom workflow.")
+    );
+
+    drop(slot);
+    drop(client);
+    server_task.await.unwrap();
+}
+
 // ----- session/start --------------------------------------------------
 
 #[tokio::test]
@@ -1349,6 +1389,66 @@ async fn set_permission_mode_auto_to_default_clears_stripped_rules() {
 
     drop(guard);
     drop(slot);
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn set_permission_mode_auto_to_plan_preserves_previous_mode() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+
+    start_session(&client).await;
+
+    {
+        let mut slot = state.session.write().await;
+        let session = slot.as_mut().unwrap();
+        session.permission_mode = Some(coco_types::PermissionMode::Auto);
+        let mut guard = session.app_state.write().await;
+        guard.permissions.mode = Some(coco_types::PermissionMode::Auto);
+        guard.permissions.stripped_dangerous_rules =
+            Some(coco_types::PermissionRulesBySource::default());
+    }
+
+    client
+        .send(req(
+            2,
+            "control/setPermissionMode",
+            serde_json::json!({ "mode": "plan" }),
+        ))
+        .await
+        .unwrap();
+
+    loop {
+        match client.recv().await.unwrap().unwrap() {
+            JsonRpcMessage::Notification(_) => {}
+            JsonRpcMessage::Response(_) => break,
+            JsonRpcMessage::Error(err) => panic!("unexpected error response: {err:?}"),
+            other => panic!("unexpected message before response: {other:?}"),
+        }
+    }
+
+    let slot = state.session.read().await;
+    let session = slot.as_ref().unwrap();
+    assert_eq!(
+        session.permission_mode,
+        Some(coco_types::PermissionMode::Plan)
+    );
+    let guard = session.app_state.read().await;
+    assert_eq!(
+        guard.permissions.mode,
+        Some(coco_types::PermissionMode::Plan)
+    );
+    assert_eq!(
+        guard.permissions.pre_plan_mode,
+        Some(coco_types::PermissionMode::Auto),
+        "SDK Plan entry must use the live previous mode, not Default"
+    );
+    assert!(
+        guard.permissions.stripped_dangerous_rules.is_none(),
+        "Auto→Plan without plan-auto semantics exits classifier territory"
+    );
+    assert!(guard.needs_auto_mode_exit_attachment);
+
     drop(client);
     server_task.await.unwrap();
 }

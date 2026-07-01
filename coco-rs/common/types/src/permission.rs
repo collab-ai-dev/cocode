@@ -279,8 +279,8 @@ pub enum PermissionAbortReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionAskChoice {
     /// Stable identifier echoed back in the approval response. Use
-    /// kebab-case (`"yes-default-keep-context"`,
-    /// `"yes-accept-edits-clear-context"`, `"no"`).
+    /// kebab-case (`"yes-default-keep-context"`, `"yes-accept-edits"`,
+    /// `"no"`).
     pub value: String,
     /// Short row label shown to the user.
     pub label: String,
@@ -319,26 +319,28 @@ pub struct ExitPlanModeAllowedPrompt {
 /// the producer (the TUI permission bridge, which builds the choice list) and
 /// the consumer (`ExitPlanModeTool::execute`, which branches on the picked
 /// value) from drifting apart.
-/// Response value for the exit-plan-mode permission request.
-/// The two clear-context variants intentionally diverge from the TS strings
-/// (`yes-accept-edits` / `yes-bypass-permissions`): coco appends an explicit
-/// `-clear-context` suffix so every clear variant reads symmetrically against
-/// the `-keep-context` keep variants — self-documenting in logs and on the wire.
-/// The value is ephemeral (resolved to the enum within a turn, never persisted),
-/// so the rename is a clean break with no legacy alias.
+/// Response value for the exit-plan-mode permission request. Values mirror
+/// upstream 2.1.193's `buildExitPlanModeOptions`/`Tar` branches so TUI
+/// choice logs and SDK surfaces stay source-compatible.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExitPlanChoice {
+    /// Clear context, then implement in Auto mode.
+    #[serde(rename = "yes-auto-clear-context")]
+    ClearAuto,
     /// Clear context, then implement with permissions bypassed.
-    #[serde(rename = "yes-bypass-permissions-clear-context")]
+    #[serde(rename = "yes-bypass-permissions")]
     ClearBypassPermissions,
     /// Clear context, then implement auto-accepting edits.
-    #[serde(rename = "yes-accept-edits-clear-context")]
+    #[serde(rename = "yes-accept-edits")]
     ClearAcceptEdits,
     /// Keep context; auto-accept edits (or bypass when the gate allows).
     #[serde(rename = "yes-accept-edits-keep-context")]
     KeepAcceptEdits,
-    /// Keep context; restore the pre-plan mode (default → manual approval).
+    /// Keep context; resume Auto mode.
+    #[serde(rename = "yes-resume-auto-mode")]
+    KeepAuto,
+    /// Keep context; manually approve edits.
     #[serde(rename = "yes-default-keep-context")]
     KeepDefault,
     /// Reject the plan and stay in plan mode. Never reaches `execute` (the
@@ -352,9 +354,11 @@ impl ExitPlanChoice {
     /// Stable wire value echoed back in the approval response.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::ClearBypassPermissions => "yes-bypass-permissions-clear-context",
-            Self::ClearAcceptEdits => "yes-accept-edits-clear-context",
+            Self::ClearAuto => "yes-auto-clear-context",
+            Self::ClearBypassPermissions => "yes-bypass-permissions",
+            Self::ClearAcceptEdits => "yes-accept-edits",
             Self::KeepAcceptEdits => "yes-accept-edits-keep-context",
+            Self::KeepAuto => "yes-resume-auto-mode",
             Self::KeepDefault => "yes-default-keep-context",
             Self::No => "no",
         }
@@ -363,9 +367,11 @@ impl ExitPlanChoice {
     /// Parse a wire value back into a choice; `None` for an unrecognized value.
     pub fn from_wire(value: &str) -> Option<Self> {
         match value {
-            "yes-bypass-permissions-clear-context" => Some(Self::ClearBypassPermissions),
-            "yes-accept-edits-clear-context" => Some(Self::ClearAcceptEdits),
+            "yes-auto-clear-context" => Some(Self::ClearAuto),
+            "yes-bypass-permissions" => Some(Self::ClearBypassPermissions),
+            "yes-accept-edits" => Some(Self::ClearAcceptEdits),
             "yes-accept-edits-keep-context" => Some(Self::KeepAcceptEdits),
+            "yes-resume-auto-mode" => Some(Self::KeepAuto),
             "yes-default-keep-context" => Some(Self::KeepDefault),
             "no" => Some(Self::No),
             _ => None,
@@ -374,7 +380,10 @@ impl ExitPlanChoice {
 
     /// Whether this choice clears conversation context before implementing.
     pub const fn clears_context(self) -> bool {
-        matches!(self, Self::ClearBypassPermissions | Self::ClearAcceptEdits)
+        matches!(
+            self,
+            Self::ClearAuto | Self::ClearBypassPermissions | Self::ClearAcceptEdits
+        )
     }
 }
 

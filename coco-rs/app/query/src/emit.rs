@@ -238,6 +238,8 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::MemoryFileOpenFailed { .. } => "memory_file_open_failed",
         TuiOnlyEvent::PlanFileOpened { .. } => "plan_file_opened",
         TuiOnlyEvent::PlanFileOpenFailed { .. } => "plan_file_open_failed",
+        TuiOnlyEvent::ExitPlanPromptEditorCompleted { .. } => "exit_plan_prompt_editor_completed",
+        TuiOnlyEvent::ExitPlanPromptEditorFailed { .. } => "exit_plan_prompt_editor_failed",
         TuiOnlyEvent::ExternalEditorPrepare { .. } => "external_editor_prepare",
         TuiOnlyEvent::PromptEditorCompleted { .. } => "prompt_editor_completed",
         TuiOnlyEvent::PromptEditorFailed { .. } => "prompt_editor_failed",

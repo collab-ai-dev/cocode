@@ -58,6 +58,9 @@ pub enum KeybindingContext {
     /// chars become `InsertChar` and arrows `Cursor*` so the rule field is
     /// editable, rather than being hijacked as y/n/a confirmation actions.
     PermissionPrefixEdit,
+    /// ExitPlanMode's focused "No, keep planning" row. Plain chars edit the
+    /// feedback input; Enter submits only when feedback is non-empty.
+    ExitPlanFeedbackInput,
     /// Background-tasks dialog (footer "N agents" pill → full-screen list +
     /// per-task detail). Dedicated context because the generic
     /// [`Self::Confirmation`] map emits `Surface{Prev,Next,Confirm}` and has no
@@ -142,6 +145,12 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
         && crate::permission_options::prefix_editing(p, state.session.permission_mode)
     {
         return KeybindingContext::PermissionPrefixEdit;
+    }
+
+    if let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref()
+        && crate::bottom_pane::permission::exit_plan_feedback_editing(p)
+    {
+        return KeybindingContext::ExitPlanFeedbackInput;
     }
 
     if matches!(
@@ -350,6 +359,7 @@ fn resolve_key(
         KeybindingContext::PermissionsEditor => crate::modal_pane::permissions_editor::map_key(key),
         KeybindingContext::AddDirectory => crate::modal_pane::add_directory::map_key(key),
         KeybindingContext::PermissionPrefixEdit => permission_prefix_edit_map_key(key),
+        KeybindingContext::ExitPlanFeedbackInput => exit_plan_feedback_input_map_key(key),
         KeybindingContext::BackgroundTasks => background_tasks_map_key(key),
         KeybindingContext::Chat => map_global_key(state, key).or_else(|| map_input_key(state, key)),
     };
@@ -380,6 +390,10 @@ fn permission_prefix_edit_map_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char(c) if !ctrl && !alt => Some(TuiCommand::InsertChar(c)),
         _ => None,
     }
+}
+
+fn exit_plan_feedback_input_map_key(key: KeyEvent) -> Option<TuiCommand> {
+    permission_prefix_edit_map_key(key)
 }
 
 /// Keys for the background-tasks dialog. Emits exactly the commands

@@ -326,6 +326,8 @@ fn exit_plan_prompt_state(step_count: usize) -> AppState {
                 detail: crate::state::PermissionDetail::ExitPlanMode {
                     outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
                     plan: Some(plan),
+                    edited_plan: None,
+                    feedback_input: crate::state::PrefixInputState::new(String::new()),
                     plan_file_path: Some("/tmp/plan.md".into()),
                     allowed_prompts: vec![],
                 },

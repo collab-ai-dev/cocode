@@ -126,6 +126,10 @@ impl TurnRunner for QueryEngineRunner {
                     &runtime.original_cwd,
                 );
             let current_engine_config = runtime.current_engine_config().await;
+            let mut plan_mode_settings = runtime_config.settings.merged.plan_mode.clone();
+            if let Some(instructions) = handoff.plan_mode_instructions.clone() {
+                plan_mode_settings.custom_instructions = Some(instructions);
+            }
             let config = QueryEngineConfig {
                 model_id: handoff.model.clone(),
                 permission_mode,
@@ -161,6 +165,7 @@ impl TurnRunner for QueryEngineRunner {
                 web_fetch_config: runtime_config.web_fetch.clone(),
                 web_search_config: runtime_config.web_search.clone(),
                 compact: runtime_config.compact.clone(),
+                plan_mode_settings,
                 features: std::sync::Arc::new(runtime_config.features.clone()),
                 skill_overrides: std::sync::Arc::new(runtime_config.skill_overrides.clone()),
                 tool_overrides: runtime_config.tool_overrides.clone(),
@@ -188,14 +193,23 @@ impl TurnRunner for QueryEngineRunner {
             // runtime /add-dir) so per-turn SDK rebuilds don't drop it (P17).
             {
                 let mut guard = handoff.app_state.write().await;
-                let additional_dirs = guard.permissions.additional_dirs.clone();
-                guard.permissions = crate::session_runtime::live_permissions(
-                    permission_mode,
-                    allow_rules,
-                    deny_rules,
-                    ask_rules,
-                    additional_dirs,
-                    permission_rule_source_roots,
+                refresh_live_permissions_for_turn(
+                    &mut guard,
+                    SdkTurnPermissionInputs {
+                        fallback_previous_mode: handoff.permission_mode.unwrap_or_default(),
+                        permission_mode,
+                        allow_rules,
+                        deny_rules,
+                        ask_rules,
+                        permission_rule_source_roots,
+                        plan_auto_options: coco_permissions::PlanModeAutoOptions {
+                            use_auto_mode_during_plan: current_engine_config
+                                .use_auto_mode_during_plan,
+                            auto_mode_available: current_engine_config
+                                .permission_mode_availability
+                                .auto,
+                        },
+                    },
                 );
             }
 
@@ -747,6 +761,39 @@ impl TurnRunner for QueryEngineRunner {
             }
         })
     }
+}
+
+struct SdkTurnPermissionInputs {
+    fallback_previous_mode: coco_types::PermissionMode,
+    permission_mode: coco_types::PermissionMode,
+    allow_rules: coco_types::PermissionRulesBySource,
+    deny_rules: coco_types::PermissionRulesBySource,
+    ask_rules: coco_types::PermissionRulesBySource,
+    permission_rule_source_roots:
+        std::collections::HashMap<coco_types::PermissionRuleSource, std::path::PathBuf>,
+    plan_auto_options: coco_permissions::PlanModeAutoOptions,
+}
+
+fn refresh_live_permissions_for_turn(
+    guard: &mut coco_types::ToolAppState,
+    refresh: SdkTurnPermissionInputs,
+) {
+    let previous_mode = guard
+        .permissions
+        .mode
+        .unwrap_or(refresh.fallback_previous_mode);
+    guard.permissions.allow_rules = refresh.allow_rules;
+    guard.permissions.deny_rules = refresh.deny_rules;
+    guard.permissions.ask_rules = refresh.ask_rules;
+    guard.permissions.permission_rule_source_roots = refresh.permission_rule_source_roots;
+    let live_allow_rules = guard.permissions.allow_rules.clone();
+    coco_permissions::apply_permission_mode_transition_to_app_state(
+        guard,
+        previous_mode,
+        refresh.permission_mode,
+        &live_allow_rules,
+        refresh.plan_auto_options,
+    );
 }
 
 async fn sdk_append_slash_text(

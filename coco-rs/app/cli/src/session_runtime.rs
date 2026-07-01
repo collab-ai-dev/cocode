@@ -318,7 +318,7 @@ pub struct SessionRuntimeBuildOpts<'a> {
     pub cwd: PathBuf,
     pub model_id: String,
     pub system_prompt: String,
-    pub bypass_permissions_available: bool,
+    pub permission_mode_availability: coco_types::PermissionModeAvailability,
     pub permission_mode: PermissionMode,
     pub model_runtimes: Option<Arc<coco_inference::ModelRuntimeRegistry>>,
     pub tools: Arc<ToolRegistry>,
@@ -813,7 +813,7 @@ impl SessionRuntime {
             cwd,
             model_id,
             system_prompt,
-            bypass_permissions_available,
+            permission_mode_availability,
             permission_mode,
             model_runtimes,
             tools,
@@ -1229,7 +1229,8 @@ impl SessionRuntime {
         let engine_config = QueryEngineConfig {
             model_id,
             permission_mode,
-            bypass_permissions_available,
+            permission_mode_availability,
+            use_auto_mode_during_plan: runtime_config.settings.use_auto_mode_during_plan_enabled(),
             permission_rule_source_roots: permission_rule_source_roots.clone(),
             context_window: 200_000,
             max_output_tokens: 16_384,
@@ -2598,23 +2599,35 @@ impl SessionRuntime {
         engine = engine.with_file_read_state(self.file_read_state.clone());
         engine = engine.with_app_state(app_state.clone());
         // `auto_mode_state` is a SESSION-GLOBAL flag shared by every engine in
-        // this runtime. It is NO LONGER the classifier gate — that now reads the
-        // per-call `permission_context.mode` (see `tool_call_preparer`, TS
-        // parity), so a stale/raced flag can't suppress the classifier. The flag
-        // survives only for the Plan→Auto bridge, denial-streak reset, and TUI
-        // display. Sync it from the session's authoritative `self.app_state`
-        // (NOT the per-build `app_state` override): a fork/skill/compaction
-        // sub-engine carrying a non-Auto override would otherwise clobber it.
-        // Every build re-syncs from the single source, covering all mode-change
-        // funnels (TUI + SDK) uniformly without threading the flag through each.
-        let auto_active = self
-            .app_state
-            .read()
-            .await
-            .permissions
-            .mode
-            .is_some_and(|mode| mode == coco_types::PermissionMode::Auto);
-        self.auto_mode_state.set_active(auto_active);
+        // this runtime. Pure Auto still keys off the per-call
+        // `permission_context.mode`; Plan uses this flag as the authoritative
+        // plan-auto bridge signal, matching TS `mode === 'plan' &&
+        // isAutoModeActive()`. Sync it from the session's authoritative
+        // `self.app_state` (NOT the per-build `app_state` override): a
+        // fork/skill/compaction sub-engine carrying a non-Auto override would
+        // otherwise clobber it. Every build re-syncs from the single source,
+        // covering all mode-change funnels (TUI + SDK) uniformly without
+        // threading the flag through each.
+        let engine_config = self.current_engine_config().await;
+        {
+            let mut app_state = self.app_state.write().await;
+            let allow_rules = app_state.permissions.allow_rules.clone();
+            let plan_auto_options = coco_permissions::PlanModeAutoOptions {
+                use_auto_mode_during_plan: engine_config.use_auto_mode_during_plan,
+                auto_mode_available: engine_config.permission_mode_availability.auto,
+            };
+            let _ = coco_permissions::reconcile_plan_auto_mode_in_app_state(
+                &mut app_state,
+                &allow_rules,
+                plan_auto_options,
+                &self.auto_mode_state,
+            );
+            if app_state.permissions.mode != Some(coco_types::PermissionMode::Plan) {
+                self.auto_mode_state.set_active(
+                    app_state.permissions.mode == Some(coco_types::PermissionMode::Auto),
+                );
+            }
+        }
         // Build the classifier rules from settings (`auto_mode` is restricted
         // to user/policy sources by the per-source validator). Previously this
         // passed `::default()`, so allow/soft_deny/environment AND the
@@ -2901,6 +2914,7 @@ impl SessionRuntime {
             features: Some(cfg.features.clone()),
             tool_overrides: Some(cfg.tool_overrides.clone()),
             active_shell_tool: cfg.active_shell_tool,
+            use_auto_mode_during_plan: cfg.use_auto_mode_during_plan,
             parent_tool_filter: None,
             // Fork-mode skill subagents count toward the same depth cap as
             // other forked subagents.

@@ -31,10 +31,14 @@ mod harness;
 
 use std::sync::Arc;
 
+use coco_messages::AssistantContent;
 use coco_messages::Message;
+use coco_messages::create_assistant_message;
 use coco_types::CoreEvent;
+use coco_types::InputTokens;
 use coco_types::PermissionMode;
 use coco_types::ServerNotification;
+use coco_types::TokenUsage;
 use coco_types::ToolAppState;
 use harness::MockModelBuilder;
 use harness::MockResponse;
@@ -204,7 +208,7 @@ async fn end_to_end_single_run() {
 }
 
 #[tokio::test]
-async fn no_plan_exit_does_not_reference_stale_plan_file() {
+async fn exit_references_existing_disk_plan_without_entry_timestamp() {
     let tmp = tempfile::tempdir().unwrap();
     let session_id = "integ-no-plan-exit";
     let app_state = Arc::new(RwLock::new(ToolAppState::default()));
@@ -233,12 +237,12 @@ async fn no_plan_exit_does_not_reference_stale_plan_file() {
         .find(|text| text.contains("## Exited Plan Mode"))
         .expect("exit banner");
     assert!(
-        exit_text.contains("without an implementation plan"),
-        "{exit_text}"
+        exit_text.contains("The plan file is located at"),
+        "non-empty disk plan should be treated as the implementation plan: {exit_text}"
     );
     assert!(
-        !exit_text.contains(path.to_string_lossy().as_ref()),
-        "no-plan exit must not reference stale plan file: {exit_text}"
+        exit_text.contains(path.to_string_lossy().as_ref()),
+        "exit should reference the current plan file: {exit_text}"
     );
     let guard = app_state.read().await;
     assert_eq!(
@@ -600,6 +604,51 @@ async fn model_driven_enter_plan_mode_swaps_to_plan_role_client_same_run() {
     assert_eq!(
         app_state.read().await.permissions.mode,
         Some(PermissionMode::Plan),
+    );
+}
+
+#[tokio::test]
+async fn plan_mode_over_threshold_uses_main_role_client() {
+    // TS `getRuntimeMainLoopModel` disables the plan-model swap when the
+    // most recent assistant turn exceeds 200k tokens. coco-rs mirrors that
+    // with `models.plan` plus a configurable threshold; this is the
+    // end-to-end guard that the active runtime falls back to Main.
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "integ-plan-model-over-threshold";
+    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+
+    let main_model = MockModelBuilder::new()
+        .on_call(0, |_| MockResponse::text("main-client"))
+        .build();
+    let plan_model = MockModelBuilder::new()
+        .on_call(0, |_| MockResponse::text("plan-client"))
+        .build();
+    let prior_assistant = create_assistant_message(
+        vec![AssistantContent::text("large previous response")],
+        "prior-plan-client",
+        TokenUsage {
+            input_tokens: InputTokens {
+                total: 250_000,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+
+    let params = PlanModeTurnParams::plan_turn(
+        session_id,
+        tmp.path().to_path_buf(),
+        app_state,
+        tools_with_plan_mode(),
+        "continue planning",
+    )
+    .with_plan_role_model(plan_model)
+    .next_turn(vec![Arc::new(prior_assistant)], "continue planning");
+    let result = run_plan_mode_turn(main_model, params).await;
+
+    assert_eq!(
+        result.response_text, "main-client",
+        "over-threshold plan mode must use Main, not the Plan-role client"
     );
 }
 

@@ -127,7 +127,12 @@ impl AttachmentGenerator for PlanModeExitGenerator {
         if !ctx.plan_mode_feature_enabled {
             return Ok(None);
         }
-        if !ctx.needs_plan_mode_exit_attachment {
+        // Upstream also emits this banner when history contains plan-mode
+        // guidance since the last exit but the one-shot flag is missing. That
+        // repairs stale/missed transition bookkeeping and closes the transcript
+        // boundary exactly once because the next scan stops at `plan_mode_exit`.
+        let has_open_plan_mode_cycle = ctx.plan_mode_turns_since_attachment.is_some();
+        if !ctx.needs_plan_mode_exit_attachment && !has_open_plan_mode_cycle {
             return Ok(None);
         }
         if ctx.is_plan_mode {
@@ -156,7 +161,6 @@ impl AttachmentGenerator for PlanModeExitGenerator {
 /// - `is_plan_mode` (we're in plan mode this turn)
 /// - `is_plan_reentry` (engine detected a prior exit)
 /// - `plan_exists` (there's an existing plan file to reference)
-/// - `!is_sub_agent` — sub-agents don't re-enter
 /// Produced via the same [`coco_context::render_plan_mode_reminder`] as the
 /// steady-state reminder but with [`ReminderType::Reentry`], which emits
 /// "## Re-entering Plan Mode" text referencing the existing plan file.
@@ -181,7 +185,7 @@ impl AttachmentGenerator for PlanModeReentryGenerator {
         if !ctx.plan_mode_feature_enabled {
             return Ok(None);
         }
-        if !(ctx.is_plan_mode && ctx.is_plan_reentry && ctx.plan_exists && !ctx.is_sub_agent) {
+        if !(ctx.is_plan_mode && ctx.is_plan_reentry && ctx.plan_exists) {
             return Ok(None);
         }
 
@@ -205,6 +209,7 @@ fn build_plan_mode_attachment(
     PlanModeAttachment {
         reminder_type,
         workflow: ctx.plan_workflow,
+        custom_instructions: ctx.plan_mode_custom_instructions.clone(),
         phase4_variant: ctx.phase4_variant,
         explore_agent_count: ctx.explore_agent_count,
         plan_agent_count: ctx.plan_agent_count,
@@ -213,8 +218,8 @@ fn build_plan_mode_attachment(
         plan_file_path: plan_file_path_string(ctx),
         plan_exists: ctx.plan_exists,
         // Resolve the plan-file tool from the model's actual loaded tools this
-        // turn, so the reminder names `apply_patch` for gpt-5 and `Write`/`Edit`
-        // for Claude — never a tool the model lacks.
+        // turn, so the reminder names `apply_patch` or `Write`/`Edit` based on
+        // what is actually available — never a tool the model lacks.
         write_tool: coco_types::ToolName::write_tool_for(&ctx.tools),
         edit_tool: coco_types::ToolName::edit_tool_for(&ctx.tools),
         deferred_tools: ctx.deferred_tools.clone(),

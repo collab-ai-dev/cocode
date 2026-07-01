@@ -13,6 +13,8 @@ use crate::permission_options::PermissionAction;
 use crate::state::AppState;
 use crate::state::PanePromptState;
 use crate::state::Toast;
+use coco_tui_ui::paste::ImageData;
+use coco_tui_ui::paste::PasteManager;
 
 /// Route an inline-editing command to the editable always-allow prefix field
 /// when an allow row is focused on a shell-tool prompt (the
@@ -52,6 +54,48 @@ pub(crate) fn intercept_prefix_edit(state: &mut AppState, cmd: &crate::events::T
         C::CursorRight => input.right(),
         C::CursorHome => input.home(),
         C::CursorEnd => input.end(),
+        _ => return false,
+    }
+    true
+}
+
+/// Route inline editing to ExitPlanMode's "No, keep planning" feedback field
+/// while that row is focused. Mirrors the source UI's input row without
+/// widening the generic permission-choice wire type.
+pub(crate) fn intercept_exit_plan_feedback_edit(
+    state: &mut AppState,
+    cmd: &crate::events::TuiCommand,
+) -> bool {
+    use crate::events::TuiCommand as C;
+    if !matches!(
+        cmd,
+        C::InsertChar(_)
+            | C::DeleteBackward
+            | C::DeleteWordBackward
+            | C::CursorLeft
+            | C::CursorRight
+            | C::CursorHome
+            | C::CursorEnd
+    ) {
+        return false;
+    }
+    let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_mut() else {
+        return false;
+    };
+    if !exit_plan_feedback_editing(p) {
+        return false;
+    }
+    let crate::state::PermissionDetail::ExitPlanMode { feedback_input, .. } = &mut p.detail else {
+        return false;
+    };
+    match cmd {
+        C::InsertChar(c) => feedback_input.insert(*c),
+        C::DeleteBackward => feedback_input.backspace(),
+        C::DeleteWordBackward => feedback_input.delete_word_backward(),
+        C::CursorLeft => feedback_input.left(),
+        C::CursorRight => feedback_input.right(),
+        C::CursorHome => feedback_input.home(),
+        C::CursorEnd => feedback_input.end(),
         _ => return false,
     }
     true
@@ -125,18 +169,27 @@ pub(crate) async fn resolve_classic_permission(
 pub(crate) async fn approve_permission(
     p: &crate::state::PermissionPromptState,
     current_mode: coco_types::PermissionMode,
+    paste_manager: &PasteManager,
     command_tx: &mpsc::Sender<UserCommand>,
-) {
+) -> bool {
     let Some(choices) = &p.choices else {
         resolve_classic_permission(p, PermissionAction::ApproveOnce, current_mode, command_tx)
             .await;
-        return;
+        return true;
     };
     let chosen_is_no = choices
         .get(p.selected_choice)
         .map(|c| c.value == coco_types::ExitPlanChoice::No.as_str())
         .unwrap_or(false);
     let approved = !chosen_is_no;
+    let (feedback, content_blocks) = if chosen_is_no && exit_plan_no_requires_feedback(p) {
+        let Some((feedback, content_blocks)) = exit_plan_feedback(p, paste_manager).await else {
+            return false;
+        };
+        (Some(feedback), content_blocks)
+    } else {
+        (None, None)
+    };
     tracing::info!(
         target: "coco_tui::permission",
         request_id = %p.request_id,
@@ -151,11 +204,11 @@ pub(crate) async fn approve_permission(
             request_id: p.request_id.clone(),
             approved,
             always_allow: false,
-            feedback: rejection_feedback(p, chosen_is_no),
+            feedback,
             updated_input: None,
             resolution_detail: build_choice_detail(p),
             permission_updates: exit_plan_allowed_prompt_updates(p, approved),
-            content_blocks: None,
+            content_blocks,
         })
         .await
     {
@@ -165,26 +218,7 @@ pub(crate) async fn approve_permission(
             "failed to dispatch ApprovalResponse (channel closed)",
         );
     }
-}
-
-fn rejection_feedback(
-    p: &crate::state::PermissionPromptState,
-    chosen_is_no: bool,
-) -> Option<String> {
-    if !chosen_is_no || p.tool_name != coco_types::ToolName::ExitPlanMode.as_str() {
-        return None;
-    }
-    if matches!(
-        p.detail,
-        crate::state::PermissionDetail::ExitPlanMode {
-            outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
-            ..
-        }
-    ) {
-        Some("User declined to exit plan mode. Stay in plan mode.".to_string())
-    } else {
-        Some("User rejected the plan. Stay in plan mode and continue planning.".to_string())
-    }
+    true
 }
 
 /// Approve/deny a sandbox-permission prompt.
@@ -246,8 +280,12 @@ pub(crate) async fn deny_permission(
     p: &crate::state::PermissionPromptState,
     current_mode: coco_types::PermissionMode,
     command_tx: &mpsc::Sender<UserCommand>,
-) {
+) -> bool {
+    if p.choices.is_some() {
+        return false;
+    }
     resolve_classic_permission(p, PermissionAction::Deny, current_mode, command_tx).await;
+    true
 }
 
 /// Handle `ApproveAll` (always-allow) for permission prompts.
@@ -363,12 +401,12 @@ pub(crate) async fn classifier_auto_approve(
 pub(crate) async fn confirm_permission(
     p: &crate::state::PermissionPromptState,
     current_mode: coco_types::PermissionMode,
+    paste_manager: &PasteManager,
     command_tx: &mpsc::Sender<UserCommand>,
-) {
+) -> bool {
     if p.choices.is_some() {
         // Multi-choice commit shares `approve_permission`'s splice + log.
-        approve_permission(p, current_mode, command_tx).await;
-        return;
+        return approve_permission(p, current_mode, paste_manager, command_tx).await;
     }
     resolve_classic_permission(
         p,
@@ -377,6 +415,7 @@ pub(crate) async fn confirm_permission(
         command_tx,
     )
     .await;
+    true
 }
 
 /// Digit shortcut (`1`-`3`) on a classic tool-permission prompt: commit the
@@ -428,6 +467,117 @@ pub(crate) fn nav_permission(
     }
 }
 
+pub(crate) fn exit_plan_feedback_editing(p: &crate::state::PermissionPromptState) -> bool {
+    if p.tool_name != coco_types::ToolName::ExitPlanMode.as_str() {
+        return false;
+    }
+    let Some(choice) = p
+        .choices
+        .as_ref()
+        .and_then(|choices| choices.get(p.selected_choice))
+    else {
+        return false;
+    };
+    choice.value == coco_types::ExitPlanChoice::No.as_str() && exit_plan_no_requires_feedback(p)
+}
+
+fn exit_plan_no_requires_feedback(p: &crate::state::PermissionPromptState) -> bool {
+    p.tool_name == coco_types::ToolName::ExitPlanMode.as_str()
+        && matches!(
+            p.detail,
+            crate::state::PermissionDetail::ExitPlanMode {
+                outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+                ..
+            }
+        )
+}
+
+async fn exit_plan_feedback(
+    p: &crate::state::PermissionPromptState,
+    paste_manager: &PasteManager,
+) -> Option<(String, Option<Vec<serde_json::Value>>)> {
+    let crate::state::PermissionDetail::ExitPlanMode { feedback_input, .. } = &p.detail else {
+        return None;
+    };
+    let resolved = paste_manager.resolve_structured(&feedback_input.value);
+    let content_blocks = image_content_blocks(&resolved.images).await;
+    let feedback_text = strip_referenced_image_pills(resolved.text, paste_manager);
+    let trimmed = feedback_text.trim();
+    if !trimmed.is_empty() {
+        return Some((trimmed.to_string(), content_blocks));
+    }
+    if content_blocks.is_some() {
+        return Some(("(See attached image)".to_string(), content_blocks));
+    }
+    None
+}
+
+fn strip_referenced_image_pills(mut text: String, paste_manager: &PasteManager) -> String {
+    for entry in paste_manager.entries() {
+        if entry.is_image {
+            text = text.replace(&entry.pill, "");
+        }
+    }
+    text
+}
+
+async fn image_content_blocks(images: &[ImageData]) -> Option<Vec<serde_json::Value>> {
+    if images.is_empty() {
+        return None;
+    }
+    use base64::Engine as _;
+    let mut blocks = Vec::with_capacity(images.len());
+    for image in images {
+        let source_mime = if image.mime.is_empty() {
+            "image/png"
+        } else {
+            image.mime.as_str()
+        };
+        let normalized = normalize_feedback_image(image.bytes.clone(), source_mime.to_string())
+            .await
+            .unwrap_or_else(|| (image.bytes.clone(), source_mime.to_string()));
+        let (bytes, media_type) = normalized;
+        blocks.push(serde_json::json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+            }
+        }));
+    }
+    Some(blocks)
+}
+
+async fn normalize_feedback_image(bytes: Vec<u8>, media_type: String) -> Option<(Vec<u8>, String)> {
+    let raw_len = bytes.len();
+    let result = tokio::task::spawn_blocking(move || {
+        coco_utils_image::normalize_image_bytes(bytes, &media_type)
+    })
+    .await;
+    match result {
+        Ok(Ok((normalized_bytes, normalized_mime))) => Some((normalized_bytes, normalized_mime)),
+        Ok(Err(error)) => {
+            tracing::warn!(
+                target: "coco_tui::permission",
+                bytes = raw_len,
+                error = %error,
+                "failed to normalize ExitPlanMode feedback image; using original bytes",
+            );
+            None
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "coco_tui::permission",
+                bytes = raw_len,
+                error = %error,
+                "ExitPlanMode feedback image normalization task failed; using original bytes",
+            );
+            None
+        }
+    }
+}
+
 /// Build trusted typed metadata for a multi-choice permission selection.
 pub(crate) fn build_choice_detail(
     p: &crate::state::PermissionPromptState,
@@ -444,9 +594,17 @@ pub(crate) fn build_choice_detail(
         clears_context = choice.clears_context(),
         "ExitPlanMode resolution detail built",
     );
+    let edited_plan = if choice == coco_types::ExitPlanChoice::No {
+        None
+    } else {
+        match &p.detail {
+            crate::state::PermissionDetail::ExitPlanMode { edited_plan, .. } => edited_plan.clone(),
+            _ => None,
+        }
+    };
     Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
         choice,
-        edited_plan: None,
+        edited_plan,
     })
 }
 

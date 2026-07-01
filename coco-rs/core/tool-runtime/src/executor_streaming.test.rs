@@ -99,6 +99,7 @@ fn prepared(
         model_index,
         permission_resolution_detail: None,
         approval_feedback: None,
+        approval_content_message: None,
     }
 }
 
@@ -137,13 +138,13 @@ async fn test_safe_plan_starts_mid_stream() {
 
     // Feed one safe plan with a 50ms sleep — it should start NOW,
     // not wait for commit_flush.
-    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
         "safe_a",
         0,
         /*safe*/ true,
         started.clone(),
         50,
-    )));
+    ))));
 
     // Give the scheduler a tick to pick up the plan.
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -169,13 +170,13 @@ async fn test_unsafe_plan_holds_until_commit_flush() {
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
-    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
         "unsafe_a",
         0,
         /*safe*/ false,
         started.clone(),
         0,
-    )));
+    ))));
 
     // Wait a tick — unsafe must NOT have started.
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -204,29 +205,29 @@ async fn test_unsafe_feed_poisons_subsequent_safe_starts() {
     let mut handle = executor.streaming_handle(stub_run_one);
 
     // Safe #1 starts immediately.
-    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
         "safe_before",
         0,
         /*safe*/ true,
         started.clone(),
         0,
-    )));
+    ))));
     // Unsafe fed now.
-    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
         "unsafe",
         1,
         /*safe*/ false,
         started.clone(),
         0,
-    )));
+    ))));
     // Safe #2 fed after unsafe → MUST hold, not start immediately.
-    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
         "safe_after",
         2,
         /*safe*/ true,
         started.clone(),
         0,
-    )));
+    ))));
 
     // Give scheduler a tick. Only safe_before should have started.
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -255,26 +256,28 @@ async fn test_early_outcome_surfaces_first_on_flush() {
     let mut handle = executor.streaming_handle(stub_run_one);
 
     // EarlyOutcome: pre-resolved synthetic error.
-    handle.feed_plan(ToolCallPlan::EarlyOutcome(UnstampedToolCallOutcome {
-        tool_use_id: "unknown_tool".into(),
-        tool_id: ToolId::Custom("unknown_tool".into()),
-        model_index: 0,
-        ordered_messages: Vec::new(),
-        message_path: crate::call_plan::ToolMessagePath::EarlyReturn,
-        error_kind: Some(crate::call_plan::ToolCallErrorKind::UnknownTool),
-        permission_denial: None,
-        prevent_continuation: None,
-        structured_output: None,
-        effects: ToolSideEffects::none(),
-    }));
+    handle.feed_plan(ToolCallPlan::EarlyOutcome(Box::new(
+        UnstampedToolCallOutcome {
+            tool_use_id: "unknown_tool".into(),
+            tool_id: ToolId::Custom("unknown_tool".into()),
+            model_index: 0,
+            ordered_messages: Vec::new(),
+            message_path: crate::call_plan::ToolMessagePath::EarlyReturn,
+            error_kind: Some(crate::call_plan::ToolCallErrorKind::UnknownTool),
+            permission_denial: None,
+            prevent_continuation: None,
+            structured_output: None,
+            effects: ToolSideEffects::none(),
+        },
+    )));
     // One safe plan after.
-    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
         "safe",
         1,
         true,
         started.clone(),
         0,
-    )));
+    ))));
 
     let mut ids: Vec<String> = Vec::new();
     handle
@@ -292,13 +295,13 @@ async fn test_discard_converts_pending_to_streaming_discarded() {
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
-    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
         "unsafe_pending",
         0,
         /*safe*/ false,
         started.clone(),
         0,
-    )));
+    ))));
 
     let out = handle.discard().await;
     assert_eq!(out.len(), 1);
@@ -319,21 +322,21 @@ async fn test_terminal_drain_commits_ready_safe_and_skips_pending_serial() {
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
-    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
         "safe_done",
         0,
         /*safe*/ true,
         started.clone(),
         0,
-    )));
+    ))));
     tokio::time::sleep(Duration::from_millis(10)).await;
-    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
         "unsafe_pending",
         1,
         /*safe*/ false,
         started.clone(),
         0,
-    )));
+    ))));
 
     let mut ids: Vec<String> = Vec::new();
     handle
@@ -354,13 +357,13 @@ async fn test_terminal_drain_aborts_unfinished_safe_tool() {
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
-    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
         "safe_slow",
         0,
         /*safe*/ true,
         started.clone(),
         50,
-    )));
+    ))));
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let mut ids: Vec<String> = Vec::new();
@@ -381,13 +384,13 @@ async fn test_commit_flush_stamps_monotonic_completion_seq() {
     let mut handle = executor.streaming_handle(stub_run_one);
 
     for i in 0..3 {
-        handle.feed_plan(ToolCallPlan::Runnable(prepared(
+        handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
             &format!("safe_{i}"),
             i,
             true,
             started.clone(),
             0,
-        )));
+        ))));
     }
 
     let mut seqs: Vec<usize> = Vec::new();
@@ -467,15 +470,16 @@ async fn test_streaming_shell_failure_aborts_concurrent_sibling() {
         model_index: 0,
         permission_resolution_detail: None,
         approval_feedback: None,
+        approval_content_message: None,
     };
-    handle.feed_plan(ToolCallPlan::Runnable(bash));
-    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(bash)));
+    handle.feed_plan(ToolCallPlan::Runnable(Box::new(prepared(
         "sibling",
         1,
         /*safe*/ true,
         Arc::new(AtomicI32::new(0)),
         0,
-    )));
+    ))));
 
     let mut collected: Vec<String> = Vec::new();
     handle

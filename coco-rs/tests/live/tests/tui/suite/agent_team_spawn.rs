@@ -73,7 +73,9 @@ impl AgentHandle for TestAgentHandle {
                 kind: AgentRunKind::Subagent,
             },
             permission_mode: PermissionMode::BypassPermissions,
-            bypass_permissions_available: true,
+            permission_mode_availability: coco_types::PermissionModeAvailability::new(
+                /*bypass_permissions*/ true, /*auto*/ false,
+            ),
             max_turns: Some(8),
             ..AgentQueryConfig::default()
         };

@@ -6,6 +6,7 @@ fn fresh_attachment() -> PlanModeAttachment {
     PlanModeAttachment {
         reminder_type: ReminderType::Sparse,
         workflow: PlanWorkflow::FivePhase,
+        custom_instructions: None,
         phase4_variant: Phase4Variant::Standard,
         explore_agent_count: 3,
         plan_agent_count: 1,
@@ -70,6 +71,24 @@ fn forces_reminder_type_full_regardless_of_input() {
         "post-compact plan_mode must render the FULL reminder text \
          (caller-provided Sparse must be coerced to Full)"
     );
+}
+
+#[test]
+fn preserves_custom_workflow_in_full_reminder() {
+    let mut attachment = fresh_attachment();
+    attachment.custom_instructions = Some("Use the custom post-compact workflow.".to_string());
+    let result = create_plan_mode_attachment_if_needed(true, attachment)
+        .expect("plan-mode session must emit attachment");
+    let LlmMessage::User { content, .. } = result.as_api_message().unwrap() else {
+        panic!("expected User LlmMessage");
+    };
+    let text = match &content[0] {
+        coco_llm_types::UserContentPart::Text(t) => &t.text,
+        _ => panic!("expected text part"),
+    };
+
+    assert!(text.contains("Use the custom post-compact workflow."));
+    assert!(!text.contains("### Phase 1: Initial Understanding"));
 }
 
 #[test]

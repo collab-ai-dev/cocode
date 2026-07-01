@@ -130,16 +130,16 @@ where
     ///   serial execution during `commit_flush`.
     pub fn feed_plan(&mut self, plan: ToolCallPlan) {
         match plan {
-            ToolCallPlan::EarlyOutcome(o) => self.pending_early.push(o),
+            ToolCallPlan::EarlyOutcome(o) => self.pending_early.push(*o),
             ToolCallPlan::Runnable(prepared) => {
                 let is_safe = prepared.is_concurrency_safe;
                 if is_safe && !self.any_unsafe_fed {
-                    self.start_safe_now(prepared);
+                    self.start_safe_now(*prepared);
                 } else {
                     if !is_safe {
                         self.any_unsafe_fed = true;
                     }
-                    self.pending_serial.push(prepared);
+                    self.pending_serial.push(*prepared);
                 }
             }
         }

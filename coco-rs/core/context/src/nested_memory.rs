@@ -4,7 +4,7 @@
 //! The eager `discover_memory_files` (in `claudemd.rs`) loads the
 //! `root → CWD` slice once at session start. This module fills in the
 //! slice **strictly between CWD (exclusive) and the read file's parent
-//! (inclusive)** — files Claude needs after the user reads them, not
+//! (inclusive)** — files the agent needs after the user reads them, not
 //! eagerly speculatively.
 //!
 //! ## Phases

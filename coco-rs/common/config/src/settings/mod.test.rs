@@ -82,6 +82,7 @@ fn test_plan_mode_clear_context_default_is_enabled() {
 fn test_plan_mode_verify_execution_default_is_disabled() {
     let settings = parse_settings("{}").expect("parse empty settings");
     assert!(!settings.plan_mode.verify_execution);
+    assert_eq!(settings.plan_mode.custom_instructions, None);
 }
 
 #[test]
@@ -96,6 +97,23 @@ fn test_plan_mode_clear_context_can_be_disabled() {
     .expect("parse settings");
 
     assert!(!settings.plan_mode.show_clear_context_on_exit);
+}
+
+#[test]
+fn test_plan_mode_custom_instructions_accepts_claude_code_key() {
+    let settings = parse_settings(
+        r#"{
+            "plan_mode": {
+                "planModeInstructions": "Use a short interview workflow."
+            }
+        }"#,
+    )
+    .expect("parse settings");
+
+    assert_eq!(
+        settings.plan_mode.custom_instructions.as_deref(),
+        Some("Use a short interview workflow.")
+    );
 }
 
 #[test]
@@ -115,6 +133,17 @@ fn test_parse_settings_accepts_auto_mode_classify_all_shell_camel_case() {
             .expect("autoMode parsed")
             .classify_all_shell
     );
+}
+
+#[test]
+fn test_parse_settings_accepts_use_auto_mode_during_plan_keys() {
+    let settings = parse_settings(r#"{ "useAutoModeDuringPlan": false }"#)
+        .expect("parse camel-case useAutoModeDuringPlan");
+    assert_eq!(settings.use_auto_mode_during_plan, Some(false));
+
+    let settings = parse_settings(r#"{ "use_auto_mode_during_plan": true }"#)
+        .expect("parse snake-case use_auto_mode_during_plan");
+    assert_eq!(settings.use_auto_mode_during_plan, Some(true));
 }
 
 #[test]
@@ -169,6 +198,87 @@ fn test_classify_all_shell_ignores_project_source() {
     };
 
     assert!(!settings.auto_mode_classify_all_shell_enabled());
+}
+
+#[test]
+fn test_use_auto_mode_during_plan_defaults_to_enabled() {
+    let settings = SettingsWithSource {
+        merged: Settings::default(),
+        per_source: std::collections::HashMap::new(),
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    assert!(settings.use_auto_mode_during_plan_enabled());
+}
+
+#[test]
+fn test_use_auto_mode_during_plan_false_disables_from_trusted_sources() {
+    for source in [
+        SettingSource::Policy,
+        SettingSource::Flag,
+        SettingSource::User,
+        SettingSource::Local,
+    ] {
+        let mut per_source = std::collections::HashMap::new();
+        per_source.insert(
+            source,
+            serde_json::json!({
+                "useAutoModeDuringPlan": false
+            }),
+        );
+        let settings = SettingsWithSource {
+            merged: Settings {
+                use_auto_mode_during_plan: Some(false),
+                ..Default::default()
+            },
+            per_source,
+            source_paths: std::collections::HashMap::new(),
+        };
+
+        assert!(!settings.use_auto_mode_during_plan_enabled());
+    }
+}
+
+#[test]
+fn test_use_auto_mode_during_plan_project_source_is_ignored() {
+    let mut per_source = std::collections::HashMap::new();
+    per_source.insert(
+        SettingSource::Project,
+        serde_json::json!({
+            "useAutoModeDuringPlan": false
+        }),
+    );
+    let settings = SettingsWithSource {
+        merged: Settings {
+            use_auto_mode_during_plan: Some(false),
+            ..Default::default()
+        },
+        per_source,
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    assert!(settings.use_auto_mode_during_plan_enabled());
+}
+
+#[test]
+fn test_use_auto_mode_during_plan_accepts_snake_case_source_key() {
+    let mut per_source = std::collections::HashMap::new();
+    per_source.insert(
+        SettingSource::User,
+        serde_json::json!({
+            "use_auto_mode_during_plan": false
+        }),
+    );
+    let settings = SettingsWithSource {
+        merged: Settings {
+            use_auto_mode_during_plan: Some(false),
+            ..Default::default()
+        },
+        per_source,
+        source_paths: std::collections::HashMap::new(),
+    };
+
+    assert!(!settings.use_auto_mode_during_plan_enabled());
 }
 
 #[test]

@@ -218,10 +218,15 @@ impl coco_tool_runtime::MailboxHandle for FakeMailbox {
 #[tokio::test]
 async fn teammate_polls_approval_and_injects_approved_reminder() {
     let app_state = Arc::new(RwLock::new(ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(PermissionMode::Plan),
+            ..Default::default()
+        },
         awaiting_plan_approval_request_id: Some("plan_approval-alice-team-a-deadbeef".into()),
         awaiting_plan_approval: true,
         ..Default::default()
     }));
+    let live_permission_mode = Arc::new(RwLock::new(PermissionMode::Plan));
     let mailbox = Arc::new(FakeMailbox::default());
     mailbox.push(
         "alice",
@@ -238,7 +243,8 @@ async fn teammate_polls_approval_and_injects_approved_reminder() {
         Some(tmp.path().to_path_buf()),
         Some(app_state.clone()),
     )
-    .with_mailbox(mailbox.clone(), "alice".into(), "team-a".into(), true);
+    .with_mailbox(mailbox.clone(), "alice".into(), "team-a".into(), true)
+    .with_live_permission_mode(live_permission_mode.clone());
 
     let mut h = MessageHistory::new();
     r.turn_start_side_effects_only(&mut h).await;
@@ -250,9 +256,21 @@ async fn teammate_polls_approval_and_injects_approved_reminder() {
     let guard = app_state.read().await;
     assert!(!guard.awaiting_plan_approval);
     assert!(guard.awaiting_plan_approval_request_id.is_none());
+    assert_eq!(guard.permissions.mode, Some(PermissionMode::AcceptEdits));
+    assert!(guard.has_exited_plan_mode);
+    assert!(guard.needs_plan_mode_exit_attachment);
+    assert_eq!(
+        guard.pending_plan_mode_exit_outcome,
+        Some(coco_types::ExitPlanModeOutcome::ImplementationPlan)
+    );
     assert_eq!(
         guard.last_permission_mode,
         Some(PermissionMode::AcceptEdits)
+    );
+    drop(guard);
+    assert_eq!(
+        *live_permission_mode.read().await,
+        PermissionMode::AcceptEdits
     );
 
     let marked = mailbox.marked.lock().unwrap();

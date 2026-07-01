@@ -276,6 +276,11 @@ pub struct AgentSpawnRequest {
     /// this so model/config-level shell disabling stays session-wide.
     #[serde(skip, default = "default_active_shell_tool")]
     pub active_shell_tool: ActiveShellTool,
+    /// Parent session's resolved plan-auto setting. Subagents inherit it so
+    /// plan mode does not silently re-enable auto semantics when the parent
+    /// explicitly opted out.
+    #[serde(default = "default_use_auto_mode_during_plan")]
+    pub use_auto_mode_during_plan: bool,
     /// Per-spawn safety constraints (turn cap, write-path whitelist).
     /// Used by the memory crate's forked extraction / auto-dream
     /// agents to install a 5-turn cap and memdir-only write fence.
@@ -387,6 +392,10 @@ pub struct AgentSpawnRequest {
 
 fn default_active_shell_tool() -> ActiveShellTool {
     ActiveShellTool::Disabled
+}
+
+fn default_use_auto_mode_during_plan() -> bool {
+    true
 }
 
 /// Response from spawning a subagent.

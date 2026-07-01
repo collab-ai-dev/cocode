@@ -66,6 +66,15 @@ fn test_resolve_structured_image_only_keeps_pill() {
 }
 
 #[test]
+fn test_resolve_structured_ignores_unreferenced_image_pills() {
+    let mut mgr = PasteManager::new();
+    let _pill = mgr.add_image_data(vec![9], "image/jpeg".to_string());
+    let resolved = mgr.resolve_structured("describe this without the image");
+    assert_eq!(resolved.text, "describe this without the image");
+    assert!(resolved.images.is_empty());
+}
+
+#[test]
 fn test_resolve_structured_mixes_text_and_image_pills() {
     let mut mgr = PasteManager::new();
     let text_pill = mgr.add_text("BIG BLOCK".to_string());

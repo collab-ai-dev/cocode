@@ -93,7 +93,9 @@ where
                 .ui
                 .paste_manager
                 .add_image_data(image.bytes, image.mime);
-            state.ui.input.textarea.insert_str(&pill);
+            if !insert_exit_plan_feedback_image_pill(state, &pill) {
+                state.ui.input.textarea.insert_str(&pill);
+            }
             state.ui.add_toast(Toast::success(
                 t!("toast.image_attached", size_kb = size_kb).to_string(),
             ));
@@ -109,6 +111,25 @@ where
             ));
         }
     }
+}
+
+fn insert_exit_plan_feedback_image_pill(state: &mut AppState, pill: &str) -> bool {
+    let Some(crate::state::PanePromptState::Permission(prompt)) =
+        state.ui.interaction.active_prompt.as_mut()
+    else {
+        return false;
+    };
+    if !crate::bottom_pane::permission::exit_plan_feedback_editing(prompt) {
+        return false;
+    }
+    let crate::state::PermissionDetail::ExitPlanMode { feedback_input, .. } = &mut prompt.detail
+    else {
+        return false;
+    };
+    for c in pill.chars() {
+        feedback_input.insert(c);
+    }
+    true
 }
 
 /// Detect a bracketed paste that is a path to an image file (drag-and-drop

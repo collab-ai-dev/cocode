@@ -435,16 +435,20 @@ impl QueryEngine {
                                 .await;
                                 let model_index = *streaming_model_index;
                                 *streaming_model_index += 1;
-                                handle.feed_plan(ToolCallPlan::Runnable(PreparedToolCall {
-                                    tool_use_id: pending.tool_use_id,
-                                    tool_id: pending.tool.id(),
-                                    tool: pending.tool,
-                                    parsed_input: pending.input,
-                                    is_concurrency_safe: pending.is_concurrency_safe,
-                                    model_index,
-                                    permission_resolution_detail: ctx.permission_resolution_detail,
-                                    approval_feedback: ctx.approval_feedback,
-                                }));
+                                handle.feed_plan(ToolCallPlan::Runnable(Box::new(
+                                    PreparedToolCall {
+                                        tool_use_id: pending.tool_use_id,
+                                        tool_id: pending.tool.id(),
+                                        tool: pending.tool,
+                                        parsed_input: pending.input,
+                                        is_concurrency_safe: pending.is_concurrency_safe,
+                                        model_index,
+                                        permission_resolution_detail: ctx
+                                            .permission_resolution_detail,
+                                        approval_feedback: ctx.approval_feedback,
+                                        approval_content_message: ctx.approval_content_message,
+                                    },
+                                )));
                             }
                             None if !deferred_outcomes.is_empty() => {
                                 if self.cancel.is_cancelled() {
@@ -487,7 +491,9 @@ impl QueryEngine {
                                     }
                                 } else {
                                     for outcome in deferred_outcomes {
-                                        handle.feed_plan(ToolCallPlan::EarlyOutcome(outcome));
+                                        handle.feed_plan(ToolCallPlan::EarlyOutcome(Box::new(
+                                            outcome,
+                                        )));
                                     }
                                 }
                             }

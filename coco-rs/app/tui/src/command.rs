@@ -123,6 +123,18 @@ pub enum UserCommand {
     /// bridge resolves the concrete plan-file path from the current
     /// session id and runtime config before launching the editor.
     OpenPlanEditor,
+    /// Open the active ExitPlanMode prompt's plan in an external editor.
+    /// The CLI bridge reads the edited content back and returns it to
+    /// the same permission prompt instead of the chat composer.
+    OpenPlanPromptEditor {
+        /// Permission request id to update on completion.
+        request_id: String,
+        /// Prompt-local plan content used as the comparison baseline.
+        initial_content: String,
+        /// Existing plan file path, when the tool wrote one. `None`
+        /// means the bridge should use a temporary editor file.
+        plan_file_path: Option<std::path::PathBuf>,
+    },
     /// The TUI has left raw mode and any active state alt-screen, so
     /// the CLI runner may now start the editor process for `request_id`.
     ExternalEditorTerminalReady {
@@ -271,8 +283,9 @@ pub enum UserCommand {
         /// Permission rules to persist from this decision (suggestions the user accepted).
         permission_updates: Vec<PermissionUpdate>,
         /// Optional content blocks (image attachments etc.) the user
-        /// pasted alongside the answer. Today no TUI gesture emits this;
-        /// SDK clients ship via `ApprovalResolveParams.content_blocks`.
+        /// pasted alongside the answer. TUI emits this for ExitPlanMode
+        /// feedback images; SDK clients ship it via
+        /// `ApprovalResolveParams.content_blocks`.
         content_blocks: Option<Vec<serde_json::Value>>,
     },
     /// Execute a skill by name.

@@ -145,7 +145,7 @@ impl SandboxApprovalBridge for SdkSandboxApprovalBridge {
             runtime
                 .fire_notification_hooks(
                     "permission_prompt",
-                    "Claude Code needs your permission for a sandboxed operation",
+                    "Coco needs your permission for a sandboxed operation",
                     Some(&title),
                 )
                 .await;

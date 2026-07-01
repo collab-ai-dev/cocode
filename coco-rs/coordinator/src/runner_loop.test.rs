@@ -30,6 +30,53 @@ fn wait_result_aborted_is_constructible() {
     assert!(matches!(r, WaitResult::Aborted));
 }
 
+fn exit_plan_mode_result(output: &str) -> std::sync::Arc<Message> {
+    std::sync::Arc::new(coco_messages::create_tool_result_message(
+        "toolu_exit_plan",
+        coco_types::ToolName::ExitPlanMode.as_str(),
+        coco_types::ToolId::Builtin(coco_types::ToolName::ExitPlanMode),
+        output,
+        false,
+    ))
+}
+
+#[test]
+fn existing_plan_approval_request_id_extracts_exit_plan_mode_request() {
+    let request_id = "plan_approval-worker-t-deadbeef";
+    let messages = vec![exit_plan_mode_result(&format!(
+        "Your plan has been submitted to the team lead for approval.\n\nRequest ID: {request_id}"
+    ))];
+
+    assert_eq!(
+        existing_plan_approval_request_id(&messages).as_deref(),
+        Some(request_id)
+    );
+}
+
+#[test]
+fn existing_plan_approval_request_id_ignores_unrelated_tool_results() {
+    let messages = vec![std::sync::Arc::new(
+        coco_messages::create_tool_result_message(
+            "toolu_bash",
+            coco_types::ToolName::Bash.as_str(),
+            coco_types::ToolId::Builtin(coco_types::ToolName::Bash),
+            "Request ID: plan_approval-worker-t-deadbeef",
+            false,
+        ),
+    )];
+
+    assert!(existing_plan_approval_request_id(&messages).is_none());
+}
+
+#[test]
+fn existing_plan_approval_request_id_requires_teammate_approval_text() {
+    let messages = vec![exit_plan_mode_result(
+        "Plan accepted locally.\n\nRequest ID: plan_approval-worker-t-deadbeef",
+    )];
+
+    assert!(existing_plan_approval_request_id(&messages).is_none());
+}
+
 // ── select_mailbox_prompt: priority + filter (pure, no I/O) ──
 
 fn msg(from: &str, text: &str, read: bool) -> mailbox::TeammateMessage {
@@ -62,12 +109,21 @@ fn mode_set_text() -> String {
 }
 
 fn plan_approval_response_text() -> String {
+    plan_approval_response_text_for("plan-1", true, None, None)
+}
+
+fn plan_approval_response_text_for(
+    request_id: &str,
+    approved: bool,
+    feedback: Option<&str>,
+    permission_mode: Option<&str>,
+) -> String {
     serde_json::to_string(&mailbox::ProtocolMessage::PlanApprovalResponse {
-        request_id: "plan-1".to_string(),
-        approved: true,
-        feedback: None,
+        request_id: request_id.to_string(),
+        approved,
+        feedback: feedback.map(str::to_string),
         timestamp: String::new(),
-        permission_mode: None,
+        permission_mode: permission_mode.map(str::to_string),
     })
     .unwrap()
 }
@@ -145,6 +201,97 @@ fn select_mailbox_prompt_plain_text_alongside_structured_picks_text() {
     let (idx, result) = select_mailbox_prompt(&messages).expect("a prompt");
     assert_eq!(idx, 1);
     assert!(matches!(result, WaitResult::NewMessage { .. }));
+}
+
+#[tokio::test]
+async fn wait_for_plan_approval_ignores_non_leader_response() {
+    let _teams = isolate_teams_dir().await;
+
+    let identity = TeammateIdentity {
+        agent_id: "worker@t".to_string(),
+        agent_name: "worker".to_string(),
+        team_name: "t".to_string(),
+        color: None,
+        plan_mode_required: true,
+    };
+    mailbox::write_to_mailbox(
+        &identity.agent_name,
+        mailbox::TeammateMessage {
+            from: "peer".to_string(),
+            text: plan_approval_response_text_for("plan-2", true, None, Some("acceptEdits")),
+            timestamp: "t".to_string(),
+            read: false,
+            color: None,
+            summary: None,
+        },
+        &identity.team_name,
+    )
+    .unwrap();
+    mailbox::write_to_mailbox(
+        &identity.agent_name,
+        mailbox::TeammateMessage {
+            from: TEAM_LEAD_NAME.to_string(),
+            text: plan_approval_response_text_for("plan-2", false, Some("revise it"), None),
+            timestamp: "t".to_string(),
+            read: false,
+            color: None,
+            summary: None,
+        },
+        &identity.team_name,
+    )
+    .unwrap();
+
+    let cancelled = AtomicBool::new(false);
+    let decision = crate::runner_loop_wait::wait_for_plan_approval(&identity, &cancelled, "plan-2")
+        .await
+        .expect("leader response");
+
+    assert!(!decision.approved);
+    assert_eq!(decision.feedback.as_deref(), Some("revise it"));
+    assert_eq!(decision.permission_mode, None);
+    let messages = mailbox::read_mailbox(&identity.agent_name, &identity.team_name).unwrap();
+    assert!(
+        !messages[0].read,
+        "non-leader response must not be consumed"
+    );
+    assert!(messages[1].read, "leader response must be consumed");
+}
+
+#[tokio::test]
+async fn wait_for_plan_approval_returns_permission_mode() {
+    let _teams = isolate_teams_dir().await;
+
+    let identity = TeammateIdentity {
+        agent_id: "worker@t".to_string(),
+        agent_name: "worker".to_string(),
+        team_name: "t".to_string(),
+        color: None,
+        plan_mode_required: true,
+    };
+    mailbox::write_to_mailbox(
+        &identity.agent_name,
+        mailbox::TeammateMessage {
+            from: TEAM_LEAD_NAME.to_string(),
+            text: plan_approval_response_text_for("plan-3", true, None, Some("acceptEdits")),
+            timestamp: "t".to_string(),
+            read: false,
+            color: None,
+            summary: None,
+        },
+        &identity.team_name,
+    )
+    .unwrap();
+
+    let cancelled = AtomicBool::new(false);
+    let decision = crate::runner_loop_wait::wait_for_plan_approval(&identity, &cancelled, "plan-3")
+        .await
+        .expect("leader response");
+
+    assert!(decision.approved);
+    assert_eq!(
+        decision.permission_mode,
+        Some(coco_types::PermissionMode::AcceptEdits)
+    );
 }
 
 // ── In-process control consumer (gap 8) ──

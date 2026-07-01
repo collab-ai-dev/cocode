@@ -126,14 +126,14 @@ pub struct QueryEngineConfig {
     pub model_id: String,
     /// Permission mode for tool execution.
     pub permission_mode: PermissionMode,
-    /// Whether this session may transition into `BypassPermissions`.
-    /// Static capability set once at session bootstrap from the CLI
-    /// (`--dangerously-skip-permissions` OR `--allow-dangerously-skip-permissions`)
-    /// and policy killswitch. Threaded into
-    /// `ToolPermissionContext.bypass_available` on every tool-context
-    /// rebuild so the Plan-mode auto-allow + Shift+Tab cycle gate stay
-    /// aligned.
-    pub bypass_permissions_available: bool,
+    /// Optional permission-mode capabilities for this session. Static
+    /// capability set once at session bootstrap from CLI/settings/policy gates.
+    /// Threaded into tool contexts so Plan-mode approval choices and the
+    /// Shift+Tab cycle stay aligned.
+    pub permission_mode_availability: coco_types::PermissionModeAvailability,
+    /// Whether plan mode uses auto-mode classifier semantics when auto mode is
+    /// available. Resolved from trusted settings sources at session startup.
+    pub use_auto_mode_during_plan: bool,
     /// This engine's OWN query-tracking depth (0 = main loop, 1+ =
     /// subagent). Stamped onto every `ToolUseContext.query_depth` for
     /// plain (non-fork) spawns; forks override it with
@@ -401,7 +401,8 @@ impl Default for QueryEngineConfig {
             append_system_prompt: None,
             model_id: String::new(),
             permission_mode: PermissionMode::Default,
-            bypass_permissions_available: false,
+            permission_mode_availability: coco_types::PermissionModeAvailability::default(),
+            use_auto_mode_during_plan: true,
             query_depth: 0,
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_output_tokens: 16_384,
@@ -473,6 +474,20 @@ impl Default for QueryEngineConfig {
 }
 
 impl QueryEngineConfig {
+    /// Whether this live permission snapshot represents plan mode using
+    /// auto-mode classifier semantics.
+    #[must_use]
+    pub fn plan_mode_uses_auto_for_permissions(
+        &self,
+        permissions: &coco_types::LiveToolPermissionState,
+    ) -> bool {
+        permissions.mode == Some(PermissionMode::Plan)
+            && self.use_auto_mode_during_plan
+            && self.permission_mode_availability.auto
+            && permissions.pre_plan_mode.is_some()
+            && permissions.pre_plan_mode != Some(PermissionMode::BypassPermissions)
+    }
+
     /// Convenience: whether auto-compaction is currently allowed (user
     /// toggle AND env kill switches resolved). Used by the system-reminder
     /// generator and the auto-compact branch in `finalize_turn_post_tools`.

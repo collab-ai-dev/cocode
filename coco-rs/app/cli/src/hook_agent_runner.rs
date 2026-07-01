@@ -17,7 +17,7 @@ const MAX_AGENT_HOOK_TURNS: i32 = 50;
 /// session prompt for the scoped child engine. The conversation transcript
 /// path travels in the Stop hook input JSON that becomes the agent's user
 /// prompt, so the agent can `Read` it to inspect history.
-const HOOK_AGENT_SYSTEM_PROMPT: &str = "You are verifying a stop condition in Claude Code. \
+const HOOK_AGENT_SYSTEM_PROMPT: &str = "You are verifying a stop condition in Coco. \
 Your task is to verify that the agent completed the given condition. The conversation \
 transcript path is provided in the hook input — you can Read that file to analyze the \
 conversation history if needed.

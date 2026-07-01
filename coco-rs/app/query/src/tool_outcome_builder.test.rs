@@ -174,6 +174,7 @@ async fn text_only_multipart_output_uses_level1_persistence() {
         tool_output_store: Some(coco_tool_runtime::ToolOutputStore::new(
             tmp.path().join("session-1"),
         )),
+        approval_content_message: None,
     })
     .await;
 
@@ -208,6 +209,7 @@ async fn oversized_output_without_store_fails_closed() {
         orchestration_ctx: test_orchestration_ctx(),
         hook_tx: None,
         tool_output_store: None,
+        approval_content_message: None,
     })
     .await;
 
@@ -251,6 +253,7 @@ async fn mixed_output_uses_aggregate_text_persistence_and_preserves_media() {
         tool_output_store: Some(coco_tool_runtime::ToolOutputStore::new(
             tmp.path().join("session-1"),
         )),
+        approval_content_message: None,
     })
     .await;
 
@@ -296,6 +299,7 @@ async fn mcp_error_envelope_creates_error_tool_result() {
         orchestration_ctx: test_orchestration_ctx(),
         hook_tx: None,
         tool_output_store: None,
+        approval_content_message: None,
     })
     .await;
 
@@ -328,6 +332,7 @@ async fn structured_output_uses_tool_result_side_channel_only() {
         orchestration_ctx: test_orchestration_ctx(),
         hook_tx: None,
         tool_output_store: None,
+        approval_content_message: None,
     })
     .await;
 
@@ -365,6 +370,7 @@ async fn structured_output_ignores_model_visible_data_lookalike() {
         orchestration_ctx: test_orchestration_ctx(),
         hook_tx: None,
         tool_output_store: None,
+        approval_content_message: None,
     })
     .await;
 
@@ -399,6 +405,7 @@ async fn success_copies_tool_result_display_data() {
         orchestration_ctx: test_orchestration_ctx(),
         hook_tx: None,
         tool_output_store: None,
+        approval_content_message: None,
     })
     .await;
 
@@ -435,6 +442,7 @@ async fn error_copies_execution_failed_display_data() {
         orchestration_ctx: test_orchestration_ctx(),
         hook_tx: None,
         tool_output_store: None,
+        approval_content_message: None,
     })
     .await;
 
@@ -468,6 +476,7 @@ async fn plain_tool_error_has_no_display_data() {
         orchestration_ctx: test_orchestration_ctx(),
         hook_tx: None,
         tool_output_store: None,
+        approval_content_message: None,
     })
     .await;
 

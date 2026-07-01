@@ -8,12 +8,22 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use coco_types::PermissionMode;
+
+use crate::constants::TEAM_LEAD_NAME;
 use crate::mailbox;
 use crate::types::TeammateIdentity;
 
 /// Poll interval for inbox scanning (ms). Mirrors the constant in
 /// `runner_loop.rs`.
 const POLL_INTERVAL_MS: u64 = 500;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanApprovalDecision {
+    pub approved: bool,
+    pub feedback: Option<String>,
+    pub permission_mode: Option<PermissionMode>,
+}
 
 /// Wait until the leader sends a [`mailbox::ProtocolMessage::PlanApprovalResponse`]
 /// matching `request_id`. Polls the teammate's inbox at
@@ -22,7 +32,7 @@ pub async fn wait_for_plan_approval(
     identity: &TeammateIdentity,
     cancelled: &AtomicBool,
     request_id: &str,
-) -> Option<(bool, Option<String>)> {
+) -> Option<PlanApprovalDecision> {
     loop {
         if cancelled.load(Ordering::Relaxed) {
             return None;
@@ -33,6 +43,9 @@ pub async fn wait_for_plan_approval(
             if msg.read {
                 continue;
             }
+            if msg.from != TEAM_LEAD_NAME {
+                continue;
+            }
             if !mailbox::is_structured_protocol_message(&msg.text) {
                 continue;
             }
@@ -40,6 +53,7 @@ pub async fn wait_for_plan_approval(
                 request_id: rid,
                 approved,
                 feedback,
+                permission_mode,
                 ..
             }) = mailbox::parse_protocol_message(&msg.text)
                 && rid == request_id
@@ -49,7 +63,11 @@ pub async fn wait_for_plan_approval(
                     &identity.team_name,
                     i,
                 );
-                return Some((approved, feedback));
+                return Some(PlanApprovalDecision {
+                    approved,
+                    feedback,
+                    permission_mode: permission_mode.and_then(|mode| mode.parse().ok()),
+                });
             }
         }
         tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;

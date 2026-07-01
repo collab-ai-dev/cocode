@@ -126,7 +126,7 @@ pub fn count_human_turns_since_attachment<M: Borrow<Message>>(
 
 /// Like [`count_human_turns_since_attachment`] but distinguishes "no prior
 /// attachment" (`None`) from "0 human turns since the most recent one"
-/// (`Some(0)`).'s
+/// (`Some(0)`). This mirrors upstream's
 /// `{ turnCount, foundPlanModeAttachment }` pair: the caller emits
 /// unconditionally on the first plan/auto turn (`None`) and otherwise gates on
 /// the turn count. This replaces the in-memory throttle's `last_generated_turn`
@@ -145,6 +145,35 @@ pub fn human_turns_since_attachment_opt<M: Borrow<Message>>(
             && attachment.kind == kind
         {
             return Some(count);
+        }
+    }
+    None
+}
+
+/// Like [`human_turns_since_attachment_opt`], but accepts multiple marker
+/// attachments and stops at a reset boundary before older markers.
+///
+/// This mirrors upstream's plan-mode scanner: `plan_mode` and
+/// `plan_mode_reentry` both count as prior plan-mode guidance, while
+/// `plan_mode_exit` closes that cycle so re-entering plan mode emits fresh
+/// guidance immediately.
+pub fn human_turns_since_any_attachment_until_reset<M: Borrow<Message>>(
+    messages: &[M],
+    marker_kinds: &[AttachmentKind],
+    reset_kind: AttachmentKind,
+) -> Option<i32> {
+    let mut count: i32 = 0;
+    for msg in messages.iter().rev() {
+        if matches!(msg.borrow(), Message::User(_)) {
+            count = count.saturating_add(1);
+        }
+        if let Message::Attachment(attachment) = msg.borrow() {
+            if attachment.kind == reset_kind {
+                return None;
+            }
+            if marker_kinds.contains(&attachment.kind) {
+                return Some(count);
+            }
         }
     }
     None

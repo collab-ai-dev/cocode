@@ -10,6 +10,27 @@ use crate::auto_mode_state::AutoModeState;
 use crate::dangerous_rules::restore_dangerous_rules;
 use crate::dangerous_rules::strip_dangerous_rules;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanModeAutoOptions {
+    pub use_auto_mode_during_plan: bool,
+    pub auto_mode_available: bool,
+}
+
+impl PlanModeAutoOptions {
+    pub fn active(self) -> bool {
+        self.use_auto_mode_during_plan && self.auto_mode_available
+    }
+}
+
+impl Default for PlanModeAutoOptions {
+    fn default() -> Self {
+        Self {
+            use_auto_mode_during_plan: true,
+            auto_mode_available: false,
+        }
+    }
+}
+
 /// Determine the next permission mode when cycling (Shift+Tab).
 ///
 /// Thin wrapper around [`PermissionMode::next_in_cycle`] that reads the
@@ -117,6 +138,60 @@ pub fn apply_auto_transition_to_app_state(
     false
 }
 
+/// Reconcile plan-mode's auto-classifier bridge while the session remains in
+/// Plan mode.
+///
+/// This is the Rust counterpart of upstream `transitionPlanAutoMode`:
+/// settings/gate changes can activate or deactivate auto semantics without a
+/// permission-mode change. `AutoModeState` is the authoritative "have" bit;
+/// `pre_plan_mode` and `stripped_dangerous_rules` are only provenance for
+/// restore/exit-reminder behavior.
+pub fn reconcile_plan_auto_mode_in_app_state(
+    guard: &mut ToolAppState,
+    live_allow_rules: &coco_types::PermissionRulesBySource,
+    plan_auto_options: PlanModeAutoOptions,
+    auto_mode_state: &AutoModeState,
+) -> bool {
+    if guard.permissions.mode != Some(PermissionMode::Plan) {
+        return false;
+    }
+    if guard.permissions.pre_plan_mode.is_none()
+        || guard.permissions.pre_plan_mode == Some(PermissionMode::BypassPermissions)
+    {
+        return false;
+    }
+
+    let want = plan_auto_options.active();
+    let have = auto_mode_state.is_active();
+    if want == have {
+        if !want || guard.permissions.stripped_dangerous_rules.is_some() {
+            return false;
+        }
+        let mut snapshot = live_allow_rules.clone();
+        if let Some(stripped) =
+            crate::dangerous_rules::strip_dangerous_allow_rules(&mut snapshot, false)
+        {
+            guard.permissions.stripped_dangerous_rules = Some(stripped);
+            return true;
+        }
+        return false;
+    }
+
+    auto_mode_state.set_active(want);
+    if want {
+        guard.needs_auto_mode_exit_attachment = false;
+        if guard.permissions.stripped_dangerous_rules.is_none() {
+            let mut snapshot = live_allow_rules.clone();
+            guard.permissions.stripped_dangerous_rules =
+                crate::dangerous_rules::strip_dangerous_allow_rules(&mut snapshot, false);
+        }
+    } else {
+        guard.needs_auto_mode_exit_attachment = true;
+        guard.permissions.stripped_dangerous_rules = None;
+    }
+    true
+}
+
 /// Apply a full permission-mode transition to shared app state.
 ///
 /// This is the app-state-shaped equivalent of the permission mode transition
@@ -140,14 +215,10 @@ pub fn apply_auto_transition_to_app_state(
 /// - Auto → non-Auto clears `stripped_dangerous_rules` via the existing
 ///   auto-boundary helper.
 ///
-/// **"Plan had Auto active" proxy.** coco-rs has no mid-plan
-/// Auto-deactivation path (no mid-plan Auto deactivation), so
-/// `pre_plan_mode == Some(Auto) ||
-/// stripped_dangerous_rules.is_some()` is a faithful proxy here — and it
-/// is the *same* proxy `ExitPlanModeTool::execute` uses, keeping the
-/// external and tool-driven exit paths consistent. If a
-/// `transitionPlanAutoMode` equivalent is ever ported, both call sites
-/// must switch to threading `AutoModeState` instead.
+/// Mid-plan plan-auto reconciliation lives in
+/// [`reconcile_plan_auto_mode_in_app_state`]. Callers that already carry the
+/// shared [`AutoModeState`] should run that helper before evaluating tool
+/// permissions or presenting plan-exit options.
 ///
 /// Returns `true` when any field was changed.
 pub fn apply_permission_mode_transition_to_app_state(
@@ -155,6 +226,7 @@ pub fn apply_permission_mode_transition_to_app_state(
     from: PermissionMode,
     to: PermissionMode,
     live_allow_rules: &coco_types::PermissionRulesBySource,
+    plan_auto_options: PlanModeAutoOptions,
 ) -> bool {
     let before_permission_mode = guard.permissions.mode;
     let before_pre_plan_mode = guard.permissions.pre_plan_mode;
@@ -163,12 +235,20 @@ pub fn apply_permission_mode_transition_to_app_state(
     let before_has_exited = guard.has_exited_plan_mode;
     let before_plan_entry = guard.plan_mode_entry_ms;
     let before_stripped = guard.permissions.stripped_dangerous_rules.is_some();
+    let entering_plan_with_auto = to == PermissionMode::Plan
+        && from != PermissionMode::Plan
+        && from != PermissionMode::BypassPermissions
+        && plan_auto_options.active();
 
     if from != to {
         if to == PermissionMode::Plan && from != PermissionMode::Plan {
             guard.permissions.pre_plan_mode = Some(from);
             guard.needs_plan_mode_exit_attachment = false;
             guard.plan_mode_entry_ms = Some(current_epoch_ms());
+            if from == PermissionMode::Auto && !entering_plan_with_auto {
+                guard.permissions.stripped_dangerous_rules = None;
+                guard.needs_auto_mode_exit_attachment = true;
+            }
         }
 
         if from == PermissionMode::Plan && to != PermissionMode::Plan {
@@ -190,7 +270,7 @@ pub fn apply_permission_mode_transition_to_app_state(
     // (ToolContextFactory::build keyed on live mode == Auto); this stash
     // exists for restore provenance + the `## Exited Auto Mode` banner proxy.
     // `is_ant_user=false` is the external-user path.
-    if to == PermissionMode::Auto
+    if (to == PermissionMode::Auto || entering_plan_with_auto)
         && from != PermissionMode::Auto
         && guard.permissions.stripped_dangerous_rules.is_none()
     {
@@ -204,7 +284,11 @@ pub fn apply_permission_mode_transition_to_app_state(
     }
 
     guard.permissions.mode = Some(to);
-    let auto_modified = apply_auto_transition_to_app_state(guard, from, to);
+    let auto_modified = if from == PermissionMode::Auto && entering_plan_with_auto {
+        false
+    } else {
+        apply_auto_transition_to_app_state(guard, from, to)
+    };
 
     auto_modified
         || before_permission_mode != guard.permissions.mode

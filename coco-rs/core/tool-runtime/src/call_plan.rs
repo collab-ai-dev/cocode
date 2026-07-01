@@ -39,12 +39,12 @@ use crate::traits::DynTool;
 /// needed here.)
 pub enum ToolCallPlan {
     /// Tool resolved, schema-validated. Ready for `run_one`.
-    Runnable(PreparedToolCall),
+    Runnable(Box<PreparedToolCall>),
     /// Preparation failed (unknown tool, schema failure, or another
     /// pre-execution gate decided after the assistant message
     /// committed). The outcome is unstamped; the executor stamps
     /// `completion_seq` and surfaces it to `on_outcome`.
-    EarlyOutcome(UnstampedToolCallOutcome),
+    EarlyOutcome(Box<UnstampedToolCallOutcome>),
 }
 
 /// Effect-free, context-free preparation only.
@@ -89,6 +89,10 @@ pub struct PreparedToolCall {
     /// User feedback captured alongside an approval (e.g. plan-approval
     /// notes). Threaded into `ToolUseContext.approval_feedback`.
     pub approval_feedback: Option<String>,
+    /// Optional user message carrying approval-time content blocks (for
+    /// example pasted images). Appended after the approved tool result so
+    /// the next model turn can see the same feedback payload the user sent.
+    pub approval_content_message: Option<Message>,
 }
 
 /// Scheduler-owned per-tool runtime.

@@ -73,7 +73,7 @@ fn shell_terminal_killed_omits_exit_code() {
 }
 
 #[test]
-fn shell_terminal_killed_parent_names_claude() {
+fn shell_terminal_killed_parent_names_coco() {
     let n = TaskNotification {
         task_id: "tb03p".into(),
         tool_use_id: None,
@@ -88,7 +88,7 @@ fn shell_terminal_killed_parent_names_claude() {
     };
     let xml = render(&n);
     assert!(xml.contains(
-        "<summary>Background command &quot;sleep 999&quot; was stopped by Claude</summary>"
+        "<summary>Background command &quot;sleep 999&quot; was stopped by Coco</summary>"
     ));
 }
 
@@ -195,7 +195,7 @@ fn agent_terminal_killed_uses_stopped_note() {
         },
     };
     let xml = render(&n);
-    assert!(xml.contains("<summary>Agent &quot;research&quot; was stopped by Claude</summary>"));
+    assert!(xml.contains("<summary>Agent &quot;research&quot; was stopped by Coco</summary>"));
     assert!(xml.contains(&format!("<note>{TASK_NOTIFICATION_STOPPED_NOTE}</note>")));
     assert!(!xml.contains("may notify more than once"));
 }

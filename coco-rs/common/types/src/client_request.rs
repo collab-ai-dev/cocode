@@ -115,6 +115,14 @@ pub struct InitializeParams {
     /// Text appended to the default system prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub append_system_prompt: Option<String>,
+    /// Custom workflow body for the plan-mode system reminder.
+    #[serde(
+        default,
+        rename = "planModeInstructions",
+        alias = "plan_mode_instructions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub plan_mode_instructions: Option<String>,
     /// Custom agent definitions keyed by name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agents: Option<HashMap<String, SdkAgentDefinition>>,

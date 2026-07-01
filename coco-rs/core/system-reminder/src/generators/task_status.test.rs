@@ -56,7 +56,7 @@ async fn killed_renders_attribution() {
         .content()
         .unwrap()
         .to_string();
-    assert_eq!(text, "Task \"code review\" (42) was stopped by Claude.");
+    assert_eq!(text, "Task \"code review\" (42) was stopped by the agent.");
 }
 
 #[tokio::test]

@@ -9,6 +9,7 @@
 
 use coco_types::SubagentType;
 use coco_types::ToolName;
+use coco_utils_string::take_bytes_at_char_boundary;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -23,6 +24,15 @@ use crate::attachment::ReminderType;
 
 /// Maximum retries when a generated slug collides with an existing file.
 const MAX_SLUG_RETRIES: i32 = 10;
+/// Local safety cap for `planModeInstructions`.
+///
+/// Upstream 2.1.193 accepts this SDK/init option as an arbitrary string and
+/// injects it directly into plan-mode reminders. We keep the same behavior for
+/// normal-sized workflows, but bound the rendered context item so a config value
+/// cannot create an oversized system reminder after normal turns or compaction.
+pub const PLAN_MODE_CUSTOM_INSTRUCTIONS_MAX_BYTES: usize = 8 * 1024;
+const PLAN_MODE_CUSTOM_INSTRUCTIONS_TRUNCATION_MARKER: &str =
+    "\n\n[Custom plan-mode workflow truncated to keep this system reminder bounded.]";
 
 // ── Word lists ──
 
@@ -810,12 +820,15 @@ pub struct ExitPlanModeDerivedState {
 
 /// Derive the semantic ExitPlanMode state from the current plan file and
 /// optional user-edited approval text. This is the single source of truth for
-/// whether an exit carries an implementation plan.
+/// whether an exit carries an implementation plan. Explicit edited-plan text is
+/// authoritative; otherwise any non-empty current plan file is the plan. The
+/// entry timestamp is reserved for optional verification flows; it must not
+/// decide whether `ExitPlanMode` has a plan.
 pub fn derive_exit_plan_mode_state(
     session_id: Option<&str>,
     plans_dir: Option<&Path>,
     agent_id: Option<&str>,
-    plan_mode_entry_ms: Option<i64>,
+    _plan_mode_entry_ms: Option<i64>,
     edited_plan: Option<String>,
 ) -> ExitPlanModeDerivedState {
     let plan_file_path = match (session_id, plans_dir) {
@@ -828,14 +841,14 @@ pub fn derive_exit_plan_mode_state(
         .as_ref()
         .map(|path| path.to_string_lossy().into_owned());
 
-    let Some(path) = plan_file_path.as_deref() else {
+    if plan_file_path.is_none() {
         return ExitPlanModeDerivedState {
             outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
             plan: None,
             plan_file_path: None,
             plan_was_edited: false,
         };
-    };
+    }
     if let Some(plan) = edited_plan
         && !plan.trim().is_empty()
     {
@@ -844,18 +857,6 @@ pub fn derive_exit_plan_mode_state(
             plan: Some(plan),
             plan_file_path: plan_file_path_string,
             plan_was_edited: true,
-        };
-    }
-
-    let verification = plan_mode_entry_ms
-        .and_then(|entry_ms| verify_plan_was_edited(path, entry_ms))
-        .unwrap_or(PlanVerificationOutcome::Missing);
-    if verification != PlanVerificationOutcome::Edited {
-        return ExitPlanModeDerivedState {
-            outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
-            plan: None,
-            plan_file_path: None,
-            plan_was_edited: false,
         };
     }
 
@@ -959,33 +960,42 @@ pub fn delete_all_session_plan_files(session_id: &str, plans_dir: &Path) -> usiz
 ///
 /// Each `(reminder_type, workflow, is_sub_agent)` combination maps to one
 /// output variant:
-/// - Any + sub-agent              → sub-agent instructions
-///   (sub-agents always get the sub-agent variant regardless of cadence)
+/// - Reentry                      → re-entry reminder
+///   (`plan_mode_reentry` is an independent boundary attachment)
+/// - Full/Sparse + sub-agent      → sub-agent instructions
 /// - Full + FivePhase + main-agent → main-agent 5-phase instructions;
 ///   Phase-4 block chosen by `attachment.phase4_variant`
 /// - Full + Interview + main-agent → interview instructions
 /// - Sparse + main-agent          → sparse instructions
-/// - Reentry + main-agent         → re-entry reminder
 ///
 /// Callers wrap the return value in a `<system-reminder>` XML tag.
 pub fn render_plan_mode_reminder(attachment: &PlanModeAttachment) -> String {
     let ask_user_question = ToolName::AskUserQuestion.as_str();
     let exit_plan_mode = ToolName::ExitPlanMode.as_str();
 
+    if attachment.reminder_type == ReminderType::Reentry {
+        return render_reentry(attachment, exit_plan_mode);
+    }
     if attachment.is_sub_agent {
         return render_full_sub_agent(attachment, ask_user_question);
     }
     match attachment.reminder_type {
         ReminderType::Sparse => render_sparse(attachment, ask_user_question, exit_plan_mode),
         ReminderType::Reentry => render_reentry(attachment, exit_plan_mode),
-        ReminderType::Full => match effective_workflow(attachment) {
-            PlanWorkflow::FivePhase => {
-                render_full_five_phase(attachment, ask_user_question, exit_plan_mode)
+        ReminderType::Full => {
+            if custom_instructions_raw(attachment).is_some() {
+                render_full_custom(attachment, ask_user_question, exit_plan_mode)
+            } else {
+                match effective_workflow(attachment) {
+                    PlanWorkflow::FivePhase => {
+                        render_full_five_phase(attachment, ask_user_question, exit_plan_mode)
+                    }
+                    PlanWorkflow::Interview => {
+                        render_full_interview(attachment, ask_user_question, exit_plan_mode)
+                    }
+                }
             }
-            PlanWorkflow::Interview => {
-                render_full_interview(attachment, ask_user_question, exit_plan_mode)
-            }
-        },
+        }
     }
 }
 
@@ -1001,6 +1011,24 @@ fn effective_workflow(attachment: &PlanModeAttachment) -> PlanWorkflow {
     }
 }
 
+fn custom_instructions_raw(attachment: &PlanModeAttachment) -> Option<&str> {
+    attachment
+        .custom_instructions
+        .as_deref()
+        .filter(|instructions| !instructions.is_empty())
+}
+
+fn custom_instructions(attachment: &PlanModeAttachment) -> Option<String> {
+    let raw = custom_instructions_raw(attachment)?;
+    if raw.len() <= PLAN_MODE_CUSTOM_INSTRUCTIONS_MAX_BYTES {
+        return Some(raw.to_string());
+    }
+    let prefix = take_bytes_at_char_boundary(raw, PLAN_MODE_CUSTOM_INSTRUCTIONS_MAX_BYTES);
+    Some(format!(
+        "{prefix}{PLAN_MODE_CUSTOM_INSTRUCTIONS_TRUNCATION_MARKER}"
+    ))
+}
+
 fn plan_file_info(attachment: &PlanModeAttachment) -> String {
     plan_file_info_impl(attachment, /*sub_agent*/ false)
 }
@@ -1014,8 +1042,8 @@ fn plan_file_info_sub_agent(attachment: &PlanModeAttachment) -> String {
 
 fn plan_file_info_impl(attachment: &PlanModeAttachment, sub_agent: bool) -> String {
     // Model-aware: the builder resolved these from the model's tool set
-    // (Claude → Write/Edit, gpt-5 → apply_patch). Don't hardcode `ToolName::`
-    // here — that's what told gpt-5 to use a `Write` tool it doesn't have.
+    // (for example, Write/Edit vs apply_patch). Don't hardcode `ToolName::`
+    // here because that can point the model at a tool it doesn't have.
     let file_edit = attachment.edit_tool.as_str();
     let file_write = attachment.write_tool.as_str();
     let softener = if sub_agent { " if you need to" } else { "" };
@@ -1052,11 +1080,15 @@ fn render_sparse(
     exit_plan_mode: &str,
 ) -> String {
     // Adapts per workflow: emit the matching hint based on `attachment.workflow`.
-    let workflow_hint = match attachment.workflow {
-        PlanWorkflow::Interview => {
-            "Follow iterative workflow: explore codebase, interview user, write to plan incrementally."
+    let workflow_hint = if custom_instructions_raw(attachment).is_some() {
+        "Follow the plan workflow described earlier."
+    } else {
+        match effective_workflow(attachment) {
+            PlanWorkflow::Interview => {
+                "Follow iterative workflow: explore codebase, interview user, write to plan incrementally."
+            }
+            PlanWorkflow::FivePhase => "Follow 5-phase workflow.",
         }
-        PlanWorkflow::FivePhase => "Follow 5-phase workflow.",
     };
     format!(
         "Plan mode still active (see full instructions earlier in conversation). \
@@ -1064,6 +1096,42 @@ fn render_sparse(
          {ask_user_question} (for clarifications) or {exit_plan_mode} (for plan \
          approval).{deferred_note} Never ask about plan approval via text or AskUserQuestion.",
         path = attachment.plan_file_path,
+        deferred_note = exit_plan_mode_deferred_note(attachment, exit_plan_mode),
+    )
+}
+
+fn render_full_custom(
+    attachment: &PlanModeAttachment,
+    ask_user_question: &str,
+    exit_plan_mode: &str,
+) -> String {
+    let custom_instructions = custom_instructions(attachment).unwrap_or_default();
+    format!(
+        "Plan mode is active. The user indicated that they do not want you to \
+         execute yet -- you MUST NOT make any edits (with the exception of the \
+         plan file mentioned below), run any non-readonly tools (including \
+         changing configs or making commits), or otherwise make any changes to \
+         the system. This supercedes any other instructions you have received.\n\n\
+         ## Plan File Info:\n{file_info}\n\
+         You should build your plan incrementally by writing to or editing this \
+         file. NOTE that this is the only file you are allowed to edit - other \
+         than this you are only allowed to take READ-ONLY actions.\n\n\
+         ## Plan Workflow\n\n\
+         {custom_instructions}\n\n\
+         ### Call {exit_plan_mode}\n\
+         At the very end of your turn, once you have asked the user questions and \
+         are happy with your final plan file - you should always call {exit_plan_mode} \
+         to indicate to the user that you are done planning.\n\
+         This is critical - your turn should only end with either using the \
+         {ask_user_question} tool OR calling {exit_plan_mode}. Do not stop unless \
+         it's for these 2 reasons\n\n\
+         **Important:** Use {ask_user_question} ONLY to clarify requirements or \
+         choose between approaches. Use {exit_plan_mode} to request plan approval. \
+         Do NOT ask about plan approval in any other way - no text questions, no \
+         AskUserQuestion. Phrases like \"Is this plan okay?\", \"Should I proceed?\", \
+         \"How does this plan look?\", \"Any changes before we start?\", or similar \
+         MUST use {exit_plan_mode}.{deferred_note}",
+        file_info = plan_file_info(attachment),
         deferred_note = exit_plan_mode_deferred_note(attachment, exit_plan_mode),
     )
 }
@@ -1233,7 +1301,9 @@ fn render_phase4_block(variant: Phase4Variant) -> String {
              - Include only your recommended approach, not all alternatives\n\
              - Ensure that the plan file is concise enough to scan quickly, but \
              detailed enough to execute effectively\n\
-             - Include the paths of critical files to be modified\n\
+             - Name the critical files to be modified. For changes that repeat a \
+             pattern across many files, describe the pattern once and list a few \
+             representative paths — do not enumerate every file or line number\n\
              - Reference existing functions and utilities you found that should be \
              reused, with their file paths\n\
              - Include a verification section describing how to test the changes \

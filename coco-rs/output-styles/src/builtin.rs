@@ -129,7 +129,7 @@ pub fn builtin_styles() -> Vec<OutputStyleConfig> {
     vec![
         OutputStyleConfig {
             name: EXPLANATORY_STYLE_NAME.to_string(),
-            description: "Claude explains its implementation choices and codebase patterns"
+            description: "Coco explains its implementation choices and codebase patterns"
                 .to_string(),
             prompt: explanatory_prompt(),
             source: OutputStyleSource::BuiltIn,
@@ -139,7 +139,7 @@ pub fn builtin_styles() -> Vec<OutputStyleConfig> {
         OutputStyleConfig {
             name: LEARNING_STYLE_NAME.to_string(),
             description:
-                "Claude pauses and asks you to write small pieces of code for hands-on practice"
+                "Coco pauses and asks you to write small pieces of code for hands-on practice"
                     .to_string(),
             prompt: learning_prompt(),
             source: OutputStyleSource::BuiltIn,

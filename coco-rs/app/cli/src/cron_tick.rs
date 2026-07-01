@@ -184,7 +184,7 @@ pub fn build_missed_notification(missed: &[&CronTask]) -> String {
         coco_utils_common::COCO_CONFIG_DIR_NAME
     );
     let header = format!(
-        "The following one-shot scheduled task{were} missed while Claude was not running. \
+        "The following one-shot scheduled task{were} missed while Coco was not running. \
          {they} already been removed from {schedule_path}.\n\n\
          Do NOT execute {these} yet. First use the AskUserQuestion tool to ask whether to run \
          {them} now. Only execute if the user confirms."

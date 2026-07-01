@@ -105,6 +105,7 @@ pub(crate) struct ToolContextFactory {
     pub(crate) task_handle: Option<coco_tool_runtime::BackgroundTaskHandleRef>,
     pub(crate) permission_bridge: Option<ToolPermissionBridgeRef>,
     pub(crate) app_state: Option<Arc<RwLock<ToolAppState>>>,
+    pub(crate) auto_mode_state: Option<Arc<coco_permissions::AutoModeState>>,
     pub(crate) file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,
     pub(crate) file_history: Option<Arc<RwLock<FileHistoryState>>>,
     pub(crate) config_home: Option<PathBuf>,
@@ -347,6 +348,11 @@ impl ToolContextFactory {
             None => Vec::new(),
         };
 
+        let auto_mode_active = self
+            .auto_mode_state
+            .as_ref()
+            .is_some_and(|state| state.is_active());
+
         let mut allow_rules = {
             let live = self.live_command_rules.read().await;
             if live.is_empty() {
@@ -389,15 +395,18 @@ impl ToolContextFactory {
         );
         // Auto-mode classifier-bypass guard: physically remove dangerous
         // classifier-bypassing allow rules (`Bash(python:*)`, `Agent`, …) from
-        // the evaluator-facing `allow_rules` whenever the live mode is Auto.
-        // Without this, evaluate.rs step-2 returns Allow on a dangerous allow
-        // rule BEFORE the classifier gate in tool_call_preparer.rs — a fail-OPEN
+        // the evaluator-facing `allow_rules` whenever the live mode uses the
+        // classifier: pure Auto, or Plan with auto semantics active. Without
+        // this, evaluate.rs step-2 returns Allow on a dangerous allow rule
+        // BEFORE the classifier gate in tool_call_preparer.rs — a fail-OPEN
         // bypass. `stripDangerousPermissionsForAutoMode` removes them from
         // `alwaysAllowRules` on Auto entry; coco-rs applies the same filter at
         // build time keyed on mode, so it is mandatory regardless of which entry
         // path (SDK / bridge / startup / plan-exit) set Auto. `is_ant_user=false`
         // mirrors the non-ant external-user path.
-        if live_mode == coco_types::PermissionMode::Auto {
+        if live_mode == coco_types::PermissionMode::Auto
+            || (live_mode == coco_types::PermissionMode::Plan && auto_mode_active)
+        {
             let _ = coco_permissions::strip_dangerous_allow_rules(
                 &mut allow_rules,
                 /*is_ant_user*/ false,
@@ -485,6 +494,9 @@ impl ToolContextFactory {
             web_fetch_config: self.config.web_fetch_config.clone(),
             web_search_config: self.config.web_search_config.clone(),
             plan_mode_settings: self.config.plan_mode_settings.clone(),
+            permission_mode_availability: self.config.permission_mode_availability,
+            use_auto_mode_during_plan: self.config.use_auto_mode_during_plan,
+            auto_mode_active,
             lsp_config: self.config.lsp_config.clone(),
             features: self.config.features.clone(),
             skill_overrides: self.config.skill_overrides.clone(),
@@ -530,7 +542,7 @@ impl ToolContextFactory {
                 allow_rules,
                 deny_rules,
                 ask_rules,
-                bypass_available: self.config.bypass_permissions_available,
+                bypass_available: self.config.permission_mode_availability.bypass_permissions,
                 pre_plan_mode: live_pre_plan,
                 stripped_dangerous_rules: live_stripped,
                 session_plan_file,

@@ -25,6 +25,7 @@ pub async fn apply_to_app_state(
     fallback_mode: PermissionMode,
     mode: PermissionMode,
     live_allow_rules: &PermissionRulesBySource,
+    plan_auto_options: coco_permissions::PlanModeAutoOptions,
 ) -> LivePermissionModeChange {
     let mut guard = app_state.write().await;
     let previous = guard.permissions.mode.unwrap_or(fallback_mode);
@@ -33,6 +34,7 @@ pub async fn apply_to_app_state(
         previous,
         mode,
         live_allow_rules,
+        plan_auto_options,
     );
     LivePermissionModeChange { previous, changed }
 }
@@ -57,8 +59,19 @@ pub async fn apply_to_runtime(
         .permissions
         .allow_rules
         .clone();
-    let change =
-        apply_to_app_state(&runtime.app_state, fallback_mode, mode, &live_allow_rules).await;
+    let config = runtime.current_engine_config().await;
+    let plan_auto_options = coco_permissions::PlanModeAutoOptions {
+        use_auto_mode_during_plan: config.use_auto_mode_during_plan,
+        auto_mode_available: config.permission_mode_availability.auto,
+    };
+    let change = apply_to_app_state(
+        &runtime.app_state,
+        fallback_mode,
+        mode,
+        &live_allow_rules,
+        plan_auto_options,
+    )
+    .await;
     publish_core_if_changed(event_tx, mode, bypass_available, change.changed).await;
     change
 }

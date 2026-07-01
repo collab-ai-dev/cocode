@@ -20,6 +20,40 @@ fn runner_is_send_sync() {
 }
 
 #[test]
+fn refresh_live_permissions_preserves_plan_latches_when_mode_unchanged() {
+    let mut app_state = coco_types::ToolAppState {
+        permissions: coco_types::LiveToolPermissionState {
+            mode: Some(coco_types::PermissionMode::Plan),
+            pre_plan_mode: Some(coco_types::PermissionMode::Auto),
+            stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
+            ..Default::default()
+        },
+        plan_mode_entry_ms: Some(42),
+        ..Default::default()
+    };
+
+    refresh_live_permissions_for_turn(
+        &mut app_state,
+        SdkTurnPermissionInputs {
+            fallback_previous_mode: coco_types::PermissionMode::Default,
+            permission_mode: coco_types::PermissionMode::Plan,
+            allow_rules: coco_types::PermissionRulesBySource::default(),
+            deny_rules: coco_types::PermissionRulesBySource::default(),
+            ask_rules: coco_types::PermissionRulesBySource::default(),
+            permission_rule_source_roots: std::collections::HashMap::new(),
+            plan_auto_options: coco_permissions::PlanModeAutoOptions::default(),
+        },
+    );
+
+    assert_eq!(
+        app_state.permissions.pre_plan_mode,
+        Some(coco_types::PermissionMode::Auto)
+    );
+    assert!(app_state.permissions.stripped_dangerous_rules.is_some());
+    assert_eq!(app_state.plan_mode_entry_ms, Some(42));
+}
+
+#[test]
 fn sdk_goal_status_format_matches_noninteractive_contract() {
     let mut goal = coco_types::ActiveGoal {
         condition: "finish migration".to_string(),

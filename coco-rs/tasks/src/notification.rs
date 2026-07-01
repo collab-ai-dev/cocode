@@ -186,7 +186,7 @@ pub fn render(n: &TaskNotification) -> String {
 fn killed_suffix(killed_by: Option<TaskKilledBy>) -> &'static str {
     match killed_by {
         Some(TaskKilledBy::User) => " was stopped by user",
-        Some(TaskKilledBy::Parent) => " was stopped by Claude",
+        Some(TaskKilledBy::Parent) => " was stopped by Coco",
         Some(TaskKilledBy::System) => " was stopped by system",
         None => " was stopped",
     }

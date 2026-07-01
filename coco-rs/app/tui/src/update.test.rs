@@ -20,6 +20,8 @@ use crate::state::MemoryDialogScope;
 use crate::state::MemoryDialogState;
 use crate::state::ModalState;
 use crate::state::PanePromptState;
+use crate::state::PermissionDetail;
+use crate::state::PermissionPromptState;
 use crate::state::QuickOpenState;
 use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
@@ -2129,6 +2131,117 @@ async fn open_plan_editor_sends_plan_editor_command() {
         panic!("expected OpenPlanEditor")
     };
     assert!(state.ui.toasts.is_empty());
+}
+
+#[tokio::test]
+async fn open_plan_editor_in_exit_plan_prompt_sends_prompt_editor_command() {
+    let mut state = AppState::new();
+    state
+        .ui
+        .push_prompt(PanePromptState::Permission(PermissionPromptState {
+            request_id: "perm-1".into(),
+            tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+            description: "Exit plan mode?".into(),
+            detail: PermissionDetail::ExitPlanMode {
+                outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+                plan: Some("# Plan".into()),
+                edited_plan: None,
+                feedback_input: crate::state::PrefixInputState::new(String::new()),
+                plan_file_path: Some("/tmp/plan.md".into()),
+                allowed_prompts: vec![],
+            },
+            risk_level: None,
+            show_always_allow: false,
+            classifier_checking: false,
+            classifier_auto_approved: None,
+            choices: None,
+            selected_choice: 0,
+            display_input: coco_types::PermissionDisplayInput::Empty,
+            original_input: None,
+            cwd: None,
+            permission_suggestions: vec![],
+            worker_badge: None,
+            explanation_visible: false,
+            explanation: crate::state::ExplainerFetch::NotFetched,
+            prefix_input: None,
+        }));
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::OpenPlanEditor, &tx).await;
+
+    let UserCommand::OpenPlanPromptEditor {
+        request_id,
+        initial_content,
+        plan_file_path,
+    } = rx.try_recv().expect("plan prompt editor command sent")
+    else {
+        panic!("expected OpenPlanPromptEditor")
+    };
+    assert_eq!(request_id, "perm-1");
+    assert_eq!(initial_content, "# Plan");
+    assert_eq!(
+        plan_file_path,
+        Some(std::path::PathBuf::from("/tmp/plan.md"))
+    );
+}
+
+#[tokio::test]
+async fn exit_plan_no_feedback_editing_does_not_touch_composer() {
+    let mut state = AppState::new();
+    state
+        .ui
+        .push_prompt(PanePromptState::Permission(PermissionPromptState {
+            request_id: "perm-1".into(),
+            tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+            description: "Exit plan mode?".into(),
+            detail: PermissionDetail::ExitPlanMode {
+                outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+                plan: Some("# Plan".into()),
+                edited_plan: None,
+                feedback_input: crate::state::PrefixInputState::new(String::new()),
+                plan_file_path: Some("/tmp/plan.md".into()),
+                allowed_prompts: vec![],
+            },
+            risk_level: None,
+            show_always_allow: false,
+            classifier_checking: false,
+            classifier_auto_approved: None,
+            choices: Some(vec![
+                coco_types::PermissionAskChoice {
+                    value: coco_types::ExitPlanChoice::KeepDefault.as_str().into(),
+                    label: "Yes, manually approve edits".into(),
+                    description: None,
+                },
+                coco_types::PermissionAskChoice {
+                    value: coco_types::ExitPlanChoice::No.as_str().into(),
+                    label: "No, keep planning".into(),
+                    description: None,
+                },
+            ]),
+            selected_choice: 1,
+            display_input: coco_types::PermissionDisplayInput::Empty,
+            original_input: None,
+            cwd: None,
+            permission_suggestions: vec![],
+            worker_badge: None,
+            explanation_visible: false,
+            explanation: crate::state::ExplainerFetch::NotFetched,
+            prefix_input: None,
+        }));
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::InsertChar('n'), &tx).await;
+    handle_command(&mut state, TuiCommand::DeleteBackward, &tx).await;
+
+    assert!(state.ui.input.is_empty());
+    let Some(PanePromptState::Permission(prompt)) = state.ui.interaction.active_prompt.as_ref()
+    else {
+        panic!("expected active permission prompt")
+    };
+    let PermissionDetail::ExitPlanMode { feedback_input, .. } = &prompt.detail else {
+        panic!("expected ExitPlanMode detail")
+    };
+    assert_eq!(feedback_input.value, "");
 }
 
 #[tokio::test]

@@ -84,7 +84,9 @@ pub async fn run_multimodal_scenario(
     let cfg = QueryEngineConfig {
         model_id,
         permission_mode: PermissionMode::BypassPermissions,
-        bypass_permissions_available: true,
+        permission_mode_availability: coco_types::PermissionModeAvailability::new(
+            /*bypass_permissions*/ true, /*auto*/ false,
+        ),
         context_window: 200_000,
         max_output_tokens: 2_048,
         // Multimodal scenarios are 2-turn: tool_call + final answer.

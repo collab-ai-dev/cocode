@@ -126,6 +126,9 @@ impl PasteManager {
 
         for entry in &self.entries {
             if entry.is_image {
+                if !text.contains(&entry.pill) {
+                    continue;
+                }
                 // Keep the `[Image #N]` placeholder inline; only collect the
                 // bytes for the separate image content block.
                 if let (Some(bytes), Some(mime)) = (&entry.image_bytes, &entry.image_mime) {

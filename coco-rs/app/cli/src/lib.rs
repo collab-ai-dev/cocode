@@ -285,6 +285,13 @@ pub struct Cli {
     #[arg(long)]
     pub append_system_prompt_file: Option<String>,
 
+    /// Custom workflow body for plan mode.
+    ///
+    /// Replaces the default plan-mode implementation phases while keeping the
+    /// read-only preamble and ExitPlanMode footer.
+    #[arg(long, hide = true)]
+    pub plan_mode_instructions: Option<String>,
+
     /// Fail fast on invalid MCP config rather than best-effort loading.
     ///
     /// If set, any malformed server entry aborts startup.

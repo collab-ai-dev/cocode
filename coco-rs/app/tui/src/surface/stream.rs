@@ -344,12 +344,17 @@ fn pending_plan_detail_hash(prompt: &PermissionPromptState) -> u64 {
     if let PermissionDetail::ExitPlanMode {
         outcome,
         plan,
+        edited_plan,
+        feedback_input,
         plan_file_path,
         allowed_prompts,
     } = &prompt.detail
     {
         outcome.hash(&mut hasher);
         plan.hash(&mut hasher);
+        edited_plan.hash(&mut hasher);
+        feedback_input.value.hash(&mut hasher);
+        feedback_input.cursor.hash(&mut hasher);
         plan_file_path.hash(&mut hasher);
         allowed_prompts.hash(&mut hasher);
     }

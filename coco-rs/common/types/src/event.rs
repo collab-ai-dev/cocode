@@ -2043,6 +2043,22 @@ pub enum TuiOnlyEvent {
         /// User-visible failure summary.
         error: String,
     },
+    /// ExitPlanMode prompt-local plan editor completed.
+    ExitPlanPromptEditorCompleted {
+        /// Permission request id of the active ExitPlanMode prompt.
+        request_id: String,
+        /// Edited plan content read back from the editor target.
+        content: String,
+        /// Whether the edited content differs from the prompt's initial plan.
+        modified: bool,
+    },
+    /// ExitPlanMode prompt-local plan editor failed before content could be read back.
+    ExitPlanPromptEditorFailed {
+        /// Permission request id of the active ExitPlanMode prompt.
+        request_id: String,
+        /// User-visible failure summary.
+        error: String,
+    },
     /// Request the foreground TUI to leave raw mode / alt-screen before
     /// the CLI runner starts an interactive editor process.
     ExternalEditorPrepare {

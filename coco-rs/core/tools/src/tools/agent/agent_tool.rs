@@ -1060,6 +1060,7 @@ impl Tool for AgentTool {
             skill_overrides: Some(ctx.skill_overrides.clone()),
             tool_overrides: Some(ctx.tool_overrides.clone()),
             active_shell_tool: ctx.active_shell_tool,
+            use_auto_mode_during_plan: ctx.use_auto_mode_during_plan,
             parent_tool_filter: Some(ctx.tool_filter.clone()),
             // `spawn_mode` carries the parent_snapshot embedded in the
             // Fork variant (type invariant: Fork without snapshot is

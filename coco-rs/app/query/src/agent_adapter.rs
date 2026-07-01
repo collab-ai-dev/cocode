@@ -117,10 +117,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
             append_system_prompt: None,
             model_id: engine_model_id,
             permission_mode,
-            // Inherit the parent session's bypass capability.
-            // `--dangerously-skip-permissions` is forwarded to spawned
-            // child processes; the in-process analog is this field.
-            bypass_permissions_available: config.bypass_permissions_available,
+            permission_mode_availability: config.permission_mode_availability,
+            use_auto_mode_during_plan: config.use_auto_mode_during_plan,
             // This child engine's OWN run depth (= parent + 1, stamped at
             // the AgentTool boundary). For plain spawns the tool-context
             // builder reads this directly; for forks it is overridden by

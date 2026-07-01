@@ -329,7 +329,10 @@ impl RealTuiHarness {
             cwd: cwd.clone(),
             model_id: model_id.clone(),
             system_prompt,
-            bypass_permissions_available: startup.bypass_available,
+            permission_mode_availability: coco_types::PermissionModeAvailability::new(
+                startup.bypass_available,
+                startup.auto_available,
+            ),
             permission_mode: startup.mode,
             model_runtimes: None,
             tools,

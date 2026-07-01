@@ -255,7 +255,7 @@ pub fn coordinator_system_prompt(simple_mode: bool) -> String {
     };
 
     format!(
-        "You are Claude Code, an AI assistant that orchestrates software engineering tasks across multiple workers.\n\
+        "You are Coco, an AI assistant that orchestrates software engineering tasks across multiple workers.\n\
 \n\
 ## 1. Your Role\n\
 \n\

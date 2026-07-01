@@ -2809,6 +2809,25 @@ class TuiOnlyEventPlanFileOpenFailed(BaseModel):
     path: str
 
 
+class TuiOnlyEventExitPlanPromptEditorCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["exit_plan_prompt_editor_completed"] = Field(
+        default="exit_plan_prompt_editor_completed", alias="type"
+    )
+    content: str
+    modified: bool
+    request_id: str
+
+
+class TuiOnlyEventExitPlanPromptEditorFailed(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["exit_plan_prompt_editor_failed"] = Field(
+        default="exit_plan_prompt_editor_failed", alias="type"
+    )
+    error: str
+    request_id: str
+
+
 class TuiOnlyEventExternalEditorPrepare(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["external_editor_prepare"] = Field(
@@ -2960,6 +2979,8 @@ TuiOnlyEvent = Annotated[
         TuiOnlyEventMemoryFileOpenFailed,
         TuiOnlyEventPlanFileOpened,
         TuiOnlyEventPlanFileOpenFailed,
+        TuiOnlyEventExitPlanPromptEditorCompleted,
+        TuiOnlyEventExitPlanPromptEditorFailed,
         TuiOnlyEventExternalEditorPrepare,
         TuiOnlyEventPromptEditorCompleted,
         TuiOnlyEventPromptEditorFailed,
@@ -3862,6 +3883,9 @@ class InitializeParams(BaseModel):
     append_system_prompt: str | None = None
     hooks: dict[str, list[HookCallbackMatcher]] | None = None
     json_schema: Any = None
+    plan_mode_instructions: str | None = Field(
+        default=None, alias="planModeInstructions"
+    )
     prompt_suggestions: bool | None = None
     sdk_mcp_servers: list[str] | None = None
     system_prompt: str | None = None

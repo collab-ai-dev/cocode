@@ -230,7 +230,9 @@ async fn http_seam_tool_round_trip_pairs_tool_use_and_result() -> Result<()> {
     let cfg = QueryEngineConfig {
         model_id: MODEL_ID.into(),
         permission_mode: PermissionMode::BypassPermissions,
-        bypass_permissions_available: true,
+        permission_mode_availability: coco_types::PermissionModeAvailability::new(
+            /*bypass_permissions*/ true, /*auto*/ false,
+        ),
         context_window: 200_000,
         max_output_tokens: 2_048,
         max_turns: Some(8),

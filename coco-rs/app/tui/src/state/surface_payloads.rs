@@ -219,6 +219,8 @@ pub enum PermissionDetail {
     ExitPlanMode {
         outcome: coco_types::ExitPlanModeOutcome,
         plan: Option<String>,
+        edited_plan: Option<String>,
+        feedback_input: PrefixInputState,
         plan_file_path: Option<String>,
         allowed_prompts: Vec<coco_types::ExitPlanModeAllowedPrompt>,
     },

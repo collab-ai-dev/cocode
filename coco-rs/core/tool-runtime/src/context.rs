@@ -162,6 +162,17 @@ pub struct ToolUseContext {
     /// `plan_model_fallback_threshold_tokens` value when computing the
     /// plan-mode model swap.
     pub plan_mode_settings: coco_config::PlanModeSettings,
+    /// Optional permission-mode capabilities for this session. Used by
+    /// `ExitPlanModeTool` to offer the same post-plan choices as the main
+    /// permission-mode carousel.
+    pub permission_mode_availability: coco_types::PermissionModeAvailability,
+    /// Whether plan mode should temporarily use auto-mode classifier
+    /// semantics when auto mode is available.
+    pub use_auto_mode_during_plan: bool,
+    /// Snapshot of whether the auto-mode classifier is active for this
+    /// turn. In Plan mode this is the authoritative plan-auto bridge signal;
+    /// `pre_plan_mode` and `stripped_dangerous_rules` are only provenance.
+    pub auto_mode_active: bool,
     /// Resolved LSP tool-layer runtime configuration. Consumed by the
     /// `LspTool` for the per-query file-size gate. Server roster lives
     /// in `coco-lsp::LspServersConfig` (separate config file) — this
@@ -631,6 +642,9 @@ impl ToolUseContext {
             web_fetch_config: self.web_fetch_config.clone(),
             web_search_config: self.web_search_config.clone(),
             plan_mode_settings: self.plan_mode_settings.clone(),
+            permission_mode_availability: self.permission_mode_availability,
+            use_auto_mode_during_plan: self.use_auto_mode_during_plan,
+            auto_mode_active: self.auto_mode_active,
             lsp_config: self.lsp_config.clone(),
             features: self.features.clone(),
             skill_overrides: self.skill_overrides.clone(),
@@ -884,6 +898,9 @@ impl ToolUseContext {
             web_fetch_config: coco_config::WebFetchConfig::default(),
             web_search_config: coco_config::WebSearchConfig::default(),
             plan_mode_settings: coco_config::PlanModeSettings::default(),
+            permission_mode_availability: coco_types::PermissionModeAvailability::default(),
+            use_auto_mode_during_plan: true,
+            auto_mode_active: false,
             lsp_config: coco_config::LspConfig::default(),
             features: Arc::new(Features::with_defaults()),
             skill_overrides: Arc::new(coco_config::SkillOverrideTiers::default()),

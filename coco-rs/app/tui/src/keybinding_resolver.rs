@@ -260,6 +260,9 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
         // No Select/Confirmation so chars/arrows aren't resolved to filter /
         // Surface* / Y-N-A before reaching the input map.
         PermissionPrefixEdit => vec![KbContext::Global],
+        // Global-only, same rationale as `PermissionPrefixEdit`: the
+        // ExitPlanMode feedback field owns chars/arrows while focused.
+        ExitPlanFeedbackInput => vec![KbContext::Global],
         // Global-only, same rationale as `PermissionsEditor`: the dialog's nav
         // (↑/↓/Enter/x/←) comes entirely from `background_tasks_map_key`. No
         // Select/Confirmation so arrows aren't resolved to `Surface*` before

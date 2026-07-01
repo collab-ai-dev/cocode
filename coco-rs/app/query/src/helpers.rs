@@ -410,6 +410,34 @@ pub(crate) async fn complete_tool_call_with_error_mode(
     deferred: Option<&mut DeferredToolCompletionBuffer>,
 ) {
     let message = create_error_tool_result(tool_call_id, tool_name, tool_id.clone(), output);
+    complete_tool_call_with_error_messages_mode(
+        event_tx,
+        history,
+        tool_call_id,
+        tool_name,
+        tool_id,
+        output,
+        error_kind,
+        event_mode,
+        deferred,
+        vec![message],
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn complete_tool_call_with_error_messages_mode(
+    event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    history: &mut MessageHistory,
+    tool_call_id: &str,
+    tool_name: &str,
+    tool_id: &ToolId,
+    output: &str,
+    error_kind: coco_tool_runtime::ToolCallErrorKind,
+    event_mode: ToolCompletionEventMode,
+    deferred: Option<&mut DeferredToolCompletionBuffer>,
+    messages: Vec<Message>,
+) {
     match event_mode {
         ToolCompletionEventMode::Emit => {
             let _delivered = emit_stream(
@@ -422,31 +450,30 @@ pub(crate) async fn complete_tool_call_with_error_mode(
                 },
             )
             .await;
-            crate::history_sync::history_push_and_emit(history, message, event_tx).await;
+            for message in messages {
+                crate::history_sync::history_push_and_emit(history, message, event_tx).await;
+            }
         }
         ToolCompletionEventMode::Defer => {
             if let Some(deferred) = deferred {
-                deferred.stage(
-                    tool_call_id,
-                    tool_id.clone(),
-                    vec![message],
-                    Some(error_kind),
-                );
+                deferred.stage(tool_call_id, tool_id.clone(), messages, Some(error_kind));
             } else {
-                history.push(message);
+                for message in messages {
+                    history.push(message);
+                }
             }
         }
     }
 }
 
-/// Complete a tool call with a NON-error result carrying user feedback.
+/// Complete a tool call with a NON-error result carrying user feedback, plus
+/// optional adjacent user messages (for pasted images in permission replies).
 /// Used when the user redirects an interactive tool rather than denying it —
 /// e.g. AskUserQuestion's "Chat about this" / "Skip interview". The feedback
-/// still reaches the model (so it re-engages), but the transcript renders it as
-/// a neutral result instead of a red "Permission denied" error, and it is NOT
-/// counted as a permission denial.
+/// still reaches the model, but renders as a neutral result and is not counted
+/// as a permission denial.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn complete_tool_call_clarification(
+pub(crate) async fn complete_tool_call_clarification_messages(
     event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
     history: &mut MessageHistory,
     tool_call_id: &str,
@@ -455,14 +482,8 @@ pub(crate) async fn complete_tool_call_clarification(
     output: &str,
     event_mode: ToolCompletionEventMode,
     deferred: Option<&mut DeferredToolCompletionBuffer>,
+    messages: Vec<Message>,
 ) {
-    let message = coco_messages::create_tool_result_message(
-        tool_call_id,
-        tool_name,
-        tool_id.clone(),
-        output,
-        /*is_error*/ false,
-    );
     match event_mode {
         ToolCompletionEventMode::Emit => {
             let _delivered = emit_stream(
@@ -475,13 +496,17 @@ pub(crate) async fn complete_tool_call_clarification(
                 },
             )
             .await;
-            crate::history_sync::history_push_and_emit(history, message, event_tx).await;
+            for message in messages {
+                crate::history_sync::history_push_and_emit(history, message, event_tx).await;
+            }
         }
         ToolCompletionEventMode::Defer => {
             if let Some(deferred) = deferred {
-                deferred.stage(tool_call_id, tool_id.clone(), vec![message], None);
+                deferred.stage(tool_call_id, tool_id.clone(), messages, None);
             } else {
-                history.push(message);
+                for message in messages {
+                    history.push(message);
+                }
             }
         }
     }

@@ -73,6 +73,39 @@ mod agent_template_tests {
 }
 
 #[cfg(test)]
+mod plan_prompt_editor_tests {
+    use super::super::PendingEditorRequest;
+    use super::super::emit_editor_prepare_failed;
+
+    #[tokio::test]
+    async fn prepare_failure_for_plan_prompt_returns_prompt_local_event() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+        emit_editor_prepare_failed(
+            PendingEditorRequest::PlanPrompt {
+                request_id: "perm-1".to_string(),
+                initial_content: "# Plan".to_string(),
+                path: None,
+            },
+            "raw mode failed".to_string(),
+            tx,
+        )
+        .await;
+
+        let event = rx.try_recv().expect("failure event sent");
+        let coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::ExitPlanPromptEditorFailed {
+            request_id,
+            error,
+        }) = event
+        else {
+            panic!("expected ExitPlanPromptEditorFailed, got {event:?}")
+        };
+        assert_eq!(request_id, "perm-1");
+        assert!(error.contains("raw mode failed"));
+    }
+}
+
+#[cfg(test)]
 mod goal_tests {
     use super::super::workspace_trust_rejected_from_env;
 
@@ -391,7 +424,7 @@ async fn build_runtime_with_registry_and_settings(
         cwd: home.path().to_path_buf(),
         model_id,
         system_prompt: "test".to_string(),
-        bypass_permissions_available: false,
+        permission_mode_availability: coco_types::PermissionModeAvailability::default(),
         permission_mode: coco_types::PermissionMode::default(),
         model_runtimes: None,
         tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),

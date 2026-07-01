@@ -63,7 +63,11 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
             active_shell_tool: config.active_shell_tool,
             preserve_tool_use_results: config.preserve_tool_use_results,
             cancel: config.cancel,
-            bypass_permissions_available: config.bypass_permissions_available,
+            permission_mode_availability: coco_types::PermissionModeAvailability::new(
+                config.bypass_permissions_available,
+                false,
+            ),
+            use_auto_mode_during_plan: true,
             fork_context_messages: config.fork_context_messages,
             is_teammate: true,
             is_in_process_teammate: true,

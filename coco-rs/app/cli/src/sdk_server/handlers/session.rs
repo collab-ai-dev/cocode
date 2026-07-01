@@ -54,6 +54,11 @@ pub(super) async fn handle_initialize(
         info!("SdkServer: agentProgressSummaries enabled by client");
     }
 
+    {
+        let mut slot = ctx.state.pending_plan_mode_instructions.write().await;
+        *slot = params.plan_mode_instructions.clone();
+    }
+
     if let Some(runtime) = ctx.state.session_runtime.read().await.clone()
         && let Some(hooks) = params.hooks.as_ref()
     {
@@ -295,6 +300,13 @@ pub(super) async fn handle_session_start(
         }
     }
 
+    let plan_mode_instructions = ctx
+        .state
+        .pending_plan_mode_instructions
+        .read()
+        .await
+        .clone();
+
     // Re-acquire the write lock and install the session. A concurrent
     // session/start would have hit the `is_some()` guard above and
     // errored out before persistence, so this path only races with an
@@ -309,6 +321,7 @@ pub(super) async fn handle_session_start(
         };
     }
     let mut handle = SessionHandle::new(session_id.clone(), cwd, model);
+    handle.plan_mode_instructions = plan_mode_instructions;
     if let Some(mode) = params.permission_mode {
         handle.permission_mode = Some(mode);
         // Brand-new session: the engine config / rules aren't wired yet, so the
@@ -319,6 +332,7 @@ pub(super) async fn handle_session_start(
             coco_types::PermissionMode::Default,
             mode,
             &coco_types::PermissionRulesBySource::new(),
+            coco_permissions::PlanModeAutoOptions::default(),
         )
         .await;
     }
@@ -876,6 +890,13 @@ pub(super) async fn handle_session_resume(
         }
     };
 
+    let plan_mode_instructions = ctx
+        .state
+        .pending_plan_mode_instructions
+        .read()
+        .await
+        .clone();
+
     // Install as the active session. If a session is already active,
     // cancel any in-flight turn and replace it — `session/resume`
     // implicitly archives the prior session.
@@ -891,11 +912,13 @@ pub(super) async fn handle_session_resume(
         );
         token.cancel();
     }
-    *slot = Some(SessionHandle::new(
+    let mut handle = SessionHandle::new(
         session.id.clone(),
         session.working_dir.to_string_lossy().into_owned(),
         session.model.clone(),
-    ));
+    );
+    handle.plan_mode_instructions = plan_mode_instructions;
+    *slot = Some(handle);
     drop(slot);
 
     // When a `SessionRuntime` is wired (the production path), repoint
