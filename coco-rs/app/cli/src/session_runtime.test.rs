@@ -112,6 +112,34 @@ async fn orchestration_ctx_factory_can_run_inside_runtime_thread() {
 }
 
 #[tokio::test]
+async fn todo_list_store_is_session_scoped_and_resets_on_new_session() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime(&home).await;
+    let item = coco_types::TodoRecord {
+        content: "write test".to_string(),
+        status: "pending".to_string(),
+        active_form: "Writing test".to_string(),
+    };
+
+    runtime
+        .seed_todo_list_snapshot("session-a".to_string(), vec![item.clone()])
+        .await;
+    assert_eq!(runtime.todo_list_snapshot("session-a").await, vec![item]);
+    assert!(
+        runtime
+            .app_state
+            .read()
+            .await
+            .todos_by_agent
+            .contains_key("session-a"),
+    );
+
+    runtime.start_new_session("session-b".to_string()).await;
+    assert!(runtime.todo_list_snapshot("session-a").await.is_empty());
+    assert!(runtime.app_state.read().await.todos_by_agent.is_empty());
+}
+
+#[tokio::test]
 async fn reload_plugin_mcp_servers_noops_without_manager_then_bumps_key_when_attached() {
     let home = TempDir::new().expect("home tempdir");
     let runtime = build_runtime(&home).await;

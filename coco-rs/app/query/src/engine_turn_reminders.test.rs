@@ -25,9 +25,13 @@ use coco_llm_types::Usage;
 use coco_system_reminder::InvokedSkillEntry;
 use coco_system_reminder::ReminderSources;
 use coco_system_reminder::SkillsSource;
+use coco_tool_runtime::TaskListHandle;
 use coco_tool_runtime::ToolRegistry;
 use coco_types::AttachmentKind;
 use coco_types::PermissionMode;
+use coco_types::TaskListStatus;
+use coco_types::TaskRecord;
+use coco_types::ToolAppState;
 use coco_types::ToolFilter;
 use coco_types::ToolName;
 use tokio_util::sync::CancellationToken;
@@ -36,6 +40,20 @@ use crate::QueryEngine;
 use crate::QueryEngineConfig;
 
 const LISTING_MARKER: &str = "SKILL-LISTING-MARKER";
+
+fn task_record(id: &str, subject: &str) -> TaskRecord {
+    TaskRecord {
+        id: id.to_string(),
+        subject: subject.to_string(),
+        description: String::new(),
+        active_form: None,
+        owner: None,
+        status: TaskListStatus::Pending,
+        blocks: Vec::new(),
+        blocked_by: Vec::new(),
+        metadata: None,
+    }
+}
 
 #[derive(Debug)]
 struct CapturingTextModel {
@@ -154,6 +172,56 @@ fn structured_output_enforcement_resets_for_next_user_turn() {
     assert!(!super::should_fire_structured_output_enforcement(
         &history, false
     ));
+}
+
+#[tokio::test]
+async fn reminder_app_state_snapshot_reads_v2_tasks_from_store() {
+    let store = Arc::new(coco_tool_runtime::InMemoryTaskListHandle::new());
+    let visible = store
+        .create_task("fresh task".to_string(), String::new(), None, None)
+        .await
+        .unwrap();
+    let mut internal_metadata = std::collections::HashMap::new();
+    internal_metadata.insert("_internal".to_string(), serde_json::json!(true));
+    store
+        .create_task(
+            "hidden task".to_string(),
+            String::new(),
+            None,
+            Some(internal_metadata),
+        )
+        .await
+        .unwrap();
+    let handle: coco_tool_runtime::TaskListHandleRef = store;
+    let base = ToolAppState {
+        plan_tasks: vec![task_record("stale", "stale task")],
+        ..Default::default()
+    };
+
+    let snapshot = super::build_reminder_app_state_snapshot(&base, Some(&handle), true).await;
+
+    assert_eq!(snapshot.plan_tasks.len(), 1);
+    assert_eq!(snapshot.plan_tasks[0].id, visible.id);
+    assert_eq!(snapshot.plan_tasks[0].subject, "fresh task");
+}
+
+#[tokio::test]
+async fn reminder_app_state_snapshot_keeps_base_when_v2_disabled() {
+    let store = Arc::new(coco_tool_runtime::InMemoryTaskListHandle::new());
+    store
+        .create_task("fresh task".to_string(), String::new(), None, None)
+        .await
+        .unwrap();
+    let handle: coco_tool_runtime::TaskListHandleRef = store;
+    let base = ToolAppState {
+        plan_tasks: vec![task_record("stale", "stale task")],
+        ..Default::default()
+    };
+
+    let snapshot = super::build_reminder_app_state_snapshot(&base, Some(&handle), false).await;
+
+    assert_eq!(snapshot.plan_tasks.len(), 1);
+    assert_eq!(snapshot.plan_tasks[0].id, "stale");
 }
 
 fn structured_output_tools() -> Arc<ToolRegistry> {

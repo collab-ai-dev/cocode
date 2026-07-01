@@ -292,6 +292,12 @@ pub trait DynTool: Send + Sync + 'static {
     // -- Validation --
 
     fn validate_input(&self, input: &Value, ctx: &ToolUseContext) -> ValidationResult;
+    fn coerce_input(&self, _input: &Value) -> Option<Value> {
+        None
+    }
+    fn validation_error_steer(&self, _input: &Value) -> Option<String> {
+        None
+    }
     fn coerce_raw_string_input(&self, raw: &str) -> Option<Value>;
     fn inputs_equivalent(&self, a: &Value, b: &Value) -> bool;
     fn backfill_observable_input(&self, input: &mut Value);
@@ -495,6 +501,26 @@ pub trait Tool: Send + Sync + 'static {
     /// (normal tools always receive a JSON object). Invoked before schema
     /// validation only when the raw input is a `Value::String`.
     fn coerce_raw_string_input(&self, _raw: &str) -> Option<Value> {
+        None
+    }
+
+    /// Coerce an object-shaped tool-call input into the typed JSON this
+    /// tool's schema expects. This runs before schema validation for all
+    /// input shapes; default `None` preserves strict schema behavior.
+    ///
+    /// Use sparingly for source-compatible, tool-local repairs such as
+    /// upstream alias normalization. Do not use this as a fallback for
+    /// semantic validation; prefer [`Tool::validate_input`] once schema
+    /// validation and typed deserialization have succeeded.
+    fn coerce_input(&self, _input: &Value) -> Option<Value> {
+        None
+    }
+
+    /// Optional model-facing guidance appended to schema validation errors
+    /// for common tool-confusion shapes. This mirrors Claude Code's
+    /// `validationErrorSteer` hook while keeping schema validation itself
+    /// structured and tool-agnostic.
+    fn validation_error_steer(&self, _input: &Value) -> Option<String> {
         None
     }
 
@@ -1001,6 +1027,12 @@ impl<T: Tool> DynTool for T {
             Ok(typed) => Tool::validate_input(self, &typed, ctx),
             Err(e) => ValidationResult::invalid(format!("input does not match schema: {e}")),
         }
+    }
+    fn coerce_input(&self, input: &Value) -> Option<Value> {
+        Tool::coerce_input(self, input)
+    }
+    fn validation_error_steer(&self, input: &Value) -> Option<String> {
+        Tool::validation_error_steer(self, input)
     }
     fn coerce_raw_string_input(&self, raw: &str) -> Option<Value> {
         Tool::coerce_raw_string_input(self, raw)

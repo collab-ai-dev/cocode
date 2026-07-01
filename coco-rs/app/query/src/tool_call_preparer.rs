@@ -1113,12 +1113,18 @@ async fn validate_effective_input_or_complete_error(
     // v4.2: the validator is owned by the tool's schema (synchronous,
     // lock-free). A schema-compile failure is impossible here — a tool is
     // only registered if its schema compiled at construction.
+    let validation_input = input.clone();
     let validated = match ValidatedInput::validate(tool.as_ref(), input) {
         Ok(validated) => validated,
         Err(issues) => {
             let message = format!(
                 "Invalid input: {}",
-                crate::tool_input_validate::format_schema_error(&tool_call.tool_name, &issues)
+                crate::tool_input_validate::format_schema_error_with_steer(
+                    &tool_call.tool_name,
+                    tool.as_ref(),
+                    &validation_input,
+                    &issues
+                )
             );
             complete_tool_call_with_error_mode(
                 event_tx,

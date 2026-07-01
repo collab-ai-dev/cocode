@@ -659,6 +659,10 @@ pub struct SessionRuntime {
     /// and in-process teammates.
     task_list: Arc<RwLock<Option<coco_tool_runtime::TaskListHandleRef>>>,
     team_task_list_router: Arc<RwLock<Option<coco_tool_runtime::TeamTaskListRouterRef>>>,
+    /// Session-scoped V1 TodoWrite store. The engine is rebuilt every turn, so
+    /// keeping this handle on the runtime preserves replace-all old/new
+    /// semantics across turns and lets resume seed the latest transcript state.
+    todo_list: Arc<RwLock<coco_tool_runtime::TodoListHandleRef>>,
     /// Per-agent transcript / metadata store for resume support.
     /// Late-bound so CLI bootstrap can construct the impl after
     /// `SessionRuntime::build` returns. `agent_handle_factory`
@@ -1471,6 +1475,9 @@ impl SessionRuntime {
             task_runtime: Arc::new(RwLock::new(None)),
             task_list: Arc::new(RwLock::new(None)),
             team_task_list_router: Arc::new(RwLock::new(None)),
+            todo_list: Arc::new(RwLock::new(Arc::new(
+                coco_tool_runtime::InMemoryTodoListHandle::new(),
+            ))),
             agent_transcript_store: Arc::new(RwLock::new(None)),
             mcp_handle: Arc::new(RwLock::new(None)),
             mcp_manager: Arc::new(RwLock::new(None)),
@@ -2851,6 +2858,7 @@ impl SessionRuntime {
         if let Some(router) = self.team_task_list_router.read().await.clone() {
             engine = engine.with_team_task_list_router(router);
         }
+        engine = engine.with_todo_list(self.todo_list.read().await.clone());
         engine
     }
 
@@ -3501,6 +3509,7 @@ impl SessionRuntime {
     pub async fn start_new_session(&self, new_session_id: String) {
         self.flush_session_usage_snapshot().await;
         self.adopt_session_id(&new_session_id).await;
+        self.reset_todo_list().await;
         let usage_tracker = self.load_usage_tracker_for_session(&new_session_id).await;
         *self.session_usage_tracker.lock().await = usage_tracker;
         {
@@ -3764,6 +3773,7 @@ impl SessionRuntime {
             *guard = ToolAppState::default();
             guard.permissions = preserved;
         }
+        self.reset_todo_list().await;
         self.reset_cache_break_detectors().await;
         // Drop the captured post-turn cache-safe-params handle. Otherwise a
         // `/btw` issued between this `/clear` and the first post-clear turn
@@ -3877,6 +3887,30 @@ impl SessionRuntime {
         }
 
         Ok(())
+    }
+
+    async fn reset_todo_list(&self) {
+        *self.todo_list.write().await = Arc::new(coco_tool_runtime::InMemoryTodoListHandle::new());
+        let mut app_state = self.app_state.write().await;
+        app_state.plan_tasks.clear();
+        app_state.todos_by_agent.clear();
+        app_state.expanded_view = coco_types::ExpandedView::None;
+        app_state.verification_nudge_pending = false;
+    }
+
+    pub async fn seed_todo_list_snapshot(&self, key: String, items: Vec<coco_types::TodoRecord>) {
+        let handle = self.todo_list.read().await.clone();
+        handle.write(&key, items.clone()).await;
+        let mut app_state = self.app_state.write().await;
+        if items.is_empty() {
+            app_state.todos_by_agent.remove(&key);
+        } else {
+            app_state.todos_by_agent.insert(key, items);
+        }
+    }
+
+    pub async fn todo_list_snapshot(&self, key: &str) -> Vec<coco_types::TodoRecord> {
+        self.todo_list.read().await.read(key).await
     }
 }
 

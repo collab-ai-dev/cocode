@@ -2,20 +2,27 @@
 //!
 //! ## V1/V2 mutual exclusion
 //!
+//! INTENTIONAL UI DIVERGENCE: Claude Code TS keeps V1 `TodoWrite` out of the
+//! expanded V2 task panel and surfaces it through summary/status state. coco-rs
+//! uses one right-rail task panel for both V2 `plan_tasks` and V1
+//! `todos_by_agent` so multi-provider sessions have a single visible planning
+//! surface. Do not remove the V1 fallback during TS parity work unless the
+//! product decision changes.
+//!
 //! V2 wins when `plan_tasks` is non-empty; otherwise V1 wins when
 //! `todos_by_agent` is non-empty. Both empty → no rows.
 //!
-//! ## Priority sort
+//! ## V2 ordering
 //!
-//! Within each family, rows are ordered:
-//!   1. **in_progress** (highest — the active focus)
-//!   2. **pending**
-//!   3. **completed** (lowest — context, not action)
+//! Mirrors Claude Code TS `TaskListV2`: when the list fits, rows are ordered by
+//! task id. When the list is truncated, visible rows are selected in this
+//! priority order: recently completed, in_progress, pending, older completed.
+//! Pending rows with unresolved blockers trail unblocked pending rows, and the
+//! hidden summary counts the truncated tail by status.
 //!
-//! "Recently completed (< 30 s)" rows promote above pending. That
-//! promotion needs a completion-timestamp side-cache in `SessionState`;
-//! deferred until the cache lands (see P3 follow-up). Without it,
-//! completed rows always trail pending — closest stable behaviour.
+//! "Recently completed (< 30 s)" rows promote above pending. Completion
+//! timestamps live in `UiEphemeralState` and are stamped by the
+//! `TaskPanelChanged` handler when a task first transitions to completed.
 //!
 //! ## Glyphs
 //!
@@ -29,6 +36,7 @@ use crate::presentation::activity::ActivitySpan;
 use crate::presentation::activity::ActivityTone;
 use crate::state::AppState;
 use coco_types::TaskListStatus;
+use std::collections::HashSet;
 
 const ICON_COMPLETED: &str = "✔";
 const ICON_IN_PROGRESS: &str = "◼";
@@ -39,6 +47,11 @@ const RECENT_COMPLETED_TTL_MS: i64 = 30_000;
 
 /// Hide the entire panel this long after every plan task became `Completed`.
 const HIDE_DELAY_MS: i64 = 5_000;
+/// TS `TaskListV2` caps the expanded inline task list at five visible
+/// task rows under truncation. coco-rs does not currently route terminal
+/// row count into this projection, so we use the TS maximum as the
+/// stable cap and keep the same priority/hidden-count semantics.
+const MAX_VISIBLE_V2_TASKS: usize = 5;
 
 /// Render the todo/plan panel section into `out` if state has content.
 ///
@@ -75,13 +88,15 @@ fn append_v2(state: &AppState, out: &mut Vec<ActivityLine>) {
         t!("plan_panel.section_tasks").to_string(),
     ));
 
-    // Sort indices by priority. Recently-completed tasks (< 30s) lift
-    // above pending so the user sees the most recent wins at the top.
-    let mut indices: Vec<usize> = (0..state.session.plan_tasks.len()).collect();
-    indices.sort_by_key(|&i| {
-        let task = &state.session.plan_tasks[i];
-        rank_v2(task, &state.ui.ephemeral.task_completion_timestamps, now)
-    });
+    let unresolved_ids: HashSet<&str> = state
+        .session
+        .plan_tasks
+        .iter()
+        .filter(|task| task.status != TaskListStatus::Completed)
+        .map(|task| task.id.as_str())
+        .collect();
+
+    let (indices, hidden_summary) = visible_v2_indices(state, &unresolved_ids, now);
 
     for i in indices {
         let task = &state.session.plan_tasks[i];
@@ -91,10 +106,15 @@ fn append_v2(state: &AppState, out: &mut Vec<ActivityLine>) {
             .as_deref()
             .map(|o| format!(" ({o})"))
             .unwrap_or_default();
-        let blocked = if task.blocked_by.is_empty() {
+        let open_blockers: Vec<&str> = task
+            .blocked_by
+            .iter()
+            .filter_map(|id| unresolved_ids.contains(id.as_str()).then_some(id.as_str()))
+            .collect();
+        let blocked = if open_blockers.is_empty() {
             String::new()
         } else {
-            format!(" [blocked by {}]", task.blocked_by.join(", "))
+            format!(" [blocked by {}]", open_blockers.join(", "))
         };
         out.push(ActivityLine {
             spans: vec![
@@ -106,6 +126,12 @@ fn append_v2(state: &AppState, out: &mut Vec<ActivityLine>) {
                 ActivitySpan::tone(blocked, ActivityTone::Warning),
             ],
         });
+    }
+    if let Some(summary) = hidden_summary {
+        out.push(ActivityLine::text(
+            format!("  {summary}"),
+            ActivityTone::Dim,
+        ));
     }
     out.push(ActivityLine::blank());
 }
@@ -144,20 +170,112 @@ fn append_v1(state: &AppState, out: &mut Vec<ActivityLine>) {
     out.push(ActivityLine::blank());
 }
 
-/// Composite rank: recently-completed (<30s) → in_progress → pending →
-/// older-completed.
-fn rank_v2(
-    task: &coco_types::TaskRecord,
-    completion_ts: &std::collections::HashMap<String, i64>,
+fn visible_v2_indices(
+    state: &AppState,
+    unresolved_ids: &HashSet<&str>,
     now: i64,
-) -> u8 {
-    match task.status {
-        TaskListStatus::Completed => match completion_ts.get(task.id.as_str()) {
-            Some(&ts) if now.saturating_sub(ts) < RECENT_COMPLETED_TTL_MS => 0,
-            _ => 3,
-        },
-        TaskListStatus::InProgress => 1,
-        TaskListStatus::Pending => 2,
+) -> (Vec<usize>, Option<String>) {
+    let tasks = &state.session.plan_tasks;
+    if tasks.len() <= MAX_VISIBLE_V2_TASKS {
+        let mut indices: Vec<usize> = (0..tasks.len()).collect();
+        indices.sort_by(|&a, &b| compare_task_ids(&tasks[a].id, &tasks[b].id));
+        return (indices, None);
+    }
+
+    let mut recent_completed = Vec::new();
+    let mut older_completed = Vec::new();
+    let mut in_progress = Vec::new();
+    let mut pending = Vec::new();
+
+    for (i, task) in tasks.iter().enumerate() {
+        match task.status {
+            TaskListStatus::Completed => {
+                let recent = state
+                    .ui
+                    .ephemeral
+                    .task_completion_timestamps
+                    .get(task.id.as_str())
+                    .is_some_and(|ts| now.saturating_sub(*ts) < RECENT_COMPLETED_TTL_MS);
+                if recent {
+                    recent_completed.push(i);
+                } else {
+                    older_completed.push(i);
+                }
+            }
+            TaskListStatus::InProgress => in_progress.push(i),
+            TaskListStatus::Pending => pending.push(i),
+        }
+    }
+
+    for group in [
+        &mut recent_completed,
+        &mut older_completed,
+        &mut in_progress,
+    ] {
+        group.sort_by(|&a, &b| compare_task_ids(&tasks[a].id, &tasks[b].id));
+    }
+    pending.sort_by(|&a, &b| {
+        let a_blocked = tasks[a]
+            .blocked_by
+            .iter()
+            .any(|id| unresolved_ids.contains(id.as_str()));
+        let b_blocked = tasks[b]
+            .blocked_by
+            .iter()
+            .any(|id| unresolved_ids.contains(id.as_str()));
+        a_blocked
+            .cmp(&b_blocked)
+            .then_with(|| compare_task_ids(&tasks[a].id, &tasks[b].id))
+    });
+
+    let ordered: Vec<usize> = recent_completed
+        .into_iter()
+        .chain(in_progress)
+        .chain(pending)
+        .chain(older_completed)
+        .collect();
+    let visible = ordered
+        .iter()
+        .copied()
+        .take(MAX_VISIBLE_V2_TASKS)
+        .collect::<Vec<_>>();
+    let hidden = &ordered[visible.len()..];
+    (visible, hidden_v2_summary(tasks, hidden))
+}
+
+fn hidden_v2_summary(tasks: &[coco_types::TaskRecord], hidden: &[usize]) -> Option<String> {
+    if hidden.is_empty() {
+        return None;
+    }
+    let pending = hidden
+        .iter()
+        .filter(|&&i| tasks[i].status == TaskListStatus::Pending)
+        .count();
+    let in_progress = hidden
+        .iter()
+        .filter(|&&i| tasks[i].status == TaskListStatus::InProgress)
+        .count();
+    let completed = hidden
+        .iter()
+        .filter(|&&i| tasks[i].status == TaskListStatus::Completed)
+        .count();
+    let mut parts = Vec::new();
+    if in_progress > 0 {
+        parts.push(format!("{in_progress} in progress"));
+    }
+    if pending > 0 {
+        parts.push(format!("{pending} pending"));
+    }
+    if completed > 0 {
+        parts.push(format!("{completed} completed"));
+    }
+    Some(format!("… +{}", parts.join(", ")))
+}
+
+fn compare_task_ids(a: &str, b: &str) -> std::cmp::Ordering {
+    match (a.parse::<i64>(), b.parse::<i64>()) {
+        (Ok(a), Ok(b)) => a.cmp(&b),
+        _ => a.cmp(b),
     }
 }
 

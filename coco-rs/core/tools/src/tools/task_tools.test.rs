@@ -11,7 +11,14 @@ use super::TaskCreateTool;
 use super::TaskStopTool;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::DynTool;
+use coco_tool_runtime::HookHandle;
+use coco_tool_runtime::PostToolUseOutcome;
+use coco_tool_runtime::PreToolUseOutcome;
 use coco_tool_runtime::PromptOptions;
+use coco_tool_runtime::SchemaContext;
+use coco_tool_runtime::TaskHookOutcome;
+use coco_tool_runtime::ToolSpec;
+use coco_tool_runtime::ValidatedInput;
 use coco_tool_runtime::{
     BackgroundShellRequest, TaskHandle, TaskOutputDelta, TerminalSignal, ToolUseContext,
 };
@@ -28,6 +35,54 @@ struct RecordingTaskHandle {
     known_ids: std::sync::Mutex<Vec<String>>,
     kill_calls: std::sync::Mutex<Vec<String>>,
     kill_actor_calls: std::sync::Mutex<Vec<(String, coco_types::TaskKilledBy)>>,
+}
+
+#[derive(Debug)]
+struct BlockingTaskCompletedHook;
+
+#[async_trait::async_trait]
+impl HookHandle for BlockingTaskCompletedHook {
+    async fn run_pre_tool_use(
+        &self,
+        _tool_name: &str,
+        _tool_use_id: &str,
+        _tool_input: &serde_json::Value,
+    ) -> PreToolUseOutcome {
+        PreToolUseOutcome::default()
+    }
+
+    async fn run_post_tool_use(
+        &self,
+        _tool_name: &str,
+        _tool_use_id: &str,
+        _tool_input: &serde_json::Value,
+        _tool_response: &serde_json::Value,
+    ) -> PostToolUseOutcome {
+        PostToolUseOutcome::default()
+    }
+
+    async fn run_post_tool_use_failure(
+        &self,
+        _tool_name: &str,
+        _tool_use_id: &str,
+        _tool_input: &serde_json::Value,
+        _error_message: &str,
+    ) -> PostToolUseOutcome {
+        PostToolUseOutcome::default()
+    }
+
+    async fn run_task_completed(
+        &self,
+        _task_id: &str,
+        _task_subject: &str,
+        _task_description: Option<&str>,
+        _teammate_name: Option<&str>,
+        _team_name: Option<&str>,
+    ) -> TaskHookOutcome {
+        TaskHookOutcome {
+            blocking_reason: Some("blocked by task hook".to_string()),
+        }
+    }
 }
 
 impl RecordingTaskHandle {
@@ -550,6 +605,20 @@ fn test_todo_write_schema_matches_ts() {
     );
 }
 
+#[tokio::test]
+async fn test_todo_write_tool_spec_is_strict() {
+    let spec = <TodoWriteTool as DynTool>::tool_spec(
+        &TodoWriteTool,
+        &SchemaContext::default(),
+        &PromptOptions::default(),
+    )
+    .await;
+    let ToolSpec::Function(spec) = spec else {
+        panic!("TodoWrite must be a function tool");
+    };
+    assert!(spec.strict, "matches Claude Code 2.1.193 strict:true");
+}
+
 /// Round-trip: write a todo list, verify the output has the expected
 /// `{oldTodos, newTodos, verificationNudgeNeeded}` shape.
 #[tokio::test]
@@ -730,6 +799,176 @@ fn test_task_v2_input_schema_required_fields_and_strict_aliases() {
     assert!(
         list_schema.validate(&json!({"status": "pending"})).is_err(),
         "TaskList is a strict empty object"
+    );
+}
+
+#[test]
+fn test_task_create_validated_input_coerces_ts_aliases() {
+    let validated = ValidatedInput::validate(
+        &TaskCreateTool,
+        json!({
+            "name": "Fix login",
+            "content": "Repair the login redirect and add coverage",
+            "active_form": "Fixing login",
+            "status": "pending",
+            "owner": "worker",
+            "metadata": {"source": "test"}
+        }),
+    )
+    .expect("TaskCreate aliases should coerce before schema validation");
+
+    assert_eq!(
+        validated.into_value(),
+        json!({
+            "subject": "Fix login",
+            "description": "Repair the login redirect and add coverage",
+            "activeForm": "Fixing login",
+            "metadata": {"source": "test"}
+        })
+    );
+}
+
+#[test]
+fn test_task_create_validated_input_coerces_task_wrapper_and_backfills() {
+    let validated = ValidatedInput::validate(
+        &TaskCreateTool,
+        json!({
+            "task": {
+                "title": "Audit task UI",
+                "activeForm": 7,
+                "metadata": ["bad"],
+                "status": "pending"
+            }
+        }),
+    )
+    .expect("TaskCreate wrapper should coerce before schema validation");
+
+    assert_eq!(
+        validated.into_value(),
+        json!({
+            "subject": "Audit task UI",
+            "description": "Audit task UI"
+        })
+    );
+}
+
+#[test]
+fn test_task_create_validated_input_rejects_batch_and_agent_shapes() {
+    assert!(
+        ValidatedInput::validate(
+            &TaskCreateTool,
+            json!({"tasks": [{"subject": "one", "description": "two"}]})
+        )
+        .is_err(),
+        "TaskCreate must not coerce batch-shaped task input"
+    );
+    assert!(
+        ValidatedInput::validate(
+            &TaskCreateTool,
+            json!({"prompt": "do work", "subagent_type": "general-purpose"})
+        )
+        .is_err(),
+        "TaskCreate must not coerce Agent-shaped input"
+    );
+}
+
+#[test]
+fn test_task_create_validation_error_steer_matches_ts_batch_shape() {
+    let steer = <TaskCreateTool as DynTool>::validation_error_steer(
+        &TaskCreateTool,
+        &json!({"tasks": [{"subject": "one", "description": "two"}]}),
+    )
+    .expect("batch-shaped input should steer");
+    assert_eq!(
+        steer,
+        "TaskCreate creates ONE task per call and has no `tasks` or `todos` parameter. Call TaskCreate once per task, passing `subject` (a brief title) and `description` (what needs to be done) as top-level string parameters."
+    );
+
+    let nested = <TaskCreateTool as DynTool>::validation_error_steer(
+        &TaskCreateTool,
+        &json!({"task": {"todos": [{"content": "one"}]}}),
+    )
+    .expect("nested batch-shaped input should steer");
+    assert_eq!(nested, steer);
+}
+
+#[test]
+fn test_task_create_validation_error_steer_matches_ts_agent_shape() {
+    let steer = <TaskCreateTool as DynTool>::validation_error_steer(
+        &TaskCreateTool,
+        &json!({"prompt": "do work", "subagent_type": "general-purpose"}),
+    )
+    .expect("Agent-shaped input should steer");
+    assert_eq!(
+        steer,
+        "This call used Agent-tool parameters (`prompt`/`subagent_type`). TaskCreate adds an item to the task list and takes `subject` and `description` string parameters. To delegate work to a subagent, use the Agent tool instead."
+    );
+
+    let nested = <TaskCreateTool as DynTool>::validation_error_steer(
+        &TaskCreateTool,
+        &json!({"task": {"prompt": "do work"}}),
+    )
+    .expect("nested Agent-shaped input should steer");
+    assert_eq!(nested, steer);
+}
+
+#[test]
+fn test_task_update_validated_input_coerces_ts_aliases() {
+    let validated = ValidatedInput::validate(
+        &TaskUpdateTool,
+        json!({
+            "id": "7",
+            "status": "in_progress",
+            "active_form": "Running audit"
+        }),
+    )
+    .expect("TaskUpdate aliases should coerce before schema validation");
+
+    assert_eq!(
+        validated.into_value(),
+        json!({
+            "taskId": "7",
+            "status": "in_progress",
+            "activeForm": "Running audit"
+        })
+    );
+}
+
+#[test]
+fn test_task_update_validated_input_rejects_uncoerced_aliases() {
+    let validated = ValidatedInput::validate(
+        &TaskUpdateTool,
+        json!({
+            "taskId": "target",
+            "activeForm": "Target form"
+        }),
+    )
+    .expect("target fields should validate without aliases");
+
+    assert_eq!(
+        validated.into_value(),
+        json!({
+            "taskId": "target",
+            "activeForm": "Target form"
+        })
+    );
+
+    assert!(
+        ValidatedInput::validate(
+            &TaskUpdateTool,
+            json!({
+                "taskId": "target",
+                "id": "alias",
+                "activeForm": "Target form",
+                "active_form": "Alias form"
+            }),
+        )
+        .is_err(),
+        "aliases left behind by TS-compatible precedence must be rejected by the strict schema"
+    );
+    assert!(
+        ValidatedInput::validate(&TaskUpdateTool, json!({"id": 7, "status": "completed"})).is_err(),
+        "non-string aliases must not be coerced into taskId"
     );
 }
 
@@ -1349,6 +1588,81 @@ async fn test_task_update_sets_verification_nudge_in_patch() {
     assert_eq!(state.expanded_view, coco_types::ExpandedView::Tasks);
 }
 
+/// Upstream emits the expanded task-panel hint before reading the
+/// target task, so a missing task still opens the current V2 snapshot.
+#[tokio::test]
+async fn test_task_update_missing_task_still_emits_expand_patch() {
+    let ctx = ToolUseContext::test_default();
+    let create = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "existing", "description": ""}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let result = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": "missing", "status": "completed"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.data["success"], false);
+    let patch = result.app_state_patch.expect("patch must be emitted");
+    let mut state = coco_types::ToolAppState::default();
+    patch(&mut state);
+    assert_eq!(state.expanded_view, coco_types::ExpandedView::Tasks);
+    assert_eq!(state.plan_tasks.len(), 1);
+    assert_eq!(
+        state.plan_tasks[0].id,
+        create.data["task"]["id"].as_str().unwrap()
+    );
+}
+
+/// A blocking TaskCompleted hook returns a structured TaskUpdate failure
+/// while still refreshing/opening the V2 task panel. The task remains
+/// uncompleted because the hook runs before the status write.
+#[tokio::test]
+async fn test_task_update_completed_hook_block_returns_failure_patch() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.hook_handle = Some(Arc::new(BlockingTaskCompletedHook));
+    let create = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "hooked", "description": ""}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    let task_id = create.data["task"]["id"].as_str().unwrap();
+
+    let result = <TaskUpdateTool as DynTool>::execute(
+        &TaskUpdateTool,
+        json!({"taskId": task_id, "status": "completed"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.data["success"], false);
+    assert_eq!(
+        result.data["error"],
+        "TaskCompleted hook feedback:\nblocked by task hook"
+    );
+    let task = ctx.task_list.get_task(task_id).await.unwrap().unwrap();
+    assert_eq!(task.status, coco_types::TaskListStatus::Pending);
+
+    let patch = result.app_state_patch.expect("patch must be emitted");
+    let mut state = coco_types::ToolAppState::default();
+    patch(&mut state);
+    assert_eq!(state.expanded_view, coco_types::ExpandedView::Tasks);
+    assert_eq!(state.plan_tasks.len(), 1);
+    assert_eq!(
+        state.plan_tasks[0].status,
+        coco_types::TaskListStatus::Pending
+    );
+}
+
 /// TodoWrite emits a patch keyed by agent_id (or session fallback).
 #[tokio::test]
 async fn test_todo_write_emits_snapshot_keyed_by_agent() {
@@ -1375,6 +1689,45 @@ async fn test_todo_write_emits_snapshot_keyed_by_agent() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].content, "item");
     assert_eq!(list[0].active_form, "Doing it");
+}
+
+/// The TUI auto-detects V2 vs V1 by snapshot content, so a V1 patch
+/// must remove any stale V2 snapshot while preserving the current
+/// expanded-view choice.
+#[tokio::test]
+async fn test_todo_write_clears_stale_plan_tasks_without_closing_panel() {
+    let ctx = ToolUseContext::test_default();
+    let result = <TodoWriteTool as DynTool>::execute(
+        &TodoWriteTool,
+        json!({"todos": [
+            {"content": "item", "status": "pending", "activeForm": "Doing it"}
+        ]}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    let patch = result.app_state_patch.expect("patch must be emitted");
+    let mut state = coco_types::ToolAppState {
+        expanded_view: coco_types::ExpandedView::Tasks,
+        ..Default::default()
+    };
+    state.plan_tasks.push(coco_types::TaskRecord {
+        id: "stale".to_string(),
+        subject: "stale v2".to_string(),
+        description: String::new(),
+        active_form: None,
+        owner: None,
+        status: coco_types::TaskListStatus::Pending,
+        blocks: Vec::new(),
+        blocked_by: Vec::new(),
+        metadata: None,
+    });
+
+    patch(&mut state);
+
+    assert!(state.plan_tasks.is_empty());
+    assert_eq!(state.expanded_view, coco_types::ExpandedView::Tasks);
+    assert_eq!(state.todos_by_agent["main-session"][0].content, "item");
 }
 
 /// Plan-item completion is observed via `TaskGet`, not `TaskOutput`.
@@ -2220,4 +2573,15 @@ fn task_v2_off_exposes_todo_write_hides_v2() {
         &ctx
     ));
     assert!(<TaskStopTool as DynTool>::is_enabled(&TaskStopTool, &ctx));
+}
+
+#[test]
+fn task_create_is_not_concurrency_safe() {
+    assert!(
+        !<TaskCreateTool as DynTool>::is_concurrency_safe(
+            &TaskCreateTool,
+            &json!({"subject": "Plan", "description": "Do one thing"})
+        ),
+        "matches Claude Code 2.1.193 TaskCreate concurrency contract"
+    );
 }
