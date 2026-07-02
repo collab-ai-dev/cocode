@@ -47,6 +47,7 @@ pub mod team_task_list_router;
 pub mod teammate_inbox_pump;
 pub mod tracing_init;
 pub mod tui_permission_bridge;
+pub mod voice_bootstrap;
 
 use clap::Parser;
 use clap::Subcommand;

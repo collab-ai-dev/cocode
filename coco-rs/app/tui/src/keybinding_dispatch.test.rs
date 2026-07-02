@@ -159,7 +159,6 @@ fn feature_gated_actions_silently_no_op() {
         KeybindingAction::AttachmentsRemove,
         KeybindingAction::PluginToggle,
         KeybindingAction::PluginInstall,
-        KeybindingAction::VoicePushToTalk,
         KeybindingAction::SettingsSearch,
         KeybindingAction::SettingsRetry,
         KeybindingAction::MessageActionsPrev,
@@ -172,6 +171,15 @@ fn feature_gated_actions_silently_no_op() {
             "{action:?} should return None — feature-gated action with no surface yet",
         );
     }
+}
+
+#[test]
+fn voice_push_to_talk_maps_to_voice_toggle() {
+    // Voice input IS wired (Feature::Voice gates it at runtime), so the
+    // keybinding maps to VoiceToggle rather than returning None.
+    let state = fresh_state();
+    let cmd = dispatch_action(&KeybindingAction::VoicePushToTalk, &state).unwrap();
+    assert!(matches!(cmd, TuiCommand::VoiceToggle));
 }
 
 #[test]

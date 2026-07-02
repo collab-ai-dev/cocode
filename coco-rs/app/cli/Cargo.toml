@@ -17,6 +17,10 @@ path = "src/main.rs"
 # avoids the jemalloc C build on Windows), enabled in release/distribution
 # builds. Tuning lives in src/main.rs (`malloc_conf`).
 jemalloc = ["dep:tikv-jemallocator"]
+# Compile the real cpal microphone backend for voice input. Off by default so
+# `cargo build` / CI stay light (no ALSA/CoreAudio system deps); enabled in the
+# shipped coco binary. Without it, voice is present but reports "no microphone".
+voice = ["coco-voice/capture"]
 
 [dependencies]
 coco-types.workspace = true
@@ -59,6 +63,8 @@ coco-git.workspace = true
 coco-paths.workspace = true
 coco-subagent.workspace = true
 coco-tui.workspace = true
+coco-voice.workspace = true
+coco-utils-audio.workspace = true
 coco-keybindings = { workspace = true, features = ["loader"] }
 coco-otel.workspace = true
 coco-model-card.workspace = true

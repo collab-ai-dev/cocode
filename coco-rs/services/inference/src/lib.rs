@@ -31,6 +31,7 @@ pub mod prompt_layout;
 pub mod retry;
 pub mod stream;
 pub mod thinking_convert;
+pub mod transcription;
 pub mod usage;
 
 pub use build_call_options::PerCallOverrides;
@@ -105,6 +106,10 @@ pub use stream::synthetic_error_stream;
 pub use stream::synthetic_error_stream_after_text;
 pub use stream::synthetic_stream_from_content;
 pub use thinking_convert::to_extra_body;
+pub use transcription::TranscriptionModelV4;
+pub use transcription::TranscriptionOutput;
+pub use transcription::build_openai_transcription_model;
+pub use transcription::transcribe_audio;
 pub use usage::UsageAccumulator;
 
 // ─── Vercel-ai re-export hub ──────────────────────────────────────────────

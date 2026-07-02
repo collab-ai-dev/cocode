@@ -118,6 +118,14 @@ pub struct App {
     deferred_core_events: VecDeque<CoreEvent>,
     pending_frame_inputs: crate::perf::FrameInputStats,
     frame_index: u64,
+    /// Voice input session (capture + STT engine + state machine). `Some` only
+    /// when the CLI bootstrap successfully initialized the voice subsystem
+    /// (voice cargo feature compiled + a usable STT backend). Driven by the
+    /// `voice:pushToTalk` keybinding via `App::toggle_voice`.
+    voice: Option<coco_voice::VoiceSession>,
+    /// Isolated stream of `VoiceEvent`s from the voice session — joined into
+    /// the run loop's `tokio::select!`. `None` when voice is not initialized.
+    voice_rx: Option<mpsc::Receiver<coco_voice::VoiceEvent>>,
 }
 
 impl App {
@@ -175,6 +183,8 @@ impl App {
             deferred_core_events: VecDeque::new(),
             pending_frame_inputs: crate::perf::FrameInputStats::default(),
             frame_index: 0,
+            voice: None,
+            voice_rx: None,
         })
     }
 
@@ -217,6 +227,8 @@ impl App {
             deferred_core_events: VecDeque::new(),
             pending_frame_inputs: crate::perf::FrameInputStats::default(),
             frame_index: 0,
+            voice: None,
+            voice_rx: None,
         }
     }
 
@@ -258,6 +270,114 @@ impl App {
     pub fn with_config_reload_errors(mut self, rx: mpsc::Receiver<String>) -> Self {
         self.config_reload_errors_rx = Some(rx);
         self
+    }
+
+    /// Install the voice-input subsystem: the `VoiceSession` plus the receiver
+    /// half of its event stream. Called by the CLI bootstrap (`tui_runner`)
+    /// when `Feature::Voice` is available and a backend initialized. `enabled`
+    /// seeds the live gate (`/voice` toggles it thereafter).
+    pub fn with_voice(
+        mut self,
+        session: coco_voice::VoiceSession,
+        rx: mpsc::Receiver<coco_voice::VoiceEvent>,
+        enabled: bool,
+    ) -> Self {
+        self.state.ui.voice.enabled = enabled;
+        self.state.ui.voice.engine_label = Some(session.engine_name().to_string());
+        self.voice = Some(session);
+        self.voice_rx = Some(rx);
+        self
+    }
+
+    /// Start/stop voice recording (the `voice:pushToTalk` toggle). No-op when
+    /// voice is disabled or uninitialized. Returns whether a redraw is needed.
+    fn toggle_voice(&mut self) -> bool {
+        if !self.state.ui.voice.enabled {
+            return false;
+        }
+        let Some(session) = self.voice.as_mut() else {
+            self.state.ui.add_toast(crate::state::ui::Toast::warning(
+                "Voice input is unavailable (no backend configured).".to_string(),
+            ));
+            return true;
+        };
+        if session.is_recording() {
+            session.stop();
+            self.state.ui.voice.status = crate::state::ui::VoiceStatusKind::Transcribing;
+            let engine = self
+                .state
+                .ui
+                .voice
+                .engine_label
+                .clone()
+                .unwrap_or_else(|| "STT".to_string());
+            self.state
+                .ui
+                .input
+                .set_inline_hint(format!("transcribing via {engine}…"));
+        } else {
+            match session.start() {
+                Ok(()) => {
+                    self.state.ui.voice.status = crate::state::ui::VoiceStatusKind::Recording;
+                    let chord = self
+                        .state
+                        .ui
+                        .kb_handle
+                        .display_for(
+                            &coco_keybindings::KeybindingAction::VoicePushToTalk,
+                            crate::keybinding_bridge::KeybindingContext::Chat,
+                        )
+                        .unwrap_or_else(|| "F3".to_string());
+                    self.state
+                        .ui
+                        .input
+                        .set_inline_hint(format!("🎙 recording… ({chord} to stop)"));
+                }
+                Err(err) => {
+                    self.state.ui.voice.status = crate::state::ui::VoiceStatusKind::Idle;
+                    self.state
+                        .ui
+                        .add_toast(crate::state::ui::Toast::warning(voice_error_text(&err)));
+                }
+            }
+        }
+        true
+    }
+
+    /// Fold an async `VoiceEvent` into UI state. Returns whether a redraw is
+    /// needed.
+    fn handle_voice_event(&mut self, event: coco_voice::VoiceEvent) -> bool {
+        use crate::state::ui::VoiceStatusKind;
+        match event {
+            coco_voice::VoiceEvent::RecordingStarted => {
+                self.state.ui.voice.status = VoiceStatusKind::Recording;
+            }
+            coco_voice::VoiceEvent::Transcribing { engine } => {
+                self.state.ui.voice.status = VoiceStatusKind::Transcribing;
+                self.state
+                    .ui
+                    .input
+                    .set_inline_hint(format!("transcribing via {engine}…"));
+            }
+            coco_voice::VoiceEvent::Final { text, .. } => {
+                self.state.ui.voice.status = VoiceStatusKind::Idle;
+                self.state.ui.input.clear_inline_hint();
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    // Insert at the cursor (TranscriptMode::Insert). Not
+                    // auto-submitted — the user edits/sends.
+                    self.state.ui.input.textarea.insert_str(trimmed);
+                }
+            }
+            coco_voice::VoiceEvent::Error(message) => {
+                self.state.ui.voice.status = VoiceStatusKind::Idle;
+                self.state.ui.input.clear_inline_hint();
+                self.state
+                    .ui
+                    .add_toast(crate::state::ui::Toast::warning(message));
+            }
+        }
+        true
     }
 
     /// Get a reference to the state.
@@ -389,6 +509,12 @@ impl App {
                 }
                 Some(update) = self.status_line_rx.recv() => {
                     needs_redraw = self.state.ui.status_line.apply_update(update);
+                }
+                // Async voice events (transcript ready, recording lifecycle,
+                // errors). Isolated stream — folded into UI state here, never
+                // bridged into CoreEvent.
+                Some(event) = recv_optional(&mut self.voice_rx), if self.voice_rx.is_some() => {
+                    needs_redraw = self.handle_voice_event(event);
                 }
                 // Coalesced draw notification — the FrameRequester
                 // task fires this when one or more `schedule_frame()`
@@ -729,7 +855,14 @@ impl App {
                 }
                 // Delegate all key mapping to keybinding_bridge
                 if let Some(cmd) = keybinding_bridge::map_key(&self.state, key) {
-                    handle_command(&mut self.state, cmd, &self.command_tx).await
+                    // Voice push-to-talk is intercepted here — the VoiceSession
+                    // lives on `App`, not `AppState`, so it can't be driven from
+                    // `update::handle_command`.
+                    if matches!(cmd, crate::events::TuiCommand::VoiceToggle) {
+                        self.toggle_voice()
+                    } else {
+                        handle_command(&mut self.state, cmd, &self.command_tx).await
+                    }
                 } else {
                     false
                 }
@@ -1059,6 +1192,21 @@ async fn recv_optional<T>(rx: &mut Option<mpsc::Receiver<T>>) -> Option<T> {
     match rx.as_mut() {
         Some(r) => r.recv().await,
         None => std::future::pending().await,
+    }
+}
+
+/// Map a voice-capture/start failure to a concise, user-facing footer message
+/// (the typed error strings from the design).
+fn voice_error_text(err: &coco_voice::VoiceError) -> String {
+    use coco_voice::VoiceError;
+    match err {
+        VoiceError::NoAudioDevice => "No microphone detected.".to_string(),
+        VoiceError::NoSpeechDetected => "No speech detected.".to_string(),
+        VoiceError::FeatureNotEnabled(backend) => {
+            format!("Voice backend `{backend}` is not available in this build.")
+        }
+        VoiceError::Connection(_) => "Voice connection failed. Check your network.".to_string(),
+        other => format!("Voice error: {other}"),
     }
 }
 

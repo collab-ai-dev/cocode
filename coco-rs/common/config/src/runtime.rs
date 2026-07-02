@@ -38,6 +38,7 @@ use crate::sections::MemoryDisabledReason;
 use crate::sections::PathConfig;
 use crate::sections::ShellConfig;
 use crate::sections::ToolConfig;
+use crate::sections::VoiceConfig;
 use crate::sections::WebFetchConfig;
 use crate::sections::WebSearchConfig;
 use crate::settings::SettingsWithSource;
@@ -79,6 +80,9 @@ pub struct RuntimeConfig {
     /// in `coco-lsp`; this struct only carries cross-server tool-side
     /// limits (file-size gate, future timeout / prewarm policy).
     pub lsp: LspConfig,
+    /// Voice-input (speech-to-text) knobs. On/off is `Feature::Voice`; this
+    /// carries backend/language/model selection. Consumed by `coco-voice`.
+    pub voice: VoiceConfig,
     pub paths: PathConfig,
     /// Resolved compaction parameters (auto threshold, micro keep-recent,
     /// api-native gate, session-memory budgets, experimental flags). Single
@@ -358,6 +362,7 @@ pub fn build_runtime_config_with(
         web_search: WebSearchConfig::resolve(merged),
         diagnostics: DiagnosticsConfig::resolve(merged, &env),
         lsp: LspConfig::resolve(merged, &env),
+        voice: VoiceConfig::resolve(merged, &env),
         paths: PathConfig::resolve(merged),
         compact: CompactConfig::resolve(merged, &env),
         agent_teams: AgentTeamsConfig::resolve(merged)?,

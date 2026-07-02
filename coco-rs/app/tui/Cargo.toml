@@ -25,6 +25,7 @@ coco-plugins.workspace = true
 coco-subagent.workspace = true
 coco-tui-markdown = { workspace = true, features = ["mermaid"] }
 coco-tui-ui.workspace = true
+coco-voice.workspace = true
 coco-utils-image.workspace = true
 coco-utils-pty.workspace = true
 coco-utils-common.workspace = true

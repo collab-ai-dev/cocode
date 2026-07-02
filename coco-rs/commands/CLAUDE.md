@@ -52,7 +52,6 @@ API beta) that coco-rs does not ship.
 
 | Command | Reason |
 |---|---|
-| `/voice` | Anthropic `voiceStreamSTT` + GrowthBook `isVoiceModeEnabled`; needs SoX + microphone probes. |
 | `/advisor` | Server-side Anthropic API beta `advisor-tool-2026-03-01`, first-party-only. |
 | `/ultraplan` | `feature('ULTRAPLAN')`; depends on Claude-Code-on-Web ("CCR") session backend. |
 | `/ultrareview` | CCR-backed multi-agent review with no local execution path. |

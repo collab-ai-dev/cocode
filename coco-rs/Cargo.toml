@@ -13,6 +13,7 @@ members = [
 
     # ─── utils/ (26) ── 24 existing + 2 new ───
     "utils/absolute-path",
+    "utils/audio-capture",
     "utils/async-utils",
     "utils/cache",
     "utils/cargo-bin",
@@ -114,9 +115,10 @@ members = [
     "hub/connector",
     "hub/server",
 
-    # ─── standalone (2) ───
+    # ─── standalone (3) ───
     "bridge",
     "retrieval",
+    "voice",
 
     # ─── ui (3) ── pure presentational primitives, depended on by app/tui ───
     "tui-ui",
@@ -244,6 +246,10 @@ coco-hub-server = { path = "hub/server" }
 # Internal - standalone
 coco-bridge = { path = "bridge" }
 coco-retrieval = { path = "retrieval" }
+coco-voice = { path = "voice" }
+
+# Internal - utils (voice audio capture)
+coco-utils-audio = { path = "utils/audio-capture" }
 
 # Internal - ui
 coco-tui-ui = { path = "tui-ui" }
@@ -252,6 +258,11 @@ coco-tui-mermaid = { path = "tui-mermaid" }
 
 # External (only those actually used by existing crates)
 anyhow = "1"
+# Voice: audio capture + WAV encoding + on-device Whisper (all optional,
+# gated behind cargo features so the default workspace build stays light).
+cpal = "0.15"
+hound = "3.5"
+whisper-rs = "0.14"
 arc-swap = "1.7"
 assert_cmd = "2"
 assert_matches = "1.5.0"

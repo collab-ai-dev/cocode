@@ -600,6 +600,9 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     if let Some(rx) = config_reload_errors_rx {
         app = app.with_config_reload_errors(rx);
     }
+    // Voice input (Feature::Voice): build the STT engine + capture + session and
+    // install it. No-op when voice is disabled; best-effort on failure.
+    app = coco_cli::voice_bootstrap::install_voice(app, &runtime.runtime_config);
 
     // Wire file_history_enabled into TUI session state so the rewind
     // modal knows whether to show code restore options.

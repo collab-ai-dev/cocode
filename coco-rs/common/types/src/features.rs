@@ -133,6 +133,12 @@ pub enum Feature {
     Worktree,
     /// LSP-backed code intelligence tool.
     Lsp,
+    /// Voice input (speech-to-text dictation): mic capture + STT, surfaced
+    /// through `/voice` / `/voice-lang` and the `voice:pushToTalk` keybinding.
+    /// Coarse subsystem gate — mic access + outbound audio to a third party is
+    /// privacy/cost-sensitive, so default off. Backend/language/model live in
+    /// `VoiceConfig`, never as extra `Feature` variants.
+    Voice,
     /// Autonomous/tick-driven assistant loop helpers.
     Proactive,
 
@@ -409,6 +415,16 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Lsp,
         key: "lsp",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Voice,
+        key: "voice",
+        // Mic capture + outbound audio to a third-party STT API is
+        // privacy/cost-sensitive — keep UnderDevelopment + default-off (same
+        // posture as Sandbox / Retrieval / AutoMemory / Lsp). Toggled by
+        // `/voice` (persists `features.voice`) or `COCO_FEATURE_VOICE=1`.
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

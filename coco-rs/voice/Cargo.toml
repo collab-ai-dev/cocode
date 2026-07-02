@@ -1,0 +1,36 @@
+[package]
+edition = "2021"
+license.workspace = true
+name = "coco-voice"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-config = { workspace = true }
+coco-inference = { workspace = true }
+coco-utils-audio = { workspace = true }
+
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+whisper-rs = { workspace = true, optional = true }
+hound = { workspace = true, optional = true }
+
+[features]
+default = []
+# Enable the real cpal microphone backend in the capture dependency. Turned on
+# by the shipped coco binary via app/cli's `voice` feature.
+capture = ["coco-utils-audio/cpal"]
+# Phase 2: on-device Whisper transcription. Pulls whisper.cpp (C++ toolchain)
+# and hound (to decode captured WAV bytes back to f32 for the model).
+local-voice = ["dep:whisper-rs", "dep:hound"]
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

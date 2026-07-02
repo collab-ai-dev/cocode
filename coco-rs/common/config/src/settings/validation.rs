@@ -657,6 +657,7 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "web_search",
     "diagnostics",
     "lsp",
+    "voice",
     "paths",
     "agent_teams",
     "compact",
