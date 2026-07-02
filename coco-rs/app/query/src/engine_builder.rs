@@ -124,6 +124,7 @@ impl QueryEngine {
             session_memory_text: Arc::new(tokio::sync::RwLock::new(String::new())),
             session_memory_service: None,
             memory_runtime: None,
+            skill_review_runtime: None,
             reactive_state: Arc::new(tokio::sync::Mutex::new(
                 coco_compact::ReactiveCompactState::new(),
             )),
@@ -586,6 +587,17 @@ impl QueryEngine {
     /// services. Returns `None` when `Feature::AutoMemory` is off.
     pub fn memory_runtime(&self) -> Option<&Arc<coco_memory::MemoryRuntime>> {
         self.memory_runtime.as_ref()
+    }
+
+    /// Install the skill-learning review runtime. Set by the CLI bootstrap
+    /// only when `Feature::SkillLearning` is enabled; without it the turn-end
+    /// skill-review trigger stays inert.
+    pub fn with_skill_review_runtime(
+        mut self,
+        runtime: Arc<coco_skill_learn::SkillReviewRuntime>,
+    ) -> Self {
+        self.skill_review_runtime = Some(runtime);
+        self
     }
 
     /// Install the running-task manager so post-compact attachments can

@@ -33,6 +33,7 @@ coco-system-reminder.workspace = true
 coco-lsp.workspace = true
 coco-mcp.workspace = true
 coco-memory.workspace = true
+coco-skill-learn.workspace = true
 coco-session.workspace = true
 coco-tasks.workspace = true
 coco-git.workspace = true

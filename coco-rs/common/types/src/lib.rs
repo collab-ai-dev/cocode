@@ -339,6 +339,7 @@ pub use command::CommandType;
 pub use command::CommandTypeTag;
 pub use command::LocalCommandData;
 pub use command::PromptCommandData;
+pub use command::SkillProvenanceBadge;
 pub use command::SlashCommandInfo;
 
 // Hook types

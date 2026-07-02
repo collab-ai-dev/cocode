@@ -11,9 +11,10 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use super::symlink::realpath_deepest_existing;
+use coco_utils_absolute_path::lexical_normalize;
+use coco_utils_absolute_path::realpath_deepest_existing;
+
 use super::validate::PathValidationError;
-use super::validate::lexical_normalize;
 use super::validate::validate_memory_path;
 use super::validate::validate_resolved_path;
 

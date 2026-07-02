@@ -1,5 +1,6 @@
 //! Skill system — markdown workflow loading, discovery, execution.
 
+pub mod agent_scope;
 pub mod bundled;
 pub mod error;
 pub mod extraction;
@@ -8,6 +9,7 @@ pub mod overrides;
 pub mod prompt_render;
 pub mod reminder_source;
 pub mod shell_exec;
+pub mod telemetry;
 pub mod usage;
 pub mod watcher;
 
@@ -153,6 +155,11 @@ pub struct SkillDefinition {
     /// `None` until the skill is first invoked AND has `files`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_root: Option<PathBuf>,
+    /// Authorship provenance. Defaults to user-owned (fail-safe); only
+    /// `origin == Agent` skills are managed by the Curator. Frontmatter keys:
+    /// `origin` / `created-by` / `created-at`.
+    #[serde(default)]
+    pub provenance: SkillProvenance,
 }
 
 impl SkillDefinition {
@@ -170,6 +177,35 @@ impl SkillDefinition {
     /// falls back to the canonical [`Self::name`] used for lookup.
     pub fn user_facing_name(&self) -> &str {
         self.display_name.as_deref().unwrap_or(&self.name)
+    }
+
+    /// Whether this skill was created by the autonomous skill-learning loop
+    /// (and is therefore Curator-managed). User-owned skills return `false`.
+    pub fn is_agent_created(&self) -> bool {
+        self.provenance.origin == SkillOrigin::Agent
+    }
+
+    /// Curator quarantine state. For agent-created skills,
+    /// `disable_model_invocation` is owned by the Curator's promotion state
+    /// (`agent_scope::enforce_agent_quarantine`), not by the file: set ⇒ still
+    /// quarantined, cleared ⇒ promoted. Always `false` for human skills,
+    /// where DMI is author intent.
+    pub fn is_quarantined(&self) -> bool {
+        self.is_agent_created() && self.disable_model_invocation
+    }
+
+    /// Provenance badge for command/typeahead listings: `Learning` while
+    /// quarantined, `Learned` once the Curator promotes. `None` for
+    /// human-authored skills.
+    pub fn provenance_badge(&self) -> Option<coco_types::SkillProvenanceBadge> {
+        if !self.is_agent_created() {
+            return None;
+        }
+        Some(if self.disable_model_invocation {
+            coco_types::SkillProvenanceBadge::Learning
+        } else {
+            coco_types::SkillProvenanceBadge::Learned
+        })
     }
 }
 
@@ -211,6 +247,90 @@ pub enum SkillSource {
     Mcp {
         server_name: String,
     },
+}
+
+/// Authorship provenance of a skill — a distinct axis from [`SkillSource`]
+/// (which records *scope*, not *who wrote it*).
+///
+/// **Fail-safe:** [`SkillOrigin::User`] is the `Default`, so any skill of
+/// unknown provenance (hand-written files, older skills, deserialization
+/// defaults) is treated as user-owned and is **never** modified by the
+/// autonomous skill-learning loop or the Curator. Only [`SkillOrigin::Agent`]
+/// skills are curator-managed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillOrigin {
+    /// Authored by a human, or of unknown provenance. Immune to auto-curation.
+    #[default]
+    User,
+    /// Created by the autonomous skill-learning loop. Curator-managed.
+    Agent,
+}
+
+impl SkillOrigin {
+    /// Canonical frontmatter value (`origin: <as_str>`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Agent => "agent",
+        }
+    }
+}
+
+/// The agent author of an [`SkillOrigin::Agent`] skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkillAuthor {
+    /// The turn-end review fork.
+    Review,
+    /// The periodic curator (e.g. umbrella consolidation).
+    Curator,
+}
+
+impl SkillAuthor {
+    /// Canonical frontmatter value (`created-by: <as_str>`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Review => "review",
+            Self::Curator => "curator",
+        }
+    }
+}
+
+/// SKILL.md frontmatter keys shared by the read side ([`parse_skill_markdown`])
+/// and the skill-learning write side (provenance stamping, Curator retire) —
+/// one definition so writer and reader cannot drift. The parser additionally
+/// accepts snake_case aliases for the kebab-case keys; the write side emits
+/// only these canonical spellings.
+pub mod frontmatter_keys {
+    /// Retire flag — flipped in place by the Curator.
+    pub const DISABLED: &str = "disabled";
+    /// Authorship provenance (values: [`crate::SkillOrigin::as_str`]).
+    pub const ORIGIN: &str = "origin";
+    /// Provenance author (values: [`crate::SkillAuthor::as_str`]).
+    pub const CREATED_BY: &str = "created-by";
+    /// RFC3339 creation timestamp.
+    pub const CREATED_AT: &str = "created-at";
+}
+
+/// Authorship provenance carried on a [`SkillDefinition`].
+///
+/// Grouped so the three related fields (origin / author / created-at) add a
+/// single field to the definition and default coherently. The security
+/// boundary for agent writes is spatial (the dedicated agent skills
+/// directory), so this metadata is for auditing and Curator gating only.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SkillProvenance {
+    /// Who owns this skill. Defaults to [`SkillOrigin::User`] (fail-safe).
+    #[serde(default)]
+    pub origin: SkillOrigin,
+    /// Which agent author created it (only meaningful when `origin == Agent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<SkillAuthor>,
+    /// When it was first created by the agent (RFC3339). Only meaningful when
+    /// `origin == Agent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Skill manager — discovery, loading, deduplication.
@@ -282,11 +402,36 @@ impl SkillCatalog {
         !skill.paths.is_empty() && !self.activated_conditional_names.contains(&skill.name)
     }
     /// Insert `skill` into the right bucket per [`Self::is_conditional`].
-    /// First loaded skill wins by canonical file identity and skill name.
+    /// First loaded skill wins by canonical file identity and skill name —
+    /// with ONE exception: a human-authored skill ALWAYS evicts an
+    /// agent-authored ([`SkillOrigin::Agent`]) skill of the same name,
+    /// regardless of load order. An agent-invented skill must never shadow a
+    /// user / project / plugin / legacy command (the review fork is prompted to
+    /// avoid collisions; this enforces it structurally, so registration order
+    /// between the agent scope and later plugin loads can't matter).
     fn insert_disk(&mut self, skill: SkillDefinition) {
         let name = skill.name.clone();
-        if self.disk.contains_key(&name) || self.disk_conditional.contains_key(&name) {
-            return;
+        let existing_is_agent = self
+            .disk
+            .get(&name)
+            .or_else(|| self.disk_conditional.get(&name))
+            .map(|s| s.is_agent_created());
+        match existing_is_agent {
+            // A human skill takes the name from a resident agent skill.
+            Some(true) if !skill.is_agent_created() => {
+                if let Some(prev) = self
+                    .disk
+                    .remove(&name)
+                    .or_else(|| self.disk_conditional.remove(&name))
+                    && let Some(id) = canonical_skill_identity(&prev)
+                {
+                    self.disk_file_identities.remove(&id);
+                }
+            }
+            // Name already taken and the incoming skill has no priority: keep
+            // the resident one (plain first-wins, incl. agent-vs-agent).
+            Some(_) => return,
+            None => {}
         }
         if let Some(identity) = canonical_skill_identity(&skill)
             && !self.disk_file_identities.insert(identity)
@@ -834,7 +979,11 @@ pub fn discover_skills_with_format(
 }
 
 /// Find a SKILL.md file in a directory (case-insensitive).
-fn find_skill_md(dir: &Path) -> Option<PathBuf> {
+///
+/// Public because the skill-learning Curator scans agent skill dirs with the
+/// same lookup — keying curation on an exact-case `SKILL.md` would let a
+/// lowercase `skill.md` load (this fallback) yet never be curated.
+pub fn find_skill_md(dir: &Path) -> Option<PathBuf> {
     let skill_md = dir.join("SKILL.md");
     if skill_md.is_file() {
         return Some(skill_md);
@@ -1104,7 +1253,7 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
     };
     let agent = lookup_str(&["agent"]);
     let version = lookup_scalar_string(&["version"]);
-    let disabled = lookup_bool(&["disabled"]).unwrap_or(false);
+    let disabled = lookup_bool(&[frontmatter_keys::DISABLED]).unwrap_or(false);
     let argument_hint = lookup_str(&["argument-hint", "argument_hint"]);
     // Default: user-invocable. Only an explicit false value disables it.
     let user_invocable = lookup_bool(&["user-invocable", "user_invocable"]).unwrap_or(true);
@@ -1120,6 +1269,45 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
     let prompt = frontmatter.content.trim().to_string();
     let content_length = prompt.len() as i64;
     let is_hidden = !user_invocable;
+
+    // Authorship provenance (audit metadata; the security boundary for agent
+    // writes is spatial). Fail-safe: anything but an explicit `origin: agent`
+    // resolves to user-owned.
+    let origin = match lookup(&[frontmatter_keys::ORIGIN]).and_then(|v| v.as_str()) {
+        Some(s) if s.trim().eq_ignore_ascii_case(SkillOrigin::Agent.as_str()) => SkillOrigin::Agent,
+        _ => SkillOrigin::User,
+    };
+    let created_by = lookup(&[frontmatter_keys::CREATED_BY, "created_by"])
+        .and_then(|v| v.as_str())
+        .and_then(|s| {
+            let s = s.trim();
+            [SkillAuthor::Review, SkillAuthor::Curator]
+                .into_iter()
+                .find(|author| s.eq_ignore_ascii_case(author.as_str()))
+        });
+    let created_at = lookup(&[frontmatter_keys::CREATED_AT, "created_at"])
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s.trim()).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+    let provenance = SkillProvenance {
+        origin,
+        created_by,
+        created_at,
+    };
+
+    // Executable-artifact isolation, tier 2 (defense-in-depth): a skill that
+    // SELF-DECLARES `origin: agent` loads inert — `shell` / `hooks` /
+    // `allowed-tools` dropped — wherever the file sits (e.g. an agent skill
+    // copied out of the agent directory with its stamp intact). This is
+    // content-keyed and therefore dodgeable by omitting the frontmatter key;
+    // the boundary that cannot be dodged is tier 1, the LOCATION-keyed
+    // enforcement in [`crate::agent_scope`], which force-stamps and
+    // neutralizes everything loaded from the fenced agent directory.
+    let (allowed_tools, hooks, shell) = if provenance.origin == SkillOrigin::Agent {
+        (None, None, None)
+    } else {
+        (allowed_tools, hooks, shell)
+    };
 
     Ok(SkillDefinition {
         name,
@@ -1155,6 +1343,7 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
         gated_by: None,
         files: HashMap::new(),
         skill_root: None,
+        provenance,
     })
 }
 
@@ -1217,10 +1406,15 @@ pub fn get_managed_commands_path() -> PathBuf {
 /// gated here. When `skills_locked` is set, only managed (policy) skills
 /// load — user, project, legacy, and additional dirs are all skipped (the
 /// policy locks customization surfaces to plugin-only sources).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SkillLoadGates {
     /// Load managed/policy `project config dir/skills`. Gated by `COCO_DISABLE_POLICY_SKILLS`.
     pub managed_enabled: bool,
+    /// Load the agent-created skills scope (`<config_home>/skills/.agent`,
+    /// see [`agent_scope`]). Gated on `Feature::SkillLearning` at the call
+    /// site; the loader additionally requires `user_enabled` (the scope
+    /// lives in the user config home), so this flag alone never loads it.
+    pub agent_skills_enabled: bool,
     /// Load user `config home/skills`. Requires `userSettings` enabled and not locked.
     pub user_enabled: bool,
     /// Load project `project config dir/skills` walk-up. Requires `projectSettings` enabled
@@ -1240,11 +1434,16 @@ pub struct SkillLoadGates {
 }
 
 impl SkillLoadGates {
-    /// All scopes enabled, no additional dirs, nothing locked. Used by tests
-    /// and callers that don't carry a resolved `RuntimeConfig`.
+    /// All setting-source scopes enabled, no additional dirs, nothing locked.
+    /// Used by tests and callers that don't carry a resolved `RuntimeConfig`.
+    ///
+    /// The agent-created scope stays OFF: it is gated by
+    /// `Feature::SkillLearning`, not by setting sources, so only a caller
+    /// that actually resolved the feature may enable it.
     pub fn all_enabled() -> Self {
         Self {
             managed_enabled: true,
+            agent_skills_enabled: false,
             user_enabled: true,
             project_enabled: true,
             legacy_enabled: true,
@@ -1323,6 +1522,14 @@ pub fn build_session_skill_manager(
             for project_commands in project_command_dirs_up_to_home(cwd) {
                 manager.load_legacy_command_scope(SettingScope::Project, &project_commands);
             }
+        }
+        // Agent-created skills (skill-learning loop). Registered LAST —
+        // `register` is first-wins by name, so an agent skill can never
+        // shadow a human-authored one from ANY scope (user, project,
+        // additional dirs, or legacy commands). Quarantine + inert-load
+        // enforcement is location-keyed inside the loader.
+        if gates.user_enabled && gates.agent_skills_enabled {
+            agent_scope::register_agent_skills(&manager, config_home);
         }
     }
 
@@ -1489,6 +1696,16 @@ fn skill_listing_mode(
     tiers: &coco_config::SkillOverrideTiers,
 ) -> Option<ListingMode> {
     let effective = crate::overrides::effective_skill_state(skill, tiers);
+    // Quarantined agent skills are never advertised to the model. Unlike a
+    // human-authored DMI skill (kept listed so the `/name` bypass stays
+    // discoverable), an agent skill's DMI is *Curator quarantine state*, not
+    // author intent — listing it would just make the model burn turns on
+    // SkillTool calls that fail with HiddenFromModel until the Curator
+    // promotes it. Users still reach it via `/` autocomplete (a separate
+    // surface that keys on `user_invocable`, not this listing).
+    if skill.is_quarantined() {
+        return None;
+    }
     // Filter 3 (XG$): author-DMI + non-default state → skip.
     if skill.disable_model_invocation && effective != coco_types::SkillOverrideState::On {
         return None;

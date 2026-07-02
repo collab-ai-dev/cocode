@@ -713,6 +713,18 @@ pub trait AgentHandle: Send + Sync {
 /// Shared handle type for `ToolUseContext`.
 pub type AgentHandleRef = Arc<dyn AgentHandle>;
 
+/// Shared swappable cell for a late-bound agent handle. Background runtimes
+/// (memory extract/dream/session, skill review) construct against
+/// [`NoOpAgentHandle`] and swap in the real session handle at bootstrap; the
+/// runtime owns the master cell and hands clones to every service so the
+/// swap propagates atomically.
+///
+/// `std::sync::RwLock` (not `tokio::sync::RwLock`) because reads are "clone
+/// the inner `Arc` and drop the guard immediately" — no await across the
+/// guard. `arc_swap` would be cheaper still, but DSTs (`dyn AgentHandle`)
+/// don't satisfy its `RefCnt: Sized` bound.
+pub type AgentSlot = Arc<std::sync::RwLock<AgentHandleRef>>;
+
 /// A no-op implementation that returns errors. Used in test/stub contexts.
 #[derive(Debug, Clone)]
 pub struct NoOpAgentHandle;

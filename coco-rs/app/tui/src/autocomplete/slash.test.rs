@@ -255,6 +255,34 @@ fn description_appends_bundled_suffix() {
 }
 
 #[test]
+fn agent_skill_badge_overrides_source_suffix() {
+    use coco_types::SkillProvenanceBadge;
+    // A quarantined agent skill loads from the user config home
+    // (source == User), but the badge takes precedence so the user sees it is
+    // auto-generated and unproven rather than a redundant `(user)`.
+    let learning = SlashCommandInfo {
+        badge: Some(SkillProvenanceBadge::Learning),
+        ..prompt("git-bisect", CommandSource::User)
+    };
+    let items = rank("git-bisect", &[learning]);
+    assert_eq!(
+        items[0].description.as_deref(),
+        Some("git-bisect prompt body (learning)")
+    );
+
+    // Once the Curator promotes it, the badge flips to (learned).
+    let learned = SlashCommandInfo {
+        badge: Some(SkillProvenanceBadge::Learned),
+        ..prompt("git-bisect", CommandSource::User)
+    };
+    let items = rank("git-bisect", &[learned]);
+    assert_eq!(
+        items[0].description.as_deref(),
+        Some("git-bisect prompt body (learned)")
+    );
+}
+
+#[test]
 fn description_prefixes_plugin_name_when_known() {
     // The plugin name is shown in parentheses BEFORE the description when known.
     let cmd = SlashCommandInfo {

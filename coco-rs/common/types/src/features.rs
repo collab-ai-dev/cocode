@@ -120,6 +120,11 @@ pub enum Feature {
     // /experimental menu (UnderDevelopment, default=false).
     /// Auto-memory subsystem (extraction, team sync, relevant injection).
     AutoMemory,
+    /// Autonomous skill-learning loop: turn-end review fork that distills
+    /// sessions into agent-owned skills, plus the periodic Curator. The one
+    /// gate for the whole capability (default off — auto-writes executable
+    /// skill artifacts, so opt-in).
+    SkillLearning,
     /// Retrieval subsystem (BM25 + vector + AST + RepoMap + reranker).
     Retrieval,
     /// Persistent agent teams and teammate orchestration.
@@ -370,6 +375,12 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::AutoMemory,
         key: "auto_memory",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SkillLearning,
+        key: "skill_learning",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

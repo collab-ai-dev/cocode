@@ -189,6 +189,7 @@ fn build_description(cmd: &SlashCommandInfo) -> Option<String> {
 
 /// Wraps the bare description with a provenance suffix or plugin prefix:
 ///
+/// - agent skill        → `"text (learning)"` / `"text (learned)"`
 /// - `plugin` with name  → `"(plugin-name) text"`
 /// - `plugin` no name    → `"text (plugin)"`
 /// - `bundled`           → `"text (bundled)"`
@@ -197,11 +198,18 @@ fn build_description(cmd: &SlashCommandInfo) -> Option<String> {
 /// - `policy`            → `"text (policy)"`
 /// - `builtin` / `mcp` / unknown → unchanged
 ///
-/// Builtin and MCP intentionally have no suffix — those surfaces are the
-/// user's expected default, so the suffix would be noise.
+/// The skill-learning badge takes precedence over the source suffix: an agent
+/// skill's scope is always the user config home, so a `(user)` tag would be
+/// both redundant and less informative than "this was auto-generated". Builtin
+/// and MCP intentionally have no suffix — those surfaces are the user's
+/// expected default, so the suffix would be noise.
 fn source_annotated_description(cmd: &SlashCommandInfo) -> Option<String> {
     let base = cmd.description.as_deref().unwrap_or("");
     let suffix_only_view = base.is_empty();
+
+    if let Some(badge) = cmd.badge {
+        return Some(format_with_suffix(base, badge.suffix_tag()));
+    }
 
     let composed = match &cmd.source {
         Some(CommandSource::Plugin { name }) if !name.is_empty() => {

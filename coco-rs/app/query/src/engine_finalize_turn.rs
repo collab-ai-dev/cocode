@@ -671,6 +671,19 @@ impl QueryEngine {
                 );
             }
         }
+
+        // Skill-learning review — the capability-layer analogue of the memory
+        // fan-out above. Gated on `is_terminal()` so the throttle counts
+        // user-prompt cycles, not LLM tool-rounds: this tail runs after every
+        // tool batch, and an ungated call here would advance the counter each
+        // round (firing ~throttle/rounds-per-prompt times too often) and could
+        // snapshot a mid-turn history. The no-tool-calls terminal tail covers
+        // text-only endings; the two tails are mutually exclusive per round,
+        // so each delivered cycle ticks the throttle exactly once.
+        if continuation.is_terminal() {
+            self.run_skill_review_finalize(history);
+        }
+
         // Collapse-aware guard: when staged_compact is active it owns
         // the threshold ladder, so proactive autocompact suppresses.
         let collapse_active = self.is_collapse_active();
@@ -1371,6 +1384,43 @@ impl QueryEngine {
             })
             .cloned()
             .collect()
+    }
+
+    /// Fire the turn-end skill-learning review trigger. Inert unless the
+    /// runtime was bootstrapped (`Feature::SkillLearning`) and this is a
+    /// non-bare, non-subagent turn. The throttle + single-flight + background
+    /// spawn all live in `SkillReviewRuntime`; the engine only supplies the
+    /// gating context and a lazy history snapshot (built only when firing).
+    ///
+    /// Called from BOTH turn-end tails — `finalize_turn_post_tools` (gated on
+    /// a terminal continuation) and `handle_no_tool_calls_terminal` — which
+    /// are mutually exclusive per round, so the throttle ticks once per
+    /// delivered user-prompt cycle.
+    pub(crate) fn run_skill_review_finalize(&self, history: &MessageHistory) {
+        let Some(runtime) = self.skill_review_runtime.as_ref() else {
+            return;
+        };
+        if coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode) {
+            return;
+        }
+        // Deliberately re-checked even though the runtime only exists when
+        // the feature was on at bootstrap (unlike the memory analogue, which
+        // gates on runtime presence alone): engines are rebuilt per turn, so
+        // this honors a mid-session settings hot-reload that disables
+        // skill-learning.
+        if !self
+            .config
+            .features
+            .enabled(coco_types::Feature::SkillLearning)
+        {
+            return;
+        }
+        let is_subagent = self.config.agent_id.is_some();
+        // A cancelled cycle is an undelivered turn — don't count or review it.
+        let turn_delivered = !self.cancel.is_cancelled();
+        let _ = runtime.maybe_review(turn_delivered, is_subagent, &self.config.session_id, || {
+            history.to_vec()
+        });
     }
 
     /// Build the `FinalizeTurnContext` from engine-side state and

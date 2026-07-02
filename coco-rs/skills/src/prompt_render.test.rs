@@ -183,6 +183,7 @@ async fn render_text_with_args() {
         gated_by: None,
         files: std::collections::HashMap::new(),
         skill_root: None,
+        provenance: crate::SkillProvenance::default(),
     };
     let parts = render_skill_prompt(
         &skill,

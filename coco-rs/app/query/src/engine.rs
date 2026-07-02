@@ -308,6 +308,10 @@ pub struct QueryEngine {
     /// the CLI bootstrap built the runtime. Turn-end hooks fan out
     /// through this one runtime.
     pub(crate) memory_runtime: Option<Arc<coco_memory::MemoryRuntime>>,
+    /// Autonomous skill-learning review runtime. `None` (inert) unless
+    /// `Feature::SkillLearning` is enabled and the CLI bootstrap built it.
+    /// Fired from the turn-end tails, symmetric to `memory_runtime`.
+    pub(crate) skill_review_runtime: Option<Arc<coco_skill_learn::SkillReviewRuntime>>,
     /// Reactive (PTL) compaction circuit breaker. Tracks consecutive
     /// failures so we stop hammering the same recovery path after
     /// `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES`.

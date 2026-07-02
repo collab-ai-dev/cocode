@@ -95,6 +95,8 @@ members = [
     "hooks",
     "tasks",
     "memory",
+    "background-review",
+    "skill-learn",
     "plugins",
     "keybindings",
     "coordinator",
@@ -220,6 +222,8 @@ coco-skills = { path = "skills" }
 coco-hooks = { path = "hooks" }
 coco-tasks = { path = "tasks" }
 coco-memory = { path = "memory" }
+coco-background-review = { path = "background-review" }
+coco-skill-learn = { path = "skill-learn" }
 coco-plugins = { path = "plugins" }
 coco-keybindings = { path = "keybindings" }
 coco-coordinator = { path = "coordinator" }

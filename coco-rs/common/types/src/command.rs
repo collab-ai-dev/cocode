@@ -74,6 +74,32 @@ impl CommandSource {
     }
 }
 
+/// Provenance badge for a skill produced by the skill-learning loop, rendered
+/// as a `/`-popup suffix so a user can tell an auto-generated skill apart from
+/// a hand-written one. Orthogonal to [`CommandSource`] (which records the
+/// *scope* the file lives in — an agent skill's scope is still the user config
+/// home): this axis records *who authored it and whether it is proven*.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillProvenanceBadge {
+    /// Agent-created and still quarantined — the Curator has not promoted it,
+    /// so the model cannot auto-invoke it yet (reachable only via user `/name`).
+    Learning,
+    /// Agent-created and promoted by the Curator to model-invocable.
+    Learned,
+}
+
+impl SkillProvenanceBadge {
+    /// The `/`-popup suffix tag (no parentheses).
+    pub fn suffix_tag(self) -> &'static str {
+        match self {
+            Self::Learning => "learning",
+            Self::Learned => "learned",
+        }
+    }
+}
+
 /// Common fields for all commands.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandBase {
@@ -97,6 +123,10 @@ pub struct CommandBase {
     pub is_sensitive: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loaded_from: Option<CommandSource>,
+    /// Skill-learning provenance badge (agent-created skills only; `None` for
+    /// everything else). Drives the `(learning)` / `(learned)` `/`-popup suffix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_badge: Option<SkillProvenanceBadge>,
     /// Safety classification for remote/bridge mode filtering.
     #[serde(default)]
     pub safety: CommandSafety,
@@ -274,6 +304,13 @@ pub struct SlashCommandInfo {
     /// rides on the `Plugin { name }` / `Mcp { server_name }` variants.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<CommandSource>,
+    /// Skill-learning provenance badge (agent-created skills only). Rendered as
+    /// a `(learning)` / `(learned)` suffix in the `/` popup, taking precedence
+    /// over the [`Self::source`] suffix (an agent skill's scope is always the
+    /// user config home, so `(user)` would be redundant). Mirrors
+    /// [`CommandBase::skill_badge`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<SkillProvenanceBadge>,
     /// Execution kind. The empty-query ranker treats only
     /// [`CommandTypeTag::Prompt`] entries as skills eligible for the
     /// "recently used" section — builtin local commands always sit in

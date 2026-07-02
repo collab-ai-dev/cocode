@@ -59,6 +59,7 @@ fn sample_skill(
         gated_by: None,
         files: std::collections::HashMap::new(),
         skill_root: None,
+        provenance: coco_skills::SkillProvenance::default(),
     }
 }
 

@@ -38,6 +38,7 @@ pub mod validation;
 
 pub use agent_handle::AgentHandle;
 pub use agent_handle::AgentHandleRef;
+pub use agent_handle::AgentSlot;
 pub use agent_handle::AgentSpawnConstraints;
 pub use agent_handle::AgentSpawnRequest;
 pub use agent_handle::AgentSpawnResponse;

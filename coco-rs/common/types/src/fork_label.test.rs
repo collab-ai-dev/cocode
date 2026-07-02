@@ -13,6 +13,7 @@ fn test_as_str_round_trip_with_serde() {
         (ForkLabel::SessionMemoryManual, "session_memory_manual"),
         (ForkLabel::AgentSummary, "agent_summary"),
         (ForkLabel::AutoDream, "auto_dream"),
+        (ForkLabel::SkillReview, "skill_review"),
         (ForkLabel::Speculation, "speculation"),
         (ForkLabel::HookAgent, "hook_agent"),
     ];
@@ -37,6 +38,7 @@ fn test_wire_strings_are_unique() {
         ForkLabel::SessionMemoryManual,
         ForkLabel::AgentSummary,
         ForkLabel::AutoDream,
+        ForkLabel::SkillReview,
         ForkLabel::Speculation,
         ForkLabel::HookAgent,
     ];

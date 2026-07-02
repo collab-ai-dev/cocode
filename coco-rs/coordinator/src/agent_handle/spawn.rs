@@ -831,6 +831,7 @@ impl SwarmAgentHandle {
                 | Some(coco_types::ForkLabel::Compact)
                 | Some(coco_types::ForkLabel::AgentSummary)
                 | Some(coco_types::ForkLabel::Speculation)
+                | Some(coco_types::ForkLabel::SkillReview)
         );
         tracing::info!(
             agent_id = %agent_id,

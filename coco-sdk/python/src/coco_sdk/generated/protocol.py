@@ -542,6 +542,11 @@ class SkillOverridesSaveErrorKind(str, Enum):
     no_publisher = "no_publisher"
 
 
+class SkillProvenanceBadge(str, Enum):
+    learning = "learning"
+    learned = "learned"
+
+
 class SkillsDialogSource(str, Enum):
     built_in = "built_in"
     project = "project"
@@ -5431,6 +5436,7 @@ class SlashCommandInfo(BaseModel):
     aliases: list[str] | None = None
     argument_hint: str | None = None
     argument_kind: CommandArgumentKind = "none"
+    badge: SkillProvenanceBadge | None = None
     description: str | None = None
     kind: CommandTypeTag = "local"
     source: CommandSource | None = None

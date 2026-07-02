@@ -148,19 +148,3 @@ fn load_all_returns_empty_on_corrupt_file() {
     let map = load_all(tmp.path());
     assert!(map.is_empty(), "corrupt file must not break the popup");
 }
-
-#[test]
-fn parses_camel_case_aliases() {
-    // A skill_usage.json with camelCase keys is read via serde alias
-    // so migrating users don't lose their history.
-    let tmp = TempDir::new().unwrap();
-    std::fs::write(
-        tmp.path().join("skill_usage.json"),
-        r#"{ "skills": { "legacy-skill": { "usageCount": 9, "lastUsedAt": 12345 } } }"#,
-    )
-    .unwrap();
-    let map = load_all(tmp.path());
-    let stats = map.get("legacy-skill").expect("camelCase entry parsed");
-    assert_eq!(stats.usage_count, 9);
-    assert_eq!(stats.last_used_at_ms, 12345);
-}

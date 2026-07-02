@@ -299,6 +299,67 @@ fn expand_imports_gates_external_imports() {
     assert!(allowed[1].1.contains("SECRET"));
 }
 
+#[cfg(unix)]
+#[test]
+fn expand_imports_gates_symlink_escape_but_keeps_local_imports() {
+    // A symlink INSIDE the project pointing OUTSIDE must not smuggle
+    // external content past the cwd gate — containment resolves symlinks,
+    // so the target location is what counts, not the link's location.
+    let cwd = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let secret = outside.path().join("secret.md");
+    fs::write(&secret, "SECRET\n").unwrap();
+    std::os::unix::fs::symlink(&secret, cwd.path().join("innocent.md")).unwrap();
+    // A genuinely local import must still load under the same gate.
+    fs::write(cwd.path().join("local.md"), "local content\n").unwrap();
+
+    let parent = cwd.path().join("CLAUDE.md");
+    let body = "@./innocent.md\n@./local.md\n";
+    fs::write(&parent, body).unwrap();
+
+    let mut processed = HashSet::new();
+    let entries = expand_imports(&parent, body, &mut processed, 0, cwd.path(), false);
+    assert_eq!(
+        entries.len(),
+        2,
+        "symlink escape gated, local import loaded"
+    );
+    assert!(entries[1].1.contains("local content"));
+    assert!(entries.iter().all(|(_, c)| !c.contains("SECRET")));
+}
+
+#[cfg(unix)]
+#[test]
+fn expand_imports_gates_dotdot_through_symlink_escape() {
+    // `@./link/../secret.md` where `link` -> an outside dir must NOT smuggle
+    // external content. Containment resolves the symlink with kernel
+    // semantics, so `link/..` escapes cwd and is gated — even though the
+    // lexical form `cwd/secret.md` looks contained. Regression for the
+    // symlink+`..` containment bypass (lexical `..` collapse erased the link).
+    let cwd = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::create_dir_all(outside.path().join("sub")).unwrap();
+    fs::write(outside.path().join("secret.md"), "SECRET\n").unwrap();
+    // cwd/link -> <outside>/sub, so `link/../secret.md` -> <outside>/secret.md.
+    std::os::unix::fs::symlink(outside.path().join("sub"), cwd.path().join("link")).unwrap();
+    // A genuinely local import must still load under the same gate.
+    fs::write(cwd.path().join("local.md"), "local content\n").unwrap();
+
+    let parent = cwd.path().join("CLAUDE.md");
+    let body = "@./link/../secret.md\n@./local.md\n";
+    fs::write(&parent, body).unwrap();
+
+    let mut processed = HashSet::new();
+    let entries = expand_imports(&parent, body, &mut processed, 0, cwd.path(), false);
+    assert_eq!(
+        entries.len(),
+        2,
+        "symlink `..` escape gated, local import loaded"
+    );
+    assert!(entries[1].1.contains("local content"));
+    assert!(entries.iter().all(|(_, c)| !c.contains("SECRET")));
+}
+
 #[test]
 fn expand_imports_skips_missing_files_silently() {
     let dir = tempdir().unwrap();

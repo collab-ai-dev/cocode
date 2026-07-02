@@ -9,10 +9,12 @@
 //! `<config_home>/skill_usage.json`, structure:
 //!
 //! ```json
-//! { "skills": { "name": { "usageCount": 5, "lastUsedAtMs": 1748313600000 } } }
+//! { "skills": { "name": { "usage_count": 5, "last_used_at_ms": 1748313600000 } } }
 //! ```
 //!
-//! Stored as i64 millis (epoch ms).
+//! Stored as i64 millis (epoch ms). Keys are snake_case only — a legacy
+//! camelCase file deserializes to zeros via `#[serde(default)]` (the
+//! autocomplete ranking self-heals on next use).
 //!
 //! ## Writes are atomic
 //!
@@ -40,13 +42,10 @@
 //! consistent even when they race.
 
 use std::collections::HashMap;
-use std::io::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -64,14 +63,15 @@ const MIN_RECENCY_FACTOR: f64 = 0.1;
 
 /// Per-skill counters persisted to disk.
 ///
-/// Wire-compatible with the `globalConfig.skillUsage[name]` shape —
-/// uses `usageCount` / `lastUsedAt`, accepted via aliases for
-/// forward-compat with upstream-generated files.
+/// Feeds only the `/` autocomplete recency ranker (`score_for`). Lifecycle
+/// counts (success/failure/view/patch) live in the separate
+/// [`crate::telemetry`] store so this file — and its `usage_count` — never
+/// mixes success signal with failures.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillUsageStats {
-    #[serde(default, alias = "usageCount")]
+    #[serde(default)]
     pub usage_count: i64,
-    #[serde(default, alias = "lastUsedAt")]
+    #[serde(default)]
     pub last_used_at_ms: i64,
 }
 
@@ -93,18 +93,6 @@ fn last_write_map() -> &'static Mutex<HashMap<String, i64>> {
     LAST_WRITE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Best-effort wall-clock millis. Returns `None` only if the system
-/// clock is set before 1970 — every healthy machine returns `Some`.
-/// Callers that get `None` MUST refuse to record: storing a `0`
-/// sentinel would poison every future score read (50+ years of decay
-/// flooring everything at 0.1 of usage count).
-fn now_ms() -> Option<i64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_millis() as i64)
-}
-
 /// Record a skill invocation. Best-effort: errors are logged via
 /// `tracing` but never surface to the caller; the implementation
 /// discards failures.
@@ -117,7 +105,7 @@ pub fn record(config_home: &Path, skill_name: &str) {
         debug_assert!(false, "skill_usage::record called with empty name");
         return;
     }
-    let Some(now) = now_ms() else {
+    let Some(now) = coco_utils_common::now_epoch_ms() else {
         tracing::warn!(
             skill = %skill_name,
             "skill_usage: system clock pre-1970, skipping record"
@@ -147,7 +135,12 @@ pub fn record(config_home: &Path, skill_name: &str) {
     entry.usage_count = entry.usage_count.saturating_add(1);
     entry.last_used_at_ms = now;
 
-    if let Err(e) = write_atomic(&path, &file) {
+    // Atomic write — a crash mid-write leaves the previous file intact, so
+    // single-skill data loss is bounded to the in-flight increment.
+    let write_result = serde_json::to_string_pretty(&file)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        .and_then(|json| coco_utils_common::write_atomic(&path, json));
+    if let Err(e) = write_result {
         tracing::debug!(?path, error = %e, "skill_usage: write failed; debounce window unchanged");
         return;
     }
@@ -191,7 +184,7 @@ pub fn load_all(config_home: &Path) -> HashMap<String, SkillUsageStats> {
 /// Returns 0 for fresh skills (count = 0) so callers can filter them
 /// out of the recently-used section.
 pub fn score_for(stats: &SkillUsageStats) -> f64 {
-    let Some(now) = now_ms() else {
+    let Some(now) = coco_utils_common::now_epoch_ms() else {
         // Clock failure: best we can do is report frequency without
         // decay. Slightly inflates old entries but never returns NaN.
         return stats.usage_count as f64 * MIN_RECENCY_FACTOR;
@@ -221,23 +214,6 @@ fn lock_debounce_map() -> std::sync::MutexGuard<'static, HashMap<String, i64>> {
             poisoned.into_inner()
         }
     }
-}
-
-/// Write `file` to `path` atomically — never leaves a truncated or
-/// partially-serialized JSON on disk. Uses [`tempfile::NamedTempFile`]
-/// in the target directory (cross-filesystem rename is a no-go) and
-/// `persist` for the atomic swap.
-fn write_atomic(path: &Path, file: &UsageFile) -> std::io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    if !parent.as_os_str().is_empty() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(file)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-    tmp.write_all(json.as_bytes())?;
-    tmp.persist(path).map_err(|e| e.error)?;
-    Ok(())
 }
 
 #[cfg(test)]

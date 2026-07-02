@@ -1,7 +1,36 @@
 //! Tests for frontmatter parser.
 
 use crate::FrontmatterValue;
+use crate::emit_frontmatter;
 use crate::parse;
+
+#[test]
+fn emit_then_parse_round_trips_scalar_fields() {
+    let mut fields = serde_json::Map::new();
+    fields.insert("origin".into(), "agent".into());
+    fields.insert("created-by".into(), "skill-review".into());
+    fields.insert("disabled".into(), true.into());
+    fields.insert("count".into(), 3.into());
+    let md = emit_frontmatter(&fields, "# Body\n\ntext");
+    let fm = parse(&md);
+    assert!(fm.parse_error.is_none());
+    assert_eq!(fm.data.get("origin").unwrap().as_str(), Some("agent"));
+    assert_eq!(
+        fm.data.get("created-by").unwrap().as_str(),
+        Some("skill-review")
+    );
+    assert_eq!(fm.data.get("disabled").unwrap().as_bool(), Some(true));
+    assert_eq!(fm.data.get("count").unwrap().as_i64(), Some(3));
+    assert_eq!(fm.content.trim(), "# Body\n\ntext");
+}
+
+#[test]
+fn emit_empty_object_yields_body_unchanged() {
+    assert_eq!(
+        emit_frontmatter(&serde_json::Map::new(), "# Body"),
+        "# Body"
+    );
+}
 
 #[test]
 fn test_basic_frontmatter() {

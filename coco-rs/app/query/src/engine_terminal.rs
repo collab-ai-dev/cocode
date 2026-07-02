@@ -273,6 +273,21 @@ impl QueryEngine {
                 &response_text,
             )
             .await;
+
+        // Text-only turn (no tool calls): fire the skill-learning review here
+        // too, so this tail is covered symmetrically with the tool path. Inert
+        // unless `Feature::SkillLearning` is on and the runtime was built.
+        // Gated AFTER the stop hooks and skipped on `BlockedContinueLoop`: a
+        // blocking Stop hook keeps the SAME user cycle running, so firing here
+        // would tick the throttle twice for one delivered cycle and could
+        // snapshot a history the hook is about to extend.
+        if !matches!(
+            stop_decision,
+            crate::engine_stop_hooks::StopHookDecision::BlockedContinueLoop
+        ) {
+            self.run_skill_review_finalize(history);
+        }
+
         match stop_decision {
             crate::engine_stop_hooks::StopHookDecision::Prevented => {
                 self.emit_successful_turn_completed(

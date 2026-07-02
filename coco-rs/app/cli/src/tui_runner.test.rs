@@ -590,6 +590,7 @@ async fn inactive_slash_command_emits_session_hint_without_running_handler() {
             user_invocable: true,
             is_sensitive: false,
             loaded_from: Some(CommandSource::Builtin),
+            skill_badge: None,
             safety: CommandSafety::AlwaysSafe,
             supports_non_interactive: false,
         },

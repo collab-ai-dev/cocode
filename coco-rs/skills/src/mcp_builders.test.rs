@@ -184,6 +184,7 @@ fn on_disk_skill_wins_over_mcp_on_name_collision() {
         gated_by: None,
         files: std::collections::HashMap::new(),
         skill_root: None,
+        provenance: crate::SkillProvenance::default(),
     };
     manager.register(on_disk);
 

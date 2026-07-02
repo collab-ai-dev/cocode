@@ -81,6 +81,7 @@ fn bundled(
         gated_by: None,
         files: HashMap::new(),
         skill_root: None,
+        provenance: crate::SkillProvenance::default(),
     }
 }
 

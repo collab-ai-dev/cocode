@@ -545,6 +545,11 @@ pub struct SessionRuntime {
     /// off; otherwise threaded into every engine via
     /// [`coco_query::QueryEngine::with_memory_runtime`].
     memory_runtime: Option<Arc<coco_memory::MemoryRuntime>>,
+    /// Skill-learning review runtime. `Some` when `Feature::SkillLearning` is
+    /// enabled; threaded into every engine via
+    /// [`coco_query::QueryEngine::with_skill_review_runtime`]. The real agent
+    /// handle is late-bound in `attach_agent_handle`, same as memory.
+    skill_review_runtime: Option<Arc<coco_skill_learn::SkillReviewRuntime>>,
     /// Real `AgentHandle` for `AgentTool` calls and forked subagents.
     /// Constructed once at session start, installed on every engine
     /// via `wire_engine`. `send_message`, team mgmt, async-launched
@@ -953,8 +958,9 @@ impl SessionRuntime {
             // gates pass inside `DreamService` so cost is bounded.
             let enumerator: coco_memory::SessionEnumerator = Arc::new(move || {
                 let store = coco_session::TranscriptStore::new(enumerator_project_paths.clone());
-                let last_ms =
-                    coco_memory::lock::last_consolidated_at(&enumerator_memory_dir).unwrap_or(0);
+                let last_ms = coco_memory::lock::consolidate_lock(&enumerator_memory_dir)
+                    .last_consolidated_at()
+                    .unwrap_or(0);
                 match store.list_main_sessions() {
                     Ok(metas) => metas
                         .into_iter()
@@ -987,6 +993,23 @@ impl SessionRuntime {
                 reason,
                 "auto-memory disabled"
             );
+            None
+        };
+
+        // Skill-learning review runtime — the capability-layer analogue of the
+        // memory runtime. Feature-gated (default off); the real agent handle is
+        // late-bound in `attach_agent_handle`, same pattern as memory.
+        let skill_review_runtime = if runtime_config
+            .features
+            .enabled(coco_types::Feature::SkillLearning)
+        {
+            let rt = Arc::new(coco_skill_learn::SkillReviewRuntime::new(&config_home));
+            // Pre-creates the agent skills dir (the watcher must see it
+            // before it spawns) and kicks a time-gated curator pass.
+            rt.bootstrap();
+            info!("skill-learning review runtime initialized");
+            Some(rt)
+        } else {
             None
         };
 
@@ -1446,6 +1469,7 @@ impl SessionRuntime {
             denial_tracker,
             session_memory_service,
             memory_runtime,
+            skill_review_runtime,
             swarm_agent_handle,
             hook_registry,
             hook_llm_handle,
@@ -2716,6 +2740,9 @@ impl SessionRuntime {
         if let Some(runtime) = &self.memory_runtime {
             engine = engine.with_memory_runtime(runtime.clone());
         }
+        if let Some(rt) = &self.skill_review_runtime {
+            engine = engine.with_skill_review_runtime(rt.clone());
+        }
         // Reminder sources — populated unconditionally so non-memory
         // sessions still get hook + skill reminders. Each slot is
         // optional and silently skips if its data is empty.
@@ -2870,7 +2897,10 @@ impl SessionRuntime {
     pub async fn attach_agent_handle(&self, handle: AgentHandleRef) {
         *self.agent_handle.write().await = Some(handle.clone());
         if let Some(runtime) = &self.memory_runtime {
-            runtime.install_agent(handle);
+            runtime.install_agent(handle.clone());
+        }
+        if let Some(rt) = &self.skill_review_runtime {
+            rt.install_agent(handle);
         }
     }
 
