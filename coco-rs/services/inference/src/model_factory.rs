@@ -383,6 +383,30 @@ fn build_openai(
     resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
     headers: Option<HashMap<String, String>>,
 ) -> Result<Arc<dyn LanguageModel>, InferenceError> {
+    let provider = build_openai_provider(provider_cfg, resolver, timeout_secs, headers)?;
+    // Honor `provider_cfg.wire_api`. The SDK's
+    // `Provider::language_model` defaults to Responses, but users
+    // who configure `wire_api: chat` (e.g. for Azure Chat Completions
+    // routing) expect Chat. Dispatch explicitly.
+    let model: Arc<dyn LanguageModel> = match provider_cfg.wire_api {
+        WireApi::Chat => Arc::new(provider.chat(api_model)),
+        WireApi::Responses => Arc::new(provider.responses(api_model)),
+    };
+    Ok(model)
+}
+
+/// Build a concrete `OpenAIProvider` handle for callers that need the provider
+/// itself — e.g. the post-login `/models` discovery listing — rather than a
+/// `LanguageModel` slot. Shares `build_openai`'s auth + settings construction
+/// so discovery uses the exact same base_url / OAuth-or-key headers as real
+/// calls. Provider-network glue stays here (inference already depends on
+/// `vercel-ai-openai`); the caller only invokes `provider.list_models()`.
+pub fn build_openai_provider(
+    provider_cfg: &ProviderConfig,
+    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
+    timeout_secs: i64,
+    headers: Option<HashMap<String, String>>,
+) -> Result<vercel_ai_openai::OpenAIProvider, InferenceError> {
     let opts = &provider_cfg.client_options;
     let auth = build_openai_auth(provider_cfg, resolver)?;
     // Parse the opaque `provider_options` map through the adapter-owned
@@ -408,16 +432,31 @@ fn build_openai(
         full_url: Some(opts.full_url),
         reasoning_store: knobs.reasoning_store,
     };
-    let provider = vercel_ai_openai::create_openai(settings);
-    // Honor `provider_cfg.wire_api`. The SDK's
-    // `Provider::language_model` defaults to Responses, but users
-    // who configure `wire_api: chat` (e.g. for Azure Chat Completions
-    // routing) expect Chat. Dispatch explicitly.
-    let model: Arc<dyn LanguageModel> = match provider_cfg.wire_api {
-        WireApi::Chat => Arc::new(provider.chat(api_model)),
-        WireApi::Responses => Arc::new(provider.responses(api_model)),
-    };
-    Ok(model)
+    Ok(vercel_ai_openai::create_openai(settings))
+}
+
+/// Fetch a provider's live model ids + context windows via its `/models`
+/// endpoint, mapped to a neutral `(id, context_window)` shape so callers
+/// outside the provider layer (e.g. the TUI catalog refresh) never touch a
+/// `vercel-ai` type. Best-effort — the caller decides how to treat errors.
+pub async fn discover_openai_models(
+    provider_cfg: &ProviderConfig,
+    resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
+    timeout_secs: i64,
+) -> Result<Vec<(String, Option<i64>)>, InferenceError> {
+    let provider = build_openai_provider(provider_cfg, resolver, timeout_secs, None)?;
+    let models = provider.list_models().await.map_err(|e| {
+        crate::errors::ProviderBuildFailedSnafu {
+            provider: "openai",
+            provider_name: provider_cfg.name.clone(),
+            message: format!("/models discovery failed: {e}"),
+        }
+        .build()
+    })?;
+    Ok(models
+        .into_iter()
+        .map(|m| (m.id, m.context_window))
+        .collect())
 }
 
 /// Map `ProviderConfig.auth` + the credential resolver into the OpenAI provider

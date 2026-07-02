@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::EmbeddingModelV4;
 use vercel_ai_provider::ImageModelV4;
 use vercel_ai_provider::LanguageModelV4;
@@ -12,6 +13,8 @@ use vercel_ai_provider::TranscriptionModelV4;
 use vercel_ai_provider::errors::LoadAPIKeyError;
 use vercel_ai_provider::errors::NoSuchModelError;
 use vercel_ai_provider::provider::v4::FromEnvProvider;
+use vercel_ai_provider_utils::JsonResponseHandler;
+use vercel_ai_provider_utils::get_from_api_with_client;
 use vercel_ai_provider_utils::load_api_key;
 use vercel_ai_provider_utils::without_trailing_slash;
 
@@ -25,6 +28,9 @@ use crate::openai_auth::HDR_ORIGINATOR;
 use crate::openai_auth::OpenAIAuth;
 use crate::openai_config::OpenAIConfig;
 use crate::openai_config::ResponsesStorePolicy;
+use crate::openai_error::OpenAIFailedResponseHandler;
+use crate::openai_models_list::DiscoveredModel;
+use crate::openai_models_list::ModelsListResponse;
 use crate::responses::OpenAIResponsesLanguageModel;
 use crate::speech::OpenAISpeechModel;
 use crate::transcription::OpenAITranscriptionModel;
@@ -194,6 +200,28 @@ impl OpenAIProvider {
     /// Get a transcription (speech-to-text) model.
     pub fn transcription(&self, model_id: &str) -> OpenAITranscriptionModel {
         OpenAITranscriptionModel::new(model_id, self.make_config("transcription"))
+    }
+
+    /// Fetch the provider's live model list from its `/models` endpoint.
+    ///
+    /// Reuses the instance's base_url + headers, so a ChatGPT-subscription
+    /// provider hits the codex backend (`…/codex/models`, OAuth bearer) and an
+    /// API-key provider hits the platform (`/v1/models`). Returns neutral
+    /// [`DiscoveredModel`]s; the coco-rs boundary merges them into its catalog.
+    pub async fn list_models(&self) -> Result<Vec<DiscoveredModel>, AISdkError> {
+        let config = self.make_config("models");
+        let url = config.url("/models");
+        let headers = config.get_headers();
+        let response: ModelsListResponse = get_from_api_with_client(
+            &url,
+            Some(headers),
+            JsonResponseHandler::new(),
+            OpenAIFailedResponseHandler,
+            /*abort_signal*/ None,
+            config.client.clone(),
+        )
+        .await?;
+        Ok(response.into_discovered())
     }
 }
 
