@@ -7,6 +7,7 @@
 // `AbsolutePathBuf::join`; only current-working-directory lookup remains
 // fallible.
 
+#[cfg(windows)]
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -16,23 +17,9 @@ pub(super) fn absolutize(path: &Path) -> std::io::Result<PathBuf> {
 }
 
 pub(super) fn absolutize_from(path: &Path, base_path: &Path) -> PathBuf {
-    normalize_path(&path_with_base(path, base_path))
-}
-
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                normalized.push(component.as_os_str());
-            }
-        }
-    }
-
+    // `.`/`..` collapsing is shared with the containment fence primitive;
+    // only the empty-result contract differs (absolutize yields `"."`).
+    let normalized = crate::containment::lexical_normalize(&path_with_base(path, base_path));
     if normalized.as_os_str().is_empty() {
         PathBuf::from(".")
     } else {

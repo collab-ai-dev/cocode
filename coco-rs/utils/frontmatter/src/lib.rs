@@ -25,6 +25,18 @@ pub struct Frontmatter {
     pub parse_error: Option<String>,
 }
 
+impl Frontmatter {
+    /// Convert the parsed `data` to a `serde_json::Map` — the object shape
+    /// [`emit_frontmatter`] consumes. Mutate-and-re-emit round-trips go
+    /// through this so every untouched key is preserved.
+    pub fn data_to_json_map(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.data
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_json()))
+            .collect()
+    }
+}
+
 /// A value in the frontmatter YAML.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FrontmatterValue {
@@ -126,6 +138,33 @@ impl FrontmatterValue {
             }
         }
     }
+}
+
+/// Emit a Markdown document with a YAML frontmatter block — the inverse of
+/// [`parse`]. Pairs with [`Frontmatter::data_to_json_map`] for
+/// mutate-and-re-emit round-trips.
+///
+/// An empty `fields` map yields `body` unchanged with no delimiters.
+/// Serialization failures also fall back to `body` unchanged (best-effort,
+/// never panics).
+///
+/// ```
+/// let mut fields = serde_json::Map::new();
+/// fields.insert("title".into(), "Hello".into());
+/// let md = coco_frontmatter::emit_frontmatter(&fields, "# Body");
+/// let fm = coco_frontmatter::parse(&md);
+/// assert_eq!(fm.data.get("title").unwrap().as_str(), Some("Hello"));
+/// assert_eq!(fm.content.trim(), "# Body");
+/// ```
+pub fn emit_frontmatter(fields: &serde_json::Map<String, serde_json::Value>, body: &str) -> String {
+    if fields.is_empty() {
+        return body.to_string();
+    }
+    let Ok(yaml) = serde_yml::to_string(fields) else {
+        return body.to_string();
+    };
+    let yaml = yaml.trim_end();
+    format!("---\n{yaml}\n---\n\n{body}")
 }
 
 /// Parse markdown file content, extracting YAML frontmatter.

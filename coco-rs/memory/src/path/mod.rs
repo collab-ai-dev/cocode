@@ -2,7 +2,6 @@
 
 mod resolve;
 mod scope;
-mod symlink;
 mod team;
 mod validate;
 
@@ -15,7 +14,6 @@ pub use scope::is_auto_managed_memory_file;
 pub use scope::is_auto_mem_file;
 pub use scope::memory_scope_for_path;
 pub use scope::should_bypass_dangerous_dirs;
-pub use symlink::realpath_deepest_existing;
 pub use team::validate_team_mem_key;
 pub use team::validate_team_mem_write_path;
 pub use validate::PathValidationError;

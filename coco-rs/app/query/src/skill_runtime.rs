@@ -269,16 +269,29 @@ impl SkillHandle for QuerySkillRuntime {
             expanded_prompt
         } else if let Some(bash) = self.snapshot_bash_handle() {
             let allowed = skill.allowed_tools.clone().unwrap_or_default();
-            coco_skills::shell_exec::execute_shell_in_prompt_with_tool(
+            match coco_skills::shell_exec::execute_shell_in_prompt_with_tool(
                 &expanded_prompt,
                 &*bash,
                 &allowed,
             )
             .await
-            .map_err(|reason| SkillInvocationError::Expansion {
-                name: skill.name.clone(),
-                reason,
-            })?
+            {
+                Ok(expanded) => expanded,
+                Err(reason) => {
+                    // The skill's own in-prompt shell failed or was denied —
+                    // a skill-quality signal the Curator must see, so record
+                    // before the error propagates (this return bypasses the
+                    // tail record block).
+                    record_invocation_outcome(
+                        &skill.name,
+                        coco_skills::telemetry::SkillOutcome::Failure,
+                    );
+                    return Err(SkillInvocationError::Expansion {
+                        name: skill.name.clone(),
+                        reason,
+                    });
+                }
+            }
         } else {
             expanded_prompt
         };
@@ -442,44 +455,48 @@ impl SkillHandle for QuerySkillRuntime {
                     extra_permission_rules = config.extra_permission_rules.len(),
                     "skill fork dispatch"
                 );
-                let query_result = engine
-                    .execute_query(&expanded_prompt, config)
-                    .await
-                    .map_err(|e| {
+                // Do NOT `?`-propagate here: a fork failure must fall through
+                // to the telemetry record below (record both outcomes) before
+                // the error surfaces to the caller.
+                match engine.execute_query(&expanded_prompt, config).await {
+                    Ok(query_result) => {
+                        let output = query_result
+                            .response_text
+                            .unwrap_or_else(|| "(no output)".into());
+                        tracing::info!(
+                            skill_name = %skill.name,
+                            agent_id = %agent_id,
+                            output_chars = output.len(),
+                            "skill fork ok"
+                        );
+                        Ok(SkillInvocationResult::Forked { agent_id, output })
+                    }
+                    Err(e) => {
                         tracing::warn!(
                             skill_name = %skill.name,
                             error = %e,
                             "skill fork failed"
                         );
-                        SkillInvocationError::Forked {
+                        Err(SkillInvocationError::Forked {
                             reason: e.to_string(),
-                        }
-                    })?;
-                let output = query_result
-                    .response_text
-                    .unwrap_or_else(|| "(no output)".into());
-                tracing::info!(
-                    skill_name = %skill.name,
-                    agent_id = %agent_id,
-                    output_chars = output.len(),
-                    "skill fork ok"
-                );
-                Ok(SkillInvocationResult::Forked { agent_id, output })
+                        })
+                    }
+                }
             }
         };
 
-        // Record usage at the model-invoked path so frequently-used skills
-        // surface in the `/` autocomplete's "recently used" section.
-        // Record on success only — a failed fork doesn't count.
-        // `spawn_blocking` keeps the async dispatcher unblocked when
-        // `record` hits its slow path (read + atomic rename).
-        if result.is_ok() {
-            let recorded_name = skill.name.clone();
-            tokio::task::spawn_blocking(move || {
-                let config_home = coco_config::global_config::config_home();
-                coco_skills::usage::record(&config_home, &recorded_name);
-            });
-        }
+        // Autocomplete recency (success only, so `/` "recently used" isn't
+        // polluted by failures) + lifecycle telemetry (both outcomes, so the
+        // Curator can spot misfiring skills). Note the fork arm classifies on
+        // execute_query's Ok/Err only — a fork that ran but produced an
+        // abnormal stop still counts Success (no clean-stop signal reaches
+        // this seam today).
+        let outcome = if result.is_ok() {
+            coco_skills::telemetry::SkillOutcome::Success
+        } else {
+            coco_skills::telemetry::SkillOutcome::Failure
+        };
+        record_invocation_outcome(&skill.name, outcome);
         result
     }
 
@@ -505,6 +522,16 @@ impl SkillHandle for QuerySkillRuntime {
         }
         Some(body.to_string())
     }
+}
+
+/// Record one skill invocation (usage + lifecycle telemetry, paired and
+/// detached in `coco_skills::telemetry`).
+fn record_invocation_outcome(name: &str, outcome: coco_skills::telemetry::SkillOutcome) {
+    coco_skills::telemetry::record_invocation_outcome_detached(
+        coco_config::global_config::config_home(),
+        name.to_string(),
+        outcome,
+    );
 }
 
 /// Convert a skill's `allowed-tools` list (tool patterns) into

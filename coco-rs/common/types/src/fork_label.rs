@@ -53,6 +53,11 @@ pub enum ForkLabel {
     AgentSummary,
     /// KAIROS-mode long-term memory consolidation (timer-driven).
     AutoDream,
+    /// Post-turn skill-learning review — distills the finished session into
+    /// skill patches / new agent-owned skills. Fenced to the agent skills
+    /// directory (see `coco-skill-learn`). The capability-layer analogue of
+    /// `ExtractMemories`.
+    SkillReview,
     /// Pre-execute the next prompt-suggestion in a COW overlay
     /// sandbox so accept can instant-inject the result. Gated by
     /// `Feature::Speculation`.
@@ -76,6 +81,7 @@ impl ForkLabel {
             ForkLabel::SessionMemoryManual => "session_memory_manual",
             ForkLabel::AgentSummary => "agent_summary",
             ForkLabel::AutoDream => "auto_dream",
+            ForkLabel::SkillReview => "skill_review",
             ForkLabel::Speculation => "speculation",
             ForkLabel::HookAgent => "hook_agent",
         }

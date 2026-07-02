@@ -14,7 +14,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
-use std::time::SystemTime;
 
 use arc_swap::ArcSwap;
 use coco_tool_runtime::AgentHandleRef;
@@ -24,9 +23,10 @@ use coco_types::ActiveShellTool;
 use coco_types::ModelRole;
 use coco_types::ToolOverrides;
 
+use coco_background_review::LockOutcome;
+
 use crate::config::MemoryConfig;
-use crate::lock;
-use crate::lock::LockOutcome;
+use crate::lock::consolidate_lock;
 use crate::prompt::FileMutationPromptTools;
 use crate::prompt::build_dream_prompt;
 use crate::service::MemoryForkToolConfig;
@@ -385,9 +385,10 @@ impl DreamService {
         };
 
         // Time gate first — `lastConsolidatedAt` stat happens before any
-        // session scan. Eager `lock::last_consolidated_at` is one stat;
+        // session scan. Eager `last_consolidated_at` is one stat;
         // cheap regardless of the scan throttle.
-        let prior_last_ms = lock::last_consolidated_at(&self.memory_dir);
+        let dream_lock = consolidate_lock(&self.memory_dir);
+        let prior_last_ms = dream_lock.last_consolidated_at();
         let hours_since_initial = prior_last_ms
             .map(|m| (now_ms.saturating_sub(m)) / (60 * 60 * 1000))
             .unwrap_or(i64::MAX);
@@ -435,7 +436,7 @@ impl DreamService {
         // never race over MEMORY.md edits. The `LockGuard` RAII type
         // ensures the lock file's mtime is rolled back on cancellation
         // for async-runtime cancellation.
-        let lock_guard = match lock::try_acquire(&self.memory_dir) {
+        let lock_guard = match dream_lock.try_acquire() {
             LockOutcome::Acquired(g) => g,
             LockOutcome::Held => {
                 self.telemetry.emit(MemoryEvent::AutoDreamSkipped {
@@ -449,7 +450,6 @@ impl DreamService {
                 return DreamOutcome::Failed { reason: e };
             }
         };
-        let prior_mtime_ms = lock_guard.prior_mtime_ms();
 
         let sessions_seen = sessions_since_last.len() as i32;
         let hours_since_last = if hours_since_initial == i64::MAX {
@@ -610,18 +610,16 @@ impl DreamService {
                     phase: AutoDreamFailurePhase::Fork,
                     error_class: error_class_from_message(&e),
                 });
-                let _ = prior_mtime_ms; // kept for tracing breadcrumb
                 DreamOutcome::Failed { reason: e }
             }
         }
     }
 
     /// Wall-clock helper so callers don't have to import `SystemTime`.
+    /// Delegates to the shared [`coco_utils_common::now_epoch_ms`] and
+    /// applies the infallible-fallback at the edge.
     pub fn now_ms() -> i64 {
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0)
+        coco_utils_common::now_epoch_ms().unwrap_or(0)
     }
 }
 

@@ -373,6 +373,13 @@ pub(crate) fn resolve_skill_load_gates_with_add_dirs(
 
     coco_skills::SkillLoadGates {
         managed_enabled,
+        // The agent-created scope rides the skill-learning feature gate: OFF
+        // (the default) keeps sessions byte-identical to a build without the
+        // learning loop, even if `.agent/` has leftover artifacts. The loader
+        // owns the "requires the user scope" conjunction.
+        agent_skills_enabled: runtime_config
+            .features
+            .enabled(coco_types::Feature::SkillLearning),
         user_enabled,
         project_enabled,
         legacy_enabled: project_enabled,

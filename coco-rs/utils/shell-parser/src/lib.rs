@@ -93,6 +93,7 @@ pub use redirects::extract_redirects_from_tokens;
 pub use redirects::extract_redirects_from_tree;
 pub use safety::command_might_be_dangerous;
 pub use safety::is_known_safe_command;
+pub use safety::is_read_only_pipeline;
 pub use segments::PipeSegment;
 pub use segments::extract_segments_from_tokens;
 pub use segments::extract_segments_from_tree;

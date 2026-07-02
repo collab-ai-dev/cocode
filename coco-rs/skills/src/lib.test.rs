@@ -109,6 +109,7 @@ fn test_skill(name: &str, description: &str, prompt: &str, source: SkillSource) 
         gated_by: None,
         files: std::collections::HashMap::new(),
         skill_root: None,
+        provenance: crate::SkillProvenance::default(),
     }
 }
 
@@ -1880,4 +1881,47 @@ fn build_session_skill_manager_managed_gate_off_skips_managed() {
     let manager = build_session_skill_manager(&config_home, &cwd, &gates);
     // No panic, bundled still present.
     assert!(manager.get("keybindings-help").is_some());
+}
+
+#[test]
+fn parse_reads_provenance_frontmatter() {
+    let src = "---\nname: My Skill\ndescription: Does things\norigin: agent\ncreated-by: review\ncreated-at: 2026-01-02T03:04:05+00:00\n---\n# body\n\ncontent";
+    let path = PathBuf::from("/x/my-skill/SKILL.md");
+    let def = parse_skill_markdown(src, &path).unwrap();
+    assert_eq!(def.provenance.origin, SkillOrigin::Agent);
+    assert_eq!(def.provenance.created_by, Some(SkillAuthor::Review));
+    assert!(def.provenance.created_at.is_some());
+    assert!(def.is_agent_created());
+}
+
+#[test]
+fn parse_defaults_to_user_origin_when_absent() {
+    let src = "---\ndescription: plain\n---\n# body";
+    let path = PathBuf::from("/x/plain/SKILL.md");
+    let def = parse_skill_markdown(src, &path).unwrap();
+    assert_eq!(def.provenance.origin, SkillOrigin::User);
+    assert!(!def.is_agent_created());
+}
+
+#[test]
+fn agent_skills_load_inert() {
+    let src = "---\ndescription: d\norigin: agent\nallowed-tools: [Bash]\nshell:\n  enabled: true\nhooks:\n  PreToolUse: []\n---\n# body";
+    let path = PathBuf::from("/x/a/SKILL.md");
+    let def = parse_skill_markdown(src, &path).unwrap();
+    assert_eq!(def.provenance.origin, SkillOrigin::Agent);
+    assert!(
+        def.allowed_tools.is_none(),
+        "agent skill allowed_tools must be dropped"
+    );
+    assert!(def.shell.is_none(), "agent skill shell must be dropped");
+    assert!(def.hooks.is_none(), "agent skill hooks must be dropped");
+}
+
+#[test]
+fn user_skills_keep_executable_fields() {
+    let src = "---\ndescription: d\nallowed-tools: [Bash]\n---\n# body";
+    let path = PathBuf::from("/x/u/SKILL.md");
+    let def = parse_skill_markdown(src, &path).unwrap();
+    assert_eq!(def.provenance.origin, SkillOrigin::User);
+    assert_eq!(def.allowed_tools, Some(vec!["Bash".to_string()]));
 }

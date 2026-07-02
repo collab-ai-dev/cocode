@@ -284,6 +284,7 @@ fn build_plugin_command(input: PluginCommandBuild<'_>) -> PluginCommand {
             loaded_from: Some(CommandSource::Plugin {
                 name: input.plugin_name.to_string(),
             }),
+            skill_badge: None,
             safety: CommandSafety::default(),
             supports_non_interactive: false,
         },

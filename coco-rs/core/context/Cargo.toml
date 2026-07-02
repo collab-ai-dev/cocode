@@ -17,6 +17,7 @@ coco-otel.workspace = true
 coco-frontmatter.workspace = true
 coco-paths.workspace = true
 coco-git.workspace = true
+coco-utils-absolute-path.workspace = true
 coco-utils-common.workspace = true
 coco-utils-string.workspace = true
 

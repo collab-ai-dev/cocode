@@ -3485,6 +3485,24 @@ async fn spawn_slash_run_engine_turn(
     });
 }
 
+/// Record one inline slash-skill invocation. No-op for non-skill commands
+/// (Local/overlay). Usage/telemetry pairing and the blocking-thread dispatch
+/// live in `coco_skills::telemetry`. Keyed on the canonical name so aliases
+/// collapse.
+fn record_slash_skill_invocation(
+    cmd: &coco_commands::RegisteredCommand,
+    outcome: coco_skills::telemetry::SkillOutcome,
+) {
+    if !matches!(cmd.command_type, coco_types::CommandType::Prompt(_)) {
+        return;
+    }
+    coco_skills::telemetry::record_invocation_outcome_detached(
+        coco_config::global_config::config_home(),
+        cmd.base.name.clone(),
+        outcome,
+    );
+}
+
 async fn dispatch_slash_command(
     name: &str,
     args: &str,
@@ -3702,8 +3720,19 @@ async fn dispatch_slash_command(
     };
 
     let result = match handler.execute_command(args).await {
-        Ok(r) => r,
+        Ok(r) => {
+            // Skill lifecycle telemetry for the INLINE slash path. Fork-mode
+            // skills returned above (RunForkSkill → QuerySkillRuntime records);
+            // the model/SkillTool path records in skill_runtime. This is the
+            // only seam that sees a user typing `/name` for an inline skill —
+            // the accrual path the Curator promotes/retires on. `handler` is
+            // the resolved trait object, so the registry-wrapper record site is
+            // never reached in production.
+            record_slash_skill_invocation(cmd, coco_skills::telemetry::SkillOutcome::Success);
+            r
+        }
         Err(e) => {
+            record_slash_skill_invocation(cmd, coco_skills::telemetry::SkillOutcome::Failure);
             emit_slash_status(
                 event_tx,
                 name,

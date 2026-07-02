@@ -90,6 +90,7 @@ fn skill(name: &str, source: SkillSource, disable_model_invocation: bool) -> Ski
         gated_by: None,
         files: std::collections::HashMap::new(),
         skill_root: None,
+        provenance: crate::SkillProvenance::default(),
     }
 }
 

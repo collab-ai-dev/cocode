@@ -76,6 +76,17 @@ is_tier3_main_trunk() {
         # tracing::warn!), so the "must depend on coco-error" rule does
         # not apply — same rationale as services/mcp-types.
         services/wire-dump)                   return 1 ;;
+        # Fenced background-review substrate: the only fallible public API is
+        # the `LockOutcome` enum (its own `Error(String)` channel) plus a thin
+        # `io::Result` fs helper — no cross-layer coco-error classification is
+        # needed. Same rationale as services/wire-dump.
+        background-review)                    return 1 ;;
+        # Fire-and-forget learning loop: every public entry point reports
+        # through an outcome enum (CuratorOutcome / SkillReviewOutcome /
+        # ReviewTrigger) consumed by detached background tasks — no Result
+        # crosses the crate boundary, so there is nothing for coco-error to
+        # classify. Same rationale as services/wire-dump.
+        skill-learn)                          return 1 ;;
         keybindings)                          return 1 ;;
         app/state|core/messages)              return 1 ;;
         *) return 0 ;;

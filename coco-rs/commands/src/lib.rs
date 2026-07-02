@@ -420,6 +420,7 @@ impl CommandRegistry {
                     argument_hint: cmd.base.argument_hint.clone(),
                     argument_kind: cmd.base.argument_kind,
                     source: cmd.base.loaded_from.clone(),
+                    badge: cmd.base.skill_badge,
                     // CommandType::tag() is the single projection point —
                     // any future variant in CommandType forces an update
                     // there, not here.
@@ -493,33 +494,12 @@ impl CommandRegistry {
                 let result = handler.execute_command(args).await;
                 let duration_ms = start.elapsed().as_millis() as i64;
                 match &result {
-                    Ok(cr) => {
-                        tracing::info!(
-                            command = %cmd.base.name,
-                            duration_ms,
-                            result_kind = command_result_kind(cr),
-                            "slash command ok"
-                        );
-                        // After a successful dispatch, record skill usage so the
-                        // `/` autocomplete can surface frequently-used skills in
-                        // the "recently used" section. We track only prompt-kind
-                        // commands (skills) — builtin local commands are always
-                        // in the builtin bucket and never ranked by use.
-                        //
-                        // `record` does blocking `std::fs` I/O. Fire-and-
-                        // forget on a blocking thread keeps the async
-                        // dispatcher non-blocking; the 60-second debounce
-                        // already makes most calls no-op so this is rarely
-                        // exercised, but we don't want a slow disk to
-                        // stall the executor when it is.
-                        if matches!(cmd.command_type, CommandType::Prompt(_)) {
-                            let skill_name = cmd.base.name.clone();
-                            tokio::task::spawn_blocking(move || {
-                                let config_home = coco_config::global_config::config_home();
-                                coco_skills::usage::record(&config_home, &skill_name);
-                            });
-                        }
-                    }
+                    Ok(cr) => tracing::info!(
+                        command = %cmd.base.name,
+                        duration_ms,
+                        result_kind = command_result_kind(cr),
+                        "slash command ok"
+                    ),
                     Err(e) => tracing::warn!(
                         command = %cmd.base.name,
                         duration_ms,
@@ -527,6 +507,12 @@ impl CommandRegistry {
                         "slash command failed"
                     ),
                 }
+                // NOTE: skill usage/telemetry recording is NOT done here — this
+                // registry method has no production dispatch caller (the TUI
+                // resolves the handler and calls `CommandHandler::execute_command`
+                // directly). Recording lives at the live seams:
+                // `tui_runner::record_slash_skill_invocation` (inline slash),
+                // `QuerySkillRuntime` (fork slash + model SkillTool).
                 result
             }
             None => {
@@ -665,6 +651,9 @@ fn register_skills_as_commands(
         let aliases: Vec<&str> = skill.aliases.iter().map(String::as_str).collect();
         let mut base = builtin_base(&skill.name, &skill.description, &aliases);
         base.loaded_from = Some(source);
+        // Skill-learning provenance badge (agent-created skills only);
+        // quarantine interpretation lives on `SkillDefinition`.
+        base.skill_badge = skill.provenance_badge();
         base.is_hidden = skill.is_hidden;
         base.user_invocable = skill.user_invocable;
         base.argument_hint = skill.argument_hint.clone();
@@ -1353,6 +1342,7 @@ pub fn builtin_base(name: &str, description: &str, aliases: &[&str]) -> CommandB
         user_invocable: true,
         is_sensitive: false,
         loaded_from: Some(CommandSource::Bundled),
+        skill_badge: None,
         safety: CommandSafety::default(),
         supports_non_interactive: false,
     }
@@ -1380,6 +1370,7 @@ pub fn builtin_base_ext(
         user_invocable: true,
         is_sensitive: false,
         loaded_from: Some(CommandSource::Bundled),
+        skill_badge: None,
         safety,
         supports_non_interactive: false,
     }

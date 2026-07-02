@@ -93,18 +93,11 @@ impl std::fmt::Debug for ExtractState {
     }
 }
 
-/// Shared swappable cell for the agent handle. The runtime owns the
-/// master `Arc<RwLock<...>>` and hands clones to every service so a
-/// later `MemoryRuntime::install_agent(handle)` propagates atomically
-/// — no need to rebuild service instances.
-///
-/// `std::sync::RwLock` (not `tokio::sync::RwLock`) because reads are
-/// "clone the inner `Arc` and drop the guard immediately" — no await
-/// across the guard, no need for an async-aware lock, no futex hop
-/// onto the runtime. `arc_swap::ArcSwapAny<Arc<dyn AgentHandle>>`
-/// would be even cheaper but DSTs (`dyn AgentHandle`) don't satisfy
-/// arc-swap's `RefCnt: Sized` bound; RwLock is the next-best primitive.
-pub type AgentSlot = Arc<std::sync::RwLock<AgentHandleRef>>;
+/// Shared swappable cell for the agent handle — see the definition in
+/// `coco-tool-runtime` for the RwLock-vs-arc-swap rationale. The runtime
+/// owns the master cell and hands clones to every service so a later
+/// `MemoryRuntime::install_agent(handle)` propagates atomically.
+pub use coco_tool_runtime::AgentSlot;
 
 /// RAII guard for the `in_progress` flag. Constructed only after a
 /// successful CAS from `false → true`; `Drop` synchronously stores

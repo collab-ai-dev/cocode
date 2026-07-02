@@ -1054,6 +1054,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-background-review"
+version = "0.1.1"
+dependencies = [
+ "coco-apply-patch",
+ "coco-utils-absolute-path",
+ "filetime",
+ "libc",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "coco-bridge"
 version = "0.1.1"
 dependencies = [
@@ -1127,6 +1140,7 @@ dependencies = [
  "coco-sandbox",
  "coco-session",
  "coco-shell",
+ "coco-skill-learn",
  "coco-skills",
  "coco-state",
  "coco-subagent",
@@ -1260,6 +1274,7 @@ dependencies = [
  "coco-otel",
  "coco-paths",
  "coco-types",
+ "coco-utils-absolute-path",
  "coco-utils-common",
  "coco-utils-string",
  "globset",
@@ -1665,7 +1680,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "chrono",
- "coco-apply-patch",
+ "coco-background-review",
  "coco-config",
  "coco-error",
  "coco-file-watch",
@@ -1683,7 +1698,6 @@ dependencies = [
  "coco-utils-json-repair",
  "coco-utils-string",
  "filetime",
- "libc",
  "notify",
  "pretty_assertions",
  "regex",
@@ -1897,6 +1911,7 @@ dependencies = [
  "coco-sandbox",
  "coco-session",
  "coco-shell",
+ "coco-skill-learn",
  "coco-skills",
  "coco-subagent",
  "coco-system-reminder",
@@ -2147,10 +2162,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-skill-learn"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "coco-background-review",
+ "coco-frontmatter",
+ "coco-shell-parser",
+ "coco-skills",
+ "coco-tool-runtime",
+ "coco-types",
+ "coco-utils-absolute-path",
+ "coco-utils-common",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "coco-skills"
 version = "0.1.1"
 dependencies = [
  "async-trait",
+ "chrono",
  "coco-config",
  "coco-error",
  "coco-file-ignore",
@@ -2588,6 +2626,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tracing",
  "ts-rs",
 ]
 
@@ -2616,6 +2655,7 @@ dependencies = [
  "chrono",
  "dirs",
  "serde",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

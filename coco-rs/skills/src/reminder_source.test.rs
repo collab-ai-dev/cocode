@@ -34,6 +34,7 @@ fn skill(name: &str, desc: &str) -> SkillDefinition {
         gated_by: None,
         files: std::collections::HashMap::new(),
         skill_root: None,
+        provenance: crate::SkillProvenance::default(),
     }
 }
 

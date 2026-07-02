@@ -4,6 +4,8 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use coco_utils_absolute_path::lexical_normalize;
+
 /// Validation error for memory paths.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PathValidationError {
@@ -148,7 +150,7 @@ pub fn validate_memory_path(path: &str) -> Result<(), PathValidationError> {
 
 /// Lexically resolve `path` against `memory_dir` and verify the result
 /// stays inside the memory dir. No filesystem access — symlink-aware
-/// validation is in [`super::symlink`].
+/// validation is in [`coco_utils_absolute_path::contains_symlink_aware`].
 pub fn validate_resolved_path(
     path: &Path,
     memory_dir: &Path,
@@ -181,23 +183,6 @@ pub fn sanitize_path_key(key: &str) -> String {
             }
         })
         .collect()
-}
-
-/// Lexically normalize a path: collapse `..`/`.` components without
-/// touching the filesystem. Equivalent to `path.normalize` on a path
-/// that's already been joined.
-pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in path.components() {
-        match c {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

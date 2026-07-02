@@ -357,8 +357,11 @@ pub fn expand_imports(
         // "external" — skip it unless the caller allows external includes
         // (only user-global memory does). Prevents an untrusted project
         // CLAUDE.md from pulling host files (SSH keys, cloud creds) into the
-        // prompt.
-        if !allow_external && !path_within(&resolved, cwd) {
+        // prompt. Uses the shared fail-closed containment primitive: any
+        // resolution ambiguity (dangling symlink, ELOOP, EACCES) denies —
+        // such paths could never be read anyway, so this only moves the
+        // denial point, never the outcome.
+        if !allow_external && !coco_utils_absolute_path::contains_symlink_aware(cwd, &resolved) {
             continue;
         }
         let Ok(child_content) = std::fs::read_to_string(&resolved) else {
@@ -425,46 +428,6 @@ pub fn strip_html_comments(content: &str) -> String {
         rest = &rest[ch.len_utf8()..];
     }
     out
-}
-
-/// Lexically resolve `.`/`..` without touching the filesystem, so an
-/// `@import` cannot escape the cwd via `../../..`.
-fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in path.components() {
-        match comp {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
-
-/// Best-effort canonicalization for a path that may not exist yet: resolve
-/// the longest existing prefix (so symlinks like macOS `/tmp`→`/private/tmp`
-/// match the canonicalized root), then re-append the remainder.
-fn canonicalize_best_effort(path: &Path) -> PathBuf {
-    let lexical = lexical_normalize(path);
-    if let Ok(c) = lexical.canonicalize() {
-        return c;
-    }
-    if let (Some(parent), Some(name)) = (lexical.parent(), lexical.file_name())
-        && let Ok(pc) = parent.canonicalize()
-    {
-        return pc.join(name);
-    }
-    lexical
-}
-
-/// True when `path` resolves inside `root`'s subtree.
-fn path_within(path: &Path, root: &Path) -> bool {
-    let root_n = root
-        .canonicalize()
-        .unwrap_or_else(|_| lexical_normalize(root));
-    canonicalize_best_effort(path).starts_with(&root_n)
 }
 
 #[cfg(test)]

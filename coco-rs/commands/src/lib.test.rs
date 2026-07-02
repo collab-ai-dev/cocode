@@ -21,6 +21,7 @@ fn test_base(name: &str, description: &str, aliases: Vec<String>) -> CommandBase
         user_invocable: true,
         is_sensitive: false,
         loaded_from: None,
+        skill_badge: None,
         safety: CommandSafety::default(),
         supports_non_interactive: false,
     }

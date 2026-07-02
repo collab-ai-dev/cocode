@@ -143,7 +143,7 @@ pub fn build_mcp_skill_default(spec: &McpSkillSpec) -> Result<SkillDefinition, S
     };
     let agent = lookup_str(&["agent"]);
     let version = lookup(&["version"]).and_then(scalar_to_string_local);
-    let disabled = lookup_bool(&["disabled"]).unwrap_or(false);
+    let disabled = lookup_bool(&[crate::frontmatter_keys::DISABLED]).unwrap_or(false);
     let argument_hint = lookup_str(&["argument-hint", "argument_hint"]);
     let user_invocable = lookup_bool(&["user-invocable", "user_invocable"]).unwrap_or(true);
     let disable_model_invocation =
@@ -191,6 +191,7 @@ pub fn build_mcp_skill_default(spec: &McpSkillSpec) -> Result<SkillDefinition, S
         gated_by: None,
         files: std::collections::HashMap::new(),
         skill_root: None,
+        provenance: crate::SkillProvenance::default(),
     })
 }
 

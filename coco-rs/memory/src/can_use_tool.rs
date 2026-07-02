@@ -36,15 +36,15 @@ use serde_json::Value;
 
 use crate::telemetry::{MemoryEvent, MemoryTelemetryEmitter, NoopEmitter};
 
-/// Tool name constants used by the policies. Matches the canonical
-/// `ToolName` strings via [`coco_types::ToolName::as_str`].
-const TOOL_READ: &str = "Read";
-const TOOL_GLOB: &str = "Glob";
-const TOOL_GREP: &str = "Grep";
-const TOOL_BASH: &str = "Bash";
-const TOOL_EDIT: &str = "Edit";
-const TOOL_WRITE: &str = "Write";
-const TOOL_APPLY_PATCH: &str = "apply_patch";
+/// Tool name constants used by the policies (canonical `ToolName` strings,
+/// same as the skill-review fence).
+const TOOL_READ: &str = coco_types::ToolName::Read.as_str();
+const TOOL_GLOB: &str = coco_types::ToolName::Glob.as_str();
+const TOOL_GREP: &str = coco_types::ToolName::Grep.as_str();
+const TOOL_BASH: &str = coco_types::ToolName::Bash.as_str();
+const TOOL_EDIT: &str = coco_types::ToolName::Edit.as_str();
+const TOOL_WRITE: &str = coco_types::ToolName::Write.as_str();
+const TOOL_APPLY_PATCH: &str = coco_types::ToolName::ApplyPatch.as_str();
 
 /// Build the auto-mem canUseTool handle.
 ///
@@ -288,23 +288,7 @@ fn bash_is_read_only(input: &Value) -> bool {
     let Some(cmd) = input.get("command").and_then(|v| v.as_str()) else {
         return false;
     };
-    let trimmed = cmd.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let mut parser = coco_shell_parser::ShellParser::new();
-    let parsed = parser.parse(trimmed);
-    let Some(stages) = parsed.try_extract_safe_commands() else {
-        // Parse contains a redirection / subshell / command-sub /
-        // syntax error — fail closed.
-        return false;
-    };
-    if stages.is_empty() {
-        return false;
-    }
-    stages
-        .iter()
-        .all(|argv| coco_shell_parser::safety::is_known_safe_command(argv))
+    coco_shell_parser::is_read_only_pipeline(cmd)
 }
 
 fn bash_is_rm_md_under_root(input: &Value, root: &Path) -> bool {
@@ -359,135 +343,23 @@ fn bash_is_rm_md_under_root(input: &Value, root: &Path) -> bool {
 }
 
 fn input_path_is_md_under_root(input: &Value, root: &Path, cwd: &Path) -> bool {
-    let path_str = input
-        .get("file_path")
-        .or_else(|| input.get("notebook_path"))
-        .or_else(|| input.get("path"))
-        .and_then(|v| v.as_str());
-    let Some(p) = path_str else {
-        return false;
-    };
-    let candidate = Path::new(p);
-    let absolute = if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        cwd.join(candidate)
-    };
-    path_is_md_under_root(&absolute, root)
+    coco_background_review::input_write_target(input, cwd)
+        .is_some_and(|absolute| path_is_md_under_root(&absolute, root))
 }
 
 fn apply_patch_paths_are_md_under_root(input: &Value, root: &Path, cwd: &Path) -> bool {
-    let Some(patch) = input.get("patch").and_then(|v| v.as_str()) else {
-        return false;
-    };
-    let Ok(cwd) = coco_utils_absolute_path::AbsolutePathBuf::from_absolute_path(cwd) else {
-        return false;
-    };
-    let Ok(parsed) = coco_apply_patch::parse_patch(patch) else {
-        return false;
-    };
-    let path_effects = coco_apply_patch::collect_path_effects(&parsed.hunks, &cwd);
-    !path_effects.permission_paths.is_empty()
-        && path_effects
-            .permission_paths
-            .iter()
-            .all(|path| path_is_md_under_root(path, root))
+    coco_background_review::apply_patch_write_targets(input, cwd)
+        .is_some_and(|paths| paths.iter().all(|path| path_is_md_under_root(path, root)))
 }
 
+/// True when `candidate` is a `.md` file contained by `root`, using the
+/// shared symlink-aware fence primitive [`coco_utils_absolute_path::contains_symlink_aware`]
+/// (fail-closed on traversal, symlink escape, and dangling symlinks).
 fn path_is_md_under_root(candidate: &Path, root: &Path) -> bool {
     if !candidate.to_string_lossy().ends_with(".md") {
         return false;
     }
-    path_under_root(candidate, root)
-}
-
-/// True when `candidate` is a descendant of `root`.
-///
-/// Two-pass containment check:
-///
-/// 1. **Symlink-aware**: resolve the deepest existing ancestor of
-///    both `root` and `candidate` via [`crate::path::realpath_deepest_existing`].
-///    A model that plants `<memdir>/x -> /etc/passwd` and then asks
-///    to `Edit` it gets caught here — the canonical candidate resolves
-///    outside `canonical_root` even though the lexical form is under it.
-///    Returns `false` on any non-recoverable symlink failure (ELOOP,
-///    dangling, EACCES) — fail closed.
-/// 2. **Lexical fallback**: if neither side could be canonicalized
-///    (typically because we're testing against a hypothetical path on
-///    a filesystem with no real `root` yet), compare via lexically
-///    normalized `starts_with`. This is intentional only for the
-///    benign "root doesn't exist yet" case; the symlink-escape vector
-///    requires the symlink to actually exist on disk and so always
-///    takes the canonical path.
-fn path_under_root(candidate: &Path, root: &Path) -> bool {
-    // Two-pass containment:
-    //
-    // (a) Lexical normalization first — collapses `.` and `..`
-    //     components so `<memdir>/../etc/passwd`-style escapes can
-    //     never slip past the symlink layer (realpath rejoins
-    //     non-existing tail components verbatim, so the walk-up
-    //     produces `<memdir>/../etc/passwd`, which deceptively
-    //     `starts_with` `<memdir>` under `PathBuf::starts_with`
-    //     component semantics).
-    //
-    // (b) Symlink resolution on the lexically-normalized form —
-    //     catches the case where the model points at a symlink
-    //     rooted inside `memory_dir` that resolves OUTSIDE. The
-    //     `realpath_deepest_existing` helper fails closed on ELOOP /
-    //     EACCES / dangling-symlink — see `path::symlink` for the
-    //     full taxonomy.
-    let lex_root = lexical_normalize(root);
-    let lex_candidate = lexical_normalize(candidate);
-    let real_root = crate::path::realpath_deepest_existing(&lex_root);
-    let real_candidate = crate::path::realpath_deepest_existing(&lex_candidate);
-    match (real_root.as_ref(), real_candidate.as_ref()) {
-        // Both sides canonicalized — primary security check.
-        (Some(rr), Some(rc)) => rc.starts_with(rr),
-        // Both failed to canonicalize — typically because neither
-        // path exists on disk (test fixtures, hypothetical paths
-        // the model proposes). Lexical-only is safe here because
-        // realpath's `None` for both sides means "doesn't exist."
-        // The lexical normalization above already collapsed any
-        // `..` traversal.
-        (None, None) => lex_candidate.starts_with(&lex_root),
-        // Asymmetric: one side resolved, the other failed.
-        // `realpath_deepest_existing` returns `None` on ELOOP /
-        // EACCES / **dangling symlink** (see `path::symlink:51-58`).
-        // The exploit: a misbehaving subagent plants
-        // `<memdir>/escape -> /etc/passwd` as a dangling symlink.
-        // `lex_root` canonicalizes; `lex_candidate` fails because
-        // of the dangling target. Falling back to lexical here
-        // would Allow — POSIX write semantics would then create
-        // `/etc/passwd` through the link. Fail closed instead.
-        _ => {
-            tracing::warn!(
-                target: "coco_memory::can_use_tool",
-                root = %lex_root.display(),
-                candidate = %lex_candidate.display(),
-                root_resolved = real_root.is_some(),
-                candidate_resolved = real_candidate.is_some(),
-                "auto_mem fence: asymmetric realpath outcome, failing closed"
-            );
-            false
-        }
-    }
-}
-
-/// Lexically normalize a path: collapse `.` and `..` components.
-/// Doesn't touch the filesystem so it works for hypothetical paths
-/// the model might propose.
-fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in path.components() {
-        match c {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    out
+    coco_utils_absolute_path::contains_symlink_aware(root, candidate)
 }
 
 #[cfg(test)]

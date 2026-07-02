@@ -9837,6 +9837,21 @@
         }
       ]
     },
+    "SkillProvenanceBadge": {
+      "description": "Provenance badge for a skill produced by the skill-learning loop, rendered\nas a `/`-popup suffix so a user can tell an auto-generated skill apart from\na hand-written one. Orthogonal to [`CommandSource`] (which records the\n*scope* the file lives in \u2014 an agent skill's scope is still the user config\nhome): this axis records *who authored it and whether it is proven*.",
+      "oneOf": [
+        {
+          "const": "learning",
+          "description": "Agent-created and still quarantined \u2014 the Curator has not promoted it,\nso the model cannot auto-invoke it yet (reachable only via user `/name`).",
+          "type": "string"
+        },
+        {
+          "const": "learned",
+          "description": "Agent-created and promoted by the Curator to model-invocable.",
+          "type": "string"
+        }
+      ]
+    },
     "SkillsDialogEntry": {
       "description": "One row in the `/skills` dialog. Every field is required so the dialog\nnever has to fabricate defaults for `baseline` / `lock` / etc.",
       "properties": {
@@ -9978,6 +9993,17 @@
           "$ref": "#/$defs/CommandArgumentKind",
           "default": "none",
           "description": "Typed argument shape. Drives argument completion and whether Enter\nexecutes immediately after accepting a slash suggestion."
+        },
+        "badge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillProvenanceBadge"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Skill-learning provenance badge (agent-created skills only). Rendered as\na `(learning)` / `(learned)` suffix in the `/` popup, taking precedence\nover the [`Self::source`] suffix (an agent skill's scope is always the\nuser config home, so `(user)` would be redundant). Mirrors\n[`CommandBase::skill_badge`]."
         },
         "description": {
           "description": "Short description shown dimmed in the popup. `None` when the\nsource command registered without one.",

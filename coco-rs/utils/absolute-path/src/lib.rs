@@ -11,6 +11,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 mod absolutize;
+mod containment;
+
+pub use containment::{contains_symlink_aware, lexical_normalize, realpath_deepest_existing};
 
 /// A path that is guaranteed to be absolute and normalized (though it is not
 /// guaranteed to be canonicalized or exist on the filesystem).
