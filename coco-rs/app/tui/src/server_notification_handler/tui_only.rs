@@ -252,6 +252,43 @@ pub(super) fn handle(
             crate::autocomplete::refresh_suggestions(state);
             true
         }
+        TuiOnlyEvent::ProviderStatusesRefreshed { statuses } => {
+            // Overwrite the full snapshot — the CLI producer always sends
+            // every provider's status, so a cleared `NotLoggedIn` (or a new
+            // `MissingApiKey`) is reflected on the next `/model` open, which
+            // rebuilds its entry list from this map. No restart needed.
+            state.session.provider_statuses = statuses
+                .into_iter()
+                .map(|s| {
+                    (
+                        s.provider,
+                        crate::state::ProviderStatus {
+                            provider_display: s.provider_display,
+                            unavailable_reasons: s.unavailable_reasons,
+                        },
+                    )
+                })
+                .collect();
+            true
+        }
+        TuiOnlyEvent::ModelCatalogRefreshed { entries } => {
+            // Overwrite with the merged snapshot (static base + discovered):
+            // the producer always sends the full set, so the `/model` picker
+            // rebuilds its rows from this on next open — no restart needed.
+            state.session.model_catalog = entries
+                .into_iter()
+                .map(|e| crate::state::ModelCatalogEntry {
+                    provider: e.provider,
+                    provider_display: e.provider_display,
+                    model_id: e.model_id,
+                    display_name: e.display_name,
+                    context_window: e.context_window,
+                    supported_efforts: e.supported_efforts,
+                    default_effort: e.default_effort,
+                })
+                .collect();
+            true
+        }
         TuiOnlyEvent::QueuedCommandEditReady {
             id: _,
             prompt,
@@ -724,6 +761,25 @@ pub(super) fn handle(
         }
         TuiOnlyEvent::OpenModelPicker => {
             crate::update::show::cycle_model(state);
+            true
+        }
+        TuiOnlyEvent::OpenLoginPicker { entries } => {
+            let entries = entries
+                .into_iter()
+                .map(|e| crate::state::LoginEntry {
+                    provider: e.provider,
+                    provider_display: e.provider_display,
+                    auth_label: e.auth_label,
+                    logged_in: e.logged_in,
+                })
+                .collect();
+            state
+                .ui
+                .show_modal(ModalState::LoginPicker(crate::state::LoginPickerState {
+                    entries,
+                    filter: String::new(),
+                    selected: 0,
+                }));
             true
         }
         TuiOnlyEvent::OpenSettings => {

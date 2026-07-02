@@ -639,7 +639,20 @@ fn hash_cacheable_cell(
                 }
             }
         }
-        CellKind::AssistantRedactedThinking => hash_u8(hasher, 4),
+        CellKind::AssistantRedactedThinking { metadata_anchor } => {
+            hash_u8(hasher, 4);
+            // Mirror AssistantThinking: the anchored side-cache count changes
+            // the rendered header, so it must invalidate the cached render.
+            hash_bool(hasher, *metadata_anchor);
+            if *metadata_anchor
+                && let Some(meta) = options
+                    .reasoning_metadata
+                    .and_then(|cache| cache.get(&cell.message_uuid))
+            {
+                hash_i64(hasher, meta.duration_ms.unwrap_or(-1));
+                hash_i64(hasher, meta.reasoning_tokens);
+            }
+        }
         CellKind::ToolUse { tool_name, call_id } => {
             hash_u8(hasher, 5);
             hash_str(hasher, tool_name);
@@ -949,7 +962,7 @@ fn estimate_cell_bytes(cell: &RenderedCell) -> usize {
         CellKind::ToolUse { call_id, tool_name } => call_id.len() + tool_name.len(),
         CellKind::ToolResult { call_id } => call_id.len(),
         CellKind::System(kind) => estimate_system_cell_bytes(kind, cell.source.as_ref()),
-        CellKind::AssistantRedactedThinking | CellKind::Attachment => 0,
+        CellKind::AssistantRedactedThinking { .. } | CellKind::Attachment => 0,
     }
 }
 

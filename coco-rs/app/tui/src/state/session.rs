@@ -12,22 +12,10 @@ use coco_types::ModelRole;
 use coco_types::PermissionMode;
 use coco_types::ReasoningEffort;
 
-/// Provider configuration issue that makes all models under that
-/// provider unavailable in the picker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProviderUnavailableReason {
-    /// `base_url` is empty after config resolution.
-    MissingBaseUrl,
-    /// No API key was resolved from the configured env var or fallback
-    /// `providers.<name>.api_key` value.
-    MissingApiKey { env_key: String },
-    /// An OAuth-subscription provider with no logged-in credential. Distinct
-    /// from `MissingApiKey` (whose hint names an env var) — the fix is
-    /// `coco login <provider>`, not setting a key.
-    NotLoggedIn { provider: String },
-    /// The provider has no model rows visible to the picker.
-    NoModels,
-}
+/// Provider-availability reason for the model picker. Defined in `coco_types`
+/// so it can ride the `ProviderStatusesRefreshed` event; the state field and
+/// picker keep consuming it via this re-export.
+pub use coco_types::ProviderUnavailableReason;
 
 /// Session-frozen provider availability status used by `/model`.
 #[derive(Debug, Clone, Default)]

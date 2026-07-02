@@ -182,8 +182,14 @@ async fn async_main() -> Result<()> {
             Commands::Login {
                 provider,
                 no_browser,
+                import,
             } => {
-                return coco_cli::provider_login::run_login(provider.clone(), *no_browser).await;
+                return coco_cli::provider_login::run_login(
+                    provider.clone(),
+                    *no_browser,
+                    import.clone(),
+                )
+                .await;
             }
             Commands::Logout { provider } => {
                 return coco_cli::provider_login::run_logout(provider.clone()).await;

@@ -1066,7 +1066,7 @@ fn cell_kind_perf_name(kind: &CellKind) -> &'static str {
 
         CellKind::AssistantText { .. } => "assistant_text",
         CellKind::AssistantThinking { .. } => "assistant_thinking",
-        CellKind::AssistantRedactedThinking => "assistant_redacted_thinking",
+        CellKind::AssistantRedactedThinking { .. } => "assistant_redacted_thinking",
         CellKind::ToolUse { .. } => "tool_use",
         CellKind::ToolResult { .. } => "tool_result",
         CellKind::Attachment => "attachment",

@@ -499,7 +499,7 @@ impl<'a> TranscriptCellRenderer<'a> {
                     self.styles,
                 ));
             }
-            CellKind::AssistantRedactedThinking => lines.push(Line::from(
+            CellKind::AssistantRedactedThinking { .. } => lines.push(Line::from(
                 Span::raw(t!("chat.redacted_thinking").to_string())
                     .fg(self.styles.thinking())
                     .dim()
@@ -1122,7 +1122,7 @@ fn cell_content_len(cell: &RenderedCell) -> usize {
             call_id.len() + len
         }
         CellKind::System(_) => meta_preview_text(cell).len(),
-        CellKind::Attachment | CellKind::AssistantRedactedThinking => 0,
+        CellKind::Attachment | CellKind::AssistantRedactedThinking { .. } => 0,
     }
 }
 

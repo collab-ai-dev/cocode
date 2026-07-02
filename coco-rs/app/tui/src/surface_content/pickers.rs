@@ -2,10 +2,12 @@
 
 use ratatui::prelude::*;
 
+use crate::presentation::login_picker;
 use crate::presentation::model_picker;
 use crate::presentation::permissions_editor;
 use crate::presentation::picker;
 use crate::state::AgentsDialogState;
+use crate::state::LoginPickerState;
 use crate::state::McpServerSelectState;
 use crate::state::ModelPickerState;
 use crate::state::PermissionsEditorState;
@@ -19,6 +21,13 @@ pub(super) fn model_picker_content(
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     model_picker::content(m, styles)
+}
+
+pub(super) fn login_picker_content(
+    l: &LoginPickerState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    login_picker::content(l, styles)
 }
 
 pub(super) fn skills_dialog_content(

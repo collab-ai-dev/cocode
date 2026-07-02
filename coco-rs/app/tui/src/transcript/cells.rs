@@ -56,8 +56,12 @@ pub enum CellKind {
     /// already been derived from `&Message`. Side-cache keeps the
     /// cell a pure function of the source message (I-2).
     AssistantThinking { text: String, metadata_anchor: bool },
-    /// Assistant redacted thinking (encrypted, displayed as opaque).
-    AssistantRedactedThinking,
+    /// Assistant redacted thinking (encrypted / summary-less, e.g. the codex
+    /// backend which returns reasoning *tokens* but no visible text). When it
+    /// is the message's first reasoning run (`metadata_anchor`), the renderer
+    /// still surfaces the side-cache reasoning-token count instead of a bare
+    /// "still thinking" marker.
+    AssistantRedactedThinking { metadata_anchor: bool },
     /// Assistant `tool_use` content block.
     ToolUse { call_id: String, tool_name: String },
     /// Tool result returned to the model.

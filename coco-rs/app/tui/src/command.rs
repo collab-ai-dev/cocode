@@ -269,6 +269,9 @@ pub enum UserCommand {
         /// Chosen effort. `None` when the model has no thinking capability.
         effort: Option<coco_types::ReasoningEffort>,
     },
+    /// `/login` picker Enter — run the OAuth flow for `provider` on the shared
+    /// `AuthService`, then refresh provider statuses. No file write.
+    ProviderLogin { provider: String },
     /// Respond to a permission prompt.
     ApprovalResponse {
         request_id: String,

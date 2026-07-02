@@ -310,16 +310,39 @@ pub(super) fn try_render(
             ));
             Some(())
         }
-        CellKind::AssistantRedactedThinking => {
-            // ✻ (teardrop asterisk) signals "still thinking" — used for
-            // the redacted/in-flight variant so users can tell at a glance
-            // the block isn't finalized.
-            lines.push(Line::from(
-                Span::raw(t!("chat.redacted_thinking").to_string())
-                    .fg(w.styles.thinking())
-                    .dim()
-                    .italic(),
-            ));
+        CellKind::AssistantRedactedThinking { metadata_anchor } => {
+            let side_meta = metadata_anchor
+                .then(|| {
+                    w.reasoning_metadata
+                        .and_then(|cache| cache.get(&cell.message_uuid))
+                })
+                .flatten()
+                .filter(|m| m.reasoning_tokens > 0);
+            match side_meta {
+                // Reasoning ran but the model returned no visible summary
+                // (e.g. codex's encrypted, token-only reasoning) — still
+                // surface the token count via the standard thinking header.
+                // `content: ""` + no toggle hint → just `⏺ Thinking · N tok`
+                // with nothing to expand.
+                Some(m) => lines.extend(render_thinking_block(
+                    ThinkingRenderInput {
+                        content: "",
+                        duration_ms: m.duration_ms,
+                        reasoning_tokens: Some(m.reasoning_tokens),
+                        toggle_hint: None,
+                        display: ThinkingDisplay::Collapsed,
+                    },
+                    w.styles,
+                )),
+                // No token count (yet) — ✻ (teardrop asterisk) signals the
+                // redacted/in-flight block isn't finalized.
+                None => lines.push(Line::from(
+                    Span::raw(t!("chat.redacted_thinking").to_string())
+                        .fg(w.styles.thinking())
+                        .dim()
+                        .italic(),
+                )),
+            }
             Some(())
         }
         CellKind::ToolUse { call_id, tool_name } => {

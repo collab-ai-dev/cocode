@@ -22,6 +22,7 @@ pub mod lsp_handle_adapter;
 pub mod mcp_cli;
 pub mod mcp_handle_adapter;
 pub mod model_card_refresh;
+pub mod openai_model_refresh;
 pub mod output;
 pub mod paths;
 pub mod permission_rule_loader;
@@ -405,6 +406,11 @@ pub enum Commands {
         /// (headless / SSH).
         #[arg(long, alias = "headless")]
         no_browser: bool,
+        /// Import an existing credential from another tool's auth file
+        /// (e.g. `~/.codex/auth.json`) instead of running OAuth. The file is
+        /// read once and never modified; symlinks are rejected.
+        #[arg(long, value_name = "PATH")]
+        import: Option<std::path::PathBuf>,
     },
     /// Clear stored provider credentials (defaults to `openai`).
     Logout {

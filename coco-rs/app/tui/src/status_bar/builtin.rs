@@ -243,7 +243,7 @@ fn transcript_counts(cells: &[RenderedCell]) -> TranscriptCounts {
             CellKind::UserText { .. } => counts.users += 1,
             CellKind::AssistantText { .. }
             | CellKind::AssistantThinking { .. }
-            | CellKind::AssistantRedactedThinking
+            | CellKind::AssistantRedactedThinking { .. }
             | CellKind::ToolUse { .. } => counts.assistants += 1,
             CellKind::ToolResult { .. } => counts.tools += 1,
             CellKind::Attachment | CellKind::System(_) => {}

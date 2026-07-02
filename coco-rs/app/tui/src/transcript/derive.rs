@@ -117,39 +117,38 @@ fn assistant_cells(
     };
     let mut out: Vec<RenderedCell> = Vec::new();
     let mut reasoning_run: Vec<String> = Vec::new();
-    let mut first_visible_reasoning_run = true;
-    let flush_reasoning_run =
-        |out: &mut Vec<RenderedCell>,
-         reasoning_run: &mut Vec<String>,
-         first_visible_reasoning_run: &mut bool| {
-            if reasoning_run.is_empty() {
-                return;
-            }
-            let visible = reasoning_run
-                .iter()
-                .filter(|text| !text.is_empty())
-                .cloned()
-                .collect::<Vec<_>>();
-            reasoning_run.clear();
-            if visible.is_empty() {
-                out.push(cell(
-                    uuid,
-                    CellKind::AssistantRedactedThinking,
-                    source.clone(),
-                ));
-            } else {
-                let metadata_anchor = *first_visible_reasoning_run;
-                *first_visible_reasoning_run = false;
-                out.push(cell(
-                    uuid,
-                    CellKind::AssistantThinking {
-                        text: visible.join("\n\n"),
-                        metadata_anchor,
-                    },
-                    source.clone(),
-                ));
-            }
-        };
+    let mut first_reasoning_run = true;
+    let flush_reasoning_run = |out: &mut Vec<RenderedCell>,
+                               reasoning_run: &mut Vec<String>,
+                               first_reasoning_run: &mut bool| {
+        if reasoning_run.is_empty() {
+            return;
+        }
+        let visible = reasoning_run
+            .iter()
+            .filter(|text| !text.is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        reasoning_run.clear();
+        let metadata_anchor = *first_reasoning_run;
+        *first_reasoning_run = false;
+        if visible.is_empty() {
+            out.push(cell(
+                uuid,
+                CellKind::AssistantRedactedThinking { metadata_anchor },
+                source.clone(),
+            ));
+        } else {
+            out.push(cell(
+                uuid,
+                CellKind::AssistantThinking {
+                    text: visible.join("\n\n"),
+                    metadata_anchor,
+                },
+                source.clone(),
+            ));
+        }
+    };
     for part in content {
         if let AssistantContent::Reasoning(r) = part {
             reasoning_run.push(r.text.clone());
@@ -157,22 +156,14 @@ fn assistant_cells(
         }
         let kind = match part {
             AssistantContent::Text(t) if !t.text.is_empty() => {
-                flush_reasoning_run(
-                    &mut out,
-                    &mut reasoning_run,
-                    &mut first_visible_reasoning_run,
-                );
+                flush_reasoning_run(&mut out, &mut reasoning_run, &mut first_reasoning_run);
                 CellKind::AssistantText {
                     text: t.text.clone(),
                     model: model.to_string(),
                 }
             }
             AssistantContent::ToolCall(tc) => {
-                flush_reasoning_run(
-                    &mut out,
-                    &mut reasoning_run,
-                    &mut first_visible_reasoning_run,
-                );
+                flush_reasoning_run(&mut out, &mut reasoning_run, &mut first_reasoning_run);
                 // Overlay-driven tools (plan approval, plan-mode entry, question
                 // dialog) render their own surface; suppress the `● ToolName(…)`
                 // invocation header so only the result/plan shows. The result
@@ -190,11 +181,7 @@ fn assistant_cells(
         };
         out.push(cell(uuid, kind, source.clone()));
     }
-    flush_reasoning_run(
-        &mut out,
-        &mut reasoning_run,
-        &mut first_visible_reasoning_run,
-    );
+    flush_reasoning_run(&mut out, &mut reasoning_run, &mut first_reasoning_run);
     out
 }
 

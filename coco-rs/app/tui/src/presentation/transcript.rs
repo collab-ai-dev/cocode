@@ -402,6 +402,10 @@ fn is_meta(cell: &RenderedCell) -> bool {
         // reminder — render the full colored block.
         CellKind::System(SystemCellKind::ContextUsage) => false,
         CellKind::System(SystemCellKind::UserInterruption { .. }) => false,
+        // API errors are real failures the user must see in full — render the
+        // dedicated red row (`system::try_render`), not a collapsed, truncated
+        // `# [api]` system-reminder preview.
+        CellKind::System(SystemCellKind::ApiError) => false,
         CellKind::System(_) => true,
         _ => false,
     }
@@ -537,7 +541,7 @@ fn is_tool_result(cell: &RenderedCell) -> bool {
 fn is_assistant_thinking(cell: &RenderedCell) -> bool {
     matches!(
         cell.kind,
-        CellKind::AssistantThinking { .. } | CellKind::AssistantRedactedThinking
+        CellKind::AssistantThinking { .. } | CellKind::AssistantRedactedThinking { .. }
     )
 }
 

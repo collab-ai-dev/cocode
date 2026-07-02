@@ -400,6 +400,85 @@ impl fmt::Display for OAuthFlowId {
 /// A set of capabilities for convenience.
 pub type CapabilitySet = HashSet<Capability>;
 
+/// Why a provider is unusable in the model picker. Produced by the CLI's
+/// `build_provider_statuses` and consumed by the TUI picker; also rides
+/// [`ProviderStatusInfo`] on the `ProviderStatusesRefreshed` event so an
+/// in-session `/login` can clear the gate without a restart.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProviderUnavailableReason {
+    /// `base_url` is empty after config resolution.
+    MissingBaseUrl,
+    /// No API key resolved from the configured env var or fallback
+    /// `providers.<name>.api_key`.
+    MissingApiKey { env_key: String },
+    /// An OAuth-subscription provider with no logged-in credential. The fix
+    /// is `coco login <provider>`, not setting a key.
+    NotLoggedIn { provider: String },
+    /// The provider has no model rows visible to the picker.
+    NoModels,
+}
+
+/// Wire payload pairing a provider id with its picker availability. Ships on
+/// [`crate::TuiOnlyEvent::ProviderStatusesRefreshed`] so a post-login rebuild
+/// can replace the TUI's `provider_statuses` map (keyed by `provider`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProviderStatusInfo {
+    /// Canonical provider id (the `provider_statuses` map key).
+    pub provider: String,
+    /// Human-facing provider label used in picker section headers.
+    pub provider_display: String,
+    /// Empty means the provider config is usable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_reasons: Vec<ProviderUnavailableReason>,
+}
+
+/// One OAuth-capable provider row for the `/login` picker. Built on the CLI
+/// side from `RuntimeConfig.providers` and shipped in
+/// [`crate::TuiOnlyEvent::OpenLoginPicker`] so the TUI never reaches into
+/// `runtime_config` directly.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LoginEntryInfo {
+    /// Canonical provider-instance id — the `coco login <provider>` target.
+    pub provider: String,
+    /// Human-facing provider label (picker row title).
+    pub provider_display: String,
+    /// Auth-method label shown on the row (e.g. `"OAuth"`).
+    pub auth_label: String,
+    /// `true` when a credential is already stored/live for this instance.
+    #[serde(default)]
+    pub logged_in: bool,
+}
+
+/// Wire payload for one model row in the picker catalog. Ships on
+/// [`crate::TuiOnlyEvent::ModelCatalogRefreshed`] so a post-login `/models`
+/// discovery can augment the TUI's session-frozen `model_catalog` without a
+/// restart. Mirrors the TUI's `ModelCatalogEntry`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelCatalogInfo {
+    /// Canonical provider id (the `model_catalog` grouping key).
+    pub provider: String,
+    /// Human-facing provider label used in picker section headers.
+    pub provider_display: String,
+    /// Model id, e.g. `gpt-5-5`.
+    pub model_id: String,
+    /// Display name; falls back to `model_id` when unset upstream.
+    pub display_name: String,
+    /// Total context window in tokens when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i64>,
+    /// Efforts the model declares it supports, in declaration order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_efforts: Vec<crate::ReasoningEffort>,
+    /// Effort the model declares as its default when none is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<crate::ReasoningEffort>,
+}
+
 #[cfg(test)]
 #[path = "provider.test.rs"]
 mod tests;

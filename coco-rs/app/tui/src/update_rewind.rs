@@ -635,7 +635,7 @@ pub fn cells_after_are_only_synthetic(cells: &[RenderedCell], from_index: usize)
                 return false;
             }
             CellKind::AssistantThinking { .. }
-            | CellKind::AssistantRedactedThinking
+            | CellKind::AssistantRedactedThinking { .. }
             | CellKind::ToolResult { .. }
             | CellKind::System(_)
             | CellKind::Attachment => continue,
