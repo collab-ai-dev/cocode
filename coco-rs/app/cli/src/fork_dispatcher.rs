@@ -36,6 +36,8 @@ use coco_query::forked_agent::{
 };
 use coco_tool_runtime::AgentSpawnMetadata;
 use coco_types::CacheSafeParams;
+use tokio_util::task::AbortOnDropHandle;
+use tracing::Instrument;
 
 use crate::session_runtime::SessionRuntime;
 
@@ -195,12 +197,34 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         messages.push(std::sync::Arc::new(coco_messages::create_user_message(
             prompt,
         )));
-        let result = engine
-            .run_with_messages_no_events(messages)
+        // Run the child engine as its own executor task — never await it
+        // inline. Inline await stacks the fork's entire poll chain (agent
+        // loop → turn pipeline → system-reminder orchestrator) on top of
+        // the caller's, which overflows the worker stack in debug builds
+        // and is additive when forks nest (reactive compaction inside a
+        // fork re-enters here; query_depth cap is 16). Spawning restarts
+        // poll depth from the executor.
+        //
+        // `AbortOnDropHandle` preserves inline-await drop semantics:
+        // dropping the dispatch future aborts the child instead of
+        // detaching it to keep burning tokens. A child panic surfaces as
+        // `JoinError` and maps to a fork error so callers degrade (compact
+        // falls back to its direct no-tools call) rather than unwinding
+        // the session task. The current span is forwarded explicitly —
+        // spans do not cross `tokio::spawn`.
+        let engine_task = AbortOnDropHandle::new(tokio::spawn(
+            async move { engine.run_with_messages_no_events(messages).await }
+                .instrument(tracing::Span::current()),
+        ));
+        let result = engine_task
             .await
-            .map_err(|e| {
+            .map_err(|e| format!("fork engine task join: {e}"))
+            .and_then(|run| {
+                run.map_err(|e| format!("fork engine run_with_messages_no_events: {e}"))
+            })
+            .map_err(|msg| {
                 Box::new(coco_error::PlainError::new(
-                    format!("fork engine run_with_messages_no_events: {e}"),
+                    msg,
                     coco_error::StatusCode::Internal,
                 )) as coco_error::BoxedError
             })?;

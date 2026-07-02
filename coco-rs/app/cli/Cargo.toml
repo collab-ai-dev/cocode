@@ -77,7 +77,7 @@ clap.workspace = true
 tokio = { workspace = true, features = ["full"] }
 async-trait.workspace = true
 thiserror.workspace = true
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 reqwest.workspace = true
 tracing.workspace = true
 shlex.workspace = true
