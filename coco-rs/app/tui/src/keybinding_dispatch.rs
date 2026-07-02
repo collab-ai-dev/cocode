@@ -136,6 +136,15 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
                 TuiCommand::AutocompleteAccept
             } else if crate::keybinding_bridge::prompt_suggestion_visible(state) {
                 TuiCommand::AcceptPromptSuggestion
+            } else if crate::presentation::input::inline_popup_view(state).is_some() {
+                // A visible completion popup advertises Tab as the accept
+                // key. This arm is only reachable while the popup shows the
+                // empty "no matches" state (non-empty items switch the
+                // context to Autocomplete, where Tab accepts) — there is
+                // nothing to complete, so swallow the key instead of
+                // silently flipping plan mode one keystroke after Tab
+                // meant "accept suggestion".
+                return None;
             } else {
                 TuiCommand::TogglePlanMode
             }

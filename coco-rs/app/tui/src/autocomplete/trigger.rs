@@ -153,10 +153,13 @@ pub fn refresh_suggestions(state: &mut AppState) {
     // Symbol from LSP). Installing an empty Vec on every keystroke blanks the
     // popup for ~one debounce interval — the severe flicker while typing a
     // path. Keep the previously-shown rows mounted until the async result for
-    // the new key replaces them in `apply_async_result_for_key`; a genuinely
-    // empty *final* result still collapses the popup there. Fully-synchronous
-    // kinds (SlashCommand, CustomTitle) keep clearing immediately — an empty
-    // result is authoritative for them.
+    // the new key replaces them in `apply_async_result_for_key`. A genuinely
+    // empty *final* result no longer collapses the popup slot: a session that
+    // has shown rows (`CompletionState::had_items`) keeps its fixed slot with
+    // a dim "no matches" row, while a session that never matched stays hidden
+    // (see `inline_popup_view`). Fully-synchronous kinds (SlashCommand,
+    // CustomTitle) keep clearing immediately — an empty result is
+    // authoritative for them.
     if items.is_empty()
         && !prior_items.is_empty()
         && matches!(
@@ -252,6 +255,8 @@ pub fn apply_async_result_for_key(
     } else {
         sug.selected.min(sug.items.len() - 1)
     };
+    let items_shown = !sug.items.is_empty();
+    state.ui.completion.had_items |= items_shown;
     state.ui.sync_popup_from_active_suggestions();
     true
 }

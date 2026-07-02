@@ -1,7 +1,8 @@
 //! Shared suggestion popup widget for autocomplete + the slash command
 //! palette.
 //!
-//! Renders an inline, borderless list directly above the input area.
+//! Renders an inline, borderless list in the fixed slot directly below
+//! the input area (the viewport's bottom slot, in place of the status bar).
 //! Each row is a single text line: a `▸` selection marker, then — only
 //! when at least one row in the list carries a kind icon — a kind-icon
 //! column (`*` agents, `+` files / paths, `◇` MCP resources, `#` symbols,
@@ -25,6 +26,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
+use crate::i18n::t;
 use crate::presentation::layout::truncate_to_width;
 use coco_tui_ui::style::UiStyles;
 
@@ -145,11 +147,21 @@ const NAME_COLUMN_FLOOR: usize = 10;
 
 impl Widget for SuggestionPopup<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if self.items.is_empty() {
-            return;
-        }
         let popup_width = area.width;
         if popup_width == 0 || area.height == 0 {
+            return;
+        }
+        // An empty list mid-session (overshot filter, async search pending)
+        // keeps the slot and shows a dim placeholder — collapsing the slot
+        // would move the bottom-aligned composer (see `popup_row_budget`).
+        if self.items.is_empty() {
+            Clear.render(area, buf);
+            let text = truncate_to_width(
+                &format!("  {}", t!("suggestion_popup.no_matches")),
+                popup_width as usize,
+            );
+            let line = Line::from(Span::styled(text, Style::default().fg(self.styles.dim())));
+            Paragraph::new(line).render(area, buf);
             return;
         }
 

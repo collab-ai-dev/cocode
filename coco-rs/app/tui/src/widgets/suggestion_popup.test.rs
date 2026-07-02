@@ -163,10 +163,17 @@ fn mixed_popup_keeps_icon_column() {
 }
 
 #[test]
-fn empty_items_renders_nothing() {
+fn empty_items_renders_no_matches_placeholder() {
+    // The slot stays reserved mid-session even with zero matches (fixed
+    // popup slot — see viewport::popup_row_budget); the widget fills it
+    // with a single dim placeholder row instead of collapsing.
+    let _locale = crate::i18n::locale_test_guard("en");
     let out = render_popup(&[], 0, 30, 4);
-    // Widget early-returns; the buffer stays as default cells (spaces).
-    assert!(out.chars().all(|c| c == ' ' || c == '\n'));
+    let lines = out.lines().collect::<Vec<_>>();
+    assert!(lines[0].contains("no matches"), "got: {out}");
+    assert_eq!(lines[1], " ".repeat(30));
+    assert_eq!(lines[2], " ".repeat(30));
+    assert_eq!(lines[3], " ".repeat(30));
 }
 
 #[test]

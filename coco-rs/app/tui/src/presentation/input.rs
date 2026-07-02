@@ -11,19 +11,24 @@ pub(crate) struct InlinePopupView<'a> {
     pub(crate) selected: usize,
 }
 
-impl InlinePopupView<'_> {
-    pub(crate) fn item_count(&self) -> usize {
-        self.items.len()
-    }
-}
-
+/// `Some` while the completion session is visibly in progress — including
+/// frames where the filtered list is momentarily empty (overshot slash
+/// filter, async result gap), PROVIDED the session has already shown rows
+/// (`CompletionState::had_items`). The viewport keeps the popup slot reserved
+/// on those frames (the widget renders a dim "no matches" row), so the
+/// composer does not collapse-and-reopen mid-typing. A session that has never
+/// matched anything stays `None` — heuristic trigger false-positives (bash
+/// tokens containing `/`, prose `@word`, a `/usr/...` path typed as a
+/// message) must not materialize a placeholder panel.
 pub(crate) fn inline_popup_view(state: &AppState) -> Option<InlinePopupView<'_>> {
     if state.ui.interaction.active_prompt.is_some() {
         return None;
     }
     let popup = state.ui.interaction.popup.as_ref()?;
     let suggestions = state.ui.completion.active.as_ref()?;
-    if !popup_matches_suggestions(popup.kind(), suggestions.kind) || suggestions.items.is_empty() {
+    if !popup_matches_suggestions(popup.kind(), suggestions.kind)
+        || (suggestions.items.is_empty() && !state.ui.completion.had_items)
+    {
         return None;
     }
     Some(InlinePopupView {

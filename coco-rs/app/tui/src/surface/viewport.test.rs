@@ -50,32 +50,51 @@ fn interactive_viewport_desired_height_never_exceeds_cap() {
 }
 
 #[test]
-fn interactive_viewport_popup_height_tracks_item_count() {
-    // Content-sized popup (mirrors codex's `calculate_required_height`): the
-    // reserved rows — and thus the composer's vertical shift — scale with the
-    // item count, capped at DEFAULT_MAX_VISIBLE. A short list no longer
-    // reserves the full budget. Layout: 3 fixed composer rows + N popup rows.
-    let short = state_with_popup_items(2);
-    let medium = state_with_popup_items(5);
-    let full = state_with_popup_items(SuggestionPopup::DEFAULT_MAX_VISIBLE as usize);
-    let over_cap = state_with_popup_items(SuggestionPopup::DEFAULT_MAX_VISIBLE as usize + 5);
+fn interactive_viewport_popup_slot_is_fixed_regardless_of_item_count() {
+    // Fixed popup slot (see `popup_row_budget`): the reserved rows — and thus
+    // the composer's position — must NOT vary with the filtered item count,
+    // else the input line bounces on every keystroke. Layout: 3 fixed composer
+    // rows + DEFAULT_MAX_VISIBLE popup rows.
+    let fixed_height = 3 + SuggestionPopup::DEFAULT_MAX_VISIBLE;
+    for count in [
+        2,
+        5,
+        SuggestionPopup::DEFAULT_MAX_VISIBLE as usize,
+        SuggestionPopup::DEFAULT_MAX_VISIBLE as usize + 5,
+    ] {
+        assert_eq!(
+            interactive_viewport_desired_height(
+                &state_with_popup_items(count),
+                48,
+                24,
+                native_plan(),
+                None
+            ),
+            fixed_height,
+            "slot height must stay fixed at {count} items"
+        );
+    }
 
+    // A session whose filter overshot to zero rows keeps the fixed slot
+    // (had_items), so correcting the query doesn't bounce the composer …
+    let mut overshoot = state_with_popup_items(0);
+    overshoot.ui.completion.had_items = true;
     assert_eq!(
-        interactive_viewport_desired_height(&short, 48, 24, native_plan(), None),
+        interactive_viewport_desired_height(&overshoot, 48, 24, native_plan(), None),
+        fixed_height
+    );
+
+    // … while a session that never matched anything reserves nothing
+    // (trigger false-positives must not materialize a placeholder panel).
+    assert_eq!(
+        interactive_viewport_desired_height(
+            &state_with_popup_items(0),
+            48,
+            24,
+            native_plan(),
+            None
+        ),
         5
-    );
-    assert_eq!(
-        interactive_viewport_desired_height(&medium, 48, 24, native_plan(), None),
-        8
-    );
-    assert_eq!(
-        interactive_viewport_desired_height(&full, 48, 24, native_plan(), None),
-        11
-    );
-    // Beyond the cap the reservation clamps to DEFAULT_MAX_VISIBLE.
-    assert_eq!(
-        interactive_viewport_desired_height(&over_cap, 48, 24, native_plan(), None),
-        11
     );
 }
 

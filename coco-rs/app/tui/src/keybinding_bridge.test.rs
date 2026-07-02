@@ -748,6 +748,26 @@ fn test_tab_toggles_plan() {
 }
 
 #[test]
+fn test_tab_is_swallowed_while_empty_popup_visible() {
+    // Overshot filter (`/clea` → `/cleax`): the popup stays visible with a
+    // "no matches" row (had_items session), items are empty so the context
+    // is Chat — but Tab was the accept key one keystroke earlier and must
+    // NOT silently flip plan mode while a completion popup is on screen.
+    let mut state = AppState::new();
+    state.ui.completion.active = Some(crate::state::ActiveSuggestions {
+        kind: crate::state::SuggestionKind::SlashCommand,
+        items: Vec::new(),
+        selected: 0,
+        query: "cleax".into(),
+        trigger_pos: 0,
+    });
+    state.ui.completion.had_items = true;
+    state.ui.sync_popup_from_active_suggestions();
+
+    assert!(map_key(&state, press(KeyCode::Tab)).is_none());
+}
+
+#[test]
 fn test_f1_shows_help() {
     let state = AppState::new();
     let cmd = map_key(&state, press(KeyCode::F(1)));
