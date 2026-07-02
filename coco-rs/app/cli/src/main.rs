@@ -45,8 +45,24 @@ use coco_cli::conversation_export;
 use coco_cli::session_runtime;
 use coco_cli::side_question;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Stack size for tokio worker + blocking threads (default: 2 MiB).
+///
+/// Workspace crates compile at opt-level 0 in dev builds, so the
+/// engine's nested `async fn` poll chains carry very large stack
+/// frames — the tokio default has overflowed in practice (`/compact`
+/// fork pipeline on a `tokio-rt-worker`). 8 MiB costs virtual address
+/// space only; pages commit on touch.
+const TOKIO_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(TOKIO_THREAD_STACK_BYTES)
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     // Sandbox inner-stage self-re-exec: when argv is
     // `--apply-seccomp <mode> -- <prog> <args>` (Linux) or
     // `--apply-windows-sandbox <b64> -- <prog> <args>`, this applies the
