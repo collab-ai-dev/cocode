@@ -121,6 +121,8 @@ pub use surface_payloads::GlobalSearchState;
 pub use surface_payloads::GoalStatusState;
 pub use surface_payloads::IdleReturnState;
 pub use surface_payloads::InvalidConfigState;
+pub use surface_payloads::LoginEntry;
+pub use surface_payloads::LoginPickerState;
 pub use surface_payloads::McpServerApprovalPromptState;
 pub use surface_payloads::McpServerOption;
 pub use surface_payloads::McpServerSelectState;

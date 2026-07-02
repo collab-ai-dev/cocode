@@ -1,6 +1,8 @@
 //! `coco login` / `coco logout` command handlers + the session-shared
 //! `AuthService` accessor used by every role-client construction site.
 
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -42,11 +44,16 @@ pub fn shared_resolver() -> Arc<dyn ProviderCredentialResolver> {
 /// `openai-chatgpt`. Any other value is taken literally — so a user with a
 /// second configured OAuth instance (e.g. `openai-chat-oauth`, or two accounts)
 /// logs each in by its own name.
-fn instance_name(provider: Option<&str>) -> String {
+pub fn instance_name(provider: Option<&str>) -> String {
     use coco_config::builtin::GEMINI_CODE_ASSIST_PROVIDER;
     use coco_config::builtin::OPENAI_CHATGPT_PROVIDER;
     match provider {
-        None | Some("openai") | Some("chatgpt") => OPENAI_CHATGPT_PROVIDER.to_string(),
+        // `openai-oauth` / `oauth` are auth-method shorthands for users who
+        // think in "which login" rather than "which product" — they resolve
+        // to the same ChatGPT-subscription instance as `openai` / `chatgpt`.
+        None | Some("openai") | Some("chatgpt") | Some("openai-oauth") | Some("oauth") => {
+            OPENAI_CHATGPT_PROVIDER.to_string()
+        }
         Some("gemini") | Some("google") => GEMINI_CODE_ASSIST_PROVIDER.to_string(),
         Some(other) => other.to_string(),
     }
@@ -95,9 +102,16 @@ fn oauth_flow_for(provider_name: &str) -> Result<OAuthFlowId> {
 
 /// `coco login [provider] [--no-browser]`. The argument selects the configured
 /// provider instance to activate (multiple instances/accounts log in separately).
-pub async fn run_login(provider: Option<String>, no_browser: bool) -> Result<()> {
+pub async fn run_login(
+    provider: Option<String>,
+    no_browser: bool,
+    import: Option<PathBuf>,
+) -> Result<()> {
     let name = instance_name(provider.as_deref());
     let flow = oauth_flow_for(&name)?;
+    if let Some(path) = import {
+        return run_import(&name, flow, &path).await;
+    }
     let service = AuthService::with_config_dir(global_config::config_home());
     let opts = LoginOptions {
         open_browser: !no_browser,
@@ -119,6 +133,40 @@ pub async fn run_login(provider: Option<String>, no_browser: bool) -> Result<()>
     println!(
         "  Use it by binding a model role to `{}` (e.g. `--models.main {}/gpt-5.5`, \
          or set it as a role in settings.json).",
+        status.provider_name, status.provider_name
+    );
+    Ok(())
+}
+
+/// `coco login <provider> --import <path>` — adopt an existing credential from
+/// another tool's auth file (e.g. the Codex CLI's `~/.codex/auth.json`) instead
+/// of running OAuth. ChatGPT/Codex (`OpenAiChatGpt`) only for now — the other
+/// wired flow (Gemini) has no compatible external file format. The path is read
+/// once and never modified; symlinks are rejected in `read_codex_auth`.
+async fn run_import(name: &str, flow: OAuthFlowId, path: &Path) -> Result<()> {
+    if flow != OAuthFlowId::OpenAiChatGpt {
+        bail!(
+            "`--import` currently supports only the ChatGPT/Codex subscription \
+             (`coco login openai --import …`); provider '{name}' uses a different flow"
+        );
+    }
+    let cred =
+        coco_provider_auth::import::read_codex_auth(path).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let service = AuthService::with_config_dir(global_config::config_home());
+    let status = service
+        .import(name, cred)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let who = status.email.as_deref().unwrap_or("your account");
+    let plan = status.plan_type.as_deref().unwrap_or(status.display_name);
+    println!(
+        "\n✓ Imported `{}` credential ({}) as {who} ({plan}) from {}.",
+        status.provider_name,
+        status.display_name,
+        path.display()
+    );
+    println!(
+        "  Use it by binding a model role to `{}` (e.g. `--models.main {}/gpt-5-5`).",
         status.provider_name, status.provider_name
     );
     Ok(())

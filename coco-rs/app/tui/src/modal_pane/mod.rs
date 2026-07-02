@@ -4,6 +4,7 @@
 //! layer routes bottom-pane prompts first where required and falls through here.
 
 pub(crate) mod add_directory;
+pub(crate) mod login_picker;
 pub(crate) mod model_picker;
 pub(crate) mod permissions_editor;
 pub(crate) mod settings;
@@ -187,6 +188,10 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
             name: "model",
             message: "Model picker dismissed",
         },
+        M::LoginPicker(_) => Slash {
+            name: "login",
+            message: "Login picker dismissed",
+        },
         M::ThemePicker(_) => Slash {
             name: "theme",
             message: "Theme picker dismissed",
@@ -328,6 +333,10 @@ pub(crate) fn filter(state: &mut AppState, c: char) {
             m.filter.push(c);
             m.selected = 0;
         }
+        Some(ModalState::LoginPicker(l)) => {
+            l.filter.push(c);
+            l.selected = 0;
+        }
         Some(ModalState::SessionBrowser(s)) => {
             s.filter.push(c);
             s.selected = 0;
@@ -353,6 +362,10 @@ pub(crate) fn filter_backspace(state: &mut AppState) {
         Some(ModalState::ModelPicker(m)) => {
             m.filter.pop();
             m.selected = 0;
+        }
+        Some(ModalState::LoginPicker(l)) => {
+            l.filter.pop();
+            l.selected = 0;
         }
         Some(ModalState::SessionBrowser(s)) => {
             s.filter.pop();
@@ -394,6 +407,10 @@ pub(crate) fn nav(state: &mut AppState, delta: i32) {
             m.effort = model_picker::filtered_models(m)
                 .get(m.selected as usize)
                 .and_then(|e| e.default_effort);
+        }
+        Some(ModalState::LoginPicker(l)) => {
+            let count = login_picker::filtered(l).len() as i32;
+            l.selected = (l.selected + delta).clamp(0, (count - 1).max(0));
         }
         Some(ModalState::SessionBrowser(s)) => {
             let count = filtered_sessions(s).len() as i32;
@@ -483,6 +500,9 @@ pub(crate) async fn route_confirm(
     match modal {
         ModalState::ModelPicker(m) => {
             model_picker::confirm(state, m, command_tx).await;
+        }
+        ModalState::LoginPicker(l) => {
+            login_picker::confirm(state, l, command_tx).await;
         }
         ModalState::TeamRoster(_) => {
             state.ui.finish_taken_modal();

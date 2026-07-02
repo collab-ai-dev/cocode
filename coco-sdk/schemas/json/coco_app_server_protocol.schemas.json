@@ -4347,6 +4347,34 @@
       ],
       "type": "object"
     },
+    "LoginEntryInfo": {
+      "description": "One OAuth-capable provider row for the `/login` picker. Built on the CLI\nside from `RuntimeConfig.providers` and shipped in\n[`crate::TuiOnlyEvent::OpenLoginPicker`] so the TUI never reaches into\n`runtime_config` directly.",
+      "properties": {
+        "auth_label": {
+          "description": "Auth-method label shown on the row (e.g. `\"OAuth\"`).",
+          "type": "string"
+        },
+        "logged_in": {
+          "default": false,
+          "description": "`true` when a credential is already stored/live for this instance.",
+          "type": "boolean"
+        },
+        "provider": {
+          "description": "Canonical provider-instance id \u2014 the `coco login <provider>` target.",
+          "type": "string"
+        },
+        "provider_display": {
+          "description": "Human-facing provider label (picker row title).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_display",
+        "auth_label"
+      ],
+      "type": "object"
+    },
     "LspPrewarmCompleteParams": {
       "properties": {
         "root": {
@@ -5074,6 +5102,60 @@
           "type": "string"
         }
       ]
+    },
+    "ModelCatalogInfo": {
+      "description": "Wire payload for one model row in the picker catalog. Ships on\n[`crate::TuiOnlyEvent::ModelCatalogRefreshed`] so a post-login `/models`\ndiscovery can augment the TUI's session-frozen `model_catalog` without a\nrestart. Mirrors the TUI's `ModelCatalogEntry`.",
+      "properties": {
+        "context_window": {
+          "description": "Total context window in tokens when known.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "default_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Effort the model declares as its default when none is set."
+        },
+        "display_name": {
+          "description": "Display name; falls back to `model_id` when unset upstream.",
+          "type": "string"
+        },
+        "model_id": {
+          "description": "Model id, e.g. `gpt-5-5`.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "Canonical provider id (the `model_catalog` grouping key).",
+          "type": "string"
+        },
+        "provider_display": {
+          "description": "Human-facing provider label used in picker section headers.",
+          "type": "string"
+        },
+        "supported_efforts": {
+          "description": "Efforts the model declares it supports, in declaration order.",
+          "items": {
+            "$ref": "#/$defs/ReasoningEffort"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_display",
+        "model_id",
+        "display_name"
+      ],
+      "type": "object"
     },
     "ModelFallbackParams": {
       "properties": {
@@ -6357,6 +6439,96 @@
       },
       "description": "Provider-specific options that can be passed to various API calls.\n\nThis is a map of provider names to their specific options.\nFor example: `{ \"anthropic\": { \"thinking\": { \"type\": \"enabled\" } } }`",
       "type": "object"
+    },
+    "ProviderStatusInfo": {
+      "description": "Wire payload pairing a provider id with its picker availability. Ships on\n[`crate::TuiOnlyEvent::ProviderStatusesRefreshed`] so a post-login rebuild\ncan replace the TUI's `provider_statuses` map (keyed by `provider`).",
+      "properties": {
+        "provider": {
+          "description": "Canonical provider id (the `provider_statuses` map key).",
+          "type": "string"
+        },
+        "provider_display": {
+          "description": "Human-facing provider label used in picker section headers.",
+          "type": "string"
+        },
+        "unavailable_reasons": {
+          "description": "Empty means the provider config is usable.",
+          "items": {
+            "$ref": "#/$defs/ProviderUnavailableReason"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "provider",
+        "provider_display"
+      ],
+      "type": "object"
+    },
+    "ProviderUnavailableReason": {
+      "description": "Why a provider is unusable in the model picker. Produced by the CLI's\n`build_provider_statuses` and consumed by the TUI picker; also rides\n[`ProviderStatusInfo`] on the `ProviderStatusesRefreshed` event so an\nin-session `/login` can clear the gate without a restart.",
+      "oneOf": [
+        {
+          "description": "`base_url` is empty after config resolution.",
+          "properties": {
+            "type": {
+              "const": "missing_base_url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "No API key resolved from the configured env var or fallback\n`providers.<name>.api_key`.",
+          "properties": {
+            "env_key": {
+              "type": "string"
+            },
+            "type": {
+              "const": "missing_api_key",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "env_key"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An OAuth-subscription provider with no logged-in credential. The fix\nis `coco login <provider>`, not setting a key.",
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "type": {
+              "const": "not_logged_in",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "provider"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The provider has no model rows visible to the picker.",
+          "properties": {
+            "type": {
+              "const": "no_models",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "QueuedCommandEditImage": {
       "description": "Image payload paired with a queued command edit restore.",
@@ -12681,6 +12853,46 @@
           "type": "object"
         },
         {
+          "description": "Provider availability changed (e.g. after an in-session `/login` or\n`/logout`) \u2014 the CLI re-ran `build_provider_statuses` and pushes the\nfull snapshot so the TUI overwrites `state.session.provider_statuses`.\nThis clears a `NotLoggedIn` gate in the `/model` picker without a\nrestart.",
+          "properties": {
+            "statuses": {
+              "items": {
+                "$ref": "#/$defs/ProviderStatusInfo"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "provider_statuses_refreshed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "statuses"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Live `/models` discovery finished (e.g. after login) \u2014 the CLI merged\nthe provider's reported models onto the static catalog and pushes the\nfull snapshot so the TUI overwrites `state.session.model_catalog`,\nletting the `/model` picker show subscription-only models without a\nrestart.",
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/$defs/ModelCatalogInfo"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "model_catalog_refreshed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "entries"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Queued command was removed from the engine queue and is ready to\nrestore into the composer for editing.",
           "properties": {
             "id": {
@@ -13615,6 +13827,26 @@
           "required": [
             "type",
             "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Open the interactive `/login` provider picker (no-argument form). The\nCLI builds the OAuth-capable provider rows (`RuntimeConfig.providers`\nfiltered to `ProviderAuth::OAuth`, with logged-in state) since the TUI\ncannot reach `runtime_config` directly; confirm emits\n`UserCommand::ProviderLogin` to run that instance's OAuth flow.",
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/$defs/LoginEntryInfo"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "open_login_picker",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "entries"
           ],
           "type": "object"
         },

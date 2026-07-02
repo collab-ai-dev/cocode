@@ -247,6 +247,47 @@ fn finalized_history_lines_render_reasoning_metadata_once_for_adjacent_parts() {
 }
 
 #[test]
+fn finalized_history_lines_render_redacted_reasoning_token_count() {
+    // Codex-style: reasoning ran (token count reported via the side-cache)
+    // but the model returned no visible summary text (empty Reasoning part).
+    // The redacted cell must still surface the token count, not a bare "✻".
+    let theme = Theme::default();
+    let msg = coco_messages::create_assistant_message(
+        vec![
+            coco_messages::AssistantContent::Reasoning(coco_messages::ReasoningContent::new("")),
+            coco_messages::AssistantContent::Text(coco_messages::TextContent::new("answer")),
+        ],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    );
+    let cells = message_to_cells(Arc::new(msg));
+    assert!(matches!(
+        cells[0].kind,
+        CellKind::AssistantRedactedThinking {
+            metadata_anchor: true
+        }
+    ));
+    let mut reasoning_metadata = std::collections::HashMap::new();
+    reasoning_metadata.insert(
+        cells[0].message_uuid,
+        crate::state::session::ReasoningMetadata {
+            duration_ms: None,
+            reasoning_tokens: 96,
+        },
+    );
+
+    let mut render_options = options(&theme, 80);
+    render_options.reasoning_metadata = Some(&reasoning_metadata);
+    let lines = render_finalized_history_lines(&cells, render_options);
+    let rendered = plain_lines(&lines).join("\n");
+
+    assert!(
+        rendered.contains("96 reasoning tok"),
+        "redacted reasoning must surface the token count: {rendered}"
+    );
+}
+
+#[test]
 fn finalized_history_lines_show_thinking_expands_full_reasoning_body() {
     let theme = Theme::default();
     let text = (0..8)

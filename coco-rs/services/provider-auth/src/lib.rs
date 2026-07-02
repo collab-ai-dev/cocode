@@ -26,6 +26,7 @@
 pub mod descriptor;
 pub mod error;
 pub mod flow;
+pub mod import;
 pub mod jwt;
 pub mod pkce;
 pub mod refresh;
@@ -202,6 +203,40 @@ impl AuthService {
         // `cell_for` returns the existing cell (holding the OLD token), so the
         // explicit `store` is load-bearing — and it is serialized under the
         // refresh lock so a racing in-flight refresh can't clobber it.
+        if let Some(cell) = self.cell_for(provider_name, Some(flow)) {
+            let lock = self.refresh_lock_for(provider_name);
+            let _permit = match &lock {
+                Some(l) => l.acquire().await.ok(),
+                None => None,
+            };
+            cell.store(cred.to_snapshot());
+        }
+        self.spawn_refresher(provider_name);
+        self.status(provider_name, flow)
+    }
+
+    /// Adopt a credential obtained OUT-OF-BAND (e.g. imported from another
+    /// tool's auth file) for a provider instance. Persists and publishes it
+    /// through the SAME path as [`Self::login`] — `login_epoch` bump,
+    /// `backend.save`, serialized cell `store`, refresher spawn — so the
+    /// single-cell and rotating-refresh invariants hold. No network or
+    /// interactive flow; `cred.flow` selects the provider's OAuth flow.
+    pub async fn import(
+        &self,
+        provider_name: &str,
+        cred: crate::store::StoredCredential,
+    ) -> Result<ProviderAuthStatus> {
+        let flow = cred.flow;
+        let prev_epoch = self
+            .backend
+            .load(provider_name)
+            .ok()
+            .flatten()
+            .map(|c| c.login_epoch)
+            .unwrap_or(0);
+        let mut cred = cred;
+        cred.login_epoch = prev_epoch.saturating_add(1);
+        self.backend.save(provider_name, &cred)?;
         if let Some(cell) = self.cell_for(provider_name, Some(flow)) {
             let lock = self.refresh_lock_for(provider_name);
             let _permit = match &lock {

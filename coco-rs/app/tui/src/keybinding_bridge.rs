@@ -85,7 +85,8 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             ModalState::ThemePicker(_) => KeybindingContext::ThemePicker,
 
             // Filterable list modals
-            ModalState::SessionBrowser(_)
+            ModalState::LoginPicker(_)
+            | ModalState::SessionBrowser(_)
             | ModalState::GlobalSearch(_)
             | ModalState::QuickOpen(_)
             | ModalState::WorkflowPicker(_)

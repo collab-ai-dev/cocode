@@ -1803,7 +1803,7 @@ pub enum TuiOnlyEvent {
         explanation: Option<crate::PermissionExplanation>,
     },
 
-    // === Picker / data-ready events (5) ===
+    // === Picker / data-ready events (7) ===
     /// Plugin picker data loaded.
     PluginDataReady { plugins: Vec<serde_json::Value> },
     /// Output style picker data loaded.
@@ -1817,6 +1817,22 @@ pub enum TuiOnlyEvent {
     /// rather than querying inline.
     AvailableCommandsRefreshed {
         commands: Vec<crate::SlashCommandInfo>,
+    },
+    /// Provider availability changed (e.g. after an in-session `/login` or
+    /// `/logout`) — the CLI re-ran `build_provider_statuses` and pushes the
+    /// full snapshot so the TUI overwrites `state.session.provider_statuses`.
+    /// This clears a `NotLoggedIn` gate in the `/model` picker without a
+    /// restart.
+    ProviderStatusesRefreshed {
+        statuses: Vec<crate::ProviderStatusInfo>,
+    },
+    /// Live `/models` discovery finished (e.g. after login) — the CLI merged
+    /// the provider's reported models onto the static catalog and pushes the
+    /// full snapshot so the TUI overwrites `state.session.model_catalog`,
+    /// letting the `/model` picker show subscription-only models without a
+    /// restart.
+    ModelCatalogRefreshed {
+        entries: Vec<crate::ModelCatalogInfo>,
     },
     /// Queued command was removed from the engine queue and is ready to
     /// restore into the composer for editing.
@@ -2125,6 +2141,12 @@ pub enum TuiOnlyEvent {
     /// the TUI cannot reach the settings stores directly. Re-emitted
     /// after each edit so the open overlay refreshes in place.
     OpenPermissionsEditor { payload: PermissionsEditorPayload },
+    /// Open the interactive `/login` provider picker (no-argument form). The
+    /// CLI builds the OAuth-capable provider rows (`RuntimeConfig.providers`
+    /// filtered to `ProviderAuth::OAuth`, with logged-in state) since the TUI
+    /// cannot reach `runtime_config` directly; confirm emits
+    /// `UserCommand::ProviderLogin` to run that instance's OAuth flow.
+    OpenLoginPicker { entries: Vec<crate::LoginEntryInfo> },
     /// Open the interactive `/add-dir` overlay (no-argument form). The TUI
     /// shows a directory-path text input; confirm re-dispatches
     /// `/add-dir <path>` to reuse the validated session-add path.

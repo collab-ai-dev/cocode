@@ -1485,6 +1485,39 @@ PermissionUpdate = Annotated[
 ]
 
 
+class ProviderUnavailableReasonMissingBaseUrl(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["missing_base_url"] = Field(default="missing_base_url", alias="type")
+
+
+class ProviderUnavailableReasonMissingApiKey(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["missing_api_key"] = Field(default="missing_api_key", alias="type")
+    env_key: str
+
+
+class ProviderUnavailableReasonNotLoggedIn(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["not_logged_in"] = Field(default="not_logged_in", alias="type")
+    provider: str
+
+
+class ProviderUnavailableReasonNoModels(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["no_models"] = Field(default="no_models", alias="type")
+
+
+ProviderUnavailableReason = Annotated[
+    Union[
+        ProviderUnavailableReasonMissingBaseUrl,
+        ProviderUnavailableReasonMissingApiKey,
+        ProviderUnavailableReasonNotLoggedIn,
+        ProviderUnavailableReasonNoModels,
+    ],
+    Field(discriminator="type_"),
+]
+
+
 class ServerNotificationSessionStarted(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["session/started"] = Field(
@@ -2536,6 +2569,22 @@ class TuiOnlyEventAvailableCommandsRefreshed(BaseModel):
     commands: list[SlashCommandInfo]
 
 
+class TuiOnlyEventProviderStatusesRefreshed(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["provider_statuses_refreshed"] = Field(
+        default="provider_statuses_refreshed", alias="type"
+    )
+    statuses: list[ProviderStatusInfo]
+
+
+class TuiOnlyEventModelCatalogRefreshed(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["model_catalog_refreshed"] = Field(
+        default="model_catalog_refreshed", alias="type"
+    )
+    entries: list[ModelCatalogInfo]
+
+
 class TuiOnlyEventQueuedCommandEditReady(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["queued_command_edit_ready"] = Field(
@@ -2919,6 +2968,14 @@ class TuiOnlyEventOpenPermissionsEditor(BaseModel):
     payload: PermissionsEditorPayload
 
 
+class TuiOnlyEventOpenLoginPicker(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["open_login_picker"] = Field(
+        default="open_login_picker", alias="type"
+    )
+    entries: list[LoginEntryInfo]
+
+
 class TuiOnlyEventOpenAddDirectory(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["open_add_directory"] = Field(
@@ -2950,6 +3007,8 @@ TuiOnlyEvent = Annotated[
         TuiOnlyEventPluginDataReady,
         TuiOnlyEventOutputStylesReady,
         TuiOnlyEventAvailableCommandsRefreshed,
+        TuiOnlyEventProviderStatusesRefreshed,
+        TuiOnlyEventModelCatalogRefreshed,
         TuiOnlyEventQueuedCommandEditReady,
         TuiOnlyEventQueuedCommandsEditReady,
         TuiOnlyEventQueuedCommandEditUnavailable,
@@ -2997,6 +3056,7 @@ TuiOnlyEvent = Annotated[
         TuiOnlyEventOpenPluginDialog,
         TuiOnlyEventOpenAgentsDialog,
         TuiOnlyEventOpenPermissionsEditor,
+        TuiOnlyEventOpenLoginPicker,
         TuiOnlyEventOpenAddDirectory,
         TuiOnlyEventOpenExport,
         TuiOnlyEventSkillOverridesSaved,
@@ -4815,6 +4875,13 @@ class JsonRpcResponse(BaseModel):
     result: Any = None
 
 
+class LoginEntryInfo(BaseModel):
+    auth_label: str
+    provider: str
+    provider_display: str
+    logged_in: bool = False
+
+
 class MaxTurnsReachedOutcome(BaseModel):
     max_turns: int
 
@@ -4883,6 +4950,16 @@ class MessageBreakdown(BaseModel):
     user_message_tokens: int
     attachments_by_type: list[AttachmentTypeBreakdown] | None = None
     tool_calls_by_type: list[ToolTypeBreakdown] | None = None
+
+
+class ModelCatalogInfo(BaseModel):
+    display_name: str
+    model_id: str
+    provider: str
+    provider_display: str
+    context_window: int | None = None
+    default_effort: ReasoningEffort | None = None
+    supported_efforts: list[ReasoningEffort] | None = None
 
 
 class ModelSpec(BaseModel):
@@ -5177,6 +5254,12 @@ class ProviderModelSelection(BaseModel):
 
 class ProviderOptions(BaseModel):
     pass
+
+
+class ProviderStatusInfo(BaseModel):
+    provider: str
+    provider_display: str
+    unavailable_reasons: list[ProviderUnavailableReason] | None = None
 
 
 class QueuedCommandEditImage(BaseModel):

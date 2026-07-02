@@ -1246,6 +1246,19 @@ async fn run_agent_driver(
                 });
             }
 
+            UserCommand::ProviderLogin { provider } => {
+                // `/login` picker Enter — run the OAuth flow for the chosen
+                // instance in the background (the flow blocks on a loopback
+                // callback for up to 5 min). On success `dispatch_provider_login`
+                // emits the transcript message + `ProviderStatusesRefreshed`, so
+                // the `/model` picker's `NotLoggedIn` gate clears live.
+                let runtime_t = runtime.clone();
+                let event_tx_t = event_tx.clone();
+                tokio::spawn(async move {
+                    dispatch_provider_login(&provider, &runtime_t, &event_tx_t).await;
+                });
+            }
+
             UserCommand::SetThinkingLevel { level } => {
                 // coco-rs Ctrl+T cycle path. Updates the Main role's
                 // effort in-memory and emits `ModelRoleChanged` so the
@@ -3620,10 +3633,19 @@ async fn dispatch_slash_command(
     // clients pick up the new token immediately. Handled here (not the
     // registry) because the auth flow lives in `app/cli` + needs the runtime.
     if name == "login" {
-        return dispatch_provider_login(args, event_tx).await;
+        // No-arg `/login` opens the provider picker (built CLI-side from the
+        // OAuth-capable providers); `/login <provider>` logs in directly.
+        if args.trim().is_empty() {
+            let entries = build_login_entries(&runtime.runtime_config);
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::OpenLoginPicker { entries }))
+                .await;
+            return SlashOutcome::Handled;
+        }
+        return dispatch_provider_login(args, runtime, event_tx).await;
     }
     if name == "logout" {
-        return dispatch_provider_logout(args, event_tx).await;
+        return dispatch_provider_logout(args, runtime, event_tx).await;
     }
     if name == "model" && !args.trim().is_empty() {
         let available_models = runtime
@@ -5330,7 +5352,34 @@ fn slash_provider_arg(args: &str) -> Option<String> {
 /// the authorize URL + result in the transcript. Loopback-only (the TUI owns
 /// stdin, so the paste fallback isn't available in-session — use `coco login
 /// --no-browser` on a plain terminal for that).
-async fn dispatch_provider_login(args: &str, event_tx: &mpsc::Sender<CoreEvent>) -> SlashOutcome {
+/// Rebuild provider availability and push it to the TUI so the `/model`
+/// picker reflects a credential change (login/logout) without a restart.
+/// Only `provider_statuses` is auth-dependent — the model catalog and role
+/// map derive from static config and are left untouched.
+async fn emit_provider_statuses_refresh(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) {
+    let statuses = build_provider_statuses(&runtime.runtime_config)
+        .into_iter()
+        .map(|(provider, status)| coco_types::ProviderStatusInfo {
+            provider,
+            provider_display: status.provider_display,
+            unavailable_reasons: status.unavailable_reasons,
+        })
+        .collect();
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::ProviderStatusesRefreshed {
+            statuses,
+        }))
+        .await;
+}
+
+async fn dispatch_provider_login(
+    args: &str,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) -> SlashOutcome {
     let provider = slash_provider_arg(args);
     let tx = event_tx.clone();
     let url_sink: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(move |url| {
@@ -5341,7 +5390,21 @@ async fn dispatch_provider_login(args: &str, event_tx: &mpsc::Sender<CoreEvent>)
         }));
     });
     match coco_cli::provider_login::run_login_session(provider, url_sink).await {
-        Ok(msg) => emit_slash_text(event_tx, "login", args, &msg).await,
+        Ok(msg) => {
+            emit_slash_text(event_tx, "login", args, &msg).await;
+            emit_provider_statuses_refresh(runtime, event_tx).await;
+            // Best-effort: discover the provider's live model list so
+            // subscription-only models surface in `/model` without a restart.
+            let instance =
+                coco_cli::provider_login::instance_name(slash_provider_arg(args).as_deref());
+            let base = model_catalog_infos(&runtime.runtime_config);
+            coco_cli::openai_model_refresh::spawn_after_login(
+                runtime.clone(),
+                instance,
+                event_tx.clone(),
+                base,
+            );
+        }
         Err(e) => {
             emit_slash_status(
                 event_tx,
@@ -5359,10 +5422,17 @@ async fn dispatch_provider_login(args: &str, event_tx: &mpsc::Sender<CoreEvent>)
 
 /// `/logout [provider]` — clears the subscription credential on the shared
 /// `AuthService` (best-effort server-side revocation included).
-async fn dispatch_provider_logout(args: &str, event_tx: &mpsc::Sender<CoreEvent>) -> SlashOutcome {
+async fn dispatch_provider_logout(
+    args: &str,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) -> SlashOutcome {
     let provider = slash_provider_arg(args);
     match coco_cli::provider_login::run_logout_session(provider).await {
-        Ok(msg) => emit_slash_text(event_tx, "logout", args, &msg).await,
+        Ok(msg) => {
+            emit_slash_text(event_tx, "logout", args, &msg).await;
+            emit_provider_statuses_refresh(runtime, event_tx).await;
+        }
         Err(e) => {
             emit_slash_status(
                 event_tx,
@@ -7190,6 +7260,25 @@ fn build_model_catalog(
     entries
 }
 
+/// Convert the static model catalog into the wire payload used by the
+/// post-login `/models` refresh (`ModelCatalogRefreshed`).
+fn model_catalog_infos(
+    runtime_config: &coco_config::RuntimeConfig,
+) -> Vec<coco_types::ModelCatalogInfo> {
+    build_model_catalog(runtime_config)
+        .into_iter()
+        .map(|e| coco_types::ModelCatalogInfo {
+            provider: e.provider,
+            provider_display: e.provider_display,
+            model_id: e.model_id,
+            display_name: e.display_name,
+            context_window: e.context_window,
+            supported_efforts: e.supported_efforts,
+            default_effort: e.default_effort,
+        })
+        .collect()
+}
+
 fn build_provider_statuses(
     runtime_config: &coco_config::RuntimeConfig,
 ) -> std::collections::HashMap<String, coco_tui::state::ProviderStatus> {
@@ -7240,6 +7329,34 @@ fn build_provider_statuses(
             )
         })
         .collect()
+}
+
+/// Build the `/login` picker rows: every OAuth-capable provider instance with
+/// its logged-in state. API-key providers are excluded (they authenticate via
+/// env var / `providers.json`, not `/login`). Kept CLI-side — like
+/// `build_provider_statuses` — since only the CLI can reach `RuntimeConfig`.
+fn build_login_entries(
+    runtime_config: &coco_config::RuntimeConfig,
+) -> Vec<coco_types::LoginEntryInfo> {
+    let resolver = coco_cli::provider_login::shared_resolver();
+    let mut entries: Vec<coco_types::LoginEntryInfo> = runtime_config
+        .providers
+        .iter()
+        .filter_map(|(name, cfg)| match cfg.auth {
+            coco_config::ProviderAuth::OAuth { .. } => Some(coco_types::LoginEntryInfo {
+                provider: name.clone(),
+                provider_display: provider_display_label(name),
+                auth_label: "OAuth".to_string(),
+                logged_in: coco_inference::model_factory::provider_credential_present(
+                    cfg,
+                    Some(&resolver),
+                ),
+            }),
+            coco_config::ProviderAuth::ApiKey => None,
+        })
+        .collect();
+    entries.sort_by(|a, b| a.provider_display.cmp(&b.provider_display));
+    entries
 }
 
 /// Build the initial `model_by_role` map from

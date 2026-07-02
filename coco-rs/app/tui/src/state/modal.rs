@@ -12,6 +12,7 @@ use crate::state::surface_payloads::DiffViewState;
 use crate::state::surface_payloads::DoctorState;
 use crate::state::surface_payloads::ExportState;
 use crate::state::surface_payloads::GlobalSearchState;
+use crate::state::surface_payloads::LoginPickerState;
 use crate::state::surface_payloads::MemoryDialogState;
 use crate::state::surface_payloads::ModelPickerState;
 use crate::state::surface_payloads::QuickOpenState;
@@ -27,6 +28,7 @@ pub enum ModalState {
     Help,
     Error(String),
     ModelPicker(ModelPickerState),
+    LoginPicker(LoginPickerState),
     ThemePicker(ThemePickerState),
     SessionBrowser(SessionBrowserState),
     GlobalSearch(GlobalSearchState),
@@ -70,6 +72,7 @@ impl ModalState {
             Self::Rewind(_) | Self::DiffView(_) => 5,
             Self::Trust(_) | Self::Bridge(_) | Self::McpServerSelect(_) => 6,
             Self::ModelPicker(_)
+            | Self::LoginPicker(_)
             | Self::ThemePicker(_)
             | Self::SessionBrowser(_)
             | Self::GlobalSearch(_)

@@ -235,7 +235,7 @@ pub(crate) fn finalize_after_stream_prefix(
         && cells[text_idx].message_uuid == group_uuid
         && matches!(
             cells[text_idx].kind,
-            CellKind::AssistantThinking { .. } | CellKind::AssistantRedactedThinking
+            CellKind::AssistantThinking { .. } | CellKind::AssistantRedactedThinking { .. }
         )
     {
         text_idx += 1;

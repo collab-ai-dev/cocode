@@ -260,6 +260,33 @@ pub struct ModelPickerState {
     pub effort: Option<coco_types::ReasoningEffort>,
 }
 
+/// `/login` (no-arg) provider picker — a filterable list of OAuth-capable
+/// provider instances. Confirm dispatches `UserCommand::ProviderLogin` for the
+/// focused row. Entries are CLI-built (from `RuntimeConfig.providers`) and
+/// shipped via `TuiOnlyEvent::OpenLoginPicker`; the TUI never reaches config.
+#[derive(Debug, Clone)]
+pub struct LoginPickerState {
+    /// Provider rows, pre-sorted by `provider_display`.
+    pub entries: Vec<LoginEntry>,
+    /// Substring filter, lowercased — matches `provider_display` + `auth_label`.
+    pub filter: String,
+    /// Index into the *filtered* entries list (0-based).
+    pub selected: i32,
+}
+
+/// One row in the `/login` picker.
+#[derive(Debug, Clone)]
+pub struct LoginEntry {
+    /// Canonical provider-instance id — the `coco login <provider>` target.
+    pub provider: String,
+    /// Display label rendered on the row.
+    pub provider_display: String,
+    /// Auth-method label (e.g. `"OAuth"`).
+    pub auth_label: String,
+    /// `true` when a credential is already stored/live — renders a badge.
+    pub logged_in: bool,
+}
+
 /// Teams roster picker — lets the leader cycle a teammate's permission
 /// mode. Members come from `session.subagents` (kind == Teammate); each
 /// member's CURRENT mode is seeded fresh from `team.json` so the picker shows
