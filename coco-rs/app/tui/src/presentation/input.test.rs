@@ -57,13 +57,37 @@ fn inline_popup_view_filters_command_palette_items() {
 }
 
 #[test]
-fn inline_popup_view_returns_none_when_no_rows_match() {
+fn inline_popup_view_stays_visible_when_filter_overshoots() {
+    // An overshot filter (e.g. `/clea` → `/cleax`) keeps the session — and
+    // the reserved popup slot — alive so the composer doesn't
+    // collapse-and-reopen while the user corrects the query. The session
+    // qualifies because it has already shown rows (`had_items`).
     let mut state = AppState::default();
     state.ui.completion.active = Some(ActiveSuggestions {
         kind: SuggestionKind::SlashCommand,
         items: Vec::new(),
         selected: 0,
-        query: "zzz".into(),
+        query: "cleax".into(),
+        trigger_pos: 0,
+    });
+    state.ui.completion.had_items = true;
+    state.ui.sync_popup_from_active_suggestions();
+
+    let view = inline_popup_view(&state).expect("overshot session should stay visible");
+    assert!(view.items.is_empty());
+}
+
+#[test]
+fn inline_popup_view_returns_none_when_session_never_matched() {
+    // A trigger false-positive that never produced a row (bash token with a
+    // `/`, a `/usr/...` path typed as a message) must not materialize a
+    // "no matches" panel.
+    let mut state = AppState::default();
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items: Vec::new(),
+        selected: 0,
+        query: "usr/bin/env".into(),
         trigger_pos: 0,
     });
     state.ui.sync_popup_from_active_suggestions();

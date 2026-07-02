@@ -155,6 +155,14 @@ pub struct CompletionState {
     pub active_key: Option<CompletionRequestKey>,
     pub dismissed: Option<DismissedCompletion>,
     pub last_dispatched: Option<CompletionRequestKey>,
+    /// Whether the CURRENT session (same kind + trigger position) has ever
+    /// held a non-empty item list. Gates the empty-list popup slot: a session
+    /// that once showed rows keeps its reserved slot (dim "no matches") when a
+    /// filter overshoots, while a trigger false-positive that never matched
+    /// anything (bash tokens containing `/`, prose `@word`, a `/usr/...` path
+    /// typed as a message) stays invisible. See
+    /// `presentation::input::inline_popup_view`.
+    pub had_items: bool,
     generation: u64,
 }
 
@@ -165,6 +173,15 @@ impl CompletionState {
         token_range: Range<usize>,
         token_text: String,
     ) -> CompletionRequestKey {
+        // Session identity is the trigger position only — kind deliberately
+        // excluded so the `@` family's mid-token kind flip (At → Path once the
+        // query turns path-like) doesn't reset the flag and collapse the slot
+        // while the path search is in flight.
+        let same_session = self
+            .active
+            .as_ref()
+            .is_some_and(|prev| prev.trigger_pos == suggestions.trigger_pos);
+        self.had_items = (same_session && self.had_items) || !suggestions.items.is_empty();
         let candidate = CompletionRequestKey {
             kind: suggestions.kind,
             token_range,
@@ -193,6 +210,7 @@ impl CompletionState {
     pub fn clear_active(&mut self) {
         self.active = None;
         self.active_key = None;
+        self.had_items = false;
     }
 
     pub fn clear_all(&mut self) {
@@ -258,6 +276,7 @@ pub fn accept_suggestion(state: &mut AppState, mode: AcceptMode) -> Option<Compl
 
     let sug = state.ui.completion.active.take()?;
     state.ui.completion.active_key = None;
+    state.ui.completion.had_items = false;
     let Some(item) = sug.items.get(sug.selected).cloned() else {
         state.ui.completion.clear_active();
         state.ui.sync_popup_from_active_suggestions();
@@ -308,6 +327,21 @@ pub fn accept_suggestion(state: &mut AppState, mode: AcceptMode) -> Option<Compl
 
     if insertion.keep_popup {
         crate::autocomplete::refresh_suggestions(state);
+        // A drill / common-prefix accept continues the SAME completion
+        // session (unchanged trigger position), but the `take()` above wiped
+        // `had_items` before `set_active` could carry it, and the re-armed
+        // path kinds seed empty until the async search lands. Re-latch so
+        // the reserved popup slot doesn't collapse-and-reopen across the
+        // result gap (we just accepted a row, so the session had items).
+        if state
+            .ui
+            .completion
+            .active
+            .as_ref()
+            .is_some_and(|active| active.trigger_pos == sug.trigger_pos)
+        {
+            state.ui.completion.had_items = true;
+        }
     } else {
         state.ui.sync_popup_from_active_suggestions();
     }
@@ -575,3 +609,7 @@ fn quote_path_token(path: &str, quoted: bool) -> String {
     out.push('"');
     out
 }
+
+#[cfg(test)]
+#[path = "mod.test.rs"]
+mod tests;

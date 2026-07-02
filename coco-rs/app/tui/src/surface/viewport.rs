@@ -16,7 +16,6 @@ use crate::FrameLayout;
 use crate::presentation::activity::TurnActivityView;
 use crate::presentation::activity::inline_activity_height;
 use crate::presentation::activity::turn_activity_view;
-use crate::presentation::input::InlinePopupView;
 use crate::presentation::input::inline_popup_view;
 use crate::presentation::layout::text_width;
 use crate::state::AppState;
@@ -188,12 +187,7 @@ fn interaction_pane_bottom_reservation(
             0
         };
     let input_height = input_height_for_state(state);
-    let inline_popup = inline_popup_view(state);
-    let popup_items = inline_popup
-        .as_ref()
-        .map(InlinePopupView::item_count)
-        .unwrap_or(0);
-    let popup_active = popup_items > 0;
+    let popup_active = inline_popup_view(state).is_some();
     let status_height: u16 = crate::status_bar::status_bar_height(state);
     let prompt_rows = interaction_prompt_height(state, _width, max_height);
     // Match render_live_viewport's avail_below_input base exactly (it subtracts
@@ -208,7 +202,7 @@ fn interaction_pane_bottom_reservation(
         + stash_rows;
     let avail_below_input = max_height.saturating_sub(other_fixed_rows);
     let bottom_height: u16 = if popup_active {
-        popup_row_budget(popup_items, avail_below_input)
+        popup_row_budget(avail_below_input)
     } else {
         status_height.min(avail_below_input)
     };
@@ -269,11 +263,7 @@ fn render_live_viewport(
         precomputed_live.unwrap_or_else(|| build_live_tail_lines(state, styles, area.width, plan));
     let live_content_height = live_lines.len() as u16;
     let inline_popup = inline_popup_view(state);
-    let popup_items = inline_popup
-        .as_ref()
-        .map(InlinePopupView::item_count)
-        .unwrap_or(0);
-    let popup_active = popup_items > 0;
+    let popup_active = inline_popup.is_some();
     let status_height: u16 = crate::status_bar::status_bar_height(state);
     // Single-row main-turn status indicator (spinner + verb + elapsed
     // + tokens) above the activity panel — visible only while a turn
@@ -294,7 +284,7 @@ fn render_live_viewport(
         + stash_rows;
     let avail_below_input = area.height.saturating_sub(other_fixed_rows);
     let bottom_height: u16 = if popup_active {
-        popup_row_budget(popup_items, avail_below_input)
+        popup_row_budget(avail_below_input)
     } else {
         status_height.min(avail_below_input)
     };
@@ -454,13 +444,11 @@ fn render_live_viewport(
         frame.render_widget(crate::widgets::StashNotice::new(s, styles), stash);
     }
 
-    if popup_active {
-        if let Some(popup_view) = inline_popup {
-            let popup = crate::widgets::SuggestionPopup::new(popup_view.items, styles)
-                .selected(popup_view.selected)
-                .max_visible(bottom_height as usize);
-            frame.render_widget(popup, bottom);
-        }
+    if let Some(popup_view) = inline_popup {
+        let popup = crate::widgets::SuggestionPopup::new(popup_view.items, styles)
+            .selected(popup_view.selected)
+            .max_visible(bottom_height as usize);
+        frame.render_widget(popup, bottom);
     } else if bottom_height > 0 {
         frame.render_widget(
             crate::status_bar::StatusBarWidget::new(state, styles),
@@ -469,17 +457,23 @@ fn render_live_viewport(
     }
 }
 
-/// Rows to reserve for the active suggestion popup: as many as there are
-/// items, capped at `DEFAULT_MAX_VISIBLE` and by the space below the input.
-/// Sizing to the item count — rather than always reserving the full cap —
-/// keeps the composer's vertical shift proportional to the popup (a 2-item
-/// popup shifts the input ~2 rows, not 10). Mirrors codex's content-based
-/// `calculate_required_height`. When the result count exceeds the cap the
-/// widget shows one fewer item and reuses that bottom row for a dim overflow
-/// indicator, so the reserved height is unchanged (still capped at the cap).
-fn popup_row_budget(item_count: usize, avail_below_input: u16) -> u16 {
-    let rows = item_count.min(SuggestionPopup::DEFAULT_MAX_VISIBLE as usize) as u16;
-    rows.min(avail_below_input)
+/// Rows to reserve for the active suggestion popup: a FIXED slot of
+/// `DEFAULT_MAX_VISIBLE` rows, clamped only by the space below the input.
+///
+/// The slot deliberately does NOT track the filtered item count. The composer
+/// here is bottom-aligned and the popup sits between it and the screen bottom,
+/// so any slot-height change moves the input line — a count-sized slot made
+/// the input bounce on every keystroke as the filter narrowed or async results
+/// landed. (codex sizes its popup to content, but stays stable for a different
+/// reason: its composer is top-anchored and the popup grows DOWNWARD, so the
+/// input never moves. With a bottom-aligned composer, the equivalent stability
+/// is a constant reservation.) The input shifts once when the popup opens,
+/// stays put across filtering — the widget clears unused slot rows and shows a
+/// dim "no matches" row when a session that already had rows overshoots to
+/// zero (`CompletionState::had_items`) — and drops back once when the session
+/// ends.
+fn popup_row_budget(avail_below_input: u16) -> u16 {
+    SuggestionPopup::DEFAULT_MAX_VISIBLE.min(avail_below_input)
 }
 
 pub(crate) fn build_live_tail_lines(
