@@ -316,6 +316,7 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 |-------|---------|
 | `bridge` | IDE bridge (VS Code/JetBrains), REPL bridge, JWT auth, trusted-device store |
 | `retrieval` | BM25 + vector + AST + RepoMap (PageRank) via Facade; isolated `RetrievalEvent` stream |
+| `voice` | Voice input (speech-to-text dictation): `VoiceEngine` trait + remote (OpenAI-wire) / local Whisper backends, `VoiceSession` state machine; isolated `VoiceEvent` stream. Gated by `Feature::Voice` |
 
 ### Utils
 
@@ -325,6 +326,7 @@ Reusable primitives. **Check here first** before implementing any basic utility.
 |-------|---------|
 | `absolute-path` | Absolute path types with deserialization support |
 | `async-utils` | Async runtime utilities and cancellation helpers |
+| `audio-capture` | Microphone capture (cpal, feature-gated) → 16 kHz mono WAV for voice STT |
 | `cache` | LRU cache with Tokio mutex protection |
 | `cargo-bin` | Cargo binary helpers for test harnesses |
 | `common` | Shared cross-crate utility functions |

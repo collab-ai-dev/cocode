@@ -30,6 +30,7 @@ use crate::sections::PartialMemorySettings;
 use crate::sections::PartialPathSettings;
 use crate::sections::PartialShellSettings;
 use crate::sections::PartialToolSettings;
+use crate::sections::PartialVoiceSettings;
 use crate::sections::PartialWebFetchSettings;
 use crate::sections::PartialWebSearchSettings;
 
@@ -109,6 +110,10 @@ pub struct Settings {
     /// established `coco-lsp` design — not here.
     #[serde(default)]
     pub lsp: PartialLspSettings,
+    /// Voice-input (speech-to-text) knobs. Resolved into `RuntimeConfig.voice`
+    /// (`VoiceConfig`). On/off is `Feature::Voice`, not a field here.
+    #[serde(default)]
+    pub voice: PartialVoiceSettings,
     #[serde(default)]
     pub paths: PartialPathSettings,
     #[serde(default)]

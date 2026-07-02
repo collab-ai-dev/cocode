@@ -347,6 +347,10 @@ pub async fn handle_command(
             let _ = command_tx.send(UserCommand::ToggleFastMode).await;
             true
         }
+        // Voice push-to-talk is intercepted in `App::handle_event` (the
+        // `VoiceSession` lives on `App`, not `AppState`). This arm only exists
+        // so the match stays exhaustive; reaching it is a no-op.
+        TuiCommand::VoiceToggle => false,
 
         // ── Input actions ──
         TuiCommand::SubmitInput => {

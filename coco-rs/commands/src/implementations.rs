@@ -45,6 +45,8 @@ pub mod names {
     pub const THEME: &str = "theme";
     pub const COLOR: &str = "color";
     pub const VIM: &str = "vim";
+    pub const VOICE: &str = "voice";
+    pub const VOICE_LANG: &str = "voice-lang";
     pub const OUTPUT_STYLE: &str = "output-style";
     pub const KEYBINDINGS: &str = "keybindings";
     pub const SANDBOX: &str = "sandbox";
@@ -600,6 +602,24 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             false,
             AlwaysSafe,
             Some("[on|off|toggle]"),
+        ),
+        (
+            names::VOICE,
+            "Enable or disable voice input (speech-to-text dictation)",
+            &[],
+            handlers::voice::handler,
+            false,
+            AlwaysSafe,
+            Some("[on|off|toggle]"),
+        ),
+        (
+            names::VOICE_LANG,
+            "Choose the voice dictation language",
+            &[],
+            handlers::voice_lang::handler,
+            false,
+            AlwaysSafe,
+            Some("[<code>]"),
         ),
         (
             names::KEYBINDINGS,

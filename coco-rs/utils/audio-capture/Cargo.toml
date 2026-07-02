@@ -1,0 +1,27 @@
+[package]
+edition = "2021"
+license.workspace = true
+name = "coco-utils-audio"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# `hound` is pure Rust (no system deps) so WAV encoding / resampling always
+# compiles. `cpal` pulls the platform audio backend (CoreAudio / ALSA / WASAPI)
+# and its system build-deps, so it is optional behind the `cpal` feature —
+# callers that don't enable it get an `is_available() == false` stub.
+hound = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+cpal = { workspace = true, optional = true }
+
+[features]
+default = []
+# Real microphone capture via cpal. Enabled transitively by `coco-voice`'s
+# `capture` feature, which is turned on by the shipped coco binary.
+cpal = ["dep:cpal"]
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

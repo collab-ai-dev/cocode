@@ -239,8 +239,11 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         SettingsSearch | SettingsRetry => return None,
 
         // ── Voice ───────────────────────────────────────────────────
-        // Voice subsystem not implemented.
-        VoicePushToTalk => return None,
+        // Push-to-talk toggle. The `VoiceSession` lives on `App`, so the
+        // command is intercepted in `App::handle_event` rather than routed
+        // through `update::handle_command`. Gated at runtime by
+        // `Feature::Voice` (inert when voice is disabled).
+        VoicePushToTalk => TuiCommand::VoiceToggle,
 
         // ── Scroll (internal) ───────────────────────────────────────
         ScrollPageUp if transcript_active(state) => TuiCommand::TranscriptPage(-1),

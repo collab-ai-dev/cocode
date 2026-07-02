@@ -85,6 +85,11 @@ pub enum TuiCommand {
     CyclePermissionMode,
     /// Toggle fast mode.
     ToggleFastMode,
+    /// Voice input push-to-talk: start recording when idle, stop + transcribe
+    /// when recording. No-op when `Feature::Voice` is disabled or the voice
+    /// subsystem is unavailable. Intercepted in `App::handle_event` (the
+    /// `VoiceSession` lives on `App`, not `AppState`).
+    VoiceToggle,
 
     // ── Input actions ──
     /// Submit current input (or queue if streaming).

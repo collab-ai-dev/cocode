@@ -1338,6 +1338,183 @@ impl PathConfig {
     }
 }
 
+// ─── Voice (speech-to-text dictation) ────────────────────────────────────
+//
+// `VoiceConfig` carries backend/language/model sub-parameters. On/off is owned
+// by `Feature::Voice` (`/voice` persists `features.voice`) — there is
+// deliberately NO `enabled` field here (mirrors `MemoryConfig`/`AutoMemory`).
+// Remote routing is a closed `VoiceBackend` enum + a `remote.model` string —
+// the sanctioned "(provider, model_id)" pair, exactly like `EmbeddingConfig`,
+// NOT a `ModelRole` (STT is an auxiliary API surface like embeddings).
+
+/// Which speech-to-text engine transcribes captured audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceBackend {
+    /// Remote OpenAI-wire transcription (`/v1/audio/transcriptions`). MVP
+    /// default: reuses coco's resolved OpenAI creds + `vercel_ai::transcribe`,
+    /// no heavy ML runtime. A Groq/self-host `base_url` reuses this same path.
+    #[default]
+    Openai,
+    /// On-device Whisper. Requires the `local-voice` cargo feature compiled
+    /// into the binary; the factory returns a typed error otherwise.
+    Local,
+}
+
+impl VoiceBackend {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Openai => "openai",
+            Self::Local => "local",
+        }
+    }
+
+    /// Parse the coarse env-override token (settings.json deserializes straight
+    /// into the enum via serde; this is only for `COCO_VOICE_BACKEND`).
+    pub fn from_token(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "openai" | "remote" => Some(Self::Openai),
+            "local" | "whisper" => Some(Self::Local),
+            _ => None,
+        }
+    }
+}
+
+/// How a finished transcript lands in the prompt input (from jcode). Only
+/// `Insert` is wired in Phase 1; the rest are reserved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptMode {
+    /// Insert at the cursor (Phase 1 default).
+    #[default]
+    Insert,
+    /// Append to the end of the current input.
+    Append,
+    /// Replace the whole input buffer.
+    Replace,
+    /// Insert then immediately submit the message.
+    Send,
+}
+
+/// Remote (OpenAI-wire) STT knobs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteVoiceConfig {
+    /// Transcription model id. Default `gpt-4o-mini-transcribe` (cheapest /
+    /// fastest); `gpt-4o-transcribe` or `whisper-1` also valid.
+    pub model: String,
+    /// Override base URL for an OpenAI-wire-compatible host (e.g. Groq's
+    /// `https://api.groq.com/openai/v1`). `None` ⇒ reuse coco's OpenAI creds.
+    pub base_url: Option<String>,
+    /// Name of the env var holding the API key for `base_url` hosts (e.g.
+    /// `GROQ_API_KEY`). `None` ⇒ reuse coco's resolved OpenAI creds.
+    pub api_key_env: Option<String>,
+}
+
+impl Default for RemoteVoiceConfig {
+    fn default() -> Self {
+        Self {
+            model: "gpt-4o-mini-transcribe".to_string(),
+            base_url: None,
+            api_key_env: None,
+        }
+    }
+}
+
+/// On-device Whisper knobs (Phase 2; behind the `local-voice` feature).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalWhisperConfig {
+    /// Whisper size/name token, e.g. `base.en`.
+    pub model: String,
+    /// Where weights are cached. `None` ⇒ `<config_home>/models/whisper/`.
+    pub cache_dir: Option<PathBuf>,
+    /// Surface a download-progress indicator on first use.
+    pub show_download_progress: bool,
+}
+
+impl Default for LocalWhisperConfig {
+    fn default() -> Self {
+        Self {
+            model: "base.en".to_string(),
+            cache_dir: None,
+            show_download_progress: true,
+        }
+    }
+}
+
+const DEFAULT_VOICE_LANGUAGE: &str = "auto";
+
+/// Resolved voice-input configuration. On/off is `Feature::Voice`, not a field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceConfig {
+    pub backend: VoiceBackend,
+    /// Dictation language: BCP-47 / ISO-639-1 (e.g. `en`, `es`, `zh`) or
+    /// `auto`. Free-form and backend-defined — intentionally not enumerated.
+    pub language: String,
+    pub transcript_mode: TranscriptMode,
+    pub remote: RemoteVoiceConfig,
+    pub local: LocalWhisperConfig,
+}
+
+impl Default for VoiceConfig {
+    fn default() -> Self {
+        Self {
+            backend: VoiceBackend::default(),
+            language: DEFAULT_VOICE_LANGUAGE.to_string(),
+            transcript_mode: TranscriptMode::default(),
+            remote: RemoteVoiceConfig::default(),
+            local: LocalWhisperConfig::default(),
+        }
+    }
+}
+
+impl VoiceConfig {
+    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
+        let mut config = Self::default();
+        if let Some(backend) = settings.voice.backend {
+            config.backend = backend;
+        }
+        if let Some(language) = &settings.voice.language {
+            config.language.clone_from(language);
+        }
+        if let Some(mode) = settings.voice.transcript_mode {
+            config.transcript_mode = mode;
+        }
+        if let Some(remote) = &settings.voice.remote {
+            config.remote = remote.clone();
+        }
+        if let Some(local) = &settings.voice.local {
+            config.local = local.clone();
+        }
+        // Env is a coarse override layer (settings.json wins the typed enum).
+        if let Some(raw) = env.get(EnvKey::CocoVoiceBackend) {
+            match VoiceBackend::from_token(raw) {
+                Some(backend) => config.backend = backend,
+                None => tracing::warn!(
+                    value = raw,
+                    "ignoring COCO_VOICE_BACKEND: expected openai|local"
+                ),
+            }
+        }
+        if let Some(language) = env.get_string(EnvKey::CocoVoiceLanguage) {
+            config.language = language;
+        }
+        if let Some(model) = env.get_string(EnvKey::CocoVoiceModel) {
+            config.remote.model = model;
+        }
+        config
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialVoiceSettings {
+    pub backend: Option<VoiceBackend>,
+    pub language: Option<String>,
+    pub transcript_mode: Option<TranscriptMode>,
+    pub remote: Option<RemoteVoiceConfig>,
+    pub local: Option<LocalWhisperConfig>,
+}
+
 #[cfg(test)]
 #[path = "sections.test.rs"]
 mod tests;

@@ -172,6 +172,14 @@ pub enum EnvKey {
     CocoSandboxFailIfUnavailable,
     CocoSandboxMode,
     CocoSessionEndHooksTimeoutMs,
+    /// Voice STT backend override: `openai` | `local`. Invalid values are
+    /// ignored with a warning (settings.json wins the enum; env is a coarse
+    /// override). Consumed by `VoiceConfig::resolve`.
+    CocoVoiceBackend,
+    /// Voice dictation language (BCP-47 / ISO-639-1 or `auto`).
+    CocoVoiceLanguage,
+    /// Remote STT model id override (e.g. `gpt-4o-mini-transcribe`).
+    CocoVoiceModel,
     CocoShell,
     /// Prefix string injected before every hook command. Consumed by
     /// `coco_hooks::execute_hook` for Command-type hooks; NOT wired
@@ -389,6 +397,9 @@ impl EnvKey {
             Self::CocoSessionEndHooksTimeoutMs => "COCO_SESSIONEND_HOOKS_TIMEOUT_MS",
             Self::CocoShell => "COCO_SHELL",
             Self::CocoShellPrefix => "COCO_SHELL_PREFIX",
+            Self::CocoVoiceBackend => "COCO_VOICE_BACKEND",
+            Self::CocoVoiceLanguage => "COCO_VOICE_LANGUAGE",
+            Self::CocoVoiceModel => "COCO_VOICE_MODEL",
             Self::CocoLoopPersistent => "COCO_LOOP_PERSISTENT",
             Self::CocoSimple => "COCO_SIMPLE",
             Self::CocoStartupProfile => "COCO_STARTUP_PROFILE",

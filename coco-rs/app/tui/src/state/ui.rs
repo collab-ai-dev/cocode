@@ -186,6 +186,35 @@ pub struct UiState {
     /// focused on conversation state and lets the renderer find them
     /// next to other UI ephemera.
     pub(crate) ephemeral: crate::state::ui_ephemeral::UiEphemeralState,
+    /// Voice-input display state (recording lifecycle + enabled flag). The
+    /// authoritative `VoiceSession` lives on `App`; this is the render-facing
+    /// mirror. Gated by `Feature::Voice`.
+    pub voice: VoiceUiState,
+}
+
+/// Render-facing voice state. The `VoiceSession` (capture + engine) lives on
+/// `App`; this mirror drives the composer status hint and the enable gate.
+#[derive(Debug, Clone, Default)]
+pub struct VoiceUiState {
+    /// Whether voice input is enabled this session (`Feature::Voice`; toggled
+    /// live by `/voice`). `false` makes the push-to-talk key inert.
+    pub enabled: bool,
+    /// Current recording lifecycle, for the composer status hint.
+    pub status: VoiceStatusKind,
+    /// Backend label for status text (e.g. `"openai"`, `"local"`).
+    pub engine_label: Option<String>,
+}
+
+/// Voice recording lifecycle for display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VoiceStatusKind {
+    /// Not recording.
+    #[default]
+    Idle,
+    /// Microphone is live.
+    Recording,
+    /// Recording stopped; transcription in flight.
+    Transcribing,
 }
 
 /// One slot of stashed input: text + cursor + paste-manager state.
@@ -249,6 +278,7 @@ impl UiState {
             show_teammate_message_preview: false,
             coordinator_mode_active: false,
             ephemeral: crate::state::ui_ephemeral::UiEphemeralState::new(),
+            voice: VoiceUiState::default(),
         }
     }
 

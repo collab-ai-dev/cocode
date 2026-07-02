@@ -5,10 +5,12 @@
 //! * Platform-conditional keys (`IMAGE_PASTE_KEY`, `MODE_CYCLE_KEY`) use
 //!   `cfg!(target_os = ...)` instead of runtime detection.
 //! * Feature-gated blocks (`KAIROS`, `QUICK_SEARCH`, `TERMINAL_PANEL`,
-//!   `MESSAGE_ACTIONS`, `VOICE_MODE`) are intentionally skipped — they
-//!   depend on Anthropic-internal infrastructure (GrowthBook, etc.) that
-//!   coco-rs doesn't ship. Re-add behind a Cargo feature when the
-//!   underlying capability lands.
+//!   `MESSAGE_ACTIONS`) are intentionally skipped — they depend on
+//!   Anthropic-internal infrastructure (GrowthBook, etc.) that coco-rs
+//!   doesn't ship. Re-add behind a Cargo feature when the underlying
+//!   capability lands. `VOICE_MODE` (`voice:pushToTalk`) IS emitted now —
+//!   coco-rs ships the `coco-voice` subsystem gated at runtime by
+//!   `Feature::Voice`; the keybinding is inert until voice is enabled.
 
 use std::collections::BTreeMap;
 
@@ -137,6 +139,14 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("ctrl+s", KeybindingAction::AppSessionBrowser),
                 ("ctrl+g", KeybindingAction::AppPlanEditor),
                 ("ctrl+shift+r", KeybindingAction::ChatToggleSystemReminders),
+                // Voice input (Feature::Voice). Press to start recording, press
+                // again (or Esc) to stop + transcribe. A function key is used
+                // rather than a modifier+letter so it never leaks into the
+                // composer during warm-up (see validator voice-on-bare-letter)
+                // and is delivered reliably without the kitty keyboard protocol.
+                // Rebindable via ~/.coco/keybindings.json; the footer/help
+                // always render the live chord.
+                ("f3", KeybindingAction::VoicePushToTalk),
                 // `tab` toggles plan mode; dispatch is state-dependent (an
                 // active inline ghost / prompt suggestion accepts instead).
                 ("tab", KeybindingAction::ChatTogglePlanMode),
