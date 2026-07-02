@@ -15,10 +15,13 @@ use coco_types::ToolName;
 use coco_types::ToolOverrides;
 use coco_types::WireApi;
 
+use std::collections::BTreeMap;
+
 use crate::model::partial::PartialModelInfo;
 use crate::positive::PositiveTokens;
 use crate::provider::PartialProviderConfig;
 use crate::provider::ProviderAuth;
+use crate::provider::model_override::PartialProviderModelOverride;
 
 const GPT_5_4: &str = include_str!("../../instructions/gpt5_4_prompt.md");
 const GPT_5_5: &str = include_str!("../../instructions/gpt5_5_prompt.md");
@@ -37,6 +40,7 @@ pub(super) fn providers() -> Vec<(&'static str, PartialProviderConfig)> {
                 // legacy Chat Completions deployments override via
                 // `wire_api: "chat"` in providers.json.
                 wire_api: Some(WireApi::Responses),
+                models: Some(openai_gpt5_models()),
                 ..Default::default()
             },
         ),
@@ -53,6 +57,7 @@ pub(super) fn providers() -> Vec<(&'static str, PartialProviderConfig)> {
                 }),
                 base_url: Some("https://chatgpt.com/backend-api/codex".into()),
                 wire_api: Some(WireApi::Responses),
+                models: Some(openai_gpt5_models()),
                 ..Default::default()
             },
         ),
@@ -143,6 +148,31 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
             },
         ),
     ]
+}
+
+/// Pre-registered GPT-5 model entries shared by both builtin OpenAI
+/// providers (`openai` API-key + `openai-chatgpt` OAuth). Empty overrides —
+/// model metadata comes from the vendor `models()` catalog above; this map
+/// only declares which ids each provider serves so `build_model_registry`
+/// emits `(provider, model_id)` pairs and the `/model` picker lists them.
+fn openai_gpt5_models() -> BTreeMap<String, PartialProviderModelOverride> {
+    // coco's catalog ids use dashes (`gpt-5-3-codex`); the OpenAI backend —
+    // both codex (`chatgpt.com/backend-api/codex`) and the platform — expects
+    // the DOTTED slug (`gpt-5.3-codex`). Route the wire request through
+    // `api_model_name` so the sent id matches what the backend accepts. A
+    // dashed id 400s: "The 'gpt-5-3-codex' model is not supported when using
+    // Codex with a ChatGPT account."
+    let wire = |slug: &str| PartialProviderModelOverride {
+        api_model_name: Some(slug.to_string()),
+        ..Default::default()
+    };
+    BTreeMap::from([
+        ("gpt-5-4".into(), wire("gpt-5.4")),
+        ("gpt-5-5".into(), wire("gpt-5.5")),
+        // The ChatGPT/Codex backend exposes the codex model as
+        // `gpt-5.3-codex-spark` (rate-limited window); bare `gpt-5.3-codex` 400s.
+        ("gpt-5-3-codex".into(), wire("gpt-5.3-codex-spark")),
+    ])
 }
 
 fn openai_reasoning_levels() -> Vec<ThinkingLevel> {

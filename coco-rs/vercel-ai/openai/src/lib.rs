@@ -29,6 +29,7 @@ pub mod openai_auth;
 pub mod openai_capabilities;
 pub mod openai_config;
 pub mod openai_error;
+pub mod openai_models_list;
 pub mod openai_provider;
 pub mod provider_options;
 
@@ -55,6 +56,7 @@ pub use openai_capabilities::SystemMessageMode;
 pub use openai_capabilities::get_capabilities;
 pub use openai_config::OpenAIConfig;
 pub use openai_config::ResponsesStorePolicy;
+pub use openai_models_list::DiscoveredModel;
 pub use openai_provider::OpenAIProvider;
 pub use openai_provider::OpenAIProviderSettings;
 pub use openai_provider::create_openai;

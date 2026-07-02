@@ -256,10 +256,6 @@ impl OpenAIResponsesLanguageModel {
                 body["reasoning"] = Value::Object(reasoning);
             }
 
-            if let Some(max) = options.max_output_tokens {
-                body["max_output_tokens"] = json!(max);
-            }
-
             if can_use_non_reasoning_params {
                 set_optional_f32(&mut body, "temperature", options.temperature);
                 set_optional_f32(&mut body, "top_p", options.top_p);
@@ -267,9 +263,17 @@ impl OpenAIResponsesLanguageModel {
         } else {
             set_optional_f32(&mut body, "temperature", options.temperature);
             set_optional_f32(&mut body, "top_p", options.top_p);
-            if let Some(max) = options.max_output_tokens {
-                body["max_output_tokens"] = json!(max);
-            }
+        }
+
+        // The ChatGPT-subscription (codex) backend rejects `max_output_tokens`
+        // ("Unsupported parameter: max_output_tokens") — the same backend that
+        // forces `store: false` below. Omit the cap there; platform / API-key
+        // requests keep it. Mirrors the codex client and jcode's `is_chatgpt_mode`
+        // gate — it's a backend property, not a per-model capability.
+        if !self.config.chatgpt_subscription
+            && let Some(max) = options.max_output_tokens
+        {
+            body["max_output_tokens"] = json!(max);
         }
 
         // Response format: handled via `text` field

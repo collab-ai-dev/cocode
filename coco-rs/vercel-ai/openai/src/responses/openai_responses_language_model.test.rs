@@ -161,6 +161,52 @@ fn get_args_reasoning_model() {
     assert!(body.get("temperature").is_none());
 }
 
+fn make_config_chatgpt() -> Arc<OpenAIConfig> {
+    Arc::new(OpenAIConfig {
+        provider: "openai.responses".into(),
+        base_url: "https://chatgpt.com/backend-api/codex".into(),
+        headers: Arc::new(|| {
+            let mut h = std::collections::HashMap::new();
+            h.insert("Authorization".into(), "Bearer test".into());
+            h
+        }),
+        client: None,
+        full_url: None,
+        chatgpt_subscription: true,
+        reasoning_store: Default::default(),
+    })
+}
+
+#[test]
+fn chatgpt_subscription_omits_max_output_tokens() {
+    // The codex backend rejects `max_output_tokens` ("Unsupported parameter");
+    // both the official codex CLI and jcode omit it in ChatGPT mode. Reasoning
+    // (`o3`) and non-reasoning (`gpt-4o`) models must both drop the cap here,
+    // while the platform path keeps it (see `get_args_reasoning_model`).
+    for model_id in ["o3", "gpt-4o"] {
+        let model = OpenAIResponsesLanguageModel::new(model_id, make_config_chatgpt());
+        let options = LanguageModelV4CallOptions {
+            prompt: vec![vercel_ai_provider::LanguageModelV4Message::User {
+                content: vec![vercel_ai_provider::UserContentPart::Text(
+                    vercel_ai_provider::TextPart {
+                        text: "Hello".into(),
+                        provider_metadata: None,
+                    },
+                )],
+                provider_options: None,
+            }],
+            max_output_tokens: Some(100),
+            ..Default::default()
+        };
+        let (body, _) = model.get_args(&options).expect("get_args");
+        assert!(
+            body.get("max_output_tokens").is_none(),
+            "codex backend must omit max_output_tokens for {model_id}, got {:?}",
+            body.get("max_output_tokens")
+        );
+    }
+}
+
 fn make_config_with_store(policy: ResponsesStorePolicy) -> Arc<OpenAIConfig> {
     Arc::new(OpenAIConfig {
         provider: "openai.responses".into(),
