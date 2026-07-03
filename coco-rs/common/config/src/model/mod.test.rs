@@ -322,10 +322,12 @@ fn test_model_roles_fallbacks_does_not_walk_to_main() {
     assert_eq!(roles.get(ModelRole::Plan).unwrap().model_id, "opus");
     assert!(roles.fallbacks(ModelRole::Plan).is_empty());
     // Main itself has one fallback.
-    assert_eq!(
-        roles.fallbacks(ModelRole::Main),
-        &[spec("anthropic", "sonnet")]
-    );
+    let main_fallbacks: Vec<_> = roles
+        .fallbacks(ModelRole::Main)
+        .iter()
+        .map(|s| s.model.clone())
+        .collect();
+    assert_eq!(main_fallbacks, vec![spec("anthropic", "sonnet")]);
 }
 
 #[test]

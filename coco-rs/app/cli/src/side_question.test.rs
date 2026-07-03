@@ -46,6 +46,7 @@ fn empty_cache() -> CacheSafeParams {
         provider: "test-provider".into(),
         active_shell_tool: coco_types::ActiveShellTool::Disabled,
         prompt_cache: None,
+        effort: None,
         fork_context_messages: Vec::new(),
     }
 }

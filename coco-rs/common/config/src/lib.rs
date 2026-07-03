@@ -78,6 +78,7 @@ pub use model::ModelSelectionSettings;
 pub use model::PartialModelInfo;
 pub use model::RecoveryProbePolicy;
 pub use model::ResolvedModel;
+pub use model::RoleSlot;
 pub use model::RoleSlots;
 pub use model::build_model_registry;
 pub use model_allowlist::is_model_allowed;

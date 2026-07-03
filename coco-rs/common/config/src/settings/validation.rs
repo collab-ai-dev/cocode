@@ -143,8 +143,8 @@ fn validate_model_allowlist(
         validate_selected_model(
             path,
             "primary",
-            &slots.primary.provider,
-            &slots.primary.model_id,
+            &slots.primary.model.provider,
+            &slots.primary.model.model_id,
             available,
             errors,
         );
@@ -152,8 +152,8 @@ fn validate_model_allowlist(
             validate_selected_model(
                 path,
                 &format!("fallbacks[{idx}]"),
-                &fallback.provider,
-                &fallback.model_id,
+                &fallback.model.provider,
+                &fallback.model.model_id,
                 available,
                 errors,
             );

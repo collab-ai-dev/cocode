@@ -38,18 +38,49 @@ use serde_json::Map;
 use serde_json::Value;
 
 use coco_types::ProviderModelSelection;
+use coco_types::ReasoningEffort;
+
+/// One position in a role's model chain: a model identity plus the
+/// reasoning effort to use **while that specific model is serving**.
+///
+/// Effort rides the slot, not the role, so a fallback model can run at
+/// a different thinking level than the primary — whichever slot is live
+/// contributes its own effort at the wire. See
+/// [`super::ModelInfo::resolve_thinking_level`] for how the effort is
+/// clamped against the serving model's declared ladder.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RoleSlot<T> {
+    pub model: T,
+    /// Per-slot reasoning effort intent. `None` = this slot states no
+    /// effort, so the wire layer falls through to the model's
+    /// `default_thinking_level`, then the provider default. `None` is
+    /// distinct from `Some(ReasoningEffort::Off)` (explicit "thinking
+    /// off") — the latter suppresses thinking, the former defers.
+    pub effort: Option<ReasoningEffort>,
+}
+
+impl<T> RoleSlot<T> {
+    /// Slot with no effort declared — model default applies downstream.
+    pub fn bare(model: T) -> Self {
+        Self {
+            model,
+            effort: None,
+        }
+    }
+}
 
 /// Per-role primary + ordered fallback chain + fallback policy.
 ///
 /// Generic over `T` so the config-facing (`ProviderModelSelection`) and
 /// runtime-facing (`ModelSpec`) instantiations share code. Keeping a
 /// single type avoids drift between the two sides and mirrors the
-/// existing `ModelResult<T>`-style generics in the codebase.
+/// existing `ModelResult<T>`-style generics in the codebase. Each slot
+/// (primary and every fallback) carries its own per-slot [`RoleSlot`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RoleSlots<T> {
-    pub primary: T,
+    pub primary: RoleSlot<T>,
     /// Ordered fallbacks. Empty = no fallback configured.
-    pub fallbacks: Vec<T>,
+    pub fallbacks: Vec<RoleSlot<T>>,
     /// Policy for fallback-chain exhaustion and primary recovery probes.
     pub policy: FallbackPolicy,
 }
@@ -57,19 +88,19 @@ pub struct RoleSlots<T> {
 impl<T> RoleSlots<T> {
     pub fn new(primary: T) -> Self {
         Self {
-            primary,
+            primary: RoleSlot::bare(primary),
             fallbacks: Vec::new(),
             policy: FallbackPolicy::default(),
         }
     }
 
     pub fn with_fallback(mut self, fallback: T) -> Self {
-        self.fallbacks.push(fallback);
+        self.fallbacks.push(RoleSlot::bare(fallback));
         self
     }
 
     pub fn with_fallbacks(mut self, fallbacks: Vec<T>) -> Self {
-        self.fallbacks = fallbacks;
+        self.fallbacks = fallbacks.into_iter().map(RoleSlot::bare).collect();
         self
     }
 
@@ -78,7 +109,8 @@ impl<T> RoleSlots<T> {
         self
     }
 
-    /// Map both primary and fallbacks with a single closure.
+    /// Map every slot's model with a single closure, carrying each
+    /// slot's effort through unchanged.
     ///
     /// Used by the runtime-config resolver to lift
     /// `RoleSlots<ProviderModelSelection>` (config-side) into
@@ -88,17 +120,44 @@ impl<T> RoleSlots<T> {
     where
         F: FnMut(T) -> Result<U, E>,
     {
-        let primary = f(self.primary)?;
+        let primary = RoleSlot {
+            model: f(self.primary.model)?,
+            effort: self.primary.effort,
+        };
         let fallbacks = self
             .fallbacks
             .into_iter()
-            .map(&mut f)
+            .map(|slot| {
+                Ok(RoleSlot {
+                    model: f(slot.model)?,
+                    effort: slot.effort,
+                })
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(RoleSlots {
             primary,
             fallbacks,
             policy: self.policy,
         })
+    }
+}
+
+impl<T: Clone> RoleSlots<T> {
+    /// Clone the chain but drop every slot's effort. Used when an
+    /// unconfigured role borrows Main's **models** at config-resolution
+    /// time — effort must not ride along, since it belongs only to the
+    /// role that explicitly declared it. A role that wants an effort
+    /// must configure `models.<role>` itself.
+    pub fn without_effort(&self) -> Self {
+        Self {
+            primary: RoleSlot::bare(self.primary.model.clone()),
+            fallbacks: self
+                .fallbacks
+                .iter()
+                .map(|slot| RoleSlot::bare(slot.model.clone()))
+                .collect(),
+            policy: self.policy,
+        }
     }
 }
 
@@ -197,7 +256,9 @@ impl<'de> Deserialize<'de> for RoleSlots<ProviderModelSelection> {
         let value = Value::deserialize(d)?;
 
         if let Some(s) = value.as_str() {
-            return parse_bare_string(s).map_err(D::Error::custom);
+            return ProviderModelSelection::from_slash_str(s)
+                .map(RoleSlots::new)
+                .map_err(D::Error::custom);
         }
 
         let obj = value
@@ -211,6 +272,16 @@ impl<'de> Deserialize<'de> for RoleSlots<ProviderModelSelection> {
             || obj.contains_key("recovery");
 
         if has_nested_keys {
+            // The most likely misplacement: `effort` at the role level.
+            // It belongs on a slot object — give a guiding error instead
+            // of the generic unknown-field one.
+            if obj.contains_key("effort") {
+                return Err(D::Error::custom(
+                    "`effort` belongs on a slot object, not at the role level — \
+                     e.g. \"primary\": {\"provider\": \"openai\", \"model_id\": \"gpt-5\", \
+                     \"effort\": \"high\"}",
+                ));
+            }
             reject_unknown_fields::<D::Error>(
                 obj,
                 &["primary", "fallback", "fallbacks", "policy"],
@@ -219,14 +290,14 @@ impl<'de> Deserialize<'de> for RoleSlots<ProviderModelSelection> {
             let primary = obj
                 .get("primary")
                 .ok_or_else(|| D::Error::custom("nested role selection requires `primary`"))
-                .and_then(|v| parse_selection_value::<D::Error>(v, "primary"))?;
+                .and_then(|v| parse_slot_value::<D::Error>(v, "primary"))?;
             let fallback = obj
                 .get("fallback")
-                .map(|v| parse_selection_value::<D::Error>(v, "fallback"))
+                .map(|v| parse_slot_value::<D::Error>(v, "fallback"))
                 .transpose()?;
             let fallback_list = obj
                 .get("fallbacks")
-                .map(parse_fallbacks::<D::Error>)
+                .map(parse_slot_fallbacks::<D::Error>)
                 .transpose()?;
             let policy = obj
                 .get("policy")
@@ -256,6 +327,24 @@ impl<'de> Deserialize<'de> for RoleSlots<ProviderModelSelection> {
     }
 }
 
+/// Emit a slot as a flat object `{provider, model_id, effort?}`.
+/// `effort` is skipped when absent so a slot that states no effort
+/// round-trips to the same minimal shape it was written in.
+impl Serialize for RoleSlot<ProviderModelSelection> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("RoleSlot", 2 + usize::from(self.effort.is_some()))?;
+        st.serialize_field("provider", &self.model.provider)?;
+        st.serialize_field("model_id", &self.model.model_id)?;
+        if let Some(effort) = self.effort {
+            st.serialize_field("effort", &effort)?;
+        } else {
+            st.skip_field("effort")?;
+        }
+        st.end()
+    }
+}
+
 /// Emit the compact nested form on serialize. Round-tripping a
 /// bare-string-form config through serde produces the nested form —
 /// acceptable because the nested form is always valid input.
@@ -278,39 +367,69 @@ impl Serialize for RoleSlots<ProviderModelSelection> {
     }
 }
 
-fn parse_bare_string(s: &str) -> Result<RoleSlots<ProviderModelSelection>, String> {
-    ProviderModelSelection::from_slash_str(s).map(RoleSlots::new)
-}
-
-fn parse_fallbacks<E: Error>(value: &Value) -> Result<Vec<ProviderModelSelection>, E> {
+fn parse_slot_fallbacks<E: Error>(
+    value: &Value,
+) -> Result<Vec<RoleSlot<ProviderModelSelection>>, E> {
     let values = value
         .as_array()
         .ok_or_else(|| E::custom("`fallbacks` must be an array"))?;
     values
         .iter()
         .enumerate()
-        .map(|(idx, v)| parse_selection_value(v, &format!("fallbacks[{idx}]")))
+        .map(|(idx, v)| parse_slot_value(v, &format!("fallbacks[{idx}]")))
         .collect()
 }
 
-fn parse_selection_value<E: Error>(
+/// Parse one slot: either a `"provider/model_id"` shorthand (no effort)
+/// or an object `{provider, model_id, effort?}`.
+fn parse_slot_value<E: Error>(
     value: &Value,
     label: &str,
-) -> Result<ProviderModelSelection, E> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| E::custom(format!("`{label}` must be an object")))?;
-    parse_selection_object(obj, label)
-}
-
-fn parse_selection_object<E: Error>(
-    obj: &Map<String, Value>,
-    label: &str,
-) -> Result<ProviderModelSelection, E> {
-    reject_unknown_fields::<E>(obj, &["provider", "model_id"], label)?;
+) -> Result<RoleSlot<ProviderModelSelection>, E> {
+    if let Some(s) = value.as_str() {
+        return ProviderModelSelection::from_slash_str(s)
+            .map(RoleSlot::bare)
+            .map_err(E::custom);
+    }
+    let obj = value.as_object().ok_or_else(|| {
+        E::custom(format!(
+            "`{label}` must be a `provider/model_id` string or an object"
+        ))
+    })?;
+    reject_unknown_fields::<E>(obj, &["provider", "model_id", "effort"], label)?;
     let provider = required_non_empty_string::<E>(obj, "provider", label)?;
     let model_id = required_non_empty_string::<E>(obj, "model_id", label)?;
-    Ok(ProviderModelSelection { provider, model_id })
+    let effort = parse_slot_effort::<E>(obj, label)?;
+    Ok(RoleSlot {
+        model: ProviderModelSelection { provider, model_id },
+        effort,
+    })
+}
+
+/// Parse the optional `effort` key on a slot object. Absent or `null`
+/// yields `None` (defer to model default); a string is parsed against
+/// [`ReasoningEffort`]'s canonical names + aliases.
+fn parse_slot_effort<E: Error>(
+    obj: &Map<String, Value>,
+    label: &str,
+) -> Result<Option<ReasoningEffort>, E> {
+    match obj.get("effort") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => {
+            let s = value.as_str().ok_or_else(|| {
+                E::custom(format!(
+                    "{label}.effort must be a string \
+                     (one of off/auto/minimal/low/medium/high/xhigh)"
+                ))
+            })?;
+            s.parse::<ReasoningEffort>().map(Some).map_err(|_| {
+                E::custom(format!(
+                    "{label}.effort `{s}` is invalid — expected one of \
+                     off/auto/minimal/low/medium/high/xhigh"
+                ))
+            })
+        }
+    }
 }
 
 fn required_non_empty_string<E: Error>(

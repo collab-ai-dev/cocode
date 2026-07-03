@@ -373,6 +373,19 @@ pub struct CacheSafeParams {
     /// it is supposed to share with the parent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_cache: Option<PromptCacheConfig>,
+    /// Parent turn's **effective** reasoning effort: the explicit
+    /// per-call level (layer 1) or the serving slot's bound effort
+    /// (layer 2). Cache-sharing forks mirror this verbatim — thinking
+    /// params (enable/disable, budget) key Anthropic's messages-level
+    /// cache breakpoints, so a fork that diverges re-reads the whole
+    /// parent history uncached (PR #18143 incident class). `None` =
+    /// parent ran on the model default; the fork targets the same
+    /// model, so both resolve the identical default and parity holds
+    /// without a snapshot. Effort only, no budget — fork and parent
+    /// share the model, so the wire budget resolves from the same
+    /// `supported_thinking_levels` ladder on both sides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<crate::ReasoningEffort>,
     /// Parent message history that should prefix the fork's prompt.
     /// Shared via `Arc<Message>` so the cache slot, fork dispatcher, and
     /// adapter all touch the same allocations — no serialize/deserialize

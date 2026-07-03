@@ -75,6 +75,7 @@ fn test_build_query_config_inherits_prompt_cache_and_sets_skip_cache_write() {
             requested_betas: Default::default(),
             skip_cache_write: false,
         }),
+        effort: None,
         fork_context_messages: vec![Arc::new(coco_messages::create_user_message("parent turn"))],
     };
     let options = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
@@ -99,6 +100,50 @@ fn test_build_query_config_inherits_prompt_cache_and_sets_skip_cache_write() {
         &config.fork_context_messages[0],
         &cache.fork_context_messages[0],
     ));
+}
+
+/// Thinking parity: a cache-sharing fork mirrors the parent's captured
+/// effective effort so its wire thinking params match the parent's —
+/// thinking config keys Anthropic's messages-level cache (PR #18143).
+#[test]
+fn test_build_query_config_mirrors_parent_effective_effort() {
+    fn cache_with_effort(effort: Option<coco_types::ReasoningEffort>) -> CacheSafeParams {
+        CacheSafeParams {
+            rendered_system_prompt: "system".into(),
+            model_id: "claude-opus-4-7".into(),
+            provider: "anthropic".into(),
+            active_shell_tool: coco_types::ActiveShellTool::Disabled,
+            prompt_cache: None,
+            effort,
+            fork_context_messages: Vec::new(),
+        }
+    }
+
+    // Parent ran at High (Ctrl+T or `models.main.<slot>.effort`) →
+    // the fork mirrors it.
+    let options = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
+    let config = build_query_config(
+        &cache_with_effort(Some(coco_types::ReasoningEffort::High)),
+        &options,
+        "test-session",
+    );
+    assert_eq!(config.effort, Some(coco_types::ReasoningEffort::High));
+
+    // Parent ran on the model default → fork stays None (same model ⇒
+    // same default ⇒ parity without a snapshot).
+    let config = build_query_config(&cache_with_effort(None), &options, "test-session");
+    assert_eq!(config.effort, None);
+
+    // An explicit per-fork override (deliberately cache-busting) still
+    // wins over the parent snapshot.
+    let mut options = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
+    options.effort = Some(coco_types::ReasoningEffort::Low);
+    let config = build_query_config(
+        &cache_with_effort(Some(coco_types::ReasoningEffort::High)),
+        &options,
+        "test-session",
+    );
+    assert_eq!(config.effort, Some(coco_types::ReasoningEffort::Low));
 }
 
 #[tokio::test]

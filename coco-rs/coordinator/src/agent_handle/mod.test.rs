@@ -997,12 +997,12 @@ async fn test_set_runtime_config_replaces_main_model_resolver() {
     runtime.model_roles.roles.insert(
         ModelRole::Main,
         coco_config::RoleSlots {
-            primary: ModelSpec {
+            primary: coco_config::RoleSlot::bare(ModelSpec {
                 provider: "anthropic".into(),
                 api: ProviderApi::Anthropic,
                 model_id: "claude-opus-4-7".into(),
                 display_name: "Claude Opus 4.7".into(),
-            },
+            }),
             fallbacks: Vec::new(),
             policy: coco_config::FallbackPolicy::default(),
         },

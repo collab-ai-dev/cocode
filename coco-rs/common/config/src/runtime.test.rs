@@ -308,10 +308,74 @@ fn test_cli_fallback_model_overrides_populate_main_chain_in_order() {
     let runtime = build_isolated(settings, env, overrides).expect("runtime with fallback chain");
     let fallbacks = runtime.model_roles.fallbacks(ModelRole::Main);
     assert_eq!(fallbacks.len(), 2);
-    assert_eq!(fallbacks[0].provider, "anthropic");
-    assert_eq!(fallbacks[0].model_id, "claude-opus-4-7");
-    assert_eq!(fallbacks[1].provider, "openai");
-    assert_eq!(fallbacks[1].model_id, "gpt-5-5");
+    assert_eq!(fallbacks[0].model.provider, "anthropic");
+    assert_eq!(fallbacks[0].model.model_id, "claude-opus-4-7");
+    assert_eq!(fallbacks[1].model.provider, "openai");
+    assert_eq!(fallbacks[1].model.model_id, "gpt-5-5");
+    // CLI fallbacks carry no effort — they defer to the model default.
+    assert_eq!(fallbacks[0].effort, None);
+    assert_eq!(fallbacks[1].effort, None);
+}
+
+#[test]
+fn test_role_effort_isolation_and_same_model_different_effort() {
+    use coco_types::ReasoningEffort;
+
+    let slots_with_effort =
+        |provider: &str, model_id: &str, effort: ReasoningEffort| crate::RoleSlots {
+            primary: crate::RoleSlot {
+                model: model_selection(provider, model_id),
+                effort: Some(effort),
+            },
+            fallbacks: Vec::new(),
+            policy: crate::FallbackPolicy::default(),
+        };
+
+    // Main and Explore share the SAME model but declare DIFFERENT
+    // efforts — the same-model-different-effort case the whole design
+    // exists to serve. Fast is left unconfigured.
+    let settings = settings_with(Settings {
+        models: crate::ModelSelectionSettings {
+            main: Some(slots_with_effort(
+                "anthropic",
+                "claude-haiku-4-5",
+                ReasoningEffort::High,
+            )),
+            explore: Some(slots_with_effort(
+                "anthropic",
+                "claude-haiku-4-5",
+                ReasoningEffort::Medium,
+            )),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("runtime");
+
+    // Same model, different effort — both preserved per role.
+    let main = runtime.model_roles.primary_slot(ModelRole::Main).unwrap();
+    let explore = runtime
+        .model_roles
+        .primary_slot(ModelRole::Explore)
+        .unwrap();
+    assert_eq!(main.model.model_id, "claude-haiku-4-5");
+    assert_eq!(explore.model.model_id, "claude-haiku-4-5");
+    assert_eq!(main.effort, Some(ReasoningEffort::High));
+    assert_eq!(explore.effort, Some(ReasoningEffort::Medium));
+
+    // Effort isolation: unconfigured Fast borrows Main's MODEL but NOT
+    // its effort — it defaults to the model default, not Main's `High`.
+    let fast = runtime.model_roles.primary_slot(ModelRole::Fast).unwrap();
+    assert_eq!(fast.model.model_id, "claude-haiku-4-5");
+    assert_eq!(
+        fast.effort, None,
+        "an unconfigured role must not inherit Main's effort",
+    );
 }
 
 #[test]
@@ -680,8 +744,8 @@ fn test_cli_fallback_overrides_take_precedence_over_settings_fallbacks() {
         .expect("CLI should override settings fallbacks");
     let fallbacks = runtime.model_roles.fallbacks(ModelRole::Main);
     assert_eq!(fallbacks.len(), 1, "CLI replaces settings chain entirely");
-    assert_eq!(fallbacks[0].provider, "openai");
-    assert_eq!(fallbacks[0].model_id, "gpt-5-5");
+    assert_eq!(fallbacks[0].model.provider, "openai");
+    assert_eq!(fallbacks[0].model.model_id, "gpt-5-5");
 }
 
 #[test]

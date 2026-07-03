@@ -10,13 +10,111 @@ fn sel(provider: &str, model_id: &str) -> ProviderModelSelection {
     }
 }
 
+/// Model identities of the fallback chain, dropping per-slot effort —
+/// used by the pre-effort tests that only assert on model identity.
+fn fallback_models(slots: &RoleSlots<ProviderModelSelection>) -> Vec<ProviderModelSelection> {
+    slots.fallbacks.iter().map(|s| s.model.clone()).collect()
+}
+
 #[test]
 fn test_deserialize_bare_string_form() {
     let slots: RoleSlots<ProviderModelSelection> =
         serde_json::from_value(json!("anthropic/claude-opus-4-6")).unwrap();
-    assert_eq!(slots.primary, sel("anthropic", "claude-opus-4-6"));
+    assert_eq!(slots.primary.model, sel("anthropic", "claude-opus-4-6"));
+    assert_eq!(slots.primary.effort, None);
     assert!(slots.fallbacks.is_empty());
     assert_eq!(slots.policy, FallbackPolicy::default());
+}
+
+#[test]
+fn test_deserialize_slot_effort_on_primary_and_fallback() {
+    let slots: RoleSlots<ProviderModelSelection> = serde_json::from_value(json!({
+        "primary":   { "provider": "openai-aipaas", "model_id": "gpt-5-5", "effort": "high" },
+        "fallbacks": [ { "provider": "openai", "model_id": "gpt-5-4", "effort": "medium" } ]
+    }))
+    .unwrap();
+    assert_eq!(slots.primary.model, sel("openai-aipaas", "gpt-5-5"));
+    assert_eq!(slots.primary.effort, Some(ReasoningEffort::High));
+    assert_eq!(slots.fallbacks.len(), 1);
+    assert_eq!(slots.fallbacks[0].model, sel("openai", "gpt-5-4"));
+    assert_eq!(slots.fallbacks[0].effort, Some(ReasoningEffort::Medium));
+}
+
+#[test]
+fn test_deserialize_slot_effort_off_is_explicit() {
+    // `effort: "off"` is a first-class explicit value, distinct from an
+    // absent effort (which defers to the model default).
+    let slots: RoleSlots<ProviderModelSelection> = serde_json::from_value(json!({
+        "primary": { "provider": "openai", "model_id": "gpt-5-4", "effort": "off" }
+    }))
+    .unwrap();
+    assert_eq!(slots.primary.effort, Some(ReasoningEffort::Off));
+}
+
+#[test]
+fn test_deserialize_slot_effort_aliases() {
+    for (wire, expected) in [
+        ("disable", ReasoningEffort::Off),
+        ("max", ReasoningEffort::XHigh),
+        ("x_high", ReasoningEffort::XHigh),
+    ] {
+        let slots: RoleSlots<ProviderModelSelection> = serde_json::from_value(json!({
+            "primary": { "provider": "openai", "model_id": "gpt-5-4", "effort": wire }
+        }))
+        .unwrap();
+        assert_eq!(slots.primary.effort, Some(expected), "wire form `{wire}`");
+    }
+}
+
+#[test]
+fn test_deserialize_slot_effort_null_is_none() {
+    let slots: RoleSlots<ProviderModelSelection> = serde_json::from_value(json!({
+        "primary": { "provider": "openai", "model_id": "gpt-5-4", "effort": null }
+    }))
+    .unwrap();
+    assert_eq!(slots.primary.effort, None);
+}
+
+#[test]
+fn test_deserialize_slot_effort_rejects_invalid() {
+    let err = serde_json::from_value::<RoleSlots<ProviderModelSelection>>(json!({
+        "primary": { "provider": "openai", "model_id": "gpt-5-4", "effort": "turbo" }
+    }))
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("effort") && msg.contains("turbo"),
+        "expected actionable effort error, got: {msg}"
+    );
+}
+
+#[test]
+fn test_deserialize_role_level_effort_gets_guiding_error() {
+    // The most likely misplacement — `effort` at the role level (next
+    // to `primary`) instead of inside a slot object — must point the
+    // user at the correct placement, not emit a generic unknown-field.
+    let err = serde_json::from_value::<RoleSlots<ProviderModelSelection>>(json!({
+        "primary": { "provider": "openai", "model_id": "gpt-5-4" },
+        "effort": "high"
+    }))
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("belongs on a slot object"),
+        "expected guiding placement error, got: {msg}"
+    );
+}
+
+#[test]
+fn test_deserialize_slot_effort_rejects_non_string() {
+    let err = serde_json::from_value::<RoleSlots<ProviderModelSelection>>(json!({
+        "primary": { "provider": "openai", "model_id": "gpt-5-4", "effort": 3 }
+    }))
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("effort"),
+        "expected effort type error, got: {err}"
+    );
 }
 
 #[test]
@@ -46,8 +144,11 @@ fn test_deserialize_nested_with_single_fallback() {
         "fallback": { "provider": "anthropic", "model_id": "claude-sonnet-4-6" }
     }))
     .unwrap();
-    assert_eq!(slots.primary, sel("anthropic", "claude-opus-4-6"));
-    assert_eq!(slots.fallbacks, vec![sel("anthropic", "claude-sonnet-4-6")]);
+    assert_eq!(slots.primary.model, sel("anthropic", "claude-opus-4-6"));
+    assert_eq!(
+        fallback_models(&slots),
+        vec![sel("anthropic", "claude-sonnet-4-6")]
+    );
 }
 
 #[test]
@@ -61,7 +162,7 @@ fn test_deserialize_nested_with_plural_fallbacks() {
     }))
     .unwrap();
     assert_eq!(
-        slots.fallbacks,
+        fallback_models(&slots),
         vec![
             sel("anthropic", "claude-sonnet-4-6"),
             sel("openai", "gpt-5"),
@@ -83,15 +184,31 @@ fn test_deserialize_rejects_flat_object_form() {
 }
 
 #[test]
-fn test_deserialize_nested_rejects_string_primary() {
-    let err = serde_json::from_value::<RoleSlots<ProviderModelSelection>>(json!({
-        "primary": "anthropic/claude-opus-4-6"
+fn test_deserialize_nested_accepts_slash_string_primary() {
+    // QoL: a nested form can use the `provider/model_id` shorthand for
+    // its slots (no effort) — so a user adding only `effort` to a
+    // fallback doesn't have to expand every slot into an object.
+    let slots: RoleSlots<ProviderModelSelection> = serde_json::from_value(json!({
+        "primary":   "anthropic/claude-opus-4-6",
+        "fallbacks": [ "openai/gpt-5" ]
     }))
-    .unwrap_err();
-    assert!(
-        err.to_string().contains("must be an object"),
-        "expected object-shape error, got: {err}"
-    );
+    .unwrap();
+    assert_eq!(slots.primary.model, sel("anthropic", "claude-opus-4-6"));
+    assert_eq!(slots.primary.effort, None);
+    assert_eq!(fallback_models(&slots), vec![sel("openai", "gpt-5")]);
+}
+
+#[test]
+fn test_deserialize_mixed_slash_string_and_object_slots() {
+    // Primary as shorthand, fallback as object carrying an effort.
+    let slots: RoleSlots<ProviderModelSelection> = serde_json::from_value(json!({
+        "primary":   "openai/gpt-5-4",
+        "fallbacks": [ { "provider": "openai", "model_id": "gpt-5-mini", "effort": "low" } ]
+    }))
+    .unwrap();
+    assert_eq!(slots.primary.model, sel("openai", "gpt-5-4"));
+    assert_eq!(slots.primary.effort, None);
+    assert_eq!(slots.fallbacks[0].effort, Some(ReasoningEffort::Low));
 }
 
 #[test]
@@ -229,11 +346,57 @@ fn test_try_map_lifts_selection_to_spec_like_type() {
         })
         .unwrap();
 
-    assert_eq!(mapped.primary, "anthropic::opus");
+    assert_eq!(mapped.primary.model, "anthropic::opus");
     assert_eq!(
-        mapped.fallbacks,
+        mapped
+            .fallbacks
+            .iter()
+            .map(|s| s.model.clone())
+            .collect::<Vec<_>>(),
         vec!["anthropic::sonnet".to_string(), "openai::gpt-5".to_string()]
     );
+}
+
+#[test]
+fn test_try_map_carries_slot_effort_through() {
+    // The model maps but each slot's effort rides along unchanged.
+    let slots = RoleSlots {
+        primary: RoleSlot {
+            model: sel("openai", "gpt-5-5"),
+            effort: Some(ReasoningEffort::High),
+        },
+        fallbacks: vec![RoleSlot {
+            model: sel("openai", "gpt-5-4"),
+            effort: Some(ReasoningEffort::Medium),
+        }],
+        policy: FallbackPolicy::default(),
+    };
+    let mapped: RoleSlots<String> = slots
+        .try_map::<_, std::convert::Infallible, _>(|s| Ok(s.model_id))
+        .unwrap();
+    assert_eq!(mapped.primary.effort, Some(ReasoningEffort::High));
+    assert_eq!(mapped.fallbacks[0].effort, Some(ReasoningEffort::Medium));
+}
+
+#[test]
+fn test_without_effort_strips_all_slots() {
+    let slots = RoleSlots {
+        primary: RoleSlot {
+            model: sel("openai", "gpt-5-5"),
+            effort: Some(ReasoningEffort::High),
+        },
+        fallbacks: vec![RoleSlot {
+            model: sel("openai", "gpt-5-4"),
+            effort: Some(ReasoningEffort::Medium),
+        }],
+        policy: FallbackPolicy::default(),
+    };
+    let stripped = slots.without_effort();
+    assert_eq!(stripped.primary.effort, None);
+    assert_eq!(stripped.fallbacks[0].effort, None);
+    // Models are preserved.
+    assert_eq!(stripped.primary.model, sel("openai", "gpt-5-5"));
+    assert_eq!(stripped.fallbacks[0].model, sel("openai", "gpt-5-4"));
 }
 
 #[test]
@@ -279,6 +442,27 @@ fn test_serialize_roundtrip_preserves_multi_fallback_and_recovery() {
         .with_fallbacks(vec![sel("anthropic", "sonnet"), sel("openai", "gpt-5")])
         .with_policy(policy);
     let json_val = serde_json::to_value(&orig).unwrap();
+    let back: RoleSlots<ProviderModelSelection> = serde_json::from_value(json_val).unwrap();
+    assert_eq!(back, orig);
+}
+
+#[test]
+fn test_serialize_roundtrip_preserves_slot_effort() {
+    let orig = RoleSlots {
+        primary: RoleSlot {
+            model: sel("openai-aipaas", "gpt-5-5"),
+            effort: Some(ReasoningEffort::High),
+        },
+        fallbacks: vec![RoleSlot {
+            model: sel("openai", "gpt-5-4"),
+            effort: Some(ReasoningEffort::Medium),
+        }],
+        policy: FallbackPolicy::default(),
+    };
+    let json_val = serde_json::to_value(&orig).unwrap();
+    // Effort surfaces as a flat `effort` key on each slot object.
+    assert_eq!(json_val["primary"]["effort"], json!("high"));
+    assert_eq!(json_val["fallbacks"][0]["effort"], json!("medium"));
     let back: RoleSlots<ProviderModelSelection> = serde_json::from_value(json_val).unwrap();
     assert_eq!(back, orig);
 }

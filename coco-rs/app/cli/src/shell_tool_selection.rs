@@ -71,7 +71,8 @@ pub(crate) fn select_active_shell_tool(
 fn model_shell_tool_types_from_runtime(runtime_config: &RuntimeConfig) -> Vec<ModelShellToolType> {
     let mut types = Vec::new();
     for slots in runtime_config.model_roles.roles.values() {
-        for spec in std::iter::once(&slots.primary).chain(slots.fallbacks.iter()) {
+        for slot in std::iter::once(&slots.primary).chain(slots.fallbacks.iter()) {
+            let spec = &slot.model;
             let shell_tool_type = runtime_config
                 .model_registry
                 .resolve(&spec.provider, &spec.model_id)

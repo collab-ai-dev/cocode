@@ -244,8 +244,15 @@ fn build_unknown_provider_fails_with_typed_error() {
 fn build_api_client_uses_real_fingerprint_for_anthropic() {
     let runtime = build_runtime_with(None);
     let s = spec("anthropic", ProviderApi::Anthropic, "claude-sonnet-4-6");
-    let client =
-        build_api_client(&runtime, &s, RetryConfig::default(), None, None).expect("api client");
+    let client = build_api_client(
+        &runtime,
+        &s,
+        /*role_effort*/ None,
+        RetryConfig::default(),
+        None,
+        None,
+    )
+    .expect("api client");
     let fp = client.fingerprint();
     assert_eq!(fp.api, ProviderApi::Anthropic);
     assert_eq!(fp.provider, "anthropic");
@@ -263,6 +270,37 @@ fn build_api_client_uses_real_fingerprint_for_anthropic() {
 }
 
 #[test]
+fn build_api_client_binds_role_effort_when_present() {
+    // Layer-2 plumbing: the per-slot effort passed to `build_api_client`
+    // must reach the client's `role_effort()` so the query path can seed
+    // the per-call thinking level when no explicit level is present.
+    let runtime = build_runtime_with(None);
+    let s = spec("anthropic", ProviderApi::Anthropic, "claude-sonnet-4-6");
+    let client = build_api_client(
+        &runtime,
+        &s,
+        Some(coco_types::ReasoningEffort::Medium),
+        RetryConfig::default(),
+        None,
+        None,
+    )
+    .expect("api client");
+    assert_eq!(
+        client.role_effort(),
+        Some(coco_types::ReasoningEffort::Medium)
+    );
+}
+
+#[test]
+fn build_api_client_role_effort_absent_is_none() {
+    let runtime = build_runtime_with(None);
+    let s = spec("anthropic", ProviderApi::Anthropic, "claude-sonnet-4-6");
+    let client =
+        build_api_client(&runtime, &s, None, RetryConfig::default(), None, None).expect("client");
+    assert_eq!(client.role_effort(), None);
+}
+
+#[test]
 fn build_api_client_anthropic_url_composes_to_messages_endpoint() {
     // R4 canary — guard against a future regression that drops the
     // version segment. Asserts the composed URL via the same logic the
@@ -270,8 +308,15 @@ fn build_api_client_anthropic_url_composes_to_messages_endpoint() {
     // format!("{base_url}/messages")`).
     let runtime = build_runtime_with(None);
     let s = spec("anthropic", ProviderApi::Anthropic, "claude-sonnet-4-6");
-    let client =
-        build_api_client(&runtime, &s, RetryConfig::default(), None, None).expect("api client");
+    let client = build_api_client(
+        &runtime,
+        &s,
+        /*role_effort*/ None,
+        RetryConfig::default(),
+        None,
+        None,
+    )
+    .expect("api client");
     let base_url = &client.fingerprint().base_url;
     let composed = if base_url.ends_with("/messages") {
         base_url.clone()
@@ -399,8 +444,15 @@ fn build_api_client_resolves_api_model_name_override() {
         ProviderApi::OpenaiCompat,
         "internal/coder-v3",
     );
-    let client =
-        build_api_client(&runtime, &s, RetryConfig::default(), None, None).expect("api client");
+    let client = build_api_client(
+        &runtime,
+        &s,
+        /*role_effort*/ None,
+        RetryConfig::default(),
+        None,
+        None,
+    )
+    .expect("api client");
     assert_eq!(
         client.fingerprint().api_model_name,
         "ep-internal-v3-prod",

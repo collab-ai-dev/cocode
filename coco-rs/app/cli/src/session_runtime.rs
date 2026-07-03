@@ -2095,6 +2095,19 @@ impl SessionRuntime {
                 return Some(ov.clone());
             }
         }
+        // No session override → seed from the configured role slot,
+        // carrying its per-slot effort (`models.<role>.effort`) so
+        // `/status` and the picker reflect the effort that will actually
+        // apply. A role defaulted to Main at config time has its effort
+        // stripped, so this yields `None` there (model default applies).
+        if let Some(slot) = self.runtime_config.model_roles.primary_slot(role) {
+            return Some(RoleOverride {
+                spec: slot.model.clone(),
+                effort: slot.effort,
+            });
+        }
+        // Role absent entirely (pre-defaulting edge) — borrow Main's
+        // model with no effort.
         self.runtime_config
             .model_roles
             .get(role)
@@ -2121,8 +2134,13 @@ impl SessionRuntime {
         let model_id = ov.spec.model_id.clone();
 
         if role == ModelRole::Main {
+            // Main's session effort rides `engine_config.thinking_level`
+            // (layer 1, main-loop only), NOT the shared Main client that
+            // forks inherit — so pass `None` here to keep the slot
+            // effort-less. This is the fork-isolation guarantee: a picker
+            // or Ctrl+T effort on Main never leaks into fork spawns.
             self.model_runtimes
-                .rebind_role_primary(role, spec)
+                .rebind_role_primary(role, spec, /*effort*/ None)
                 .map_err(anyhow::Error::from)?;
             let model_info = self
                 .runtime_config
@@ -2144,9 +2162,13 @@ impl SessionRuntime {
             return Ok(());
         }
 
+        // Non-Main roles feed subagents through the role runtime's client,
+        // so the picker's effort binds to the rebuilt slot (layer 2). This
+        // is safe to isolate — each non-Main role owns its own client, not
+        // shared with the main loop or forks.
         let spec = ov.spec.clone();
         self.model_runtimes
-            .rebind_role_primary(role, spec)
+            .rebind_role_primary(role, spec, ov.effort)
             .map_err(anyhow::Error::from)?;
         let mut overrides = self.role_overrides.write().await;
         overrides.insert(role, ov);
@@ -2154,12 +2176,21 @@ impl SessionRuntime {
     }
 
     /// Update only the `effort` on an existing role override, preserving
-    /// the spec. The Main role's `engine_config.thinking_level` is
-    /// rewritten so the next turn picks up the change.
-    /// When the role has no prior override, the current
+    /// the spec. When the role has no prior override, the current
     /// `runtime_config.model_roles` spec is captured and stored
     /// alongside the new effort so subsequent reads see a consistent
     /// `RoleOverride`.
+    ///
+    /// The effort's live landing site differs by role — same rule as
+    /// [`Self::apply_role_override`]:
+    /// - **Main**: rewrites `engine_config.thinking_level` (layer 1,
+    ///   main-loop only). Never bound to the Main slot client — forks
+    ///   share it, and they take their thinking from the
+    ///   `CacheSafeParams.effort` parity snapshot instead.
+    /// - **Non-Main**: rebinds the role runtime so the effort lands on
+    ///   the rebuilt slot client (layer 2), where that role's subagents
+    ///   actually read it. Without the rebind the override map updates
+    ///   but the wire never changes.
     pub async fn apply_role_effort(&self, role: ModelRole, effort: Option<ReasoningEffort>) {
         let spec_for_seed = self.runtime_config.model_roles.get(role).cloned();
         let effective_spec = self
@@ -2191,6 +2222,14 @@ impl SessionRuntime {
                     effort.map(|e| thinking_level_for_effort_from(model_info.as_ref(), e));
             })
             .await;
+        } else if let Some(spec) = effective_spec
+            && let Err(error) = self.model_runtimes.rebind_role_primary(role, spec, effort)
+        {
+            tracing::warn!(
+                role = %role.as_str(),
+                error = %error,
+                "apply_role_effort: role runtime rebind failed; effort override stored but not live",
+            );
         }
     }
 
@@ -2213,23 +2252,30 @@ impl SessionRuntime {
         let mut out = String::from("Session status:\n");
         let _ = writeln!(out, "  Version: {}", env!("CARGO_PKG_VERSION"));
 
-        if let Some(main) = self.resolve_role(ModelRole::Main).await {
+        // Effective Main effort = explicit per-call level (Ctrl+T, layer 1)
+        // or the resolved Main slot / override effort (layer 2). `None`
+        // means "defer to the model default", which is NOT the same as
+        // "off" — so render it as the model default rather than lying.
+        let main_role = self.resolve_role(ModelRole::Main).await;
+        if let Some(main) = main_role.as_ref() {
             let _ = writeln!(
                 out,
                 "  Model: {} ({})",
                 main.spec.model_id, main.spec.provider
             );
-            if let Some(effort) = main.effort {
-                let _ = writeln!(out, "  Effort: {effort:?}");
-            }
         }
         let _ = writeln!(out, "  Permission mode: {:?}", cfg.permission_mode);
-        match cfg.thinking_level.as_ref().map(|t| t.effort) {
+        let effective_effort = cfg
+            .thinking_level
+            .as_ref()
+            .map(|t| t.effort)
+            .or_else(|| main_role.as_ref().and_then(|m| m.effort));
+        match effective_effort {
             Some(effort) => {
-                let _ = writeln!(out, "  Thinking: {effort:?}");
+                let _ = writeln!(out, "  Thinking: {effort}");
             }
             None => {
-                let _ = writeln!(out, "  Thinking: off");
+                let _ = writeln!(out, "  Thinking: model default");
             }
         }
         let _ = writeln!(
@@ -3057,16 +3103,20 @@ impl SessionRuntime {
     /// This is the `/btw` fallback when no post-turn cache slot exists yet.
     pub async fn fallback_cache_safe_params(&self) -> coco_types::CacheSafeParams {
         let cfg = self.current_engine_config().await;
-        let provider = self
+        let snapshot = self
             .model_runtimes
             .snapshot_for_role(coco_types::ModelRole::Main)
-            .map(|snapshot| snapshot.provider)
+            .ok();
+        let provider = snapshot
+            .as_ref()
+            .map(|s| s.provider.clone())
             .unwrap_or_default();
+        let slot_effort = snapshot.and_then(|s| s.role_effort);
         let history = {
             let guard = self.history.lock().await;
             guard.snapshot()
         };
-        coco_query::QueryEngine::cache_safe_params_from_parts(&cfg, provider, &history)
+        coco_query::QueryEngine::cache_safe_params_from_parts(&cfg, provider, slot_effort, &history)
     }
 
     /// Install the background task runtime. Called once during CLI

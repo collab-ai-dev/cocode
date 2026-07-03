@@ -662,17 +662,18 @@ impl QueryEngine {
 
         if let Some(dispatcher) = self.fork_dispatcher.clone() {
             let mut cache = self.last_cache_safe_params().await.unwrap_or_else(|| {
-                coco_types::CacheSafeParams {
-                    rendered_system_prompt: self.config.system_prompt.clone().unwrap_or_default(),
-                    model_id: self.config.model_id.clone(),
-                    provider: self
-                        .runtime_snapshot()
-                        .map(|snapshot| snapshot.provider)
-                        .unwrap_or_default(),
-                    active_shell_tool: self.config.active_shell_tool,
-                    prompt_cache: self.config.prompt_cache.clone(),
-                    fork_context_messages: Vec::new(),
-                }
+                let snapshot = self.runtime_snapshot();
+                let provider = snapshot
+                    .as_ref()
+                    .map(|s| s.provider.clone())
+                    .unwrap_or_default();
+                let slot_effort = snapshot.and_then(|s| s.role_effort);
+                Self::cache_safe_params_from_parts(
+                    &self.config,
+                    provider,
+                    slot_effort,
+                    &coco_messages::MessageHistory::new(),
+                )
             });
             // `CompactSummaryAttempt.context_messages` is already
             // `Vec<Arc<Message>>` — Arc-share into the fork context.
