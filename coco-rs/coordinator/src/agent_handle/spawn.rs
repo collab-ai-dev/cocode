@@ -1779,6 +1779,16 @@ impl SwarmAgentHandle {
                 .ok()
                 .map(|qr| qr.cost_usd)
                 .unwrap_or(0.0);
+            let input_cost_usd = query_result
+                .as_ref()
+                .ok()
+                .map(|qr| qr.input_cost_usd)
+                .unwrap_or(0.0);
+            let output_cost_usd = query_result
+                .as_ref()
+                .ok()
+                .map(|qr| qr.output_cost_usd)
+                .unwrap_or(0.0);
             // Full token breakdown (incl cache) for the completion payload.
             let token_usage = query_result
                 .as_ref()
@@ -1887,6 +1897,8 @@ impl SwarmAgentHandle {
                                     tool_uses: response.total_tool_use_count as i32,
                                     duration_ms,
                                     cost_usd,
+                                    input_cost_usd,
+                                    output_cost_usd,
                                 }),
                                 worktree: response.worktree_path.clone().map(|path| {
                                     coco_tool_runtime::AgentWorktree {
@@ -2276,6 +2288,8 @@ impl SwarmAgentHandle {
                         tool_uses: qr.tool_use_count as i32,
                         duration_ms,
                         cost_usd: qr.cost_usd,
+                        input_cost_usd: qr.input_cost_usd,
+                        output_cost_usd: qr.output_cost_usd,
                     });
                     let worktree = worktree_session_for_task.as_ref().map(|s| {
                         coco_tool_runtime::AgentWorktree {

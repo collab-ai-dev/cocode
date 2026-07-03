@@ -45,6 +45,7 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
             total_cost_usd: 0.0072,
             ..Default::default()
         },
+        auto_compact_threshold: Some(90),
         ..Default::default()
     });
     state.session.token_usage.input_tokens = 1_500;
@@ -91,20 +92,22 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
 
     assert!(text.contains(" openai/gpt-5.4"));
     assert!(text.contains("high * ctrl+t to cycle"));
-    assert!(text.contains("↑1.5K/$0.0042 ↓250/$0.0030"));
+    assert!(text.contains("↑1.5K/$0.00 ↓250/$0.00"));
     assert!(text.contains("cache 750/50.0%"));
     assert!(!text.contains("F2 to expand"));
     assert!(text.contains("ctx 80%"));
     assert!(text.contains("→0 ←1"));
+    // Trigger at 90% (window 100, threshold 90) → red band starts at
+    // T-12 = 78%, so 80% renders red.
     assert!(
         spans
             .iter()
-            .any(|span| span.text == "ctx 80%" && span.tone == StatusTone::Warning)
+            .any(|span| span.text == "ctx 80%" && span.tone == StatusTone::Error)
     );
 }
 
 #[test]
-fn status_bar_splits_permission_pill_and_directory_onto_dynamic_lines() {
+fn status_bar_merges_permission_pill_and_directory_onto_environment_line() {
     use coco_types::PermissionMode;
 
     let _locale = locale_test_guard("en");
@@ -119,11 +122,13 @@ fn status_bar_splits_permission_pill_and_directory_onto_dynamic_lines() {
         running_task("s1", TaskEntryKind::Shell),
     ];
 
-    assert_eq!(status_bar_height(&state), 3);
+    // No token activity → the spend line is hidden, so the bar is 2 rows:
+    // identity + the merged environment row (permission pill + directory).
+    assert_eq!(status_bar_height(&state), 2);
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
     };
-    assert_eq!(lines.len(), 3);
+    assert_eq!(lines.len(), 2);
 
     let line_text = |i: usize| {
         lines[i]
@@ -131,14 +136,14 @@ fn status_bar_splits_permission_pill_and_directory_onto_dynamic_lines() {
             .map(|span| span.text.as_str())
             .collect::<String>()
     };
-    // Line 1 no longer carries the permission segment.
+    // Line 1 (identity) carries the model, not the permission segment.
     assert!(line_text(0).contains("openai/gpt-5.4"));
     assert!(!line_text(0).contains("auto mode on"));
-    // Line 2: permission symbol + label, then the TS-style pill.
+    // Line 2 (environment): permission pill + task pill, then the working
+    // dir + git branch (zsh-prompt style), joined on one row.
     assert!(line_text(1).contains("▸▸ auto mode on"));
     assert!(line_text(1).contains("1 agent · 1 shell"));
-    // Line 3: directory basename + git branch (zsh-prompt style).
-    assert_eq!(line_text(2), " codex git:(feat/automode)");
+    assert!(line_text(1).contains("codex git:(feat/automode)"));
 }
 
 #[test]
@@ -251,7 +256,9 @@ fn status_bar_view_renders_unknown_context_without_assistant_usage() {
 #[test]
 fn status_bar_view_renders_zero_cache_percent_without_decimal() {
     let _locale = locale_test_guard("en");
-    let state = AppState::default();
+    let mut state = AppState::default();
+    // Minimal input activity so the spend line renders; cache stays 0.
+    state.session.token_usage.input_tokens = 1_000;
 
     let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
         panic!("expected built-in status bar");
@@ -262,7 +269,7 @@ fn status_bar_view_renders_zero_cache_percent_without_decimal() {
         .map(|span| span.text.as_str())
         .collect::<String>();
 
-    assert!(text.contains("↑0 ↓0 · cache 0/0%"));
+    assert!(text.contains("cache 0/0%"));
     assert!(!text.contains("cache 0/0.0%"));
 }
 
@@ -373,10 +380,12 @@ fn status_bar_view_renders_subagent_usage_segment_only_when_active() {
         output_tokens: 468,
         cache_read_tokens: 64_700,
         cost_usd: 0.18,
+        input_cost_usd: 0.14,
+        output_cost_usd: 0.04,
     };
     let text = render(&state);
     assert!(
-        text.contains("subagents ↑68.1K ↓468 · $0.1800 · cache 64.7K/95.0%"),
+        text.contains("↳ subagents ↑68.1K/$0.14 ↓468/$0.04 · cache 64.7K/95.0%"),
         "text: {text}"
     );
 }

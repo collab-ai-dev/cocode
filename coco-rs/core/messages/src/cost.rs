@@ -88,6 +88,21 @@ impl CostTracker {
         self.per_model.values().map(|u| u.output_tokens).sum()
     }
 
+    /// Input-side cost across all models (uncached input + cache read + cache
+    /// creation) — the same grouping the status bar shows for the main
+    /// thread's `↑…/$in`, so subagent spend lines up dimension-for-dimension.
+    pub fn input_cost_usd(&self) -> f64 {
+        self.per_model
+            .values()
+            .map(|u| u.input_cost_usd + u.cache_read_cost_usd + u.cache_creation_cost_usd)
+            .sum()
+    }
+
+    /// Output-side cost across all models (the `↓…/$out` figure).
+    pub fn output_cost_usd(&self) -> f64 {
+        self.per_model.values().map(|u| u.output_cost_usd).sum()
+    }
+
     pub fn model_entries(
         &self,
     ) -> impl Iterator<Item = (&ProviderModelSelection, &SessionModelUsageEntry)> {
@@ -156,6 +171,9 @@ impl CostTracker {
             totals,
             models,
             unpriced_models,
+            // Populated by the engine (`record_session_usage`) which has the
+            // window + max_output + config; the pure cost tracker doesn't.
+            auto_compact_threshold: None,
         }
     }
 

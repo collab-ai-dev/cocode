@@ -261,6 +261,10 @@ pub struct AgentUsage {
     /// Real USD cost of the completed subagent run. `0.0` when pricing
     /// is unavailable.
     pub cost_usd: f64,
+    /// Input-side / output-side cost split, carried alongside `cost_usd`
+    /// so the TUI can show the subagent aggregate as `↑…/$in ↓…/$out`.
+    pub input_cost_usd: f64,
+    pub output_cost_usd: f64,
 }
 
 #[derive(Debug, Clone)]

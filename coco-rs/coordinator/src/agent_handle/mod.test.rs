@@ -736,6 +736,8 @@ async fn test_classifier_passes_through_when_side_query_unconfigured() {
     let qr = coco_tool_runtime::AgentQueryResult {
         usage: Default::default(),
         cost_usd: 0.0,
+        input_cost_usd: 0.0,
+        output_cost_usd: 0.0,
         response_text: Some("computed answer".into()),
         messages: Vec::new(),
         turns: 1,
@@ -782,6 +784,8 @@ async fn test_classifier_skips_on_empty_transcript() {
     let qr = coco_tool_runtime::AgentQueryResult {
         usage: Default::default(),
         cost_usd: 0.0,
+        input_cost_usd: 0.0,
+        output_cost_usd: 0.0,
         response_text: Some("explored result".into()),
         messages: Vec::new(), // empty transcript
         turns: 1,
@@ -810,6 +814,8 @@ async fn test_classifier_skips_in_non_auto_mode() {
     let qr = coco_tool_runtime::AgentQueryResult {
         usage: Default::default(),
         cost_usd: 0.0,
+        input_cost_usd: 0.0,
+        output_cost_usd: 0.0,
         response_text: Some("did the work".into()),
         messages: messages_with_transcript(),
         turns: 1,
@@ -844,6 +850,8 @@ async fn test_classifier_runs_for_read_only_agent_with_transcript() {
     let qr = coco_tool_runtime::AgentQueryResult {
         usage: Default::default(),
         cost_usd: 0.0,
+        input_cost_usd: 0.0,
+        output_cost_usd: 0.0,
         response_text: Some("explored result".into()),
         messages: messages_with_transcript(),
         turns: 1,
@@ -872,6 +880,8 @@ async fn test_classifier_unavailable_prepends_warning() {
     let qr = coco_tool_runtime::AgentQueryResult {
         usage: Default::default(),
         cost_usd: 0.0,
+        input_cost_usd: 0.0,
+        output_cost_usd: 0.0,
         response_text: Some("partial work".into()),
         messages: messages_with_transcript(),
         turns: 1,
@@ -907,6 +917,8 @@ async fn test_classifier_short_circuits_on_stage1_safe() {
     let qr = coco_tool_runtime::AgentQueryResult {
         usage: Default::default(),
         cost_usd: 0.0,
+        input_cost_usd: 0.0,
+        output_cost_usd: 0.0,
         response_text: Some("clean output".into()),
         messages: messages_with_transcript(),
         turns: 1,
@@ -941,6 +953,8 @@ async fn test_classifier_blocks_when_verdict_is_blocked() {
     let qr = coco_tool_runtime::AgentQueryResult {
         usage: Default::default(),
         cost_usd: 0.0,
+        input_cost_usd: 0.0,
+        output_cost_usd: 0.0,
         response_text: Some("malicious child output".into()),
         messages: messages_with_transcript(),
         turns: 1,
@@ -1045,6 +1059,8 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("child result".into()),
                 messages: Vec::new(),
                 turns: 2,
@@ -1098,6 +1114,8 @@ async fn test_spawn_subagent_sync_classifier_respects_permission_mode() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("child result".into()),
                 // Non-empty transcript → `should_classify` would pass, so
                 // only the permission-mode gate prevents classification.
@@ -1170,6 +1188,8 @@ async fn test_spawn_subagent_sync_drains_stream_events_to_task_registry() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("child result".into()),
                 messages: Vec::new(),
                 turns: 1,
@@ -1255,6 +1275,8 @@ async fn test_drain_fills_task_activity_summary_from_tool_input() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("done".into()),
                 messages: Vec::new(),
                 turns: 1,
@@ -1432,6 +1454,8 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("detached result".into()),
                 messages: Vec::new(),
                 turns: 1,
@@ -1616,6 +1640,8 @@ async fn test_spawn_subagent_parent_abort_cancels_foreground() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("should never complete".into()),
                 messages: Vec::new(),
                 turns: 1,
@@ -1712,6 +1738,8 @@ async fn test_spawn_subagent_async() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("background result".into()),
                 messages: Vec::new(),
                 turns: 1,
@@ -1945,6 +1973,8 @@ async fn test_spawn_subagent_fresh_threads_definition_system_prompt() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
                 turns: 1,
@@ -2013,6 +2043,8 @@ async fn test_spawn_subagent_threads_definition_allowed_tools() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
                 turns: 1,
@@ -2087,6 +2119,8 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
                 turns: 1,
@@ -2572,6 +2606,8 @@ async fn test_subagent_start_hook_injects_additional_context() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
                 turns: 1,
@@ -2663,6 +2699,8 @@ async fn test_subagent_start_hook_no_context_leaves_prompt_unchanged() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
                 turns: 1,
@@ -2724,6 +2762,8 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("resumed".into()),
                 messages: Vec::new(),
                 turns: 1,
@@ -2803,6 +2843,8 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("done".into()),
                 messages: Vec::new(),
                 turns: 1,

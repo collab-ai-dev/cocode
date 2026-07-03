@@ -302,7 +302,20 @@ impl QueryEngine {
         let snapshot = {
             let mut guard = tracker.lock().await;
             guard.record_usage(provider, model_id, usage, duration_ms);
-            guard.snapshot(&self.config.session_id)
+            let mut snap = guard.snapshot(&self.config.session_id);
+            // Attach the exact auto-compact trigger so the TUI can anchor its
+            // `ctx` color bands to the real compaction point (honors config
+            // overrides). Only when the window is known — a 0 would collapse
+            // the whole ramp to red.
+            let window = self.clamped_context_window();
+            if window > 0 {
+                snap.auto_compact_threshold = Some(coco_compact::auto_compact_threshold(
+                    window,
+                    self.config.max_output_tokens,
+                    &self.config.compact.auto,
+                ));
+            }
+            snap
         };
         let _ = crate::emit::emit_protocol(
             event_tx,

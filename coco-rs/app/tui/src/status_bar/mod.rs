@@ -20,6 +20,7 @@ pub(crate) enum StatusTone {
     Accent,
     Plan,
     Error,
+    Success,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

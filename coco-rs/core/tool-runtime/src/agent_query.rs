@@ -435,6 +435,14 @@ pub struct AgentQueryResult {
     /// engine's `CostTracker`. `0.0` when pricing is unavailable.
     #[serde(default)]
     pub cost_usd: f64,
+    /// Input-side cost (uncached input + cache), split from
+    /// [`Self::output_cost_usd`] so the subagent aggregate can mirror the
+    /// main thread's `↑…/$in ↓…/$out`. `0.0` when pricing is unavailable.
+    #[serde(default)]
+    pub input_cost_usd: f64,
+    /// Output-side cost.
+    #[serde(default)]
+    pub output_cost_usd: f64,
     /// Whether the agent was cancelled.
     #[serde(default)]
     pub cancelled: bool,

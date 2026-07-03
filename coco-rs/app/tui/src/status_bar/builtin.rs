@@ -13,20 +13,20 @@ use crate::status_bar::StatusSpan;
 use crate::status_bar::StatusTone;
 
 /// The built-in status bar is a one-to-three-line block:
-/// 1. model · effort · tokens · cache · context · transcript counts (always)
-/// 2. permission mode (`▸▸ auto mode on`) · background-task pill
-/// 3. working-directory basename · `git:(branch)`
+/// 1. model · effort · cycle-hint · ctx · transcript counts · MCP · LSP (always)
+/// 2. main-thread spend (`↑in/$ ↓out/$ · cache`) + subagent aggregate
+/// 3. permission mode (`▸▸ auto mode on`) · task pill · working dir `git:(branch)`
 /// Lines 2 and 3 are emitted only when they have content, so the bar collapses
 /// to a single row in the default state and grows to the full three rows in a
-/// real session (a permission mode set + a working dir). [`built_in_line_count`]
-/// mirrors the same predicates for the layout pass without building any spans.
+/// real session. [`built_in_line_count`] mirrors the same predicates for the
+/// layout pass without building any spans.
 pub(crate) fn built_in_status_lines(state: &AppState) -> Vec<Vec<StatusSpan>> {
-    let mut lines = vec![model_and_usage_line(state)];
-    if show_permission_tasks_line(state) {
-        lines.push(permission_and_tasks_line(state));
+    let mut lines = vec![identity_line(state)];
+    if show_usage_line(state) {
+        lines.push(usage_line(state));
     }
-    if show_directory_line(state) {
-        lines.push(directory_line(state));
+    if show_environment_line(state) {
+        lines.push(environment_line(state));
     }
     lines
 }
@@ -34,7 +34,7 @@ pub(crate) fn built_in_status_lines(state: &AppState) -> Vec<Vec<StatusSpan>> {
 /// Row count of the built-in bar, cheaply (no span building) — for the layout
 /// pass. MUST track the `push` conditions in [`built_in_status_lines`].
 pub(crate) fn built_in_line_count(state: &AppState) -> u16 {
-    1 + u16::from(show_permission_tasks_line(state)) + u16::from(show_directory_line(state))
+    1 + u16::from(show_usage_line(state)) + u16::from(show_environment_line(state))
 }
 
 /// Whether line 2 (permission mode / task pill) has content. Cheap: the task
@@ -46,12 +46,23 @@ fn show_permission_tasks_line(state: &AppState) -> bool {
         || state.session.has_running_background_task()
 }
 
-/// Whether line 3 (working dir / git branch) has content.
-fn show_directory_line(state: &AppState) -> bool {
-    state.session.working_dir.is_some()
+/// Whether line 2 (spend) has content: any main-thread token activity, or a
+/// subagent has reported.
+fn show_usage_line(state: &AppState) -> bool {
+    let tokens = &state.session.token_usage;
+    tokens.input_tokens > 0
+        || tokens.output_tokens > 0
+        || state.session.subagent_usage.has_activity()
 }
 
-fn model_and_usage_line(state: &AppState) -> Vec<StatusSpan> {
+/// Whether line 3 (permission mode / task pill / working dir) has content.
+fn show_environment_line(state: &AppState) -> bool {
+    show_permission_tasks_line(state) || state.session.working_dir.is_some()
+}
+
+/// Line 1 (identity + vitals): model · effort · cycle-hint | ctx | turn
+/// counts | MCP | LSP. Always rendered.
+fn identity_line(state: &AppState) -> Vec<StatusSpan> {
     let mut spans = Vec::new();
     let (provider, model_id) = state
         .session
@@ -102,6 +113,48 @@ fn model_and_usage_line(state: &AppState) -> Vec<StatusSpan> {
         spans.push(StatusSpan::bold(warning.clone(), StatusTone::Warning));
     }
 
+    separator(&mut spans);
+    if let Some(usage) = render_context_usage(state) {
+        let trigger = ctx_trigger_percent(state, usage.total);
+        let (tone, bold) = ctx_tone(usage.percent, trigger);
+        spans.push(StatusSpan {
+            text: format!("ctx {}%", usage.percent),
+            tone,
+            bold,
+        });
+    } else {
+        spans.push(StatusSpan::new("ctx --", StatusTone::Dim));
+    }
+
+    separator(&mut spans);
+    spans.push(StatusSpan::new(
+        transcript_count_status(state.session.transcript.cumulative_counts()),
+        StatusTone::Dim,
+    ));
+
+    let mcp_count = state.session.connected_mcp_count();
+    if mcp_count > 0 {
+        separator(&mut spans);
+        spans.push(StatusSpan::new(
+            t!("status.mcp", count = mcp_count).to_string(),
+            StatusTone::Dim,
+        ));
+    }
+
+    if state.session.lsp_active {
+        separator(&mut spans);
+        spans.push(StatusSpan::new("LSP", StatusTone::Dim));
+    }
+
+    spans
+}
+
+/// Line 2 (spend): main-thread `↑in/$ ↓out/$ · cache` and, once any subagent
+/// reports, the aggregate `↳ subagents …` group. Both use 2-decimal costs for
+/// a compact, scannable width. Rendered only when there is token activity
+/// ([`show_usage_line`]).
+fn usage_line(state: &AppState) -> Vec<StatusSpan> {
+    let mut spans = Vec::new();
     let tokens = &state.session.token_usage;
     let usage_costs = state.session.session_usage.as_ref().map(|snapshot| {
         let input_cost = snapshot.totals.input_cost_usd
@@ -117,23 +170,22 @@ fn model_and_usage_line(state: &AppState) -> Vec<StatusSpan> {
             snapshot.unpriced_models.len(),
         )
     });
-    separator(&mut spans);
     spans.push(StatusSpan::new(
         match usage_costs {
             Some((_, _, true, _)) => format!(
-                "↑{}/$? ↓{}/$?",
+                " ↑{}/$? ↓{}/$?",
                 format_token_count(tokens.input_tokens),
                 format_token_count(tokens.output_tokens)
             ),
             Some((input_cost, output_cost, false, _)) => format!(
-                "↑{}/{} ↓{}/{}",
+                " ↑{}/{} ↓{}/{}",
                 format_token_count(tokens.input_tokens),
-                format_cost(input_cost),
+                format_cost_2dp(input_cost),
                 format_token_count(tokens.output_tokens),
-                format_cost(output_cost)
+                format_cost_2dp(output_cost)
             ),
             None => format!(
-                "↑{} ↓{}",
+                " ↑{} ↓{}",
                 format_token_count(tokens.input_tokens),
                 format_token_count(tokens.output_tokens)
             ),
@@ -157,48 +209,11 @@ fn model_and_usage_line(state: &AppState) -> Vec<StatusSpan> {
         ));
     }
 
-    separator(&mut spans);
-    if let Some(ctx_pct) = render_context_usage(state).map(|u| u.percent) {
-        spans.push(StatusSpan {
-            text: format!("ctx {ctx_pct}%"),
-            tone: if ctx_pct > 90 {
-                StatusTone::Error
-            } else if ctx_pct > 70 {
-                StatusTone::Warning
-            } else {
-                StatusTone::Dim
-            },
-            bold: ctx_pct > 90,
-        });
-    } else {
-        spans.push(StatusSpan::new("ctx --", StatusTone::Dim));
-    }
-
-    let mcp_count = state.session.connected_mcp_count();
-    if mcp_count > 0 {
-        separator(&mut spans);
-        spans.push(StatusSpan::new(
-            t!("status.mcp", count = mcp_count).to_string(),
-            StatusTone::Dim,
-        ));
-    }
-
-    if state.session.lsp_active {
-        separator(&mut spans);
-        spans.push(StatusSpan::new("LSP", StatusTone::Dim));
-    }
-
-    separator(&mut spans);
-    spans.push(StatusSpan::new(
-        transcript_count_status(state.session.transcript.cumulative_counts()),
-        StatusTone::Dim,
-    ));
-
-    // Aggregate subagent spend (token / cost / cache only) — a separate
-    // session-cumulative bucket, never mixed into the main-thread usage
-    // shown earlier in the line. Agent-tool subagents only; teammates
-    // run their own sessions and account their own spend. Hidden until
-    // the first subagent reports.
+    // Aggregate subagent spend — a separate session-cumulative bucket, never
+    // mixed into the main-thread usage earlier on this line. Split per
+    // direction (`↑in/$ ↓out/$`) to mirror the main thread. Agent-tool
+    // subagents only; teammates run their own sessions and account their own
+    // spend. Hidden until the first subagent reports.
     let sub = &state.session.subagent_usage;
     if sub.has_activity() {
         separator(&mut spans);
@@ -206,8 +221,9 @@ fn model_and_usage_line(state: &AppState) -> Vec<StatusSpan> {
             t!(
                 "status.subagent_usage",
                 input = format_token_count(sub.input_tokens),
+                input_cost = format_cost_2dp(sub.input_cost_usd),
                 output = format_token_count(sub.output_tokens),
-                cost = format_cost(sub.cost_usd),
+                output_cost = format_cost_2dp(sub.output_cost_usd),
                 cache = format!(
                     "{}/{}",
                     format_token_count(sub.cache_read_tokens),
@@ -219,6 +235,48 @@ fn model_and_usage_line(state: &AppState) -> Vec<StatusSpan> {
         ));
     }
     spans
+}
+
+/// Fallback reserve (`min(max_output, 20K) = 20K` + `13K` buffer) used to
+/// anchor the `ctx` color bands before the engine reports the exact
+/// `auto_compact_threshold`. Mirrors `coco_compact`'s
+/// `MAX_OUTPUT_TOKENS_FOR_SUMMARY + AUTOCOMPACT_BUFFER_TOKENS`.
+const CTX_TRIGGER_FALLBACK_RESERVED: i64 = 33_000;
+
+/// Auto-compact trigger as a percent of the full window — the anchor for the
+/// `ctx` color bands. Prefers the engine-reported exact threshold; falls back
+/// to the default-formula reserve when it is not yet known.
+fn ctx_trigger_percent(state: &AppState, total_window: i64) -> i64 {
+    let threshold = state
+        .session
+        .session_usage
+        .as_ref()
+        .and_then(|s| s.auto_compact_threshold)
+        .unwrap_or((total_window - CTX_TRIGGER_FALLBACK_RESERVED).max(0));
+    (threshold * 100 / total_window.max(1)).clamp(0, 100)
+}
+
+/// `ctx` tone + bold on the 4-band ramp anchored to the auto-compact trigger
+/// `T`: green `<T-62` · blue `T-62..T-42` · yellow `T-42..T-12` · red `≥T-12`
+/// (bold at/over `T`). Higher ctx% = fuller context = more urgent.
+fn ctx_tone(pct: i64, trigger: i64) -> (StatusTone, bool) {
+    if pct >= trigger {
+        (StatusTone::Error, true)
+    } else if pct >= trigger - 12 {
+        (StatusTone::Error, false)
+    } else if pct >= trigger - 42 {
+        (StatusTone::Warning, false)
+    } else if pct >= trigger - 62 {
+        (StatusTone::Accent, false)
+    } else {
+        (StatusTone::Success, false)
+    }
+}
+
+/// Status-bar cost: always 2 decimals (`$0.26`) for compact width, unlike the
+/// shared `coco_messages::format_cost` which widens to 4 decimals under $0.50.
+fn format_cost_2dp(cost_usd: f64) -> String {
+    format!("${cost_usd:.2}")
 }
 
 /// Cache-hit share of total input tokens, clamped to `[0, 100]`.
@@ -430,24 +488,38 @@ pub(crate) fn background_pill_label(state: &AppState) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-/// Line 3: working-directory basename and `git:(branch)`, zsh-prompt style.
-/// Empty when no working directory is known.
-fn directory_line(state: &AppState) -> Vec<StatusSpan> {
-    let mut spans = Vec::new();
-    let Some(dir) = state.session.working_dir.as_deref() else {
-        return spans;
-    };
+/// Line 3 (environment): permission mode / task pill, then the working
+/// directory + `git:(branch)`. Merges the mode and directory groups so the
+/// row reads "in this dir, in this mode".
+fn environment_line(state: &AppState) -> Vec<StatusSpan> {
+    let mut spans = permission_and_tasks_line(state);
+    if let Some(dir_spans) = directory_spans(state) {
+        if spans.is_empty() {
+            spans.push(StatusSpan::new(" ", StatusTone::Dim));
+        } else {
+            separator(&mut spans);
+        }
+        spans.extend(dir_spans);
+    }
+    spans
+}
+
+/// Working-directory basename + `git:(branch)`, zsh-prompt style (dim parens,
+/// accent branch). `None` when no working directory is known. No leading
+/// space — [`environment_line`] adds the pad/separator.
+fn directory_spans(state: &AppState) -> Option<Vec<StatusSpan>> {
+    let dir = state.session.working_dir.as_deref()?;
     let name = dir
         .rsplit(['/', '\\'])
         .find(|seg| !seg.is_empty())
         .unwrap_or(dir);
-    spans.push(StatusSpan::new(format!(" {name}"), StatusTone::Primary));
+    let mut spans = vec![StatusSpan::new(name.to_string(), StatusTone::Primary)];
     if let Some(branch) = state.session.git_branch.as_deref() {
         spans.push(StatusSpan::new(" git:(", StatusTone::Dim));
         spans.push(StatusSpan::new(branch.to_string(), StatusTone::Accent));
         spans.push(StatusSpan::new(")", StatusTone::Dim));
     }
-    spans
+    Some(spans)
 }
 
 pub(crate) fn format_token_count(count: i64) -> String {
@@ -466,8 +538,4 @@ fn format_cache_percent(pct: f64) -> String {
     } else {
         format!("{pct:.1}%")
     }
-}
-
-fn format_cost(cost_usd: f64) -> String {
-    coco_messages::format_cost(cost_usd)
 }

@@ -1461,6 +1461,15 @@ pub struct TaskUsage {
     /// cost) deserializing to `0.0`.
     #[serde(default)]
     pub cost_usd: f64,
+    /// Input-side cost (uncached input + cache tokens), split from
+    /// [`Self::output_cost_usd`] so the status bar can show the subagent
+    /// aggregate as `↑…/$in ↓…/$out` like the main thread. `#[serde(default)]`
+    /// keeps older payloads (single `cost_usd` only) deserializing to `0.0`.
+    #[serde(default)]
+    pub input_cost_usd: f64,
+    /// Output-side cost.
+    #[serde(default)]
+    pub output_cost_usd: f64,
 }
 
 /// A teammate's plan-approval request, surfaced to the team lead's

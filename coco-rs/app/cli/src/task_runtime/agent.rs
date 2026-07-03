@@ -181,7 +181,14 @@ impl TaskRuntime {
         // snapshot carries them to the TUI subagent panel.
         if let Some(u) = &payload.usage {
             self.manager
-                .record_terminal_usage(task_id, u.usage, u.tool_uses, u.cost_usd)
+                .record_terminal_usage(
+                    task_id,
+                    u.usage,
+                    u.tool_uses,
+                    u.cost_usd,
+                    u.input_cost_usd,
+                    u.output_cost_usd,
+                )
                 .await;
         }
         self.transition_terminal(task_id, TaskStatus::Completed)
