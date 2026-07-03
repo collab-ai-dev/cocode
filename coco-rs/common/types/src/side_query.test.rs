@@ -48,6 +48,7 @@ fn test_cache_safe_params_serde_roundtrip() {
         provider: "anthropic".into(),
         active_shell_tool: crate::ActiveShellTool::PowerShell,
         prompt_cache: None,
+        effort: None,
         fork_context_messages: vec![user_msg("hi"), assistant_msg("hello")],
     };
     let s = serde_json::to_string(&params).unwrap();
@@ -94,6 +95,7 @@ fn test_cache_safe_params_eq_distinguishes_model() {
         provider: "anthropic".into(),
         active_shell_tool: crate::ActiveShellTool::Bash,
         prompt_cache: None,
+        effort: None,
         fork_context_messages: Vec::new(),
     };
     let b = CacheSafeParams {
@@ -112,6 +114,7 @@ fn test_cache_safe_params_eq_distinguishes_provider() {
         provider: "anthropic".into(),
         active_shell_tool: crate::ActiveShellTool::Bash,
         prompt_cache: None,
+        effort: None,
         fork_context_messages: Vec::new(),
     };
     let b = CacheSafeParams {

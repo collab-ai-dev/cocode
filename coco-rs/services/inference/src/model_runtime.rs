@@ -52,6 +52,7 @@ use coco_config::FallbackPolicy;
 use coco_config::ModelInfo;
 use coco_config::PositiveTokens;
 use coco_config::RecoveryProbePolicy;
+use coco_config::RoleSlot;
 use coco_config::RuntimeConfig;
 use coco_llm_types::LlmMessage;
 use coco_llm_types::UserContentPart;
@@ -617,6 +618,12 @@ pub struct ModelRuntimeSnapshot {
     pub supports_server_side_context_edits: bool,
     pub runtime_snapshot: coco_types::SubagentRuntimeSnapshot,
     pub active_slot: usize,
+    /// The active slot's bound per-slot reasoning effort
+    /// (`models.<role>.<slot>.effort`, priority-chain layer 2). Read by
+    /// the post-turn `CacheSafeParams` capture so cache-sharing forks
+    /// can mirror the parent's effective wire thinking — thinking
+    /// params key Anthropic's messages-level cache.
+    pub role_effort: Option<coco_types::ReasoningEffort>,
 }
 
 /// Token returned by `open_stream` so callers can report the final outcome.
@@ -721,7 +728,7 @@ pub struct ModelRuntimeRegistry {
     /// id.
     header_vars: std::sync::RwLock<Arc<HeaderVars>>,
     role_runtimes: std::sync::RwLock<HashMap<ModelRole, Arc<std::sync::Mutex<ModelRuntime>>>>,
-    role_overrides: std::sync::RwLock<HashMap<ModelRole, ModelSpec>>,
+    role_overrides: std::sync::RwLock<HashMap<ModelRole, RoleSlot<ModelSpec>>>,
     explicit_runtimes:
         std::sync::RwLock<HashMap<ProviderModelSelection, Arc<std::sync::Mutex<ModelRuntime>>>>,
     recovery_tasks: std::sync::Mutex<HashMap<ModelRuntimeSource, tokio::task::JoinHandle<()>>>,
@@ -825,17 +832,8 @@ impl ModelRuntimeRegistry {
     ) -> Result<Self, InferenceError> {
         let retry: RetryConfig = runtime_config.api.retry.clone().into();
         let mut role_runtimes = HashMap::new();
-        for role in [
-            ModelRole::Main,
-            ModelRole::Plan,
-            ModelRole::Fast,
-            ModelRole::Explore,
-            ModelRole::Review,
-            ModelRole::Subagent,
-            ModelRole::Memory,
-            ModelRole::HookAgent,
-        ] {
-            if let Some(primary) = runtime_config.model_roles.get(role).cloned() {
+        for role in ModelRole::ALL {
+            if let Some(primary) = runtime_config.model_roles.primary_slot(role).cloned() {
                 let runtime = build_role_runtime(
                     &runtime_config,
                     role,
@@ -1144,7 +1142,7 @@ impl ModelRuntimeRegistry {
             }
             .build()
         })?;
-        let primary = cfg.model_roles.get(role).cloned().ok_or_else(|| {
+        let primary = cfg.model_roles.primary_slot(role).cloned().ok_or_else(|| {
             crate::errors::ProviderBuildFailedSnafu {
                 provider: "model_runtime",
                 provider_name: role.as_str().to_string(),
@@ -1182,9 +1180,12 @@ impl ModelRuntimeRegistry {
         })?;
         let spec = explicit_spec(&cfg, &selection)?;
         let retry: RetryConfig = cfg.api.retry.clone().into();
+        // Explicit (provider/model) selections carry no role slot, so no
+        // slot effort — thinking defers to the model / provider default.
         let client = model_factory::build_api_client(
             &cfg,
             &spec,
+            /*role_effort*/ None,
             retry,
             self.resolver.as_ref(),
             Some(self.header_vars_snapshot().as_ref()),
@@ -1231,10 +1232,17 @@ impl ModelRuntimeRegistry {
         Ok(runtime.primary_model_info())
     }
 
+    /// Rebind a role's primary to `spec` for the session. `effort` binds
+    /// the new slot's per-slot reasoning effort (priority-chain layer 2);
+    /// pass `None` to let the model default apply. Callers driving Main
+    /// pass `None` here — Main's session effort rides
+    /// `QueryEngineConfig.thinking_level` (layer 1) so it stays out of
+    /// the shared Main client that forks inherit.
     pub fn rebind_role_primary(
         self: &Arc<Self>,
         role: ModelRole,
         spec: ModelSpec,
+        effort: Option<coco_types::ReasoningEffort>,
     ) -> Result<Vec<ModelRuntimeEvent>, InferenceError> {
         let cfg = rw_read(&self.runtime_config).clone().ok_or_else(|| {
             crate::errors::ProviderBuildFailedSnafu {
@@ -1245,15 +1253,19 @@ impl ModelRuntimeRegistry {
             .build()
         })?;
         let retry: RetryConfig = cfg.api.retry.clone().into();
+        let slot = RoleSlot {
+            model: spec.clone(),
+            effort,
+        };
         let runtime = build_role_runtime(
             &cfg,
             role,
-            spec.clone(),
+            slot.clone(),
             retry,
             self.resolver.as_ref(),
             Some(self.header_vars_snapshot().as_ref()),
         )?;
-        rw_write(&self.role_overrides).insert(role, spec.clone());
+        rw_write(&self.role_overrides).insert(role, slot);
         if let Some(old) = mutex_lock(&self.recovery_tasks).remove(&ModelRuntimeSource::Role(role))
         {
             old.abort();
@@ -1314,20 +1326,11 @@ impl ModelRuntimeRegistry {
         let retry: RetryConfig = runtime_config.api.retry.clone().into();
         let overrides = rw_read(&self.role_overrides).clone();
         let mut rebuilt = HashMap::new();
-        for role in [
-            ModelRole::Main,
-            ModelRole::Plan,
-            ModelRole::Fast,
-            ModelRole::Explore,
-            ModelRole::Review,
-            ModelRole::Subagent,
-            ModelRole::Memory,
-            ModelRole::HookAgent,
-        ] {
+        for role in ModelRole::ALL {
             let primary = overrides
                 .get(&role)
                 .cloned()
-                .or_else(|| runtime_config.model_roles.get(role).cloned());
+                .or_else(|| runtime_config.model_roles.primary_slot(role).cloned());
             if let Some(primary) = primary {
                 let runtime = build_role_runtime(
                     &runtime_config,
@@ -1350,6 +1353,7 @@ impl ModelRuntimeRegistry {
             let client = model_factory::build_api_client(
                 &runtime_config,
                 &spec,
+                /*role_effort*/ None,
                 retry.clone(),
                 self.resolver.as_ref(),
                 Some(self.header_vars_snapshot().as_ref()),
@@ -1403,6 +1407,7 @@ impl ModelRuntime {
             supports_server_side_context_edits: client.supports_server_side_context_edits(),
             runtime_snapshot: client.fingerprint().to_snapshot(),
             active_slot: self.active,
+            role_effort: client.role_effort(),
         }
     }
 
@@ -1715,14 +1720,19 @@ fn finish_transition(
 fn build_role_runtime(
     runtime_config: &RuntimeConfig,
     role: ModelRole,
-    primary: ModelSpec,
+    primary: RoleSlot<ModelSpec>,
     retry: RetryConfig,
     resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
     header_vars: Option<&HeaderVars>,
 ) -> Result<ModelRuntime, InferenceError> {
+    // Each slot binds its own effort: the primary from the passed slot
+    // (a config primary or a session rebind), the fallbacks from config
+    // by role. Whichever slot is live contributes its own effort at the
+    // wire (priority-chain layer 2).
     let primary = model_factory::build_api_client(
         runtime_config,
-        &primary,
+        &primary.model,
+        primary.effort,
         retry.clone(),
         resolver,
         header_vars,
@@ -1731,10 +1741,11 @@ fn build_role_runtime(
         .model_roles
         .fallbacks(role)
         .iter()
-        .map(|spec| {
+        .map(|slot| {
             model_factory::build_api_client(
                 runtime_config,
-                spec,
+                &slot.model,
+                slot.effort,
                 retry.clone(),
                 resolver,
                 header_vars,

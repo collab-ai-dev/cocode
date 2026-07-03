@@ -9,6 +9,7 @@ pub use registry::build_model_registry;
 pub use role_slots::ExhaustedRetryPolicy;
 pub use role_slots::FallbackPolicy;
 pub use role_slots::RecoveryProbePolicy;
+pub use role_slots::RoleSlot;
 pub use role_slots::RoleSlots;
 
 use crate::error::ConfigError;
@@ -287,12 +288,23 @@ impl ModelRoles {
     pub fn get(&self, role: ModelRole) -> Option<&ModelSpec> {
         self.roles
             .get(&role)
-            .map(|s| &s.primary)
-            .or_else(|| self.roles.get(&ModelRole::Main).map(|s| &s.primary))
+            .map(|s| &s.primary.model)
+            .or_else(|| self.roles.get(&ModelRole::Main).map(|s| &s.primary.model))
     }
 
-    /// Ordered fallback chain for a role. Strictly per-role.
-    pub fn fallbacks(&self, role: ModelRole) -> &[ModelSpec] {
+    /// Primary slot (model + per-slot effort) for a role. Unlike
+    /// [`Self::get`], this does **not** fall back to Main — the effort
+    /// belongs to the role that declared it, so an unconfigured role
+    /// has no slot here. Config-resolution already defaults every role's
+    /// *model* to Main (with effort stripped), so callers that only need
+    /// the model keep using [`Self::get`].
+    pub fn primary_slot(&self, role: ModelRole) -> Option<&RoleSlot<ModelSpec>> {
+        self.roles.get(&role).map(|s| &s.primary)
+    }
+
+    /// Ordered fallback chain for a role. Strictly per-role. Each entry
+    /// carries its own per-slot effort.
+    pub fn fallbacks(&self, role: ModelRole) -> &[RoleSlot<ModelSpec>] {
         self.roles
             .get(&role)
             .map(|s| s.fallbacks.as_slice())

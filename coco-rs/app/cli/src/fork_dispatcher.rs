@@ -127,11 +127,15 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             // Forks are fire-and-forget — no UI to prompt, so a residual `Ask`
             // must fail closed.
             avoid_permission_prompts: true,
-            // Fork dispatch is fire-and-forget — model-driven thinking
-            // / effort overrides would invalidate the parent cache, so
-            // we skip them. `forked_agent::build_query_config` already
-            // honors `options.effort` when the caller wants it; we
-            // forward that through the engine config below.
+            // Parent-parity thinking: `build_query_config` already
+            // resolved `options.effort.or(cache.effort)` — the parent's
+            // effective wire effort unless the caller deliberately
+            // overrode it. Thread it as the engine's explicit level so
+            // the fork's thinking params match the parent's byte-for-
+            // byte (thinking config keys Anthropic's messages-level
+            // cache; divergence re-reads the parent history uncached —
+            // PR #18143 class). Effort only, no budget — same model ⇒
+            // same `supported_thinking_levels` ladder ⇒ same wire budget.
             thinking_level: agent_config.effort.map(|effort| coco_types::ThinkingLevel {
                 effort,
                 budget_tokens: None,

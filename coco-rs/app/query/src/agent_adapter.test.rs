@@ -265,6 +265,52 @@ async fn test_adapter_xhigh_effort_propagates() {
     );
 }
 
+/// Problem-1 fix: a non-fork subagent with no explicit `effort` must
+/// leave `thinking_level = None` so resolution falls through to the
+/// role runtime's per-slot effort (layer 2) then the model default —
+/// NOT a synthesized `Off`. Previously the adapter forced `Off` for
+/// non-fork spawns, which permanently disabled model-default thinking
+/// for every built-in subagent (e.g. Explore).
+#[tokio::test]
+async fn test_adapter_none_effort_defers_no_synthesized_off() {
+    use super::QueryEngineAdapter;
+    use super::QueryEngineFactory;
+
+    // Two spawns: one plain (non-fork), one fork-flavored (fork_label
+    // set). Both must thread `thinking_level = None`.
+    for fork_label in [None, Some(coco_types::ForkLabel::Speculation)] {
+        let observed: Arc<std::sync::Mutex<Option<coco_types::ThinkingLevel>>> = Arc::new(
+            std::sync::Mutex::new(Some(coco_types::ThinkingLevel::high())),
+        );
+        let observed_c = observed.clone();
+
+        let factory: QueryEngineFactory = Arc::new(move |cfg, _role, _cancel| {
+            let observed_c = observed_c.clone();
+            Box::pin(async move {
+                *observed_c.lock().unwrap() = cfg.thinking_level;
+                std::panic::resume_unwind(Box::new("observed"));
+            })
+        });
+        let adapter = QueryEngineAdapter::new(factory);
+
+        let cfg = AgentQueryConfig {
+            system_prompt: "s".into(),
+            max_turns: Some(1),
+            effort: None,
+            fork_label,
+            ..Default::default()
+        };
+
+        let handle = tokio::task::spawn(async move { adapter.execute_query("hello", cfg).await });
+        let _ = handle.await.expect_err("factory panic must bubble up");
+        assert_eq!(
+            *observed.lock().unwrap(),
+            None,
+            "effort=None (fork_label={fork_label:?}) must defer, not synthesize Off",
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_adapter_defers_to_factory_default_when_role_none() {
     use super::QueryEngineAdapter;

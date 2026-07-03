@@ -172,30 +172,19 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // we just thread the categorical level (no budget, default
             // options) and let the downstream apply model-relative
             // overrides where they exist.
-            // (): a non-fork subagent runs
-            // with thinking DISABLED — only forks (which inherit the
-            // parent's exact prompt + tool pool) keep the parent's
-            // reasoning. An explicit per-spawn `effort` override still
-            // wins. coco detects "fork" via `fork_label` (memory/dream/
-            // summary forks) or a non-empty inherited history (the
-            // user-facing `COCO_FORK_SUBAGENT` path).
-            thinking_level: {
-                let is_fork =
-                    config.fork_label.is_some() || !config.fork_context_messages.is_empty();
-                match config.effort {
-                    Some(effort) => Some(ThinkingLevel {
-                        effort,
-                        budget_tokens: None,
-                        options: std::collections::HashMap::new(),
-                    }),
-                    None if !is_fork => Some(ThinkingLevel {
-                        effort: coco_types::ReasoningEffort::Off,
-                        budget_tokens: None,
-                        options: std::collections::HashMap::new(),
-                    }),
-                    None => None,
-                }
-            },
+            // `None` means the spawn states no per-call effort (layer 1),
+            // so it falls through to the resolved role runtime's per-slot
+            // effort (layer 2 — e.g. `models.explore.effort`), then the
+            // model default (layer 3), then the provider default. A
+            // subagent that wants thinking off declares `effort: off` in
+            // its definition; this layer never synthesizes an `Off`. An
+            // explicit per-spawn `effort` (definition frontmatter or the
+            // AgentTool input) still wins as the layer-1 override.
+            thinking_level: config.effort.map(|effort| ThinkingLevel {
+                effort,
+                budget_tokens: None,
+                options: std::collections::HashMap::new(),
+            }),
             fast_mode: false,
             fallback_min_context_window: None,
             session_id: identity.session_id.clone(),

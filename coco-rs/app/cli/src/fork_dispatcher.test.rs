@@ -194,6 +194,7 @@ async fn dispatch_with_parent_history_uses_no_event_message_path() {
         provider: "mock".into(),
         active_shell_tool: coco_types::ActiveShellTool::Bash,
         prompt_cache: None,
+        effort: None,
         fork_context_messages: vec![Arc::new(coco_messages::create_user_message("parent turn"))],
     };
     let options = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
@@ -232,6 +233,7 @@ async fn compact_sidechain_transcript_writes_agent_store_only() {
         provider: "mock".into(),
         active_shell_tool: coco_types::ActiveShellTool::Bash,
         prompt_cache: None,
+        effort: None,
         fork_context_messages: vec![Arc::new(coco_messages::create_user_message("parent turn"))],
     };
     let mut options = ForkedAgentOptions::for_label(ForkLabel::Compact);

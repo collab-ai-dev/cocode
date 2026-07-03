@@ -560,6 +560,7 @@ fn empty_cache() -> CacheSafeParams {
         provider: "mock".into(),
         active_shell_tool: coco_types::ActiveShellTool::Bash,
         prompt_cache: None,
+        effort: None,
         fork_context_messages: vec![Arc::new(coco_messages::create_user_message(
             "old parent cache",
         ))],

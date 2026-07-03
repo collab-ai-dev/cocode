@@ -235,6 +235,14 @@ pub(crate) struct ApiClient {
     /// `ProviderClientOptions.stream_idle_timeout_secs` via
     /// [`Self::with_stream_idle_timeout`]; applied in [`Self::query_stream`].
     stream_idle_timeout: Option<std::time::Duration>,
+    /// Per-slot reasoning effort (priority-chain layer 2). Bound from the
+    /// serving `RoleSlot.effort` at build time. When a call carries no
+    /// explicit `QueryParams.thinking_level` (layer 1), this seeds the
+    /// per-call thinking level so the slot's configured effort reaches the
+    /// wire; the model default (layer 3) and provider default (layer 4)
+    /// still apply below it via `build_call_options`. `None` = this slot
+    /// states no effort. Distinct from `Some(Off)` (explicit "off").
+    role_effort: Option<coco_types::ReasoningEffort>,
 }
 
 impl ApiClient {
@@ -264,7 +272,25 @@ impl ApiClient {
             cache_break_detector: None,
             refresh_hook: None,
             stream_idle_timeout: None,
+            role_effort: None,
         }
+    }
+
+    /// Bind the serving slot's reasoning effort (priority-chain layer 2).
+    /// A `None` argument leaves the slot effort-less (model default
+    /// applies). Set by `model_factory::build_api_client` from the
+    /// `RoleSlot.effort` that produced this client.
+    #[must_use]
+    pub(crate) fn with_role_effort(mut self, effort: Option<coco_types::ReasoningEffort>) -> Self {
+        self.role_effort = effort;
+        self
+    }
+
+    /// The serving slot's reasoning effort, if any. Read by the
+    /// cache-break detector so its `effort_value` reflects the effective
+    /// wire effort rather than only the per-call override.
+    pub(crate) fn role_effort(&self) -> Option<coco_types::ReasoningEffort> {
+        self.role_effort
     }
 
     /// Set the per-provider streaming idle-timeout backstop. A non-positive /
@@ -985,7 +1011,17 @@ impl ApiClient {
             }
         });
         let per_call = PerCallOverrides {
-            thinking_level: params.thinking_level.clone(),
+            // Priority chain: explicit per-call level (layer 1) wins;
+            // otherwise seed the serving slot's effort (layer 2). A
+            // `None` from both leaves `build_call_options` to apply the
+            // model default (layer 3) / provider default (layer 4).
+            thinking_level: params.thinking_level.clone().or_else(|| {
+                self.role_effort.map(|effort| ThinkingLevel {
+                    effort,
+                    budget_tokens: None,
+                    options: Default::default(),
+                })
+            }),
             max_output_tokens,
             context_management: params.context_management.clone(),
             cache_strategy: params.cache.clone(),
@@ -1152,15 +1188,22 @@ fn build_prompt_state_input(
         )
     };
 
-    let effort_value = params
+    // Effective wire effort = per-call level (layer 1) or the serving
+    // slot's effort (layer 2). Mirrors the resolution in `query`'s
+    // `per_call`, so the detector keys on what actually goes on the wire
+    // rather than only the per-call override.
+    let effective_effort = params
         .thinking_level
         .as_ref()
-        .map(|t| {
+        .map(|t| t.effort)
+        .or_else(|| client.role_effort());
+    let effort_value = effective_effort
+        .map(|effort| {
             // Stable serde-derived string. `format!("{:?}")` debug
             // format is not a stability commitment; serde rename-rules
             // are. The value is opaque to the detector — only
             // equality matters.
-            serde_json::to_string(&t.effort).unwrap_or_default()
+            serde_json::to_string(&effort).unwrap_or_default()
         })
         .unwrap_or_default();
 

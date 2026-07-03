@@ -17,6 +17,7 @@ use crate::error::ConfigError;
 use crate::model::ModelRegistry;
 use crate::model::ModelRoles;
 use crate::model::PartialModelInfo;
+use crate::model::RoleSlot;
 use crate::model::RoleSlots;
 use crate::model::build_model_registry;
 use crate::model_allowlist::is_model_allowed;
@@ -393,12 +394,17 @@ fn validate_roles_against_available_models(
     // It does not imply fallback selection: any configured primary or
     // fallback outside the allowlist fails startup.
     for (role, slots) in &roles.roles {
-        ensure_model_allowed(role.as_str(), "primary", &slots.primary, available_models)?;
-        for (idx, spec) in slots.fallbacks.iter().enumerate() {
+        ensure_model_allowed(
+            role.as_str(),
+            "primary",
+            &slots.primary.model,
+            available_models,
+        )?;
+        for (idx, slot) in slots.fallbacks.iter().enumerate() {
             ensure_model_allowed(
                 role.as_str(),
                 &format!("fallbacks[{idx}]"),
-                spec,
+                &slot.model,
                 available_models,
             )?;
         }
@@ -432,7 +438,8 @@ fn validate_roles_against_registry(
     registry: &ModelRegistry,
 ) -> Result<(), ConfigError> {
     for slots in roles.roles.values() {
-        for spec in std::iter::once(&slots.primary).chain(slots.fallbacks.iter()) {
+        for slot in std::iter::once(&slots.primary).chain(slots.fallbacks.iter()) {
+            let spec = &slot.model;
             match registry.try_resolve(&spec.provider, &spec.model_id)? {
                 Some(_) => {}
                 None => {
@@ -611,9 +618,11 @@ fn resolve_model_roles(
             .iter()
             .map(|sel| resolve_model_selection(sel.clone(), providers))
             .collect::<crate::Result<Vec<_>>>()?;
+        // CLI `--fallback-model` carries no per-slot effort — wrap each
+        // as a bare slot (effort defers to the model default).
         main_slots = RoleSlots {
             primary: main_slots.primary,
-            fallbacks,
+            fallbacks: fallbacks.into_iter().map(RoleSlot::bare).collect(),
             policy: main_slots.policy,
         };
         ensure_chain_unique(ModelRole::Main, &main_slots)?;
@@ -676,28 +685,37 @@ fn resolve_model_roles(
     // the single-knob Main escape hatch (handled above).
     if let Some(main_slots) = roles.roles.get(&ModelRole::Main).cloned() {
         let mut defaulted_roles = Vec::new();
-        for fallback_role in [
-            ModelRole::Fast,
-            ModelRole::Plan,
-            ModelRole::Explore,
-            ModelRole::Review,
-            ModelRole::HookAgent,
-            ModelRole::Memory,
-            ModelRole::Subagent,
-        ] {
+        for fallback_role in ModelRole::ALL {
             if let std::collections::hash_map::Entry::Vacant(e) = roles.roles.entry(fallback_role) {
-                e.insert(main_slots.clone());
+                // Borrow Main's models but NOT its effort — an
+                // unconfigured role has declared no thinking intent, so
+                // each defaulted slot defers to the model default. Effort
+                // isolation: `models.main.effort` never leaks into a role
+                // the user didn't configure.
+                e.insert(main_slots.without_effort());
                 defaulted_roles.push(fallback_role.as_str());
             }
         }
         if !defaulted_roles.is_empty() {
             tracing::debug!(
                 roles = %defaulted_roles.join(","),
-                main_model = %main_slots.primary.model_id,
+                main_model = %main_slots.primary.model.model_id,
                 "model roles unconfigured; defaulting to Main",
             );
         }
     }
+
+    // Invariant consumed downstream: after this pass every role has an
+    // entry (Main is mandatory above; the loop fills the rest). The
+    // model-runtime registry reads `ModelRoles::primary_slot` — which
+    // deliberately does NOT fall back to Main, so effort can't leak
+    // across roles — and relies on this pass having populated the map.
+    debug_assert!(
+        ModelRole::ALL
+            .iter()
+            .all(|role| roles.roles.contains_key(role)),
+        "build_model_roles must leave every ModelRole populated",
+    );
 
     Ok(roles)
 }
@@ -731,18 +749,18 @@ fn ensure_chain_unique(role: ModelRole, slots: &RoleSlots<ModelSpec>) -> crate::
     let mut seen: HashMap<(String, String), &'static str> = HashMap::new();
     seen.insert(
         (
-            slots.primary.provider.clone(),
-            slots.primary.model_id.clone(),
+            slots.primary.model.provider.clone(),
+            slots.primary.model.model_id.clone(),
         ),
         "primary",
     );
     for (idx, fb) in slots.fallbacks.iter().enumerate() {
-        let key = (fb.provider.clone(), fb.model_id.clone());
+        let key = (fb.model.provider.clone(), fb.model.model_id.clone());
         if let Some(prev) = seen.get(&key) {
             return Err(crate::ConfigError::generic(format!(
                 "role `{role:?}`: fallback[{idx}] `{}/{}` duplicates {prev} slot; \
                  each slot in the chain must be a distinct model",
-                fb.provider, fb.model_id,
+                fb.model.provider, fb.model.model_id,
             )));
         }
         seen.insert(key, "earlier fallback");

@@ -209,6 +209,7 @@ fn account_kind_str(kind: coco_types::AccountKind) -> &'static str {
 pub(crate) fn build_api_client(
     runtime: &RuntimeConfig,
     spec: &ModelSpec,
+    role_effort: Option<coco_types::ReasoningEffort>,
     retry: RetryConfig,
     resolver: Option<&Arc<dyn ProviderCredentialResolver>>,
     header_vars: Option<&HeaderVars>,
@@ -245,7 +246,8 @@ pub(crate) fn build_api_client(
     };
     let mut client = ApiClient::new(model, fingerprint, model_info, model_identity, retry)
         .with_cache_break_detector(detector)
-        .with_stream_idle_timeout(provider_cfg.client_options.stream_idle_timeout_secs);
+        .with_stream_idle_timeout(provider_cfg.client_options.stream_idle_timeout_secs)
+        .with_role_effort(role_effort);
     // Reactive-401 hook for OAuth-subscription providers: bind a
     // `refresh_now(provider)` callback so an expired access token recovers
     // (refresh + retry) instead of surfacing the 401.

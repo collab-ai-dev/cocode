@@ -424,20 +424,32 @@ impl QueryEngine {
         &self,
         history: &coco_messages::MessageHistory,
     ) -> coco_types::CacheSafeParams {
-        let provider = self
-            .runtime_snapshot()
-            .map(|snapshot| snapshot.provider)
+        let snapshot = self.runtime_snapshot();
+        let provider = snapshot
+            .as_ref()
+            .map(|s| s.provider.clone())
             .unwrap_or_default();
-        Self::cache_safe_params_from_parts(&self.config, provider, history)
+        let slot_effort = snapshot.and_then(|s| s.role_effort);
+        Self::cache_safe_params_from_parts(&self.config, provider, slot_effort, history)
     }
 
     /// Construct [`coco_types::CacheSafeParams`] from explicit config parts.
     /// This is intentionally small and byte-for-byte aligned with
     /// `save_post_turn_cache_params`, except callers supply the provider
-    /// snapshot when they do not have a live `QueryEngine`.
+    /// + slot-effort snapshot when they do not have a live `QueryEngine`.
+    ///
+    /// `slot_effort` is the serving slot's bound per-slot effort
+    /// (priority-chain layer 2, `ModelRuntimeSnapshot.role_effort`). The
+    /// captured `effort` is the parent's **effective** wire level —
+    /// explicit engine config (layer 1) wins, else the slot effort — so
+    /// cache-sharing forks can mirror it and keep the Anthropic
+    /// messages-level cache key identical. The model default (layer 3)
+    /// needs no capture: fork and parent share the model, so both
+    /// resolve the same default when this stays `None`.
     pub fn cache_safe_params_from_parts(
         config: &QueryEngineConfig,
         provider: String,
+        slot_effort: Option<coco_types::ReasoningEffort>,
         history: &coco_messages::MessageHistory,
     ) -> coco_types::CacheSafeParams {
         coco_types::CacheSafeParams {
@@ -446,6 +458,11 @@ impl QueryEngine {
             provider,
             active_shell_tool: config.active_shell_tool,
             prompt_cache: config.prompt_cache.clone(),
+            effort: config
+                .thinking_level
+                .as_ref()
+                .map(|t| t.effort)
+                .or(slot_effort),
             fork_context_messages: history.as_slice().to_vec(),
         }
     }
@@ -1074,3 +1091,7 @@ fn task_status_to_ts_string(status: coco_types::TaskStatus) -> String {
     }
     .to_string()
 }
+
+#[cfg(test)]
+#[path = "engine_builder.test.rs"]
+mod tests;

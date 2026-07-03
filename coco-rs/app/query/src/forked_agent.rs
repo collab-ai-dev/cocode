@@ -27,10 +27,12 @@
 //!   transcript
 //! - `skip_cache_write: true` — fire-and-forget; don't pollute the
 //!   shared cache with this branch
-//! - `effort: None` — leaves thinking config untouched (setting
-//!   `effort: 'low'` on prompt-suggestion forks collapsed cache hit
-//!   rate from 92.7% → 61% by changing `budget_tokens` and busting
-//!   the cache key)
+//! - `effort: None` — inherit the parent's **effective** effort from
+//!   [`coco_types::CacheSafeParams::effort`] (see `build_query_config`),
+//!   keeping the fork's thinking params identical to the parent's.
+//!   Setting an explicit per-fork effort busts cache parity — PR
+//!   #18143: `effort: 'low'` on prompt-suggestion forks collapsed
+//!   cache hit rate from 92.7% → 61% by changing `budget_tokens`
 //! - `fallback_min_context_window: None` — ordinary forks inherit the
 //!   configured fallback chain; compact sets this explicitly.
 //!
@@ -239,7 +241,17 @@ pub fn build_query_config(
         allowed_tools: Vec::new(),
         disallowed_tools: Vec::new(),
         extra_permission_rules: Vec::new(),
-        effort: options.effort,
+        // Wire parity with the parent: a cache-sharing fork must send
+        // the SAME thinking params the parent's last turn sent —
+        // thinking config keys Anthropic's messages-level cache
+        // breakpoints, and a diverging fork re-reads the whole parent
+        // history uncached (PR #18143 class). An explicit per-fork
+        // `options.effort` (rare, deliberately cache-busting) wins;
+        // otherwise mirror the parent's captured effective effort.
+        // `None` = parent ran on the model default — the fork targets
+        // the same model, so both resolve the identical default and
+        // parity holds without a snapshot.
+        effort: options.effort.or(cache.effort),
         // Per-fork policy: thread can_use_tool / fork_label /
         // onto the child engine config so the engine builder reflects
         // them on QueryEngineConfig and ToolUseContext. Empty when not

@@ -74,6 +74,23 @@ pub enum ModelRole {
 }
 
 impl ModelRole {
+    /// Every role, in registry-build order. The single canonical
+    /// iteration list — config resolution (`build_runtime_config`'s
+    /// default-to-Main pass) and the model-runtime registry loop both
+    /// walk this so no role can be silently skipped. The exhaustive
+    /// `match` in [`Self::as_str`] forces a new variant to be added
+    /// here too (the compiler flags `as_str` first; update both).
+    pub const ALL: [Self; 8] = [
+        Self::Main,
+        Self::Plan,
+        Self::Fast,
+        Self::Explore,
+        Self::Review,
+        Self::Subagent,
+        Self::Memory,
+        Self::HookAgent,
+    ];
+
     /// Canonical snake_case spelling. Matches the serde wire form so
     /// `ModelRole::Subagent.as_str() == serde_json::to_string(&Subagent)?`
     /// modulo the surrounding quotes.

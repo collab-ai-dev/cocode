@@ -97,6 +97,7 @@ fn snapshot_with(
         }),
         supports_prompt_cache: false,
         supports_server_side_context_edits: false,
+        role_effort: None,
         runtime_snapshot: coco_types::SubagentRuntimeSnapshot {
             provider: "provider".into(),
             api,
