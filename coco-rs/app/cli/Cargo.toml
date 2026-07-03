@@ -21,6 +21,10 @@ jemalloc = ["dep:tikv-jemallocator"]
 # `cargo build` / CI stay light (no ALSA/CoreAudio system deps); enabled in the
 # shipped coco binary. Without it, voice is present but reports "no microphone".
 voice = ["coco-voice/capture"]
+# Also compile the on-device Whisper backend (whisper.cpp). Off by default: it
+# needs a C++ toolchain (cmake + libclang) at build time. On macOS this pulls
+# the Metal GPU backend automatically (target-specific dep in coco-voice).
+voice-local = ["voice", "coco-voice/local-voice"]
 
 [dependencies]
 coco-types.workspace = true

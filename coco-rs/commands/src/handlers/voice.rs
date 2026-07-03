@@ -31,8 +31,8 @@ fn run(args: &str) -> crate::Result<String> {
         serde_json::Value::Bool(target),
     ) {
         Ok(_) if target => Ok(concat!(
-            "Voice input enabled. Press Ctrl+G in the terminal UI to record ",
-            "(rebindable via /keybindings). Set the language with /voice-lang."
+            "Voice input enabled. Press F3 in the terminal UI to record ",
+            "(rebindable via /keybindings). Configure it with /voice-config."
         )
         .to_string()),
         Ok(_) => Ok("Voice input disabled.".to_string()),

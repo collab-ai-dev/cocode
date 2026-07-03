@@ -728,6 +728,50 @@ fn smoosh_folds_into_is_error_tool_result() {
 }
 
 #[test]
+fn smoosh_ignores_directive_prefixed_trailing_user() {
+    use coco_llm_types::ToolContentPart;
+    use coco_llm_types::ToolResultContent;
+    use coco_llm_types::ToolResultPart;
+
+    // Compact's summarization request is wrapped in
+    // "<compaction_directive>" (coco-compact::prompt — literal here:
+    // core/messages cannot depend on services/compact). Only
+    // "<system-reminder>"-prefixed trailing users may be folded into a
+    // preceding tool_result; the compact request must survive intact on
+    // the cache-sharing fork path even when the context ends in a tool
+    // result.
+    let tool_msg = LlmMessage::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "tc1".into(),
+            tool_name: "Bash".into(),
+            output: ToolResultContent::Text {
+                value: "tool output".into(),
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    };
+    let user_directive = LlmMessage::User {
+        content: vec![coco_llm_types::UserContentPart::text(
+            "<compaction_directive>\nsummarize the conversation\n</compaction_directive>",
+        )],
+        provider_options: None,
+    };
+
+    let mut msgs = vec![tool_msg, user_directive];
+    super::smoosh_system_reminder_into_tool_result(&mut msgs);
+
+    assert_eq!(
+        msgs.len(),
+        2,
+        "directive-prefixed trailing user must NOT fold into the tool_result"
+    );
+    assert!(matches!(&msgs[1], LlmMessage::User { .. }));
+}
+
+#[test]
 fn sanitize_strips_non_text_from_is_error_tool_result() {
     use coco_llm_types::ToolContentPart;
     use coco_llm_types::ToolResultContent;

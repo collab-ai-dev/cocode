@@ -8,18 +8,40 @@
 //!
 //! The renderer pipeline reads `cells()` directly.
 //!
+//! Besides the derived cells, this struct also owns the
+//! **session-cumulative message counters** ([`Self::cumulative_counts`]).
+//! They are a fold over the same event stream — like the session token
+//! accumulators, they survive intra-session transcript rewrites
+//! (compaction / trim / rewind via `HistoryReplaced`) and reset only at
+//! a true session boundary (`SessionResetForResume`). They are *not* a
+//! function of the current cells.
+//!
 //! Per-cell render layout (`cached_lines`, `cached_height`) is
 //! intentionally not part of this struct. Layout caching lives in the
 //! renderer at draw time.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use coco_messages::Message;
+use coco_types::HistoryReplaceReason;
 use uuid::Uuid;
 
+use crate::transcript::cells::CellKind;
 use crate::transcript::cells::RenderedCell;
 use crate::transcript::derive::message_to_cells;
+
+/// Session-cumulative message counts, deduped by message uuid and
+/// classified by the head cell each message derives (matching what the
+/// transcript actually renders — invisible messages produce no cells
+/// and are never counted).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptCounts {
+    pub users: usize,
+    pub assistants: usize,
+    pub tools: usize,
+}
 
 /// Append-only-with-truncation list of derived cells.
 #[derive(Debug, Default)]
@@ -31,6 +53,14 @@ pub struct TranscriptView {
     /// thinking + tool_use blocks); the index points at the head cell
     /// of that group.
     by_uuid: HashMap<Uuid, usize>,
+    /// Session-cumulative counters (status bar). Unlike `cells` /
+    /// `by_uuid`, these survive `replace_from_messages` and truncation;
+    /// only [`Self::on_session_reset`] zeroes them.
+    cumulative: TranscriptCounts,
+    /// Message uuids already folded into `cumulative`. Kept separate
+    /// from `by_uuid` (which is rebuilt on every replace) so a rewind /
+    /// compact snapshot cannot re-count messages it re-states.
+    counted: HashSet<Uuid>,
 }
 
 impl TranscriptView {
@@ -61,6 +91,29 @@ impl TranscriptView {
 
     pub fn find_head_index_by_uuid(&self, uuid: &Uuid) -> Option<usize> {
         self.by_uuid.get(uuid).copied()
+    }
+
+    /// Session-cumulative user / assistant / tool message counts.
+    pub fn cumulative_counts(&self) -> TranscriptCounts {
+        self.cumulative
+    }
+
+    /// Fold one message into the cumulative counters, deduped by uuid.
+    /// Classification uses the head cell (one bucket per message), the
+    /// same rule the old per-frame cell walk applied.
+    fn count_message(&mut self, uuid: Uuid, head: &RenderedCell) {
+        if !self.counted.insert(uuid) {
+            return;
+        }
+        match &head.kind {
+            CellKind::UserText { .. } => self.cumulative.users += 1,
+            CellKind::AssistantText { .. }
+            | CellKind::AssistantThinking { .. }
+            | CellKind::AssistantRedactedThinking { .. }
+            | CellKind::ToolUse { .. } => self.cumulative.assistants += 1,
+            CellKind::ToolResult { .. } => self.cumulative.tools += 1,
+            CellKind::Attachment | CellKind::System(_) => {}
+        }
     }
 
     /// Append cells derived from `msg`. Multiple cells may be produced
@@ -102,6 +155,7 @@ impl TranscriptView {
         let head_idx = self.cells.len();
         if let Some(uuid) = msg.uuid() {
             self.by_uuid.insert(*uuid, head_idx);
+            self.count_message(*uuid, &derived[0]);
         }
         self.cells.extend(derived);
         self.bump_revision();
@@ -147,6 +201,8 @@ impl TranscriptView {
     pub fn on_session_reset(&mut self) {
         self.cells.clear();
         self.by_uuid.clear();
+        self.cumulative = TranscriptCounts::default();
+        self.counted.clear();
         self.bump_revision();
     }
 
@@ -157,7 +213,20 @@ impl TranscriptView {
     /// [`Self::on_session_reset`] + N
     /// [`Self::on_message_appended`] calls but in a single
     /// cache-rebuild pass.
-    pub fn replace_from_messages(&mut self, messages: &[Arc<Message>]) {
+    ///
+    /// Cumulative counters never decrease here. Per `reason`:
+    /// - `Hydrate` / `Trim` / `Rewind`: unseen messages are counted
+    ///   normally (seeds the fold after a resume reset; a strict-subset
+    ///   snapshot is a no-op).
+    /// - `Compact`: snapshot messages are only marked seen — the
+    ///   boundary / summary / re-injected attachments are compaction
+    ///   artifacts, not organic conversation — and the summarizer's one
+    ///   LLM response is folded as a single assistant message.
+    pub fn replace_from_messages(
+        &mut self,
+        messages: &[Arc<Message>],
+        reason: HistoryReplaceReason,
+    ) {
         self.cells.clear();
         self.by_uuid.clear();
         for arc in messages {
@@ -169,8 +238,19 @@ impl TranscriptView {
             let head_idx = self.cells.len();
             if let Some(uuid) = arc.uuid() {
                 self.by_uuid.insert(*uuid, head_idx);
+                match reason {
+                    HistoryReplaceReason::Compact => {
+                        self.counted.insert(*uuid);
+                    }
+                    HistoryReplaceReason::Hydrate
+                    | HistoryReplaceReason::Trim
+                    | HistoryReplaceReason::Rewind => self.count_message(*uuid, &derived[0]),
+                }
             }
             self.cells.extend(derived);
+        }
+        if reason == HistoryReplaceReason::Compact {
+            self.cumulative.assistants += 1;
         }
         self.bump_revision();
     }

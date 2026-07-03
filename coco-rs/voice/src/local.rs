@@ -1,19 +1,21 @@
 //! On-device Whisper backend (feature = "local-voice").
 //!
 //! Mirrors coco/retrieval's local-model recipe: an optional heavy dependency
-//! (whisper.cpp via `whisper-rs`) behind a cargo feature, a fallible
-//! constructor (never `unwrap` on model init), the model kept warm in an `Arc`
-//! for the session, and inference offloaded to `spawn_blocking` (a pass is
-//! seconds — not the inline-sync shortcut retrieval uses for embeddings).
+//! (whisper.cpp via `whisper-rs`) behind a cargo feature, model init that never
+//! `unwrap`s, the context kept warm in an `Arc` for the session, and inference
+//! offloaded to `spawn_blocking` (a pass is seconds — not the inline-sync
+//! shortcut retrieval uses for embeddings).
 //!
-//! Weights are NOT auto-downloaded yet: the model file must be present at the
-//! resolved cache path. Download-on-first-use is a follow-up (needs an HTTP
-//! client + HuggingFace URLs).
+//! The model is loaded lazily on the first `transcribe`, not at construction,
+//! so enabling `voice.backend = local` never blocks or bloats startup when the
+//! mic is never used. [`LocalWhisperEngine::ensure_ctx`] is the single load
+//! choke point — and the site where download-on-first-use hooks in.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::mpsc;
+use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 use whisper_rs::FullParams;
 use whisper_rs::SamplingStrategy;
@@ -27,34 +29,80 @@ use crate::engine::Transcript;
 use crate::engine::VoiceCapabilities;
 use crate::engine::VoiceEngine;
 use crate::error::VoiceError;
+use crate::session::VoiceEvent;
 
-/// On-device Whisper transcription. The loaded context is shared across
-/// requests (loaded once, kept warm for the session).
+/// On-device Whisper transcription. Construction is cheap and infallible; the
+/// context is loaded once on first use and then shared (kept warm) across
+/// requests for the session.
 pub struct LocalWhisperEngine {
-    ctx: Arc<WhisperContext>,
+    config: LocalWhisperConfig,
+    ctx: OnceCell<Arc<WhisperContext>>,
+    /// Voice event stream, used to report weight-download progress on first use.
+    events: Option<mpsc::Sender<VoiceEvent>>,
 }
 
 impl LocalWhisperEngine {
-    /// Load the Whisper model. Fails (never panics) when the weights are
-    /// missing or unreadable — the factory surfaces the error to `/voice`.
-    pub fn try_new(config: &LocalWhisperConfig) -> Result<Self, VoiceError> {
-        let model_path = resolve_model_path(config);
-        if !model_path.exists() {
-            return Err(VoiceError::TranscriptionFailed(format!(
-                "Whisper model not found at {}. Download a ggml model for `{}` \
-                 (e.g. from https://huggingface.co/ggerganov/whisper.cpp) to that path.",
-                model_path.display(),
-                config.model
-            )));
+    /// Build the engine without touching disk. The model loads (and, if
+    /// missing, downloads) on the first `transcribe` call via
+    /// [`Self::ensure_ctx`]. `events` receives download progress.
+    pub fn new(config: LocalWhisperConfig, events: Option<mpsc::Sender<VoiceEvent>>) -> Self {
+        Self {
+            config,
+            ctx: OnceCell::new(),
+            events,
         }
-        let ctx = WhisperContext::new_with_params(
-            &model_path.to_string_lossy(),
-            WhisperContextParameters::default(),
-        )
-        .map_err(|e| {
-            VoiceError::TranscriptionFailed(format!("failed to load Whisper model: {e}"))
-        })?;
-        Ok(Self { ctx: Arc::new(ctx) })
+    }
+
+    /// Load-once accessor for the Whisper context. On first use it downloads the
+    /// weights if they are missing and eligible for auto-download (a known,
+    /// checksum-pinned model), then loads them. Fails (never panics) when the
+    /// weights are missing and cannot be auto-fetched, or are unreadable. The
+    /// heavy `WhisperContext::new_with_params` load is kept off the async
+    /// runtime via `spawn_blocking`.
+    async fn ensure_ctx(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<Arc<WhisperContext>, VoiceError> {
+        let ctx = self
+            .ctx
+            .get_or_try_init(|| async {
+                let model_path = crate::models::resolve_model_path(&self.config);
+                if !model_path.exists() {
+                    if !crate::models::may_auto_download(&self.config) {
+                        return Err(VoiceError::TranscriptionFailed(format!(
+                            "Whisper model `{}` is missing at {} and won't auto-download \
+                             (auto-download applies only to a built-in model with \
+                             `auto_download` on and no custom `model_url`). Pick a built-in \
+                             model with `/voice-config local model <name>` (e.g. base.en, \
+                             small), or place the ggml weights at that path yourself.",
+                            self.config.model,
+                            model_path.display()
+                        )));
+                    }
+                    crate::download::download_model(
+                        &self.config,
+                        self.events.clone(),
+                        cancel.clone(),
+                    )
+                    .await?;
+                }
+                let path = model_path.to_string_lossy().to_string();
+                tokio::task::spawn_blocking(move || {
+                    WhisperContext::new_with_params(&path, WhisperContextParameters::default())
+                        .map(Arc::new)
+                        .map_err(|e| {
+                            VoiceError::TranscriptionFailed(format!(
+                                "failed to load Whisper model: {e}"
+                            ))
+                        })
+                })
+                .await
+                .map_err(|e| {
+                    VoiceError::TranscriptionFailed(format!("whisper load task panicked: {e}"))
+                })?
+            })
+            .await?;
+        Ok(ctx.clone())
     }
 }
 
@@ -81,7 +129,10 @@ impl VoiceEngine for LocalWhisperEngine {
         if cancel.is_cancelled() {
             return Err(VoiceError::Cancelled);
         }
-        let ctx = self.ctx.clone();
+        let ctx = self.ensure_ctx(&cancel).await?;
+        if cancel.is_cancelled() {
+            return Err(VoiceError::Cancelled);
+        }
         let language = params.language.clone();
         // A Whisper pass is seconds of CPU — keep it off the async runtime.
         let text =
@@ -116,6 +167,13 @@ fn run_whisper(
     if let Some(lang) = language {
         params.set_language(Some(lang));
     }
+    // Whisper defaults to a conservative 4 threads; use available parallelism
+    // (capped) so multi-core machines aren't left idle during the CPU pass.
+    let threads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(4)
+        .clamp(1, 8) as i32;
+    params.set_n_threads(threads);
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
@@ -149,15 +207,4 @@ fn decode_wav_to_f32(wav: &[u8]) -> Result<Vec<f32>, VoiceError> {
         .collect::<Result<Vec<f32>, _>>()
         .map_err(|e| VoiceError::TranscriptionFailed(format!("read WAV samples: {e}")))?;
     Ok(samples)
-}
-
-/// Resolve the on-disk model path: `<cache_dir>/ggml-<model>.bin`, defaulting
-/// the cache dir to `<config_home>/models/whisper/`.
-fn resolve_model_path(config: &LocalWhisperConfig) -> PathBuf {
-    let dir = config.cache_dir.clone().unwrap_or_else(|| {
-        coco_config::global_config::config_home()
-            .join("models")
-            .join("whisper")
-    });
-    dir.join(format!("ggml-{}.bin", config.model))
 }

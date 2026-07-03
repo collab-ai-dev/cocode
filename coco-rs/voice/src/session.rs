@@ -36,6 +36,15 @@ pub enum VoiceState {
 pub enum VoiceEvent {
     /// The microphone is now capturing.
     RecordingStarted,
+    /// On-device model weights are downloading (first-use auto-download or an
+    /// explicit `/voice-config download`). Carries cumulative bytes for a
+    /// progress indicator; `total` is the size when the server reports it.
+    /// Emitted only by the local backend.
+    Download {
+        model: String,
+        received: u64,
+        total: Option<u64>,
+    },
     /// Recording stopped; transcription started (carries the backend name for
     /// the footer, e.g. "Transcribing via openai...").
     Transcribing { engine: String },
@@ -61,6 +70,11 @@ pub struct VoiceSession {
     runtime: tokio::runtime::Handle,
     event_tx: Option<mpsc::Sender<VoiceEvent>>,
     active: Option<Active>,
+    /// Cancel handle for the in-flight transcription (and its first-use model
+    /// download). Set on `stop()` and fired by `cancel_transcription()` so a
+    /// stuck download can be aborted — `active` is already `None` by then, so
+    /// `cancel()` can't reach it.
+    transcribe_cancel: Option<CancellationToken>,
 }
 
 impl VoiceSession {
@@ -78,6 +92,7 @@ impl VoiceSession {
             runtime: tokio::runtime::Handle::current(),
             event_tx: None,
             active: None,
+            transcribe_cancel: None,
         }
     }
 
@@ -86,7 +101,7 @@ impl VoiceSession {
         self.event_tx = Some(tx);
     }
 
-    /// Update the dictation language (from `/voice-lang`). `None` = auto-detect.
+    /// Update the dictation language (from `/voice-config lang`). `None` = auto.
     pub fn set_language(&mut self, language: Option<String>) {
         self.params.language = language;
     }
@@ -143,6 +158,9 @@ impl VoiceSession {
         let event_tx = self.event_tx.clone();
         let cancel = active.cancel.clone();
         let recording = active.recording;
+        // Retain the cancel handle so the transcription (and any first-use model
+        // download) can still be aborted after `active` is cleared.
+        self.transcribe_cancel = Some(active.cancel);
 
         self.runtime.spawn(async move {
             // Finalizing the WAV blocks (drains the capture thread) — keep it
@@ -180,6 +198,15 @@ impl VoiceSession {
             active.cancel.cancel();
             // Dropping the recording handle stops the capture stream.
             drop(active.recording);
+        }
+    }
+
+    /// Cancel an in-flight transcription — including a stuck first-use model
+    /// download — after `stop()` has handed recording off to the async task.
+    /// No-op if nothing is transcribing.
+    pub fn cancel_transcription(&mut self) {
+        if let Some(cancel) = self.transcribe_cancel.take() {
+            cancel.cancel();
         }
     }
 

@@ -134,7 +134,7 @@ pub enum Feature {
     /// LSP-backed code intelligence tool.
     Lsp,
     /// Voice input (speech-to-text dictation): mic capture + STT, surfaced
-    /// through `/voice` / `/voice-lang` and the `voice:pushToTalk` keybinding.
+    /// through `/voice` / `/voice-config` and the `voice:pushToTalk` keybinding.
     /// Coarse subsystem gate — mic access + outbound audio to a third party is
     /// privacy/cost-sensitive, so default off. Backend/language/model live in
     /// `VoiceConfig`, never as extra `Feature` variants.

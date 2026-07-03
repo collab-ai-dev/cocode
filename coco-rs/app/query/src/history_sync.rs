@@ -212,10 +212,15 @@ pub async fn history_clear_and_emit_session_reset(
 /// `HistoryReplaced { messages: vec![] }`, which clears the derived
 /// view exactly like [`history_clear_and_emit`] but without
 /// rotating the session id.
+///
+/// `reason` tells fold-keeping consumers (cumulative counters) whether
+/// the snapshot re-states known content or is a compaction product —
+/// see [`coco_types::HistoryReplaceReason`].
 pub async fn history_replace_and_emit(
     history: &mut MessageHistory,
     new_messages: Vec<Arc<Message>>,
     event_tx: &Option<Sender<CoreEvent>>,
+    reason: coco_types::HistoryReplaceReason,
 ) {
     let (session_id, agent_id) = envelope_from(history);
     let removed = history.len();
@@ -231,6 +236,7 @@ pub async fn history_replace_and_emit(
         target: HISTORY_SYNC_TARGET,
         removed,
         incoming,
+        ?reason,
         has_tx = event_tx.is_some(),
         "history replace: single HistoryReplaced event",
     );
@@ -240,6 +246,7 @@ pub async fn history_replace_and_emit(
             messages: snapshot,
             session_id,
             agent_id,
+            reason,
         },
     )
     .await;

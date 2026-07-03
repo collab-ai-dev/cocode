@@ -21,6 +21,7 @@ members = [
     "utils/coco-paths",
     "utils/common",
     "utils/cursor",
+    "utils/download",
     "utils/file-encoding",
     "utils/file-ignore",
     "utils/file-search",
@@ -159,6 +160,7 @@ coco-utils-absolute-path = { path = "utils/absolute-path" }
 coco-utils-cache = { path = "utils/cache" }
 coco-utils-cargo-bin = { path = "utils/cargo-bin" }
 coco-utils-common = { path = "utils/common" }
+coco-utils-download = { path = "utils/download" }
 coco-utils-image = { path = "utils/image" }
 coco-utils-json-repair = { path = "utils/json-repair" }
 coco-utils-json-to-toml = { path = "utils/json-to-toml" }

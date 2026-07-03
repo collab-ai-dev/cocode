@@ -2761,6 +2761,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-utils-download"
+version = "0.1.1"
+dependencies = [
+ "futures",
+ "hex",
+ "pretty_assertions",
+ "reqwest 0.12.28",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "coco-utils-image"
 version = "0.1.1"
 dependencies = [
@@ -2873,6 +2890,7 @@ dependencies = [
  "coco-config",
  "coco-inference",
  "coco-utils-audio",
+ "coco-utils-download",
  "hound",
  "pretty_assertions",
  "serde_json",

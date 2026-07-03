@@ -187,6 +187,7 @@ fn history_replaced_clears_pre_clear_rewind_snapshot() {
             messages: Vec::new(),
             session_id: String::new(),
             agent_id: None,
+            reason: coco_types::HistoryReplaceReason::Hydrate,
         },
         &tx,
     );
@@ -246,6 +247,7 @@ fn history_replaced_preserves_cumulative_usage() {
             messages: Vec::new(),
             session_id: String::new(),
             agent_id: None,
+            reason: coco_types::HistoryReplaceReason::Hydrate,
         },
         &tx,
     );
@@ -893,5 +895,240 @@ fn sandbox_violations_show_toast_not_modal() {
     assert!(
         state.ui.modal.is_none(),
         "violations must not open a blocking modal"
+    );
+}
+
+// ── TaskPanelChanged out-of-order generation guard ──────────────
+
+/// Uses `verification_nudge_pending` as the applied/dropped marker so
+/// the fixture avoids constructing `TaskRecord`s.
+fn panel_snapshot(generation: i64, nudge: bool) -> ServerNotification {
+    ServerNotification::TaskPanelChanged(coco_types::TaskPanelChangedParams {
+        plan_tasks: Vec::new(),
+        todos_by_agent: std::collections::HashMap::new(),
+        expanded_view: coco_types::ExpandedView::Tasks,
+        verification_nudge_pending: nudge,
+        generation,
+    })
+}
+
+#[test]
+fn test_task_panel_changed_stale_generation_dropped_zero_always_applied() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    assert!(super::handle(&mut state, panel_snapshot(2, true), &tx));
+    assert!(state.session.verification_nudge_pending);
+    assert_eq!(state.session.task_panel_generation, 2);
+
+    // Stale delivery from a slower producer channel (subagent/teammate
+    // bridge): dropped whole — the full-state replace must not roll the
+    // panel back.
+    assert!(!super::handle(&mut state, panel_snapshot(1, false), &tx));
+    assert!(state.session.verification_nudge_pending);
+    assert_eq!(state.session.task_panel_generation, 2);
+
+    // Equal generation is a duplicate delivery: also dropped.
+    assert!(!super::handle(&mut state, panel_snapshot(2, false), &tx));
+    assert!(state.session.verification_nudge_pending);
+
+    // Generation 0 (resume hydration) is unordered by contract: always
+    // applied, never advances the high-water mark.
+    assert!(super::handle(&mut state, panel_snapshot(0, false), &tx));
+    assert!(!state.session.verification_nudge_pending);
+    assert_eq!(state.session.task_panel_generation, 2);
+
+    // A genuinely newer snapshot applies and advances the mark.
+    assert!(super::handle(&mut state, panel_snapshot(3, true), &tx));
+    assert!(state.session.verification_nudge_pending);
+    assert_eq!(state.session.task_panel_generation, 3);
+}
+
+// ── Subagent usage aggregation (status bar `agents` segment) ────
+
+fn task_usage(input: i64, output: i64, cache: i64, cost: f64) -> coco_types::TaskUsage {
+    coco_types::TaskUsage {
+        total_tokens: input + output,
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_tokens: cache,
+        tool_uses: 0,
+        duration_ms: 1_000,
+        cost_usd: cost,
+    }
+}
+
+fn usage_progress(task_id: &str, usage: coco_types::TaskUsage) -> ServerNotification {
+    let mut progress = progress_params(task_id, None, Vec::new());
+    progress.usage = usage;
+    coco_types::ServerNotification::TaskProgress(progress)
+}
+
+fn task_completed(task_id: &str, usage: Option<coco_types::TaskUsage>) -> ServerNotification {
+    coco_types::ServerNotification::TaskCompleted(coco_types::TaskCompletedParams {
+        task_id: task_id.into(),
+        tool_use_id: None,
+        status: coco_types::TaskCompletionStatus::Completed,
+        killed_by: None,
+        output_file: String::new(),
+        summary: String::new(),
+        usage,
+    })
+}
+
+#[test]
+fn test_task_progress_folds_subagent_usage_with_high_water_marks() {
+    let mut state = AppState::new();
+    state.session.subagents.push(running_subagent("agent-1"));
+    state.session.subagents.push(running_subagent("agent-2"));
+    let (tx, _rx) = channel();
+
+    super::handle(
+        &mut state,
+        usage_progress("agent-1", task_usage(100, 50, 30, 0.02)),
+        &tx,
+    );
+    super::handle(
+        &mut state,
+        usage_progress("agent-2", task_usage(10, 5, 0, 0.01)),
+        &tx,
+    );
+
+    let sub = state.session.subagent_usage;
+    assert_eq!(sub.input_tokens, 110);
+    assert_eq!(sub.output_tokens, 55);
+    assert_eq!(sub.cache_read_tokens, 30);
+    assert!((sub.cost_usd - 0.03).abs() < 1e-9);
+
+    // Out-of-order (stale, lower) snapshot must not add anything.
+    super::handle(
+        &mut state,
+        usage_progress("agent-1", task_usage(80, 40, 20, 0.015)),
+        &tx,
+    );
+    assert_eq!(state.session.subagent_usage.input_tokens, 110);
+
+    // A newer snapshot contributes only the delta beyond the mark.
+    super::handle(
+        &mut state,
+        usage_progress("agent-1", task_usage(150, 70, 30, 0.05)),
+        &tx,
+    );
+    let sub = state.session.subagent_usage;
+    assert_eq!(sub.input_tokens, 160);
+    assert_eq!(sub.output_tokens, 75);
+    assert_eq!(sub.cache_read_tokens, 30);
+    assert!((sub.cost_usd - 0.06).abs() < 1e-9);
+}
+
+#[test]
+fn test_task_completed_folds_final_remainder_and_duplicate_is_noop() {
+    let mut state = AppState::new();
+    state.session.subagents.push(running_subagent("agent-1"));
+    let (tx, _rx) = channel();
+
+    super::handle(
+        &mut state,
+        usage_progress("agent-1", task_usage(100, 50, 30, 0.02)),
+        &tx,
+    );
+    super::handle(
+        &mut state,
+        task_completed("agent-1", Some(task_usage(120, 60, 30, 0.03))),
+        &tx,
+    );
+    assert_eq!(state.session.subagent_usage.input_tokens, 120);
+    assert_eq!(state.session.subagent_usage.output_tokens, 60);
+
+    // Duplicate terminal delivery adds nothing.
+    super::handle(
+        &mut state,
+        task_completed("agent-1", Some(task_usage(120, 60, 30, 0.03))),
+        &tx,
+    );
+    assert_eq!(state.session.subagent_usage.input_tokens, 120);
+    assert!((state.session.subagent_usage.cost_usd - 0.03).abs() < 1e-9);
+}
+
+#[test]
+fn test_teammate_usage_is_excluded_from_subagent_aggregate() {
+    let mut state = AppState::new();
+    let mut teammate = running_subagent("mate@team");
+    teammate.kind = crate::state::session::SubagentKind::Teammate;
+    state.session.subagents.push(teammate);
+    let (tx, _rx) = channel();
+
+    super::handle(
+        &mut state,
+        usage_progress("mate@team", task_usage(100, 50, 30, 0.02)),
+        &tx,
+    );
+    assert!(!state.session.subagent_usage.has_activity());
+}
+
+#[test]
+fn test_subagent_usage_survives_compact_history_replace_and_resets_on_session_boundary() {
+    let mut state = AppState::new();
+    state.session.subagents.push(running_subagent("agent-1"));
+    let (tx, _rx) = channel();
+    super::handle(
+        &mut state,
+        usage_progress("agent-1", task_usage(100, 50, 30, 0.02)),
+        &tx,
+    );
+
+    // Compaction rewrites the transcript but is not a session boundary.
+    super::handle(
+        &mut state,
+        ServerNotification::HistoryReplaced {
+            messages: Vec::new(),
+            session_id: String::new(),
+            agent_id: None,
+            reason: coco_types::HistoryReplaceReason::Compact,
+        },
+        &tx,
+    );
+    assert_eq!(state.session.subagent_usage.input_tokens, 100);
+
+    super::handle(
+        &mut state,
+        ServerNotification::SessionResetForResume {
+            session_id: "next".into(),
+            agent_id: None,
+        },
+        &tx,
+    );
+    assert!(!state.session.subagent_usage.has_activity());
+}
+
+// ── Cumulative transcript counts across HistoryReplaced ─────────
+
+#[test]
+fn test_compact_history_replace_keeps_cumulative_counts_and_adds_one_assistant() {
+    let mut state = idle_with_meaningful_tail();
+    let before = state.session.transcript.cumulative_counts();
+    assert_eq!((before.users, before.assistants), (1, 1));
+    let (tx, _rx) = channel();
+
+    // Compact snapshot: one (User-role) continuation summary message.
+    super::handle(
+        &mut state,
+        ServerNotification::HistoryReplaced {
+            messages: vec![snapshot_user_message(
+                uuid::Uuid::new_v4(),
+                "This session is being continued…",
+            )],
+            session_id: String::new(),
+            agent_id: None,
+            reason: coco_types::HistoryReplaceReason::Compact,
+        },
+        &tx,
+    );
+
+    let after = state.session.transcript.cumulative_counts();
+    assert_eq!(
+        (after.users, after.assistants),
+        (1, 2),
+        "compact keeps prior counts and folds the summarizer call as one assistant message"
     );
 }

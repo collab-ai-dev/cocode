@@ -1343,28 +1343,39 @@ impl PathConfig {
 // `VoiceConfig` carries backend/language/model sub-parameters. On/off is owned
 // by `Feature::Voice` (`/voice` persists `features.voice`) — there is
 // deliberately NO `enabled` field here (mirrors `MemoryConfig`/`AutoMemory`).
-// Remote routing is a closed `VoiceBackend` enum + a `remote.model` string —
-// the sanctioned "(provider, model_id)" pair, exactly like `EmbeddingConfig`,
-// NOT a `ModelRole` (STT is an auxiliary API surface like embeddings).
+//
+// Remote routing is a `(remote.provider, remote.model)` pair: `provider` keys
+// into the providers registry (reusing its base_url + credential resolution),
+// so multiple OpenAI-wire STT hosts are providers.json entries, NOT bespoke
+// credential fields here. STT is an auxiliary API surface like `EmbeddingConfig`
+// — not a `ModelRole`. Local routing is a `LocalSttEngine` discriminant + a
+// flat per-engine knob struct, so new on-device engines are additive.
 
-/// Which speech-to-text engine transcribes captured audio.
+/// Where captured audio is transcribed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VoiceBackend {
     /// Remote OpenAI-wire transcription (`/v1/audio/transcriptions`). MVP
-    /// default: reuses coco's resolved OpenAI creds + `vercel_ai::transcribe`,
-    /// no heavy ML runtime. A Groq/self-host `base_url` reuses this same path.
+    /// default. The endpoint + credentials come from the provider named by
+    /// [`RemoteVoiceConfig::provider`] in the providers registry, so any
+    /// OpenAI-wire STT host (OpenAI, Groq, a self-hosted faster-whisper) is a
+    /// providers.json entry away — no separate credential config lives here.
+    /// `openai` is a deserialize alias so a `backend: "openai"` persisted by an
+    /// earlier build still parses (and doesn't fail the whole settings load).
     #[default]
-    Openai,
-    /// On-device Whisper. Requires the `local-voice` cargo feature compiled
-    /// into the binary; the factory returns a typed error otherwise.
+    #[serde(alias = "openai")]
+    Remote,
+    /// On-device transcription (engine chosen by [`LocalVoiceConfig::engine`]).
+    /// Requires the matching cargo feature (e.g. `local-voice` for Whisper)
+    /// compiled into the binary; the factory returns a typed error otherwise.
+    #[serde(alias = "whisper")]
     Local,
 }
 
 impl VoiceBackend {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Openai => "openai",
+            Self::Remote => "remote",
             Self::Local => "local",
         }
     }
@@ -1373,7 +1384,7 @@ impl VoiceBackend {
     /// into the enum via serde; this is only for `COCO_VOICE_BACKEND`).
     pub fn from_token(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "openai" | "remote" => Some(Self::Openai),
+            "remote" | "openai" => Some(Self::Remote),
             "local" | "whisper" => Some(Self::Local),
             _ => None,
         }
@@ -1396,37 +1407,74 @@ pub enum TranscriptMode {
     Send,
 }
 
-/// Remote (OpenAI-wire) STT knobs.
+/// Remote (OpenAI-wire) STT knobs — the sanctioned `(provider, model)` pair.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RemoteVoiceConfig {
-    /// Transcription model id. Default `gpt-4o-mini-transcribe` (cheapest /
-    /// fastest); `gpt-4o-transcribe` or `whisper-1` also valid.
+    /// Providers-registry key that fronts `/v1/audio/transcriptions` (supplies
+    /// base_url + credentials). Must be an OpenAI-wire provider — `openai`, or
+    /// a `providers.json` entry such as `groq`. Default `openai`.
+    pub provider: String,
+    /// Transcription model id served by `provider`. Default
+    /// `gpt-4o-mini-transcribe` (cheapest/fastest); `gpt-4o-transcribe` or
+    /// `whisper-1` also valid.
     pub model: String,
-    /// Override base URL for an OpenAI-wire-compatible host (e.g. Groq's
-    /// `https://api.groq.com/openai/v1`). `None` ⇒ reuse coco's OpenAI creds.
-    pub base_url: Option<String>,
-    /// Name of the env var holding the API key for `base_url` hosts (e.g.
-    /// `GROQ_API_KEY`). `None` ⇒ reuse coco's resolved OpenAI creds.
-    pub api_key_env: Option<String>,
 }
 
 impl Default for RemoteVoiceConfig {
     fn default() -> Self {
         Self {
+            provider: "openai".to_string(),
             model: "gpt-4o-mini-transcribe".to_string(),
-            base_url: None,
-            api_key_env: None,
         }
     }
 }
 
-/// On-device Whisper knobs (Phase 2; behind the `local-voice` feature).
+/// Which on-device STT engine `VoiceBackend::Local` dispatches to. Closed set;
+/// each variant reads its own knob struct on [`LocalVoiceConfig`]. Only
+/// `whisper` is implemented today (behind the `local-voice` cargo feature).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalSttEngine {
+    /// whisper.cpp via `whisper-rs`.
+    #[default]
+    Whisper,
+}
+
+/// On-device backend selection + per-engine knobs. Flat per-engine sub-structs
+/// (not a `#[serde(tag)]` enum) so switching `engine` preserves the other
+/// engine's settings and a partial merge never hits a missing-tag case.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LocalVoiceConfig {
+    /// Active on-device engine.
+    pub engine: LocalSttEngine,
+    /// Whisper knobs (used when `engine == whisper`).
+    pub whisper: LocalWhisperConfig,
+}
+
+/// On-device Whisper knobs (behind the `local-voice` feature).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LocalWhisperConfig {
-    /// Whisper size/name token, e.g. `base.en`.
+    /// Whisper size/name token, e.g. `base.en`, `small`, `medium`. A name in
+    /// the built-in model table downloads with a pinned checksum; any other
+    /// name requires `model_url`.
     pub model: String,
     /// Where weights are cached. `None` ⇒ `<config_home>/models/whisper/`.
     pub cache_dir: Option<PathBuf>,
+    /// Base URL to fetch ggml weights from (mirror override, e.g. an
+    /// `hf-mirror.com` host). `None` ⇒ the built-in HuggingFace base. The file
+    /// name is derived from `model`.
+    pub download_base: Option<String>,
+    /// Full URL override for this exact model's weights — highest priority,
+    /// bypasses `download_base` and the built-in table. Required when `model`
+    /// is not in the built-in table.
+    pub model_url: Option<String>,
+    /// Auto-download missing weights on first use. Only known-table models
+    /// (pinned checksum) auto-download; a custom `model_url` always needs the
+    /// explicit `/voice-config download`. `false` ⇒ error with a hint instead.
+    pub auto_download: bool,
     /// Surface a download-progress indicator on first use.
     pub show_download_progress: bool,
 }
@@ -1436,6 +1484,9 @@ impl Default for LocalWhisperConfig {
         Self {
             model: "base.en".to_string(),
             cache_dir: None,
+            download_base: None,
+            model_url: None,
+            auto_download: true,
             show_download_progress: true,
         }
     }
@@ -1445,14 +1496,17 @@ const DEFAULT_VOICE_LANGUAGE: &str = "auto";
 
 /// Resolved voice-input configuration. On/off is `Feature::Voice`, not a field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct VoiceConfig {
     pub backend: VoiceBackend,
     /// Dictation language: BCP-47 / ISO-639-1 (e.g. `en`, `es`, `zh`) or
-    /// `auto`. Free-form and backend-defined — intentionally not enumerated.
+    /// `auto`. Shared by both backends — passed to the remote API's `language`
+    /// hint and to whisper's `set_language`, each of which uses it to improve
+    /// accuracy/latency. Free-form and backend-defined — not enumerated.
     pub language: String,
     pub transcript_mode: TranscriptMode,
     pub remote: RemoteVoiceConfig,
-    pub local: LocalWhisperConfig,
+    pub local: LocalVoiceConfig,
 }
 
 impl Default for VoiceConfig {
@@ -1462,7 +1516,7 @@ impl Default for VoiceConfig {
             language: DEFAULT_VOICE_LANGUAGE.to_string(),
             transcript_mode: TranscriptMode::default(),
             remote: RemoteVoiceConfig::default(),
-            local: LocalWhisperConfig::default(),
+            local: LocalVoiceConfig::default(),
         }
     }
 }
@@ -1491,7 +1545,7 @@ impl VoiceConfig {
                 Some(backend) => config.backend = backend,
                 None => tracing::warn!(
                     value = raw,
-                    "ignoring COCO_VOICE_BACKEND: expected openai|local"
+                    "ignoring COCO_VOICE_BACKEND: expected remote|local"
                 ),
             }
         }
@@ -1512,7 +1566,7 @@ pub struct PartialVoiceSettings {
     pub language: Option<String>,
     pub transcript_mode: Option<TranscriptMode>,
     pub remote: Option<RemoteVoiceConfig>,
-    pub local: Option<LocalWhisperConfig>,
+    pub local: Option<LocalVoiceConfig>,
 }
 
 #[cfg(test)]

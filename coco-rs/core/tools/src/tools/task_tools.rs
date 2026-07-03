@@ -156,16 +156,40 @@ fn project_output_background(
 
 // ── app_state patch helpers ───────────────────────────────────────────
 
+/// Who performed the panel mutation. `ToolAppState` (and the task/todo
+/// stores) are shared with every child engine, so child mutations must
+/// refresh the panel data WITHOUT the leader-only side effects: view
+/// auto-expand (a background subagent would keep yanking the user's
+/// panel choice) and the V1/V2 mode switch (a child's internal
+/// TodoWrite would clobber the leader's plan snapshot).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelMutator {
+    Leader,
+    ChildAgent,
+}
+
+/// `agent_id` is set for Agent-tool spawns and forks; `is_teammate`
+/// additionally covers swarm members (which coordinate via mailbox and
+/// may not carry an `agent_id` on every path).
+fn panel_mutator(ctx: &ToolUseContext) -> PanelMutator {
+    if ctx.agent_id.is_none() && !ctx.is_teammate {
+        PanelMutator::Leader
+    } else {
+        PanelMutator::ChildAgent
+    }
+}
+
 /// Snapshot the current plan-task list (filtered to model-visible
 /// entries) and return a patch that:
 /// 1. Stores the snapshot in `ToolAppState.plan_tasks`
-/// 2. Sets `expanded_view = Tasks` (auto-expand)
+/// 2. Sets `expanded_view = Tasks` (auto-expand, leader only)
 /// 3. Updates `verification_nudge_pending`
 /// The snapshot is computed *now* and moved into the closure. The
 /// executor applies the patch post-execute under a single write lock.
 async fn build_task_list_patch(
     task_list: &TaskListHandleRef,
     verification_nudge: bool,
+    mutator: PanelMutator,
 ) -> AppStatePatch {
     let mut visible = task_list.list_tasks().await.unwrap_or_default();
     visible.retain(|t| {
@@ -175,7 +199,9 @@ async fn build_task_list_patch(
     });
     Box::new(move |state: &mut coco_types::ToolAppState| {
         state.plan_tasks = visible;
-        state.expanded_view = ExpandedView::Tasks;
+        if mutator == PanelMutator::Leader {
+            state.expanded_view = ExpandedView::Tasks;
+        }
         if verification_nudge {
             state.verification_nudge_pending = true;
         }
@@ -188,10 +214,17 @@ async fn build_todo_patch(
     todo_list: &TodoListHandleRef,
     key: String,
     verification_nudge: bool,
+    mutator: PanelMutator,
 ) -> AppStatePatch {
     let items = todo_list.read(&key).await;
     Box::new(move |state: &mut coco_types::ToolAppState| {
-        state.plan_tasks.clear();
+        // The V1/V2 panel-mode switch is a leader-only act: clearing the
+        // plan snapshot flips the whole panel to V1 rendering ("V2 wins
+        // when populated"), which must not happen because a child agent
+        // wrote its internal checklist.
+        if mutator == PanelMutator::Leader {
+            state.plan_tasks.clear();
+        }
         if items.is_empty() {
             state.todos_by_agent.remove(&key);
         } else {
@@ -739,7 +772,12 @@ impl Tool for TaskCreateTool {
         }
 
         // Auto-expand the task panel.
-        let patch = build_task_list_patch(&ctx.task_list, false).await;
+        let patch = build_task_list_patch(
+            &ctx.task_list,
+            /*verification_nudge*/ false,
+            panel_mutator(ctx),
+        )
+        .await;
         Ok(ToolResult {
             data: project_create(&task),
             new_messages: vec![],
@@ -1168,7 +1206,12 @@ impl Tool for TaskUpdateTool {
         let existing = match ctx.task_list.get_task(&task_id).await {
             Ok(Some(t)) => t,
             Ok(None) => {
-                let patch = build_task_list_patch(&ctx.task_list, false).await;
+                let patch = build_task_list_patch(
+                    &ctx.task_list,
+                    /*verification_nudge*/ false,
+                    panel_mutator(ctx),
+                )
+                .await;
                 return Ok(ToolResult {
                     data: project_update_error(&task_id, "Task not found"),
                     new_messages: vec![],
@@ -1210,7 +1253,12 @@ impl Tool for TaskUpdateTool {
             } else {
                 project_update_error(&task_id, "Failed to delete task")
             };
-            let patch = build_task_list_patch(&ctx.task_list, false).await;
+            let patch = build_task_list_patch(
+                &ctx.task_list,
+                /*verification_nudge*/ false,
+                panel_mutator(ctx),
+            )
+            .await;
             return Ok(ToolResult {
                 data,
                 new_messages: vec![],
@@ -1309,7 +1357,12 @@ impl Tool for TaskUpdateTool {
                 )
                 .await;
             if let Some(reason) = outcome.blocking_reason {
-                let patch = build_task_list_patch(&ctx.task_list, false).await;
+                let patch = build_task_list_patch(
+                    &ctx.task_list,
+                    /*verification_nudge*/ false,
+                    panel_mutator(ctx),
+                )
+                .await;
                 let error = format!("TaskCompleted hook feedback:\n{reason}");
                 return Ok(ToolResult {
                     data: project_update_error(&task_id, &error),
@@ -1407,7 +1460,8 @@ impl Tool for TaskUpdateTool {
         let completed_nudge = newly_completed && ctx.is_teammate;
 
         // Auto-expand on update.
-        let patch = build_task_list_patch(&ctx.task_list, verification_nudge).await;
+        let patch =
+            build_task_list_patch(&ctx.task_list, verification_nudge, panel_mutator(ctx)).await;
         Ok(ToolResult {
             data: project_update(
                 &task_id,
@@ -2162,7 +2216,8 @@ impl Tool for TodoWriteTool {
 
         let old_json = serde_json::to_value(&old_todos).unwrap_or_default();
         let new_json = serde_json::to_value(&incoming).unwrap_or_default();
-        let patch = build_todo_patch(&ctx.todo_list, key, verification_nudge).await;
+        let patch =
+            build_todo_patch(&ctx.todo_list, key, verification_nudge, panel_mutator(ctx)).await;
         Ok(ToolResult {
             data: serde_json::json!({
                 "oldTodos": old_json,

@@ -1880,6 +1880,7 @@ impl SessionRuntime {
                 &mut history,
                 replacement,
                 &no_event_tx,
+                coco_types::HistoryReplaceReason::Rewind,
             )
             .await;
         }

@@ -450,7 +450,7 @@ pub async fn install_session_late_binds(
     // a sink the manager short-circuits every emit (`emit_progress` bails at
     // the no-sink branch), starving the subagent activity panel.
     let mut task_manager = coco_tasks::TaskManager::new();
-    if let Some(event_sink) = event_sink {
+    if let Some(event_sink) = event_sink.clone() {
         task_manager = task_manager.with_event_sink(event_sink);
     }
     let task_runtime = Arc::new(
@@ -508,8 +508,14 @@ pub async fn install_session_late_binds(
     // Agent wiring (`SwarmAgentHandle` + `QueryEngineAdapter`
     // factory). LocalAgent requires the TaskRuntime registry installed
     // above; team-specific tools remain feature-gated at the tool layer.
-    crate::agent_handle_factory::install_agent_team(runtime.clone(), cwd.display().to_string())
-        .await?;
+    // `event_sink` doubles as the subagent `TaskPanelChanged` bridge —
+    // same channel the TaskManager sink above feeds.
+    crate::agent_handle_factory::install_agent_team(
+        runtime.clone(),
+        cwd.display().to_string(),
+        event_sink,
+    )
+    .await?;
 
     // Post-turn fork dispatcher (`/btw`, `promptSuggestion`). Captures
     // `Arc<SessionRuntime>` and routes every dispatch through

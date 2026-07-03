@@ -47,6 +47,38 @@ message assembly; `app/query` owns model execution, fork/cache behavior,
 tools, hooks, and app-state deltas.
 
 Implemented behaviors:
+- **Anti-echo compaction directive — deliberate deviation from the TS
+  upstream templates; do NOT "fix" back to byte-parity with
+  `prompt.ts`.** The summarization request travels as a trailing
+  user-role message (cache-sharing fork constraint), so a literal
+  non-Claude summarizer (observed: GPT-5.4) treats it as a user message
+  and echoes the whole request into section 6, starving sections 7-9.
+  Upstream has zero protection (masked there because summarizers are
+  always Claude models). Three layers, all in this crate, all
+  cache-safe (trailing-message text + client-side post-processing
+  only): (1) `prompt.rs` wraps the request in `<compaction_directive>`
+  sentinel tags with a meta-frame, defines section 6 spatially ("user
+  messages in the conversation above"; excludes prior compaction
+  summaries and `<system-reminder>` attachments), and forbids copying
+  example placeholders; (2) `format_compact_summary` scrubs echoed
+  directive spans before `<analysis>`/`<summary>` extraction — the
+  scrub is **bounded**: a span is deleted wholesale only when its
+  interior carries a `DIRECTIVE_BODY_MARKERS` substring; otherwise only
+  the tag strings are dropped and the interior survives (unwraps
+  tag-mirrored real summaries; preserves summaries that legitimately
+  quote the sentinel constants, e.g. dogfooding sessions editing
+  `prompt.rs`), and an empty post-scrub result falls back to bare-tag
+  stripping of the raw text so a pure echo can never silently replace
+  history with an empty summary; (3) `summary_guard` emits warn-only
+  anomaly telemetry
+  (`compact summary anomaly detected`, fields `anomaly` =
+  `directive_echo`/`prompt_echo`/`placeholder_section` +
+  `prompt_kind`) at the `call_with_ptl_retry` choke point — no
+  control-flow change; escalate to a corrective retry only if
+  telemetry shows residual echo. The sentinel must not collide with
+  `<system-reminder>`: that prefix would be folded into a preceding
+  tool_result by the normalize smoosh pass on the fork path
+  (regression-pinned in `core/messages/src/normalize.test.rs`).
 - Full and partial LLM compaction call a typed summarizer with
   `CompactSummaryAttempt` rather than rendering the conversation into a
   single legacy prompt string. The attempt separates `messages` (the

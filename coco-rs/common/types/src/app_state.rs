@@ -195,6 +195,14 @@ pub struct ToolAppState {
     /// `/verif/i`. Cleared on acknowledgement or next TodoWrite cycle.
     pub verification_nudge_pending: bool,
 
+    /// Monotonic generation for task-panel snapshots. Incremented under
+    /// the state write lock by `ToolExecutor::apply_side_effects` for
+    /// every applied patch and stamped into `TaskPanelChangedParams`.
+    /// The leader's executor and the subagent/teammate bridges deliver
+    /// on different channels with no global ordering, so consumers use
+    /// this to drop snapshots that arrive after a newer one.
+    pub panel_generation: i64,
+
     // ── Date-change latch ────────────────────────────────────────────
     /// Most recent local ISO date (`YYYY-MM-DD`) the engine emitted a
     /// `date_change` system-reminder for. The reminder subsystem fires

@@ -293,6 +293,13 @@ class FileChangeKind(str, Enum):
     delete = "delete"
 
 
+class HistoryReplaceReason(str, Enum):
+    hydrate = "hydrate"
+    compact = "compact"
+    trim = "trim"
+    rewind = "rewind"
+
+
 class HookDecision(str, Enum):
     approve = "approve"
     block = "block"
@@ -3551,6 +3558,7 @@ class TaskPanelChangedParams(BaseModel):
     expanded_view: ExpandedView
     plan_tasks: list[TaskRecord]
     verification_nudge_pending: bool
+    generation: int = 0
     todos_by_agent: dict[str, list[TodoRecord]] = {}
 
 
@@ -3632,6 +3640,7 @@ class HistoryResetForResumeParams(BaseModel):
 class HistoryReplacedParams(BaseModel):
     messages: list[Message]
     agent_id: str | None = None
+    reason: HistoryReplaceReason = "hydrate"
     session_id: str = ""
 
 

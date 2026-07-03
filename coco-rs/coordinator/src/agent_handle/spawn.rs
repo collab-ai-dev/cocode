@@ -563,6 +563,7 @@ fn spawn_task_event_drain(
     task_id: String,
     agent_type: String,
     mut event_rx: tokio::sync::mpsc::Receiver<coco_types::CoreEvent>,
+    panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 ) {
     tokio::spawn(async move {
         // ProgressTracker increments on every ToolUseStarted,
@@ -671,6 +672,21 @@ fn spawn_task_event_drain(
                             tracker.cache_read_tokens = usage.input_tokens.cache_read;
                             registry.set_progress(&task_id, tracker.clone()).await;
                         }
+                    }
+                }
+                // Bridge the child's task-panel snapshot to the surface's
+                // live event channel. Subagent engines share the leader's
+                // `ToolAppState`, so the snapshot is authoritative for the
+                // whole session — without this the mutation lands in the
+                // shared store but the TUI panel only refreshes on the
+                // next main-agent patch. Only this variant is bridged;
+                // everything else stays isolated per the event-system
+                // design ("don't bridge the full taxonomy").
+                event @ coco_types::CoreEvent::Protocol(
+                    coco_types::ServerNotification::TaskPanelChanged(_),
+                ) => {
+                    if let Some(tx) = panel_event_tx.as_ref() {
+                        let _ = tx.send(event).await;
                     }
                 }
                 _ => {}
@@ -1616,6 +1632,7 @@ impl SwarmAgentHandle {
                 tid.clone(),
                 agent_type_for_engine.clone(),
                 event_rx,
+                self.panel_event_sink().cloned(),
             );
             // `live_transcript` is `Some` iff `request.enable_summarization`,
             // so this gates the timer on the same condition while handing it
@@ -2057,6 +2074,7 @@ impl SwarmAgentHandle {
             task_id.clone(),
             agent_type.to_string(),
             event_rx,
+            self.panel_event_sink().cloned(),
         );
 
         // Periodic AgentSummary timer: only run when the spawn requested it
@@ -2491,71 +2509,5 @@ fn last_assistant_text(messages: &[std::sync::Arc<coco_messages::Message>]) -> O
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-
-    fn assistant_patch_call(patch: &str) -> Arc<coco_messages::Message> {
-        Arc::new(coco_messages::create_assistant_message(
-            vec![coco_messages::AssistantContent::ToolCall(
-                coco_messages::ToolCallContent::new(
-                    "toolu_patch",
-                    coco_types::ToolName::ApplyPatch.as_str(),
-                    serde_json::json!({"patch": patch}),
-                ),
-            )],
-            "test-model",
-            coco_types::TokenUsage::default(),
-        ))
-    }
-
-    fn tool_result(
-        call_id: &str,
-        tool_name: coco_types::ToolName,
-        is_error: bool,
-    ) -> Arc<coco_messages::Message> {
-        Arc::new(coco_messages::create_tool_result_message(
-            call_id,
-            tool_name.as_str(),
-            coco_types::ToolId::Builtin(tool_name),
-            "ok",
-            is_error,
-        ))
-    }
-
-    #[test]
-    fn collect_written_paths_in_messages_counts_successful_apply_patch() {
-        let cwd = std::env::current_dir().expect("cwd");
-        let patch = "*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n";
-        let messages = vec![
-            assistant_patch_call(patch),
-            tool_result(
-                "toolu_patch",
-                coco_types::ToolName::ApplyPatch,
-                /*is_error*/ false,
-            ),
-        ];
-
-        let paths = collect_written_paths_in_messages(&messages, &cwd);
-
-        assert_eq!(paths, vec![cwd.join("notes.md")]);
-    }
-
-    #[test]
-    fn collect_written_paths_in_messages_ignores_failed_apply_patch() {
-        let cwd = std::env::current_dir().expect("cwd");
-        let patch = "*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch\n";
-        let messages = vec![
-            assistant_patch_call(patch),
-            tool_result(
-                "toolu_patch",
-                coco_types::ToolName::ApplyPatch,
-                /*is_error*/ true,
-            ),
-        ];
-
-        let paths = collect_written_paths_in_messages(&messages, &cwd);
-
-        assert!(paths.is_empty());
-    }
-}
+#[path = "spawn.test.rs"]
+mod tests;

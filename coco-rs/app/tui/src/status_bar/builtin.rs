@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use coco_keybindings::KeybindingAction;
 use coco_types::ModelRole;
 use coco_types::PermissionMode;
@@ -10,10 +8,9 @@ use crate::presentation::context_usage::render_context_usage;
 use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::state::session::TaskEntryKind;
+use crate::state::transcript_view::TranscriptCounts;
 use crate::status_bar::StatusSpan;
 use crate::status_bar::StatusTone;
-use crate::transcript::cells::CellKind;
-use crate::transcript::cells::RenderedCell;
 
 /// The built-in status bar is a one-to-three-line block:
 /// 1. model · effort · tokens · cache · context · transcript counts (always)
@@ -143,17 +140,11 @@ fn model_and_usage_line(state: &AppState) -> Vec<StatusSpan> {
         },
         StatusTone::Dim,
     ));
-    let cache_pct = if tokens.input_tokens > 0 {
-        ((tokens.cache_read_tokens.max(0) as f64 * 100.0) / tokens.input_tokens as f64)
-            .clamp(0.0, 100.0)
-    } else {
-        0.0
-    };
     spans.push(StatusSpan::new(
         format!(
             " · cache {}/{}",
             format_token_count(tokens.cache_read_tokens),
-            format_cache_percent(cache_pct)
+            format_cache_percent(cache_percent(tokens.cache_read_tokens, tokens.input_tokens))
         ),
         StatusTone::Dim,
     ));
@@ -199,21 +190,53 @@ fn model_and_usage_line(state: &AppState) -> Vec<StatusSpan> {
 
     separator(&mut spans);
     spans.push(StatusSpan::new(
-        transcript_count_status(state.session.transcript.cells()),
+        transcript_count_status(state.session.transcript.cumulative_counts()),
         StatusTone::Dim,
     ));
+
+    // Aggregate subagent spend (token / cost / cache only) — a separate
+    // session-cumulative bucket, never mixed into the main-thread usage
+    // shown earlier in the line. Agent-tool subagents only; teammates
+    // run their own sessions and account their own spend. Hidden until
+    // the first subagent reports.
+    let sub = &state.session.subagent_usage;
+    if sub.has_activity() {
+        separator(&mut spans);
+        spans.push(StatusSpan::new(
+            t!(
+                "status.subagent_usage",
+                input = format_token_count(sub.input_tokens),
+                output = format_token_count(sub.output_tokens),
+                cost = format_cost(sub.cost_usd),
+                cache = format!(
+                    "{}/{}",
+                    format_token_count(sub.cache_read_tokens),
+                    format_cache_percent(cache_percent(sub.cache_read_tokens, sub.input_tokens))
+                )
+            )
+            .to_string(),
+            StatusTone::Dim,
+        ));
+    }
     spans
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct TranscriptCounts {
-    users: usize,
-    assistants: usize,
-    tools: usize,
+/// Cache-hit share of total input tokens, clamped to `[0, 100]`.
+/// `input_tokens` is the cache-inclusive total, so the ratio reads as
+/// "how much of the input was served from the prompt cache".
+fn cache_percent(cache_read_tokens: i64, input_tokens: i64) -> f64 {
+    if input_tokens > 0 {
+        ((cache_read_tokens.max(0) as f64 * 100.0) / input_tokens as f64).clamp(0.0, 100.0)
+    } else {
+        0.0
+    }
 }
 
-fn transcript_count_status(cells: &[RenderedCell]) -> String {
-    let counts = transcript_counts(cells);
+/// Session-cumulative user / assistant / tool counts. The fold lives in
+/// [`crate::state::transcript_view::TranscriptView`] — deduped by
+/// message uuid, surviving compaction, reset only at session boundaries
+/// — so this is O(1) per frame.
+fn transcript_count_status(counts: TranscriptCounts) -> String {
     if counts.tools > 0 {
         t!(
             "status.turn_counts_with_tools",
@@ -230,26 +253,6 @@ fn transcript_count_status(cells: &[RenderedCell]) -> String {
         )
         .to_string()
     }
-}
-
-fn transcript_counts(cells: &[RenderedCell]) -> TranscriptCounts {
-    let mut seen = HashSet::new();
-    let mut counts = TranscriptCounts::default();
-    for cell in cells {
-        if !seen.insert(cell.message_uuid) {
-            continue;
-        }
-        match &cell.kind {
-            CellKind::UserText { .. } => counts.users += 1,
-            CellKind::AssistantText { .. }
-            | CellKind::AssistantThinking { .. }
-            | CellKind::AssistantRedactedThinking { .. }
-            | CellKind::ToolUse { .. } => counts.assistants += 1,
-            CellKind::ToolResult { .. } => counts.tools += 1,
-            CellKind::Attachment | CellKind::System(_) => {}
-        }
-    }
-    counts
 }
 
 fn separator(spans: &mut Vec<StatusSpan>) {
