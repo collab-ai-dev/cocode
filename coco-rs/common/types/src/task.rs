@@ -168,6 +168,14 @@ pub struct TaskProgress {
     /// `CostTracker`.
     #[serde(default)]
     pub cost_micro_usd: i64,
+    /// Input-side / output-side cost split (micro-USD, to keep
+    /// `TaskProgress: Eq`), stamped alongside `cost_micro_usd` so the TUI
+    /// can show subagent spend as `↑…/$in ↓…/$out` like the main thread.
+    /// `0` mid-flight.
+    #[serde(default)]
+    pub input_cost_micro_usd: i64,
+    #[serde(default)]
+    pub output_cost_micro_usd: i64,
     /// Declared subagent type (`Explore` / `Plan` / …). Carried on
     /// progress so the TUI can replace the `local_agent` wire fallback
     /// (which is all `TaskStarted` knows) with the real type once the

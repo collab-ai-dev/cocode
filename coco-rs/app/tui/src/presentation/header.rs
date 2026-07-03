@@ -103,10 +103,14 @@ pub(crate) fn header_bar_view(
         if !row3_spans.is_empty() {
             row3_spans.push(Span::raw(" "));
         }
+        // `git:(branch)` zsh-prompt style, matching the status bar's
+        // directory line: dim parens, accent branch.
+        row3_spans.push(Span::styled(" git:(", Style::default().fg(styles.dim())));
         row3_spans.push(Span::styled(
-            format!(" {branch}"),
-            Style::default().fg(styles.dim()),
+            branch.clone(),
+            Style::default().fg(styles.accent()),
         ));
+        row3_spans.push(Span::styled(")", Style::default().fg(styles.dim())));
     }
     if let Some(ref wt) = state.session.worktree_path {
         let short = wt.rsplit('/').next().unwrap_or(wt);

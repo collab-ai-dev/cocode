@@ -72,6 +72,7 @@ fn status_span(span: &StatusSpan, styles: UiStyles<'_>) -> Span<'static> {
         StatusTone::Accent => styles.accent(),
         StatusTone::Plan => styles.plan(),
         StatusTone::Error => styles.error(),
+        StatusTone::Success => styles.success(),
     };
     let rendered = Span::styled(span.text.clone(), Style::default().fg(color));
     if span.bold { rendered.bold() } else { rendered }

@@ -646,10 +646,15 @@ impl SessionState {
         self.subagent_usage.cache_read_tokens +=
             (usage.cache_read_tokens - mark.cache_read_tokens).max(0);
         self.subagent_usage.cost_usd += (usage.cost_usd - mark.cost_usd).max(0.0);
+        self.subagent_usage.input_cost_usd += (usage.input_cost_usd - mark.input_cost_usd).max(0.0);
+        self.subagent_usage.output_cost_usd +=
+            (usage.output_cost_usd - mark.output_cost_usd).max(0.0);
         mark.input_tokens = mark.input_tokens.max(usage.input_tokens);
         mark.output_tokens = mark.output_tokens.max(usage.output_tokens);
         mark.cache_read_tokens = mark.cache_read_tokens.max(usage.cache_read_tokens);
         mark.cost_usd = mark.cost_usd.max(usage.cost_usd);
+        mark.input_cost_usd = mark.input_cost_usd.max(usage.input_cost_usd);
+        mark.output_cost_usd = mark.output_cost_usd.max(usage.output_cost_usd);
     }
 
     /// Zero the subagent aggregate at a true session boundary
@@ -893,6 +898,11 @@ pub struct SubagentUsageTotals {
     pub output_tokens: i64,
     pub cache_read_tokens: i64,
     pub cost_usd: f64,
+    /// Input-side cost (input + cache), split from [`Self::output_cost_usd`]
+    /// so the status bar can show `↑…/$in ↓…/$out` like the main thread.
+    pub input_cost_usd: f64,
+    /// Output-side cost.
+    pub output_cost_usd: f64,
 }
 
 impl SubagentUsageTotals {

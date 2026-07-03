@@ -246,6 +246,8 @@ impl TaskManager {
         usage: coco_types::TokenUsage,
         tool_uses: i32,
         cost_usd: f64,
+        input_cost_usd: f64,
+        output_cost_usd: f64,
     ) {
         let mut rows = self.rows.write().await;
         let Some(row) = rows.get_mut(id) else { return };
@@ -262,6 +264,8 @@ impl TaskManager {
             .max(usage.input_tokens.cache_read);
         progress.tool_use_count = progress.tool_use_count.max(tool_uses);
         progress.cost_micro_usd = (cost_usd * 1_000_000.0) as i64;
+        progress.input_cost_micro_usd = (input_cost_usd * 1_000_000.0) as i64;
+        progress.output_cost_micro_usd = (output_cost_usd * 1_000_000.0) as i64;
     }
 
     async fn emit_progress(&self, task_id: &str, progress: TaskProgress) {
@@ -301,6 +305,8 @@ impl TaskManager {
                 tool_uses: progress.tool_use_count,
                 duration_ms,
                 cost_usd: progress.cost_micro_usd as f64 / 1_000_000.0,
+                input_cost_usd: progress.input_cost_micro_usd as f64 / 1_000_000.0,
+                output_cost_usd: progress.output_cost_micro_usd as f64 / 1_000_000.0,
             },
             last_tool_name: progress.last_tool_name,
             summary: progress.summary,
@@ -1014,6 +1020,8 @@ impl TaskManager {
                 tool_uses: 0,
                 duration_ms,
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
             },
             last_tool_name: None,
             summary: None,
@@ -1049,6 +1057,12 @@ impl TaskManager {
             duration_ms,
             cost_usd: progress
                 .map(|p| p.cost_micro_usd as f64 / 1_000_000.0)
+                .unwrap_or(0.0),
+            input_cost_usd: progress
+                .map(|p| p.input_cost_micro_usd as f64 / 1_000_000.0)
+                .unwrap_or(0.0),
+            output_cost_usd: progress
+                .map(|p| p.output_cost_micro_usd as f64 / 1_000_000.0)
                 .unwrap_or(0.0),
         };
         let params = TaskCompletedParams {

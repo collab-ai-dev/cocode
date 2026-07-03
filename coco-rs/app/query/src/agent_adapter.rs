@@ -455,6 +455,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
             tool_use_count,
             usage: result.total_usage,
             cost_usd: result.cost_tracker.total_cost_usd(),
+            input_cost_usd: result.cost_tracker.input_cost_usd(),
+            output_cost_usd: result.cost_tracker.output_cost_usd(),
             cancelled: result.cancelled,
             // Captured `StructuredOutput` tool-call input (schema-validated)
             // when `output_schema` forced the contract; `None` otherwise.

@@ -547,6 +547,8 @@ fn task_progress_params_description_and_usage_required() {
             tool_uses: 5,
             duration_ms: 12_000,
             cost_usd: 0.0,
+            input_cost_usd: 0.0,
+            output_cost_usd: 0.0,
         },
         last_tool_name: Some("Bash".into()),
         summary: None,

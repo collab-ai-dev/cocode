@@ -254,6 +254,8 @@ fn task_progress(
             tool_uses: 0,
             duration_ms: 0,
             cost_usd: 0.0,
+            input_cost_usd: 0.0,
+            output_cost_usd: 0.0,
         },
         last_tool_name: None,
         summary: None,

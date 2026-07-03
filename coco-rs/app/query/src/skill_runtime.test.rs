@@ -365,6 +365,8 @@ impl AgentQueryEngine for StubEngine {
         Ok(AgentQueryResult {
             usage: Default::default(),
             cost_usd: 0.0,
+            input_cost_usd: 0.0,
+            output_cost_usd: 0.0,
             response_text: Some(format!("child got: {prompt}")),
             messages: Vec::new(),
             turns: 1,
@@ -532,6 +534,8 @@ async fn test_fork_skill_with_allowed_tools_does_not_narrow_registry() {
             Ok(AgentQueryResult {
                 usage: Default::default(),
                 cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
                 response_text: Some("ok".into()),
                 messages: Vec::new(),
                 turns: 1,

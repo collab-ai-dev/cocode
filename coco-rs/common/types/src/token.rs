@@ -84,6 +84,12 @@ pub struct SessionUsageSnapshot {
     pub models: Vec<SessionModelUsageEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unpriced_models: Vec<crate::ProviderModelSelection>,
+    /// Exact auto-compact trigger threshold (tokens) for the active model,
+    /// computed by the engine (window − reserved − buffer, honoring config
+    /// overrides). Lets the TUI anchor its `ctx` color bands to the real
+    /// compaction point. `None` on legacy snapshots / before the first turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_threshold: Option<i64>,
 }
 
 /// Session-level token and cost totals.

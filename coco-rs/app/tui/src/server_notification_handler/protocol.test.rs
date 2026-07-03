@@ -512,6 +512,8 @@ fn progress_params(
             tool_uses: activities.len() as i32,
             duration_ms: 1_000,
             cost_usd: 0.0,
+            input_cost_usd: 0.0,
+            output_cost_usd: 0.0,
         },
         last_tool_name: last_tool.map(str::to_string),
         summary: None,
@@ -955,6 +957,8 @@ fn task_usage(input: i64, output: i64, cache: i64, cost: f64) -> coco_types::Tas
         tool_uses: 0,
         duration_ms: 1_000,
         cost_usd: cost,
+        input_cost_usd: 0.0,
+        output_cost_usd: 0.0,
     }
 }
 
