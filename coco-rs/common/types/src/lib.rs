@@ -144,6 +144,7 @@ pub use event::FastModeState;
 pub use event::FileChangeInfo;
 pub use event::FileChangeKind;
 pub use event::FilesPersistedParams;
+pub use event::HistoryReplaceReason;
 pub use event::HookOutcomeStatus;
 pub use event::HookProgressParams;
 pub use event::HookResponseParams;

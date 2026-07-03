@@ -370,11 +370,16 @@ impl ToolExecutor {
         let snapshot = {
             let mut guard = state.write().await;
             patch(&mut guard);
+            // Generation advances under the same lock that ordered the
+            // patch, so snapshot creation order == generation order even
+            // though delivery channels are unordered.
+            guard.panel_generation += 1;
             coco_types::TaskPanelChangedParams {
                 plan_tasks: guard.plan_tasks.clone(),
                 todos_by_agent: guard.todos_by_agent.clone(),
                 expanded_view: guard.expanded_view,
                 verification_nudge_pending: guard.verification_nudge_pending,
+                generation: guard.panel_generation,
             }
         };
         if let Some(tx) = self.event_tx.as_ref() {

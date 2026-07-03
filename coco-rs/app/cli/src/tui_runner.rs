@@ -2461,6 +2461,7 @@ async fn hydrate_resume_plan(
                     .collect(),
                 session_id: plan.session_id.clone(),
                 agent_id: None,
+                reason: coco_types::HistoryReplaceReason::Hydrate,
             },
         ))
         .await;
@@ -2477,6 +2478,9 @@ async fn hydrate_resume_plan(
                         todos_by_agent,
                         expanded_view: coco_types::ExpandedView::None,
                         verification_nudge_pending: false,
+                        // Unordered producer: always applied, never
+                        // advances the consumer's high-water mark.
+                        generation: 0,
                     },
                 ),
             ))
@@ -5968,6 +5972,7 @@ async fn handle_rewind(
                     messages: messages.into_iter().map(Arc::new).collect(),
                     session_id: String::new(),
                     agent_id: None,
+                    reason: coco_types::HistoryReplaceReason::Rewind,
                 }))
                 .await;
         }

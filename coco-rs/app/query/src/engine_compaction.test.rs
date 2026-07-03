@@ -140,6 +140,38 @@ impl ForkDispatcher for CapturingCompactDispatcher {
     }
 }
 
+/// Dispatcher that reports summarizer spend alongside the summary,
+/// like the real fork path does.
+struct UsageReportingDispatcher;
+
+#[async_trait::async_trait]
+impl ForkDispatcher for UsageReportingDispatcher {
+    async fn dispatch(
+        &self,
+        _cache: &CacheSafeParams,
+        _options: &ForkedAgentOptions,
+        _prompt: &str,
+        _system_prompt_override: Option<String>,
+    ) -> Result<ForkedAgentResult, coco_error::BoxedError> {
+        Ok(ForkedAgentResult {
+            messages: vec![Arc::new(assistant_msg("fork summary"))],
+            total_usage: coco_types::TokenUsage {
+                input_tokens: coco_types::InputTokens {
+                    total: 104_785,
+                    no_cache: 4_785,
+                    cache_read: 100_000,
+                    cache_write: 0,
+                },
+                output_tokens: coco_types::OutputTokens {
+                    total: 9_463,
+                    text: 9_463,
+                    reasoning: 0,
+                },
+            },
+        })
+    }
+}
+
 struct FailingDispatcher;
 
 #[async_trait::async_trait]
@@ -868,6 +900,35 @@ async fn manual_compact_with_args_passes_instructions_to_summarizer() {
     let rendered_prompt = format!("{:?}", options.prompt);
     assert!(rendered_prompt.contains("Additional Instructions"));
     assert!(rendered_prompt.contains("focus on auth regressions"));
+
+    // The real get_compact_prompt output travels this path: lock the
+    // directive envelope shape on the wire (anti-echo fix). The trailing
+    // user message must start with the open tag — a prefix like
+    // "<system-reminder>" would trip the normalize smoosh pass instead.
+    match options.prompt.last() {
+        Some(LlmMessage::User { content, .. }) => {
+            let text = content
+                .iter()
+                .find_map(|part| match part {
+                    UserContentPart::Text(text) => Some(text.text.as_str()),
+                    _ => None,
+                })
+                .expect("summary request should be a text part");
+            assert!(text.starts_with(coco_compact::COMPACT_DIRECTIVE_OPEN));
+            assert!(text.ends_with(coco_compact::COMPACT_DIRECTIVE_CLOSE));
+            let close_at = text
+                .find(coco_compact::COMPACT_DIRECTIVE_CLOSE)
+                .expect("close tag present");
+            let args_at = text
+                .find("focus on auth regressions")
+                .expect("args inside the request");
+            assert!(
+                args_at < close_at,
+                "custom instructions must sit inside the directive envelope"
+            );
+        }
+        other => panic!("summary request should be the trailing user message, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -940,7 +1001,7 @@ async fn compact_summary_uses_cache_safe_fork_with_deny_all_tools() {
     engine.save_cache_safe_params(empty_cache()).await;
 
     let response = engine
-        .run_compact_summary_attempt(compact_attempt("summarize now"))
+        .run_compact_summary_attempt(compact_attempt("summarize now"), &None)
         .await
         .expect("fork summary should succeed");
 
@@ -982,6 +1043,43 @@ async fn compact_summary_uses_cache_safe_fork_with_deny_all_tools() {
 }
 
 #[tokio::test]
+async fn compact_summary_records_usage_into_session_tracker() {
+    let model = Arc::new(CapturingModel::default());
+    let tracker = Arc::new(tokio::sync::Mutex::new(coco_messages::CostTracker::new()));
+    let engine = new_engine(model, Some(Arc::new(UsageReportingDispatcher)))
+        .with_session_usage_tracker(tracker.clone());
+    engine.save_cache_safe_params(empty_cache()).await;
+
+    engine
+        .run_compact_summary_attempt(compact_attempt("summarize now"), &None)
+        .await
+        .expect("fork summary should succeed");
+
+    let guard = tracker.lock().await;
+    assert_eq!(
+        guard.total_api_calls, 1,
+        "the summarizer call must land in the session usage tracker"
+    );
+    assert_eq!(guard.total_input_tokens(), 104_785);
+    assert_eq!(guard.total_output_tokens(), 9_463);
+}
+
+#[tokio::test]
+async fn compact_summary_without_tracker_still_succeeds() {
+    // Fork / subagent engines have no session tracker installed —
+    // recording must silently no-op, not fail the compaction.
+    let model = Arc::new(CapturingModel::default());
+    let engine = new_engine(model, Some(Arc::new(UsageReportingDispatcher)));
+    engine.save_cache_safe_params(empty_cache()).await;
+
+    let response = engine
+        .run_compact_summary_attempt(compact_attempt("summarize now"), &None)
+        .await
+        .expect("fork summary should succeed");
+    assert_eq!(response.summary, "fork summary");
+}
+
+#[tokio::test]
 async fn compact_summary_falls_back_to_direct_no_tools_call() {
     let model = Arc::new(CapturingModel::default());
     let engine = new_engine(model.clone(), Some(Arc::new(FailingDispatcher)));
@@ -990,7 +1088,7 @@ async fn compact_summary_falls_back_to_direct_no_tools_call() {
     let mut attempt = compact_attempt("direct request");
     attempt.max_summary_tokens = 123;
     let response = engine
-        .run_compact_summary_attempt(attempt)
+        .run_compact_summary_attempt(attempt, &None)
         .await
         .expect("direct fallback should succeed");
 

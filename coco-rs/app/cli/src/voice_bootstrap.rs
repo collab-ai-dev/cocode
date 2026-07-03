@@ -39,35 +39,46 @@ fn build_voice_session(
 )> {
     let voice = &runtime_config.voice;
     let remote_handle: Option<Arc<dyn TranscriptionModelV4>> = match voice.backend {
-        VoiceBackend::Openai => Some(build_openai_transcription(runtime_config)?),
+        VoiceBackend::Remote => Some(build_remote_transcription(runtime_config)?),
         VoiceBackend::Local => None,
     };
-    let engine = coco_voice::create_voice_engine(voice, remote_handle)
+    // One event stream feeds both recording lifecycle and download progress.
+    let (tx, rx) = tokio::sync::mpsc::channel(32);
+    let engine = coco_voice::create_voice_engine(voice, remote_handle, Some(tx.clone()))
         .map_err(|e| anyhow::anyhow!("voice engine: {e}"))?;
     let capture = coco_utils_audio::default_capture();
     let params = coco_voice::params_from_config(voice);
     let mut session = coco_voice::VoiceSession::new(engine, capture, params);
-    let (tx, rx) = tokio::sync::mpsc::channel(32);
     session.set_event_sink(tx);
     Ok((session, rx))
 }
 
-/// Build an OpenAI-wire transcription model handle, reusing coco's resolved
-/// OpenAI provider config + credential resolver (so auth stays in the provider
-/// layer — this crate injects a pre-built handle into `coco-voice`).
-fn build_openai_transcription(
+/// Build an OpenAI-wire transcription model handle from the provider named by
+/// `voice.remote.provider`, reusing that provider's resolved config +
+/// credential resolver (so auth stays in the provider layer — this crate
+/// injects a pre-built handle into `coco-voice`). Any OpenAI-wire host (OpenAI,
+/// Groq, a self-hosted faster-whisper) works by pointing at its providers.json
+/// entry.
+fn build_remote_transcription(
     runtime_config: &RuntimeConfig,
 ) -> anyhow::Result<Arc<dyn TranscriptionModelV4>> {
+    let remote = &runtime_config.voice.remote;
     let provider_cfg = runtime_config
         .providers
-        .get("openai")
-        .ok_or_else(|| anyhow::anyhow!("no OpenAI provider configured; set an OpenAI API key"))?;
+        .get(&remote.provider)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no `{}` provider configured for voice transcription; \
+             set voice.remote.provider to a configured OpenAI-wire provider",
+                remote.provider
+            )
+        })?;
     let resolver = crate::provider_login::shared_resolver();
     coco_inference::build_openai_transcription_model(
         provider_cfg,
         Some(&resolver),
-        &runtime_config.voice.remote.model,
+        &remote.model,
         /*timeout_secs*/ 60,
     )
-    .map_err(|e| anyhow::anyhow!("build OpenAI transcription model: {e}"))
+    .map_err(|e| anyhow::anyhow!("build transcription model for `{}`: {e}", remote.provider))
 }

@@ -19,6 +19,8 @@ use std::sync::Arc;
 use tracing::info;
 use tracing::warn;
 
+use coco_compact::COMPACT_SUMMARY_ABORTED_PREFIX;
+use coco_compact::COMPACT_SUMMARY_INVALID_PREFIX;
 use coco_inference::ModelRuntimeQueryOutcome;
 use coco_inference::ModelRuntimeSource;
 use coco_inference::QueryParams;
@@ -81,7 +83,13 @@ impl QueryEngine {
             self.record_transcript_tail(history).await;
         }
 
-        crate::history_sync::history_replace_and_emit(history, new_messages, event_tx).await;
+        crate::history_sync::history_replace_and_emit(
+            history,
+            new_messages,
+            event_tx,
+            coco_types::HistoryReplaceReason::Compact,
+        )
+        .await;
         self.record_transcript_tail(history).await;
     }
 
@@ -222,7 +230,7 @@ impl QueryEngine {
         .await;
 
         let summarize_fn = |attempt: coco_compact::CompactSummaryAttempt| async move {
-            self.run_compact_summary_attempt(attempt).await
+            self.run_compact_summary_attempt(attempt, event_tx).await
         };
         let result = coco_compact::partial_compact_conversation(
             history.as_slice(),
@@ -646,9 +654,10 @@ impl QueryEngine {
     async fn run_compact_summary_attempt(
         &self,
         attempt: coco_compact::CompactSummaryAttempt,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
     ) -> Result<coco_compact::CompactSummaryResponse, String> {
         if self.cancel.is_cancelled() {
-            return Err("compact_summary_aborted: cancelled".to_string());
+            return Err(format!("{COMPACT_SUMMARY_ABORTED_PREFIX} cancelled"));
         }
 
         if let Some(dispatcher) = self.fork_dispatcher.clone() {
@@ -679,11 +688,26 @@ impl QueryEngine {
             options.fallback_min_context_window = self.compact_fallback_min_context_window();
             options.overrides.abort = Some(self.cancel.clone());
 
+            let dispatch_started = std::time::Instant::now();
             match dispatcher
                 .dispatch(&cache, &options, &attempt.summary_request, None)
                 .await
             {
                 Ok(result) => {
+                    // The summarizer call is real session spend even when
+                    // the summary turns out unusable — record it into the
+                    // session usage tracker (no-op on engines without one:
+                    // forks / subagents account through their own trackers).
+                    if result.total_usage.total() > 0 {
+                        self.record_session_usage(
+                            event_tx,
+                            &cache.provider,
+                            &cache.model_id,
+                            result.total_usage,
+                            dispatch_started.elapsed().as_millis() as i64,
+                        )
+                        .await;
+                    }
                     match extract_compact_summary_from_messages(&result.messages, &self.cancel) {
                         Ok(summary) => {
                             return Ok(coco_compact::CompactSummaryResponse { summary });
@@ -699,7 +723,8 @@ impl QueryEngine {
             }
         }
 
-        self.run_direct_compact_summary_attempt(attempt).await
+        self.run_direct_compact_summary_attempt(attempt, event_tx)
+            .await
     }
 
     async fn compact_session_start_hook_messages(
@@ -796,9 +821,10 @@ impl QueryEngine {
     async fn run_direct_compact_summary_attempt(
         &self,
         attempt: coco_compact::CompactSummaryAttempt,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
     ) -> Result<coco_compact::CompactSummaryResponse, String> {
         if self.cancel.is_cancelled() {
-            return Err("compact_summary_aborted: cancelled".to_string());
+            return Err(format!("{COMPACT_SUMMARY_ABORTED_PREFIX} cancelled"));
         }
 
         let mut prompt = coco_messages::normalize_messages_for_api(&attempt.context_messages);
@@ -813,22 +839,36 @@ impl QueryEngine {
                 attempt.max_summary_tokens,
                 fallback_min_context_window,
             );
+            let call_started = std::time::Instant::now();
             match self
                 .model_runtimes
                 .query_once(source.clone(), &params)
                 .await
             {
-                ModelRuntimeQueryOutcome::Success { result, .. } => {
+                ModelRuntimeQueryOutcome::Success {
+                    result, snapshot, ..
+                } => {
+                    // Record spend before the usability checks below — a
+                    // truncated / unparsable summary was still billed.
+                    if result.usage.total() > 0 {
+                        self.record_session_usage(
+                            event_tx,
+                            &snapshot.provider,
+                            &snapshot.model_id,
+                            result.usage,
+                            call_started.elapsed().as_millis() as i64,
+                        )
+                        .await;
+                    }
                     let stop = result.stop_reason.as_ref();
                     let stop_abnormal = stop.is_some_and(coco_messages::FinishReason::is_abnormal);
                     // A truncated / content-filtered / refused summary is
                     // unusable — it would silently contaminate every
                     // subsequent turn with partial XML. Return an `Err`
-                    // whose message carries the `compact_summary_aborted:`
-                    // prefix; the upper layer at
-                    // `coco_compact::compact.rs:898-902` routes this prefix
-                    // into `CompactError::LlmCallFailed`, which the user
-                    // sees as "Error compacting conversation".
+                    // carrying `COMPACT_SUMMARY_ABORTED_PREFIX`; the
+                    // prefix match in `coco_compact::call_with_ptl_retry`
+                    // routes it into `CompactError::LlmCallFailed`, which
+                    // the user sees as "Error compacting conversation".
                     // Multi-provider note: some providers convert `max_tokens`
                     // into a synthetic API-error message at the stream layer;
                     // coco-rs does not, so the side-fork caller has to
@@ -841,7 +881,7 @@ impl QueryEngine {
                              dropping truncated summary to avoid contaminating future turns"
                         );
                         return Err(format!(
-                            "compact_summary_aborted: model stopped with stop_reason={} \
+                            "{COMPACT_SUMMARY_ABORTED_PREFIX} model stopped with stop_reason={} \
                          (truncated or filtered summary discarded)",
                             stop.map(|f| f.unified.as_wire_str()).unwrap_or("unknown")
                         ));
@@ -1493,7 +1533,7 @@ impl QueryEngine {
         // It prefers a cache-sharing compact fork and falls back to a
         // no-tools structured direct call when no dispatcher is installed.
         let summarize_fn = |attempt: coco_compact::CompactSummaryAttempt| async move {
-            self.run_compact_summary_attempt(attempt).await
+            self.run_compact_summary_attempt(attempt, event_tx).await
         };
 
         match coco_compact::compact_conversation(
@@ -1840,7 +1880,7 @@ fn extract_compact_summary_from_messages(
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<String, String> {
     if cancel.is_cancelled() {
-        return Err("compact_summary_aborted: cancelled".to_string());
+        return Err(format!("{COMPACT_SUMMARY_ABORTED_PREFIX} cancelled"));
     }
 
     let mut chunks = Vec::new();
@@ -1850,7 +1890,7 @@ fn extract_compact_summary_from_messages(
         };
         if let Some(api_error) = &assistant.api_error {
             return Err(format!(
-                "compact_summary_invalid: assistant API error: {}",
+                "{COMPACT_SUMMARY_INVALID_PREFIX} assistant API error: {}",
                 api_error.message
             ));
         }
@@ -1952,7 +1992,7 @@ fn extract_compact_summary_from_content(content: &[AssistantContent]) -> Result<
             AssistantContent::Text(t) if !t.text.is_empty() => chunks.push(t.text.clone()),
             AssistantContent::ToolCall(tc) => {
                 return Err(format!(
-                    "compact_summary_invalid: summary attempted tool call {}",
+                    "{COMPACT_SUMMARY_INVALID_PREFIX} summary attempted tool call {}",
                     tc.tool_name
                 ));
             }

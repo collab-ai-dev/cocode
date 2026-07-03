@@ -1,0 +1,32 @@
+[package]
+name = "coco-utils-download"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Streaming file downloader with progress, SHA-256 verification, and atomic replace"
+
+[dependencies]
+futures = { workspace = true, features = ["std"] }
+hex = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "macros"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = [
+    "macros",
+    "rt-multi-thread",
+    "fs",
+    "io-util",
+    "sync",
+    "time",
+] }
+wiremock = { workspace = true }
+
+[lints]
+workspace = true

@@ -23,11 +23,24 @@ use crate::runner_loop::AgentQueryResult as RunnerAgentQueryResult;
 /// [`AgentExecutionEngine`] trait.
 pub struct TeammateExecutionAdapter {
     inner: coco_tool_runtime::AgentQueryEngineRef,
+    /// Surface sender for bridging a teammate's `TaskPanelChanged`
+    /// snapshots (see `SwarmAgentHandle::panel_event_tx` for the
+    /// sharing contract). Teammates run on the leader's shared
+    /// `ToolAppState`, so their panel snapshots are
+    /// session-authoritative. `None` ⇒ all teammate engine events are
+    /// discarded, the pre-bridge behavior.
+    panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 }
 
 impl TeammateExecutionAdapter {
-    pub fn new(inner: coco_tool_runtime::AgentQueryEngineRef) -> Self {
-        Self { inner }
+    pub fn new(
+        inner: coco_tool_runtime::AgentQueryEngineRef,
+        panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    ) -> Self {
+        Self {
+            inner,
+            panel_event_tx,
+        }
     }
 }
 
@@ -38,6 +51,28 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
         prompt: &str,
         config: RunnerAgentQueryConfig,
     ) -> crate::Result<RunnerAgentQueryResult> {
+        // Bridge the teammate's `TaskPanelChanged` snapshots to the
+        // surface, mirroring `spawn_task_event_drain`: without an
+        // `event_tx` the child engine writes into a discarded channel,
+        // so the teammate's task/todo mutations would patch the shared
+        // `ToolAppState` while the TUI panel never hears about them.
+        // Every other event stays discarded, as before.
+        let event_tx = self.panel_event_tx.clone().map(|panel_tx| {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(16);
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    if matches!(
+                        &event,
+                        coco_types::CoreEvent::Protocol(
+                            coco_types::ServerNotification::TaskPanelChanged(_)
+                        )
+                    ) {
+                        let _ = panel_tx.send(event).await;
+                    }
+                }
+            });
+            tx
+        });
         let tool_runtime_config = coco_tool_runtime::AgentQueryConfig {
             system_prompt: config.system_prompt,
             identity: coco_tool_runtime::AgentRunIdentity::new(
@@ -74,6 +109,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
             effort: config.effort,
             use_exact_tools: config.use_exact_tools,
             mcp_servers: config.mcp_servers,
+            event_tx,
             ..Default::default()
         };
 
@@ -220,8 +256,11 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
 }
 
 /// Convenience: wrap an `AgentQueryEngineRef` for the runner-loop side.
+/// `panel_event_tx` is the surface's live `CoreEvent` sender used to
+/// bridge teammate `TaskPanelChanged` snapshots (`None` = SDK/headless).
 pub fn into_execution_engine(
     inner: coco_tool_runtime::AgentQueryEngineRef,
+    panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 ) -> Arc<dyn AgentExecutionEngine> {
-    Arc::new(TeammateExecutionAdapter::new(inner))
+    Arc::new(TeammateExecutionAdapter::new(inner, panel_event_tx))
 }

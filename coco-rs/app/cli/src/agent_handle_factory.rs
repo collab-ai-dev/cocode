@@ -88,6 +88,7 @@ fn resolve_agent_runtime_source(
 pub async fn build_agent_team_wiring(
     runtime: Arc<SessionRuntime>,
     cwd: String,
+    panel_event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 ) -> Result<AgentTeamWiring> {
     // In-process subagents inherit the leader's `ToolPermissionBridge`
     // (installed on `SessionRuntime` and propagated by `wire_engine`):
@@ -112,6 +113,11 @@ pub async fn build_agent_team_wiring(
         runtime.runtime_config.clone(),
         task_rt as coco_tool_runtime::AgentTaskRegistryRef,
     );
+    // Bridge subagent `TaskPanelChanged` snapshots to the surface (TUI).
+    // Same source channel as the TaskManager sink wired at bootstrap.
+    if let Some(tx) = panel_event_sink.clone() {
+        handle.set_panel_event_sink(tx);
+    }
     let backend_registry = Arc::new(coco_coordinator::pane::BackendRegistry::new());
     backend_registry
         .register_in_process_backend(Arc::new(coco_coordinator::InProcessBackend::new(
@@ -307,8 +313,11 @@ pub async fn build_agent_team_wiring(
     // teammates compact at the same tuning as the leader. Default
     // 100k matches the threshold-formula floor when CompactConfig is
     // unset.
+    // Teammates get the same panel bridge as subagent spawn drains —
+    // they run on the leader's shared `ToolAppState` too.
     handle.set_teammate_execution_engine(coco_coordinator::agent_handle::into_execution_engine(
         adapter,
+        panel_event_sink,
     ));
     let auto_compact_threshold = coco_compact::auto_compact_threshold(
         /*context_window*/ 200_000,
@@ -505,8 +514,12 @@ async fn sync_agent_memory_snapshots(_runtime: &Arc<SessionRuntime>, cwd: &str) 
 
 /// Convenience for one-shot bootstrap: build the wiring and attach it
 /// to the runtime.
-pub async fn install_agent_team(runtime: Arc<SessionRuntime>, cwd: String) -> anyhow::Result<()> {
-    let wiring = build_agent_team_wiring(runtime.clone(), cwd).await?;
+pub async fn install_agent_team(
+    runtime: Arc<SessionRuntime>,
+    cwd: String,
+    panel_event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+) -> anyhow::Result<()> {
+    let wiring = build_agent_team_wiring(runtime.clone(), cwd, panel_event_sink).await?;
     runtime.attach_agent_handle(wiring.agent_handle).await;
     runtime.attach_skill_handle(wiring.skill_handle).await;
     Ok(())

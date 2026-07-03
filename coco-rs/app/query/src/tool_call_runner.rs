@@ -476,7 +476,14 @@ impl Control {
     }
 }
 
-fn create_executor(
+/// Single construction seam for the per-turn `ToolExecutor`, shared by
+/// the batch runner (above) and the streaming path
+/// (`engine_turn_request`). Every cross-cutting handle — app state,
+/// permission rules, event sink — must be wired here: the streaming
+/// path once hand-rolled its own executor without the sink, so
+/// `apply_side_effects` silently dropped every `TaskPanelChanged` and
+/// the TUI task panel never rendered on the default path.
+pub(crate) fn create_executor(
     app_state: Option<&Arc<RwLock<ToolAppState>>>,
     permission_rule_handle: &coco_tool_runtime::PermissionRuleHandleRef,
     event_tx: &Option<mpsc::Sender<CoreEvent>>,

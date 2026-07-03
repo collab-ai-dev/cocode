@@ -492,3 +492,103 @@ fn test_mcp_runtime_config_json_first_env_override() {
     // positive idle values are floored to 1s; 0 still disables when selected.
     assert_eq!(config.tool_idle_timeout_ms, Some(1_000));
 }
+
+#[test]
+fn test_voice_config_defaults() {
+    let c = VoiceConfig::default();
+    assert_eq!(c.backend, VoiceBackend::Remote);
+    assert_eq!(c.language, "auto");
+    assert_eq!(c.remote.provider, "openai");
+    assert_eq!(c.remote.model, "gpt-4o-mini-transcribe");
+    assert_eq!(c.local.engine, LocalSttEngine::Whisper);
+    assert_eq!(c.local.whisper.model, "base.en");
+    assert!(c.local.whisper.auto_download);
+    assert!(c.local.whisper.model_url.is_none());
+    assert!(c.local.whisper.download_base.is_none());
+}
+
+#[test]
+fn test_voice_backend_token_and_str() {
+    assert_eq!(
+        VoiceBackend::from_token("remote"),
+        Some(VoiceBackend::Remote)
+    );
+    assert_eq!(
+        VoiceBackend::from_token("openai"),
+        Some(VoiceBackend::Remote)
+    );
+    assert_eq!(VoiceBackend::from_token("local"), Some(VoiceBackend::Local));
+    assert_eq!(
+        VoiceBackend::from_token("whisper"),
+        Some(VoiceBackend::Local)
+    );
+    assert_eq!(VoiceBackend::from_token("nope"), None);
+    assert_eq!(VoiceBackend::Remote.as_str(), "remote");
+    assert_eq!(VoiceBackend::Local.as_str(), "local");
+}
+
+#[test]
+fn test_voice_config_resolve_prefers_env_over_settings() {
+    let settings = Settings {
+        voice: PartialVoiceSettings {
+            backend: Some(VoiceBackend::Local),
+            language: Some("en".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoVoiceBackend, "remote"),
+        (EnvKey::CocoVoiceLanguage, "zh"),
+        (EnvKey::CocoVoiceModel, "whisper-1"),
+    ]);
+    let c = VoiceConfig::resolve(&settings, &env);
+    assert_eq!(c.backend, VoiceBackend::Remote);
+    assert_eq!(c.language, "zh");
+    assert_eq!(c.remote.model, "whisper-1");
+}
+
+#[test]
+fn test_partial_voice_deserializes_nested_new_shape() {
+    // New schema: `remote.provider` + `local.engine`/`local.whisper.*`, with
+    // `#[serde(default)]` filling every omitted field.
+    let json = serde_json::json!({
+        "backend": "local",
+        "remote": { "provider": "groq" },
+        "local": { "whisper": { "model": "small", "model_url": "https://example/m.bin" } }
+    });
+    let partial: PartialVoiceSettings = serde_json::from_value(json).expect("parse");
+    assert_eq!(partial.backend, Some(VoiceBackend::Local));
+    let remote = partial.remote.expect("remote");
+    assert_eq!(remote.provider, "groq");
+    assert_eq!(remote.model, "gpt-4o-mini-transcribe"); // default fills in
+    let local = partial.local.expect("local");
+    assert_eq!(local.engine, LocalSttEngine::Whisper); // engine default
+    assert_eq!(local.whisper.model, "small");
+    assert_eq!(
+        local.whisper.model_url.as_deref(),
+        Some("https://example/m.bin")
+    );
+    assert!(local.whisper.auto_download); // default
+    assert!(local.whisper.cache_dir.is_none()); // default
+}
+
+#[test]
+fn test_voice_backend_deserializes_legacy_openai_alias() {
+    // A settings.json persisted by an earlier build carries backend "openai";
+    // the alias must keep it parsing (not fail the whole settings load).
+    let partial: PartialVoiceSettings =
+        serde_json::from_value(serde_json::json!({ "backend": "openai" })).expect("parse");
+    assert_eq!(partial.backend, Some(VoiceBackend::Remote));
+    let whisper: PartialVoiceSettings =
+        serde_json::from_value(serde_json::json!({ "backend": "whisper" })).expect("parse");
+    assert_eq!(whisper.backend, Some(VoiceBackend::Local));
+}
+
+#[test]
+fn test_voice_config_json_round_trip() {
+    let c = VoiceConfig::default();
+    let json = serde_json::to_value(&c).expect("ser");
+    let back: VoiceConfig = serde_json::from_value(json).expect("de");
+    assert_eq!(c, back);
+}

@@ -8,9 +8,11 @@
 //! On/off is owned by `coco_types::Feature::Voice`; backend/language/model live
 //! in `coco_config::VoiceConfig`.
 
+mod download;
 mod engine;
 mod error;
 mod factory;
+mod models;
 mod remote;
 mod session;
 
@@ -23,12 +25,31 @@ pub use engine::VoiceCapabilities;
 pub use engine::VoiceEngine;
 pub use error::VoiceError;
 pub use factory::create_voice_engine;
+pub use models::find_model;
+pub use models::may_auto_download;
+pub use models::resolve_model_path;
+pub use models::WhisperModelSpec;
+pub use models::KNOWN_MODELS;
 pub use remote::RemoteOpenAiEngine;
 pub use session::VoiceEvent;
 pub use session::VoiceSession;
 pub use session::VoiceState;
 
+use coco_config::LocalWhisperConfig;
 use coco_config::VoiceConfig;
+
+/// Download the configured whisper weights (the explicit `/voice-config
+/// download` path — the app runner calls this). Verifies the pinned checksum
+/// for a known model and forwards progress to `events` as
+/// [`VoiceEvent::Download`]. Available without the `local-voice` feature so
+/// weights can be pre-staged. Returns the installed path.
+pub async fn download_whisper_model(
+    config: &LocalWhisperConfig,
+    events: Option<tokio::sync::mpsc::Sender<VoiceEvent>>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<std::path::PathBuf, VoiceError> {
+    download::download_model(config, events, cancel).await
+}
 
 /// Build [`TranscribeParams`] from resolved config (maps `"auto"` → `None`).
 pub fn params_from_config(config: &VoiceConfig) -> TranscribeParams {

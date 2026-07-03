@@ -177,9 +177,10 @@ pub enum EnvKey {
     CocoSandboxFailIfUnavailable,
     CocoSandboxMode,
     CocoSessionEndHooksTimeoutMs,
-    /// Voice STT backend override: `openai` | `local`. Invalid values are
-    /// ignored with a warning (settings.json wins the enum; env is a coarse
-    /// override). Consumed by `VoiceConfig::resolve`.
+    /// Voice STT backend override: `remote` | `local` (legacy `openai` /
+    /// `whisper` aliases accepted). Invalid values are ignored with a warning
+    /// (settings.json wins the enum; env is a coarse override). Consumed by
+    /// `VoiceConfig::resolve`.
     CocoVoiceBackend,
     /// Voice dictation language (BCP-47 / ISO-639-1 or `auto`).
     CocoVoiceLanguage,

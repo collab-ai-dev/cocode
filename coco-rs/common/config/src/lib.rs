@@ -123,6 +123,8 @@ pub use sections::ApiConfig;
 pub use sections::ApiRetryConfig;
 pub use sections::BashConfig;
 pub use sections::DiagnosticsConfig;
+pub use sections::LocalSttEngine;
+pub use sections::LocalVoiceConfig;
 pub use sections::LocalWhisperConfig;
 pub use sections::LoopConfig;
 pub use sections::LspConfig;

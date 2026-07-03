@@ -11,6 +11,7 @@ workspace = true
 coco-config = { workspace = true }
 coco-inference = { workspace = true }
 coco-utils-audio = { workspace = true }
+coco-utils-download = { workspace = true }
 
 async-trait = { workspace = true }
 serde_json = { workspace = true }
@@ -21,6 +22,17 @@ tracing = { workspace = true }
 
 whisper-rs = { workspace = true, optional = true }
 hound = { workspace = true, optional = true }
+
+# On macOS, build whisper.cpp with the Metal GPU backend (Apple-Silicon
+# acceleration). This is a *target-specific dependency feature*, not a coco
+# cargo feature: it applies automatically to macOS `local-voice` builds and is
+# deliberately NOT reachable by `--all-features` on Linux (which has no Metal
+# toolchain, so a feature flag would break the Linux gate). No code change is
+# needed — `WhisperContextParameters::default()` uses whatever GPU backend was
+# compiled in. (CoreML is intentionally left out: it also requires a second
+# `*-encoder.mlmodelc` artifact download, deferred to a later phase.)
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { workspace = true, optional = true, features = ["metal"] }
 
 [features]
 default = []

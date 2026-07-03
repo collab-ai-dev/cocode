@@ -2918,6 +2918,31 @@
       ],
       "type": "object"
     },
+    "HistoryReplaceReason": {
+      "description": "Why the engine replaced the transcript wholesale\n(`ServerNotification::HistoryReplaced`).\n\nConsumers that keep session-cumulative folds over the message stream\n(e.g. the TUI's cumulative user/assistant/tool counters) need to know\nwhether the snapshot is a re-hydration of already-known content\n(`Hydrate` / `Trim` / `Rewind` \u2014 dedup by uuid suffices) or the\nproduct of a compaction, where one summarizer LLM call collapsed the\ntail into synthetic messages that must not be re-classified as\norganic conversation.",
+      "oneOf": [
+        {
+          "const": "hydrate",
+          "description": "Bulk resume hydration (startup `--resume`, in-session resume).\nDefault for wire back-compat with emitters that predate the field.",
+          "type": "string"
+        },
+        {
+          "const": "compact",
+          "description": "Full / partial / session-memory compaction: the snapshot is\nboundary marker + summarizer output + kept tail + attachments.",
+          "type": "string"
+        },
+        {
+          "const": "trim",
+          "description": "Reactive head-trim (PTL recovery): the snapshot is a strict\nsubset of the prior history, no new content.",
+          "type": "string"
+        },
+        {
+          "const": "rewind",
+          "description": "Rewind / pre-clear prefix restore: the snapshot is a prefix of\npreviously-seen history.",
+          "type": "string"
+        }
+      ]
+    },
     "HookCallbackMatcher": {
       "description": "Hook callback matcher with optional tool-name filter and callback IDs.",
       "properties": {
@@ -7537,6 +7562,10 @@
                   },
                   "type": "array"
                 },
+                "reason": {
+                  "$ref": "#/$defs/HistoryReplaceReason",
+                  "default": "hydrate"
+                },
                 "session_id": {
                   "default": "",
                   "type": "string"
@@ -11110,6 +11139,12 @@
       "properties": {
         "expanded_view": {
           "$ref": "#/$defs/ExpandedView"
+        },
+        "generation": {
+          "default": 0,
+          "description": "Monotonic snapshot generation (`ToolAppState::panel_generation`).\nMultiple producers (leader executor, subagent/teammate bridges)\ndeliver on unordered channels; consumers drop a snapshot whose\ngeneration is \u2264 the last applied one. `0` marks an unordered\nproducer (resume hydration): always applied, never advances the\nconsumer's high-water mark.",
+          "format": "int64",
+          "type": "integer"
         },
         "plan_tasks": {
           "items": {

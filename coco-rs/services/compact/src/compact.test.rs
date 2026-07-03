@@ -97,6 +97,74 @@ fn test_compact_run_options_default_mirrors_ts_full_compact_no_recent_rounds() {
     assert_eq!(CompactRunOptions::default().keep_recent_rounds, 0);
 }
 
+/// THE regression test for the prompt-echo incident: a literal
+/// summarizer copies the compaction request (directive envelope
+/// included) into section 6. The echoed span must never reach the
+/// post-compact history, while `raw_summary` keeps the echo verbatim
+/// for PostCompact hooks.
+#[tokio::test]
+async fn test_full_compact_scrubs_echoed_directive_from_summary_message() {
+    let messages = vec![
+        make_user_text("real user request"),
+        make_assistant_text("real answer"),
+    ];
+
+    let echoed_summary = format!(
+        "<analysis>ok</analysis>\n<summary>\n1. Primary Request and Intent:\n   real user request\n\n6. All user messages:\n    - real user request\n    - {}\nCRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n{}\n\n7. Pending Tasks:\n   - follow up on retries\n</summary>",
+        crate::prompt::COMPACT_DIRECTIVE_OPEN,
+        crate::prompt::COMPACT_DIRECTIVE_CLOSE,
+    );
+
+    let result = compact_conversation(
+        &messages,
+        &CompactRunOptions::default(),
+        {
+            let echoed_summary = echoed_summary.clone();
+            move |_attempt| {
+                let echoed_summary = echoed_summary.clone();
+                async move {
+                    Ok(CompactSummaryResponse {
+                        summary: echoed_summary,
+                    })
+                }
+            }
+        },
+        None,
+    )
+    .await
+    .expect("compact succeeds despite the echo");
+
+    let summary_text: String = result
+        .summary_messages
+        .iter()
+        .filter_map(crate::summary_text::extract_message_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        summary_text.contains("real user request"),
+        "real section content must survive the scrub"
+    );
+    assert!(
+        summary_text.contains("follow up on retries"),
+        "sections after the echo must survive the scrub"
+    );
+    assert!(
+        !summary_text.contains(crate::prompt::COMPACT_DIRECTIVE_OPEN),
+        "directive tags must never reach post-compact history"
+    );
+    assert!(
+        !summary_text.contains("CRITICAL: Respond with TEXT ONLY"),
+        "echoed instruction text must never reach post-compact history"
+    );
+    assert!(
+        result
+            .raw_summary
+            .as_deref()
+            .is_some_and(|raw| raw.contains(crate::prompt::COMPACT_DIRECTIVE_OPEN)),
+        "raw_summary keeps the echo verbatim for PostCompact hooks"
+    );
+}
+
 #[tokio::test]
 async fn test_full_compact_default_summarizes_recent_tool_result_without_keeping_original() {
     let messages = vec![

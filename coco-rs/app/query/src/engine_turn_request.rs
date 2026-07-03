@@ -235,14 +235,16 @@ impl QueryEngine {
             None
         };
         let streaming_handle = streaming_ctx.as_ref().map(|ctx_arc| {
-            let executor_base = coco_tool_runtime::ToolExecutor::new()
-                .with_turn_abort(ctx_arc.abort.turn_signal());
-            let executor_with_state = match self.app_state.as_ref() {
-                Some(state) => executor_base.with_app_state(state.clone()),
-                None => executor_base,
-            };
+            // Wiring shared with the batch path via `create_executor` so
+            // the two executors cannot drift; only the turn-abort signal
+            // is streaming-specific.
             let executor = Arc::new(
-                executor_with_state.with_permission_rule_handle(self.permission_rule_handle.clone()),
+                crate::tool_call_runner::create_executor(
+                    self.app_state.as_ref(),
+                    &self.permission_rule_handle,
+                    event_tx,
+                )
+                .with_turn_abort(ctx_arc.abort.turn_signal()),
             );
             let ctx_for_closure = ctx_arc.clone();
             let hooks_for_closure = self.hooks.clone();

@@ -95,6 +95,13 @@ pub struct SwarmAgentHandle {
     /// here are addressable through `Task*` tools the model invokes later.
     /// There is no Swarm-side LocalAgent fallback store.
     task_registry: coco_tool_runtime::AgentTaskRegistryRef,
+    /// Long-lived surface `CoreEvent` sender used to bridge a child
+    /// engine's `TaskPanelChanged` snapshots to the TUI. Subagent
+    /// engines share the leader's `ToolAppState` (`wire_engine` passes
+    /// the same `Arc`), so their panel snapshots are authoritative for
+    /// the whole session. `None` (SDK / headless) ⇒ the spawn drain
+    /// drops them — same contract as the `TaskManager` event sink.
+    panel_event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
     /// Durable task-list handle shared with the leader engine. In-process
     /// teammates poll this after mailbox messages so unclaimed team tasks
     /// become work prompts without going through a separate mirror.
@@ -195,6 +202,7 @@ impl SwarmAgentHandle {
             worktree_manager: None,
             side_query: None,
             task_registry,
+            panel_event_tx: None,
             task_list: None,
             transcript_store: None,
             cwd,
@@ -233,6 +241,19 @@ impl SwarmAgentHandle {
 
     pub fn set_task_list(&mut self, handle: coco_tool_runtime::TaskListHandleRef) {
         self.task_list = Some(handle);
+    }
+
+    /// Install the surface's live `CoreEvent` sender so subagent
+    /// `TaskPanelChanged` snapshots reach the TUI (see the
+    /// `panel_event_tx` field doc for the sharing contract).
+    pub fn set_panel_event_sink(&mut self, tx: tokio::sync::mpsc::Sender<coco_types::CoreEvent>) {
+        self.panel_event_tx = Some(tx);
+    }
+
+    pub(crate) fn panel_event_sink(
+        &self,
+    ) -> Option<&tokio::sync::mpsc::Sender<coco_types::CoreEvent>> {
+        self.panel_event_tx.as_ref()
     }
 
     /// Install the MCP handle used for per-agent dynamic server

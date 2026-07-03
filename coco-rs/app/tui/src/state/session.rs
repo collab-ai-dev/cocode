@@ -221,6 +221,18 @@ pub struct SessionState {
     pub token_usage: TokenUsage,
     /// Cumulative session usage and cost snapshot.
     pub session_usage: Option<coco_types::SessionUsageSnapshot>,
+    /// Session-cumulative subagent spend (tokens / cost / cache),
+    /// aggregated across all subagent runs. Deliberately separate from
+    /// the main-thread [`Self::session_usage`] bucket; folded from
+    /// per-task monotonic `TaskProgress` / `TaskCompleted` usage
+    /// snapshots via [`Self::fold_subagent_usage`]. Survives compaction
+    /// and subagent-row pruning; reset only at session boundaries.
+    pub subagent_usage: SubagentUsageTotals,
+    /// Per-task high-water marks backing [`Self::subagent_usage`]. A
+    /// task's usage snapshots are cumulative over its own life, so the
+    /// session aggregate folds positive deltas against the last-seen
+    /// mark. Bounded by the number of subagent spawns in the session.
+    subagent_usage_marks: HashMap<String, SubagentUsageTotals>,
     /// Active `/goal` snapshot, mirrored from the engine.
     pub active_goal: Option<coco_types::ActiveGoal>,
     /// Session identifier.
@@ -346,6 +358,11 @@ pub struct SessionState {
     pub expanded_view: coco_types::ExpandedView,
     /// Verification-nudge banner flag.
     pub verification_nudge_pending: bool,
+    /// High-water mark of applied `TaskPanelChanged.generation` values.
+    /// Snapshots at or below this are stale deliveries from another
+    /// producer channel and are dropped. Reset with the panel state on
+    /// `SessionResetForResume` (a fresh engine restarts the counter).
+    pub task_panel_generation: i64,
     /// Active hook executions (set by HookStarted, updated by HookProgress/Response).
     pub active_hooks: Vec<HookEntry>,
     /// Prompt suggestions from the model (set by PromptSuggestion).
@@ -611,6 +628,44 @@ impl SessionState {
     pub fn insert_subagent_summary(&mut self, tool_use_id: String, summary: SubagentRunSummary) {
         self.subagent_summaries.insert(tool_use_id, summary);
     }
+
+    /// Fold one subagent usage snapshot into the session-cumulative
+    /// [`Self::subagent_usage`] bucket.
+    ///
+    /// A task's snapshots (`TaskProgress` / `TaskCompleted`) are
+    /// cumulative over that task's own life and may arrive out of
+    /// order, so the fold adds only the positive delta against the
+    /// task's high-water mark. Stale (lower) snapshots are no-ops.
+    pub fn fold_subagent_usage(&mut self, task_id: &str, usage: &coco_types::TaskUsage) {
+        let mark = self
+            .subagent_usage_marks
+            .entry(task_id.to_string())
+            .or_default();
+        self.subagent_usage.input_tokens += (usage.input_tokens - mark.input_tokens).max(0);
+        self.subagent_usage.output_tokens += (usage.output_tokens - mark.output_tokens).max(0);
+        self.subagent_usage.cache_read_tokens +=
+            (usage.cache_read_tokens - mark.cache_read_tokens).max(0);
+        self.subagent_usage.cost_usd += (usage.cost_usd - mark.cost_usd).max(0.0);
+        mark.input_tokens = mark.input_tokens.max(usage.input_tokens);
+        mark.output_tokens = mark.output_tokens.max(usage.output_tokens);
+        mark.cache_read_tokens = mark.cache_read_tokens.max(usage.cache_read_tokens);
+        mark.cost_usd = mark.cost_usd.max(usage.cost_usd);
+    }
+
+    /// Zero the subagent aggregate at a true session boundary
+    /// (`/clear` / resume), keeping high-water marks for subagent rows
+    /// that survive the boundary (running backgrounded agents) so their
+    /// pre-boundary spend is not re-counted into the fresh session.
+    pub fn reset_subagent_usage_for_session_boundary(&mut self) {
+        let surviving: std::collections::HashSet<&str> = self
+            .subagents
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect();
+        self.subagent_usage_marks
+            .retain(|task_id, _| surviving.contains(task_id.as_str()));
+        self.subagent_usage = SubagentUsageTotals::default();
+    }
 }
 
 impl Default for SessionState {
@@ -637,6 +692,8 @@ impl Default for SessionState {
             subagents: Vec::new(),
             token_usage: TokenUsage::default(),
             session_usage: None,
+            subagent_usage: SubagentUsageTotals::default(),
+            subagent_usage_marks: HashMap::new(),
             active_goal: None,
             session_id: None,
             pid: 0,
@@ -678,6 +735,7 @@ impl Default for SessionState {
             todos_by_agent: std::collections::HashMap::new(),
             expanded_view: coco_types::ExpandedView::None,
             verification_nudge_pending: false,
+            task_panel_generation: 0,
             active_hooks: Vec::new(),
             prompt_suggestions: Vec::new(),
             local_command_output: VecDeque::new(),
@@ -824,6 +882,28 @@ pub struct SubagentInstance {
     /// (`TaskUsage.cost_usd`). `0.0` until the agent completes. Summed
     /// across agents for the panel's `Subagents · N tok · $X` line.
     pub cost_usd: f64,
+}
+
+/// Session-cumulative subagent token / cost / cache totals (the status
+/// bar's `agents` segment). Also the per-task high-water-mark shape
+/// backing the fold — see [`SessionState::fold_subagent_usage`].
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct SubagentUsageTotals {
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cost_usd: f64,
+}
+
+impl SubagentUsageTotals {
+    /// Whether any subagent has reported usage yet — gates the status
+    /// bar segment so sessions without subagents stay uncluttered.
+    pub fn has_activity(&self) -> bool {
+        self.input_tokens > 0
+            || self.output_tokens > 0
+            || self.cache_read_tokens > 0
+            || self.cost_usd > 0.0
+    }
 }
 
 /// Final run summary for a completed subagent, rendered on its Agent

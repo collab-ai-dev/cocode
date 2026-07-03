@@ -36,6 +36,6 @@ pub mod summary;
 pub mod theme;
 pub mod vim;
 pub mod voice;
-pub mod voice_lang;
+pub mod voice_config;
 
 pub mod stats;

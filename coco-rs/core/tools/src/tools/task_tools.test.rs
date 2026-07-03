@@ -1546,6 +1546,92 @@ async fn test_task_create_emits_snapshot_and_auto_expand() {
     assert!(!state.verification_nudge_pending);
 }
 
+/// A child agent's TaskCreate refreshes the shared plan snapshot but
+/// must NOT auto-expand: view stealing is leader-only, otherwise every
+/// background subagent mutation yanks the user's panel choice.
+#[tokio::test]
+async fn test_task_create_child_agent_refreshes_without_auto_expand() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent_id = Some(coco_types::AgentId::from("agent-child-1"));
+    let result = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "child item", "description": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let patch = result.app_state_patch.expect("patch must be emitted");
+    let mut state = coco_types::ToolAppState::default();
+    patch(&mut state);
+    assert_eq!(state.plan_tasks.len(), 1, "data refresh must still land");
+    assert_eq!(
+        state.expanded_view,
+        coco_types::ExpandedView::None,
+        "child mutation must preserve the current view"
+    );
+}
+
+/// A child agent's TodoWrite stores its checklist under its own key but
+/// must NOT clear the shared V2 plan snapshot — the V1/V2 panel-mode
+/// switch is leader-only. A leader TodoWrite still switches to V1.
+#[tokio::test]
+async fn test_todo_write_child_agent_preserves_plan_tasks_leader_clears() {
+    // Leader creates a plan task → V2 snapshot populated.
+    let leader_ctx = ToolUseContext::test_default();
+    let create = <TaskCreateTool as DynTool>::execute(
+        &TaskCreateTool,
+        json!({"subject": "leader plan", "description": ""}),
+        &leader_ctx,
+    )
+    .await
+    .unwrap();
+    let mut state = coco_types::ToolAppState::default();
+    create.app_state_patch.expect("create patch")(&mut state);
+    assert_eq!(state.plan_tasks.len(), 1);
+
+    // Child agent writes its internal checklist → V2 snapshot survives,
+    // the child's todos land under its own agent key.
+    let mut child_ctx = ToolUseContext::test_default();
+    child_ctx.agent_id = Some(coco_types::AgentId::from("agent-child-2"));
+    let todo = <TodoWriteTool as DynTool>::execute(
+        &TodoWriteTool,
+        json!({"todos": [{
+            "content": "child step",
+            "status": "pending",
+            "activeForm": "Doing child step"
+        }]}),
+        &child_ctx,
+    )
+    .await
+    .unwrap();
+    todo.app_state_patch.expect("todo patch")(&mut state);
+    assert_eq!(
+        state.plan_tasks.len(),
+        1,
+        "child TodoWrite must not clobber the leader's V2 snapshot"
+    );
+    assert!(state.todos_by_agent.contains_key("agent-child-2"));
+
+    // Leader TodoWrite is the intentional V1 mode switch: V2 clears.
+    let leader_todo = <TodoWriteTool as DynTool>::execute(
+        &TodoWriteTool,
+        json!({"todos": [{
+            "content": "leader step",
+            "status": "pending",
+            "activeForm": "Doing leader step"
+        }]}),
+        &leader_ctx,
+    )
+    .await
+    .unwrap();
+    leader_todo.app_state_patch.expect("leader todo patch")(&mut state);
+    assert!(
+        state.plan_tasks.is_empty(),
+        "leader TodoWrite switches the panel to V1 mode"
+    );
+}
+
 /// TaskUpdate on completion with all-done gate sets
 /// `verification_nudge_pending = true`.
 #[tokio::test]

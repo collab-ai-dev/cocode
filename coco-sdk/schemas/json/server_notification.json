@@ -196,6 +196,10 @@
                 "$ref": "#/$defs/Message"
               }
             },
+            "reason": {
+              "$ref": "#/$defs/HistoryReplaceReason",
+              "default": "hydrate"
+            },
             "session_id": {
               "type": "string",
               "default": ""
@@ -2988,6 +2992,31 @@
       "required": [
         "met",
         "condition"
+      ]
+    },
+    "HistoryReplaceReason": {
+      "description": "Why the engine replaced the transcript wholesale\n(`ServerNotification::HistoryReplaced`).\n\nConsumers that keep session-cumulative folds over the message stream\n(e.g. the TUI's cumulative user/assistant/tool counters) need to know\nwhether the snapshot is a re-hydration of already-known content\n(`Hydrate` / `Trim` / `Rewind` — dedup by uuid suffices) or the\nproduct of a compaction, where one summarizer LLM call collapsed the\ntail into synthetic messages that must not be re-classified as\norganic conversation.",
+      "oneOf": [
+        {
+          "description": "Bulk resume hydration (startup `--resume`, in-session resume).\nDefault for wire back-compat with emitters that predate the field.",
+          "type": "string",
+          "const": "hydrate"
+        },
+        {
+          "description": "Full / partial / session-memory compaction: the snapshot is\nboundary marker + summarizer output + kept tail + attachments.",
+          "type": "string",
+          "const": "compact"
+        },
+        {
+          "description": "Reactive head-trim (PTL recovery): the snapshot is a strict\nsubset of the prior history, no new content.",
+          "type": "string",
+          "const": "trim"
+        },
+        {
+          "description": "Rewind / pre-clear prefix restore: the snapshot is a prefix of\npreviously-seen history.",
+          "type": "string",
+          "const": "rewind"
+        }
       ]
     },
     "HookCancelledPayload": {
@@ -6055,6 +6084,12 @@
       "properties": {
         "expanded_view": {
           "$ref": "#/$defs/ExpandedView"
+        },
+        "generation": {
+          "description": "Monotonic snapshot generation (`ToolAppState::panel_generation`).\nMultiple producers (leader executor, subagent/teammate bridges)\ndeliver on unordered channels; consumers drop a snapshot whose\ngeneration is ≤ the last applied one. `0` marks an unordered\nproducer (resume hydration): always applied, never advances the\nconsumer's high-water mark.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
         },
         "plan_tasks": {
           "type": "array",

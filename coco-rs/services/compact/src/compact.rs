@@ -1014,11 +1014,26 @@ where
                         }
                         .fail();
                     }
+                    // Warn-only quality audit: single choke point covering
+                    // the fork path, the direct fallback, and all three
+                    // templates. The summary is accepted regardless — a
+                    // degraded summary beats a failed compaction when the
+                    // context is nearly full.
+                    for anomaly in crate::summary_guard::detect_compact_summary_anomalies(
+                        &response.summary,
+                        &options.summary_request,
+                    ) {
+                        tracing::warn!(
+                            anomaly = anomaly.as_str(),
+                            prompt_kind = ?options.prompt_kind,
+                            "compact summary anomaly detected"
+                        );
+                    }
                     return Ok(response.summary);
                 }
                 Err(e)
-                    if e.starts_with("compact_summary_invalid:")
-                        || e.starts_with("compact_summary_aborted:") =>
+                    if e.starts_with(crate::types::COMPACT_SUMMARY_INVALID_PREFIX)
+                        || e.starts_with(crate::types::COMPACT_SUMMARY_ABORTED_PREFIX) =>
                 {
                     return crate::types::LlmCallFailedSnafu { message: e }.fail();
                 }

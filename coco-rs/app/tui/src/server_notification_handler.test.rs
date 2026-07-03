@@ -857,6 +857,7 @@ fn test_history_replaced_clears_tail_but_preserves_session_state() {
             messages: Vec::new(),
             session_id: String::new(),
             agent_id: None,
+            reason: coco_types::HistoryReplaceReason::Hydrate,
         }),
     );
 

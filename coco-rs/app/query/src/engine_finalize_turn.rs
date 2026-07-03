@@ -285,7 +285,13 @@ impl QueryEngine {
                 // messages from history. Pair the swap with truncate
                 // + appended-burst so TUI/SDK observers see the new
                 // state.
-                crate::history_sync::history_replace_and_emit(history, survivors, event_tx).await;
+                crate::history_sync::history_replace_and_emit(
+                    history,
+                    survivors,
+                    event_tx,
+                    coco_types::HistoryReplaceReason::Trim,
+                )
+                .await;
             }
         }
 

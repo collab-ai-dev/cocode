@@ -413,6 +413,8 @@ matching `NotificationMethod` discriminant.",
         session_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_id: Option<String>,
+        #[serde(default)]
+        reason: HistoryReplaceReason,
     },
     /// Reasoning aggregates attached to a specific assistant message.
     /// Engine emits this after `TurnCompleted` (when usage is known)
@@ -1138,6 +1140,35 @@ pub struct ReasoningMetadataAttachedParams {
     pub reasoning_tokens: i64,
 }
 
+/// Why the engine replaced the transcript wholesale
+/// (`ServerNotification::HistoryReplaced`).
+///
+/// Consumers that keep session-cumulative folds over the message stream
+/// (e.g. the TUI's cumulative user/assistant/tool counters) need to know
+/// whether the snapshot is a re-hydration of already-known content
+/// (`Hydrate` / `Trim` / `Rewind` — dedup by uuid suffices) or the
+/// product of a compaction, where one summarizer LLM call collapsed the
+/// tail into synthetic messages that must not be re-classified as
+/// organic conversation.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryReplaceReason {
+    /// Bulk resume hydration (startup `--resume`, in-session resume).
+    /// Default for wire back-compat with emitters that predate the field.
+    #[default]
+    Hydrate,
+    /// Full / partial / session-memory compaction: the snapshot is
+    /// boundary marker + summarizer output + kept tail + attachments.
+    Compact,
+    /// Reactive head-trim (PTL recovery): the snapshot is a strict
+    /// subset of the prior history, no new content.
+    Trim,
+    /// Rewind / pre-clear prefix restore: the snapshot is a prefix of
+    /// previously-seen history.
+    Rewind,
+}
+
 /// Active `/goal` snapshot.
 ///
 /// `goal = None` means no active goal. Terminal goal_status attachments
@@ -1459,6 +1490,14 @@ pub struct TaskPanelChangedParams {
     pub todos_by_agent: std::collections::HashMap<String, Vec<crate::TodoRecord>>,
     pub expanded_view: crate::ExpandedView,
     pub verification_nudge_pending: bool,
+    /// Monotonic snapshot generation (`ToolAppState::panel_generation`).
+    /// Multiple producers (leader executor, subagent/teammate bridges)
+    /// deliver on unordered channels; consumers drop a snapshot whose
+    /// generation is ≤ the last applied one. `0` marks an unordered
+    /// producer (resume hydration): always applied, never advances the
+    /// consumer's high-water mark.
+    #[serde(default)]
+    pub generation: i64,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

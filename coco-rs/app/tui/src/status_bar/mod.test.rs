@@ -318,6 +318,70 @@ fn status_bar_view_counts_transcript_messages_by_uuid_and_role() {
 }
 
 #[test]
+fn status_bar_view_counts_survive_compact_history_replace() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    test_helpers::push_user_text(&mut state.session, "u1", "hello");
+    test_helpers::push_assistant_text(&mut state.session, "answer");
+
+    // Compaction replaces the transcript wholesale; the status bar
+    // counts are session-cumulative and must not collapse — the
+    // summarizer call itself counts as one assistant message.
+    state.session.transcript.replace_from_messages(
+        &[Arc::new(coco_messages::create_user_message_with_uuid(
+            uuid::Uuid::new_v4(),
+            "This session is being continued…",
+        ))],
+        coco_types::HistoryReplaceReason::Compact,
+    );
+
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
+        panic!("expected built-in status bar");
+    };
+    let text = lines
+        .iter()
+        .flatten()
+        .map(|span| span.text.as_str())
+        .collect::<String>();
+
+    assert!(text.contains("→1 ←2"), "text: {text}");
+}
+
+#[test]
+fn status_bar_view_renders_subagent_usage_segment_only_when_active() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+
+    let render = |state: &AppState| {
+        let StatusBarView::BuiltIn { lines } = status_bar_view(state) else {
+            panic!("expected built-in status bar");
+        };
+        lines
+            .iter()
+            .flatten()
+            .map(|span| span.text.as_str())
+            .collect::<String>()
+    };
+
+    assert!(
+        !render(&state).contains("subagents"),
+        "segment hidden while no subagent has reported usage"
+    );
+
+    state.session.subagent_usage = crate::state::session::SubagentUsageTotals {
+        input_tokens: 68_100,
+        output_tokens: 468,
+        cache_read_tokens: 64_700,
+        cost_usd: 0.18,
+    };
+    let text = render(&state);
+    assert!(
+        text.contains("subagents ↑68.1K ↓468 · $0.1800 · cache 64.7K/95.0%"),
+        "text: {text}"
+    );
+}
+
+#[test]
 fn custom_status_line_replaces_built_in_segments() {
     let mut state = AppState::default();
     state.ui.display_settings.status_line = Some(coco_config::StatusLineSettings::Command(

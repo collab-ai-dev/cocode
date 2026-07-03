@@ -460,6 +460,19 @@ pub(super) fn handle(
             if let Some((tuid, summary)) = completed_summary {
                 state.session.insert_subagent_summary(tuid, summary);
             }
+            // Authoritative final usage → session-cumulative subagent
+            // aggregate. High-water-mark fold, so re-adding on top of the
+            // live TaskProgress snapshots only contributes the remainder
+            // (and a duplicate TaskCompleted is a no-op).
+            if let Some(usage) = p.usage.as_ref()
+                && state
+                    .session
+                    .subagents
+                    .iter()
+                    .any(|a| a.agent_id == p.task_id && matches!(a.kind, SubagentKind::Subagent))
+            {
+                state.session.fold_subagent_usage(&p.task_id, usage);
+            }
             true
         }
         ServerNotification::TaskProgress(p) => {
@@ -527,9 +540,33 @@ pub(super) fn handle(
                     agent.agent_type = agent_type.to_string();
                 }
             }
+            // Fold the per-task snapshot into the session-cumulative
+            // subagent aggregate (status bar `agents` segment). Subagent
+            // rows only — teammates run their own sessions and account
+            // their own spend.
+            if state
+                .session
+                .subagents
+                .iter()
+                .any(|a| a.agent_id == p.task_id && matches!(a.kind, SubagentKind::Subagent))
+            {
+                state.session.fold_subagent_usage(&p.task_id, &p.usage);
+            }
             true
         }
         ServerNotification::TaskPanelChanged(p) => {
+            // Multiple producers (leader executor, subagent/teammate
+            // bridges) deliver on unordered channels; the arm below does
+            // an unconditional full replace, so a late-arriving older
+            // snapshot would silently roll the panel back. Drop it.
+            // Generation 0 (resume hydration) is unordered by contract:
+            // always applied, never advances the mark.
+            if p.generation > 0 {
+                if p.generation <= state.session.task_panel_generation {
+                    return false;
+                }
+                state.session.task_panel_generation = p.generation;
+            }
             // Unified snapshot refresh. Before we replace the snapshot, diff
             // the old/new statuses so we can stamp per-task `Completed`
             // timestamps (`RECENT_COMPLETED_TTL_MS = 30_000` priority lift)
@@ -1128,9 +1165,18 @@ pub(super) fn handle(
             // `RewindPreClearSnapshot`.
             state.session.session_usage = None;
             state.session.token_usage = crate::state::session::TokenUsage::default();
+            // Runs after `clear_session_boundary_state` pruned the
+            // subagent rows, so surviving (running backgrounded) agents
+            // keep their high-water marks and don't re-count pre-clear
+            // spend into the fresh session.
+            state.session.reset_subagent_usage_for_session_boundary();
             state.session.active_goal = None;
             state.session.plan_tasks.clear();
             state.session.todos_by_agent.clear();
+            // The resumed engine's `ToolAppState` restarts its panel
+            // generation from 1; keeping the old high-water mark would
+            // drop every snapshot from the new run.
+            state.session.task_panel_generation = 0;
             state.session.queued_commands.clear();
             state.session.rewind_pre_clear_messages.clear();
             state.session.transcript.on_session_reset();
@@ -1168,14 +1214,19 @@ pub(super) fn handle(
             state.session.active_goal = p.goal;
             true
         }
-        ServerNotification::HistoryReplaced { messages, .. } => {
-            // Bulk resume hydration: a single replace instead of N
+        ServerNotification::HistoryReplaced {
+            messages, reason, ..
+        } => {
+            // Bulk transcript replace (resume hydration / compaction /
+            // trim / rewind): a single replace instead of N
             // MessageAppended events. UI-only side-caches that anchor
             // on message uuids get cleared because the new transcript
-            // overwrites the old.
+            // overwrites the old. `reason` steers the cumulative
+            // counter fold inside the derived view.
             tracing::info!(
                 target: "coco_tui::history",
                 incoming = messages.len(),
+                ?reason,
                 cells_before = state.session.transcript.len(),
                 "HistoryReplaced (bulk hydration)",
             );
@@ -1184,7 +1235,7 @@ pub(super) fn handle(
             state
                 .session
                 .transcript
-                .replace_from_messages(messages.as_slice());
+                .replace_from_messages(messages.as_slice(), reason);
             tracing::debug!(
                 target: "coco_tui::history",
                 cells_after = state.session.transcript.len(),

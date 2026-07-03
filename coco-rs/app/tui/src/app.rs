@@ -295,13 +295,27 @@ impl App {
         if !self.state.ui.voice.enabled {
             return false;
         }
+        let transcribing = matches!(
+            self.state.ui.voice.status,
+            crate::state::ui::VoiceStatusKind::Transcribing
+        );
         let Some(session) = self.voice.as_mut() else {
             self.state.ui.add_toast(crate::state::ui::Toast::warning(
                 "Voice input is unavailable (no backend configured).".to_string(),
             ));
             return true;
         };
-        if session.is_recording() {
+        if transcribing && !session.is_recording() {
+            // A transcription (possibly a stuck first-use model download) is in
+            // flight — pressing the key again aborts it rather than starting a
+            // new recording.
+            session.cancel_transcription();
+            self.state.ui.voice.status = crate::state::ui::VoiceStatusKind::Idle;
+            self.state.ui.input.clear_inline_hint();
+            self.state.ui.add_toast(crate::state::ui::Toast::warning(
+                "Voice transcription cancelled.".to_string(),
+            ));
+        } else if session.is_recording() {
             session.stop();
             self.state.ui.voice.status = crate::state::ui::VoiceStatusKind::Transcribing;
             let engine = self
@@ -358,6 +372,22 @@ impl App {
                     .ui
                     .input
                     .set_inline_hint(format!("transcribing via {engine}…"));
+            }
+            coco_voice::VoiceEvent::Download {
+                model,
+                received,
+                total,
+            } => {
+                // First-use weight download (runs inside transcription); reuse
+                // the inline hint to show progress, cleared by Final/Error.
+                let hint = match total {
+                    Some(total) if total > 0 => {
+                        let pct = received.min(total) * 100 / total;
+                        format!("downloading {model} model… {pct}%")
+                    }
+                    _ => format!("downloading {model} model… {} MB", received / 1_048_576),
+                };
+                self.state.ui.input.set_inline_hint(hint);
             }
             coco_voice::VoiceEvent::Final { text, .. } => {
                 self.state.ui.voice.status = VoiceStatusKind::Idle;

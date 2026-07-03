@@ -39,6 +39,16 @@ pub const MAX_PTL_RETRIES: i32 = 3;
 /// Max streaming retries for the summary LLM call.
 pub const MAX_COMPACT_STREAMING_RETRIES: i32 = 2;
 
+/// Error-string prefix for structurally unusable summarizer responses
+/// (tool call attempted, assistant API error). `call_with_ptl_retry`
+/// routes it to an immediate `CompactError::LlmCallFailed` — no retry.
+pub const COMPACT_SUMMARY_INVALID_PREFIX: &str = "compact_summary_invalid:";
+
+/// Error-string prefix for summary attempts aborted mid-flight
+/// (cancellation, abnormal stop_reason). Same no-retry routing as
+/// [`COMPACT_SUMMARY_INVALID_PREFIX`].
+pub const COMPACT_SUMMARY_ABORTED_PREFIX: &str = "compact_summary_aborted:";
+
 /// Turns after a compact that still count as a rapid refill.
 pub const RAPID_REFILL_TURN_WINDOW: i32 = 3;
 

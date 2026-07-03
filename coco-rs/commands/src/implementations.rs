@@ -46,7 +46,7 @@ pub mod names {
     pub const COLOR: &str = "color";
     pub const VIM: &str = "vim";
     pub const VOICE: &str = "voice";
-    pub const VOICE_LANG: &str = "voice-lang";
+    pub const VOICE_CONFIG: &str = "voice-config";
     pub const OUTPUT_STYLE: &str = "output-style";
     pub const KEYBINDINGS: &str = "keybindings";
     pub const SANDBOX: &str = "sandbox";
@@ -613,13 +613,13 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             Some("[on|off|toggle]"),
         ),
         (
-            names::VOICE_LANG,
-            "Choose the voice dictation language",
+            names::VOICE_CONFIG,
+            "Inspect or edit voice-input settings (backend, language, model)",
             &[],
-            handlers::voice_lang::handler,
+            handlers::voice_config::handler,
             false,
             AlwaysSafe,
-            Some("[<code>]"),
+            Some("[lang|backend|remote|local|download] ..."),
         ),
         (
             names::KEYBINDINGS,
