@@ -39,6 +39,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::Weak;
 
+use coco_config::CredentialStoreMode;
 use coco_inference::ProviderCredentialResolver;
 use coco_inference::RefreshFuture;
 use coco_inference::SubscriptionCredsSupplier;
@@ -99,6 +100,16 @@ pub struct AuthService {
     me: OnceLock<Weak<AuthService>>,
 }
 
+/// Whether the running binary is a signed distribution build (release profile),
+/// versus an unsigned dev / test build (debug profile). Decides whether the
+/// default credential store ([`AuthService::with_config_dir`]) may read the OS
+/// keychain. `debug_assertions` is the build-provenance proxy for "unsigned": it
+/// is off only for `--release` (CI / official) artifacts and on for every
+/// `cargo build` / `cargo test` binary, which are unsigned or ad-hoc-signed.
+fn build_is_signed_release() -> bool {
+    !cfg!(debug_assertions)
+}
+
 impl AuthService {
     /// Build a service over the given credential backend.
     pub fn new(backend: Arc<dyn CredentialBackend>) -> Arc<Self> {
@@ -112,9 +123,49 @@ impl AuthService {
         service
     }
 
-    /// Convenience: keyring-with-file-fallback backend under `<config_dir>/auth/`.
+    /// The default deployment backend under `<config_dir>/auth/`, selected by
+    /// build provenance:
+    ///
+    /// - **signed release build** → [`AutoBackend`] (OS keychain first, file
+    ///   fallback) — credentials rest in the OS vault;
+    /// - **unsigned dev / test build** → file-only backend — the OS keychain is
+    ///   never touched.
+    ///
+    /// Why gate on signing: the macOS Keychain ACL is keyed to the accessing
+    /// binary's code signature. An unsigned / ad-hoc-signed dev or test binary
+    /// (every `cargo build` / `cargo test` artifact) reading an item that a
+    /// *differently*-signed release binary created is not in that item's ACL, so
+    /// macOS pops a modal "allow access" prompt — which blocks headless PTY e2e
+    /// tests until the nextest timeout kills them, and re-fires on every local
+    /// rebuild. `COCO_CONFIG_DIR` cannot isolate this: it redirects the file
+    /// backend but not the process-global, OS-session-scoped keychain namespace.
+    /// Mirrors codex's LOCAL_DEV_BUILD keyring downgrade; signed releases keep the
+    /// more secure keychain-backed store.
     pub fn with_config_dir(config_dir: std::path::PathBuf) -> Arc<Self> {
-        Self::new(Arc::new(AutoBackend::new(config_dir.join("auth"))))
+        let auth_dir = config_dir.join("auth");
+        let backend: Arc<dyn CredentialBackend> = if build_is_signed_release() {
+            Arc::new(AutoBackend::new(auth_dir))
+        } else {
+            Arc::new(store::FileBackend::new(auth_dir))
+        };
+        Self::new(backend)
+    }
+
+    /// Build the service over an explicitly-pinned credential backend, for when
+    /// the user forces a mode via `COCO_AUTH_CREDENTIAL_STORE` /
+    /// `GlobalConfig.auth_credential_store`. Callers that leave it unset use
+    /// [`Self::with_config_dir`] (the build-provenance default) instead. An
+    /// explicit mode overrides the build-provenance heuristic — e.g. `File`
+    /// keeps a locally-built (unsigned) `--release` binary off the keychain.
+    pub fn with_store(config_dir: std::path::PathBuf, mode: CredentialStoreMode) -> Arc<Self> {
+        let auth_dir = config_dir.join("auth");
+        let backend: Arc<dyn CredentialBackend> = match mode {
+            CredentialStoreMode::Auto => Arc::new(AutoBackend::new(auth_dir)),
+            CredentialStoreMode::File => Arc::new(store::FileBackend::new(auth_dir)),
+            CredentialStoreMode::Keyring => Arc::new(store::KeyringBackend::default()),
+            CredentialStoreMode::Ephemeral => Arc::new(EphemeralBackend::default()),
+        };
+        Self::new(backend)
     }
 
     fn lock_providers(&self) -> std::sync::MutexGuard<'_, HashMap<String, ManagedProvider>> {

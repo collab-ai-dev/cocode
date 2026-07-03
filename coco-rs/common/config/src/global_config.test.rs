@@ -202,3 +202,37 @@ fn test_write_global_config_preserves_jsonc_comments() {
             .has_completed_project_onboarding
     );
 }
+
+#[test]
+fn credential_store_mode_parses_case_insensitively() {
+    assert_eq!(
+        CredentialStoreMode::from_env_value("AUTO"),
+        Some(CredentialStoreMode::Auto)
+    );
+    assert_eq!(
+        CredentialStoreMode::from_env_value("  File "),
+        Some(CredentialStoreMode::File)
+    );
+    assert_eq!(
+        CredentialStoreMode::from_env_value("keyring"),
+        Some(CredentialStoreMode::Keyring)
+    );
+    assert_eq!(
+        CredentialStoreMode::from_env_value("ephemeral"),
+        Some(CredentialStoreMode::Ephemeral)
+    );
+    // Unknown values fall through (None) rather than pinning a backend.
+    assert_eq!(CredentialStoreMode::from_env_value("vault"), None);
+    assert_eq!(CredentialStoreMode::from_env_value(""), None);
+}
+
+#[test]
+fn credential_store_mode_deserializes_snake_case_from_global_config() {
+    let g: GlobalConfig =
+        serde_json::from_value(json!({ "auth_credential_store": "file" })).expect("deserialize");
+    assert_eq!(g.auth_credential_store, Some(CredentialStoreMode::File));
+
+    // Absent field ⇒ None (build-provenance default applies downstream).
+    let empty: GlobalConfig = serde_json::from_value(json!({})).expect("deserialize");
+    assert_eq!(empty.auth_credential_store, None);
+}
