@@ -37,6 +37,70 @@ fn gemini_flow_is_wired_with_google_specifics() {
 }
 
 #[test]
+fn build_is_signed_release_is_false_in_test_builds() {
+    // Test binaries compile with debug_assertions on, so they must classify as
+    // *unsigned* — this is exactly what keeps `with_config_dir` on the file
+    // backend and off the OS keychain, so headless PTY e2e tests never block on
+    // a macOS "allow access" prompt. Guards against inverting the gate.
+    assert!(!build_is_signed_release());
+}
+
+#[tokio::test]
+async fn with_config_dir_credentials_live_under_the_config_dir() {
+    // A (debug/test) build picks the file-only backend, so a credential written
+    // under <config_dir>/auth is authoritative and fully isolated — this is what
+    // lets e2e tests repoint COCO_CONFIG_DIR at a temp dir instead of leaking
+    // into (or blocking on) the real OS keychain.
+    let tmp = tempfile::tempdir().unwrap();
+    crate::store::FileBackend::new(tmp.path().join("auth"))
+        .save("openai-chatgpt", &cred("at", "acct"))
+        .unwrap();
+
+    let svc = AuthService::with_config_dir(tmp.path().to_path_buf());
+    let st = svc
+        .status("openai-chatgpt", OAuthFlowId::OpenAiChatGpt)
+        .expect("status");
+    assert_eq!(st.state, AuthState::Available);
+    assert_eq!(st.email.as_deref(), Some("u@example.com"));
+}
+
+#[tokio::test]
+async fn with_store_file_reads_credentials_from_config_dir() {
+    // An explicit `file` mode roots the store at <config_dir>/auth regardless of
+    // build provenance — this is the escape hatch for a locally-built (unsigned)
+    // `--release` binary that would otherwise hit the keychain.
+    let tmp = tempfile::tempdir().unwrap();
+    crate::store::FileBackend::new(tmp.path().join("auth"))
+        .save("openai-chatgpt", &cred("at", "acct"))
+        .unwrap();
+    let svc = AuthService::with_store(
+        tmp.path().to_path_buf(),
+        coco_config::CredentialStoreMode::File,
+    );
+    let st = svc
+        .status("openai-chatgpt", OAuthFlowId::OpenAiChatGpt)
+        .expect("status");
+    assert_eq!(st.state, AuthState::Available);
+}
+
+#[test]
+fn with_store_ephemeral_ignores_persisted_credentials() {
+    // Seed an on-disk credential; the ephemeral backend must not read it.
+    let tmp = tempfile::tempdir().unwrap();
+    crate::store::FileBackend::new(tmp.path().join("auth"))
+        .save("openai-chatgpt", &cred("at", "acct"))
+        .unwrap();
+    let svc = AuthService::with_store(
+        tmp.path().to_path_buf(),
+        coco_config::CredentialStoreMode::Ephemeral,
+    );
+    let st = svc
+        .status("openai-chatgpt", OAuthFlowId::OpenAiChatGpt)
+        .expect("status");
+    assert_eq!(st.state, AuthState::NotConfigured);
+}
+
+#[test]
 fn fresh_service_is_not_logged_in() {
     let svc = AuthService::new(Arc::new(EphemeralBackend::default()));
     let st = svc

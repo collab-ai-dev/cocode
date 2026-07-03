@@ -36,6 +36,11 @@ pub enum EnvKey {
     /// Test/diagnostic override for the Google (Gemini) OAuth revocation
     /// endpoint (logout). Wiremock seam; unset in normal use.
     CocoAuthGeminiRevokeUrl,
+    /// User override for the provider-auth credential-storage backend
+    /// (`auto`|`file`|`keyring`|`ephemeral`). Highest-priority source in
+    /// [`crate::resolve_credential_store_mode`]; unset ⇒ the build-provenance
+    /// default applies.
+    CocoAuthCredentialStore,
     /// Entrypoint label written to the concurrent-sessions PID registry
     /// (`<config_home>/sessions/{pid}.json`). Identifies *how* the
     /// session was started ("sdk-py", "tmux-bg", "cli-interactive", …)
@@ -341,6 +346,7 @@ impl EnvKey {
             Self::CocoAuthGeminiTokenUrl => "COCO_AUTH_GEMINI_TOKEN_URL",
             Self::CocoAuthOpenaiRevokeUrl => "COCO_AUTH_OPENAI_REVOKE_URL",
             Self::CocoAuthGeminiRevokeUrl => "COCO_AUTH_GEMINI_REVOKE_URL",
+            Self::CocoAuthCredentialStore => "COCO_AUTH_CREDENTIAL_STORE",
             Self::CocoEntrypoint => "COCO_ENTRYPOINT",
             Self::CocoSessionKind => "COCO_SESSION_KIND",
             Self::CocoBashAutoBackgroundOnTimeout => "COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT",

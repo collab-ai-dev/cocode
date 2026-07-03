@@ -28,8 +28,19 @@ use coco_types::OAuthFlowId;
 pub fn shared_auth_service() -> Arc<AuthService> {
     static SERVICE: OnceLock<Arc<AuthService>> = OnceLock::new();
     SERVICE
-        .get_or_init(|| AuthService::with_config_dir(global_config::config_home()))
+        .get_or_init(|| build_auth_service(global_config::config_home()))
         .clone()
+}
+
+/// Construct an `AuthService` over the credential backend the user selected via
+/// `COCO_AUTH_CREDENTIAL_STORE` / `GlobalConfig.auth_credential_store`, falling
+/// back to the build-provenance default (signed release → keychain-first;
+/// unsigned dev/test → file-only) when unset.
+fn build_auth_service(config_dir: PathBuf) -> Arc<AuthService> {
+    match coco_config::resolve_credential_store_mode() {
+        Some(mode) => AuthService::with_store(config_dir, mode),
+        None => AuthService::with_config_dir(config_dir),
+    }
 }
 
 /// The shared service as a `ProviderCredentialResolver` trait object, for
@@ -112,7 +123,7 @@ pub async fn run_login(
     if let Some(path) = import {
         return run_import(&name, flow, &path).await;
     }
-    let service = AuthService::with_config_dir(global_config::config_home());
+    let service = build_auth_service(global_config::config_home());
     let opts = LoginOptions {
         open_browser: !no_browser,
         // Headless / SSH (`--no-browser`): the browser is likely on another
@@ -152,7 +163,7 @@ async fn run_import(name: &str, flow: OAuthFlowId, path: &Path) -> Result<()> {
     }
     let cred =
         coco_provider_auth::import::read_codex_auth(path).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let service = AuthService::with_config_dir(global_config::config_home());
+    let service = build_auth_service(global_config::config_home());
     let status = service
         .import(name, cred)
         .await
@@ -175,7 +186,7 @@ async fn run_import(name: &str, flow: OAuthFlowId, path: &Path) -> Result<()> {
 /// `coco logout [provider]`.
 pub async fn run_logout(provider: Option<String>) -> Result<()> {
     let name = instance_name(provider.as_deref());
-    let service = AuthService::with_config_dir(global_config::config_home());
+    let service = build_auth_service(global_config::config_home());
     let removed = service
         .logout(&name)
         .await

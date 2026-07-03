@@ -4,6 +4,59 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::env::EnvKey;
+
+/// Which credential-storage backend `coco_provider_auth` uses. A user/machine-
+/// level choice — it lives in [`GlobalConfig`] (see [`global_config_path`]),
+/// never in project settings, so a project's `settings.json` cannot downgrade
+/// your credential store. Unset ⇒ the backend is chosen by build provenance
+/// (signed release → keychain-first; unsigned dev/test → file-only); see
+/// `coco_provider_auth::AuthService::with_config_dir`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialStoreMode {
+    /// OS keychain first, file fallback.
+    Auto,
+    /// File only (`<config>/auth/*.json`, mode 0600); never touches the keychain.
+    File,
+    /// OS keychain only; error out if the keychain is unavailable.
+    Keyring,
+    /// In-memory only; nothing persists across processes.
+    Ephemeral,
+}
+
+impl CredentialStoreMode {
+    /// Parse a case-insensitive env value (`auto`|`file`|`keyring`|`ephemeral`).
+    /// Routes through the enum's own serde mapping so the accepted spellings can
+    /// never drift from the on-disk config form. `None` for anything else, so a
+    /// typo falls through to the next resolution layer rather than silently
+    /// pinning a backend.
+    pub fn from_env_value(raw: &str) -> Option<Self> {
+        serde_json::from_value(serde_json::Value::String(raw.trim().to_ascii_lowercase())).ok()
+    }
+}
+
+/// Resolve the credential-store mode from user-controlled sources, highest
+/// priority first: the `COCO_AUTH_CREDENTIAL_STORE` env var, then
+/// [`GlobalConfig::auth_credential_store`]. `None` = unconfigured; the caller
+/// (`coco_provider_auth`) then applies its build-provenance default. Project
+/// settings intentionally cannot influence this.
+pub fn resolve_credential_store_mode() -> Option<CredentialStoreMode> {
+    if let Some(raw) = crate::env::env_opt(EnvKey::CocoAuthCredentialStore) {
+        if let Some(mode) = CredentialStoreMode::from_env_value(&raw) {
+            return Some(mode);
+        }
+        tracing::warn!(
+            value = %raw,
+            "ignoring {}: expected auto|file|keyring|ephemeral",
+            EnvKey::CocoAuthCredentialStore.as_str()
+        );
+    }
+    load_global_config()
+        .ok()
+        .and_then(|g| g.auth_credential_store)
+}
+
 /// Per-user global config. Separate from Settings.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -12,6 +65,11 @@ pub struct GlobalConfig {
     pub user_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Credential-storage backend override for provider-auth. Unset ⇒ chosen by
+    /// build provenance (signed release → keychain; dev/test → file). User-level
+    /// on purpose; resolved via [`resolve_credential_store_mode`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_credential_store: Option<CredentialStoreMode>,
     pub projects: HashMap<String, ProjectConfig>,
     pub session_costs: HashMap<String, SessionCostState>,
     #[serde(skip_serializing_if = "Option::is_none")]
