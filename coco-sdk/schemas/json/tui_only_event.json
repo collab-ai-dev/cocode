@@ -1139,6 +1139,19 @@
       ]
     },
     {
+      "description": "Tell the TUI to open the `/provider` add-provider wizard. Emitted when\nthe slash dispatcher resolves `/provider` with no args. The TUI builds\nthe template list from the compiled-in builtin provider catalog.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_provider_wizard"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
       "description": "Tell the TUI to open the tabbed settings panel. Emitted when the slash\ndispatcher resolves `/config` with no args (TS `/config` local-jsx\npanel). Reuses the same overlay as the `Ctrl+,` keybind.",
       "type": "object",
       "properties": {
