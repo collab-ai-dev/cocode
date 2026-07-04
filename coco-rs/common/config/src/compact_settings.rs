@@ -379,9 +379,14 @@ impl Default for DisplayCollapseConfig {
 /// Mapping to TS feature gates:
 /// | Field | TS gate / GrowthBook | Default |
 /// |---|---|---|
-/// | `enabled` | `tengu_hawthorn_steeple` (Level 2 enable) | `false` |
+/// | `enabled` | `tengu_hawthorn_steeple` (Level 2 enable) | `true` |
 /// | `per_message_chars` | `tengu_hawthorn_window` (per-message override) | `200_000` |
 /// | `persist_records` | — (transcript record write toggle for fork agents) | `true` |
+///
+/// **Deliberate divergence from TS:** TS gates Level 2 behind GrowthBook
+/// `tengu_hawthorn_steeple` (code fallback `false`). coco-rs enables the
+/// per-message aggregate budget by default as a context-window safety guard;
+/// opt out via `compact.tool_result_budget.enabled = false` in settings.json.
 /// Per-tool persistence threshold overrides belong on
 /// `Tool::max_result_size_bound()`; they are intentionally not surfaced as
 /// compact config.
@@ -407,7 +412,9 @@ pub struct ToolResultBudgetConfig {
 impl Default for ToolResultBudgetConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            // Product policy: keep the context-window safety guard on by
+            // default even though TS's GrowthBook-off fallback is false.
+            enabled: true,
             per_message_chars: DEFAULT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS,
             persist_records: true,
         }

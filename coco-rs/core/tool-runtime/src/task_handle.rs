@@ -283,6 +283,15 @@ pub struct AgentSpawnMetadata {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub killed_by: Option<coco_types::TaskKilledBy>,
+    /// Permission mode the agent was spawned in, restored on resume so a
+    /// Plan-mode (etc.) agent doesn't silently drop to Default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<coco_types::PermissionMode>,
+    /// Isolation the agent was spawned with, restored on resume so a
+    /// worktree-isolated agent is re-isolated (its original worktree is
+    /// typically GC'd on completion).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<coco_types::AgentIsolation>,
 }
 
 /// Per-agent transcript persistence trait.

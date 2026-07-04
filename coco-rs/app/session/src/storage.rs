@@ -11,6 +11,7 @@
 use coco_paths::ProjectPaths;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::BufRead;
 use std::io::Write;
@@ -502,6 +503,14 @@ pub struct AgentMetadata {
     /// terminal for resume; callers must spawn a fresh agent instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub killed_by: Option<coco_types::TaskKilledBy>,
+    /// Permission mode at spawn — restored on resume (Plan etc. would
+    /// otherwise drop to Default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<coco_types::PermissionMode>,
+    /// Isolation at spawn — restored on resume so a worktree-isolated agent
+    /// is re-isolated when its original worktree was GC'd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<coco_types::AgentIsolation>,
 }
 
 // ---------------------------------------------------------------------------
@@ -699,16 +708,12 @@ impl TranscriptStore {
         }
     }
 
-    /// Append typed `Arc<Message>` entries to a background agent's
-    /// per-spawn transcript, one JSON line each. Used by
-    /// `coco_coordinator::agent_handle_spawn` on bg-spawn
-    /// completion to persist the conversation history for resume.
-    /// Serialises straight from `Message` to the JSONL byte stream —
-    /// no `serde_json::Value` intermediate — so the disk-write path
-    /// walks the message tree exactly once. Conversation order is
-    /// preserved by append order (coco-rs doesn't need TS's
-    /// parent_uuid chain because `MessageHistory.messages` is in
-    /// conversation order; resume just reads back the Vec).
+    /// Append a subagent's messages to its per-agent transcript as
+    /// `TranscriptEntry` envelopes (`is_sidechain = true`), matching the
+    /// main-transcript wire shape so one reader ([`Self::load_agent_messages`])
+    /// serves every agent file. One-shot convenience over
+    /// [`Self::append_agent_message_chain`] with a fresh dedup set — the
+    /// framework-fork sidechain writer's single completion dump.
     pub fn append_agent_messages(
         &self,
         session_id: &str,
@@ -718,26 +723,32 @@ impl TranscriptStore {
         if messages.is_empty() {
             return Ok(());
         }
-        let path = self.agent_transcript_path(session_id, agent_id);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        for msg in messages {
-            let line = serde_json::to_string(msg.as_ref())?;
-            writeln!(file, "{line}")?;
-        }
+        let mut seen = HashSet::new();
+        let options = ChainWriteOptions {
+            cwd: std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.display().to_string())
+                .unwrap_or_default(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            is_sidechain: true,
+            agent_id: Some(agent_id.to_string()),
+            starting_parent_uuid: None,
+            git_branch: None,
+        };
+        self.append_agent_message_chain(
+            session_id,
+            agent_id,
+            messages.iter().map(AsRef::as_ref),
+            &mut seen,
+            options,
+        )?;
         Ok(())
     }
 
-    /// Load every line of a background agent's per-spawn transcript
-    /// into typed `Arc<Message>` in conversation order. Returns
-    /// `Ok(None)` when the file doesn't exist (no prior spawn).
-    /// Lines that fail to parse are dropped — resume is best-effort,
-    /// a corrupted entry shouldn't take the whole spawn down.
+    /// Load a subagent's per-agent transcript into typed `Arc<Message>` for
+    /// the current conversation chain. Agent files use the same parent_uuid
+    /// DAG as the main transcript; resume walks the newest leaf so stale
+    /// pre-compact / rewound branches do not re-enter model context.
     pub fn load_agent_messages(
         &self,
         session_id: &str,
@@ -747,17 +758,34 @@ impl TranscriptStore {
         if !path.exists() {
             return Ok(None);
         }
-        let content = std::fs::read_to_string(&path)?;
+        let entries = load_entries_from_file(&path)?;
+        let transcript_entries: Vec<TranscriptEntry> = entries
+            .into_iter()
+            .filter_map(|entry| match entry {
+                Entry::Transcript(t) => Some(*t),
+                Entry::Metadata(_) | Entry::Unknown(_) => None,
+            })
+            .collect();
+        let chain_indices = selected_agent_chain_indices(&transcript_entries);
         let mut out: Vec<Arc<coco_messages::Message>> = Vec::new();
-        for line in content.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Ok(m) = serde_json::from_str::<coco_messages::Message>(line) {
+        for idx in chain_indices {
+            for m in messages_from_transcript_entry(&transcript_entries[idx]) {
                 out.push(Arc::new(m));
             }
         }
         Ok(Some(out))
+    }
+
+    /// Load every per-agent transcript for a session
+    /// (`<sid>/subagents/**/agent-*.jsonl`) as a flat `Entry` list,
+    /// concatenated in path order. Now that subagent messages live in
+    /// per-agent files rather than interleaved in the main transcript, this is
+    /// how the Hub projection surfaces subagent activity. Missing dir → empty;
+    /// unreadable files are skipped (best-effort).
+    pub fn load_agent_transcript_entries(&self, session_id: &str) -> crate::Result<Vec<Entry>> {
+        let mut out = Vec::new();
+        collect_agent_transcript_entries(&self.paths.subagents_dir(session_id), true, &mut out);
+        Ok(out)
     }
 
     /// Write an agent's metadata sidecar (`agent-<id>.meta.json`).
@@ -828,6 +856,32 @@ impl TranscriptStore {
         Ok(result)
     }
 
+    /// Append a subagent conversation chain to that agent's dedicated
+    /// transcript (`<sid>/subagents/agent-<id>.jsonl`) instead of the main
+    /// session file. Mirrors the TS upstream, which routes every
+    /// `is_sidechain && agent_id` entry to a per-agent file so the main
+    /// transcript never carries sidechain and its parent-uuid chain stays
+    /// intact. Same `TranscriptEntry` envelope and prefix-only dedup as
+    /// [`Self::append_message_chain`]; only the target path differs.
+    pub fn append_agent_message_chain<'a, I>(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        messages: I,
+        seen: &mut HashSet<Uuid>,
+        options: ChainWriteOptions,
+    ) -> crate::Result<ChainWriteResult>
+    where
+        I: IntoIterator<Item = &'a coco_messages::Message>,
+    {
+        let (entries, result) = build_message_chain_entries(session_id, messages, seen, &options);
+        let path = self.agent_transcript_path(session_id, agent_id);
+        for entry in &entries {
+            append_entry_to_file(&path, entry)?;
+        }
+        Ok(result)
+    }
+
     /// Persist a file-history snapshot to the JSONL transcript.
     /// `snapshot_json` is the `FileHistorySnapshot`'s serialized JSON
     /// shape (see `coco-context::FileHistorySnapshot`).
@@ -884,14 +938,21 @@ impl TranscriptStore {
         if records.is_empty() {
             return Ok(());
         }
-        self.append_metadata(
-            session_id,
-            &MetadataEntry::ContentReplacement {
-                session_id: session_id.to_string(),
-                agent_id: agent_id.map(str::to_string),
-                replacements: records.to_vec(),
-            },
-        )
+        let entry = Entry::Metadata(MetadataEntry::ContentReplacement {
+            session_id: session_id.to_string(),
+            agent_id: agent_id.map(str::to_string),
+            replacements: records.to_vec(),
+        });
+        // Mirror TS: a subagent's content-replacement records live in that
+        // agent's own transcript (for AgentTool resume); main-thread records
+        // stay in the main session file (for /resume). Routing is by
+        // `agent_id`, exactly like sidechain messages.
+        match agent_id {
+            Some(agent_id) => {
+                append_entry_to_file(&self.agent_transcript_path(session_id, agent_id), &entry)
+            }
+            None => self.append_entry(session_id, &entry),
+        }
     }
 
     pub fn load_content_replacements(
@@ -922,7 +983,20 @@ impl TranscriptStore {
         session_id: &str,
         agent_id: Option<&str>,
     ) -> crate::Result<Vec<ContentReplacementRecord>> {
-        let entries = self.load_entries(session_id)?;
+        // Subagent records live in that agent's transcript; main-thread
+        // records in the main session file. Read from the matching file
+        // (mirrors TS `getAgentTranscript` vs `/resume`).
+        let entries = match agent_id {
+            Some(agent_id) => {
+                let path = self.agent_transcript_path(session_id, agent_id);
+                if path.exists() {
+                    load_entries_from_file(&path)?
+                } else {
+                    Vec::new()
+                }
+            }
+            None => self.load_entries(session_id)?,
+        };
         Ok(content_replacements_for_chain(
             &entries, session_id, agent_id,
         ))
@@ -1290,6 +1364,245 @@ fn load_entries_from_file(path: &Path) -> crate::Result<Vec<Entry>> {
     Ok(entries)
 }
 
+fn selected_agent_chain_indices(entries: &[TranscriptEntry]) -> Vec<usize> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let mut by_uuid: HashMap<String, usize> = HashMap::new();
+    let mut parent_uuids: HashSet<String> = HashSet::new();
+    for (idx, entry) in entries.iter().enumerate() {
+        if !entry.uuid.is_empty() {
+            by_uuid.insert(entry.uuid.clone(), idx);
+        }
+        if let Some(parent_uuid) = entry.parent_uuid.as_deref()
+            && !parent_uuid.is_empty()
+        {
+            parent_uuids.insert(parent_uuid.to_string());
+        }
+    }
+    if parent_uuids.is_empty() {
+        return (0..entries.len()).collect();
+    }
+
+    let mut leaf_indices = Vec::new();
+    let mut leaf_seen = HashSet::new();
+    for (idx, terminal) in entries.iter().enumerate() {
+        if terminal.uuid.is_empty() || parent_uuids.contains(&terminal.uuid) {
+            continue;
+        }
+        let mut visited = HashSet::new();
+        let mut cursor = Some(idx);
+        while let Some(cursor_idx) = cursor {
+            let entry = &entries[cursor_idx];
+            if !entry.uuid.is_empty() && !visited.insert(entry.uuid.clone()) {
+                break;
+            }
+            if entry.entry_type == entry_kind::USER || entry.entry_type == entry_kind::ASSISTANT {
+                if leaf_seen.insert(cursor_idx) {
+                    leaf_indices.push(cursor_idx);
+                }
+                break;
+            }
+            cursor = entry
+                .parent_uuid
+                .as_deref()
+                .filter(|parent_uuid| !parent_uuid.is_empty())
+                .and_then(|parent_uuid| by_uuid.get(parent_uuid).copied());
+        }
+    }
+    let Some(leaf_idx) = leaf_indices
+        .into_iter()
+        .fold(None::<usize>, |best, idx| match best {
+            Some(best_idx) if entries[idx].timestamp > entries[best_idx].timestamp => Some(idx),
+            Some(best_idx) => Some(best_idx),
+            None => Some(idx),
+        })
+    else {
+        return (0..entries.len()).collect();
+    };
+    recover_agent_parallel_tool_branch_indices(
+        entries,
+        walk_agent_parent_chain_indices(entries, &by_uuid, leaf_idx),
+    )
+}
+
+fn walk_agent_parent_chain_indices(
+    entries: &[TranscriptEntry],
+    by_uuid: &HashMap<String, usize>,
+    leaf_idx: usize,
+) -> Vec<usize> {
+    let mut walked = Vec::new();
+    let mut visited = HashSet::new();
+    let mut cursor = Some(leaf_idx);
+    while let Some(idx) = cursor {
+        let entry = &entries[idx];
+        if !entry.uuid.is_empty() && !visited.insert(entry.uuid.clone()) {
+            break;
+        }
+        walked.push(idx);
+        cursor = entry
+            .parent_uuid
+            .as_deref()
+            .filter(|parent_uuid| !parent_uuid.is_empty())
+            .and_then(|parent_uuid| by_uuid.get(parent_uuid).copied());
+    }
+    walked.reverse();
+    walked
+}
+
+fn recover_agent_parallel_tool_branch_indices(
+    entries: &[TranscriptEntry],
+    chain_indices: Vec<usize>,
+) -> Vec<usize> {
+    if chain_indices.is_empty() {
+        return chain_indices;
+    }
+
+    let chain_set: HashSet<usize> = chain_indices.iter().copied().collect();
+    let mut assistant_groups: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut tool_result_children: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (idx, entry) in entries.iter().enumerate() {
+        if entry.entry_type == entry_kind::ASSISTANT
+            && let Some(request_id) = entry.request_id.as_deref()
+            && !request_id.is_empty()
+        {
+            assistant_groups.entry(request_id).or_default().push(idx);
+        }
+        if entry.entry_type == entry_kind::USER
+            && is_tool_result_entry(entry)
+            && let Some(parent_uuid) = entry.parent_uuid.as_deref()
+            && !parent_uuid.is_empty()
+        {
+            tool_result_children
+                .entry(parent_uuid)
+                .or_default()
+                .push(idx);
+        }
+    }
+
+    let mut last_group_position: HashMap<&str, usize> = HashMap::new();
+    for (pos, idx) in chain_indices.iter().copied().enumerate() {
+        let entry = &entries[idx];
+        if entry.entry_type == entry_kind::ASSISTANT
+            && let Some(request_id) = entry.request_id.as_deref()
+            && assistant_groups.contains_key(request_id)
+        {
+            last_group_position.insert(request_id, pos);
+        }
+    }
+
+    let mut out = Vec::with_capacity(chain_indices.len());
+    let mut emitted: HashSet<usize> = HashSet::new();
+    let mut expanded_request_ids: HashSet<&str> = HashSet::new();
+    for (pos, idx) in chain_indices.into_iter().enumerate() {
+        if emitted.insert(idx) {
+            out.push(idx);
+        }
+
+        let entry = &entries[idx];
+        let Some(request_id) = (entry.entry_type == entry_kind::ASSISTANT)
+            .then_some(entry.request_id.as_deref())
+            .flatten()
+        else {
+            continue;
+        };
+        if last_group_position.get(request_id) != Some(&pos)
+            || !expanded_request_ids.insert(request_id)
+        {
+            continue;
+        }
+
+        let mut recovered = Vec::new();
+        if let Some(group) = assistant_groups.get(request_id) {
+            for assistant_idx in group {
+                if !chain_set.contains(assistant_idx) {
+                    recovered.push(*assistant_idx);
+                }
+                if let Some(children) =
+                    tool_result_children.get(entries[*assistant_idx].uuid.as_str())
+                {
+                    recovered.extend(children.iter().copied().filter(|i| !chain_set.contains(i)));
+                }
+            }
+        }
+        recovered.sort_by(|a, b| {
+            entries[*a]
+                .timestamp
+                .cmp(&entries[*b].timestamp)
+                .then_with(|| a.cmp(b))
+        });
+        for recovered_idx in recovered {
+            if emitted.insert(recovered_idx) {
+                out.push(recovered_idx);
+            }
+        }
+    }
+
+    out
+}
+
+fn is_tool_result_entry(entry: &TranscriptEntry) -> bool {
+    entry
+        .message
+        .as_ref()
+        .and_then(|message| message.get("content"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|content| {
+            content.iter().any(|block| {
+                block
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|kind| kind == "tool_result" || kind == "tool-result")
+            })
+        })
+}
+
+/// Recursively collect `agent-*.jsonl` transcript entries under a subagents
+/// directory into `out`, in path order (deterministic across reads).
+/// `recurse` descends boundedly for nested workflow/run layouts; `.meta.json`
+/// sidecars and unparseable lines are skipped.
+pub(crate) fn collect_agent_transcript_entries(dir: &Path, recurse: bool, out: &mut Vec<Entry>) {
+    let max_depth = if recurse { 8 } else { 0 };
+    collect_agent_transcript_entries_at_depth(dir, max_depth, out);
+}
+
+fn collect_agent_transcript_entries_at_depth(
+    dir: &Path,
+    depth_remaining: usize,
+    out: &mut Vec<Entry>,
+) {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = read_dir.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            if depth_remaining > 0 {
+                collect_agent_transcript_entries_at_depth(&path, depth_remaining - 1, out);
+            }
+            continue;
+        }
+        let is_agent_transcript = path.extension().is_some_and(|ext| ext == "jsonl")
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("agent-"));
+        if !is_agent_transcript {
+            continue;
+        }
+        let Ok(entries) = load_entries_from_file(&path) else {
+            continue;
+        };
+        for entry in entries {
+            match entry {
+                Entry::Unknown(_) => {}
+                entry => out.push(entry),
+            }
+        }
+    }
+}
+
 /// Parse a single JSONL line into an [`Entry`].
 /// Dispatch order: parse once into `serde_json::Value`, then route by
 /// the `type` field. Transcript types
@@ -1421,6 +1734,7 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &str) -> Transcri
     let mut git_branch: Option<String> = None;
     let mut cwd: Option<String> = None;
     let mut is_sidechain = false;
+    let mut first_message_seen = false;
     let mut message_count: i32 = 0;
 
     for entry in entries {
@@ -1440,8 +1754,19 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &str) -> Transcri
                         first_prompt = candidate;
                     }
                 }
-                if t.is_sidechain {
-                    is_sidechain = true;
+                // Session-level sidechain is derived from the FIRST message
+                // only, mirroring the TS upstream (`transcript[0].isSidechain`
+                // / the first-line scan in listSessionsImpl / sessionStorage).
+                // coco-rs interleaves inline AgentTool subagent messages
+                // (`is_sidechain = true`) into the *main* transcript, so an
+                // OR-over-all fold would mis-flag any main session that ran a
+                // subagent as a sidechain session and hide it from
+                // `list_main_sessions` / `--continue` / auto-dream. Only a
+                // transcript whose first message is a sidechain (a pure agent
+                // transcript) is a sidechain session.
+                if !first_message_seen {
+                    first_message_seen = true;
+                    is_sidechain = t.is_sidechain;
                 }
                 if cwd.is_none() && !t.cwd.is_empty() {
                     cwd = Some(t.cwd.clone());

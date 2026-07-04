@@ -272,6 +272,9 @@ pub async fn build_agent_team_wiring(
     };
     let adapter: AgentQueryEngineRef = Arc::new(QueryEngineAdapter::new(factory));
     handle.set_execution_engine(adapter.clone());
+    // Live catalog so `resume_agent` can re-resolve the AgentDefinition from
+    // the persisted `meta.agent_type` (restores system prompt / tools / model).
+    handle.set_agent_catalog(runtime.agent_catalog_handle());
 
     // ── Skill runtime ──
     //

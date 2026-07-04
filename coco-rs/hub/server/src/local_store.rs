@@ -305,7 +305,15 @@ impl LocalSessionJsonStore {
     fn load_entries(&self, meta: &TranscriptMetadata) -> Result<Vec<Entry>, EventStoreError> {
         let cwd = meta.cwd.as_deref().unwrap_or_default();
         let store = self.catalog.store_for(Path::new(cwd));
-        Ok(store.load_entries(&meta.session_id)?)
+        let mut entries = store.load_entries(&meta.session_id)?;
+        // Subagent messages now live in per-agent files (`<sid>/subagents/…`),
+        // not interleaved in the main transcript. Append them so the projection
+        // still surfaces subagent activity (attributed via each entry's
+        // `agent_id`) and folds subagent tokens back into session stats.
+        // Appending keeps a continuous `line_index`, so event seqs stay
+        // collision-free.
+        entries.extend(store.load_agent_transcript_entries(&meta.session_id)?);
+        Ok(entries)
     }
 
     fn instance_id_for_meta(&self, meta: &TranscriptMetadata) -> Result<String, EventStoreError> {

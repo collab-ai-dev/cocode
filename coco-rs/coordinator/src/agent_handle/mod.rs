@@ -176,6 +176,11 @@ pub struct SwarmAgentHandle {
     /// separate Arc fields so future additions to the block don't
     /// proliferate SwarmAgentHandle fields.
     coco_guide_context_builder: Option<CocoGuideContextBuilder>,
+    /// Live agent catalog (shared `Arc<RwLock<..>>` from the runtime) so
+    /// `resume_agent` can re-resolve an `AgentDefinition` from the persisted
+    /// `meta.agent_type` — restoring the agent's system prompt, tool
+    /// restrictions, and model instead of falling back to a generic identity.
+    agent_catalog: Option<Arc<tokio::sync::RwLock<Arc<coco_subagent::AgentCatalogSnapshot>>>>,
 }
 
 /// Closure type for [`SwarmAgentHandle::coco_guide_context_builder`].
@@ -217,6 +222,7 @@ impl SwarmAgentHandle {
                 std::collections::HashMap::new(),
             )),
             coco_guide_context_builder: None,
+            agent_catalog: None,
         }
     }
 
@@ -422,6 +428,26 @@ impl SwarmAgentHandle {
 
     pub fn set_execution_engine(&mut self, engine: coco_tool_runtime::AgentQueryEngineRef) {
         self.execution_engine = Some(engine);
+    }
+
+    /// Install the runtime's live agent catalog so `resume_agent` can
+    /// re-resolve an `AgentDefinition` from persisted `meta.agent_type`.
+    pub fn set_agent_catalog(
+        &mut self,
+        catalog: Arc<tokio::sync::RwLock<Arc<coco_subagent::AgentCatalogSnapshot>>>,
+    ) {
+        self.agent_catalog = Some(catalog);
+    }
+
+    /// Resolve an `AgentDefinition` by `agent_type` from the live catalog.
+    /// `None` when no catalog is wired or the type isn't active (built-in
+    /// resolution still happens downstream in the spawn path).
+    pub(crate) async fn resolve_agent_definition(
+        &self,
+        agent_type: &str,
+    ) -> Option<Arc<coco_types::AgentDefinition>> {
+        let catalog = self.agent_catalog.as_ref()?.read().await.clone();
+        catalog.find_active(agent_type).cloned().map(Arc::new)
     }
 
     /// Install an [`AgentWorktreeManager`](crate::worktree::AgentWorktreeManager)

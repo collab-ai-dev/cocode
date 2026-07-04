@@ -68,14 +68,36 @@ impl SwarmAgentHandle {
         // Value → Message round-trip at this seam.
         let filtered = coco_subagent::filter_transcript(&prior_messages);
 
-        // If the worktree directory was removed out from under us, fall
-        // back to the parent's cwd.
-        let cwd_override = match meta.worktree_path.as_deref() {
-            Some(path) if std::path::Path::new(path).is_dir() => {
-                Some(std::path::PathBuf::from(path))
-            }
-            _ => None,
+        // Worktree revival: reuse the original worktree if it still exists;
+        // otherwise, if the agent was worktree-isolated, re-isolate (its
+        // worktree is typically GC'd on completion) so the resumed run stays
+        // isolated. Fall back to the parent cwd only when neither applies.
+        // Mirrors TS resumeAgent's worktree handling.
+        let worktree_alive = meta
+            .worktree_path
+            .as_deref()
+            .is_some_and(|p| std::path::Path::new(p).is_dir());
+        let (cwd_override, isolation) = if worktree_alive {
+            (
+                meta.worktree_path.as_deref().map(std::path::PathBuf::from),
+                None,
+            )
+        } else if meta.isolation == Some(coco_types::AgentIsolation::Worktree) {
+            (None, Some(coco_types::AgentIsolation::Worktree))
+        } else {
+            (None, None)
         };
+
+        // Inherit the session's current features (coordinator-mode etc.) so the
+        // resumed agent runs in the live session context, like a fresh spawn.
+        let features = Some(std::sync::Arc::new(self.runtime_config().features.clone()));
+
+        // Restore the agent's definition (system prompt, tool restrictions,
+        // model, effort, hooks, mcp, skills) by re-resolving its persisted
+        // `agent_type` against the live catalog — mirroring a fresh AgentTool
+        // spawn. Without this the resumed agent would run with a generic
+        // identity and no frontmatter tool restrictions.
+        let definition = self.resolve_agent_definition(&meta.agent_type).await;
 
         let resume_request = AgentSpawnRequest {
             prompt,
@@ -84,6 +106,12 @@ impl SwarmAgentHandle {
                 .clone()
                 .or_else(|| Some("(resumed)".into())),
             subagent_type: Some(meta.agent_type.clone()),
+            definition,
+            // Restore the spawn-time permission mode (Plan etc.) so the resumed
+            // agent doesn't silently drop to Default.
+            mode: meta.mode,
+            isolation,
+            features,
             run_in_background: true,
             cwd: cwd_override,
             session_id,
@@ -93,6 +121,10 @@ impl SwarmAgentHandle {
             // parent's pre-rendered prompt verbatim for cache parity).
             spawn_mode: coco_tool_runtime::SpawnMode::Resume {
                 parent_messages: filtered,
+                // Reuse the original id so the resumed run's transcript,
+                // content-replacement records, and metadata stay in the same
+                // per-agent files (continuity), mirroring TS.
+                resumed_agent_id: original_agent_id.to_string(),
             },
             ..Default::default()
         };

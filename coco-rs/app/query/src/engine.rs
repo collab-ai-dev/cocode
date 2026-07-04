@@ -393,6 +393,20 @@ pub struct QueryEngine {
     /// metadata is written).
     pub(crate) transcript_dedup:
         Option<Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>>,
+    /// Per-engine dedup set for *this subagent's* own transcript file
+    /// (`<sid>/subagents/agent-<id>.jsonl`). Deliberately fresh per engine —
+    /// NOT the shared `transcript_dedup` — so a subagent's full history
+    /// (including any fork-inherited context) is written to its agent file
+    /// and cannot be pre-skipped by UUIDs the main thread already recorded.
+    /// Only consulted on the `agent_id.is_some()` branch of
+    /// `record_transcript_tail`; unused (but harmless) on the main loop.
+    pub(crate) agent_transcript_dedup: tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>,
+    /// Latch: on the first subagent-transcript write, seed
+    /// `agent_transcript_dedup` from the existing per-agent file so a resumed
+    /// run (which reuses the original agent_id and replays its prior history)
+    /// does NOT re-persist the already-recorded messages — it appends only new
+    /// turns. False on a fresh spawn (empty file → seed is a no-op).
+    pub(crate) agent_transcript_seeded: std::sync::atomic::AtomicBool,
     /// Shared runtime flag set after terminal `/goal` success metadata
     /// is written and cleared at the next main-session turn start.
     pub(crate) terminal_goal_metadata_written: Option<Arc<AtomicBool>>,

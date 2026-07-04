@@ -125,6 +125,13 @@ pub enum SpawnMode {
         /// run `coco_subagent::filter_transcript` to drop unresolved
         /// tool uses + orphaned thinking + whitespace-only assistants.
         parent_messages: Vec<Arc<Message>>,
+        /// The ORIGINAL agent's id, reused verbatim so the resumed run's
+        /// transcript, content-replacement records, and metadata append to
+        /// the SAME per-agent files (continuity). Mirrors TS, which threads
+        /// `override.agentId` so `runAgent` skips minting a new id. The
+        /// spawn path seeds the child engine's transcript dedup from the
+        /// existing file so the replayed history is not re-persisted.
+        resumed_agent_id: String,
     },
 }
 

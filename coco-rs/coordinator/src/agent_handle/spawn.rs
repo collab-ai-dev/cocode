@@ -834,7 +834,15 @@ impl SwarmAgentHandle {
             .as_deref()
             .unwrap_or("general-purpose");
 
-        let agent_id = coco_types::generate_task_id(coco_types::TaskType::BgAgent);
+        // Resume reuses the ORIGINAL agent id so the rehydrated run appends to
+        // the same per-agent transcript / content-replacement records / metadata
+        // (continuity, mirroring TS). Every other mode mints a fresh id.
+        let agent_id = match &request.spawn_mode {
+            coco_tool_runtime::SpawnMode::Resume {
+                resumed_agent_id, ..
+            } => resumed_agent_id.clone(),
+            _ => coco_types::generate_task_id(coco_types::TaskType::BgAgent),
+        };
         let task_registry = self.task_registry().clone();
         let is_dream = matches!(request.fork_label, Some(coco_types::ForkLabel::AutoDream));
         let is_skip_registration = matches!(
@@ -1199,9 +1207,9 @@ impl SwarmAgentHandle {
                         true,
                     )
                 }
-                coco_tool_runtime::SpawnMode::Resume { parent_messages } => {
-                    (build_fresh_prompt(), parent_messages.clone(), true, false)
-                }
+                coco_tool_runtime::SpawnMode::Resume {
+                    parent_messages, ..
+                } => (build_fresh_prompt(), parent_messages.clone(), true, false),
                 coco_tool_runtime::SpawnMode::Fresh => (
                     build_fresh_prompt(),
                     request.fork_context_messages.clone(),
@@ -2067,6 +2075,9 @@ impl SwarmAgentHandle {
                     .map(|s| s.path.display().to_string()),
                 description: request.description.clone(),
                 killed_by: None,
+                // Persist so resume can restore them.
+                mode: request.mode,
+                isolation: request.isolation,
             };
             if let Err(e) = store_for_meta
                 .write_agent_metadata(&session_for_meta, &task_for_meta, &meta)
@@ -2250,19 +2261,12 @@ impl SwarmAgentHandle {
                     .await;
                 }
             }
-            // Persist the full message history to the per-agent JSONL
-            // transcript on success. `agent/resume` reads this back via
-            // `AgentTranscriptStore::load_agent_messages` and threads the
-            // entries into the resumed spawn's `fork_context_messages`.
-            if let (Some(store), Ok(qr)) = (transcript_store_for_task.as_ref(), outcome.as_ref())
-                && !session_id_for_task.is_empty()
-                && !qr.messages.is_empty()
-                && let Err(e) = store
-                    .append_agent_messages(&session_id_for_task, &task_id_for_task, &qr.messages)
-                    .await
-            {
-                tracing::debug!(error = %e, "agent transcript write failed");
-            }
+            // No on-completion transcript dump: the subagent's per-agent JSONL
+            // (`<sid>/subagents/agent-<id>.jsonl`) is written incrementally by
+            // its own engine's `record_transcript_tail` (agent branch) each
+            // turn, exactly as the main session builds its transcript. This is
+            // the file `agent/resume` reads back via
+            // `AgentTranscriptStore::load_agent_messages`.
             match outcome {
                 Ok(qr) => {
                     // The completion notification carries the final assistant
@@ -2326,6 +2330,10 @@ impl SwarmAgentHandle {
                                     .map(|s| s.path.display().to_string()),
                                 description: description_for_task.clone(),
                                 killed_by,
+                                // Cancelled/killed agents are terminal for resume,
+                                // so mode/isolation are moot here.
+                                mode: None,
+                                isolation: None,
                             };
                             if let Err(write_err) = store
                                 .write_agent_metadata(

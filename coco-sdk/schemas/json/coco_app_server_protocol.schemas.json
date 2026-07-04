@@ -9462,6 +9462,14 @@
     "SessionUsageSnapshot": {
       "description": "Persisted and protocol-visible cumulative usage for one session.",
       "properties": {
+        "auto_compact_threshold": {
+          "description": "Exact auto-compact trigger threshold (tokens) for the active model,\ncomputed by the engine (window \u2212 reserved \u2212 buffer, honoring config\noverrides). Lets the TUI anchor its `ctx` color bands to the real\ncompaction point. `None` on legacy snapshots / before the first turn.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "models": {
           "items": {
             "$ref": "#/$defs/SessionModelUsageEntry"
@@ -11373,11 +11381,23 @@
           "format": "int64",
           "type": "integer"
         },
+        "input_cost_usd": {
+          "default": 0.0,
+          "description": "Input-side cost (uncached input + cache tokens), split from\n[`Self::output_cost_usd`] so the status bar can show the subagent\naggregate as `\u2191\u2026/$in \u2193\u2026/$out` like the main thread. `#[serde(default)]`\nkeeps older payloads (single `cost_usd` only) deserializing to `0.0`.",
+          "format": "double",
+          "type": "number"
+        },
         "input_tokens": {
           "default": 0,
           "description": "Input / output split + cache-read (the `\u2191in \u2193out` / cache-hit\ndimensions the panel and transcript summary show). `#[serde(default)]`\nfor back-compat with payloads that only carried `total_tokens`.",
           "format": "int64",
           "type": "integer"
+        },
+        "output_cost_usd": {
+          "default": 0.0,
+          "description": "Output-side cost.",
+          "format": "double",
+          "type": "number"
         },
         "output_tokens": {
           "default": 0,

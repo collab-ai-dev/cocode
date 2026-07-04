@@ -372,12 +372,13 @@ impl Tool for SendMessageTool {
                     }));
                 }
             };
-            let new_id = resume.agent_id.as_deref().unwrap_or(to);
+            let resumed_id = resume.agent_id.as_deref().unwrap_or(to);
             return Ok(send_message_result(SendMessageOutput::Direct {
                 success: true,
                 message: format!(
                     "Agent '{to}' was stopped ({status:?}); resumed it in the background \
-                         with your message. New task id: {new_id}. You'll be notified when it finishes.",
+                         with your message under the same id ({resumed_id}) — its transcript \
+                         continues where it left off. You'll be notified when it finishes.",
                     status = info.status,
                 ),
                 routing: Some("resume".to_string()),
