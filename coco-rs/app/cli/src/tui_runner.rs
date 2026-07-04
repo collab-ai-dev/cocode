@@ -968,7 +968,7 @@ async fn run_agent_driver(
             }
             Some(turn_id) = turn_done_rx.recv() => {
                 if drain_completed_turn(&active_turn, turn_id).await {
-                    drain_queued_slash_commands(
+                    process_idle_command_queue(
                         &runtime,
                         &event_tx,
                         &active_turn,
@@ -981,26 +981,15 @@ async fn run_agent_driver(
                 continue;
             }
             _ = runtime.command_queue().wait_for_change() => {
-                if active_turn.lock().await.is_none() {
-                    drain_queued_slash_commands(
-                        &runtime,
-                        &event_tx,
-                        &active_turn,
-                        &mut pending_editor_requests,
-                        &title_gen_attempted,
-                        &turn_done_tx,
-                    )
-                    .await;
-                    if active_turn.lock().await.is_none() {
-                        spawn_command_queue_turn(
-                            &runtime,
-                            &event_tx,
-                            &active_turn,
-                            &turn_done_tx,
-                        )
-                        .await;
-                    }
-                }
+                process_idle_command_queue(
+                    &runtime,
+                    &event_tx,
+                    &active_turn,
+                    &mut pending_editor_requests,
+                    &title_gen_attempted,
+                    &turn_done_tx,
+                )
+                .await;
                 continue;
             }
         };
@@ -3174,6 +3163,33 @@ async fn handle_slash_outcome(
             run_reload_hooks(runtime, event_tx).await;
             SlashFollowup::Done
         }
+    }
+}
+
+async fn process_idle_command_queue(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
+    pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
+    title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
+    turn_done_tx: &mpsc::Sender<uuid::Uuid>,
+) {
+    if active_turn.lock().await.is_some() {
+        return;
+    }
+
+    drain_queued_slash_commands(
+        runtime,
+        event_tx,
+        active_turn,
+        pending_editor_requests,
+        title_gen_attempted,
+        turn_done_tx,
+    )
+    .await;
+
+    if active_turn.lock().await.is_none() {
+        spawn_command_queue_turn(runtime, event_tx, active_turn, turn_done_tx).await;
     }
 }
 

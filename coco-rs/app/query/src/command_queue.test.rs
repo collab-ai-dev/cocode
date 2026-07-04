@@ -125,6 +125,18 @@ async fn test_peek_does_not_remove() {
 }
 
 #[tokio::test]
+async fn test_has_matching_does_not_remove() {
+    let queue = CommandQueue::new();
+    queue
+        .enqueue(QueuedCommand::new("hello".into(), QueuePriority::Next))
+        .await;
+
+    assert!(queue.has_matching(|c| c.prompt == "hello").await);
+    assert!(!queue.has_matching(|c| c.prompt == "missing").await);
+    assert_eq!(queue.len().await, 1);
+}
+
+#[tokio::test]
 async fn test_dequeue_matching() {
     let queue = CommandQueue::new();
     queue
