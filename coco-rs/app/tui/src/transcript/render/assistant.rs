@@ -146,6 +146,16 @@ pub(crate) fn clear_in_flight_markdown_memo() {
     IN_FLIGHT_MD_MEMO.with(|m| *m.borrow_mut() = None);
 }
 
+pub(crate) fn committed_markdown_memo_estimated_bytes() -> usize {
+    let committed = COMMITTED_MD_MEMO.with(|m| m.borrow().bytes);
+    let in_flight = IN_FLIGHT_MD_MEMO.with(|m| {
+        m.borrow()
+            .as_ref()
+            .map_or(0, |(_, lines)| super::estimate_lines_bytes(lines))
+    });
+    committed.saturating_add(in_flight)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommittedAssistantMarkdownOptions<'a> {
     pub(crate) styles: UiStyles<'a>,

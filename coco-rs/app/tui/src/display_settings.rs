@@ -49,6 +49,9 @@ pub struct TuiPerformanceConfig {
     pub sample_every_n_frames: u64,
     pub slow_frame_ms: u64,
     pub slow_stage_us: u64,
+    pub memory_enabled: bool,
+    pub memory_sample_interval_secs: u64,
+    pub memory_delta_threshold_bytes: u64,
 }
 
 impl Default for TuiPerformanceConfig {
@@ -123,11 +126,18 @@ fn performance_config(settings: TuiPerformanceSettings) -> TuiPerformanceConfig 
         sample_every_n_frames: settings.sample_every_n_frames,
         slow_frame_ms: settings.slow_frame_ms,
         slow_stage_us: settings.slow_stage_us,
+        memory_enabled: settings.memory_enabled,
+        memory_sample_interval_secs: settings.memory_sample_interval_secs,
+        memory_delta_threshold_bytes: mib_to_bytes(settings.memory_delta_threshold_mb),
     }
 }
 
 fn kib_to_bytes(kib: usize) -> usize {
     kib.saturating_mul(1024)
+}
+
+fn mib_to_bytes(mib: u64) -> u64 {
+    mib.saturating_mul(1024 * 1024)
 }
 
 fn syntax_highlighting_editability(settings: &SettingsWithSource) -> DisplaySettingEditability {

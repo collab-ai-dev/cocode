@@ -324,6 +324,10 @@ where
         !self.alt_screen_active
     }
 
+    pub(crate) fn history_replay_cache_estimated_bytes(&self) -> usize {
+        self.surface.history_replay_cache_estimated_bytes()
+    }
+
     /// Draw one native surface frame.
     pub fn draw(&mut self, state: &AppState) -> Result<TuiDrawOutcome, B::Error> {
         self.draw_with_frame_index(state, 0)

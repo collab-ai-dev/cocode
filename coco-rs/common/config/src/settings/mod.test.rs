@@ -343,7 +343,10 @@ fn test_parse_settings_accepts_tui_performance_policy() {
                     "enabled": true,
                     "sample_every_n_frames": 7,
                     "slow_frame_ms": 33,
-                    "slow_stage_us": 750
+                    "slow_stage_us": 750,
+                    "memory_enabled": true,
+                    "memory_sample_interval_secs": 0,
+                    "memory_delta_threshold_mb": 0
                 }
             }
         }"#,
@@ -355,6 +358,9 @@ fn test_parse_settings_accepts_tui_performance_policy() {
     assert_eq!(performance.sample_every_n_frames, 7);
     assert_eq!(performance.slow_frame_ms, 33);
     assert_eq!(performance.slow_stage_us, 750);
+    assert!(performance.memory_enabled);
+    assert_eq!(performance.memory_sample_interval_secs, 0);
+    assert_eq!(performance.memory_delta_threshold_mb, 0);
 }
 
 #[test]

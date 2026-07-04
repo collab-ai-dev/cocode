@@ -226,11 +226,11 @@ impl HistoryReplayCache {
         self.entries.get(&key)
     }
 
-    fn entry_count(&self) -> usize {
+    pub(crate) fn entry_count(&self) -> usize {
         self.entries.len()
     }
 
-    fn estimated_bytes(&self) -> usize {
+    pub(crate) fn estimated_bytes(&self) -> usize {
         self.bytes
     }
 

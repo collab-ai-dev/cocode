@@ -17,6 +17,7 @@ Usage:
   resolve.py [PID]            # explicit pid (running or exited)
   resolve.py --cwd <dir>      # force a working dir instead of $PWD
   resolve.py --list           # list all known coco-rs sessions and exit
+  resolve.py [PID] --mem      # focused TUI memory perf timeline
 """
 
 from __future__ import annotations
@@ -344,6 +345,11 @@ def _kv_bool(field: str, s: str):
     return (m.group(1) == "true") if m else None
 
 
+def _kv_str(field: str, s: str):
+    m = re.search(rf'\b{field}="([^"]*)"', s) or re.search(rf"\b{field}=([^\s]+)", s)
+    return m.group(1) if m else None
+
+
 def _stats(xs: list[int]) -> str:
     if not xs:
         return "n=0"
@@ -492,10 +498,143 @@ def triage_perf(logs: list[str]) -> list[str]:
     return out
 
 
+# ----------------------------------------------------------------------------- memory perf
+
+MEM_BUCKET_FIELDS = [
+    "message_history_payload_bytes",
+    "transcript_cell_text_bytes",
+    "tool_execution_bytes",
+    "reasoning_metadata_bytes",
+    "subagent_bytes",
+    "last_markdown_bytes",
+    "markdown_memo_cache_bytes",
+    "history_replay_cache_bytes",
+]
+
+
+def parse_mem_samples(lines: list[str]) -> list[dict]:
+    samples = []
+    turn = 0
+    for line in lines:
+        if "tui::perf::mem" not in line:
+            continue
+        phase = _kv_str("phase", line) or "unknown"
+        if phase == "turn_started":
+            turn += 1
+        sample = {
+            "turn": turn,
+            "phase": phase,
+            "trigger": _kv_str("trigger", line) or "unknown",
+            "rss_bytes": _kv_int("rss_bytes", line) or 0,
+            "vsz_bytes": _kv_int("vsz_bytes", line) or 0,
+            "rss_delta_bytes": _kv_int("rss_delta_bytes", line) or 0,
+            "sample_ms": _kv_int("sample_ms", line) or 0,
+            "retained_total_bytes": _kv_int("retained_total_bytes", line) or 0,
+        }
+        for field in MEM_BUCKET_FIELDS:
+            sample[field] = _kv_int(field, line) or 0
+        samples.append(sample)
+    return samples
+
+
+def _delta(last: dict, first: dict, field: str) -> int:
+    return int(last.get(field, 0)) - int(first.get(field, 0))
+
+
+def _largest_bucket_delta(first: dict, last: dict) -> tuple[str, int]:
+    deltas = [(field, _delta(last, first, field)) for field in MEM_BUCKET_FIELDS]
+    if not deltas:
+        return ("none", 0)
+    return max(deltas, key=lambda item: abs(item[1]))
+
+
+def triage_mem(logs: list[str]) -> list[str]:
+    if not logs:
+        return ["- (no log file — cannot analyze memory perf)"]
+    primary = logs[0]
+    try:
+        with open(primary, errors="replace") as f:
+            lines = f.readlines()
+    except Exception as e:
+        return [f"- (could not read log: {e})"]
+
+    samples = parse_mem_samples(lines)
+    if not samples:
+        return [
+            "- memory perf埋点 OFF (no `tui::perf::mem` lines).",
+            "  Enable `tui.performance.memory_enabled=true` and log filter `tui=debug`, then reproduce.",
+        ]
+
+    out = ["- memory perf埋点 ON", f"- samples: {len(samples)}", ""]
+    overall_first = samples[0]
+    overall_last = samples[-1]
+    out.append("### Overall")
+    out.append(
+        f"- RSS: {human_size(overall_first['rss_bytes'])} -> {human_size(overall_last['rss_bytes'])} "
+        f"(delta {human_size(_delta(overall_last, overall_first, 'rss_bytes'))})"
+    )
+    out.append(
+        f"- retained_total: {human_size(overall_first['retained_total_bytes'])} -> "
+        f"{human_size(overall_last['retained_total_bytes'])} "
+        f"(delta {human_size(_delta(overall_last, overall_first, 'retained_total_bytes'))})"
+    )
+    bucket, bucket_delta = _largest_bucket_delta(overall_first, overall_last)
+    out.append(f"- largest retained bucket delta: {bucket} {human_size(bucket_delta)}")
+
+    out.append("")
+    out.append("### Timeline")
+    for sample in samples:
+        out.append(
+            f"- turn={sample['turn']} phase={sample['phase']} trigger={sample['trigger']} "
+            f"rss={human_size(sample['rss_bytes'])} "
+            f"rss_delta={human_size(sample['rss_delta_bytes'])} "
+            f"retained={human_size(sample['retained_total_bytes'])}"
+        )
+
+    by_turn: dict[int, list[dict]] = {}
+    for sample in samples:
+        by_turn.setdefault(sample["turn"], []).append(sample)
+
+    out.append("")
+    out.append("### Per turn")
+    for turn in sorted(by_turn):
+        group = by_turn[turn]
+        if not group:
+            continue
+        first, last = group[0], group[-1]
+        bucket, bucket_delta = _largest_bucket_delta(first, last)
+        triggers = ",".join(sorted({s["trigger"] for s in group}))
+        out.append(
+            f"- turn={turn}: rss_delta={human_size(_delta(last, first, 'rss_bytes'))} "
+            f"retained_delta={human_size(_delta(last, first, 'retained_total_bytes'))} "
+            f"largest_bucket={bucket}:{human_size(bucket_delta)} triggers={triggers}"
+        )
+
+    rss_delta = _delta(overall_last, overall_first, "rss_bytes")
+    retained_delta = _delta(overall_last, overall_first, "retained_total_bytes")
+    unexplained = rss_delta - retained_delta
+    out.append("")
+    out.append("### Interpretation")
+    if rss_delta <= 0:
+        out.append("- RSS did not grow over this capture.")
+    elif retained_delta > 0 and retained_delta >= rss_delta * 0.6:
+        out.append("- RSS growth is mostly explained by retained TUI/message structures.")
+    elif retained_delta > 0:
+        out.append(
+            "- RSS grew more than retained structures; allocator retained pages or untracked caches are plausible."
+        )
+    else:
+        out.append(
+            "- RSS grew while retained buckets were flat/down; allocator retained pages or untracked native allocations are likely."
+        )
+    out.append(f"- rough unexplained RSS delta: {human_size(unexplained)}")
+    return out
+
+
 # ----------------------------------------------------------------------------- main
 
 
-def emit_report(pid, info: dict, perf: bool = False):
+def emit_report(pid, info: dict, perf: bool = False, mem: bool = False):
     cwd = info.get("cwd")
     sid = info.get("session_id")
     started = info.get("started_at")
@@ -513,6 +652,19 @@ def emit_report(pid, info: dict, perf: bool = False):
         print()
         print("## UI render performance (tui::perf)")
         for l in triage_perf(logs):
+            print(l)
+        return
+
+    if mem:
+        print("# coco-rs TUI memory performance\n")
+        print("## Resolution")
+        print(f"- pid: {pid}" + (f"  (running: {'yes' if is_running(pid) else 'no — exited'})" if pid else ""))
+        print(f"- cwd: {cwd}")
+        print(f"- session_id: {sid}")
+        print(f"- log: {logs[0] if logs else '(none)'}")
+        print()
+        print("## TUI memory performance (tui::perf::mem)")
+        for l in triage_mem(logs):
             print(l)
         return
 
@@ -585,7 +737,8 @@ def main(argv: list[str]) -> int:
         return 0
 
     perf = "--perf" in args
-    args = [a for a in args if a != "--perf"]
+    mem = "--mem" in args
+    args = [a for a in args if a not in ("--perf", "--mem")]
 
     forced_cwd = None
     if "--cwd" in args:
@@ -607,7 +760,7 @@ def main(argv: list[str]) -> int:
                 print(f"ERROR: pid {pid} has no pid file and no readable log under {LOGS_DIR}.")
                 print("Try `resolve.py --list` to see known sessions.")
                 return 1
-        emit_report(pid, info, perf=perf)
+        emit_report(pid, info, perf=perf, mem=mem)
         return 0
 
     # cwd mode
@@ -626,6 +779,7 @@ def main(argv: list[str]) -> int:
         chosen.get("pid"),
         {"cwd": chosen.get("cwd"), "session_id": chosen.get("session_id"), "started_at": chosen.get("started_at")},
         perf=perf,
+        mem=mem,
     )
     return 0
 

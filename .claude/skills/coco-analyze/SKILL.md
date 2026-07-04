@@ -26,7 +26,7 @@ That is why the auto-run was removed — you run the resolver yourself instead:
    focus text:
    - with a PID: `python3 <SCRIPT> --cwd <CWD> <pid>`
    - no PID:     `python3 <SCRIPT> --cwd <CWD>`
-   - UI-perf focus (see Focus areas): add `--perf`; enumerate sessions with `--list`.
+   - UI-perf focus (see Focus areas): add `--perf`; memory focus: add `--mem`; enumerate sessions with `--list`.
    `<SCRIPT>` and `<CWD>` are printed by the "Resolver location" line above.
 3. Read the report it prints, then proceed with the analysis below.
 
@@ -86,6 +86,14 @@ grep for it.
     `buffer_updates`, especially consecutive bursts. **位移/图标跳动/jump** ≈
     `input_bottom`/`viewport_bottom` changing frame-to-frame (composer/viewport reseat)
     and scrollback-commit churn. `--perf` computes all of these; read them, don't grep raw.
+- **TUI memory** (`memory`, `mem`, `rss`, `内存`, `常驻`, `泄漏`) →
+  run **`resolve.py <pid> --mem`** for the memory timeline. It parses
+  `tui::perf::mem` samples, groups RSS deltas by turn, compares them to retained
+  buckets (`MessageHistory` payload, transcript cells, tool/reasoning/subagent
+  side-caches, last markdown, markdown memo, history replay cache), and calls
+  out growth that likely comes from allocator-retained pages or untracked native
+  allocations. These lines require `tui.performance.memory_enabled=true` and
+  log filter `tui=debug`.
 - **Provider / LLM** (`provider`, `llm`, `model`, `api`, `stream`) → the **wire** dir:
   `index.jsonl` for `outcome`/`status`, then the offending `*.resp.txt` (raw SSE) and
   `*.req.json` (params/tools/messages). Log anchors: `coco_inference`, retry / rate-limit.
@@ -145,6 +153,8 @@ last wire outcome) rather than inventing a problem.
 - `resolve.py --cwd <dir>` forces a working directory; `resolve.py <pid>` targets one run.
 - `resolve.py <pid> --perf` emits the focused UI-render report (frame timing, action
   frequency, flicker/位移 proxies) — the analyzer for any UI-performance focus.
+- `resolve.py <pid> --mem` emits the focused TUI memory report (RSS timeline,
+  retained-bucket deltas, per-turn grouping).
 - Secrets in wire `meta.json` headers are already `[REDACTED_SECRET]`; never echo raw
   `Authorization` values even if a future capture is unredacted.
 - Artifacts can be large (logs MBs, req bodies 100KB+). Prefer `grep`/`rg` with context

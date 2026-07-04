@@ -155,6 +155,10 @@ impl PreparedFinalizedHistory {
 }
 
 impl SurfaceHistoryDriver {
+    pub(crate) fn replay_cache_estimated_bytes(&self) -> usize {
+        self.replay_cache.estimated_bytes()
+    }
+
     pub(crate) fn note_viewport(
         &mut self,
         width: u16,

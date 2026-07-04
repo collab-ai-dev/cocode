@@ -18,6 +18,7 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use tokio::sync::mpsc;
 use tokio::time::interval;
+use tokio::time::interval_at;
 use tokio_stream::StreamExt;
 
 use std::time::Duration;
@@ -118,6 +119,7 @@ pub struct App {
     deferred_core_events: VecDeque<CoreEvent>,
     pending_frame_inputs: crate::perf::FrameInputStats,
     frame_index: u64,
+    memory_perf: crate::perf::MemoryPerfTracker,
     /// Voice input session (capture + STT engine + state machine). `Some` only
     /// when the CLI bootstrap successfully initialized the voice subsystem
     /// (voice cargo feature compiled + a usable STT backend). Driven by the
@@ -183,6 +185,7 @@ impl App {
             deferred_core_events: VecDeque::new(),
             pending_frame_inputs: crate::perf::FrameInputStats::default(),
             frame_index: 0,
+            memory_perf: crate::perf::MemoryPerfTracker::default(),
             voice: None,
             voice_rx: None,
         })
@@ -227,6 +230,7 @@ impl App {
             deferred_core_events: VecDeque::new(),
             pending_frame_inputs: crate::perf::FrameInputStats::default(),
             frame_index: 0,
+            memory_perf: crate::perf::MemoryPerfTracker::default(),
             voice: None,
             voice_rx: None,
         }
@@ -457,8 +461,16 @@ impl App {
             );
         });
         self.refresh_status_line();
+        self.log_memory_sample(
+            crate::perf::MemoryPhase::Startup,
+            crate::perf::MemorySampleKind::Lifecycle,
+        );
         // Initial render
         self.redraw()?;
+        self.log_memory_sample(
+            crate::perf::MemoryPhase::FirstDraw,
+            crate::perf::MemorySampleKind::Lifecycle,
+        );
 
         let mut event_stream = EventStream::new();
         let mut tick_interval = interval(constants::TICK_INTERVAL);
@@ -466,6 +478,7 @@ impl App {
         // re-opens — otherwise a long idle period would dump a stream
         // of catch-up ticks the moment the user types again.
         tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut memory_interval = memory_perf_interval(self.state.ui.display_settings.performance);
 
         loop {
             let mut needs_redraw = false;
@@ -494,11 +507,19 @@ impl App {
                 // Under high throughput (e.g. 100+ TextDeltas/sec) this avoids
                 // one redraw per token by draining all ready events first.
                 Some(event) = self.notification_rx.recv() => {
+                    let memory_phase = crate::perf::memory_phase_for_core_event(&event);
                     self.pending_frame_inputs.record_core_event(&event);
                     needs_redraw = self.handle_core_event(event).await?;
+                    if let Some(phase) = memory_phase {
+                        self.log_memory_sample(phase, crate::perf::MemorySampleKind::Lifecycle);
+                    }
                     while let Ok(next) = self.notification_rx.try_recv() {
+                        let memory_phase = crate::perf::memory_phase_for_core_event(&next);
                         self.pending_frame_inputs.record_core_event(&next);
                         needs_redraw |= self.handle_core_event(next).await?;
+                        if let Some(phase) = memory_phase {
+                            self.log_memory_sample(phase, crate::perf::MemorySampleKind::Lifecycle);
+                        }
                     }
                 }
                 // Async file-search results (from @path triggers).
@@ -528,6 +549,7 @@ impl App {
                 Some(display_settings) = recv_optional(&mut self.display_settings_rx), if self.display_settings_rx.is_some() => {
                     self.pending_frame_inputs.settings_reloads += 1;
                     self.state.ui.apply_display_settings(display_settings);
+                    memory_interval = memory_perf_interval(self.state.ui.display_settings.performance);
                     needs_redraw = true;
                 }
                 Some(error) = recv_optional(&mut self.config_reload_errors_rx), if self.config_reload_errors_rx.is_some() => {
@@ -567,6 +589,12 @@ impl App {
                     self.pending_frame_inputs.ticks += 1;
                     needs_redraw = self.handle_event(TuiEvent::Tick).await;
                 }
+                _ = memory_interval.tick(), if crate::perf::MemoryPerfTracker::periodic_enabled(self.state.ui.display_settings.performance) => {
+                    self.log_memory_sample(
+                        crate::perf::MemoryPhase::Periodic,
+                        crate::perf::MemorySampleKind::Periodic,
+                    );
+                }
             };
 
             // After every iteration, refresh async autocomplete dispatches
@@ -589,6 +617,20 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn log_memory_sample(
+        &mut self,
+        phase: crate::perf::MemoryPhase,
+        sample_kind: crate::perf::MemorySampleKind,
+    ) {
+        let config = self.state.ui.display_settings.performance;
+        let retained = crate::perf::retained_memory_stats(
+            &self.state,
+            self.tui.history_replay_cache_estimated_bytes(),
+        );
+        self.memory_perf
+            .maybe_log(config, phase, sample_kind, retained);
     }
 
     fn refresh_status_line(&mut self) {
@@ -1156,6 +1198,15 @@ impl App {
             ));
         true
     }
+}
+
+fn memory_perf_interval(
+    config: crate::display_settings::TuiPerformanceConfig,
+) -> tokio::time::Interval {
+    let duration = crate::perf::MemoryPerfTracker::periodic_interval(config);
+    let mut interval = interval_at(tokio::time::Instant::now() + duration, duration);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    interval
 }
 
 /// Resolve a pending hint against the on-disk marketplace cache. Builds a
