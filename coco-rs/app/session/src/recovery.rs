@@ -284,25 +284,34 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
                 .unwrap_or_default()
                 .to_string()
         });
+    // Main-thread records (`agent_id: None`) live in this main transcript.
     let content_replacements = content_replacements_for_chain(&metadata_entries, &session_id, None);
-    // Content-replacement records are routed by `agent_id` presence —
-    // no per-message-uuid scope. Records are keyed by `tool_use_id`,
-    // which is globally unique within a session.
+    // Subagent records now live in per-agent transcripts (`<sid>/subagents/**`,
+    // mirroring TS) rather than the main file. Aggregate them from those files
+    // so the resume snapshot still carries each agent's bucket. Records are
+    // keyed by `tool_use_id` (globally unique within a session), routed purely
+    // by `agent_id` presence — no per-message-uuid scope.
     let mut agent_content_replacements: HashMap<String, Vec<ContentReplacementRecord>> =
         HashMap::new();
-    for entry in &metadata_entries {
-        let Entry::Metadata(MetadataEntry::ContentReplacement {
-            session_id: entry_session_id,
-            agent_id: Some(agent_id),
-            replacements,
-        }) = entry
-        else {
-            continue;
-        };
-        if entry_session_id != &session_id {
-            continue;
-        }
-        if !replacements.is_empty() {
+    if let (Some(parent), Some(stem)) = (
+        transcript_path.parent(),
+        transcript_path.file_stem().and_then(|s| s.to_str()),
+    ) {
+        let subagents_dir = parent.join(stem).join("subagents");
+        let mut agent_entries = Vec::new();
+        crate::storage::collect_agent_transcript_entries(&subagents_dir, true, &mut agent_entries);
+        for entry in &agent_entries {
+            let Entry::Metadata(MetadataEntry::ContentReplacement {
+                session_id: entry_session_id,
+                agent_id: Some(agent_id),
+                replacements,
+            }) = entry
+            else {
+                continue;
+            };
+            if entry_session_id != &session_id || replacements.is_empty() {
+                continue;
+            }
             agent_content_replacements
                 .entry(agent_id.clone())
                 .or_default()

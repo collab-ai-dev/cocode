@@ -182,6 +182,88 @@ fn assistant_with_uuid(uuid: Uuid, text: &str) -> Message {
     })
 }
 
+fn assistant_tool_call(tool_use_id: &str, tool_name: &str) -> Message {
+    coco_messages::create_assistant_message(
+        vec![coco_messages::AssistantContent::ToolCall(
+            coco_messages::ToolCallContent::new(
+                tool_use_id.to_string(),
+                tool_name.to_string(),
+                json!({"query": tool_use_id}),
+            ),
+        )],
+        "claude-sonnet-4-6",
+        coco_types::TokenUsage::default(),
+    )
+}
+
+fn tool_result(tool_use_id: &str, tool_name: &str, output: &str) -> Message {
+    coco_messages::create_tool_result_message(
+        tool_use_id,
+        tool_name,
+        coco_types::ToolId::Custom(tool_name.to_string()),
+        output,
+        /*is_error*/ false,
+    )
+}
+
+fn write_agent_chain(store: &TranscriptStore, agent_id: &str, msgs: &[Message]) {
+    let mut seen: HashSet<Uuid> = HashSet::new();
+    store
+        .append_agent_message_chain(
+            SESSION,
+            agent_id,
+            msgs.iter(),
+            &mut seen,
+            ChainWriteOptions {
+                cwd: CWD.to_string(),
+                timestamp: "2025-01-15T10:00:00Z".to_string(),
+                is_sidechain: true,
+                agent_id: Some(agent_id.to_string()),
+                starting_parent_uuid: None,
+                git_branch: Some("main".to_string()),
+            },
+        )
+        .expect("agent chain write");
+}
+
+fn budget_replacement(tool_use_id: &str, output: &str) -> String {
+    format!(
+        "<persisted-output>\nOutput too large ({} bytes). Full output saved to: /tmp/{tool_use_id}.txt\n\nPreview (first 2KB):\n{}\n...\n</persisted-output>",
+        output.len(),
+        &output[..output.floor_char_boundary(128.min(output.len()))],
+    )
+}
+
+fn replacement_by_id(
+    records: &[ContentReplacementRecord],
+) -> std::collections::HashMap<&str, &str> {
+    records
+        .iter()
+        .map(|record| (record.tool_use_id(), record.replacement()))
+        .collect()
+}
+
+fn tool_result_lengths(messages: &[Message]) -> std::collections::HashMap<String, usize> {
+    let mut out = std::collections::HashMap::new();
+    for message in messages {
+        let Message::ToolResult(tool_result) = message else {
+            continue;
+        };
+        let coco_messages::LlmMessage::Tool { content, .. } = &tool_result.message else {
+            continue;
+        };
+        for part in content {
+            let coco_messages::ToolContent::ToolResult(part) = part else {
+                continue;
+            };
+            if let coco_messages::ToolResultOutput::Text { value, .. } = &part.output {
+                out.insert(tool_result.tool_use_id.clone(), value.len());
+            }
+        }
+    }
+    out
+}
+
 fn user_with_uuid(uuid: Uuid, text: &str) -> Message {
     coco_messages::create_user_message_with_uuid(uuid, text)
 }
@@ -466,6 +548,25 @@ fn content_replacement_subagent_routes_by_agent_id() {
         .expect("agent-b bucket present");
     assert_eq!(agent_b.len(), 1);
     assert_eq!(agent_b[0].tool_use_id(), "toolu_agent_b_1");
+
+    // Physical routing (mirror TS): the agent records live in their per-agent
+    // transcripts, NEVER the main file — which carries only the main record.
+    let main_content = std::fs::read_to_string(&path).unwrap();
+    assert!(main_content.contains("toolu_main_2"));
+    assert!(
+        !main_content.contains("toolu_agent_a_1") && !main_content.contains("toolu_agent_b_1"),
+        "subagent content-replacement must not land in the main transcript",
+    );
+    let agent_a_path = store.agent_transcript_path(SESSION, "agent-a");
+    assert!(
+        agent_a_path.exists(),
+        "per-agent content-replacement file must exist"
+    );
+    assert!(
+        std::fs::read_to_string(&agent_a_path)
+            .unwrap()
+            .contains("toolu_agent_a_1"),
+    );
 }
 
 /// Multi-megabyte replacement strings survive write + reload intact —
@@ -493,6 +594,124 @@ fn big_tool_result_replacement_survives_resume() {
     assert_eq!(state.content_replacements.len(), 1);
     assert_eq!(state.content_replacements[0].replacement().len(), big.len());
     assert_eq!(state.content_replacements[0].replacement(), big);
+}
+
+/// Full regression for resume after Level 2 tool-result budget fired in both
+/// the main thread and a subagent:
+///
+/// - main transcript keeps the original big `tool_result` message;
+/// - subagent transcript lives in `<sid>/subagents/agent-*.jsonl` and also
+///   keeps its original big `tool_result`;
+/// - budget-generated `content-replacement` records are routed to the correct
+///   resume buckets (`content_replacements` vs `agent_content_replacements`);
+/// - replacement strings are byte-stable and big enough to prove this was the
+///   budget/persisted-output path, not a small inline result.
+#[test]
+fn resume_restores_main_and_subagent_big_tool_result_budget_state() {
+    let (_dir, store, path) = fresh_store();
+    let agent_id = "agent-budget-1";
+    let main_tool_use_id = "toolu_main_big";
+    let agent_tool_use_id = "toolu_agent_big";
+    let main_big_output = format!("main-big-start\n{}\nmain-big-end", "M".repeat(220 * 1024));
+    let agent_big_output = format!("agent-big-start\n{}\nagent-big-end", "A".repeat(230 * 1024));
+
+    let main_messages = vec![
+        user_with_uuid(Uuid::new_v4(), "run the main big tool"),
+        assistant_tool_call(main_tool_use_id, "MainBigTool"),
+        tool_result(main_tool_use_id, "MainBigTool", &main_big_output),
+        assistant_with_uuid(Uuid::new_v4(), "main tool summarized"),
+    ];
+    write_chain(&store, &main_messages);
+
+    let agent_messages = vec![
+        user_with_uuid(Uuid::new_v4(), "run the subagent big tool"),
+        assistant_tool_call(agent_tool_use_id, "AgentBigTool"),
+        tool_result(agent_tool_use_id, "AgentBigTool", &agent_big_output),
+        assistant_with_uuid(Uuid::new_v4(), "agent tool summarized"),
+    ];
+    write_agent_chain(&store, agent_id, &agent_messages);
+
+    let main_replacement = budget_replacement(main_tool_use_id, &main_big_output);
+    let agent_replacement = budget_replacement(agent_tool_use_id, &agent_big_output);
+    store
+        .insert_content_replacement(
+            SESSION,
+            None,
+            &[ContentReplacementRecord::tool_result(
+                main_tool_use_id,
+                &main_replacement,
+            )],
+        )
+        .unwrap();
+    store
+        .insert_content_replacement(
+            SESSION,
+            Some(agent_id),
+            &[ContentReplacementRecord::tool_result(
+                agent_tool_use_id,
+                &agent_replacement,
+            )],
+        )
+        .unwrap();
+
+    let state = load_session_state_for_resume(&path).expect("main resume state loads");
+    let main_tool_results = tool_result_lengths(&state.messages);
+    assert_eq!(
+        main_tool_results.get(main_tool_use_id),
+        Some(&main_big_output.len()),
+        "main resume must keep the original big tool_result in transcript history",
+    );
+
+    let main_records = replacement_by_id(&state.content_replacements);
+    assert_eq!(
+        main_records.get(main_tool_use_id).copied(),
+        Some(main_replacement.as_str()),
+        "main budget replacement must seed the main resume bucket",
+    );
+    assert!(
+        !main_records.contains_key(agent_tool_use_id),
+        "agent replacement must not leak into main bucket",
+    );
+
+    let agent_records = state
+        .agent_content_replacements
+        .get(agent_id)
+        .expect("agent budget bucket present");
+    let agent_records = replacement_by_id(agent_records);
+    assert_eq!(
+        agent_records.get(agent_tool_use_id).copied(),
+        Some(agent_replacement.as_str()),
+        "agent budget replacement must seed the agent-specific resume bucket",
+    );
+    assert!(
+        !agent_records.contains_key(main_tool_use_id),
+        "main replacement must not leak into agent bucket",
+    );
+
+    let agent_loaded_messages = store
+        .load_agent_messages(SESSION, agent_id)
+        .unwrap()
+        .expect("agent transcript present");
+    let agent_loaded_messages: Vec<Message> = agent_loaded_messages
+        .iter()
+        .map(|message| message.as_ref().clone())
+        .collect();
+    let agent_tool_results = tool_result_lengths(&agent_loaded_messages);
+    assert_eq!(
+        agent_tool_results.get(agent_tool_use_id),
+        Some(&agent_big_output.len()),
+        "subagent resume must keep the original big tool_result in its own transcript",
+    );
+
+    let main_content = std::fs::read_to_string(&path).unwrap();
+    assert!(main_content.contains(main_tool_use_id));
+    assert!(!main_content.contains(agent_tool_use_id));
+    let agent_content = std::fs::read_to_string(store.agent_transcript_path(SESSION, agent_id))
+        .expect("agent transcript file readable");
+    assert!(agent_content.contains(agent_tool_use_id));
+    assert!(!agent_content.contains(main_tool_use_id));
+    assert!(main_replacement.contains("<persisted-output>"));
+    assert!(agent_replacement.contains("<persisted-output>"));
 }
 
 // ---------------------------------------------------------------------------

@@ -111,6 +111,8 @@ impl AgentTranscriptStore for SessionAgentTranscriptStore {
             worktree_path: metadata.worktree_path.clone(),
             description: metadata.description.clone(),
             killed_by: metadata.killed_by,
+            mode: metadata.mode,
+            isolation: metadata.isolation,
         };
         tokio::task::spawn_blocking(move || {
             store.write_agent_metadata(&session_id, &agent_id, &session_meta)
@@ -138,6 +140,8 @@ impl AgentTranscriptStore for SessionAgentTranscriptStore {
             worktree_path: m.worktree_path,
             description: m.description,
             killed_by: m.killed_by,
+            mode: m.mode,
+            isolation: m.isolation,
         }))
     }
 }

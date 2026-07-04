@@ -3535,6 +3535,7 @@ class SessionUsageSnapshot(BaseModel):
     totals: SessionUsageTotals
     updated_at_ms: int
     version: int
+    auto_compact_threshold: int | None = None
     models: list[SessionModelUsageEntry] | None = None
     unpriced_models: list[ProviderModelSelection] | None = None
 
@@ -5748,7 +5749,9 @@ class TaskUsage(BaseModel):
     total_tokens: int
     cache_read_tokens: int = 0
     cost_usd: float = 0.0
+    input_cost_usd: float = 0.0
     input_tokens: int = 0
+    output_cost_usd: float = 0.0
     output_tokens: int = 0
 
 

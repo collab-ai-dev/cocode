@@ -228,6 +228,22 @@ fn make_assistant_entry(uuid: &str, parent_uuid: &str, session_id: &str) -> Tran
     }
 }
 
+fn write_agent_entries(
+    store: &TranscriptStore,
+    session_id: &str,
+    agent_id: &str,
+    entries: &[TranscriptEntry],
+) {
+    let path = store.agent_transcript_path(session_id, agent_id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut body = String::new();
+    for entry in entries {
+        body.push_str(&serde_json::to_string(entry).unwrap());
+        body.push('\n');
+    }
+    std::fs::write(path, body).unwrap();
+}
+
 #[test]
 fn test_append_and_load_entries() {
     let (_dir, store, _project_dir) = test_store();
@@ -309,6 +325,241 @@ fn test_metadata_entries_round_trip() {
     assert_eq!(meta.first_prompt, "Fix the bug");
     assert_eq!(meta.message_count, 1); // Only the user message.
     assert!(!meta.is_sidechain);
+}
+
+/// `fold_transcript_metadata` derives session-level sidechain from the FIRST
+/// message only (mirroring the TS upstream), so a main transcript that somehow
+/// contains a later sidechain entry is still NOT flagged as a sidechain
+/// session — it stays in `list_main_sessions` / `--continue` / auto-dream.
+/// Production no longer routes subagent sidechain into the main file (see
+/// [`test_append_agent_message_chain_routes_to_agent_file_not_main`]); this is
+/// the defensive guard that keeps the derivation robust to such input.
+#[test]
+fn test_main_session_with_interleaved_sidechain_stays_in_main_list() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "mixed-session";
+
+    let user = make_user_entry("u1", sid, "Explore the repo");
+    let assistant = make_assistant_entry("a1", "u1", sid);
+    // Inline subagent turn, interleaved into the SAME transcript.
+    let mut sub_user = make_user_entry("s1", sid, "sidechain prompt");
+    sub_user.is_sidechain = true;
+    sub_user.agent_id = Some("agent-explore-1".to_string());
+    let mut sub_assistant = make_assistant_entry("s2", "s1", sid);
+    sub_assistant.is_sidechain = true;
+    sub_assistant.agent_id = Some("agent-explore-1".to_string());
+    let user2 = make_user_entry("u2", sid, "Now fix it");
+
+    for entry in [&user, &assistant, &sub_user, &sub_assistant, &user2] {
+        store.append_message(sid, entry).unwrap();
+    }
+
+    let meta = store.read_metadata(sid).unwrap();
+    assert!(
+        !meta.is_sidechain,
+        "main session with interleaved sidechain must not be flagged sidechain"
+    );
+
+    let main = store.list_main_sessions().unwrap();
+    assert!(
+        main.iter().any(|m| m.session_id == sid),
+        "interleaved-sidechain main session must appear in list_main_sessions"
+    );
+}
+
+/// Complement: a transcript whose FIRST message is a sidechain (a pure agent
+/// transcript) IS a sidechain session and is filtered from
+/// `list_main_sessions`.
+#[test]
+fn test_pure_agent_transcript_is_flagged_sidechain() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "agent-only";
+
+    let mut sub_user = make_user_entry("s1", sid, "agent prompt");
+    sub_user.is_sidechain = true;
+    sub_user.agent_id = Some("agent-1".to_string());
+    let mut sub_assistant = make_assistant_entry("s2", "s1", sid);
+    sub_assistant.is_sidechain = true;
+    sub_assistant.agent_id = Some("agent-1".to_string());
+
+    store.append_message(sid, &sub_user).unwrap();
+    store.append_message(sid, &sub_assistant).unwrap();
+
+    let meta = store.read_metadata(sid).unwrap();
+    assert!(
+        meta.is_sidechain,
+        "pure agent transcript must be flagged sidechain"
+    );
+
+    let main = store.list_main_sessions().unwrap();
+    assert!(
+        !main.iter().any(|m| m.session_id == sid),
+        "pure agent transcript must be filtered from list_main_sessions"
+    );
+}
+
+/// Reroute invariant (mirrors TS): a subagent's chain written via
+/// `append_agent_message_chain` lands in `<sid>/subagents/agent-<id>.jsonl`,
+/// NOT the main `<sid>.jsonl` — so the main transcript never carries sidechain
+/// and its parent-uuid chain stays intact. `load_agent_messages` reads the
+/// per-agent file back as typed messages.
+#[test]
+fn test_append_agent_message_chain_routes_to_agent_file_not_main() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "route-session";
+
+    // Main thread writes to the main file (is_sidechain = false).
+    let main_user = coco_messages::create_user_message("main prompt");
+    let mut main_seen = std::collections::HashSet::new();
+    store
+        .append_message_chain(
+            sid,
+            std::iter::once(&main_user),
+            &mut main_seen,
+            ChainWriteOptions {
+                cwd: "/tmp/project".into(),
+                timestamp: "2025-01-15T10:00:00Z".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // Subagent turns route to the per-agent file.
+    let sub_msgs = [
+        coco_messages::create_user_message("subagent prompt"),
+        coco_messages::create_user_message("subagent step"),
+    ];
+    let mut sub_seen = std::collections::HashSet::new();
+    store
+        .append_agent_message_chain(
+            sid,
+            "agent-explore-1",
+            sub_msgs.iter(),
+            &mut sub_seen,
+            ChainWriteOptions {
+                cwd: "/tmp/project".into(),
+                timestamp: "2025-01-15T10:00:01Z".into(),
+                is_sidechain: true,
+                agent_id: Some("agent-explore-1".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    // The main transcript exists and contains ZERO sidechain lines.
+    let main_content = std::fs::read_to_string(store.transcript_path(sid)).unwrap();
+    assert!(
+        !main_content.contains("\"is_sidechain\":true"),
+        "main transcript must never contain sidechain lines"
+    );
+    assert!(main_content.contains("main prompt"));
+    assert!(!main_content.contains("subagent prompt"));
+
+    // The subagent chain lands in its own per-agent file.
+    let agent_path = store.agent_transcript_path(sid, "agent-explore-1");
+    assert!(agent_path.exists(), "per-agent transcript file must exist");
+    let agent_content = std::fs::read_to_string(&agent_path).unwrap();
+    assert!(agent_content.contains("subagent prompt"));
+    assert!(agent_content.contains("\"is_sidechain\":true"));
+
+    // And it reads back as typed messages.
+    let loaded = store
+        .load_agent_messages(sid, "agent-explore-1")
+        .unwrap()
+        .expect("agent transcript present");
+    assert_eq!(loaded.len(), 2);
+}
+
+#[test]
+fn test_load_agent_messages_walks_latest_parent_chain() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "agent-latest-chain";
+    let agent_id = "agent-explore-1";
+
+    let mut root = make_user_entry("u1", sid, "root prompt");
+    root.is_sidechain = true;
+    root.agent_id = Some(agent_id.to_string());
+    root.timestamp = "2025-01-15T10:00:00Z".to_string();
+
+    let mut stale = make_assistant_entry("a-stale", "u1", sid);
+    stale.is_sidechain = true;
+    stale.agent_id = Some(agent_id.to_string());
+    stale.timestamp = "2025-01-15T10:00:01Z".to_string();
+    stale.message = Some(json!({
+        "role": "assistant",
+        "content": [{"type": "text", "text": "stale branch"}],
+    }));
+
+    let mut latest = make_assistant_entry("a-latest", "u1", sid);
+    latest.is_sidechain = true;
+    latest.agent_id = Some(agent_id.to_string());
+    latest.timestamp = "2025-01-15T10:00:02Z".to_string();
+    latest.message = Some(json!({
+        "role": "assistant",
+        "content": [{"type": "text", "text": "latest branch"}],
+    }));
+
+    write_agent_entries(&store, sid, agent_id, &[root, stale, latest]);
+
+    let loaded = store
+        .load_agent_messages(sid, agent_id)
+        .unwrap()
+        .expect("agent transcript present");
+    let rendered = format!("{loaded:?}");
+    assert_eq!(loaded.len(), 2);
+    assert!(rendered.contains("root prompt"));
+    assert!(rendered.contains("latest branch"));
+    assert!(!rendered.contains("stale branch"));
+}
+
+#[test]
+fn test_append_agent_messages_stamps_envelope_fields() {
+    let (_dir, store, _project_dir) = test_store();
+    let sid = "agent-stamped";
+    let agent_id = "agent-bg";
+    let message = Arc::new(coco_messages::create_user_message("framework sidechain"));
+
+    store
+        .append_agent_messages(sid, agent_id, &[message])
+        .expect("agent messages should append");
+
+    let entries = store.load_agent_transcript_entries(sid).unwrap();
+    let Entry::Transcript(entry) = entries.first().expect("agent entry should exist") else {
+        panic!("expected transcript entry");
+    };
+    assert_eq!(entry.agent_id.as_deref(), Some(agent_id));
+    assert!(!entry.cwd.is_empty(), "cwd must not be blank");
+    assert!(!entry.timestamp.is_empty(), "timestamp must not be blank");
+}
+
+#[test]
+fn test_load_agent_transcript_entries_recurses_workflow_runs() {
+    let (_dir, store, project_dir) = test_store();
+    let sid = "agent-workflow";
+    let agent_id = "workflow-agent";
+    let path = project_dir
+        .join(sid)
+        .join("subagents")
+        .join("workflows")
+        .join("run-1")
+        .join(format!("agent-{agent_id}.jsonl"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+    let mut entry = make_user_entry("wu1", sid, "workflow agent prompt");
+    entry.is_sidechain = true;
+    entry.agent_id = Some(agent_id.to_string());
+    std::fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string(&entry).unwrap()),
+    )
+    .unwrap();
+
+    let entries = store.load_agent_transcript_entries(sid).unwrap();
+    assert_eq!(entries.len(), 1);
+    let Entry::Transcript(entry) = &entries[0] else {
+        panic!("expected transcript entry");
+    };
+    assert_eq!(entry.agent_id.as_deref(), Some(agent_id));
 }
 
 #[test]

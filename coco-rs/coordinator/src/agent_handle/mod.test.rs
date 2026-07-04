@@ -122,6 +122,8 @@ async fn resume_agent_rejects_user_stopped_metadata() {
             worktree_path: None,
             description: Some("stopped task".into()),
             killed_by: Some(coco_types::TaskKilledBy::User),
+            mode: None,
+            isolation: None,
         },
     }));
 
@@ -2795,6 +2797,7 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
         prompt: "follow up".into(),
         spawn_mode: coco_tool_runtime::SpawnMode::Resume {
             parent_messages: parent_messages.clone(),
+            resumed_agent_id: "agent-original".into(),
         },
         session_id: "test-session".into(),
         ..Default::default()
@@ -2807,6 +2810,141 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
     assert!(
         serialized.contains("REAL TOOL OUTPUT - must survive"),
         "Resume must preserve tool_result content verbatim; got {serialized}",
+    );
+}
+
+/// End-to-end `resume_agent` wiring: a stopped subagent (with a persisted
+/// transcript carrying a tool result + metadata recording Plan mode) is
+/// resumed via SendMessage. Asserts the rehydrated background spawn (1) reuses
+/// the ORIGINAL agent id (continuity), (2) restores the persisted permission
+/// mode, (3) inherits the session features, and (4) replays the prior tool
+/// output verbatim into the child's context.
+#[tokio::test]
+async fn resume_agent_full_wiring_reuses_id_restores_mode_and_replays_history() {
+    use async_trait::async_trait;
+    use coco_tool_runtime::AgentQueryConfig;
+    use coco_tool_runtime::AgentQueryEngine;
+    use coco_tool_runtime::AgentQueryResult;
+
+    // The subagent's persisted per-agent transcript + metadata.
+    struct ResumeFixtureStore;
+    #[async_trait]
+    impl coco_tool_runtime::AgentTranscriptStore for ResumeFixtureStore {
+        async fn append_agent_messages(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[Arc<coco_messages::Message>],
+        ) -> Result<(), coco_error::BoxedError> {
+            Ok(())
+        }
+        async fn load_agent_messages(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<Vec<Arc<coco_messages::Message>>>, coco_error::BoxedError> {
+            let user = Arc::new(coco_messages::create_user_message("original prompt"));
+            let tool_result = Arc::new(coco_messages::create_tool_result_message(
+                "toolu_1",
+                "Bash",
+                "Bash".parse().unwrap(),
+                "PRIOR TOOL OUTPUT",
+                false,
+            ));
+            Ok(Some(vec![user, tool_result]))
+        }
+        async fn write_agent_metadata(
+            &self,
+            _: &str,
+            _: &str,
+            _: &coco_tool_runtime::AgentSpawnMetadata,
+        ) -> Result<(), coco_error::BoxedError> {
+            Ok(())
+        }
+        async fn read_agent_metadata(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<Option<coco_tool_runtime::AgentSpawnMetadata>, coco_error::BoxedError> {
+            Ok(Some(coco_tool_runtime::AgentSpawnMetadata {
+                agent_type: "general-purpose".into(),
+                worktree_path: None,
+                description: Some("orig task".into()),
+                killed_by: None,
+                mode: Some(coco_types::PermissionMode::Plan),
+                isolation: None,
+            }))
+        }
+    }
+
+    struct CapturingEngine {
+        cfg: tokio::sync::Mutex<Option<AgentQueryConfig>>,
+        ran: tokio::sync::Notify,
+    }
+    #[async_trait]
+    impl AgentQueryEngine for CapturingEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            *self.cfg.lock().await = Some(config);
+            self.ran.notify_one();
+            Ok(AgentQueryResult {
+                usage: Default::default(),
+                cost_usd: 0.0,
+                input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
+                response_text: Some("resumed".into()),
+                messages: Vec::new(),
+                turns: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_use_count: 0,
+                cancelled: false,
+                structured_output: None,
+            })
+        }
+    }
+
+    let engine = Arc::new(CapturingEngine {
+        cfg: tokio::sync::Mutex::new(None),
+        ran: tokio::sync::Notify::new(),
+    });
+    let mut handle = create_test_handle();
+    handle.set_execution_engine(engine.clone());
+    handle.set_transcript_store(Arc::new(ResumeFixtureStore));
+
+    let resp = handle
+        .resume_agent("agent-orig", "keep going".into(), "sess-1".into())
+        .await
+        .expect("resume dispatch");
+    assert_ne!(
+        resp.status,
+        AgentSpawnStatus::Failed,
+        "resume must not fail"
+    );
+
+    // Background spawn runs the engine in a detached task; wait for it.
+    tokio::time::timeout(std::time::Duration::from_secs(10), engine.ran.notified())
+        .await
+        .expect("resumed engine ran");
+    let cfg = engine.cfg.lock().await.clone().expect("config captured");
+
+    // (1) id continuity — resumed run reuses the ORIGINAL agent id.
+    assert_eq!(cfg.identity.agent_id, "agent-orig");
+    // (2) permission mode restored from the persisted metadata.
+    assert_eq!(cfg.permission_mode, coco_types::PermissionMode::Plan);
+    // (3) session features inherited (Some, not the None the old path left).
+    assert!(
+        cfg.features.is_some(),
+        "resume must inherit session features"
+    );
+    // (4) prior tool output replayed verbatim into the child's context.
+    let replayed = serde_json::to_string(&cfg.fork_context_messages).unwrap();
+    assert!(
+        replayed.contains("PRIOR TOOL OUTPUT"),
+        "resume must replay prior tool output: {replayed}",
     );
 }
 

@@ -1088,15 +1088,13 @@ impl QueryEngine {
             live.set(history.iter().cloned().collect());
         }
 
-        let (Some(store), Some(sid), Some(seen)) = (
+        let (Some(store), Some(sid)) = (
             self.transcript_store.as_ref(),
             self.transcript_session_id.as_deref(),
-            self.transcript_dedup.as_ref(),
         ) else {
             return;
         };
 
-        let mut seen_guard = seen.lock().await;
         let cwd_path = std::env::current_dir().unwrap_or_default();
         let cwd = cwd_path.display().to_string();
         // Capture the git branch once per chain and stamp it on every
@@ -1108,18 +1106,100 @@ impl QueryEngine {
             .flatten()
             .filter(|s| !s.is_empty());
         let now = chrono::Utc::now().to_rfc3339();
+        let message_refs: Vec<&coco_messages::Message> =
+            history.iter().map(AsRef::as_ref).collect();
+
+        // Mirror the TS upstream: a subagent's turns go to its OWN per-agent
+        // transcript (`<sid>/subagents/agent-<id>.jsonl`), never the main
+        // session file — so the main transcript never carries sidechain and
+        // its parent-uuid chain stays intact. Uses a fresh per-engine dedup so
+        // the subagent's full history is persisted even when it shares UUIDs
+        // with the main thread (fork-inherited context).
+        if let Some(agent_id) = self.config.agent_id.as_deref() {
+            let mut seen = self.agent_transcript_dedup.lock().await;
+            // Continuity: on the first write for this engine, seed the dedup
+            // from the existing per-agent file so a RESUMED run (which reuses
+            // the original agent_id and replays its prior history) appends only
+            // new turns instead of duplicating what's already on disk. No-op on
+            // a fresh spawn (empty/absent file). Mirrors TS seeding
+            // `lastRecordedUuid` from the last replayed message.
+            if !self
+                .agent_transcript_seeded
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+                && let Ok(Some(prior)) = store.load_agent_messages(sid, agent_id)
+            {
+                seen.extend(prior.iter().filter_map(|m| m.uuid().copied()));
+            }
+            let options = coco_session::storage::ChainWriteOptions {
+                cwd,
+                timestamp: now,
+                is_sidechain: true,
+                agent_id: Some(agent_id.to_string()),
+                starting_parent_uuid: None,
+                git_branch,
+            };
+            if let Err(e) =
+                store.append_agent_message_chain(sid, agent_id, &message_refs, &mut seen, options)
+            {
+                warn!(error = %e, "failed to append subagent transcript chain");
+            }
+            return;
+        }
+
+        // Main thread: shared per-session dedup, main session transcript file.
+        let Some(seen) = self.transcript_dedup.as_ref() else {
+            return;
+        };
+        let mut seen_guard = seen.lock().await;
         let options = coco_session::storage::ChainWriteOptions {
             cwd,
             timestamp: now,
-            is_sidechain: self.config.agent_id.is_some(),
-            agent_id: self.config.agent_id.clone(),
+            is_sidechain: false,
+            agent_id: None,
             starting_parent_uuid: None,
             git_branch,
         };
-        let message_refs: Vec<&coco_messages::Message> =
-            history.iter().map(AsRef::as_ref).collect();
         if let Err(e) = store.append_message_chain(sid, &message_refs, &mut seen_guard, options) {
             warn!(error = %e, "failed to append transcript chain");
+        }
+    }
+
+    /// Seed the tool-result budget / content-replacement state for a RESUMED
+    /// subagent from its persisted per-agent records, so the resumed run makes
+    /// the SAME budget decisions and replays the exact `<persisted-output>`
+    /// strings the model previously saw (byte-identical prompt prefix →
+    /// prompt-cache stable). Mirrors TS `reconstructForSubagentResume`:
+    /// freeze every replayed tool_use_id into `seen_ids` (the budget never
+    /// re-replaces content the model already saw unreplaced) and re-apply the
+    /// recorded replacements. MERGE (not overwrite) — the state is shared with
+    /// the main thread; `tool_use_id`s are globally unique so entries can't
+    /// collide. No-op unless this engine is a subagent with a wired store.
+    pub(crate) async fn seed_resumed_replacement_state(
+        &self,
+        resumed_messages: &[std::sync::Arc<coco_messages::Message>],
+    ) {
+        let (Some(store), Some(sid), Some(agent_id)) = (
+            self.transcript_store.as_ref(),
+            self.transcript_session_id.as_deref(),
+            self.config.agent_id.as_deref(),
+        ) else {
+            return;
+        };
+        let records = store
+            .load_content_replacements_for_chain(sid, Some(agent_id))
+            .unwrap_or_default();
+        let mut state = self.tool_result_replacement_state.write().await;
+        for msg in resumed_messages {
+            if let coco_messages::Message::ToolResult(tr) = msg.as_ref() {
+                state.seen_ids.insert(tr.tool_use_id.clone());
+            }
+        }
+        for record in records {
+            state.seen_ids.insert(record.tool_use_id().to_string());
+            state.replacements.insert(
+                record.tool_use_id().to_string(),
+                record.replacement().to_string(),
+            );
         }
     }
 

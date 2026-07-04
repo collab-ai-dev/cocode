@@ -407,6 +407,12 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // the new user prompt after the inherited history.
             let mut messages: Vec<std::sync::Arc<coco_messages::Message>> =
                 config.fork_context_messages;
+            // Resume: seed the tool-result budget state from this agent's
+            // persisted records + freeze the replayed tool_use_ids so the
+            // resumed run's prompt prefix stays byte-identical (prompt-cache
+            // stable). No-op for forks / fresh spawns (gated inside on a wired
+            // store + agent_id).
+            engine.seed_resumed_replacement_state(&messages).await;
             messages.push(std::sync::Arc::new(coco_messages::create_user_message(
                 prompt,
             )));

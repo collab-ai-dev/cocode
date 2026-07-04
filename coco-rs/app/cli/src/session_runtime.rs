@@ -1610,6 +1610,15 @@ impl SessionRuntime {
         self.agent_catalog.read().await.clone()
     }
 
+    /// The live catalog handle (shared `Arc<RwLock<..>>`), for consumers that
+    /// need to read the *current* catalog at call time (e.g. `resume_agent`
+    /// re-resolving an `AgentDefinition` after a `/agents reload`).
+    pub fn agent_catalog_handle(
+        &self,
+    ) -> Arc<tokio::sync::RwLock<Arc<coco_subagent::AgentCatalogSnapshot>>> {
+        self.agent_catalog.clone()
+    }
+
     /// Session-scoped attachment emitter for producers outside the
     /// per-turn engine (TUI slash commands, swarm forwarders, …).
     /// Each `emit()` enqueues a typed `AttachmentMessage` (typically

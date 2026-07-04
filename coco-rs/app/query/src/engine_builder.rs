@@ -147,6 +147,8 @@ impl QueryEngine {
             session_usage_write_lock: None,
             transcript_session_id: None,
             transcript_dedup: None,
+            agent_transcript_dedup: tokio::sync::Mutex::new(std::collections::HashSet::new()),
+            agent_transcript_seeded: std::sync::atomic::AtomicBool::new(false),
             terminal_goal_metadata_written: None,
             live_transcript: None,
             pending_nested_memory: Arc::new(tokio::sync::Mutex::new(Vec::new())),

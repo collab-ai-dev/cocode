@@ -60,6 +60,20 @@ pub trait TranscriptIo: Send + Sync {
         options: ChainWriteOptions,
     ) -> crate::Result<ChainWriteResult>;
 
+    /// Append a subagent conversation chain to its per-agent transcript
+    /// (`<sid>/subagents/agent-<id>.jsonl`) rather than the main session
+    /// file, so the main transcript never carries sidechain. Object-safe
+    /// `&[&Message]` form of the inherent
+    /// [`TranscriptStore::append_agent_message_chain`].
+    fn append_agent_message_chain(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        messages: &[&Message],
+        seen: &mut HashSet<Uuid>,
+        options: ChainWriteOptions,
+    ) -> crate::Result<ChainWriteResult>;
+
     fn insert_file_history_snapshot(
         &self,
         session_id: &str,
@@ -136,6 +150,10 @@ pub trait AgentTranscriptStore: Send + Sync {
         session_id: &str,
         agent_id: &str,
     ) -> crate::Result<Option<Vec<Arc<Message>>>>;
+    /// All per-agent transcript entries for a session (`<sid>/subagents/**`)
+    /// as `Entry`, for read-model projection (the Hub) now that subagent
+    /// messages live in per-agent files rather than the main transcript.
+    fn load_agent_transcript_entries(&self, session_id: &str) -> crate::Result<Vec<Entry>>;
     fn write_agent_metadata(
         &self,
         session_id: &str,
@@ -235,6 +253,23 @@ impl TranscriptIo for TranscriptStore {
         TranscriptStore::append_message_chain(
             self,
             session_id,
+            messages.iter().copied(),
+            seen,
+            options,
+        )
+    }
+    fn append_agent_message_chain(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        messages: &[&Message],
+        seen: &mut HashSet<Uuid>,
+        options: ChainWriteOptions,
+    ) -> crate::Result<ChainWriteResult> {
+        TranscriptStore::append_agent_message_chain(
+            self,
+            session_id,
+            agent_id,
             messages.iter().copied(),
             seen,
             options,
@@ -347,6 +382,9 @@ impl AgentTranscriptStore for TranscriptStore {
         agent_id: &str,
     ) -> crate::Result<Option<Vec<Arc<Message>>>> {
         TranscriptStore::load_agent_messages(self, session_id, agent_id)
+    }
+    fn load_agent_transcript_entries(&self, session_id: &str) -> crate::Result<Vec<Entry>> {
+        TranscriptStore::load_agent_transcript_entries(self, session_id)
     }
     fn write_agent_metadata(
         &self,
@@ -577,6 +615,42 @@ impl TranscriptIo for InMemoryStore {
         Ok(result)
     }
 
+    fn append_agent_message_chain(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        messages: &[&Message],
+        seen: &mut HashSet<Uuid>,
+        options: ChainWriteOptions,
+    ) -> crate::Result<ChainWriteResult> {
+        // Build the same entries the disk backend writes, then reconstruct
+        // messages so `load_agent_messages` returns byte-parity output across
+        // backends. Subagent transcripts live in the agent bucket, never the
+        // main session's entry list.
+        let (entries, result) = crate::storage::build_message_chain_entries(
+            session_id,
+            messages.iter().copied(),
+            seen,
+            &options,
+        );
+        let mut msgs: Vec<Arc<Message>> = Vec::new();
+        for entry in &entries {
+            if let Entry::Transcript(t) = entry {
+                for m in crate::storage::messages_from_transcript_entry(t) {
+                    msgs.push(Arc::new(m));
+                }
+            }
+        }
+        if !msgs.is_empty() {
+            self.lock()
+                .agent_messages
+                .entry((session_id.to_string(), agent_id.to_string()))
+                .or_default()
+                .extend(msgs);
+        }
+        Ok(result)
+    }
+
     fn insert_file_history_snapshot(
         &self,
         session_id: &str,
@@ -752,11 +826,21 @@ impl AgentTranscriptStore for InMemoryStore {
         if messages.is_empty() {
             return Ok(());
         }
-        self.lock()
-            .agent_messages
-            .entry((session_id.to_string(), agent_id.to_string()))
-            .or_default()
-            .extend(messages.iter().cloned());
+        // Route through the same envelope build + reconstruct path as the
+        // disk backend so both stores round-trip agent transcripts identically.
+        let refs: Vec<&Message> = messages.iter().map(AsRef::as_ref).collect();
+        let mut seen = HashSet::new();
+        let options = ChainWriteOptions {
+            cwd: String::new(),
+            timestamp: String::new(),
+            is_sidechain: true,
+            agent_id: Some(agent_id.to_string()),
+            starting_parent_uuid: None,
+            git_branch: None,
+        };
+        TranscriptIo::append_agent_message_chain(
+            self, session_id, agent_id, &refs, &mut seen, options,
+        )?;
         Ok(())
     }
 
@@ -770,6 +854,13 @@ impl AgentTranscriptStore for InMemoryStore {
             .agent_messages
             .get(&(session_id.to_string(), agent_id.to_string()))
             .cloned())
+    }
+
+    fn load_agent_transcript_entries(&self, _session_id: &str) -> crate::Result<Vec<Entry>> {
+        // RAM backend keeps no per-agent transcript files; the Hub projection
+        // is disk-only. Consistent with `transcript_path` / `session_artifact_dir`
+        // returning `None` on this backend.
+        Ok(Vec::new())
     }
 
     fn write_agent_metadata(

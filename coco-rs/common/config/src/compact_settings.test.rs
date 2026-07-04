@@ -27,6 +27,9 @@ fn default_config_matches_ts_constants() {
     assert!(!cfg.experimental.history_snip.enabled);
     assert!(!cfg.experimental.staged_compact.enabled);
     assert!(cfg.experimental.display_collapses.read_search);
+    // Deliberate coco-rs policy divergence from TS GrowthBook-off behavior:
+    // keep the aggregate tool-result budget on by default.
+    assert!(cfg.tool_result_budget.enabled);
     // TS-alignment: count-based MC and stub rewrite are off by default
     // (TS external `microcompactMessages` is a no-op outside
     // `feature('CACHED_MICROCOMPACT')`; stub rewrite has no TS analogue).
@@ -178,11 +181,12 @@ fn invalid_pct_settings_are_rejected() {
 }
 
 #[test]
-fn tool_result_budget_default_matches_ts_constants() {
+fn tool_result_budget_default_is_enabled_by_policy() {
     let cfg = CompactConfig::default();
-    // Phase 0 stub: off by default to match TS feature-stripped behavior
-    // (`tengu_hawthorn_steeple` gate, default off).
-    assert!(!cfg.tool_result_budget.enabled);
+    // Deliberate divergence from TS: coco-rs keeps the per-message aggregate
+    // budget ON by default as a context-window safety guard. Users can opt out
+    // with `compact.tool_result_budget.enabled = false`.
+    assert!(cfg.tool_result_budget.enabled);
     // TS `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS` in `constants/toolLimits.ts`.
     assert_eq!(cfg.tool_result_budget.per_message_chars, 200_000);
     assert!(cfg.tool_result_budget.persist_records);
@@ -191,11 +195,11 @@ fn tool_result_budget_default_matches_ts_constants() {
 #[test]
 fn tool_result_budget_settings_overrides_apply() {
     let mut settings = Settings::default();
-    settings.compact.tool_result_budget.enabled = Some(true);
+    settings.compact.tool_result_budget.enabled = Some(false);
     settings.compact.tool_result_budget.per_message_chars = Some(150_000);
     settings.compact.tool_result_budget.persist_records = Some(false);
     let cfg = CompactConfig::resolve(&settings, &empty_env());
-    assert!(cfg.tool_result_budget.enabled);
+    assert!(!cfg.tool_result_budget.enabled);
     assert_eq!(cfg.tool_result_budget.per_message_chars, 150_000);
     assert!(!cfg.tool_result_budget.persist_records);
 }

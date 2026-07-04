@@ -4888,6 +4888,14 @@
       "description": "Persisted and protocol-visible cumulative usage for one session.",
       "type": "object",
       "properties": {
+        "auto_compact_threshold": {
+          "description": "Exact auto-compact trigger threshold (tokens) for the active model,\ncomputed by the engine (window − reserved − buffer, honoring config\noverrides). Lets the TUI anchor its `ctx` color bands to the real\ncompaction point. `None` on legacy snapshots / before the first turn.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "models": {
           "type": "array",
           "items": {
@@ -6318,11 +6326,23 @@
           "type": "integer",
           "format": "int64"
         },
+        "input_cost_usd": {
+          "description": "Input-side cost (uncached input + cache tokens), split from\n[`Self::output_cost_usd`] so the status bar can show the subagent\naggregate as `↑…/$in ↓…/$out` like the main thread. `#[serde(default)]`\nkeeps older payloads (single `cost_usd` only) deserializing to `0.0`.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
         "input_tokens": {
           "description": "Input / output split + cache-read (the `↑in ↓out` / cache-hit\ndimensions the panel and transcript summary show). `#[serde(default)]`\nfor back-compat with payloads that only carried `total_tokens`.",
           "type": "integer",
           "format": "int64",
           "default": 0
+        },
+        "output_cost_usd": {
+          "description": "Output-side cost.",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
         },
         "output_tokens": {
           "type": "integer",

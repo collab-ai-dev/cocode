@@ -121,6 +121,70 @@ async fn list_events_denormalizes_tool_use_blocks() {
     assert_eq!(events.items[1].call_id.as_deref(), Some("toolu_1"));
 }
 
+/// Subagent messages live in per-agent files (`<sid>/subagents/agent-*.jsonl`),
+/// not the main transcript. The projection must still surface them, attributed
+/// via each entry's `agent_id`, so the Hub shows subagent activity.
+#[tokio::test]
+async fn list_events_surface_subagent_activity_from_per_agent_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = "/tmp/project-sub";
+    let sid = "session-sub";
+    seed(tmp.path(), cwd, sid); // main user + assistant → 2 events
+
+    // Simulate the reroute output: a per-agent transcript file.
+    let paths = Arc::new(coco_paths::ProjectPaths::new(
+        tmp.path().to_path_buf(),
+        Path::new(cwd),
+    ));
+    let agent_path = paths.agent_transcript(sid, "explore-1");
+    std::fs::create_dir_all(agent_path.parent().unwrap()).unwrap();
+    let agent_entry = json!({
+        "type": "user",
+        "uuid": "s1",
+        "session_id": sid,
+        "cwd": cwd,
+        "timestamp": "2026-05-17T00:59:00Z",
+        "is_sidechain": true,
+        "agent_id": "explore-1",
+        "message": {"role":"user","content":[{"type":"text","text":"subagent explored"}]}
+    });
+    std::fs::write(&agent_path, format!("{agent_entry}\n")).unwrap();
+
+    let store = LocalSessionJsonStore::new(tmp.path().to_path_buf());
+    let instance_id = store
+        .list_instances(ListInstancesParams::default())
+        .await
+        .unwrap()
+        .items[0]
+        .instance_id
+        .clone();
+    let events = store
+        .list_events(EventQuery {
+            instance_id,
+            session_id: Some(sid.to_string()),
+            before: None,
+            limit: 100,
+            filter: EventFilter::default(),
+        })
+        .await
+        .unwrap();
+
+    // 2 main-thread events + 1 subagent event attributed to `explore-1`.
+    assert_eq!(events.items.len(), 3);
+    assert_eq!(events.items[0].line_index, 0);
+    assert_eq!(events.items[0].agent_id, None);
+    assert_eq!(events.items[1].line_index, 1);
+    assert_eq!(events.items[1].agent_id, None);
+    assert_eq!(events.items[2].line_index, 2);
+    assert_eq!(events.items[2].agent_id.as_deref(), Some("explore-1"));
+    let subagent = events
+        .items
+        .iter()
+        .find(|e| e.agent_id.as_deref() == Some("explore-1"))
+        .expect("subagent event must surface from the per-agent file");
+    assert_eq!(subagent.preview.as_deref(), Some("subagent explored"));
+}
+
 #[tokio::test]
 async fn local_hub_reads_from_injected_session_catalog() {
     let tmp = tempfile::tempdir().unwrap();
