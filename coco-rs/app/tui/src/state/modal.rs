@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use crate::state::agents_dialog::AgentsDialogState;
 use crate::state::permissions_editor::PermissionsEditorState;
 use crate::state::plugin_dialog::PluginDialogState;
+use crate::state::provider_wizard::ProviderWizardState;
 use crate::state::skills_dialog::SkillsDialogState;
 use crate::state::surface_payloads::BackgroundTasksState;
 use crate::state::surface_payloads::CopyPickerState;
@@ -42,6 +43,8 @@ pub enum ModalState {
     SkillsDialog(SkillsDialogState),
     PluginDialog(PluginDialogState),
     AgentsDialog(AgentsDialogState),
+    /// `/provider` (no-arg) add-provider wizard.
+    ProviderWizard(ProviderWizardState),
     PermissionsEditor(PermissionsEditorState),
     Transcript(crate::state::transcript::TranscriptState),
     Doctor(DoctorState),
@@ -89,6 +92,7 @@ impl ModalState {
             | Self::SkillsDialog(_)
             | Self::PluginDialog(_)
             | Self::AgentsDialog(_)
+            | Self::ProviderWizard(_)
             | Self::PermissionsEditor(_)
             | Self::CopyPicker(_)
             | Self::TeamRoster(_)

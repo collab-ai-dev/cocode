@@ -37,6 +37,17 @@ use crate::widgets::InputRenderModel;
 /// `Tui::draw` to hide the cursor explicitly — see module docs for why hide
 /// alone isn't enough on iTerm2 / macOS Terminal.
 pub fn compute_cursor(state: &AppState, layout: FrameLayout) -> Option<CursorClaim> {
+    // An active in-modal text input (e.g. the `/model` filter or a `/provider`
+    // wizard field) pins the cursor at its caret. This must precede the
+    // focus / blocking-interaction early-returns below: a modal is a blocking
+    // interaction with `focus != Input`, so without this a CJK IME would
+    // anchor its candidate window to the top-left corner instead of the field.
+    if let Some(position) = layout.modal_text_cursor {
+        return Some(CursorClaim {
+            position,
+            style: SetCursorStyle::DefaultUserShape,
+        });
+    }
     if let Some(claim) = compute_question_cursor(state, layout.question_prompt) {
         return Some(claim);
     }

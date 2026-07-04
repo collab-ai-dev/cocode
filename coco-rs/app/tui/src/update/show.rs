@@ -54,6 +54,37 @@ pub(crate) fn cycle_model(state: &mut AppState) {
         }));
 }
 
+/// Open the `/provider` add-provider wizard. The template list is built from
+/// the builtin catalog (`coco_config::builtin_provider_partials`) minus the
+/// subscription/OAuth providers — those are added via `coco login`, not a
+/// pasted key — plus a trailing "Custom (OpenAI-compatible)" entry.
+///
+/// `pub(crate)` so the `OpenProviderWizard` TuiOnlyEvent handler can open it
+/// without round-tripping through the keybind layer.
+pub(crate) fn open_provider_wizard(state: &mut AppState) {
+    let mut templates: Vec<crate::state::ProviderTemplate> =
+        coco_config::builtin_provider_partials()
+            .into_iter()
+            .filter_map(|(name, partial)| {
+                if matches!(partial.auth, Some(coco_config::ProviderAuth::OAuth { .. })) {
+                    return None;
+                }
+                Some(crate::state::ProviderTemplate {
+                    name: name.to_string(),
+                    api: partial.api?,
+                    base_url: partial.base_url.unwrap_or_default(),
+                    wire_api: partial.wire_api.unwrap_or(coco_types::WireApi::Chat),
+                    env_key: partial.env_key.unwrap_or_default(),
+                    is_custom: false,
+                })
+            })
+            .collect();
+    templates.push(crate::state::ProviderTemplate::custom());
+    state.ui.show_modal(ModalState::ProviderWizard(
+        crate::state::ProviderWizardState::new(templates),
+    ));
+}
+
 /// Open the teams roster picker, seeded from the live teammate list
 /// (`session.subagents` where `kind == Teammate` and still running). The
 /// leader cycles a focused teammate's permission mode (Left/Right) and

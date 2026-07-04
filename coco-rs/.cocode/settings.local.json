@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(for dir:*)",
+      "Bash(do echo:*)",
+      "Bash(head -60 \"$dir/Cargo.toml\")",
+      "Bash(done)",
+      "Bash(head -80 \"$dir/Cargo.toml\")"
+    ]
+  }
+}

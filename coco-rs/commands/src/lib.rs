@@ -178,6 +178,10 @@ pub enum DialogSpec {
     /// pill so multi-provider users can address any [`coco_types::ModelRole`]
     /// from the same surface.
     ModelPicker,
+    /// `/provider` (no args) — add-provider wizard. Select a provider template
+    /// from the builtin catalog, supply the secret (and, for a custom provider,
+    /// its base URL), then persist to `settings.json` under `providers.<name>`.
+    ProviderWizard,
     /// `/theme` (no args) — standalone theme picker with live preview + a
     /// sample diff.
     ThemePicker,

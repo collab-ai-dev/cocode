@@ -247,6 +247,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::PromptEditorFailed { .. } => "prompt_editor_failed",
         TuiOnlyEvent::BashCommandCompleted { .. } => "bash_command_completed",
         TuiOnlyEvent::OpenModelPicker => "open_model_picker",
+        TuiOnlyEvent::OpenProviderWizard => "open_provider_wizard",
         TuiOnlyEvent::OpenSettings => "open_settings",
         TuiOnlyEvent::OpenThemePicker => "open_theme_picker",
         TuiOnlyEvent::OpenSkillsDialog { .. } => "open_skills_dialog",

@@ -76,14 +76,6 @@ pub(crate) fn centered_fixed_area(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
-#[cfg(test)]
-pub(crate) fn inner_size(area: Rect) -> (usize, usize) {
-    (
-        area.width.saturating_sub(2) as usize,
-        area.height.saturating_sub(2) as usize,
-    )
-}
-
 pub(crate) fn selected_in_bounds(selected: i32, row_count: usize) -> Option<usize> {
     if row_count == 0 {
         return None;

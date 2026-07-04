@@ -763,6 +763,10 @@ pub(super) fn handle(
             crate::update::show::cycle_model(state);
             true
         }
+        TuiOnlyEvent::OpenProviderWizard => {
+            crate::update::show::open_provider_wizard(state);
+            true
+        }
         TuiOnlyEvent::OpenLoginPicker { entries } => {
             let entries = entries
                 .into_iter()

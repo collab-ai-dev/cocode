@@ -271,6 +271,9 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
         // result) inside `add_directory::intercept`, so the generic Esc route
         // never reaches it.
         | M::AddDirectory(_)
+        // `/provider` wizard owns its own Esc (step-back / cancel) inside
+        // `provider_wizard::intercept`, so the generic route never reaches it.
+        | M::ProviderWizard(_)
         | M::Feedback(_) => return None,
     })
 }

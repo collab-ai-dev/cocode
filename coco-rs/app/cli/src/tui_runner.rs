@@ -3956,6 +3956,11 @@ async fn dispatch_slash_command(
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenModelPicker))
                         .await;
                 }
+                DialogSpec::ProviderWizard => {
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::OpenProviderWizard))
+                        .await;
+                }
                 DialogSpec::ThemePicker => {
                     let _ = event_tx
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenThemePicker))
@@ -4039,6 +4044,7 @@ async fn dispatch_slash_command(
                         | DialogSpec::AgentsList { .. }
                         | DialogSpec::PluginPicker
                         | DialogSpec::ModelPicker
+                        | DialogSpec::ProviderWizard
                         | DialogSpec::WorkflowPicker
                         | DialogSpec::ThemePicker => unreachable!(),
                     }
