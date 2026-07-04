@@ -212,7 +212,9 @@ fn filtered_selection_uses_filtered_index() {
 
 #[test]
 fn many_providers_keep_effort_and_hints_visible_and_box_bounded() {
-    let _locale = locale_test_guard("en");
+    // NOTE: no `locale_test_guard` here — `render_snapshot` already acquires it,
+    // and the guard's mutex is non-reentrant, so taking it twice on this thread
+    // would self-deadlock (this test previously hung to the 30s timeout).
     // 13 providers × 2 models on a tall terminal — the regression scenario
     // where the list padded to full height and clipped the bottom hints.
     let mut entries = Vec::new();
