@@ -126,7 +126,8 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
             coco_inference::PrebuiltLanguageModelSlot::new(
                 Arc::new(ForkMockModel),
                 coco_inference::RetryConfig::default(),
-            ),
+            )
+            .with_model_info(coco_query::test_support::default_test_model_info()),
         ),
     );
 

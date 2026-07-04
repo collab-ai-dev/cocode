@@ -294,7 +294,7 @@ pub async fn analyze_engine_context_with_sources(
     let auto_compact_threshold = is_auto_compact_enabled.then(|| {
         coco_compact::auto_compact_threshold(
             max_tokens,
-            engine.config.max_output_tokens,
+            i64::from(model_info.max_output_tokens),
             &engine.config.compact.auto,
         )
     });

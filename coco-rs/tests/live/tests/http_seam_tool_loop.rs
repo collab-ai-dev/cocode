@@ -233,8 +233,6 @@ async fn http_seam_tool_round_trip_pairs_tool_use_and_result() -> Result<()> {
         permission_mode_availability: coco_types::PermissionModeAvailability::new(
             /*bypass_permissions*/ true, /*auto*/ false,
         ),
-        context_window: 200_000,
-        max_output_tokens: 2_048,
         max_turns: Some(8),
         total_token_budget: None,
         system_prompt: Some("You are a test agent.".into()),

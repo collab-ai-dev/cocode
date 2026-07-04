@@ -57,6 +57,7 @@ use coco_tool_runtime::TurnAbortSignal;
 use coco_types::ModelRole;
 use coco_types::ModelSpec;
 use coco_types::PermissionMode;
+use coco_types::ProviderModelSelection;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
 use coco_types::ToolAppState;
@@ -411,6 +412,58 @@ fn thinking_level_for_effort_from(
     model_info
         .map(|info| info.resolve_thinking_level(&requested))
         .unwrap_or(requested)
+}
+
+fn resolve_model_info(
+    runtime_config: &RuntimeConfig,
+    provider: &str,
+    model_id: &str,
+) -> Option<coco_config::ModelInfo> {
+    runtime_config
+        .model_registry
+        .resolve(provider, model_id)
+        .map(|resolved| resolved.info.clone())
+}
+
+fn resolve_model_selection_from_runtime_config(
+    runtime_config: &RuntimeConfig,
+    raw_model: &str,
+) -> Option<ProviderModelSelection> {
+    let raw_model = raw_model.trim();
+    if raw_model.is_empty() {
+        return None;
+    }
+
+    if let Ok(selection) = ProviderModelSelection::from_slash_str(raw_model)
+        && runtime_config
+            .model_registry
+            .resolve(&selection.provider, &selection.model_id)
+            .is_some()
+    {
+        return Some(selection);
+    }
+
+    if let Some(main) = runtime_config.model_roles.get(ModelRole::Main)
+        && runtime_config
+            .model_registry
+            .resolve(&main.provider, raw_model)
+            .is_some()
+    {
+        return Some(ProviderModelSelection {
+            provider: main.provider.clone(),
+            model_id: raw_model.to_string(),
+        });
+    }
+
+    runtime_config.providers.keys().find_map(|provider| {
+        runtime_config
+            .model_registry
+            .resolve(provider, raw_model)
+            .map(|_| ProviderModelSelection {
+                provider: provider.clone(),
+                model_id: raw_model.to_string(),
+            })
+    })
 }
 
 /// In-memory binding for a single [`ModelRole`] that overrides the
@@ -1259,8 +1312,6 @@ impl SessionRuntime {
             permission_mode_availability,
             use_auto_mode_during_plan: runtime_config.settings.use_auto_mode_during_plan_enabled(),
             permission_rule_source_roots: permission_rule_source_roots.clone(),
-            context_window: 200_000,
-            max_output_tokens: 16_384,
             // Interactive: unbounded unless the user set `loop.max_turns`;
             // `--max-turns` is `--print`-only.
             max_turns: runtime_config.loop_config.max_turns,
@@ -1969,6 +2020,15 @@ impl SessionRuntime {
         self.model_runtimes.clone()
     }
 
+    /// Resolve an SDK/user-supplied model string into a concrete
+    /// provider/model pair using the same registry snapshot that built
+    /// this session. `provider/model_id` is accepted directly; bare
+    /// model ids first bind to the current Main provider, then to the
+    /// deterministic provider catalog order.
+    pub fn resolve_model_selection(&self, raw_model: &str) -> Option<ProviderModelSelection> {
+        resolve_model_selection_from_runtime_config(&self.runtime_config, raw_model)
+    }
+
     /// Best-effort PID-registry live patch — push the human-readable
     /// session name into the `<config_home>/sessions/<pid>.json` file
     /// that `coco ps` reads. Silently no-ops when the session isn't
@@ -2121,9 +2181,9 @@ impl SessionRuntime {
     /// override layers above `runtime_config.model_roles` and is NOT
     /// persisted to the global config file — re-bind on every session via the
     /// picker, or edit settings to make the change durable.
-    /// For `role == Main` this also rewrites
-    /// `engine_config.{model_id, thinking_level}` so UI and tool
-    /// context mirrors see the new identity on the next turn.
+    /// For `role == Main` this also rewrites the model-sensitive
+    /// `engine_config` fields so UI, compaction, and tool-context mirrors see
+    /// the new identity on the next turn.
     pub async fn apply_role_override(
         &self,
         role: ModelRole,
@@ -2142,11 +2202,8 @@ impl SessionRuntime {
             self.model_runtimes
                 .rebind_role_primary(role, spec, /*effort*/ None)
                 .map_err(anyhow::Error::from)?;
-            let model_info = self
-                .runtime_config
-                .model_registry
-                .resolve(&ov.spec.provider, &ov.spec.model_id)
-                .map(|resolved| resolved.info.clone());
+            let model_info =
+                resolve_model_info(&self.runtime_config, &ov.spec.provider, &ov.spec.model_id);
             // Store the override only after the registry accepted the
             // replacement runtime.
             {
@@ -2212,10 +2269,7 @@ impl SessionRuntime {
         drop(overrides);
         if role == ModelRole::Main {
             let model_info = effective_spec.as_ref().and_then(|spec| {
-                self.runtime_config
-                    .model_registry
-                    .resolve(&spec.provider, &spec.model_id)
-                    .map(|resolved| resolved.info.clone())
+                resolve_model_info(&self.runtime_config, &spec.provider, &spec.model_id)
             });
             self.update_engine_config(|cfg| {
                 cfg.thinking_level =

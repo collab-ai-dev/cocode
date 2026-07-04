@@ -21,10 +21,22 @@ use coco_inference::PrebuiltLanguageModelSlot;
 use coco_inference::RetryConfig;
 use coco_types::ModelRole;
 
+pub fn default_test_model_info() -> coco_config::ModelInfo {
+    coco_config::ModelInfo {
+        model_id: "test-model".to_string(),
+        ..Default::default()
+    }
+}
+
+pub fn prebuilt_slot(model: Arc<dyn LanguageModel>) -> PrebuiltLanguageModelSlot {
+    PrebuiltLanguageModelSlot::new(model, RetryConfig::default())
+        .with_model_info(default_test_model_info())
+}
+
 pub fn model_runtime_registry(model: Arc<dyn LanguageModel>) -> Arc<ModelRuntimeRegistry> {
     Arc::new(ModelRuntimeRegistry::from_prebuilt_language_model(
         ModelRole::Main,
-        PrebuiltLanguageModelSlot::new(model, RetryConfig::default()),
+        prebuilt_slot(model),
     ))
 }
 
@@ -34,10 +46,7 @@ pub fn model_runtime_registry_with_fallback(
 ) -> Arc<ModelRuntimeRegistry> {
     Arc::new(ModelRuntimeRegistry::from_prebuilt_language_models(
         ModelRole::Main,
-        PrebuiltLanguageModelSlot::new(primary, RetryConfig::default()),
-        vec![PrebuiltLanguageModelSlot::new(
-            fallback,
-            RetryConfig::default(),
-        )],
+        prebuilt_slot(primary),
+        vec![prebuilt_slot(fallback)],
     ))
 }

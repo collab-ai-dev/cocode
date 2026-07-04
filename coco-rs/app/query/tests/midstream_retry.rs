@@ -148,7 +148,8 @@ fn single_model_registry(model: Arc<dyn LanguageModel>) -> Arc<ModelRuntimeRegis
             max_retries: 0,
             ..RetryConfig::default()
         },
-    );
+    )
+    .with_model_info(coco_query::test_support::default_test_model_info());
     Arc::new(ModelRuntimeRegistry::from_prebuilt_language_models(
         coco_types::ModelRole::Main,
         slot,
@@ -161,8 +162,6 @@ fn minimal_config() -> QueryEngineConfig {
         model_id: "primary-model".to_string(),
         max_turns: Some(20),
         total_token_budget: Some(16_384),
-        context_window: 200_000,
-        max_output_tokens: 4_096,
         streaming_tool_execution: false,
         system_prompt: Some("you are a test assistant".into()),
         session_id: "s-midstream-retry-test".into(),

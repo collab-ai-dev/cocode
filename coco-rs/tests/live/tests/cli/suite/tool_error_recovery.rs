@@ -26,7 +26,6 @@ use crate::cli::harness::run_session;
 pub async fn run(provider: &str, model: &str) -> Result<()> {
     let cfg = SessionConfig {
         max_turns: Some(6),
-        max_output_tokens: 1_024,
         ..SessionConfig::default()
     };
     // First Bash call hits `cat /no/such/file/here-coco-test` (ENOENT).

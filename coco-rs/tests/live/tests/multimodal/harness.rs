@@ -87,8 +87,6 @@ pub async fn run_multimodal_scenario(
         permission_mode_availability: coco_types::PermissionModeAvailability::new(
             /*bypass_permissions*/ true, /*auto*/ false,
         ),
-        context_window: 200_000,
-        max_output_tokens: 2_048,
         // Multimodal scenarios are 2-turn: tool_call + final answer.
         // Cap tight so an under-specified `replies` queue can't spin.
         max_turns: Some(4),

@@ -125,7 +125,10 @@ fn slot_default(provider: &'static str, model_id: &'static str) -> PrebuiltLangu
         provider,
         id: model_id,
     });
-    PrebuiltLanguageModelSlot::new(model, RetryConfig::default())
+    PrebuiltLanguageModelSlot::new(model, RetryConfig::default()).with_model_info(ModelInfo {
+        model_id: model_id.to_string(),
+        ..Default::default()
+    })
 }
 
 /// Slot whose fingerprint reports the Anthropic wire API, so
@@ -149,7 +152,12 @@ fn slot_anthropic(model_id: &'static str) -> PrebuiltLanguageModelSlot {
         api_key_origin_digest: [0u8; 32],
         runtime_state_digest: [0u8; 32],
     };
-    PrebuiltLanguageModelSlot::new(model, RetryConfig::default()).with_fingerprint(fingerprint)
+    PrebuiltLanguageModelSlot::new(model, RetryConfig::default())
+        .with_fingerprint(fingerprint)
+        .with_model_info(ModelInfo {
+            model_id: model_id.to_string(),
+            ..Default::default()
+        })
 }
 
 fn registry_from_slot(slot: PrebuiltLanguageModelSlot) -> Arc<ModelRuntimeRegistry> {
@@ -1230,14 +1238,12 @@ async fn r8_check_blocking_limit_falls_back_to_model_info_baseline() {
     }
 }
 
-/// R8 ultimate fallback: when NO `ModelInfo` is wired (test paths /
-/// mock clients) AND `effective_max_tokens` is None, the gate falls
-/// back to the 10% heuristic. Validates the bottom of the three-tier
-/// resolution chain stays intact.
-#[tokio::test]
-async fn r8_check_blocking_limit_falls_back_to_10pct_without_model_info() {
-    // `slot_default` builds a runtime slot with NO ModelInfo wired,
-    // so `model_info()` returns None.
+/// R8 invariant: sizing must come from the active runtime's ModelInfo.
+/// A runtime snapshot without ModelInfo is invalid for query execution;
+/// falling back to QueryEngineConfig would reintroduce two sizing sources.
+#[test]
+#[should_panic(expected = "model runtime must provide ModelInfo before recovery sizing")]
+fn r8_check_blocking_limit_requires_model_info() {
     let client = slot_default("anthropic", "claude-3");
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
@@ -1245,22 +1251,15 @@ async fn r8_check_blocking_limit_falls_back_to_10pct_without_model_info() {
     let mut history = MessageHistory::new();
     history.push(create_user_message(&huge_text));
     let turn_state = loop_turn_state();
+    let mut snapshot = slot_snapshot(&client);
+    snapshot.model_info = None;
 
-    // `check_blocking_limit` uses `DEFAULT_CONTEXT_WINDOW = 200k` when
-    // ModelInfo is absent, then reserved = max(1024, 200k/10) = 20k,
-    // threshold = 180k. 140k < 180k → Proceed.
-    match engine.check_blocking_limit(
+    let _ = engine.check_blocking_limit(
         &history,
-        &slot_snapshot(&client),
+        &snapshot,
         &turn_state,
         /*effective_max_tokens*/ None,
-    ) {
-        BlockingLimitDecision::Proceed => {}
-        other => panic!(
-            "fallback 10% heuristic on 200k default window must Proceed for 140k prompt, \
-             got {other:?}"
-        ),
-    }
+    );
 }
 
 /// R1 finding (happy path): when compaction succeeds (circuit-breaker

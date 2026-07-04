@@ -498,8 +498,8 @@ impl QueryEngine {
                         cache_creation_input_tokens: usage.cache_creation_input_tokens,
                         web_search_requests: usage.web_search_requests,
                         cost_usd: usage.total_cost_usd,
-                        context_window: self.config.context_window,
-                        max_output_tokens: self.config.max_output_tokens,
+                        context_window: self.resolved_context_window(),
+                        max_output_tokens: self.resolved_max_output_tokens(),
                     },
                 )
             })

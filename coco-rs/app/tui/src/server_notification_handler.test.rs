@@ -1103,6 +1103,75 @@ fn test_model_role_changed_folds_into_session_and_role_map() {
 }
 
 #[test]
+fn test_model_role_changed_clears_stale_auto_compact_threshold_for_main() {
+    let mut state = AppState::new();
+    state.session.session_usage = Some(coco_types::SessionUsageSnapshot {
+        session_id: "s1".into(),
+        totals: coco_types::SessionUsageTotals {
+            input_tokens: 30_000,
+            output_tokens: 2_000,
+            request_count: 3,
+            ..Default::default()
+        },
+        auto_compact_threshold: Some(170_000),
+        ..Default::default()
+    });
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::ModelRoleChanged(
+            coco_types::ModelRoleChangedParams {
+                role: coco_types::ModelRole::Main,
+                model_id: "deepseek-v4-pro".into(),
+                provider: "deepseek-openai".into(),
+                context_window: Some(1_000_000),
+                effort: None,
+            },
+        )),
+    );
+
+    let usage = state
+        .session
+        .session_usage
+        .as_ref()
+        .expect("usage totals should be preserved");
+    assert_eq!(usage.session_id, "s1");
+    assert_eq!(usage.totals.input_tokens, 30_000);
+    assert_eq!(usage.auto_compact_threshold, None);
+}
+
+#[test]
+fn test_model_role_changed_keeps_threshold_for_non_main() {
+    let mut state = AppState::new();
+    state.session.session_usage = Some(coco_types::SessionUsageSnapshot {
+        auto_compact_threshold: Some(170_000),
+        ..Default::default()
+    });
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::ModelRoleChanged(
+            coco_types::ModelRoleChangedParams {
+                role: coco_types::ModelRole::Fast,
+                model_id: "claude-haiku-4-5".into(),
+                provider: "anthropic".into(),
+                context_window: Some(200_000),
+                effort: None,
+            },
+        )),
+    );
+
+    assert_eq!(
+        state
+            .session
+            .session_usage
+            .as_ref()
+            .and_then(|usage| usage.auto_compact_threshold),
+        Some(170_000)
+    );
+}
+
+#[test]
 fn test_model_role_changed_none_effort_uses_catalog_default() {
     let mut state = AppState::new();
     state

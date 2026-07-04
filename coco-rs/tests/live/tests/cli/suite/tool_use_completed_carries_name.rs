@@ -27,7 +27,6 @@ use crate::cli::harness::run_session;
 pub async fn run(provider: &str, model: &str) -> Result<()> {
     let cfg = SessionConfig {
         max_turns: Some(6),
-        max_output_tokens: 1_024,
         ..SessionConfig::default()
     };
     let prompt = "Step 1: Use the Bash tool to run `echo hello-from-bash`. \

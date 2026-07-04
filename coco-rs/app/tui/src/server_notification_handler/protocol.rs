@@ -683,6 +683,9 @@ pub(super) fn handle(
             if p.role == coco_types::ModelRole::Main {
                 state.session.model = p.model_id.clone();
                 state.session.provider = p.provider.clone();
+                if let Some(session_usage) = state.session.session_usage.as_mut() {
+                    session_usage.auto_compact_threshold = None;
+                }
                 let default_effort = state
                     .session
                     .model_catalog

@@ -174,13 +174,6 @@ fn midstream_capacity_backoff(retry_after_ms: Option<i64>, attempt: i32) -> std:
     std::time::Duration::from_millis(exp_ms as u64)
 }
 
-/// Minimum reserved output budget used by the pre-API gate when
-/// computing `context_window - reserved_output`. The recovery
-/// dispatcher and [`QueryEngineConfig::default`] (via
-/// [`crate::config::DEFAULT_CONTEXT_WINDOW`]) share the same fallback
-/// pair so the threshold math stays self-consistent.
-const MIN_RESERVED_OUTPUT: i64 = 1_024;
-
 /// Pre-API gate outcome (Finding **C15**). Lives next to the recovery
 /// dispatcher because it sits on the same axis (preventing /
 /// rescuing from context-overflow), and the implementation routes
@@ -419,29 +412,29 @@ impl QueryEngine {
             return BlockingLimitDecision::Proceed;
         }
 
-        let model_info = active_snapshot.model_info.as_ref();
-        let context_window = model_info
-            .map(|info| i64::from(info.context_window))
-            .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW);
-        let model_baseline_max_output = model_info.map(|info| i64::from(info.max_output_tokens));
+        let model_info = match active_snapshot.model_info.as_ref() {
+            Some(model_info) => model_info,
+            None => panic!(
+                "model runtime must provide ModelInfo before recovery sizing: provider={} model={}",
+                active_snapshot.provider, active_snapshot.model_id
+            ),
+        };
+        let context_window = i64::from(model_info.context_window);
 
         let estimated_tokens = coco_messages::estimate_tokens_for_messages(history.as_slice());
 
         // Finding **R8** — reserved budget tracks what the provider will
-        // actually enforce as `prompt + max_tokens ≤ window`. Three
-        // tiers, most-specific first:
+        // actually enforce as `prompt + max_tokens ≤ window`. Two tiers,
+        // most-specific first:
         //
         // 1. Phase-1 escalate retry — `effective_max_tokens = Some(N)`
         //    (the escalate ceiling for this one turn). Use it directly.
         // 2. ModelInfo baseline — the model's `max_output_tokens` is
         //    what the next non-escalate call will use. Most accurate
         //    threshold on production paths.
-        // 3. Fallback heuristic — only when no ModelInfo is wired
-        //    (mocked clients / test fixtures).
         let reserved_output = effective_max_tokens
             .filter(|v| *v > 0)
-            .or(model_baseline_max_output)
-            .unwrap_or_else(|| std::cmp::max(MIN_RESERVED_OUTPUT, context_window / 10));
+            .unwrap_or_else(|| i64::from(model_info.max_output_tokens));
         let blocking_threshold = context_window.saturating_sub(reserved_output);
 
         if estimated_tokens > blocking_threshold {

@@ -1016,7 +1016,6 @@ pub async fn run_chat_with_options(
         target: "coco_cli::headless",
         max_turns = ?config.max_turns,
         total_token_budget = ?config.total_token_budget,
-        context_window = config.context_window,
         streaming_tools = config.streaming_tool_execution,
         plan_mode = ?config.plan_mode_settings,
         "engine config built"

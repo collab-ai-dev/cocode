@@ -470,8 +470,8 @@ impl QueryEngine {
         // wouldn't actually shrink below the line.
         let sm_cfg = &self.config.compact.session_memory;
         let auto_threshold = coco_compact::auto_compact_threshold(
-            self.clamped_context_window(),
-            self.config.max_output_tokens,
+            self.resolved_context_window(),
+            self.resolved_max_output_tokens(),
             &self.config.compact.auto,
         );
         let path_str = self
@@ -1506,8 +1506,8 @@ impl QueryEngine {
         // Auto-compact threshold mirrors the gate we already evaluated
         // above, recomputed here for the analytics-aligned struct.
         let auto_threshold = coco_compact::auto_compact_threshold(
-            self.clamped_context_window(),
-            self.config.max_output_tokens,
+            self.resolved_context_window(),
+            self.resolved_max_output_tokens(),
             &self.config.compact.auto,
         );
         // `RecompactionInfo.turns_since_previous`: counter was reset to
@@ -1523,7 +1523,7 @@ impl QueryEngine {
                 auto_compact_threshold: auto_threshold,
             });
         let compact_run_options = coco_compact::CompactRunOptions {
-            context_window: self.config.context_window,
+            context_window: self.resolved_context_window(),
             trigger,
             custom_prompt: effective_instructions,
             recompaction_info,

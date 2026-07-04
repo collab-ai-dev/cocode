@@ -22,7 +22,6 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
         // Generous output cap so the first iteration's reply isn't
         // truncated; the boundary we're testing is iteration count, not
         // length.
-        max_output_tokens: 1_024,
         ..SessionConfig::default()
     };
     // Ask for a tool call so the model would *want* to take ≥2 turns

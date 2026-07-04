@@ -239,7 +239,12 @@ pub(crate) struct LoopConstants {
 impl LoopConstants {
     /// Derive the loop's immutable constants from the engine config and
     /// the initial `turn_messages` list.
-    pub(crate) fn derive(engine: &QueryEngine, turn_messages: &[Arc<Message>]) -> Self {
+    pub(crate) fn derive(
+        engine: &QueryEngine,
+        turn_messages: &[Arc<Message>],
+        model_info: &coco_config::ModelInfo,
+    ) -> Self {
+        let context_window = i64::from(model_info.context_window);
         Self {
             started_at: std::time::Instant::now(),
             // The "current turn" user message id is the LAST user message
@@ -272,10 +277,10 @@ impl LoopConstants {
                 .agent_id
                 .clone()
                 .unwrap_or_else(|| engine.config.session_id.clone()),
-            context_window: engine.config.context_window,
+            context_window,
             // Effective = 90% of window (reserve 10% for output),
             // matching the same approximation `coco-compact` uses.
-            effective_window: (engine.config.context_window * 9) / 10,
+            effective_window: (context_window * 9) / 10,
         }
     }
 }
@@ -298,7 +303,26 @@ impl QueryEngine {
         event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
         history: &mut MessageHistory,
     ) -> (LoopAccumulator, LoopTurnState, LoopServices, LoopConstants) {
-        let consts = LoopConstants::derive(self, &turn_messages);
+        let main_source = self.model_runtime_source.clone();
+        let mr_init = match self.model_runtimes.runtime_for_source(main_source.clone()) {
+            Ok(runtime) => runtime,
+            Err(err) => panic!("model runtime source must be registered: {err}"),
+        };
+        let initial_snapshot = {
+            let runtime = match mr_init.lock() {
+                Ok(runtime) => runtime,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            runtime.snapshot(main_source.clone())
+        };
+        let initial_model_info = match initial_snapshot.model_info.as_ref() {
+            Some(model_info) => model_info,
+            None => panic!(
+                "model runtime must provide ModelInfo before loop initialization: provider={} model={}",
+                initial_snapshot.provider, initial_snapshot.model_id
+            ),
+        };
+        let consts = LoopConstants::derive(self, &turn_messages, initial_model_info);
 
         // Permission denials accumulate into `acc.permission_denials`
         // on each `PermissionDecision::Deny` branch and flush into
@@ -314,11 +338,6 @@ impl QueryEngine {
             /*max_continuations*/ 3,
         );
 
-        let main_source = self.model_runtime_source.clone();
-        let mr_init = match self.model_runtimes.runtime_for_source(main_source.clone()) {
-            Ok(runtime) => runtime,
-            Err(err) => panic!("model runtime source must be registered: {err}"),
-        };
         let main_runtime = mr_init.clone();
 
         // ── Progress-event forwarder ──
