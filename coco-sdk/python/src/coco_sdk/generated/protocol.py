@@ -2931,6 +2931,13 @@ class TuiOnlyEventOpenModelPicker(BaseModel):
     )
 
 
+class TuiOnlyEventOpenProviderWizard(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["open_provider_wizard"] = Field(
+        default="open_provider_wizard", alias="type"
+    )
+
+
 class TuiOnlyEventOpenSettings(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["open_settings"] = Field(default="open_settings", alias="type")
@@ -3057,6 +3064,7 @@ TuiOnlyEvent = Annotated[
         TuiOnlyEventPromptEditorFailed,
         TuiOnlyEventBashCommandCompleted,
         TuiOnlyEventOpenModelPicker,
+        TuiOnlyEventOpenProviderWizard,
         TuiOnlyEventOpenSettings,
         TuiOnlyEventOpenThemePicker,
         TuiOnlyEventOpenSkillsDialog,
