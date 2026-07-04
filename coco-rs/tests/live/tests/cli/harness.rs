@@ -58,11 +58,6 @@ use crate::common::runtime::build_client;
 /// realistic" so live tests stay fast and cheap.
 #[derive(Clone)]
 pub struct SessionConfig {
-    /// Triggers compaction earlier when set small. Default 200_000
-    /// (matches the production `run_chat` default).
-    pub context_window: i64,
-    /// Per-call output cap. Default 2_048 keeps each turn cheap.
-    pub max_output_tokens: i64,
     /// Hard upper bound on agent loop turns (`None` = unbounded).
     pub max_turns: Option<i32>,
     /// Session-level total token budget (input + output, accumulated
@@ -108,8 +103,6 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            context_window: 200_000,
-            max_output_tokens: 2_048,
             max_turns: Some(8),
             total_token_budget: None,
             event_buffer: 1024,
@@ -121,19 +114,6 @@ impl Default for SessionConfig {
             pre_workdir_files: Vec::new(),
             hooks: None,
             features: None,
-        }
-    }
-}
-
-impl SessionConfig {
-    /// Smaller window, fewer output tokens — used by the compaction
-    /// scenario to force `ContextCompacted` to fire.
-    pub fn small_window(window_tokens: i64) -> Self {
-        Self {
-            context_window: window_tokens,
-            max_output_tokens: 1_024,
-            max_turns: Some(12),
-            ..Self::default()
         }
     }
 }
@@ -209,8 +189,6 @@ pub async fn run_session(
             bypass_available,
             false,
         ),
-        context_window: session_cfg.context_window,
-        max_output_tokens: session_cfg.max_output_tokens,
         max_turns: session_cfg.max_turns,
         total_token_budget: session_cfg.total_token_budget,
         system_prompt: session_cfg.system_prompt,
@@ -335,8 +313,6 @@ pub async fn run_session_with_steering(
             bypass_available,
             false,
         ),
-        context_window: session_cfg.context_window,
-        max_output_tokens: session_cfg.max_output_tokens,
         max_turns: session_cfg.max_turns,
         total_token_budget: session_cfg.total_token_budget,
         system_prompt: session_cfg.system_prompt,

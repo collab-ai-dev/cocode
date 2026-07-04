@@ -13,7 +13,6 @@ use crate::cli::harness::run_session;
 pub async fn run(provider: &str, model_id: &str) -> Result<()> {
     let cfg = SessionConfig {
         max_turns: Some(14),
-        max_output_tokens: 1_024,
         ..SessionConfig::default()
     };
 

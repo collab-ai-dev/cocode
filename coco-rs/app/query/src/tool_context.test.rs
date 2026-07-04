@@ -20,8 +20,6 @@ fn test_config() -> QueryEngineConfig {
     QueryEngineConfig {
         model_id: "claude-test".into(),
         permission_mode: PermissionMode::Default,
-        context_window: 200_000,
-        max_output_tokens: 8_192,
         session_id: "session-abc".into(),
         ..Default::default()
     }

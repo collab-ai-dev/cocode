@@ -256,21 +256,41 @@ fn ctx_trigger_percent(state: &AppState, total_window: i64) -> i64 {
     (threshold * 100 / total_window.max(1)).clamp(0, 100)
 }
 
-/// `ctx` tone + bold on the 4-band ramp anchored to the auto-compact trigger
-/// `T`: green `<T-62` · blue `T-62..T-42` · yellow `T-42..T-12` · red `≥T-12`
-/// (bold at/over `T`). Higher ctx% = fuller context = more urgent.
+/// Reference trigger for the historical color ramp. The default compact
+/// threshold on large windows lands near 90%, with tone boundaries at
+/// 28/48/78/90. Lower trigger points scale those boundaries proportionally
+/// instead of subtracting fixed percentage points that can go negative.
+const CTX_REFERENCE_TRIGGER_PERCENT: i64 = 90;
+const CTX_REFERENCE_ACCENT_START: i64 = 28;
+const CTX_REFERENCE_WARNING_START: i64 = 48;
+const CTX_REFERENCE_ERROR_START: i64 = 78;
+
+/// `ctx` tone + bold on a 4-band ramp anchored to the auto-compact trigger
+/// `T`: green · blue · yellow · red, with bold red at/over `T`. Higher ctx% =
+/// fuller context = more urgent.
 fn ctx_tone(pct: i64, trigger: i64) -> (StatusTone, bool) {
+    let accent_start = ctx_scaled_boundary(trigger, CTX_REFERENCE_ACCENT_START);
+    let warning_start = ctx_scaled_boundary(trigger, CTX_REFERENCE_WARNING_START);
+    let error_start = ctx_scaled_boundary(trigger, CTX_REFERENCE_ERROR_START);
+
     if pct >= trigger {
         (StatusTone::Error, true)
-    } else if pct >= trigger - 12 {
+    } else if pct >= error_start {
         (StatusTone::Error, false)
-    } else if pct >= trigger - 42 {
+    } else if pct >= warning_start {
         (StatusTone::Warning, false)
-    } else if pct >= trigger - 62 {
+    } else if pct >= accent_start {
         (StatusTone::Accent, false)
     } else {
         (StatusTone::Success, false)
     }
+}
+
+fn ctx_scaled_boundary(trigger: i64, reference_boundary: i64) -> i64 {
+    if trigger <= 0 {
+        return 0;
+    }
+    (trigger * reference_boundary / CTX_REFERENCE_TRIGGER_PERCENT).clamp(0, trigger)
 }
 
 /// Status-bar cost: always 2 decimals (`$0.26`) for compact width, unlike the

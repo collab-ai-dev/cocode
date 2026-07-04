@@ -107,6 +107,56 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
 }
 
 #[test]
+fn status_bar_view_keeps_low_context_usage_green_with_low_compact_trigger() {
+    let _locale = locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.provider = "deepseek-openai".into();
+    state.session.model = "deepseek-v4-pro".into();
+    state.session.session_usage = Some(coco_types::SessionUsageSnapshot {
+        auto_compact_threshold: Some(17_000),
+        ..Default::default()
+    });
+    state.session.model_by_role.insert(
+        ModelRole::Main,
+        crate::state::ModelBinding {
+            provider: "deepseek-openai".into(),
+            model_id: "deepseek-v4-pro".into(),
+            context_window: Some(50_000),
+            effort: None,
+        },
+    );
+    state
+        .session
+        .transcript
+        .on_message_appended(Arc::new(create_assistant_message(
+            vec![AssistantContent::Text(TextContent {
+                text: "done".into(),
+                provider_metadata: None,
+            })],
+            "deepseek-v4-pro",
+            coco_types::TokenUsage {
+                input_tokens: coco_types::InputTokens {
+                    total: 1_500,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )));
+
+    let StatusBarView::BuiltIn { lines } = status_bar_view(&state) else {
+        panic!("expected built-in status bar");
+    };
+    let spans: Vec<&StatusSpan> = lines.iter().flatten().collect();
+
+    assert!(
+        spans
+            .iter()
+            .any(|span| span.text == "ctx 3%" && span.tone == StatusTone::Success),
+        "3% context usage should stay green even when the compact trigger is 34%"
+    );
+}
+
+#[test]
 fn status_bar_merges_permission_pill_and_directory_onto_environment_line() {
     use coco_types::PermissionMode;
 

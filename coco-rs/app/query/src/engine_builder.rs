@@ -210,22 +210,33 @@ impl QueryEngine {
             .ok()
     }
 
-    /// The configured context window clamped to the active model's
-    /// authoritative max (`ModelInfo.context_window`).
-    ///
-    /// `QueryEngineConfig.context_window` is a plain `i64` that a
-    /// settings override (`COCO_COMPACT_AUTO_WINDOW`) or a stale config
-    /// can push above what the model actually supports. This is the
-    /// generic "model-card max wins" clamp (the latch is provider-neutral —
-    /// any Anthropic-billing clamp-back lives in `vercel-ai-anthropic`).
-    /// Feeds the auto-compact / reactive threshold helpers so they never
-    /// reason about a window the model can't honor.
-    pub(crate) fn clamped_context_window(&self) -> i64 {
-        let model_max = self
-            .runtime_snapshot()
-            .and_then(|snapshot| snapshot.model_info)
-            .map(|info| i64::from(info.context_window));
-        coco_compact::clamp_to_model_max(self.config.context_window, model_max)
+    pub(crate) fn resolved_model_info(&self) -> coco_config::ModelInfo {
+        let snapshot = match self.runtime_snapshot() {
+            Some(snapshot) => snapshot,
+            None => panic!(
+                "model runtime source must be registered before deriving model sizing: {:?}",
+                self.model_runtime_source
+            ),
+        };
+        match snapshot.model_info {
+            Some(model_info) => model_info,
+            None => panic!(
+                "model runtime must provide ModelInfo before deriving model sizing: provider={} model={}",
+                snapshot.provider, snapshot.model_id
+            ),
+        }
+    }
+
+    /// Runtime model-card context window from the same runtime snapshot
+    /// that serves the request.
+    pub(crate) fn resolved_context_window(&self) -> i64 {
+        i64::from(self.resolved_model_info().context_window)
+    }
+
+    /// Runtime model-card max output from the same runtime snapshot that
+    /// serves the request.
+    pub(crate) fn resolved_max_output_tokens(&self) -> i64 {
+        i64::from(self.resolved_model_info().max_output_tokens)
     }
 
     pub(crate) async fn notify_model_compaction(&self, query_source: &str) {
@@ -309,11 +320,11 @@ impl QueryEngine {
             // `ctx` color bands to the real compaction point (honors config
             // overrides). Only when the window is known — a 0 would collapse
             // the whole ramp to red.
-            let window = self.clamped_context_window();
+            let window = self.resolved_context_window();
             if window > 0 {
                 snap.auto_compact_threshold = Some(coco_compact::auto_compact_threshold(
                     window,
-                    self.config.max_output_tokens,
+                    self.resolved_max_output_tokens(),
                     &self.config.compact.auto,
                 ));
             }

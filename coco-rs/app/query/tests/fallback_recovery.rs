@@ -130,6 +130,7 @@ fn runtime_slot(model: Arc<dyn LanguageModel>) -> PrebuiltLanguageModelSlot {
         ..RetryConfig::default()
     };
     PrebuiltLanguageModelSlot::new(model, retry)
+        .with_model_info(coco_query::test_support::default_test_model_info())
 }
 
 fn registry_with_main_slots(
@@ -150,8 +151,6 @@ fn minimal_config(model_id: &str) -> QueryEngineConfig {
         model_id: model_id.to_string(),
         max_turns: Some(20),
         total_token_budget: Some(16_384),
-        context_window: 200_000,
-        max_output_tokens: 4_096,
         streaming_tool_execution: false,
         system_prompt: Some("you are a test assistant".into()),
         session_id: "s-fallback-test".into(),

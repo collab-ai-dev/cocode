@@ -26,7 +26,6 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
 
     let cfg = SessionConfig {
         max_turns: Some(2),
-        max_output_tokens: 512,
         system_prompt: Some(format!(
             "You are a test fixture. ALWAYS end every reply with the exact \
              literal token {MARKER} on its own line. Do not omit it under \

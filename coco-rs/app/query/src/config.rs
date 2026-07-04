@@ -29,13 +29,6 @@ use std::sync::Arc;
 /// giving up.
 pub(crate) const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT: i32 = 3;
 
-/// Default context window when no `ModelInfo` is wired (mocked clients,
-/// test fixtures) and the caller didn't pass an explicit value. Chosen
-/// to match the headline-model Anthropic / OpenAI bands at the time of
-/// import; conservative enough not to over-block, liberal enough to let
-/// typical sessions through.
-pub(crate) const DEFAULT_CONTEXT_WINDOW: i64 = 200_000;
-
 /// Default cap on consecutive `StructuredOutput` retries. Overridable
 /// via [`coco_config::EnvKey::CocoMaxStructuredOutputRetries`].
 pub(crate) const DEFAULT_MAX_STRUCTURED_OUTPUT_RETRIES: u32 = 5;
@@ -143,10 +136,6 @@ pub struct QueryEngineConfig {
     /// own depth and gate nested `Agent` spawning at
     /// `coco_subagent::SUBAGENT_DEPTH_LIMIT`. Defaults to 0.
     pub query_depth: i32,
-    /// Context window size in tokens (for compaction trigger).
-    pub context_window: i64,
-    /// Max output tokens for the model (used in effective window calculation).
-    pub max_output_tokens: i64,
     /// Maximum budget in USD (None = unlimited).
     pub max_budget_usd: Option<f64>,
     /// Per-turn output-token budget surfaced to the model via the
@@ -404,8 +393,6 @@ impl Default for QueryEngineConfig {
             permission_mode_availability: coco_types::PermissionModeAvailability::default(),
             use_auto_mode_during_plan: true,
             query_depth: 0,
-            context_window: DEFAULT_CONTEXT_WINDOW,
-            max_output_tokens: 16_384,
             max_budget_usd: None,
             output_token_budget: None,
             requires_structured_output: false,

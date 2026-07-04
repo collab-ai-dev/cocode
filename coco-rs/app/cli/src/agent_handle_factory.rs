@@ -322,9 +322,16 @@ pub async fn build_agent_team_wiring(
         adapter,
         panel_event_sink,
     ));
+    let main_snapshot = runtime
+        .model_runtimes()
+        .snapshot_for_role(ModelRole::Main)
+        .context("Main model runtime snapshot must be available for teammate compaction")?;
+    let main_model_info = main_snapshot
+        .model_info
+        .context("Main model runtime must provide ModelInfo for teammate compaction")?;
     let auto_compact_threshold = coco_compact::auto_compact_threshold(
-        /*context_window*/ 200_000,
-        /*max_output_tokens*/ 16_384,
+        i64::from(main_model_info.context_window),
+        i64::from(main_model_info.max_output_tokens),
         &runtime.runtime_config.compact.auto,
     );
     handle.set_teammate_auto_compact_threshold(auto_compact_threshold);

@@ -23,7 +23,6 @@ use crate::cli::harness::run_session;
 pub async fn run(provider: &str, model: &str) -> Result<()> {
     let cfg = SessionConfig {
         max_turns: Some(4),
-        max_output_tokens: 1_024,
         ..SessionConfig::default()
     };
     // `seq 1 8000` emits ~46k chars (each line is up to 4 digits + `\n`).

@@ -334,8 +334,6 @@ impl TuiHarness {
                 matches!(cfg.permission_mode, PermissionMode::BypassPermissions),
                 false,
             ),
-            context_window: 200_000,
-            max_output_tokens: 2_048,
             max_turns: cfg.max_turns,
             total_token_budget: None,
             system_prompt: Some("You are a test scripted model.".into()),

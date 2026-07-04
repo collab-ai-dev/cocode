@@ -125,10 +125,6 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // `fork_isolation.child_query_depth()` so the fork counts toward
             // the same nesting cap.
             query_depth: config.child_query_depth,
-            context_window: config
-                .context_window
-                .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW),
-            max_output_tokens: config.max_output_tokens.unwrap_or(16_384),
             max_budget_usd: None,
             // Subagents inherit no output-token budget (reminder stays dormant);
             // the caller sets it explicitly when desired, same as the main loop.

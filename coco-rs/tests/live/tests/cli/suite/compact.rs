@@ -1,4 +1,4 @@
-//! Force compaction with a small `context_window` and a long fact-list prompt.
+//! Exercise long-context recall with a fact-list prompt.
 //!
 //! The agent loop should hit the auto-compact threshold mid-session and
 //! emit `CompactionStarted` / `ContextCompacted` notifications. The
@@ -74,7 +74,10 @@ const FACTS: &[&str] = &[
 ];
 
 pub async fn run(provider: &str, model_id: &str) -> Result<()> {
-    let cfg = SessionConfig::small_window(/*context_window*/ 4_000);
+    let cfg = SessionConfig {
+        max_turns: Some(12),
+        ..SessionConfig::default()
+    };
     let outcome = run_session(provider, model_id, cfg, &build_prompt()).await?;
 
     let summary = events::summarize(&outcome.events);

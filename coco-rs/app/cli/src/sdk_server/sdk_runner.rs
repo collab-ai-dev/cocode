@@ -22,9 +22,11 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
+use coco_inference::ModelRuntimeSource;
 use coco_messages::MessageHistory;
 use coco_query::QueryEngineConfig;
 use coco_types::CoreEvent;
+use coco_types::ModelRole;
 use coco_types::TurnStartParams;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -43,8 +45,6 @@ use crate::sdk_server::handlers::TurnRunner;
 /// `with_*` install list.
 pub struct QueryEngineRunner {
     runtime: Arc<crate::session_runtime::SessionRuntime>,
-    /// Max output tokens per turn. Pulled from CLI flags at startup.
-    max_output_tokens: i64,
     /// Max internal agent turns (tool-use iterations) per SDK turn.
     /// `None` = unbounded unless `max_turns` is supplied in the request
     /// or `loop.max_turns` in settings.
@@ -59,13 +59,11 @@ impl QueryEngineRunner {
     /// session subsystems).
     pub fn new(
         runtime: Arc<crate::session_runtime::SessionRuntime>,
-        max_output_tokens: i64,
         max_turns: Option<i32>,
         system_prompt: Option<String>,
     ) -> Self {
         Self {
             runtime,
-            max_output_tokens,
             max_turns,
             system_prompt,
         }
@@ -82,7 +80,6 @@ impl TurnRunner for QueryEngineRunner {
     ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
         let mut prompt = params.prompt;
         let system_prompt = self.system_prompt.clone();
-        let max_output_tokens = self.max_output_tokens;
         let max_turns = self.max_turns;
         let runtime = self.runtime.clone();
         let history_handle = handoff.history.clone();
@@ -126,23 +123,30 @@ impl TurnRunner for QueryEngineRunner {
                     &runtime.original_cwd,
                 );
             let current_engine_config = runtime.current_engine_config().await;
+            let model_selection = runtime.resolve_model_selection(&handoff.model);
+            let model_runtime_source = model_selection
+                .clone()
+                .map(ModelRuntimeSource::Explicit)
+                .unwrap_or(ModelRuntimeSource::Role(ModelRole::Main));
+            let model_id = model_selection
+                .as_ref()
+                .map(|selection| selection.model_id.clone())
+                .unwrap_or_else(|| handoff.model.clone());
             let mut plan_mode_settings = runtime_config.settings.merged.plan_mode.clone();
             if let Some(instructions) = handoff.plan_mode_instructions.clone() {
                 plan_mode_settings.custom_instructions = Some(instructions);
             }
             let config = QueryEngineConfig {
-                model_id: handoff.model.clone(),
+                model_id,
                 permission_mode,
-                context_window: 200_000,
                 permission_rule_source_roots: permission_rule_source_roots.clone(),
-                max_output_tokens,
                 // Request `max_turns` wins, else settings `loop.max_turns`,
                 // else unbounded.
                 max_turns: max_turns.or(runtime_config.loop_config.max_turns),
                 total_token_budget: runtime_config.loop_config.total_token_budget.map(i64::from),
                 prompt_cache: runtime
                     .model_runtimes()
-                    .snapshot_for_role(coco_types::ModelRole::Main)
+                    .snapshot_for_source(model_runtime_source.clone())
                     .ok()
                     .is_some_and(|snapshot| snapshot.supports_prompt_cache)
                     .then(|| coco_types::PromptCacheConfig {
@@ -215,7 +219,8 @@ impl TurnRunner for QueryEngineRunner {
 
             let engine = runtime
                 .build_engine_from_config(config, cancel, Some(handoff.app_state.clone()))
-                .await;
+                .await
+                .with_model_runtime_source(model_runtime_source);
 
             if let Some(request) = coco_commands::parse_goal_sentinel(&prompt) {
                 let args = crate::goal_command::goal_display_args(&request).to_string();

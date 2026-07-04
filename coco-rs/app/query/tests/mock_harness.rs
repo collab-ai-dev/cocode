@@ -582,11 +582,13 @@ pub async fn run_plan_mode_turn_with_events(
         session_id: params.session_id,
         ..Default::default()
     };
-    let main_slot = PrebuiltLanguageModelSlot::new(model, coco_inference::RetryConfig::default());
+    let main_slot = PrebuiltLanguageModelSlot::new(model, coco_inference::RetryConfig::default())
+        .with_model_info(coco_query::test_support::default_test_model_info());
     let mut registry_runtimes = vec![(ModelRole::Main, main_slot, Vec::new())];
     if let Some(plan_model) = params.plan_role_model {
         let plan_slot =
-            PrebuiltLanguageModelSlot::new(plan_model, coco_inference::RetryConfig::default());
+            PrebuiltLanguageModelSlot::new(plan_model, coco_inference::RetryConfig::default())
+                .with_model_info(coco_query::test_support::default_test_model_info());
         registry_runtimes.push((ModelRole::Plan, plan_slot, Vec::new()));
     }
     let model_runtimes = Arc::new(ModelRuntimeRegistry::from_prebuilt_language_model_roles(

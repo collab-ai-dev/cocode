@@ -200,8 +200,6 @@ async fn deepseek_request_prefix_is_byte_stable_across_turns() -> Result<()> {
         permission_mode_availability: coco_types::PermissionModeAvailability::new(
             /*bypass_permissions*/ true, /*auto*/ false,
         ),
-        context_window: 1_000_000,
-        max_output_tokens: 2_048,
         max_turns: Some(8),
         total_token_budget: None,
         system_prompt: Some("You are a test agent.".into()),

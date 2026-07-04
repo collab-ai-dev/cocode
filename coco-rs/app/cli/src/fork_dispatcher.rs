@@ -97,8 +97,6 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             model_id: cache.model_id.clone(),
             permission_mode: coco_types::PermissionMode::Default,
             permission_rule_source_roots,
-            context_window: agent_config.context_window.unwrap_or(200_000),
-            max_output_tokens: agent_config.max_output_tokens.unwrap_or(16_384),
             // Forks stay bounded (default single round-trip).
             max_turns: Some(agent_config.max_turns.unwrap_or(1)),
             total_token_budget: None,

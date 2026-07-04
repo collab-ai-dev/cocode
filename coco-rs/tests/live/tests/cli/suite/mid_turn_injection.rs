@@ -35,7 +35,6 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
 
     let cfg = SessionConfig {
         max_turns: Some(6),
-        max_output_tokens: 1_024,
         ..SessionConfig::default()
     };
     let prompt = "Use the Bash tool to run exactly: sleep 3 && echo done. \

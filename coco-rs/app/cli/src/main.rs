@@ -672,7 +672,6 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
 
     let runner = Arc::new(QueryEngineRunner::new(
         session_runtime,
-        cli.max_tokens.unwrap_or(16_384),
         cli.max_turns,
         system_prompt,
     ));

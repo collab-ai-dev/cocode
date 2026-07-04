@@ -323,7 +323,6 @@ pub async fn build_live_server_with_options(
 
     let runner = Arc::new(QueryEngineRunner::new(
         session_runtime.clone(),
-        cli.max_tokens.unwrap_or(2_048),
         cli.max_turns.or(Some(8)),
         Some(system_prompt),
     ));

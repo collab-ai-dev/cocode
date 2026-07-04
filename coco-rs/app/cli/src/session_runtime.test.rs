@@ -18,12 +18,20 @@ use super::thinking_level_for_effort_from;
 use crate::Cli;
 
 async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
+    build_runtime_with_main(home, "anthropic", "claude-opus-4-7").await
+}
+
+async fn build_runtime_with_main(
+    home: &TempDir,
+    provider: &str,
+    model_id: &str,
+) -> Arc<SessionRuntime> {
     let settings = SettingsWithSource {
         merged: Settings {
             models: coco_config::ModelSelectionSettings {
                 main: Some(RoleSlots::new(ProviderModelSelection {
-                    provider: "anthropic".into(),
-                    model_id: "claude-opus-4-7".into(),
+                    provider: provider.into(),
+                    model_id: model_id.into(),
                 })),
                 ..Default::default()
             },
@@ -69,6 +77,39 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
     })
     .await
     .expect("build SessionRuntime")
+}
+
+#[tokio::test]
+async fn main_runtime_snapshot_uses_main_model_context_metadata() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime_with_main(&home, "deepseek-openai", "deepseek-v4-pro").await;
+
+    let snapshot = runtime
+        .model_runtimes()
+        .snapshot_for_role(coco_types::ModelRole::Main)
+        .expect("main runtime snapshot");
+    let info = snapshot.model_info.expect("main runtime model info");
+
+    assert_eq!(info.context_window.get(), 1_000_000);
+    assert_eq!(info.max_output_tokens.get(), 12_288);
+}
+
+#[tokio::test]
+async fn sdk_model_selection_resolves_bare_model_against_main_provider() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime_with_main(&home, "deepseek-openai", "deepseek-v4-pro").await;
+
+    let bare = runtime
+        .resolve_model_selection("deepseek-v4-pro")
+        .expect("bare model should resolve");
+    assert_eq!(bare.provider, "deepseek-openai");
+    assert_eq!(bare.model_id, "deepseek-v4-pro");
+
+    let explicit = runtime
+        .resolve_model_selection("deepseek-openai/deepseek-v4-pro")
+        .expect("explicit model should resolve");
+    assert_eq!(explicit.provider, "deepseek-openai");
+    assert_eq!(explicit.model_id, "deepseek-v4-pro");
 }
 
 #[test]
