@@ -26,6 +26,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use coco_types::TaskKilledBy;
+use coco_types::TaskNotificationPayload;
+use coco_types::TaskNotificationSource;
+use coco_types::TaskStatus;
 
 /// One push-notification produced by a background task lifecycle
 /// transition. Carries all fields emitted across shell + agent
@@ -50,6 +53,85 @@ pub struct TaskNotification {
     pub description: String,
     /// Per-variant payload. Drives the renderer.
     pub kind: NotificationKind,
+}
+
+impl TaskNotification {
+    /// Human-facing summary shared by XML rendering and typed UI payloads.
+    pub fn summary(&self) -> String {
+        match &self.kind {
+            NotificationKind::ShellTerminal {
+                status,
+                exit_code,
+                killed_by,
+            } => {
+                let mut summary = format!("Background command \"{}\"", self.description);
+                match status {
+                    TerminalStatus::Completed => {
+                        summary.push_str(" completed");
+                        if let Some(code) = exit_code {
+                            summary.push_str(&format!(" (exit code {code})"));
+                        }
+                    }
+                    TerminalStatus::Failed => {
+                        summary.push_str(" failed");
+                        if let Some(code) = exit_code {
+                            summary.push_str(&format!(" with exit code {code}"));
+                        }
+                    }
+                    TerminalStatus::Killed => summary.push_str(killed_suffix(*killed_by)),
+                }
+                summary
+            }
+            NotificationKind::AgentTerminal {
+                status,
+                error,
+                killed_by,
+                ..
+            } => match status {
+                TerminalStatus::Completed => {
+                    format!("Agent \"{}\" finished", self.description)
+                }
+                TerminalStatus::Failed => {
+                    let reason = error.as_deref().unwrap_or("Unknown error");
+                    format!("Agent \"{}\" failed: {reason}", self.description)
+                }
+                TerminalStatus::Killed => {
+                    format!(
+                        "Agent \"{}\"{}",
+                        self.description,
+                        killed_suffix(*killed_by)
+                    )
+                }
+            },
+            NotificationKind::Stall { .. } => format!(
+                "Background command \"{}\" appears to be waiting for interactive input",
+                self.description
+            ),
+        }
+    }
+
+    /// Structured projection for UI and queue-preview surfaces. The rendered
+    /// XML remains the model-facing contract.
+    pub fn payload(&self) -> TaskNotificationPayload {
+        let (source, status) = match &self.kind {
+            NotificationKind::ShellTerminal { status, .. } => (
+                TaskNotificationSource::ShellTerminal,
+                Some((*status).into()),
+            ),
+            NotificationKind::AgentTerminal { status, .. } => (
+                TaskNotificationSource::AgentTerminal,
+                Some((*status).into()),
+            ),
+            NotificationKind::Stall { .. } => (TaskNotificationSource::ShellStall, None),
+        };
+        TaskNotificationPayload {
+            task_id: self.task_id.clone(),
+            summary: self.summary(),
+            status,
+            source,
+            output_file: Some(self.output_file.clone()),
+        }
+    }
 }
 
 /// Notification variants.
@@ -105,6 +187,16 @@ impl TerminalStatus {
     }
 }
 
+impl From<TerminalStatus> for TaskStatus {
+    fn from(value: TerminalStatus) -> Self {
+        match value {
+            TerminalStatus::Completed => Self::Completed,
+            TerminalStatus::Failed => Self::Failed,
+            TerminalStatus::Killed => Self::Killed,
+        }
+    }
+}
+
 /// Usage block embedded in agent-task completion notifications.
 /// Field shape for agent notification usage.
 #[derive(Debug, Clone)]
@@ -128,25 +220,10 @@ pub fn render(n: &TaskNotification) -> String {
     match &n.kind {
         NotificationKind::ShellTerminal {
             status,
-            exit_code,
-            killed_by,
+            exit_code: _,
+            killed_by: _,
         } => {
-            let mut summary = format!("Background command \"{}\"", n.description);
-            match status {
-                TerminalStatus::Completed => {
-                    summary.push_str(" completed");
-                    if let Some(code) = exit_code {
-                        summary.push_str(&format!(" (exit code {code})"));
-                    }
-                }
-                TerminalStatus::Failed => {
-                    summary.push_str(" failed");
-                    if let Some(code) = exit_code {
-                        summary.push_str(&format!(" with exit code {code}"));
-                    }
-                }
-                TerminalStatus::Killed => summary.push_str(killed_suffix(*killed_by)),
-            }
+            let summary = n.summary();
             render_terminal(n, *status, &summary, None, None, None, None)
         }
         NotificationKind::AgentTerminal {
@@ -154,21 +231,10 @@ pub fn render(n: &TaskNotification) -> String {
             result,
             usage,
             worktree,
-            error,
-            killed_by,
+            error: _,
+            killed_by: _,
         } => {
-            let summary = match status {
-                TerminalStatus::Completed => {
-                    format!("Agent \"{}\" finished", n.description)
-                }
-                TerminalStatus::Failed => {
-                    let reason = error.as_deref().unwrap_or("Unknown error");
-                    format!("Agent \"{}\" failed: {reason}", n.description)
-                }
-                TerminalStatus::Killed => {
-                    format!("Agent \"{}\"{}", n.description, killed_suffix(*killed_by))
-                }
-            };
+            let summary = n.summary();
             render_terminal(
                 n,
                 *status,
@@ -263,10 +329,7 @@ fn render_stall(n: &TaskNotification, tail: &str) -> String {
         xml.push_str(&format!("<tool-use-id>{tu}</tool-use-id>\n"));
     }
     xml.push_str(&format!("<output-file>{}</output-file>\n", n.output_file));
-    let summary = format!(
-        "Background command \"{}\" appears to be waiting for interactive input",
-        n.description
-    );
+    let summary = n.summary();
     xml.push_str(&format!("<summary>{}</summary>\n", escape_xml(&summary)));
     xml.push_str("</task-notification>\n");
     if !tail.is_empty() {

@@ -597,6 +597,21 @@ class TaskListStatus(str, Enum):
     completed = "completed"
 
 
+class TaskNotificationSource(str, Enum):
+    shell_terminal = "shell_terminal"
+    agent_terminal = "agent_terminal"
+    shell_stall = "shell_stall"
+    hook_rewake = "hook_rewake"
+
+
+class TaskStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    killed = "killed"
+
+
 class TurnAbortReason(str, Enum):
     user_cancel = "user_cancel"
     submit_interrupt = "submit_interrupt"
@@ -653,7 +668,10 @@ AttachmentBody = Union["LanguageModelV4Message", "SilentPayload", "dict[str, Any
 
 # Typed structured extras carried alongside an [`AttachmentBody::Api`] body.
 AttachmentExtras = Union[
-    "SkillDiscoveryPayload", "CompactFileReferencePayload", "MentionSummaryPayload"
+    "SkillDiscoveryPayload",
+    "CompactFileReferencePayload",
+    "TaskNotificationPayload",
+    "MentionSummaryPayload",
 ]
 
 # Top-level JSON-RPC 2.0 message.
@@ -5737,6 +5755,14 @@ class TaskCreatedInput(BaseModel):
     team_name: str | None = None
     teammate_name: str | None = None
     transcript_path: str = ""
+
+
+class TaskNotificationPayload(BaseModel):
+    source: TaskNotificationSource
+    summary: str
+    task_id: str
+    output_file: str | None = None
+    status: TaskStatus | None = None
 
 
 class TaskRecord(BaseModel):

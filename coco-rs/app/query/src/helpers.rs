@@ -21,7 +21,6 @@ use coco_messages::create_error_tool_result;
 use coco_messages::wrapping::wrap_in_system_reminder;
 use coco_system_reminder::QueueOrigin;
 use coco_system_reminder::wrap_command_text;
-use coco_types::AttachmentKind;
 use coco_types::MessageOrigin;
 use coco_types::ToolId;
 use std::sync::Arc;
@@ -140,7 +139,7 @@ pub async fn drain_command_queue_into_history(
 /// first-class [`Message::User`] carrying the **raw** text (fully visible in
 /// the transcript and counted as a user message); every other origin
 /// (coordinator / task-notification / channel) stays a model-only
-/// [`AttachmentKind::QueuedCommand`] attachment.
+/// [`coco_types::AttachmentKind::QueuedCommand`] attachment.
 /// For the human case the model-facing "The user sent a new message while you
 /// were working…" framing is **not** baked here — it is applied at prompt-build
 /// time by [`wrap_steering_messages_for_api`], so the stored message stays raw.
@@ -220,7 +219,7 @@ fn wrap_steering_llm_message(raw: &LlmMessage) -> LlmMessage {
 }
 
 /// Convert a [`QueuedCommand`] drained from the queue into a model-bound
-/// `AttachmentMessage` of kind [`AttachmentKind::QueuedCommand`].
+/// `AttachmentMessage` of kind [`coco_types::AttachmentKind::QueuedCommand`].
 /// Used for non-human queue origins (coordinator / task-notification /
 /// channel) whose framing is model-only and which never surface as a user
 /// message. Human steering goes through [`queued_command_to_user_message`].
@@ -238,7 +237,7 @@ fn wrap_steering_llm_message(raw: &LlmMessage) -> LlmMessage {
 /// system-reminder wrap; image bytes ride alongside untouched.
 /// Lands as `Message::Attachment` with `kind = QueuedCommand`. The
 /// kind threads through to UI rendering
-/// (`AttachmentKind::renders_in_transcript`) and to the API
+/// (`coco_types::AttachmentKind::renders_in_transcript`) and to the API
 /// normalization path that surfaces the wrapped text to the model.
 pub fn queued_command_to_attachment(cmd: &QueuedCommand) -> Message {
     let framed = wrap_command_text(&cmd.prompt, cmd.origin.as_ref());
@@ -255,9 +254,9 @@ pub fn queued_command_to_attachment(cmd: &QueuedCommand) -> Message {
         }
         LlmMessage::user(parts)
     };
-    Message::Attachment(AttachmentMessage::api(
-        AttachmentKind::QueuedCommand,
+    Message::Attachment(AttachmentMessage::queued_command(
         llm_message,
+        cmd.task_notification.clone(),
     ))
 }
 

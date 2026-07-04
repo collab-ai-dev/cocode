@@ -15,6 +15,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 
 use coco_types::AttachmentKind;
+use coco_types::TaskStatus;
 
 use crate::i18n::t;
 use crate::presentation::streaming::StreamingTailView;
@@ -657,6 +658,30 @@ pub(crate) fn attachment_summary_text(source: &coco_messages::Message) -> Option
     let body = strip_system_reminder_wrapper(&att.as_text_for_display());
     let first = body.lines().map(str::trim).find(|line| !line.is_empty())?;
     Some(first.to_string())
+}
+
+pub(crate) fn task_notification_line(
+    source: &coco_messages::Message,
+    styles: UiStyles<'_>,
+) -> Option<Line<'static>> {
+    let coco_messages::Message::Attachment(att) = source else {
+        return None;
+    };
+    let Some(coco_messages::AttachmentExtras::TaskNotification(payload)) = att.extras.as_ref()
+    else {
+        return None;
+    };
+
+    let color = match payload.status {
+        Some(TaskStatus::Completed) => styles.success(),
+        Some(TaskStatus::Failed) => styles.error(),
+        Some(TaskStatus::Killed) => styles.warning(),
+        Some(TaskStatus::Pending | TaskStatus::Running) | None => styles.dim(),
+    };
+    Some(Line::from(vec![
+        Span::raw("◇ ").fg(color).dim(),
+        Span::raw(payload.summary.clone()).fg(color),
+    ]))
 }
 
 fn format_goal_status(payload: &coco_types::GoalStatusPayload) -> String {

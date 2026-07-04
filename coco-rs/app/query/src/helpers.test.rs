@@ -1,6 +1,7 @@
 use super::*;
 use coco_messages::Message;
 use coco_messages::StopReason;
+use coco_types::AttachmentKind;
 
 fn api_error_text(msg: &Message) -> String {
     let Message::Assistant(asst) = msg else {
@@ -160,6 +161,35 @@ fn queued_command_to_message_coordinator_stays_model_only_attachment() {
         panic!("coordinator must stay an attachment, got {msg:?}");
     };
     assert_eq!(att.kind, AttachmentKind::QueuedCommand);
+}
+
+#[test]
+fn queued_command_to_attachment_preserves_task_notification_payload_and_api_body() {
+    let payload = coco_types::TaskNotificationPayload {
+        task_id: "task-1".to_string(),
+        summary: "Background command \"cargo test\" completed (exit code 0)".to_string(),
+        status: Some(coco_types::TaskStatus::Completed),
+        source: coco_types::TaskNotificationSource::ShellTerminal,
+        output_file: Some("/tmp/task-1.out".to_string()),
+    };
+    let cmd = QueuedCommand::new(
+        "<task-notification>\n<summary>Background command &quot;cargo test&quot; completed (exit code 0)</summary>\n</task-notification>".into(),
+        QueuePriority::Later,
+    )
+    .with_origin(QueueOrigin::TaskNotification)
+    .with_task_notification(payload.clone());
+
+    let msg = queued_command_to_attachment(&cmd);
+    let Message::Attachment(att) = &msg else {
+        panic!("task notification should drain as attachment, got {msg:?}");
+    };
+    assert_eq!(att.kind, AttachmentKind::QueuedCommand);
+    assert!(msg_text(&msg).contains("A background agent completed a task:"));
+    assert!(msg_text(&msg).contains("<task-notification>"));
+    assert!(matches!(
+        att.extras.as_ref(),
+        Some(coco_messages::AttachmentExtras::TaskNotification(stored)) if stored == &payload
+    ));
 }
 
 #[test]

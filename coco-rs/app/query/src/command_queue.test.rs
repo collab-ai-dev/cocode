@@ -42,12 +42,19 @@ fn test_new_classifies_whitespace_prefixed_slash_command() {
 }
 
 #[test]
-fn task_notification_preview_uses_decoded_summary() {
+fn task_notification_preview_uses_typed_summary() {
     let cmd = QueuedCommand::new(
-        "<task-notification>\n<summary>Background command &quot;echo hi&quot; completed &amp; saved</summary>\n</task-notification>".into(),
+        "<task-notification>\n<summary>wrong xml summary</summary>\n</task-notification>".into(),
         QueuePriority::Later,
     )
-    .with_origin(QueueOrigin::TaskNotification);
+    .with_origin(QueueOrigin::TaskNotification)
+    .with_task_notification(coco_types::TaskNotificationPayload {
+        task_id: "task-1".to_string(),
+        summary: "Background command \"echo hi\" completed & saved".to_string(),
+        status: Some(coco_types::TaskStatus::Completed),
+        source: coco_types::TaskNotificationSource::ShellTerminal,
+        output_file: Some("/tmp/task-1.out".to_string()),
+    });
 
     assert_eq!(
         cmd.preview(),
@@ -56,11 +63,17 @@ fn task_notification_preview_uses_decoded_summary() {
 }
 
 #[test]
-fn task_notification_preview_falls_back_without_summary() {
-    let cmd = QueuedCommand::new("plain task notification".into(), QueuePriority::Later)
-        .with_origin(QueueOrigin::TaskNotification);
+fn task_notification_preview_does_not_parse_xml_without_typed_payload() {
+    let cmd = QueuedCommand::new(
+        "<task-notification><summary>xml summary</summary></task-notification>".into(),
+        QueuePriority::Later,
+    )
+    .with_origin(QueueOrigin::TaskNotification);
 
-    assert_eq!(cmd.preview(), "plain task notification");
+    assert_eq!(
+        cmd.preview(),
+        "<task-notification><summary>xml summary</summary></task-notification>"
+    );
 }
 
 #[tokio::test]

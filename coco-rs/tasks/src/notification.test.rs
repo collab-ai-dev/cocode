@@ -1,5 +1,17 @@
 use super::*;
 
+fn assert_payload_summary_matches_xml(n: &TaskNotification) {
+    let payload = n.payload();
+    let xml = render(n);
+    assert!(
+        xml.contains(&format!(
+            "<summary>{}</summary>",
+            escape_xml(&payload.summary)
+        )),
+        "XML summary should match payload summary: {xml}"
+    );
+}
+
 #[test]
 fn shell_terminal_completed_with_exit_code() {
     let n = TaskNotification {
@@ -27,6 +39,14 @@ fn shell_terminal_completed_with_exit_code() {
     assert!(!xml.contains("<worktree>"));
     // Shell terminals carry no agent recur-note (the note is agent-specific).
     assert!(!xml.contains("<note>"));
+    assert_payload_summary_matches_xml(&n);
+    let payload = n.payload();
+    assert_eq!(payload.status, Some(coco_types::TaskStatus::Completed));
+    assert_eq!(
+        payload.source,
+        coco_types::TaskNotificationSource::ShellTerminal
+    );
+    assert_eq!(payload.output_file.as_deref(), Some("/tmp/tb01.output"));
 }
 
 #[test]
@@ -48,6 +68,8 @@ fn shell_terminal_failed_with_exit_code() {
     assert!(xml.contains(
         "<summary>Background command &quot;make&quot; failed with exit code 2</summary>"
     ));
+    assert_payload_summary_matches_xml(&n);
+    assert_eq!(n.payload().status, Some(coco_types::TaskStatus::Failed));
 }
 
 #[test]
@@ -70,6 +92,8 @@ fn shell_terminal_killed_omits_exit_code() {
         xml.contains("<summary>Background command &quot;sleep 999&quot; was stopped</summary>")
     );
     assert!(!xml.contains("(exit code"));
+    assert_payload_summary_matches_xml(&n);
+    assert_eq!(n.payload().status, Some(coco_types::TaskStatus::Killed));
 }
 
 #[test]
@@ -147,6 +171,13 @@ fn agent_terminal_completed_includes_result_usage_worktree() {
     assert!(xml.contains(
         "<worktree><worktreePath>/tmp/wt/ta01</worktreePath><worktreeBranch>feat/x</worktreeBranch></worktree>"
     ));
+    assert_payload_summary_matches_xml(&n);
+    let payload = n.payload();
+    assert_eq!(payload.status, Some(coco_types::TaskStatus::Completed));
+    assert_eq!(
+        payload.source,
+        coco_types::TaskNotificationSource::AgentTerminal
+    );
 }
 
 #[test]
@@ -267,6 +298,13 @@ fn stall_omits_status_tag() {
     assert!(xml.contains("waiting for interactive input"));
     assert!(xml.contains("Last output:\nContinue? [y/N]"));
     assert!(xml.contains("Kill this task"));
+    assert_payload_summary_matches_xml(&n);
+    let payload = n.payload();
+    assert_eq!(payload.status, None);
+    assert_eq!(
+        payload.source,
+        coco_types::TaskNotificationSource::ShellStall
+    );
 }
 
 #[test]
