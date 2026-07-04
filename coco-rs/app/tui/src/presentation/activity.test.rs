@@ -89,15 +89,25 @@ fn turn_activity_view_falls_back_to_agents_when_present() {
 }
 
 #[test]
-fn foreground_subagent_row_shows_background_hint() {
+fn foreground_subagent_header_shows_compact_hints() {
     let _locale = crate::i18n::locale_test_guard("en");
     let mut state = AppState::default();
     state.session.subagents.push(subagent());
 
     let view = surface(turn_activity_view(&state, 160));
-    let text = per_line_text(&view).join("\n");
+    let rows = per_line_text(&view);
+    let text = rows.join("\n");
+    let header = rows
+        .iter()
+        .find(|row| row.contains("Subagents"))
+        .expect("subagent header");
 
-    assert!(text.contains("Ctrl+B to run in background"), "{text}");
+    assert!(header.contains("bg Ctrl+B"), "{text}");
+    assert!(header.contains("switch Shift+↑"), "{text}");
+    assert!(
+        !text.contains("Ctrl+B to run in background"),
+        "long background hint should not occupy its own row: {text}"
+    );
 }
 
 #[test]
@@ -342,7 +352,8 @@ fn switcher_focus_adds_cursor_and_hint_no_main_row() {
 
 #[test]
 fn no_switcher_cursor_when_unfocused() {
-    // Passive panel (no focus) must look unchanged — no `◯ main`, no hint.
+    // Passive panel (no focus) must not show switcher UI — no `◯ main`, no
+    // focused switcher hint row.
     let _locale = crate::i18n::locale_test_guard("en");
     let mut state = AppState::default();
     state.session.subagents = vec![subagent()];
@@ -351,7 +362,11 @@ fn no_switcher_cursor_when_unfocused() {
     assert!(!text.contains("◯ main"), "main row leaked: {text}");
     assert!(
         !text.contains("← back"),
-        "hint leaked when unfocused: {text}"
+        "focused hint leaked when unfocused: {text}"
+    );
+    assert!(
+        text.contains("switch Shift+↑"),
+        "collapsed hint should live on the header: {text}"
     );
 }
 

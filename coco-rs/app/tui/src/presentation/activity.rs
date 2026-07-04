@@ -6,6 +6,7 @@ use coco_types::ExpandedView;
 use unicode_width::UnicodeWidthStr;
 
 use crate::i18n::t;
+use crate::presentation::layout::truncate_to_width;
 use crate::state::AppState;
 use crate::state::SubagentStatus;
 use crate::state::session::TaskEntryKind;
@@ -166,11 +167,11 @@ pub(crate) fn turn_activity_view(state: &AppState, width: u16) -> TurnActivityVi
     }
 
     if matches!(state.session.expanded_view, ExpandedView::Teammates) && has_subagents {
-        return TurnActivityView::Surface(limit_surface_rows(agent_surface(state), width));
+        return TurnActivityView::Surface(limit_surface_rows(agent_surface(state, width), width));
     }
 
     if has_subagents {
-        TurnActivityView::Surface(limit_surface_rows(agent_surface(state), width))
+        TurnActivityView::Surface(limit_surface_rows(agent_surface(state, width), width))
     } else if has_running_workflow {
         TurnActivityView::Surface(limit_surface_rows(plan_surface(state), width))
     } else if state.session.stream_stall {
@@ -240,12 +241,12 @@ fn plan_surface(state: &AppState) -> ActivitySurfaceView {
     }
 }
 
-fn agent_surface(state: &AppState) -> ActivitySurfaceView {
+fn agent_surface(state: &AppState, width: u16) -> ActivitySurfaceView {
     let mut lines = status_activity_lines(state);
     if state.ui.coordinator_mode_active {
         append_coordinator_lines(state, &mut lines);
     } else {
-        append_subagent_lines(state, &mut lines);
+        append_subagent_lines(state, &mut lines, width);
     }
     append_tool_lines(state, &mut lines);
     trim_trailing_blank(&mut lines);
@@ -331,7 +332,7 @@ fn append_plan_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
     }
 }
 
-fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
+fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>, width: u16) {
     // Tree mode: when the Teammates view is expanded we draw a leader
     // row at the top and prefix each subagent with ├─ / └─ tree
     // connectors (highlighted ╞═ / ╘═ on the focused row). Otherwise
@@ -347,32 +348,6 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
     // running batch keeps this scoped to the current stage, not a running
     // cross-batch sum. The per-agent *rows* below stay live-only.
     let agg = SubagentAggregate::of(&state.session.subagents);
-    let summary = agg.summary_text();
-
-    if tree_mode && !state.session.subagents.is_empty() {
-        let mut leader = vec![
-            ActivitySpan::tone("● ", ActivityTone::Accent),
-            ActivitySpan::bold("Leader", ActivityTone::Text),
-            ActivitySpan::tone(" (lead)", ActivityTone::Dim),
-        ];
-        if let Some(summary) = &summary {
-            leader.push(ActivitySpan::tone(
-                format!("   {summary}"),
-                ActivityTone::Dim,
-            ));
-        }
-        lines.push(ActivityLine { spans: leader });
-    } else if let Some(summary) = &summary {
-        // Flat (compact inline) view has no leader row — surface the
-        // aggregate as a one-line header so the subagent cost stays
-        // visible without expanding the Teammates view.
-        lines.push(ActivityLine {
-            spans: vec![ActivitySpan::tone(
-                format!("  {summary}"),
-                ActivityTone::Dim,
-            )],
-        });
-    }
     // Only live agents render (transient stage view). Keep the original
     // index for focus matching; use the in-list position for tree
     // connectors so `└─` lands on the last *visible* row.
@@ -390,7 +365,43 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
     // viewed agent carries a `◀` marker; a hint line lists the keys.
     let switcher_active = state.ui.focus == crate::state::FocusTarget::AgentSwitcher;
     let switcher_sel = state.ui.agent_switcher_selected;
-    let mut foreground_background_hint = false;
+    let foreground_background_hint = live.iter().any(|(_, agent)| {
+        matches!(agent.kind, crate::state::SubagentKind::Subagent)
+            && !agent.is_backgrounded
+            && matches!(agent.status, SubagentStatus::Running)
+    });
+    let header_hint = subagent_header_hint(
+        foreground_background_hint,
+        !switcher_active && !live.is_empty(),
+    );
+    let summary = agg.summary_text(header_hint.as_deref());
+
+    if tree_mode && !state.session.subagents.is_empty() {
+        let mut leader = vec![
+            ActivitySpan::tone("● ", ActivityTone::Accent),
+            ActivitySpan::bold("Leader", ActivityTone::Text),
+            ActivitySpan::tone(" (lead)", ActivityTone::Dim),
+        ];
+        if let Some(summary) = &summary {
+            let prefix_width = UnicodeWidthStr::width("● Leader (lead)");
+            let summary_width = (width as usize).saturating_sub(prefix_width);
+            leader.push(ActivitySpan::tone(
+                truncate_to_width(&format!("   {summary}"), summary_width),
+                ActivityTone::Dim,
+            ));
+        }
+        lines.push(ActivityLine { spans: leader });
+    } else if let Some(summary) = &summary {
+        // Flat (compact inline) view has no leader row — surface the
+        // aggregate as a one-line header so the subagent cost stays
+        // visible without expanding the Teammates view.
+        lines.push(ActivityLine {
+            spans: vec![ActivitySpan::tone(
+                truncate_to_width(&format!("  {summary}"), width as usize),
+                ActivityTone::Dim,
+            )],
+        });
+    }
     for (pos, (i, agent)) in live.iter().enumerate() {
         let i = *i;
         let is_focused = state.session.focused_subagent_index == Some(i as i32);
@@ -523,13 +534,6 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         }
         lines.push(ActivityLine { spans });
 
-        if matches!(agent.kind, crate::state::SubagentKind::Subagent)
-            && !agent.is_backgrounded
-            && matches!(agent.status, SubagentStatus::Running)
-        {
-            foreground_background_hint = true;
-        }
-
         // Backgrounded but still alive — hint the user how to bring it back.
         // After the underlying task terminates the flag stays set but the
         // status icon already conveys the outcome, so the hint stays useful
@@ -560,21 +564,9 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         }
     }
 
-    if foreground_background_hint {
-        lines.push(ActivityLine {
-            spans: vec![
-                ActivitySpan::raw("  "),
-                ActivitySpan::tone(
-                    t!("activity.background_hint").to_string(),
-                    ActivityTone::Dim,
-                ),
-            ],
-        });
-    }
-
     // Switcher key hints. When focused, list the in-switcher keys; otherwise
-    // surface the entry affordance so `Shift+↑` is discoverable. Only shown
-    // when there's at least one switchable agent.
+    // the entry affordance lives on the header line so it stays attached to
+    // the subagent summary and does not cost an extra row.
     if switcher_active {
         lines.push(ActivityLine {
             spans: vec![ActivitySpan::tone(
@@ -582,14 +574,18 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
                 ActivityTone::Dim,
             )],
         });
-    } else if !live.is_empty() {
-        lines.push(ActivityLine {
-            spans: vec![ActivitySpan::tone(
-                format!("  {}", t!("switcher.hint_collapsed")),
-                ActivityTone::Dim,
-            )],
-        });
     }
+}
+
+fn subagent_header_hint(background: bool, switcher: bool) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if background {
+        parts.push(t!("activity.background_hint_short").to_string());
+    }
+    if switcher {
+        parts.push(t!("switcher.hint_collapsed_short").to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 /// Whether a subagent row is shown in the (transient) Agents panel.
@@ -691,7 +687,7 @@ impl SubagentAggregate {
     /// landed; the token / cache / cost segments fill in as usage arrives, so
     /// the line is present from the first spawn instead of waiting on the
     /// first token report. Falls back to a bare count for teammate-only panels.
-    fn summary_text(&self) -> Option<String> {
+    fn summary_text(&self, hint: Option<&str>) -> Option<String> {
         if self.total == 0 && self.live == 0 {
             return None;
         }
@@ -717,6 +713,9 @@ impl SubagentAggregate {
         }
         if self.cost > 0.0 {
             parts.push(format!("${:.2}", self.cost));
+        }
+        if let Some(hint) = hint {
+            parts.push(hint.to_string());
         }
         Some(parts.join(" · "))
     }

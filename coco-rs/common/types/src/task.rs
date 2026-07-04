@@ -160,18 +160,16 @@ pub struct TaskProgress {
     /// dimension). Mirrors `TokenUsage.input_tokens.cache_read`.
     #[serde(default)]
     pub cache_read_tokens: i64,
-    /// Real cost in micro-USD (USD × 1_000_000), stamped onto the
-    /// progress slot at terminal transition so `emit_task_completed`
-    /// can forward it to the TUI. Integer to keep `TaskProgress: Eq`
-    /// (and the `TaskStateBase` chain that embeds it). `0` mid-flight —
-    /// cost is only known once the subagent's engine returns its
-    /// `CostTracker`.
+    /// Real cost in micro-USD (USD × 1_000_000). Subagent progress
+    /// snapshots can populate this mid-flight from session usage updates;
+    /// terminal transitions stamp the final value before `TaskCompleted`.
+    /// Integer to keep `TaskProgress: Eq` (and the `TaskStateBase` chain
+    /// that embeds it).
     #[serde(default)]
     pub cost_micro_usd: i64,
     /// Input-side / output-side cost split (micro-USD, to keep
     /// `TaskProgress: Eq`), stamped alongside `cost_micro_usd` so the TUI
     /// can show subagent spend as `↑…/$in ↓…/$out` like the main thread.
-    /// `0` mid-flight.
     #[serde(default)]
     pub input_cost_micro_usd: i64,
     #[serde(default)]
