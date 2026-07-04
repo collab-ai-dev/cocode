@@ -66,6 +66,46 @@ fn collect_written_paths_in_messages_ignores_failed_apply_patch() {
     assert!(paths.is_empty());
 }
 
+#[test]
+fn fold_session_usage_into_task_progress_carries_live_cost_split() {
+    let mut tracker = coco_types::TaskProgress::default();
+    let totals = coco_types::SessionUsageTotals {
+        input_tokens: 1_000,
+        output_tokens: 200,
+        cache_read_input_tokens: 400,
+        input_cost_usd: 0.010,
+        cache_read_cost_usd: 0.001,
+        cache_creation_cost_usd: 0.002,
+        output_cost_usd: 0.020,
+        total_cost_usd: 0.033,
+        ..Default::default()
+    };
+
+    assert!(fold_session_usage_into_task_progress(&mut tracker, &totals));
+
+    assert_eq!(tracker.input_tokens, 1_000);
+    assert_eq!(tracker.output_tokens, 200);
+    assert_eq!(tracker.cache_read_tokens, 400);
+    assert_eq!(tracker.cost_micro_usd, 33_000);
+    assert_eq!(tracker.input_cost_micro_usd, 13_000);
+    assert_eq!(tracker.output_cost_micro_usd, 20_000);
+
+    let stale = coco_types::SessionUsageTotals {
+        input_tokens: 900,
+        output_tokens: 100,
+        cache_read_input_tokens: 300,
+        input_cost_usd: 0.005,
+        output_cost_usd: 0.010,
+        total_cost_usd: 0.015,
+        ..Default::default()
+    };
+
+    assert!(!fold_session_usage_into_task_progress(&mut tracker, &stale));
+    assert_eq!(tracker.cost_micro_usd, 33_000);
+    assert_eq!(tracker.input_cost_micro_usd, 13_000);
+    assert_eq!(tracker.output_cost_micro_usd, 20_000);
+}
+
 /// The drain must bridge a child engine's `TaskPanelChanged` snapshot to
 /// the surface's panel sink — subagent engines share the leader's
 /// `ToolAppState`, so the snapshot is session-authoritative — while every

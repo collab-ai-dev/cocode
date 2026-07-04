@@ -636,22 +636,7 @@ fn spawn_task_event_drain(
                 coco_types::CoreEvent::Protocol(
                     coco_types::ServerNotification::SessionUsageUpdated(snap),
                 ) => {
-                    let totals = &snap.totals;
-                    let total = totals.input_tokens.saturating_add(totals.output_tokens);
-                    let cost_micro = (totals.total_cost_usd * 1_000_000.0) as i64;
-                    let mut changed = false;
-                    if total > tracker.total_tokens {
-                        tracker.total_tokens = total;
-                        tracker.input_tokens = totals.input_tokens;
-                        tracker.output_tokens = totals.output_tokens;
-                        tracker.cache_read_tokens = totals.cache_read_input_tokens;
-                        changed = true;
-                    }
-                    if cost_micro > tracker.cost_micro_usd {
-                        tracker.cost_micro_usd = cost_micro;
-                        changed = true;
-                    }
-                    if changed {
+                    if fold_session_usage_into_task_progress(&mut tracker, &snap.totals) {
                         registry.set_progress(&task_id, tracker.clone()).await;
                     }
                 }
@@ -698,6 +683,44 @@ fn spawn_task_event_drain(
             "subagent event drain ended (event channel closed)"
         );
     });
+}
+
+fn fold_session_usage_into_task_progress(
+    tracker: &mut coco_types::TaskProgress,
+    totals: &coco_types::SessionUsageTotals,
+) -> bool {
+    let total = totals.input_tokens.saturating_add(totals.output_tokens);
+    let input_cost_usd =
+        totals.input_cost_usd + totals.cache_read_cost_usd + totals.cache_creation_cost_usd;
+    let cost_micro = usd_to_micro(totals.total_cost_usd);
+    let input_cost_micro = usd_to_micro(input_cost_usd);
+    let output_cost_micro = usd_to_micro(totals.output_cost_usd);
+
+    let mut changed = false;
+    if total > tracker.total_tokens {
+        tracker.total_tokens = total;
+        tracker.input_tokens = totals.input_tokens;
+        tracker.output_tokens = totals.output_tokens;
+        tracker.cache_read_tokens = totals.cache_read_input_tokens;
+        changed = true;
+    }
+    if cost_micro > tracker.cost_micro_usd {
+        tracker.cost_micro_usd = cost_micro;
+        changed = true;
+    }
+    if input_cost_micro > tracker.input_cost_micro_usd {
+        tracker.input_cost_micro_usd = input_cost_micro;
+        changed = true;
+    }
+    if output_cost_micro > tracker.output_cost_micro_usd {
+        tracker.output_cost_micro_usd = output_cost_micro;
+        changed = true;
+    }
+    changed
+}
+
+fn usd_to_micro(cost_usd: f64) -> i64 {
+    (cost_usd * 1_000_000.0) as i64
 }
 
 /// Inputs for the periodic [`spawn_agent_summary_timer`]. Bundled into a
