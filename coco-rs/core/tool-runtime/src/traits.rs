@@ -659,13 +659,18 @@ pub trait Tool: Send + Sync + 'static {
         None
     }
 
-    /// Whether this tool requires user interaction to complete.
+    /// Whether this tool's `Ask` decision *is* the tool's function — a required
+    /// human interaction (AskUserQuestion, entering/exiting plan mode) — rather
+    /// than a security-approval gate over a side effect.
     ///
-    /// When false, permission prompts are auto-denied for headless/background agents.
-    /// Used by ExitPlanMode (returns false for teammates so they send approval
-    /// via mailbox instead of requiring a local permission dialog).
+    /// Consumed by the auto-mode classifier gate (`tool_call_preparer`): auto
+    /// mode runs the LLM classifier over an `Ask` only when this is `false`, so
+    /// an interaction primitive is never silently rewritten to `Allow` (which
+    /// would drop its overlay and echo the prompt back to the model). Almost all
+    /// tools are security-gated, so the default is `false`; only the handful of
+    /// interaction primitives override to `true`.
     fn requires_user_interaction(&self) -> bool {
-        true
+        false
     }
 
     /// Whether this tool exhibits "open-world" behavior — i.e. its effect

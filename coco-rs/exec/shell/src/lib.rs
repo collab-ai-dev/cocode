@@ -39,6 +39,7 @@ pub mod windows_paths;
 
 pub use ast::BashNode;
 pub use ast::SimpleCommand;
+pub use ast::contains_control_structure;
 pub use ast::extract_simple_commands;
 pub use ast::parse_command;
 pub use bash_permissions::CompoundCommandAnalysis;

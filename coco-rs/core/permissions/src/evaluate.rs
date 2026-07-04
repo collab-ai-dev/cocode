@@ -278,6 +278,44 @@ impl PermissionEvaluator {
             }
         }
 
+        // Step 3b: Compound shell allow. A compound command (`a && b; c`) whose
+        // every subcommand is individually covered by an allow rule is allowed,
+        // even though no single rule matches the whole compound (prefix rules are
+        // barred from matching a compound by the guard in `shell_rules`). This
+        // lets the per-subcommand rules the ask flow suggests re-authorize the
+        // compound they came from. Suspended for the auto-mode classifier exactly
+        // like the per-rule allows above; deny already ran per-segment at Step 1.
+        if !options.suspend_shell_allow_rules
+            && is_shell_tool(&tool_str)
+            && let Some(command) = extract_shell_command(input)
+        {
+            let allow_contents: Vec<&str> = context
+                .allow_rules
+                .values()
+                .flatten()
+                .filter(|r| matches_tool_pattern(&r.value.tool_pattern, &tool_str))
+                .filter_map(|r| r.value.rule_content.as_deref())
+                .collect();
+            if !allow_contents.is_empty()
+                && shell_rules::compound_command_fully_allowed(
+                    &command,
+                    options.shell_cwd.as_deref().unwrap_or(""),
+                    &allow_contents,
+                    shell_case_for(&tool_str),
+                )
+            {
+                tracing::debug!(
+                    tool_name = %tool_str,
+                    permission_decision = "allow",
+                    "permission_eval: compound allow — every subcommand covered by an allow rule",
+                );
+                return PermissionDecision::Allow {
+                    updated_input: None,
+                    feedback: None,
+                };
+            }
+        }
+
         // When a tool-wide Bash ask rule is skipped because the command will be
         // sandboxed (sandbox auto-allow), the evaluator must auto-allow on
         // fall-through rather than re-prompt via mode_fallthrough.
