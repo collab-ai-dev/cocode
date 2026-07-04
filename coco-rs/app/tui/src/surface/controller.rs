@@ -108,6 +108,10 @@ impl NativeSurfaceFramePlan {
 }
 
 impl NativeSurfaceController {
+    pub(crate) fn history_replay_cache_estimated_bytes(&self) -> usize {
+        self.history.replay_cache_estimated_bytes()
+    }
+
     pub(crate) fn prepare_native_frame(
         &mut self,
         state: &AppState,

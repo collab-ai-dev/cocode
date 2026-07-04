@@ -355,6 +355,9 @@ pub struct TuiPerformanceSettings {
     pub sample_every_n_frames: u64,
     pub slow_frame_ms: u64,
     pub slow_stage_us: u64,
+    pub memory_enabled: bool,
+    pub memory_sample_interval_secs: u64,
+    pub memory_delta_threshold_mb: u64,
 }
 
 impl Default for TuiPerformanceSettings {
@@ -364,6 +367,9 @@ impl Default for TuiPerformanceSettings {
             sample_every_n_frames: 10,
             slow_frame_ms: 16,
             slow_stage_us: 1000,
+            memory_enabled: false,
+            memory_sample_interval_secs: 30,
+            memory_delta_threshold_mb: 4,
         }
     }
 }
