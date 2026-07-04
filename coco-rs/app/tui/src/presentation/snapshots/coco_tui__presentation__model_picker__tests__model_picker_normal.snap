@@ -14,14 +14,6 @@ expression: "render_snapshot(90, 24, &state)"
 │ Google                                                                                 │
 │     Gemini 2.5 Pro · 200K                                                              │
 │                                                                                        │
-│ OpenAI                                                                                 │
-│     GPT-5.4 · 200K · unavailable · thinking                                            │
-│                                                                                        │
-│                                                                                        │
-│                                                                                        │
-│                                                                                        │
-│                                                                                        │
-│                                                                                        │
 │ Thinking:  ▸auto◂   medium    high                                                     │
 │                                                                                        │
 │ ↑/↓ Model  ←/→ Effort  Tab Role  Enter Confirm  Esc Cancel                             │
