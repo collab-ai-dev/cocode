@@ -1,7 +1,7 @@
 use super::*;
 use coco_tool_runtime::{
-    AgentCompletionPayload, AgentRegistration as AR, AgentUsage, AgentWorktree,
-    BackgroundShellRequest, TaskHandle,
+    AgentCompletionPayload, AgentRegistration as AR, AgentUsage, AgentWorktree, ShellTaskRequest,
+    TaskHandle,
 };
 use coco_types::TaskStatus;
 use std::sync::Arc;
@@ -826,9 +826,10 @@ async fn mark_failed_cancels_per_task_token() {
 async fn shell_spawn_runs_command_and_marks_completed() {
     let rt = rt();
     let task_id = rt
-        .spawn_shell_task(BackgroundShellRequest {
+        .spawn_shell_task(ShellTaskRequest {
             command: "echo hello-bg".into(),
-            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             timeout_ms: Some(5_000),
             description: "echo test".into(),
             tool_use_id: Some("toolu_sh1".into()),
@@ -865,9 +866,10 @@ async fn shell_spawn_runs_command_and_marks_completed() {
 async fn shell_spawn_propagates_nonzero_exit_as_failed() {
     let rt = rt();
     let task_id = rt
-        .spawn_shell_task(BackgroundShellRequest {
+        .spawn_shell_task(ShellTaskRequest {
             command: "exit 7".into(),
-            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             timeout_ms: Some(5_000),
             description: "fail".into(),
             tool_use_id: None,
@@ -904,9 +906,10 @@ async fn shell_spawn_threads_tool_use_id_and_agent_id_into_notification() {
     let rt = rt_with_sink(sink);
 
     let _task_id = rt
-        .spawn_shell_task(BackgroundShellRequest {
+        .spawn_shell_task(ShellTaskRequest {
             command: "true".into(),
-            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             timeout_ms: Some(5_000),
             description: "noop".into(),
             tool_use_id: Some("toolu_bash99".into()),
@@ -946,15 +949,77 @@ async fn shell_spawn_threads_tool_use_id_and_agent_id_into_notification() {
 
 #[cfg(not(windows))]
 #[tokio::test]
+async fn foreground_shell_completion_is_silent_until_read() {
+    let sink = CapturingSink::default();
+    let captured = sink.captured.clone();
+    let rt = rt_with_sink(sink);
+
+    let task_id = rt
+        .spawn_shell_task(ShellTaskRequest {
+            command: "echo hello-fg".into(),
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
+            timeout_ms: Some(5_000),
+            description: "foreground echo".into(),
+            tool_use_id: Some("toolu_fg".into()),
+            issuing_agent: None,
+            progress_tx: None,
+            progress_throttle_ms: 1000,
+            auto_detach_ms: None,
+            kill_on_timeout: true,
+            sandbox_state: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+        })
+        .await
+        .unwrap();
+
+    let signal = rt
+        .subscribe_terminal(&task_id)
+        .await
+        .expect("entry must exist");
+    tokio::time::timeout(std::time::Duration::from_secs(5), signal.await_terminal())
+        .await
+        .expect("task must terminate within 5s");
+
+    let before_read = rt.get_task_status(&task_id).await.unwrap();
+    assert!(before_read.status.is_terminal());
+    assert!(!before_read.is_backgrounded());
+    assert!(
+        !before_read.notified,
+        "foreground terminal task must not be notification-consumed before the tool reads output"
+    );
+    assert!(
+        captured.lock().await.is_empty(),
+        "foreground terminal task must not enqueue a task notification"
+    );
+
+    let outputs = rt.read_terminal_outputs(&task_id).await.unwrap();
+    assert!(outputs.stdout.contains("hello-fg"));
+    assert_eq!(outputs.exit_code, Some(0));
+
+    let after_read = rt.get_task_status(&task_id).await.unwrap();
+    assert!(
+        after_read.notified,
+        "foreground terminal task is silently consumed after output read"
+    );
+    assert!(
+        captured.lock().await.is_empty(),
+        "silent foreground consumption must not enqueue a task notification"
+    );
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
 async fn shell_stop_suppresses_model_notification() {
     let sink = CapturingSink::default();
     let captured = sink.captured.clone();
     let rt = rt_with_sink(sink);
 
     let task_id = rt
-        .spawn_shell_task(BackgroundShellRequest {
+        .spawn_shell_task(ShellTaskRequest {
             command: "sleep 5".into(),
-            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             timeout_ms: Some(10_000),
             description: "sleep".into(),
             tool_use_id: Some("toolu_stop".into()),
@@ -1165,9 +1230,10 @@ async fn complete_silent_fires_cancel_and_broadcasts_terminal() {
 async fn shell_spawn_persists_exit_code_for_terminal_outputs() {
     let rt = rt();
     let task_id = rt
-        .spawn_shell_task(BackgroundShellRequest {
+        .spawn_shell_task(ShellTaskRequest {
             command: "exit 42".into(),
-            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
             timeout_ms: Some(5_000),
             description: "exit-42".into(),
             tool_use_id: None,
@@ -1212,11 +1278,12 @@ async fn shell_spawn_emits_progress_events_through_progress_tx() {
     let rt = rt();
     let (tx, mut rx) = mpsc::unbounded_channel::<ToolProgress>();
     let _task_id = rt
-        .spawn_shell_task(BackgroundShellRequest {
+        .spawn_shell_task(ShellTaskRequest {
             // Sleep long enough to ensure at least one progress tick
             // at 100 ms throttle, then exit.
             command: "sleep 0.3 && echo done".into(),
-            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
             timeout_ms: Some(5_000),
             description: "progress-test".into(),
             tool_use_id: Some("toolu_progress".into()),
@@ -1252,10 +1319,11 @@ async fn shell_spawn_emits_progress_events_through_progress_tx() {
 async fn shell_spawn_auto_detach_timer_fires() {
     let rt = rt();
     let task_id = rt
-        .spawn_shell_task(BackgroundShellRequest {
+        .spawn_shell_task(ShellTaskRequest {
             // Long-running command so auto-detach beats natural exit.
             command: "sleep 5".into(),
-            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Foreground,
             timeout_ms: Some(10_000),
             description: "auto-detach".into(),
             tool_use_id: None,

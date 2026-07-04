@@ -363,7 +363,7 @@ impl TaskHandle for TaskRuntime {
     // ── Shell spawn (was ShellTaskSpawner) ──
     async fn spawn_shell_task(
         &self,
-        request: coco_tool_runtime::BackgroundShellRequest,
+        request: coco_tool_runtime::ShellTaskRequest,
     ) -> Result<String, coco_error::BoxedError> {
         self.spawn_shell_task_impl(request).await
     }

@@ -20,7 +20,7 @@ use coco_tool_runtime::TaskHookOutcome;
 use coco_tool_runtime::ToolSpec;
 use coco_tool_runtime::ValidatedInput;
 use coco_tool_runtime::{
-    BackgroundShellRequest, TaskHandle, TaskOutputDelta, TerminalSignal, ToolUseContext,
+    ShellTaskRequest, TaskHandle, TaskOutputDelta, TerminalSignal, ToolUseContext,
 };
 use coco_types::{TaskExtras, TaskStateBase, TaskStatus};
 use serde_json::json;
@@ -244,7 +244,7 @@ impl TaskHandle for RecordingTaskHandle {
     }
     async fn spawn_shell_task(
         &self,
-        _request: BackgroundShellRequest,
+        _request: ShellTaskRequest,
     ) -> Result<String, coco_error::BoxedError> {
         unimplemented!("not used in these tests")
     }

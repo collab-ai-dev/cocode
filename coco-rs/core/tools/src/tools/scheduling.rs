@@ -5,10 +5,10 @@
 use chrono::Datelike;
 use chrono::Timelike;
 use coco_messages::ToolResult;
-use coco_tool_runtime::BackgroundShellKind;
-use coco_tool_runtime::BackgroundShellRequest;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::PromptOptions;
+use coco_tool_runtime::ShellTaskKind;
+use coco_tool_runtime::ShellTaskRequest;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
@@ -875,9 +875,10 @@ Use `persistent: true` only for monitors that should run until TaskStop. Otherwi
         } else {
             Some(input.timeout_ms.unwrap_or(MONITOR_DEFAULT_TIMEOUT_MS))
         };
-        let req = BackgroundShellRequest {
+        let req = ShellTaskRequest {
             command: input.command,
-            shell_kind: BackgroundShellKind::DefaultPlatformShell,
+            shell_kind: ShellTaskKind::DefaultPlatformShell,
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             description: format!("Monitor: {}", input.description.trim()),
             timeout_ms: timeout_ms.map(|ms| ms as i64),
             tool_use_id: ctx.tool_use_id.clone(),

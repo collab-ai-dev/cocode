@@ -4,9 +4,10 @@
 //! helpers from `powershell.rs` — previously they were dead code.
 
 use super::PowerShellTool;
-use coco_tool_runtime::BackgroundShellKind;
-use coco_tool_runtime::BackgroundShellRequest;
 use coco_tool_runtime::DynTool;
+use coco_tool_runtime::ShellTaskKind;
+use coco_tool_runtime::ShellTaskRequest;
+use coco_tool_runtime::ShellTaskStartMode;
 use coco_tool_runtime::TaskHandle;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
@@ -270,14 +271,14 @@ impl coco_shell::ShellProvider for FakePowerShellProvider {
 
 #[derive(Default)]
 struct RecordingTaskHandle {
-    request: Mutex<Option<BackgroundShellRequest>>,
+    request: Mutex<Option<ShellTaskRequest>>,
 }
 
 #[async_trait::async_trait]
 impl TaskHandle for RecordingTaskHandle {
     async fn spawn_shell_task(
         &self,
-        request: BackgroundShellRequest,
+        request: ShellTaskRequest,
     ) -> Result<String, coco_error::BoxedError> {
         *self.request.lock().unwrap() = Some(request);
         Ok("task-ps".into())
@@ -320,9 +321,10 @@ async fn test_powershell_background_preserves_command_for_provider() {
     assert!(!request.command.contains("-NoProfile"));
     assert!(matches!(
         request.shell_kind,
-        BackgroundShellKind::Provider(ref provider)
+        ShellTaskKind::Provider(ref provider)
             if matches!(provider.shell_type(), coco_shell::ShellType::PowerShell)
     ));
+    assert_eq!(request.start_mode, ShellTaskStartMode::Background);
 }
 
 // ── render_for_model — output envelopes ────────────────

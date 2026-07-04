@@ -1813,7 +1813,7 @@ impl coco_tool_runtime::TaskHandle for StoppedTaskHandle {
     }
     async fn spawn_shell_task(
         &self,
-        _: coco_tool_runtime::BackgroundShellRequest,
+        _: coco_tool_runtime::ShellTaskRequest,
     ) -> Result<String, coco_error::BoxedError> {
         Err(Box::new(coco_error::PlainError::new(
             "not used in test",

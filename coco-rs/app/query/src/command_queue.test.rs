@@ -41,6 +41,28 @@ fn test_new_classifies_whitespace_prefixed_slash_command() {
     assert!(cmd.is_slash_command);
 }
 
+#[test]
+fn task_notification_preview_uses_decoded_summary() {
+    let cmd = QueuedCommand::new(
+        "<task-notification>\n<summary>Background command &quot;echo hi&quot; completed &amp; saved</summary>\n</task-notification>".into(),
+        QueuePriority::Later,
+    )
+    .with_origin(QueueOrigin::TaskNotification);
+
+    assert_eq!(
+        cmd.preview(),
+        "Background command \"echo hi\" completed & saved"
+    );
+}
+
+#[test]
+fn task_notification_preview_falls_back_without_summary() {
+    let cmd = QueuedCommand::new("plain task notification".into(), QueuePriority::Later)
+        .with_origin(QueueOrigin::TaskNotification);
+
+    assert_eq!(cmd.preview(), "plain task notification");
+}
+
 #[tokio::test]
 async fn test_agent_id_filtering() {
     let queue = CommandQueue::new();

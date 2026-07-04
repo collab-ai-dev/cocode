@@ -267,9 +267,9 @@ fn sample_current_process_memory() -> Result<ProcessMemorySample, ()> {
             return Err(());
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
-        return parse_ps_memory_output(&stdout)
+        parse_ps_memory_output(&stdout)
             .map(|kb| kb.into_sample(started.elapsed().as_millis()))
-            .ok_or(());
+            .ok_or(())
     }
     #[cfg(not(target_os = "macos"))]
     {

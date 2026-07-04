@@ -112,6 +112,17 @@ impl TaskRuntime {
         // and shell `Cancelled` / `TimedOut` / `SpawnFailed` outcomes
         // leave it unset, yielding `None`.
         let exit_code = self.manager.exit_code(task_id).await;
+        if state.task_type() == TaskType::Shell
+            && state.status.is_terminal()
+            && !state.is_backgrounded()
+        {
+            self.manager.mark_notified_once(task_id).await;
+            trace!(
+                target: "coco::task_runtime",
+                task_id,
+                "marked foreground shell task as silently consumed"
+            );
+        }
         Ok(TerminalOutputs {
             stdout,
             stderr: String::new(),
