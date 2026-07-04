@@ -219,10 +219,12 @@ use super::classify_sentinel_trigger;
 use super::create_slash_metadata_message;
 use super::dispatch_slash_command;
 use super::drain_active_turn;
+use super::drain_completed_turn;
 use super::format_slash_command_metadata;
 use super::parse_editor_command;
 use super::parse_permissions_mutation;
 use super::parse_slash_command;
+use super::process_idle_command_queue;
 use super::session_plan_file_path;
 use super::should_prompt_mode_bash_respond;
 use super::should_trigger_title_gen;
@@ -447,6 +449,53 @@ fn inactive_test_command_handler(_args: &str) -> String {
     "handler should not run".to_string()
 }
 
+struct QueuedTurnMockModel;
+
+#[async_trait::async_trait]
+impl coco_inference::LanguageModel for QueuedTurnMockModel {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "queued-turn-mock"
+    }
+
+    async fn do_generate(
+        &self,
+        _options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<coco_inference::LanguageModelGenerateResult, coco_inference::AISdkError> {
+        Ok(coco_inference::LanguageModelGenerateResult {
+            content: vec![coco_llm_types::AssistantContentPart::Text(
+                coco_llm_types::TextPart {
+                    text: "queued turn complete".into(),
+                    provider_metadata: None,
+                },
+            )],
+            usage: coco_llm_types::Usage::new(1, 1),
+            finish_reason: coco_llm_types::FinishReason::new(coco_llm_types::StopReason::EndTurn),
+            warnings: Vec::new(),
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+
+    async fn do_stream(
+        &self,
+        options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<coco_inference::LanguageModelStreamResult, coco_inference::AISdkError> {
+        let result = self.do_generate(options, None).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
 async fn build_runtime_with_registry(
     home: &TempDir,
     registry: coco_commands::CommandRegistry,
@@ -494,7 +543,9 @@ async fn build_runtime_with_registry_and_settings(
         system_prompt: "test".to_string(),
         permission_mode_availability: coco_types::PermissionModeAvailability::default(),
         permission_mode: coco_types::PermissionMode::default(),
-        model_runtimes: None,
+        model_runtimes: Some(coco_query::test_support::model_runtime_registry(Arc::new(
+            QueuedTurnMockModel,
+        ))),
         tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
         session_manager: Arc::new(coco_session::SessionManager::new(
             home.path().join("sessions"),
@@ -536,6 +587,74 @@ async fn prompt_mode_bash_respects_respond_setting_false() {
     .await;
 
     assert!(!should_prompt_mode_bash_respond(&runtime));
+}
+
+#[tokio::test]
+async fn idle_queue_processor_starts_pending_prompt_turn() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let queued = coco_query::QueuedCommand::new(
+        "queued follow-up after text response".into(),
+        coco_query::QueuePriority::Next,
+    )
+    .with_origin(coco_system_reminder::QueueOrigin::Human);
+    let queued_id = queued.id.to_string();
+    runtime.command_queue().enqueue(queued).await;
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(64);
+    let active_turn = Arc::new(Mutex::new(None));
+    let (turn_done_tx, mut turn_done_rx) = tokio::sync::mpsc::channel(4);
+    let mut pending_editor_requests = std::collections::HashMap::new();
+    let title_gen_attempted = Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
+
+    process_idle_command_queue(
+        &runtime,
+        &event_tx,
+        &active_turn,
+        &mut pending_editor_requests,
+        &title_gen_attempted,
+        &turn_done_tx,
+    )
+    .await;
+
+    assert!(
+        runtime.command_queue().is_empty().await,
+        "queued prompt should be consumed into a follow-up turn"
+    );
+    assert!(
+        active_turn.lock().await.is_some(),
+        "queued prompt should start a follow-up turn"
+    );
+
+    let completed_turn = tokio::time::timeout(Duration::from_secs(1), turn_done_rx.recv())
+        .await
+        .expect("queued follow-up turn should finish")
+        .expect("turn_done channel should stay open");
+    assert!(drain_completed_turn(&active_turn, completed_turn).await);
+
+    let mut saw_dequeued = false;
+    let mut saw_queue_empty = false;
+    while let Ok(event) = event_rx.try_recv() {
+        match event {
+            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::CommandDequeued {
+                id,
+            }) if id == queued_id => {
+                saw_dequeued = true;
+            }
+            coco_types::CoreEvent::Protocol(
+                coco_types::ServerNotification::QueueStateChanged { queued: 0 },
+            ) => {
+                saw_queue_empty = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_dequeued, "queued prompt should emit CommandDequeued");
+    assert!(
+        saw_queue_empty,
+        "queued prompt should emit QueueStateChanged queued=0"
+    );
 }
 
 #[tokio::test]

@@ -222,6 +222,15 @@ impl CommandQueue {
         self.inner.lock().await.is_empty()
     }
 
+    /// Check whether any queued command matches a predicate without removing it.
+    pub async fn has_matching<F>(&self, predicate: F) -> bool
+    where
+        F: Fn(&QueuedCommand) -> bool,
+    {
+        let queue = self.inner.lock().await;
+        queue.iter().any(predicate)
+    }
+
     /// Wait for a change to the queue.
     pub async fn wait_for_change(&self) {
         self.changed.notified().await;

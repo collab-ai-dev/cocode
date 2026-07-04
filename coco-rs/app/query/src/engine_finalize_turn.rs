@@ -1329,6 +1329,15 @@ impl QueryEngine {
         if coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode) {
             return;
         }
+        if self.config.agent_id.is_none()
+            && self
+                .command_queue
+                .has_matching(|cmd| cmd.agent_id.is_none())
+                .await
+        {
+            tracing::debug!("promptSuggestion suppressed because command queue has pending input");
+            return;
+        }
         let Some(app_state) = self.app_state.as_ref() else {
             return;
         };

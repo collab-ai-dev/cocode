@@ -22,6 +22,9 @@ use super::main_agent_wrote_memory;
 use super::truncate_memory_reminder;
 use crate::CoreEvent;
 use crate::ServerNotification;
+use crate::command_queue::CommandQueue;
+use crate::command_queue::QueuePriority;
+use crate::command_queue::QueuedCommand;
 use crate::config::QueryEngineConfig;
 use crate::engine::QueryEngine;
 use crate::forked_agent::ForkDispatcher;
@@ -548,6 +551,56 @@ async fn maybe_spawn_prompt_suggestion_emits_protocol_event() {
     assert!(
         override_seen.is_none(),
         "promptSuggestion must use user prompt only, no system override"
+    );
+}
+
+#[tokio::test]
+async fn maybe_spawn_prompt_suggestion_skips_when_main_queue_pending() {
+    let model = Arc::new(DummyModel);
+    let model_runtimes = crate::test_support::model_runtime_registry(model);
+    let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
+    let dispatcher = Arc::new(CapturingSuggestionDispatcher::default());
+    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+    let queue = CommandQueue::new();
+    queue
+        .enqueue(QueuedCommand::new(
+            "user already typed next step".into(),
+            QueuePriority::Next,
+        ))
+        .await;
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        model_runtimes,
+        tools,
+        CancellationToken::new(),
+        None,
+    )
+    .with_app_state(app_state)
+    .with_fork_dispatcher(dispatcher.clone())
+    .with_command_queue(queue);
+
+    let mut cache = empty_cache("anthropic");
+    cache.fork_context_messages = vec![
+        Arc::new(assistant_msg("first turn", Some("req-parent-1"))),
+        Arc::new(assistant_msg("second turn", Some("req-parent-2"))),
+    ];
+    engine.save_cache_safe_params(cache).await;
+
+    let (tx, mut rx) = mpsc::channel(4);
+    engine
+        .maybe_spawn_prompt_suggestion_after_stop(&Some(tx))
+        .await;
+
+    if let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
+        panic!("prompt suggestion must not emit while queued input is pending; got {event:?}");
+    }
+    let prompt = dispatcher
+        .prompt
+        .lock()
+        .expect("prompt lock is not poisoned");
+    assert!(
+        prompt.is_none(),
+        "dispatcher must not be called while queued input is pending"
     );
 }
 
