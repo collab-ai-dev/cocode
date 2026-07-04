@@ -1,0 +1,14 @@
+---
+source: app/tui/src/presentation/provider_wizard.test.rs
+expression: render_snapshot(&state)
+---
+┌ /provider — Add a provider ──────────────────────────────────────────┐
+│ Review — Enter to save:                                              │
+│                                                                      │
+│ Name      my-openai                                                  │
+│ API       openai                                                     │
+│ Base URL  https://api.openai.com/v1                                  │
+│ Key       •••••••••                                                  │
+│                                                                      │
+│ Enter Save  Esc Back                                                 │
+└──────────────────────────────────────────────────────────────────────┘

@@ -25,6 +25,7 @@ fn layout(input: Rect) -> FrameLayout {
     FrameLayout {
         input,
         question_prompt: Rect::default(),
+        modal_text_cursor: None,
     }
 }
 
@@ -130,6 +131,7 @@ fn compute_cursor_uses_focused_question_input() {
         FrameLayout {
             input: INPUT_AREA,
             question_prompt,
+            modal_text_cursor: None,
         },
     )
     .expect("focused question input claims cursor");

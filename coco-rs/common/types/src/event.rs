@@ -2161,6 +2161,10 @@ pub enum TuiOnlyEvent {
     /// `/model` from input bar). The TUI consumes the current
     /// `state.session.model` to mark the "current" entry.
     OpenModelPicker,
+    /// Tell the TUI to open the `/provider` add-provider wizard. Emitted when
+    /// the slash dispatcher resolves `/provider` with no args. The TUI builds
+    /// the template list from the compiled-in builtin provider catalog.
+    OpenProviderWizard,
     /// Tell the TUI to open the tabbed settings panel. Emitted when the slash
     /// dispatcher resolves `/config` with no args (TS `/config` local-jsx
     /// panel). Reuses the same overlay as the `Ctrl+,` keybind.

@@ -41,6 +41,7 @@ pub mod names {
     // Configuration
     pub const CONFIG: &str = "config";
     pub const MODEL: &str = "model";
+    pub const PROVIDER: &str = "provider";
     pub const PERMISSIONS: &str = "permissions";
     pub const THEME: &str = "theme";
     pub const COLOR: &str = "color";
@@ -1557,6 +1558,27 @@ pub fn register_ts_parity_handlers(
                 handler: names::MODEL.to_string(),
             }),
             handler: Some(Arc::new(handlers::model::ModelHandler)),
+            is_enabled: None,
+        });
+    }
+
+    // /provider — no-args opens the add-provider wizard overlay; there is no
+    // argument form (interactive-only).
+    {
+        let mut base = crate::builtin_base_ext(
+            names::PROVIDER,
+            "Add or configure an LLM provider (opens a wizard)",
+            &[],
+            CommandSafety::LocalOnly,
+            None,
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::LocalOverlay(LocalCommandData {
+                handler: names::PROVIDER.to_string(),
+            }),
+            handler: Some(Arc::new(handlers::provider::ProviderHandler)),
             is_enabled: None,
         });
     }

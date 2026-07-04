@@ -2,6 +2,7 @@
 
 use std::time::Instant;
 
+use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Style;
@@ -195,6 +196,7 @@ pub(crate) fn history_emission_deferred_for_state(state: &AppState, now: Instant
         .is_some_and(|placement| matches!(placement, ModalSurfacePlacement::AltScreen))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_modal_surface(
     frame: &mut SurfaceFrame<'_>,
     area: Rect,
@@ -203,6 +205,7 @@ pub(crate) fn render_modal_surface(
     state: &AppState,
     transcript_layout: &mut TranscriptLayoutIndex,
     styles: UiStyles<'_>,
+    layout: &mut crate::FrameLayout,
 ) {
     if modal_surface_placement(Some(modal)).is_none() {
         return;
@@ -251,6 +254,92 @@ pub(crate) fn render_modal_surface(
                     .borders(Borders::ALL)
                     .padding(Padding::horizontal(1))
                     .border_style(Style::default().fg(styles.accent())),
+            ),
+            modal_area,
+        );
+        return;
+    }
+
+    if let ModalState::ModelPicker(m) = modal {
+        let placement_area = modal_placement_area(area, input_area, modal);
+        if placement_area.height == 0 || placement_area.width == 0 {
+            return;
+        }
+        // Clamp the box to a stable width so the top border (and its title) do
+        // not breathe as the active role / filter changes.
+        let box_width = placement_area.width.clamp(40, 96);
+        // Inner content width = box_width − 2 border − 2 horizontal padding.
+        let inner_width = box_width.saturating_sub(4).max(1);
+        // Adaptive list budget: give the list whichever is SMALLER of the rows
+        // that physically fit and "~60% of the terminal as the whole box" — so a
+        // tall terminal shows more, a short one shrinks, and the box never
+        // dominates the screen. Both bounds subtract the chrome + border rows,
+        // so the effort row + hints are always kept; a small floor keeps a few
+        // rows visible on short terminals. `model_picker_lines` then caps this to
+        // the actual (unfiltered) model count.
+        const MIN_LIST_ROWS: u16 = 6;
+        let reserved = crate::presentation::model_picker::CHROME_ROWS as u16 + 2;
+        let fits = placement_area.height.saturating_sub(reserved);
+        let adaptive = (placement_area.height * 3 / 5).saturating_sub(reserved);
+        let list_visible = adaptive.clamp(MIN_LIST_ROWS.min(fits), fits) as usize;
+        let title = crate::presentation::model_picker::model_picker_title();
+        let lines = crate::presentation::model_picker::model_picker_lines(
+            m,
+            styles,
+            inner_width as usize,
+            list_visible,
+        );
+        let box_height = (lines.len() as u16 + 2).min(placement_area.height);
+        let modal_area = layout::centered_fixed_area(placement_area, box_width, box_height);
+        // Pin the cursor at the filter caret so a CJK IME anchors here.
+        let (fcol, frow) = crate::presentation::model_picker::filter_caret(m);
+        layout.modal_text_cursor = Some(content_caret(modal_area, fcol, frow));
+        frame.render_widget(Clear, modal_area);
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .padding(Padding::horizontal(1))
+                    .title(title)
+                    .border_style(Style::default().fg(styles.modal_border())),
+            ),
+            modal_area,
+        );
+        return;
+    }
+
+    if let ModalState::ProviderWizard(wizard) = modal {
+        let placement_area = modal_placement_area(area, input_area, modal);
+        if placement_area.height == 0 || placement_area.width == 0 {
+            return;
+        }
+        let box_width = placement_area.width.clamp(40, 80);
+        let inner_width = box_width.saturating_sub(4).max(1);
+        // Reserve chrome (prompt + blank + optional error + blank + hint) + borders.
+        let list_visible = placement_area.height.saturating_sub(8).max(3) as usize;
+        let title = crate::presentation::provider_wizard::provider_wizard_title();
+        let lines = crate::presentation::provider_wizard::provider_wizard_lines(
+            wizard,
+            styles,
+            inner_width as usize,
+            list_visible,
+        );
+        let box_height = (lines.len() as u16 + 2).min(placement_area.height);
+        let modal_area = layout::centered_fixed_area(placement_area, box_width, box_height);
+        // Pin the cursor at the active field's caret for IME anchoring; the
+        // template/confirm steps have no text input and return `None`.
+        if let Some((fcol, frow)) = crate::presentation::provider_wizard::active_field_caret(wizard)
+        {
+            layout.modal_text_cursor = Some(content_caret(modal_area, fcol, frow));
+        }
+        frame.render_widget(Clear, modal_area);
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .padding(Padding::horizontal(1))
+                    .title(title)
+                    .border_style(Style::default().fg(styles.modal_border())),
             ),
             modal_area,
         );
@@ -335,6 +424,16 @@ fn render_styled_modal_box(
             .block(block),
         modal_area,
     );
+}
+
+/// Absolute terminal caret position for a content-relative `(col, row)` inside
+/// a bordered modal box with `Padding::horizontal(1)`: +1 border +1 padding on
+/// x, +1 border on y. Clamped to stay inside the box.
+fn content_caret(modal_area: Rect, col: u16, row: u16) -> Position {
+    Position {
+        x: (modal_area.x + 2 + col).min(modal_area.right().saturating_sub(2)),
+        y: (modal_area.y + 1 + row).min(modal_area.bottom().saturating_sub(2)),
+    }
 }
 
 fn modal_placement_area(area: Rect, input_area: Option<Rect>, modal: &ModalState) -> Rect {

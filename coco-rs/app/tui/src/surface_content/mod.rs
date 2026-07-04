@@ -27,7 +27,6 @@ pub(crate) enum TextSurfaceContent<'a> {
     Error(&'a str),
     PlanEntry(&'a crate::state::PlanEntryPromptState),
     CostWarning(&'a crate::state::CostWarningPromptState),
-    ModelPicker(&'a crate::state::ModelPickerState),
     LoginPicker(&'a crate::state::LoginPickerState),
     SandboxPermission(&'a crate::state::SandboxPermissionPromptState),
     DiffView(&'a crate::state::DiffViewState),
@@ -77,7 +76,8 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
     Some(match modal {
         ModalState::Help => TextSurfaceContent::Help,
         ModalState::Error(msg) => TextSurfaceContent::Error(msg),
-        ModalState::ModelPicker(m) => TextSurfaceContent::ModelPicker(m),
+        // Rendered by the styled `ModelPicker` branch in `surface/modal.rs`.
+        ModalState::ModelPicker(_) => return None,
         ModalState::LoginPicker(l) => TextSurfaceContent::LoginPicker(l),
         ModalState::SessionBrowser(_) => return None,
         ModalState::GlobalSearch(_) => return None,
@@ -112,6 +112,7 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::Transcript(_) => return None,
         // Styled render path (see `surface/modal.rs`) — not a text surface.
         ModalState::ThemePicker(_) => return None,
+        ModalState::ProviderWizard(_) => return None,
         ModalState::TeamRoster(_) => return None,
     })
 }
@@ -161,7 +162,6 @@ pub(crate) fn surface_content(
         ),
         TextSurfaceContent::PlanEntry(p) => confirm::plan_entry_content(p, styles),
         TextSurfaceContent::CostWarning(c) => confirm::cost_warning_content(c, styles),
-        TextSurfaceContent::ModelPicker(m) => pickers::model_picker_content(m, styles),
         TextSurfaceContent::LoginPicker(l) => pickers::login_picker_content(l, styles),
         TextSurfaceContent::SandboxPermission(s) => confirm::sandbox_content(s, styles),
         TextSurfaceContent::DiffView(d) => diff::diff_view_content(d, styles),

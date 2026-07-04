@@ -28,6 +28,7 @@ pub mod model;
 pub mod permissions;
 pub mod plugin;
 pub mod prompt_command;
+pub mod provider;
 pub mod rewind;
 pub mod sentinel;
 pub mod session;

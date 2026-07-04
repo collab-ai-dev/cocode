@@ -1,0 +1,13 @@
+---
+source: app/tui/src/presentation/provider_wizard.test.rs
+expression: render_snapshot(&state)
+---
+┌ /provider — Add a provider ──────────────────────────────────────────┐
+│ Select a provider to add:                                            │
+│                                                                      │
+│ ❯ anthropic  anthropic                                               │
+│   openai  openai                                                     │
+│   custom  custom · you set the base URL                              │
+│                                                                      │
+│ ↑/↓ Select  Enter Next  Esc Cancel                                   │
+└──────────────────────────────────────────────────────────────────────┘

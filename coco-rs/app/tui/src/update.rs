@@ -29,6 +29,7 @@ mod exit;
 mod expanded_view;
 mod interaction;
 mod plugin_dialog;
+mod provider_wizard;
 // `pub(crate)` so the slash-command dispatcher (in
 // `server_notification_handler::tui_only`) can call into `cycle_model`
 // when `TuiOnlyEvent::OpenModelPicker` arrives. The other `show::*`
@@ -105,6 +106,13 @@ pub async fn handle_command(
     if let agents_dialog::Handled::Yes(changed) =
         agents_dialog::intercept(state, &cmd, command_tx).await
     {
+        return changed;
+    }
+
+    // The `/provider` add-provider wizard owns a linear step machine
+    // (select template → text fields → confirm) with its own Esc back/close,
+    // so it intercepts before the generic modal dispatch.
+    if let provider_wizard::Handled::Yes(changed) = provider_wizard::intercept(state, &cmd) {
         return changed;
     }
 

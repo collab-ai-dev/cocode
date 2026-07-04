@@ -70,14 +70,16 @@ pub(crate) fn render_interactive_viewport(
     }
 
     if let Some(modal) = state.ui.modal.as_ref() {
+        let input_area = Some(layout.input);
         render_modal_surface(
             frame,
             area,
-            Some(layout.input),
+            input_area,
             modal,
             state,
             transcript_layout,
             styles,
+            &mut layout,
         );
     }
 
