@@ -409,15 +409,15 @@ export type AttachmentBody = LanguageModelV4Message | SilentPayload | {
  * `body` carries the rendered prompt; `extras` carries the
  * derived-from-structure original data.
  */
-export type AttachmentExtras = SkillDiscoveryPayload | CompactFileReferencePayload | MentionSummaryPayload;
+export type AttachmentExtras = SkillDiscoveryPayload | CompactFileReferencePayload | TaskNotificationPayload | MentionSummaryPayload;
 
 /**
  * Every `AttachmentKind` discriminator, plus coco-rs-synthetic
- * reminder kinds. 65 variants.
+ * reminder kinds. 67 variants.
  * Wire format is snake_case via `#[serde(rename_all = "snake_case")]`
  * to match `AttachmentKind` exactly, so transcripts round-trip.
  */
-export type AttachmentKind = "plan_mode" | "plan_mode_reentry" | "plan_mode_exit" | "auto_mode" | "auto_mode_exit" | "todo_reminder" | "task_reminder" | "compaction_reminder" | "date_change" | "verify_plan_reminder" | "ultrathink_effort" | "workflow_keyword_request" | "token_usage" | "budget_usd" | "output_token_usage" | "companion_intro" | "deferred_tools_delta" | "agent_listing_delta" | "mcp_instructions_delta" | "hook_success" | "hook_blocking_error" | "hook_additional_context" | "hook_stopped_continuation" | "async_hook_response" | "diagnostics" | "output_style" | "queued_command" | "task_status" | "skill_listing" | "invoked_skills" | "teammate_mailbox" | "team_context" | "mcp_resource" | "agent_mention" | "selected_lines_in_ide" | "opened_file_in_ide" | "nested_memory" | "relevant_memories" | "already_read_file" | "edited_image_file" | "file" | "directory" | "pdf_reference" | "compact_file_reference" | "plan_file_reference" | "edited_text_file" | "command_permissions" | "hook_cancelled" | "hook_error_during_execution" | "hook_non_blocking_error" | "hook_permission_decision" | "hook_system_message" | "goal_status" | "structured_output" | "dynamic_skill" | "skill_discovery" | "context_efficiency" | "max_turns_reached" | "current_session_memory" | "teammate_shutdown_batch" | "bagel_console" | "critical_system_reminder" | "slash_command_metadata" | "user_context" | "tool_search_usage_reminder";
+export type AttachmentKind = "plan_mode" | "plan_mode_reentry" | "plan_mode_exit" | "auto_mode" | "auto_mode_exit" | "todo_reminder" | "task_reminder" | "compaction_reminder" | "date_change" | "verify_plan_reminder" | "ultrathink_effort" | "workflow_keyword_request" | "token_usage" | "budget_usd" | "output_token_usage" | "companion_intro" | "deferred_tools_delta" | "agent_listing_delta" | "mcp_instructions_delta" | "hook_success" | "hook_blocking_error" | "hook_additional_context" | "hook_stopped_continuation" | "async_hook_response" | "diagnostics" | "output_style" | "queued_command" | "task_status" | "skill_listing" | "invoked_skills" | "teammate_mailbox" | "team_context" | "mcp_resource" | "agent_mention" | "selected_lines_in_ide" | "opened_file_in_ide" | "nested_memory" | "relevant_memories" | "already_read_file" | "edited_image_file" | "file" | "directory" | "pdf_reference" | "compact_file_reference" | "plan_file_reference" | "edited_text_file" | "command_permissions" | "hook_cancelled" | "hook_error_during_execution" | "hook_non_blocking_error" | "hook_permission_decision" | "hook_system_message" | "goal_status" | "structured_output" | "dynamic_skill" | "skill_discovery" | "context_efficiency" | "max_turns_reached" | "current_session_memory" | "teammate_shutdown_batch" | "bagel_console" | "critical_system_reminder" | "memory_index_warning" | "memory_update_reminder" | "slash_command_metadata" | "user_context" | "tool_search_usage_reminder";
 
 /**
  * Attachment message: `kind` carries the discriminant (60 variants),
@@ -982,6 +982,20 @@ export interface GoalStatusPayload {
 }
 
 /**
+ * Why the engine replaced the transcript wholesale
+ * (`ServerNotification::HistoryReplaced`).
+ *
+ * Consumers that keep session-cumulative folds over the message stream
+ * (e.g. the TUI's cumulative user/assistant/tool counters) need to know
+ * whether the snapshot is a re-hydration of already-known content
+ * (`Hydrate` / `Trim` / `Rewind` — dedup by uuid suffices) or the
+ * product of a compaction, where one summarizer LLM call collapsed the
+ * tail into synthetic messages that must not be re-classified as
+ * organic conversation.
+ */
+export type HistoryReplaceReason = "hydrate" | "compact" | "trim" | "rewind";
+
+/**
  * Hook callback matcher with optional tool-name filter and callback IDs.
  */
 export interface HookCallbackMatcher {
@@ -1244,6 +1258,7 @@ export interface InitializeParams {
   WorktreeRemove?: Array<HookCallbackMatcher>;
 } | null;
   json_schema?: unknown;
+  planModeInstructions?: string | null;
   prompt_suggestions?: boolean | null;
   sdk_mcp_servers?: Array<string> | null;
   system_prompt?: string | null;
@@ -1422,6 +1437,19 @@ export type LanguageModelV4Message = {
  */
 export interface LocalCommandOutputParams {
   content: unknown;
+}
+
+/**
+ * One OAuth-capable provider row for the `/login` picker. Built on the CLI
+ * side from `RuntimeConfig.providers` and shipped in
+ * [`crate::TuiOnlyEvent::OpenLoginPicker`] so the TUI never reaches into
+ * `runtime_config` directly.
+ */
+export interface LoginEntryInfo {
+  auth_label: string;
+  logged_in?: boolean;
+  provider: string;
+  provider_display: string;
 }
 
 export interface LspPrewarmCompleteParams {
@@ -1644,6 +1672,22 @@ export type MessageKind = "user" | "assistant" | "system" | "attachment" | "tool
  * Where a message originated.
  */
 export type MessageOrigin = "user_input" | "system_injected" | "tool_result" | "compact_summary" | "subagent_reply" | "slash_command" | "plan_implementation" | "queued_steering";
+
+/**
+ * Wire payload for one model row in the picker catalog. Ships on
+ * [`crate::TuiOnlyEvent::ModelCatalogRefreshed`] so a post-login `/models`
+ * discovery can augment the TUI's session-frozen `model_catalog` without a
+ * restart. Mirrors the TUI's `ModelCatalogEntry`.
+ */
+export interface ModelCatalogInfo {
+  context_window?: number | null;
+  default_effort?: ReasoningEffort | null;
+  display_name: string;
+  model_id: string;
+  provider: string;
+  provider_display: string;
+  supported_efforts?: Array<ReasoningEffort>;
+}
 
 export interface ModelFallbackParams {
   from_model: string;
@@ -2035,6 +2079,23 @@ export interface PluginDialogPayload {
   errors: Array<PluginDialogErrorRow>;
   installed: Array<PluginDialogInstalledRow>;
   marketplaces: Array<PluginDialogMarketplaceRow>;
+  skills?: Array<PluginDialogSkillRow>;
+}
+
+export interface PluginDialogSkillRow {
+  description: string;
+  id: string;
+  lock_source?: SkillLockSource | null;
+  name: string;
+  override_state: SkillOverrideState;
+  source: SkillsDialogSource;
+  token_estimate: number;
+  usage?: PluginDialogSkillUsage | null;
+}
+
+export interface PluginDialogSkillUsage {
+  count: number;
+  days_since_use: number;
 }
 
 /**
@@ -2192,6 +2253,35 @@ export interface ProviderModelSelection {
  * For example: `{ "anthropic": { "thinking": { "type": "enabled" } } }`
  */
 export type ProviderOptions = { [key: string]: { [key: string]: unknown; }; };
+
+/**
+ * Wire payload pairing a provider id with its picker availability. Ships on
+ * [`crate::TuiOnlyEvent::ProviderStatusesRefreshed`] so a post-login rebuild
+ * can replace the TUI's `provider_statuses` map (keyed by `provider`).
+ */
+export interface ProviderStatusInfo {
+  provider: string;
+  provider_display: string;
+  unavailable_reasons?: Array<ProviderUnavailableReason>;
+}
+
+/**
+ * Why a provider is unusable in the model picker. Produced by the CLI's
+ * `build_provider_statuses` and consumed by the TUI picker; also rides
+ * [`ProviderStatusInfo`] on the `ProviderStatusesRefreshed` event so an
+ * in-session `/login` can clear the gate without a restart.
+ */
+export type ProviderUnavailableReason = {
+  type: "missing_base_url";
+} | {
+  env_key: string;
+  type: "missing_api_key";
+} | {
+  provider: string;
+  type: "not_logged_in";
+} | {
+  type: "no_models";
+};
 
 /**
  * Image payload paired with a queued command edit restore.
@@ -2689,6 +2779,7 @@ export type SessionState = "idle" | "running" | "requires_action";
  * Persisted and protocol-visible cumulative usage for one session.
  */
 export interface SessionUsageSnapshot {
+  auto_compact_threshold?: number | null;
   models?: Array<SessionModelUsageEntry>;
   session_id: string;
   totals: SessionUsageTotals;
@@ -2868,6 +2959,15 @@ export type SkillOverridesSaveResult = {
 };
 
 /**
+ * Provenance badge for a skill produced by the skill-learning loop, rendered
+ * as a `/`-popup suffix so a user can tell an auto-generated skill apart from
+ * a hand-written one. Orthogonal to [`CommandSource`] (which records the
+ * *scope* the file lives in — an agent skill's scope is still the user config
+ * home): this axis records *who authored it and whether it is proven*.
+ */
+export type SkillProvenanceBadge = "learning" | "learned";
+
+/**
  * One row in the `/skills` dialog. Every field is required so the dialog
  * never has to fabricate defaults for `baseline` / `lock` / etc.
  */
@@ -2918,6 +3018,7 @@ export interface SlashCommandInfo {
   aliases?: Array<string>;
   argument_hint?: string | null;
   argument_kind?: CommandArgumentKind;
+  badge?: SkillProvenanceBadge | null;
   description?: string | null;
   kind?: CommandTypeTag;
   name: string;
@@ -3279,11 +3380,29 @@ export type TaskKilledBy = "user" | "parent" | "system";
 export type TaskListStatus = "pending" | "in_progress" | "completed";
 
 /**
+ * Structured display payload for a queued `<task-notification>` attachment.
+ *
+ * The attachment body still carries the model-facing XML reminder. This
+ * payload lets transcript and queue-preview surfaces render the notification
+ * without parsing that XML back out of the prompt string.
+ */
+export interface TaskNotificationPayload {
+  output_file?: string | null;
+  source: TaskNotificationSource;
+  status?: TaskStatus | null;
+  summary: string;
+  task_id: string;
+}
+
+export type TaskNotificationSource = "shell_terminal" | "agent_terminal" | "shell_stall" | "hook_rewake";
+
+/**
  * Snapshot of the task panel state — tools emit this post-mutation
  * so the TUI can redraw without reaching into `ToolAppState` directly.
  */
 export interface TaskPanelChangedParams {
   expanded_view: ExpandedView;
+  generation?: number;
   plan_tasks: Array<TaskRecord>;
   todos_by_agent?: { [key: string]: Array<TodoRecord>; };
   verification_nudge_pending: boolean;
@@ -3350,11 +3469,15 @@ export interface TaskStartedParams {
   workflow_name?: string | null;
 }
 
+export type TaskStatus = "pending" | "running" | "completed" | "failed" | "killed";
+
 export interface TaskUsage {
   cache_read_tokens?: number;
   cost_usd?: number;
   duration_ms: number;
+  input_cost_usd?: number;
   input_tokens?: number;
+  output_cost_usd?: number;
   output_tokens?: number;
   tool_uses: number;
   total_tokens: number;
@@ -3744,7 +3867,7 @@ export interface ToolUseSummaryParams {
  * (TUI-only, never sent to SDK) is preserved via consumer dispatch rules
  * in `StreamAccumulator` and `handle_core_event()`.
  *
- * 23 variants (20 from design §4.1 + 3 local extensions).
+ * TUI-only variants emitted by the engine and local runtime helpers.
  */
 export type TuiOnlyEvent = {
   choices?: Array<PermissionAskChoice> | null;
@@ -3773,6 +3896,11 @@ export type TuiOnlyEvent = {
   request_id: string;
   type: "sandbox_approval_required";
 } | {
+  display: string;
+  reason: string;
+  tool_name: string;
+  type: "auto_mode_denied";
+} | {
   explanation?: PermissionExplanation | null;
   request_id: string;
   type: "permission_explanation_ready";
@@ -3785,6 +3913,12 @@ export type TuiOnlyEvent = {
 } | {
   commands: Array<SlashCommandInfo>;
   type: "available_commands_refreshed";
+} | {
+  statuses: Array<ProviderStatusInfo>;
+  type: "provider_statuses_refreshed";
+} | {
+  entries: Array<ModelCatalogInfo>;
+  type: "model_catalog_refreshed";
 } | {
   id: string;
   images?: Array<QueuedCommandEditImage>;
@@ -3906,6 +4040,15 @@ export type TuiOnlyEvent = {
   path: string;
   type: "plan_file_open_failed";
 } | {
+  content: string;
+  modified: boolean;
+  request_id: string;
+  type: "exit_plan_prompt_editor_completed";
+} | {
+  error: string;
+  request_id: string;
+  type: "exit_plan_prompt_editor_failed";
+} | {
   request_id: string;
   type: "external_editor_prepare";
 } | {
@@ -3923,6 +4066,8 @@ export type TuiOnlyEvent = {
 } | {
   type: "open_model_picker";
 } | {
+  type: "open_provider_wizard";
+} | {
   type: "open_settings";
 } | {
   type: "open_theme_picker";
@@ -3938,6 +4083,9 @@ export type TuiOnlyEvent = {
 } | {
   payload: PermissionsEditorPayload;
   type: "open_permissions_editor";
+} | {
+  entries: Array<LoginEntryInfo>;
+  type: "open_login_picker";
 } | {
   type: "open_add_directory";
 } | {
@@ -4134,6 +4282,11 @@ export interface WorkflowDialogPayload {
 
 /**
  * Typed workflow progress payload carried by `task/progress`.
+ * Mirrors Claude's workflow progress wire shape. `WorkflowAgent` is much
+ * larger than phase/log events, but boxing the variant fields would add
+ * indirection to every producer and consumer of this serde payload for no
+ * practical win: values are stored in task progress vectors and rendered or
+ * forwarded, not packed into hot inner-loop collections.
  */
 export type WorkflowProgressEvent = {
   agentId?: string | null;
@@ -4142,11 +4295,15 @@ export type WorkflowProgressEvent = {
   error?: string | null;
   index: number;
   label: string;
+  lastProgressAt?: number | null;
   model?: string | null;
   phaseIndex?: number | null;
   phaseTitle?: string | null;
   promptPreview?: string | null;
+  queuedAt?: number | null;
   resultPreview?: string | null;
+  skipped?: boolean;
+  startedAt?: number | null;
   state: WorkflowAgentState;
   tokens?: number | null;
   toolCalls?: number | null;
@@ -4462,6 +4619,7 @@ export type HistoryReplacedNotification = {
   params: {
   agent_id?: string | null;
   messages: Array<Message>;
+  reason?: HistoryReplaceReason;
   session_id?: string;
 };
 };

@@ -1895,6 +1895,19 @@
           ]
         },
         {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "task_notification"
+            }
+          },
+          "$ref": "#/$defs/TaskNotificationPayload",
+          "required": [
+            "type"
+          ]
+        },
+        {
           "description": "Display-only summary of the `@`-mentioned files / directories resolved\nfor a turn. Carried on a `Unit`-body `AttachmentKind::File` message so\nthe transcript can render a compact `Read <path> (N lines)` /\n`Listed directory <path>/` row per item — the model-visible content is\ninjected separately as `<system-reminder>`-wrapped tool narration, so\nthis payload never reaches the API.",
           "type": "object",
           "properties": {
@@ -6200,6 +6213,61 @@
       "required": [
         "uuid",
         "for_tool_use"
+      ]
+    },
+    "TaskNotificationPayload": {
+      "description": "Structured display payload for a queued `<task-notification>` attachment.\n\nThe attachment body still carries the model-facing XML reminder. This\npayload lets transcript and queue-preview surfaces render the notification\nwithout parsing that XML back out of the prompt string.",
+      "type": "object",
+      "properties": {
+        "output_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/TaskNotificationSource"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "summary",
+        "source"
+      ]
+    },
+    "TaskNotificationSource": {
+      "type": "string",
+      "enum": [
+        "shell_terminal",
+        "agent_terminal",
+        "shell_stall",
+        "hook_rewake"
+      ]
+    },
+    "TaskStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "killed"
       ]
     },
     "TextPart": {

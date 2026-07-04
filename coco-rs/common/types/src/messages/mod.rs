@@ -54,6 +54,8 @@ pub use attachment_body::SkillDiscoveryPayload;
 pub use attachment_body::SkillDiscoverySkill;
 pub use attachment_body::SkillDiscoverySource;
 pub use attachment_body::StructuredOutputPayload;
+pub use attachment_body::TaskNotificationPayload;
+pub use attachment_body::TaskNotificationSource;
 
 pub use attachment_emitter::AttachmentEmitter;
 

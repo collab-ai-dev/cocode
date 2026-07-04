@@ -13,6 +13,7 @@
 //! queue-processor coroutine to guard against.
 
 use coco_system_reminder::QueueOrigin;
+use coco_types::TaskNotificationPayload;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
@@ -65,6 +66,11 @@ pub struct QueuedCommand {
     /// queue items, which is the common case.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<QueuedImage>,
+    /// Structured task notification payload paired with the model-facing XML
+    /// prompt. Present only for `QueueOrigin::TaskNotification` entries whose
+    /// producer had typed task metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_notification: Option<TaskNotificationPayload>,
 }
 
 /// One image attached to a queued command — wire-shape mirrors
@@ -89,6 +95,7 @@ impl QueuedCommand {
             is_slash_command: is_slash,
             origin: None,
             images: Vec::new(),
+            task_notification: None,
         }
     }
 
@@ -96,12 +103,11 @@ impl QueuedCommand {
     /// 80 characters and trims to a char boundary so multibyte input
     /// (CJK, emoji) doesn't slice in the middle of a code point.
     pub fn preview(&self) -> String {
-        let summary = if matches!(self.origin.as_ref(), Some(QueueOrigin::TaskNotification)) {
-            task_notification_summary(&self.prompt)
-        } else {
-            None
-        };
-        let text = summary.as_deref().unwrap_or(&self.prompt);
+        let text = self
+            .task_notification
+            .as_ref()
+            .map(|payload| payload.summary.as_str())
+            .unwrap_or(&self.prompt);
         let mut out = String::with_capacity(80);
         for c in text.chars().take(80) {
             out.push(c);
@@ -127,26 +133,17 @@ impl QueuedCommand {
         self
     }
 
+    pub fn with_task_notification(mut self, payload: TaskNotificationPayload) -> Self {
+        self.task_notification = Some(payload);
+        self
+    }
+
     /// Whether the queued command may be restored into the user's composer.
     pub fn is_editable_by_user(&self) -> bool {
         !self.is_slash_command
             && self.agent_id.is_none()
             && matches!(self.origin.as_ref(), None | Some(QueueOrigin::Human))
     }
-}
-
-fn task_notification_summary(prompt: &str) -> Option<String> {
-    let (_, rest) = prompt.split_once("<summary>")?;
-    let (summary, _) = rest.split_once("</summary>")?;
-    Some(unescape_xml_summary(summary))
-}
-
-fn unescape_xml_summary(s: &str) -> String {
-    s.replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
 }
 
 /// Thread-safe mid-turn command queue with priority ordering.

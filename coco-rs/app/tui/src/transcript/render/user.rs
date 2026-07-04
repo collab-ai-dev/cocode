@@ -94,7 +94,10 @@ pub(super) fn try_render(
             // column-2 gutter, distinct from tool/assistant dots by shape + dim
             // styling. Other attachments show the body's first line;
             // silent / structured payloads render nothing.
-            if let Some(rows) = super::mention_summary_lines(cell.source.as_ref(), w.styles) {
+            if let Some(line) = super::task_notification_line(cell.source.as_ref(), w.styles) {
+                lines.push(line);
+            } else if let Some(rows) = super::mention_summary_lines(cell.source.as_ref(), w.styles)
+            {
                 // Resolved `@`-mention summary: one compact `└ Read …` /
                 // `└ Listed directory …` row per file/dir, hanging under the
                 // user prompt. The raw `@-mentioned files` system-reminder is

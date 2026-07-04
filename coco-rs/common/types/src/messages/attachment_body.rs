@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::HookEventType;
+use crate::TaskStatus;
 
 use super::aliases::LlmMessage;
 
@@ -49,6 +50,7 @@ pub enum AttachmentBody {
 pub enum AttachmentExtras {
     SkillDiscovery(SkillDiscoveryPayload),
     CompactFileReference(CompactFileReferencePayload),
+    TaskNotification(TaskNotificationPayload),
     /// Display-only summary of the `@`-mentioned files / directories resolved
     /// for a turn. Carried on a `Unit`-body `AttachmentKind::File` message so
     /// the transcript can render a compact `Read <path> (N lines)` /
@@ -56,6 +58,33 @@ pub enum AttachmentExtras {
     /// injected separately as `<system-reminder>`-wrapped tool narration, so
     /// this payload never reaches the API.
     MentionSummary(MentionSummaryPayload),
+}
+
+/// Structured display payload for a queued `<task-notification>` attachment.
+///
+/// The attachment body still carries the model-facing XML reminder. This
+/// payload lets transcript and queue-preview surfaces render the notification
+/// without parsing that XML back out of the prompt string.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskNotificationPayload {
+    pub task_id: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskStatus>,
+    pub source: TaskNotificationSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_file: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskNotificationSource {
+    ShellTerminal,
+    AgentTerminal,
+    ShellStall,
+    HookRewake,
 }
 
 /// One resolved `@`-mention, for the transcript's compact display row.

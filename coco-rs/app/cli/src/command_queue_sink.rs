@@ -20,6 +20,8 @@ use async_trait::async_trait;
 use coco_query::command_queue::{CommandQueue, QueuePriority, QueuedCommand};
 use coco_system_reminder::QueueOrigin;
 use coco_tasks::{NotificationKind, NotificationSink, TaskNotification, render_notification};
+use coco_types::TaskNotificationPayload;
+use coco_types::TaskNotificationSource;
 use tracing::{debug, instrument};
 
 /// Wraps a [`CommandQueue`] to satisfy [`NotificationSink`].
@@ -51,10 +53,12 @@ impl NotificationSink for CommandQueueNotificationSink {
             }
         };
         let agent_id = n.agent_id.clone();
+        let payload = n.payload();
         let envelope = render_notification(&n);
         let envelope_bytes = envelope.len();
-        let mut cmd =
-            QueuedCommand::new(envelope, priority).with_origin(QueueOrigin::TaskNotification);
+        let mut cmd = QueuedCommand::new(envelope, priority)
+            .with_origin(QueueOrigin::TaskNotification)
+            .with_task_notification(payload);
         if let Some(id) = agent_id {
             cmd = cmd.with_agent(id);
         }
@@ -70,9 +74,17 @@ impl NotificationSink for CommandQueueNotificationSink {
 
 #[async_trait]
 impl coco_hooks::AsyncRewakeSink for CommandQueueNotificationSink {
-    async fn enqueue_rewake(&self, _command: String, message: String) {
+    async fn enqueue_rewake(&self, command: String, message: String) {
+        let payload = TaskNotificationPayload {
+            task_id: command,
+            summary: message.clone(),
+            status: None,
+            source: TaskNotificationSource::HookRewake,
+            output_file: None,
+        };
         let cmd = QueuedCommand::new(message, QueuePriority::Later)
-            .with_origin(QueueOrigin::TaskNotification);
+            .with_origin(QueueOrigin::TaskNotification)
+            .with_task_notification(payload);
         self.queue.enqueue(cmd).await;
         debug!(
             target: "coco::hook_rewake",

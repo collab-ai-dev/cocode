@@ -1,4 +1,5 @@
 use super::*;
+use coco_hooks::AsyncRewakeSink;
 use coco_query::command_queue::{CommandQueue, QueuePriority};
 use coco_tasks::{NotificationKind, TerminalStatus};
 
@@ -74,6 +75,50 @@ async fn push_tags_origin_as_task_notification() {
         snapshot[0].origin,
         Some(QueueOrigin::TaskNotification)
     ));
+}
+
+#[tokio::test]
+async fn push_carries_typed_task_notification_payload() {
+    let q = CommandQueue::new();
+    let sink = CommandQueueNotificationSink::new(q.clone());
+    sink.push(shell_terminal("a", None)).await;
+    let cmd = q.dequeue(None).await.expect("queued command");
+    let payload = cmd
+        .task_notification
+        .as_ref()
+        .expect("typed task notification payload");
+    assert_eq!(payload.task_id, "a");
+    assert_eq!(
+        payload.summary,
+        "Background command \"ls\" completed (exit code 0)"
+    );
+    assert_eq!(payload.status, Some(coco_types::TaskStatus::Completed));
+    assert_eq!(
+        payload.source,
+        coco_types::TaskNotificationSource::ShellTerminal
+    );
+    assert_eq!(payload.output_file.as_deref(), Some("/tmp/out"));
+}
+
+#[tokio::test]
+async fn async_rewake_carries_hook_rewake_payload() {
+    let q = CommandQueue::new();
+    let sink = CommandQueueNotificationSink::new(q.clone());
+    sink.enqueue_rewake("hook-name".into(), "rewake now".into())
+        .await;
+    let cmd = q.dequeue(None).await.expect("queued rewake");
+    let payload = cmd
+        .task_notification
+        .as_ref()
+        .expect("typed rewake payload");
+    assert_eq!(payload.task_id, "hook-name");
+    assert_eq!(payload.summary, "rewake now");
+    assert_eq!(payload.status, None);
+    assert_eq!(
+        payload.source,
+        coco_types::TaskNotificationSource::HookRewake
+    );
+    assert_eq!(payload.output_file, None);
 }
 
 #[tokio::test]

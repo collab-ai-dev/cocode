@@ -1022,6 +1022,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/TaskNotificationPayload",
+          "properties": {
+            "type": {
+              "const": "task_notification",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/MentionSummaryPayload",
           "description": "Display-only summary of the `@`-mentioned files / directories resolved\nfor a turn. Carried on a `Unit`-body `AttachmentKind::File` message so\nthe transcript can render a compact `Read <path> (N lines)` /\n`Listed directory <path>/` row per item \u2014 the model-visible content is\ninjected separately as `<system-reminder>`-wrapped tool narration, so\nthis payload never reaches the API.",
           "properties": {
@@ -11142,6 +11155,51 @@
       ],
       "type": "string"
     },
+    "TaskNotificationPayload": {
+      "description": "Structured display payload for a queued `<task-notification>` attachment.\n\nThe attachment body still carries the model-facing XML reminder. This\npayload lets transcript and queue-preview surfaces render the notification\nwithout parsing that XML back out of the prompt string.",
+      "properties": {
+        "output_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/TaskNotificationSource"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "summary",
+        "source"
+      ],
+      "type": "object"
+    },
+    "TaskNotificationSource": {
+      "enum": [
+        "shell_terminal",
+        "agent_terminal",
+        "shell_stall",
+        "hook_rewake"
+      ],
+      "type": "string"
+    },
     "TaskPanelChangedParams": {
       "description": "Snapshot of the task panel state \u2014 tools emit this post-mutation\nso the TUI can redraw without reaching into `ToolAppState` directly.",
       "properties": {
@@ -11363,6 +11421,16 @@
         "description"
       ],
       "type": "object"
+    },
+    "TaskStatus": {
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "killed"
+      ],
+      "type": "string"
     },
     "TaskUsage": {
       "properties": {

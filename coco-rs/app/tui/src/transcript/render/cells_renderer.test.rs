@@ -5,12 +5,16 @@ use super::in_flight_tool_lines;
 use super::mention_summary_lines;
 use super::nested_memory_chip_path;
 use super::single_line_capped;
+use super::task_notification_line;
 use super::transcript_safe_line;
 use coco_messages::AttachmentMessage;
 use coco_messages::CompactFileReferencePayload;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_types::AttachmentKind;
+use coco_types::TaskNotificationPayload;
+use coco_types::TaskNotificationSource;
+use coco_types::TaskStatus;
 
 #[test]
 fn test_transcript_safe_line_caps_single_line_output() {
@@ -208,6 +212,57 @@ fn compact_file_reference_chip_path_uses_typed_payload() {
         Some("src/lib.rs")
     );
     assert_eq!(attachment_summary_text(&message), None);
+}
+
+#[test]
+fn task_notification_line_uses_typed_summary_not_xml_wrapper() {
+    let theme = coco_tui_ui::theme::Theme::default();
+    let styles = coco_tui_ui::style::UiStyles::new(&theme);
+    let message = Message::Attachment(AttachmentMessage::queued_command(
+        LlmMessage::user_text(
+            "<system-reminder>\nA background agent completed a task:\n<task-notification>\n<summary>wrong</summary>\n</task-notification>\n</system-reminder>",
+        ),
+        Some(TaskNotificationPayload {
+            task_id: "task-1".to_string(),
+            summary: "Background command \"cargo test\" completed (exit code 0)".to_string(),
+            status: Some(TaskStatus::Completed),
+            source: TaskNotificationSource::ShellTerminal,
+            output_file: Some("/tmp/task-1.out".to_string()),
+        }),
+    ));
+
+    let line = task_notification_line(&message, styles).expect("task notification row");
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(text.contains("Background command \"cargo test\" completed (exit code 0)"));
+    assert!(!text.contains("A background agent completed a task:"));
+    assert!(!text.contains("<task-notification>"));
+    assert_eq!(line.spans[1].style.fg, Some(styles.success()));
+}
+
+#[test]
+fn task_notification_line_colors_failed_and_killed_statuses() {
+    let theme = coco_tui_ui::theme::Theme::default();
+    let styles = coco_tui_ui::style::UiStyles::new(&theme);
+    let make_message = |status| {
+        Message::Attachment(AttachmentMessage::queued_command(
+            LlmMessage::user_text("<system-reminder>raw</system-reminder>"),
+            Some(TaskNotificationPayload {
+                task_id: "task-1".to_string(),
+                summary: "summary".to_string(),
+                status,
+                source: TaskNotificationSource::ShellTerminal,
+                output_file: None,
+            }),
+        ))
+    };
+
+    let failed = task_notification_line(&make_message(Some(TaskStatus::Failed)), styles)
+        .expect("failed row");
+    assert_eq!(failed.spans[1].style.fg, Some(styles.error()));
+
+    let killed = task_notification_line(&make_message(Some(TaskStatus::Killed)), styles)
+        .expect("killed row");
+    assert_eq!(killed.spans[1].style.fg, Some(styles.warning()));
 }
 
 #[test]

@@ -28,6 +28,7 @@ use super::attachment_body::MaxTurnsReachedPayload;
 use super::attachment_body::MentionSummaryPayload;
 use super::attachment_body::SkillDiscoveryPayload;
 use super::attachment_body::StructuredOutputPayload;
+use super::attachment_body::TaskNotificationPayload;
 
 /// Top-level message enum.
 /// Tool-use summaries are intentionally **not** a `Message` variant —
@@ -371,6 +372,17 @@ impl AttachmentMessage {
             kind: AttachmentKind::CompactFileReference,
             body: AttachmentBody::Api(message),
             extras: Some(AttachmentExtras::CompactFileReference(payload)),
+        }
+    }
+    pub fn queued_command(
+        message: LlmMessage,
+        task_notification: Option<TaskNotificationPayload>,
+    ) -> Self {
+        Self {
+            uuid: Uuid::new_v4(),
+            kind: AttachmentKind::QueuedCommand,
+            body: AttachmentBody::Api(message),
+            extras: task_notification.map(AttachmentExtras::TaskNotification),
         }
     }
 
