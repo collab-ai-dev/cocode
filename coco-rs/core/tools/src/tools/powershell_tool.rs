@@ -457,9 +457,10 @@ async fn execute_background(
         .map(String::from)
         .unwrap_or_else(|| "PowerShell background task".into());
     let task_id = task_handle
-        .spawn_shell_task(coco_tool_runtime::BackgroundShellRequest {
+        .spawn_shell_task(coco_tool_runtime::ShellTaskRequest {
             command: input.command.clone(),
-            shell_kind: coco_tool_runtime::BackgroundShellKind::Provider(provider),
+            shell_kind: coco_tool_runtime::ShellTaskKind::Provider(provider),
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
             timeout_ms: input.timeout.map(|t| t as i64),
             description,
             tool_use_id: ctx.tool_use_id.clone(),

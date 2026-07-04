@@ -6,8 +6,8 @@ use coco_tasks::{
     NotificationKind, NotificationSink, TaskCreateRequest, TaskManager, TaskNotification,
     TerminalStatus,
 };
-use coco_tool_runtime::BackgroundShellKind;
-use coco_tool_runtime::BackgroundShellRequest;
+use coco_tool_runtime::ShellTaskKind;
+use coco_tool_runtime::ShellTaskRequest;
 use coco_types::{TaskStatus, TaskType};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio_util::sync::CancellationToken;
@@ -32,22 +32,22 @@ impl TaskRuntime {
     )]
     pub(super) async fn spawn_shell_task_impl(
         &self,
-        request: BackgroundShellRequest,
+        request: ShellTaskRequest,
     ) -> Result<String, coco_error::BoxedError> {
         let task_id = coco_types::generate_task_id(TaskType::Shell);
         let dto = self.disk.get_or_create(&task_id).await;
         let output_path = dto.path().display().to_string();
         let cancel = CancellationToken::new();
-        // Shell tasks reach this path only via `BashTool` with
-        // `run_in_background=true` — by definition backgrounded. Stash
-        // the typed shell extras (kind / command / agent_id) on the
-        // canonical row so introspection has the same shape TS exposes.
+        let is_backgrounded = request.start_mode.is_backgrounded();
+        // Shell tasks share one managed runtime path. Their initial
+        // mode is explicit so foreground Bash can be tracked/detached
+        // without being treated as a completed background task.
         let shell_extras = coco_types::ShellExtras {
             kind: None,
             command: request.command.clone(),
             issuing_agent: request.issuing_agent.clone(),
             exit_code: None,
-            is_backgrounded: true,
+            is_backgrounded,
         };
         let assigned = self
             .manager
@@ -57,7 +57,7 @@ impl TaskRuntime {
                 description: request.description.clone(),
                 output_file: Some(output_path.clone()),
                 tool_use_id: request.tool_use_id.clone(),
-                is_backgrounded: true,
+                is_backgrounded,
                 status: TaskStatus::Running,
                 cancel: cancel.clone(),
                 invoking_agent: request.issuing_agent.clone(),
@@ -73,7 +73,8 @@ impl TaskRuntime {
             task_id = %task_id,
             description = %request.description,
             output_file = %output_path,
-            "background shell task spawned"
+            is_backgrounded,
+            "shell task spawned"
         );
 
         let manager = self.manager.clone();
@@ -193,7 +194,7 @@ struct ShellOutcome {
     fields(command_preview = %command_preview(&request.command), timeout_ms, kill_on_timeout = request.kill_on_timeout, sandboxed = request.sandbox_state.is_some())
 )]
 async fn run_shell_task(
-    request: BackgroundShellRequest,
+    request: ShellTaskRequest,
     timeout_ms: i64,
     cancel: CancellationToken,
     dto: DiskTaskOutput,
@@ -216,7 +217,7 @@ async fn run_shell_task(
 
     let (program, args, env_overrides): (std::path::PathBuf, Vec<String>, Vec<(String, String)>) =
         match request.shell_kind.clone() {
-            BackgroundShellKind::DefaultPlatformShell => {
+            ShellTaskKind::DefaultPlatformShell => {
                 #[cfg(windows)]
                 {
                     (
@@ -234,7 +235,7 @@ async fn run_shell_task(
                     )
                 }
             }
-            BackgroundShellKind::Provider(provider) => {
+            ShellTaskKind::Provider(provider) => {
                 let use_sandbox = sandbox_tmp_path.is_some();
                 let opts = coco_shell::BuildExecOpts {
                     id: BACKGROUND_SHELL_COMMAND_ID.fetch_add(1, Ordering::Relaxed),
@@ -373,10 +374,9 @@ async fn run_shell_task(
     ShellOutcome { wait: outcome }
 }
 
-/// Final lifecycle update for a shell task: flip status,
-/// broadcast on the watch, persist exit_code into the per-task
-/// `OnceLock` (W3: so `read_terminal_outputs` can return it to the
-/// fg `tool.execute` caller), and push the terminal notification.
+/// Final lifecycle update for a shell task: flip status, broadcast on the
+/// watch, persist exit_code for foreground readers, and push a terminal
+/// notification only if the task is backgrounded at completion time.
 #[allow(clippy::too_many_arguments)]
 async fn apply_shell_terminal_state(
     manager: &TaskManager,
@@ -418,6 +418,18 @@ async fn apply_shell_terminal_state(
     let Some(state) = manager.transition_terminal(task_id, status).await else {
         return;
     };
+    if !state.is_backgrounded() {
+        if terminal == TerminalStatus::Killed {
+            manager.mark_notified_once(task_id).await;
+        }
+        info!(
+            target: "coco::task_runtime::shell",
+            task_id,
+            status = ?status,
+            "foreground shell task terminal"
+        );
+        return;
+    }
     if !manager.mark_notified_once(task_id).await {
         return;
     }

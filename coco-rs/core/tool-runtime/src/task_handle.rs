@@ -63,11 +63,29 @@ pub enum DetachSource {
     AssistantAuto,
 }
 
-/// Request to spawn a background shell task.
+/// Initial lifecycle mode for a managed shell task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellTaskStartMode {
+    /// The Bash tool is awaiting this task and will consume the terminal
+    /// result directly.
+    Foreground,
+    /// The task is detached from the tool call and reports terminal state
+    /// via `<task-notification>`.
+    Background,
+}
+
+impl ShellTaskStartMode {
+    pub fn is_backgrounded(self) -> bool {
+        matches!(self, Self::Background)
+    }
+}
+
+/// Request to spawn a managed shell task.
 #[derive(Clone)]
-pub struct BackgroundShellRequest {
+pub struct ShellTaskRequest {
     pub command: String,
-    pub shell_kind: BackgroundShellKind,
+    pub shell_kind: ShellTaskKind,
+    pub start_mode: ShellTaskStartMode,
     pub description: String,
     pub timeout_ms: Option<i64>,
     pub tool_use_id: Option<String>,
@@ -107,12 +125,12 @@ pub struct WorkflowTaskRequest {
 }
 
 #[derive(Clone)]
-pub enum BackgroundShellKind {
+pub enum ShellTaskKind {
     DefaultPlatformShell,
     Provider(Arc<dyn coco_shell::ShellProvider>),
 }
 
-impl std::fmt::Debug for BackgroundShellKind {
+impl std::fmt::Debug for ShellTaskKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DefaultPlatformShell => f.write_str("DefaultPlatformShell"),
@@ -124,11 +142,12 @@ impl std::fmt::Debug for BackgroundShellKind {
     }
 }
 
-impl std::fmt::Debug for BackgroundShellRequest {
+impl std::fmt::Debug for ShellTaskRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BackgroundShellRequest")
+        f.debug_struct("ShellTaskRequest")
             .field("command", &self.command)
             .field("shell_kind", &self.shell_kind)
+            .field("start_mode", &self.start_mode)
             .field("description", &self.description)
             .field("timeout_ms", &self.timeout_ms)
             .field("tool_use_id", &self.tool_use_id)
@@ -426,7 +445,7 @@ pub trait TaskHandle: Send + Sync {
 
     async fn spawn_shell_task(
         &self,
-        _request: BackgroundShellRequest,
+        _request: ShellTaskRequest,
     ) -> Result<String, coco_error::BoxedError> {
         Err(unavail())
     }

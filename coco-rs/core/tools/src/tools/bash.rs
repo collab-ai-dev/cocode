@@ -12,9 +12,10 @@ use coco_sandbox::SandboxState;
 use coco_shell::read_only::is_read_only_command;
 use coco_shell::security::SecuritySeverity;
 use coco_shell::security::check_security;
-use coco_tool_runtime::BackgroundShellRequest;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::DetachSource;
+use coco_tool_runtime::ShellTaskRequest;
+use coco_tool_runtime::ShellTaskStartMode;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolProgress;
@@ -893,7 +894,7 @@ impl Tool for BashTool {
         // Tests / minimal embeddings without a TaskRuntime fall back
         // to the legacy ShellExecutor path (`execute_foreground`).
         // W6: TaskRuntime now supports sandbox wrap (sandbox params
-        // threaded into `BackgroundShellRequest`).
+        // threaded into `ShellTaskRequest`).
         if ctx.task_handle.is_some() {
             return execute_via_task_runtime(
                 command,
@@ -997,9 +998,14 @@ async fn execute_via_task_runtime(
         ctx.progress_tx.clone()
     };
 
-    let req = BackgroundShellRequest {
+    let req = ShellTaskRequest {
         command: command.to_string(),
-        shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
+        shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+        start_mode: if run_in_background {
+            ShellTaskStartMode::Background
+        } else {
+            ShellTaskStartMode::Foreground
+        },
         description: description.to_string(),
         timeout_ms: Some(timeout_ms as i64),
         tool_use_id,

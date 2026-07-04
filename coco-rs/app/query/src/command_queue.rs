@@ -96,8 +96,14 @@ impl QueuedCommand {
     /// 80 characters and trims to a char boundary so multibyte input
     /// (CJK, emoji) doesn't slice in the middle of a code point.
     pub fn preview(&self) -> String {
+        let summary = if matches!(self.origin.as_ref(), Some(QueueOrigin::TaskNotification)) {
+            task_notification_summary(&self.prompt)
+        } else {
+            None
+        };
+        let text = summary.as_deref().unwrap_or(&self.prompt);
         let mut out = String::with_capacity(80);
-        for c in self.prompt.chars().take(80) {
+        for c in text.chars().take(80) {
             out.push(c);
         }
         out
@@ -127,6 +133,20 @@ impl QueuedCommand {
             && self.agent_id.is_none()
             && matches!(self.origin.as_ref(), None | Some(QueueOrigin::Human))
     }
+}
+
+fn task_notification_summary(prompt: &str) -> Option<String> {
+    let (_, rest) = prompt.split_once("<summary>")?;
+    let (summary, _) = rest.split_once("</summary>")?;
+    Some(unescape_xml_summary(summary))
+}
+
+fn unescape_xml_summary(s: &str) -> String {
+    s.replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 /// Thread-safe mid-turn command queue with priority ordering.

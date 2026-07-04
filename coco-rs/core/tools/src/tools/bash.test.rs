@@ -702,7 +702,7 @@ impl DetachingTaskHandle {
 impl TaskHandle for DetachingTaskHandle {
     async fn spawn_shell_task(
         &self,
-        _request: coco_tool_runtime::BackgroundShellRequest,
+        _request: coco_tool_runtime::ShellTaskRequest,
     ) -> Result<String, coco_error::BoxedError> {
         let notify = self.notify.clone();
         tokio::spawn(async move {
