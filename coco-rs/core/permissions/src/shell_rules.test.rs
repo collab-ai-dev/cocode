@@ -376,6 +376,81 @@ fn test_bash_suggestion_compound_is_per_subcommand() {
 }
 
 #[test]
+fn test_bash_suggestion_for_loop_is_single_exact_rule() {
+    // A `for … in …; do …; done` loop must not fragment into keyword rules
+    // (`for dir:*`, `do echo:*`, `done`); it is keyed as one exact rule on the
+    // whole command.
+    let command = "for dir in a b c; do echo \"$dir\"; head -1 \"$dir/f\"; done";
+    let s = bash_permission_suggestions("Bash", command);
+    assert_eq!(one_rule(&s), ("Bash", command));
+}
+
+#[test]
+fn test_bash_suggestion_for_loop_after_cd_has_no_keyword_fragments() {
+    // The reported repro: a no-op `cd` then a read-only loop. Previously this
+    // saved `for dir:*`, `do echo:*`, `head …`, `done`; now a single exact rule.
+    let cwd = std::env::current_dir().expect("test cwd");
+    let command = format!(
+        "cd {} && for dir in a b; do echo \"=== $dir ===\"; head -1 \"$dir/f\"; done",
+        cwd.display()
+    );
+    let s = bash_permission_suggestions("Bash", &command);
+    let (_, content) = one_rule(&s);
+    assert_eq!(content, command);
+    assert!(
+        !content.ends_with(":*"),
+        "must be an exact rule, not a prefix"
+    );
+}
+
+#[test]
+fn test_compound_command_fully_allowed_when_each_subcommand_covered() {
+    // `git status && npm run build` re-authorized by the per-subcommand rules
+    // the ask flow suggests — no single rule matches the whole compound.
+    let allow = ["git status:*", "npm run:*"];
+    assert!(compound_command_fully_allowed(
+        "git status && npm run build",
+        "/tmp",
+        &allow,
+        ShellCase::Sensitive,
+    ));
+}
+
+#[test]
+fn test_compound_command_not_allowed_when_a_subcommand_uncovered() {
+    let allow = ["git status:*"]; // npm not covered
+    assert!(!compound_command_fully_allowed(
+        "git status && npm run build",
+        "/tmp",
+        &allow,
+        ShellCase::Sensitive,
+    ));
+}
+
+#[test]
+fn test_compound_command_fully_allowed_false_for_single_command() {
+    // A single command is handled by the normal whole-command allow match.
+    assert!(!compound_command_fully_allowed(
+        "git status",
+        "/tmp",
+        &["git status:*"],
+        ShellCase::Sensitive,
+    ));
+}
+
+#[test]
+fn test_compound_command_fully_allowed_false_for_control_structure() {
+    // A control structure is matched as a whole (exact rule), never decomposed —
+    // so this is false even though the body commands are covered.
+    assert!(!compound_command_fully_allowed(
+        "for dir in a b; do echo x; head -1 f; done",
+        "/tmp",
+        &["echo:*", "head:*"],
+        ShellCase::Sensitive,
+    ));
+}
+
+#[test]
 fn test_editable_prefix_uses_single_backend_suggestion() {
     let cwd = std::env::current_dir().expect("test cwd");
     let command = format!("cd {} && git diff", cwd.display());

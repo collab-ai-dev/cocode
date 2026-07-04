@@ -596,6 +596,28 @@ pub fn extract_simple_commands(node: &BashNode) -> Vec<&SimpleCommand> {
     commands
 }
 
+/// Whether `command` contains a shell control structure (`for` / `while` /
+/// `until` / `if` / `case` / `select`).
+///
+/// Such a command must not be flat-split on `;` / `&&` for permission-rule
+/// purposes: its keywords (`for x in …`, `do …`, `done`) are not runnable
+/// commands and fragment into meaningless rules (`Bash(for dir:*)`,
+/// `Bash(done)`). The parser already models a control structure as a single
+/// opaque [`BashNode::Compound`], so this is a walk looking for one — quoting is
+/// handled by the tokenizer, so `echo "done"` does not match.
+pub fn contains_control_structure(command: &str) -> bool {
+    fn walk(node: &BashNode) -> bool {
+        match node {
+            BashNode::Compound { .. } => true,
+            BashNode::Pipeline(nodes) => nodes.iter().any(walk),
+            BashNode::List { left, right, .. } => walk(left) || walk(right),
+            BashNode::Subshell(inner) | BashNode::CommandSubstitution(inner) => walk(inner),
+            BashNode::SimpleCommand(_) | BashNode::Assignment { .. } | BashNode::Raw(_) => false,
+        }
+    }
+    walk(&parse_command(command))
+}
+
 fn collect_simple_commands<'a>(node: &'a BashNode, commands: &mut Vec<&'a SimpleCommand>) {
     match node {
         BashNode::SimpleCommand(cmd) => commands.push(cmd),

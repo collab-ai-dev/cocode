@@ -417,6 +417,43 @@ pub fn match_bash_rule(
     }
 }
 
+/// Whether a COMPOUND shell command is fully covered by allow rules: every
+/// significant subcommand individually matches at least one rule in
+/// `allow_rule_contents`.
+///
+/// This is the allow-side analogue of the deny/ask per-segment scan. Without
+/// it, allow rules suggested per-subcommand for a compound (`git status:*`,
+/// `npm run:*`) can never re-authorize the compound they came from — a prefix
+/// rule is barred from matching a compound command as a whole (the compound
+/// guard in [`rule_matches_candidate_with_compound_guard`]). Matching each
+/// segment in isolation keeps that guard intact: a rule still cannot widen to a
+/// whole compound, only cover one segment.
+///
+/// Returns `false` for a single (non-compound) command — the normal
+/// whole-command allow match handles those — and for any control structure
+/// (for/while/if/case), which is matched as a whole to stay symmetric with the
+/// suggestion side ([`bash_permission_suggestions_in_cwd`]). Deny/ask run
+/// per-segment before allow, so this cannot widen a deny.
+pub fn compound_command_fully_allowed(
+    command: &str,
+    cwd: &str,
+    allow_rule_contents: &[&str],
+    case: ShellCase,
+) -> bool {
+    if coco_shell::contains_control_structure(command) {
+        return false;
+    }
+    let significant = coco_shell::analyze_compound_command(command, cwd).significant_subcommands;
+    if significant.len() <= 1 {
+        return false;
+    }
+    significant.iter().all(|segment| {
+        allow_rule_contents
+            .iter()
+            .any(|content| match_bash_rule(content, segment, RuleMatchPolicy::Allow, case))
+    })
+}
+
 /// Check if a rule_content represents a dangerous bash permission.
 ///
 /// Delegates to `setup::is_dangerous_bash_permission` for the full pattern list.
@@ -494,14 +531,21 @@ pub fn bash_permission_suggestions_in_cwd(
         return Vec::new();
     }
 
-    let significant = significant_bash_subcommands_in_cwd(trimmed, cwd);
-    if significant.len() > 1 {
-        return suggestions_for_significant_subcommands(tool_name, &significant);
-    }
-    if let Some(only) = significant.first()
-        && only != trimmed
-    {
-        return bash_permission_suggestions_for_single(tool_name, only);
+    // A control structure (for/while/if/case) is keyed as a single rule on the
+    // whole command: flat-splitting it on `;` fragments loop keywords into
+    // meaningless rules (`for dir:*`, `do echo:*`, `done`). The match side
+    // ([`compound_command_fully_allowed`]) mirrors this — it never decomposes a
+    // control structure — so a saved whole-command rule can still re-authorize.
+    if !coco_shell::contains_control_structure(trimmed) {
+        let significant = significant_bash_subcommands_in_cwd(trimmed, cwd);
+        if significant.len() > 1 {
+            return suggestions_for_significant_subcommands(tool_name, &significant);
+        }
+        if let Some(only) = significant.first()
+            && only != trimmed
+        {
+            return bash_permission_suggestions_for_single(tool_name, only);
+        }
     }
 
     bash_permission_suggestions_for_single(tool_name, trimmed)
@@ -512,6 +556,13 @@ fn bash_permission_suggestions_for_single(
     command: &str,
 ) -> Vec<coco_types::PermissionUpdate> {
     let trimmed = command.trim();
+
+    // A control structure (for/while/if/case) has no usable command prefix —
+    // its first word is a shell keyword, so any prefix would be junk
+    // (`for dir:*`, `while read:*`). Key the exact command instead.
+    if coco_shell::contains_control_structure(trimmed) {
+        return vec![suggestion_for_exact_command(tool_name, trimmed)];
+    }
 
     // Heredoc: suggest a prefix taken from the words before `<<`.
     if let Some(prefix) = coco_shell::heredoc_command_prefix(trimmed) {

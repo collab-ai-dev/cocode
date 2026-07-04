@@ -256,6 +256,11 @@ impl Tool for EnterPlanModeTool {
     fn is_always_read_only(&self) -> bool {
         true
     }
+    /// The `Ask` from `check_permissions` IS the plan-mode entry prompt, not a
+    /// security gate — the auto-mode classifier must never rewrite it to Allow.
+    fn requires_user_interaction(&self) -> bool {
+        true
+    }
     fn is_concurrency_safe(&self, _input: &EnterPlanModeInput) -> bool {
         true
     }
@@ -626,6 +631,12 @@ impl Tool for ExitPlanModeTool {
     }
     fn is_read_only(&self, _input: &ExitPlanModeInput) -> bool {
         false
+    }
+    /// The `Ask` from `check_permissions` IS the plan-approval prompt, not a
+    /// security gate — the auto-mode classifier must never rewrite it to Allow
+    /// (that would auto-approve the plan without review).
+    fn requires_user_interaction(&self) -> bool {
+        true
     }
     fn is_concurrency_safe(&self, _input: &ExitPlanModeInput) -> bool {
         true

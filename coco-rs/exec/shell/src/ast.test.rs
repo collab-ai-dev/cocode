@@ -312,3 +312,28 @@ fn test_double_quote_escape_sequences() {
         panic!("expected SimpleCommand");
     }
 }
+
+#[test]
+fn test_contains_control_structure_true_for_loops_and_conditionals() {
+    assert!(contains_control_structure("for x in a b; do echo $x; done"));
+    assert!(contains_control_structure(
+        "cd /tmp && for x in a b; do echo $x; done"
+    ));
+    assert!(contains_control_structure("while read l; do echo $l; done"));
+    assert!(contains_control_structure("until false; do echo x; done"));
+    assert!(contains_control_structure(
+        "if grep -q x f; then echo y; fi"
+    ));
+    assert!(contains_control_structure("case $x in a) echo a ;; esac"));
+}
+
+#[test]
+fn test_contains_control_structure_false_for_plain_commands() {
+    assert!(!contains_control_structure("git status"));
+    assert!(!contains_control_structure("git status && npm run build"));
+    assert!(!contains_control_structure("echo one; echo two"));
+    assert!(!contains_control_structure("ls | grep foo"));
+    // Keywords in quotes / as arguments are not control structures.
+    assert!(!contains_control_structure(r#"echo "done""#));
+    assert!(!contains_control_structure("echo for while done"));
+}
