@@ -631,6 +631,20 @@ class UnifiedFinishReason(str, Enum):
     other = "other"
 
 
+class UsageSource(str, Enum):
+    main = "main"
+    compact = "compact"
+    side_query = "side_query"
+    memory_side_query = "memory_side_query"
+    hook_prompt = "hook_prompt"
+    hook_agent = "hook_agent"
+
+
+class UsageSourceGroup(str, Enum):
+    session = "session"
+    agent_tool_subagent = "agent_tool_subagent"
+
+
 class WireApi(str, Enum):
     chat = "chat"
     responses = "responses"
@@ -3563,6 +3577,7 @@ class SessionUsageSnapshot(BaseModel):
     version: int
     auto_compact_threshold: int | None = None
     models: list[SessionModelUsageEntry] | None = None
+    source_records: list[SessionUsageSourceEntry] | None = None
     unpriced_models: list[ProviderModelSelection] | None = None
 
 
@@ -5487,6 +5502,30 @@ class SessionStartInput(BaseModel):
 
 class SessionStartResult(BaseModel):
     session_id: str
+
+
+class SessionUsageSourceEntry(BaseModel):
+    cache_creation_cost_usd: float
+    cache_creation_input_tokens: int
+    cache_read_cost_usd: float
+    cache_read_input_tokens: int
+    input_cost_usd: float
+    input_tokens: int
+    model_id: str
+    output_cost_usd: float
+    output_tokens: int
+    priced: bool
+    provider: str
+    request_count: int
+    total_cost_usd: float
+    agent_task_id: str | None = None
+    duration_ms: int = 0
+    group: UsageSourceGroup = "session"
+    source: UsageSource = "main"
+    unpriced_input_tokens: int = 0
+    unpriced_output_tokens: int = 0
+    unpriced_request_count: int = 0
+    web_search_requests: int = 0
 
 
 class SessionUsageTotals(BaseModel):

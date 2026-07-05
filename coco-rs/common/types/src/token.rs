@@ -80,6 +80,10 @@ pub struct SessionUsageSnapshot {
     pub session_id: String,
     pub updated_at_ms: i64,
     pub totals: SessionUsageTotals,
+    /// Provider/model/source records. This is the source of truth for
+    /// detailed usage views; `totals` and `models` are rollups.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_records: Vec<SessionUsageSourceEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<SessionModelUsageEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -116,6 +120,65 @@ pub struct SessionUsageTotals {
     pub unpriced_output_tokens: i64,
 }
 
+/// Top-level ownership bucket for a recorded LLM call.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageSourceGroup {
+    /// Main session work: main turns, session compaction, session side
+    /// queries, memory side queries, hook prompts, and HookAgent forks.
+    #[default]
+    Session,
+    /// Calls causally owned by an AgentTool child engine.
+    AgentToolSubagent,
+}
+
+/// Fine-grained source of a recorded LLM call.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageSource {
+    #[default]
+    Main,
+    Compact,
+    SideQuery,
+    MemorySideQuery,
+    HookPrompt,
+    HookAgent,
+}
+
+/// Attribution required for every session-usage record.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct UsageAttribution {
+    pub group: UsageSourceGroup,
+    pub source: UsageSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_task_id: Option<String>,
+}
+
+impl UsageAttribution {
+    pub fn session(source: UsageSource) -> Self {
+        Self {
+            group: UsageSourceGroup::Session,
+            source,
+            agent_task_id: None,
+        }
+    }
+
+    pub fn agent_tool_subagent(source: UsageSource, agent_task_id: Option<String>) -> Self {
+        Self {
+            group: UsageSourceGroup::AgentToolSubagent,
+            source,
+            agent_task_id,
+        }
+    }
+}
+
 /// Cumulative usage for a single `(provider, model_id)` bucket.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -134,6 +197,43 @@ pub struct SessionModelUsageEntry {
     pub cache_creation_cost_usd: f64,
     pub total_cost_usd: f64,
     pub request_count: i64,
+    #[serde(default)]
+    pub unpriced_request_count: i64,
+    #[serde(default)]
+    pub unpriced_input_tokens: i64,
+    #[serde(default)]
+    pub unpriced_output_tokens: i64,
+    /// True only when every request in this bucket had known pricing.
+    pub priced: bool,
+}
+
+/// Cumulative usage for a single `(provider, model_id, source,
+/// agent_task_id)` bucket.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionUsageSourceEntry {
+    pub provider: String,
+    pub model_id: String,
+    #[serde(default)]
+    pub group: UsageSourceGroup,
+    #[serde(default)]
+    pub source: UsageSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_task_id: Option<String>,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_input_tokens: i64,
+    pub cache_creation_input_tokens: i64,
+    #[serde(default)]
+    pub web_search_requests: i64,
+    pub input_cost_usd: f64,
+    pub output_cost_usd: f64,
+    pub cache_read_cost_usd: f64,
+    pub cache_creation_cost_usd: f64,
+    pub total_cost_usd: f64,
+    pub request_count: i64,
+    #[serde(default)]
+    pub duration_ms: i64,
     #[serde(default)]
     pub unpriced_request_count: i64,
     #[serde(default)]

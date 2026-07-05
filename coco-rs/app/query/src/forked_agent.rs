@@ -220,6 +220,7 @@ pub fn build_query_config(
             agent_id: crate::fork_context::auto_agent_id(options.fork_label),
             kind: coco_tool_runtime::AgentRunKind::Fork,
         },
+        agent_task_id: None,
         model_selection: if cache.provider.trim().is_empty() || cache.model_id.trim().is_empty() {
             coco_types::LlmModelSelection::InheritMain
         } else {

@@ -64,6 +64,7 @@ use coco_hooks::HookLlmHandle;
 use coco_inference::InferenceError;
 use coco_inference::ModelRuntimeQueryOutcome;
 use coco_inference::ModelRuntimeRegistry;
+use coco_inference::ModelRuntimeSnapshot;
 use coco_inference::ModelRuntimeSource;
 use coco_inference::QueryParams;
 use coco_inference::ResponseFormat;
@@ -72,6 +73,7 @@ use coco_llm_types::AssistantContentPart;
 use coco_llm_types::LlmMessage;
 use coco_llm_types::UserContentPart;
 use coco_types::ModelRole;
+use coco_types::TokenUsage;
 use serde_json::Value;
 use serde_json::json;
 
@@ -103,7 +105,9 @@ Only use {"ok": false, "impossible": true} when the condition is genuinely unach
 pub struct QueryHookLlm {
     model_runtimes: Arc<ModelRuntimeRegistry>,
     default_model_id: String,
-    agent_runner: tokio::sync::RwLock<Option<HookAgentRunnerRef>>,
+    agent_runner: Arc<tokio::sync::RwLock<Option<HookAgentRunnerRef>>>,
+    usage_recorder: Option<Arc<dyn HookUsageRecorder>>,
+    usage_accounting: Option<crate::usage_accounting::UsageAccounting>,
 }
 
 impl std::fmt::Debug for QueryHookLlm {
@@ -139,7 +143,27 @@ impl QueryHookLlm {
         Self {
             model_runtimes,
             default_model_id,
-            agent_runner: tokio::sync::RwLock::new(None),
+            agent_runner: Arc::new(tokio::sync::RwLock::new(None)),
+            usage_recorder: None,
+            usage_accounting: None,
+        }
+    }
+
+    pub fn with_usage_recorder(mut self, recorder: Arc<dyn HookUsageRecorder>) -> Self {
+        self.usage_recorder = Some(recorder);
+        self
+    }
+
+    pub fn scoped_with_usage_accounting(
+        &self,
+        accounting: crate::usage_accounting::UsageAccounting,
+    ) -> Self {
+        Self {
+            model_runtimes: self.model_runtimes.clone(),
+            default_model_id: self.default_model_id.clone(),
+            agent_runner: self.agent_runner.clone(),
+            usage_recorder: None,
+            usage_accounting: Some(accounting),
         }
     }
 
@@ -181,6 +205,16 @@ impl QueryHookLlm {
     }
 }
 
+#[async_trait]
+pub trait HookUsageRecorder: Send + Sync + std::fmt::Debug {
+    async fn record_hook_usage(
+        &self,
+        snapshot: &ModelRuntimeSnapshot,
+        usage: TokenUsage,
+        duration_ms: i64,
+    );
+}
+
 /// Request passed from [`QueryHookLlm`] to the runtime-specific Agent
 /// hook runner.
 #[derive(Debug, Clone)]
@@ -189,6 +223,7 @@ pub struct HookAgentRunRequest {
     pub model_source: ModelRuntimeSource,
     pub model_id: String,
     pub timeout: Duration,
+    pub usage_accounting: Option<crate::usage_accounting::UsageAccounting>,
 }
 
 #[async_trait]
@@ -242,12 +277,35 @@ impl HookLlmHandle for QueryHookLlm {
                     cancel: None,
                     wire_tap: None,
                 };
+                let started = std::time::Instant::now();
                 match self
                     .model_runtimes
                     .query_once(source.clone(), &params)
                     .await
                 {
-                    ModelRuntimeQueryOutcome::Success { result, .. } => return Ok(result),
+                    ModelRuntimeQueryOutcome::Success {
+                        result, snapshot, ..
+                    } => {
+                        if let Some(accounting) = &self.usage_accounting {
+                            accounting
+                                .record_snapshot_usage(
+                                    &snapshot,
+                                    result.usage,
+                                    started.elapsed().as_millis() as i64,
+                                    coco_types::UsageSource::HookPrompt,
+                                )
+                                .await;
+                        } else if let Some(recorder) = &self.usage_recorder {
+                            recorder
+                                .record_hook_usage(
+                                    &snapshot,
+                                    result.usage,
+                                    started.elapsed().as_millis() as i64,
+                                )
+                                .await;
+                        }
+                        return Ok(result);
+                    }
                     ModelRuntimeQueryOutcome::Retry { .. } => continue,
                     ModelRuntimeQueryOutcome::Failed { error, .. } => {
                         if is_stop_event && !prompt_too_long_retried && is_prompt_too_long(&error) {
@@ -315,6 +373,7 @@ impl HookLlmHandle for QueryHookLlm {
                 model_source: source,
                 model_id,
                 timeout,
+                usage_accounting: self.usage_accounting.clone(),
             })
             .await
     }

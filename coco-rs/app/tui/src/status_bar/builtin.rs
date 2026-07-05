@@ -13,7 +13,7 @@ use crate::status_bar::StatusSpan;
 use crate::status_bar::StatusTone;
 
 /// The built-in status bar is a one-to-three-line block:
-/// 1. model · effort · cycle-hint · ctx · transcript counts · MCP · LSP (always)
+/// 1. model · effort · cycle-hint · ctx · total spend · transcript counts · MCP · LSP (always)
 /// 2. main-thread spend (`↑in/$ ↓out/$ · cache`) + subagent aggregate
 /// 3. permission mode (`▸▸ auto mode on`) · task pill · working dir `git:(branch)`
 /// Lines 2 and 3 are emitted only when they have content, so the bar collapses
@@ -61,7 +61,7 @@ fn show_environment_line(state: &AppState) -> bool {
 }
 
 /// Line 1 (identity + vitals): model · effort · cycle-hint | ctx | turn
-/// counts | MCP | LSP. Always rendered.
+/// total spend | counts | MCP | LSP. Always rendered.
 fn identity_line(state: &AppState) -> Vec<StatusSpan> {
     let mut spans = Vec::new();
     let (provider, model_id) = state
@@ -118,12 +118,27 @@ fn identity_line(state: &AppState) -> Vec<StatusSpan> {
         let trigger = ctx_trigger_percent(state, usage.total);
         let (tone, bold) = ctx_tone(usage.percent, trigger);
         spans.push(StatusSpan {
-            text: format!("ctx {}%", usage.percent),
+            text: format!("ctx {}%/{}", usage.percent, format_token_count(usage.total)),
             tone,
             bold,
         });
     } else {
         spans.push(StatusSpan::new("ctx --", StatusTone::Dim));
+    }
+
+    if let Some(usage) = total_usage_summary(state) {
+        separator(&mut spans);
+        let mut text = t!(
+            "status.total_usage",
+            input = format_token_count(usage.input_tokens),
+            output = format_token_count(usage.output_tokens)
+        )
+        .to_string();
+        if let Some(cost) = usage.cost {
+            text.push(' ');
+            text.push_str(&cost);
+        }
+        spans.push(StatusSpan::new(text, StatusTone::Dim));
     }
 
     separator(&mut spans);
@@ -149,7 +164,7 @@ fn identity_line(state: &AppState) -> Vec<StatusSpan> {
     spans
 }
 
-/// Line 2 (spend): main-thread `↑in/$ ↓out/$ · cache` and, once any subagent
+/// Line 2 (spend): session `↑in/$ ↓out/$ · cache` and, once any subagent
 /// reports, the aggregate `↳ subagents …` group. Both use 2-decimal costs for
 /// a compact, scannable width. Rendered only when there is token activity
 /// ([`show_usage_line`]).
@@ -172,23 +187,26 @@ fn usage_line(state: &AppState) -> Vec<StatusSpan> {
     });
     spans.push(StatusSpan::new(
         match usage_costs {
-            Some((_, _, true, _)) => format!(
-                " ↑{}/$? ↓{}/$?",
-                format_token_count(tokens.input_tokens),
-                format_token_count(tokens.output_tokens)
-            ),
-            Some((input_cost, output_cost, false, _)) => format!(
-                " ↑{}/{} ↓{}/{}",
-                format_token_count(tokens.input_tokens),
-                format_cost_2dp(input_cost),
-                format_token_count(tokens.output_tokens),
-                format_cost_2dp(output_cost)
-            ),
-            None => format!(
-                " ↑{} ↓{}",
-                format_token_count(tokens.input_tokens),
-                format_token_count(tokens.output_tokens)
-            ),
+            Some((_, _, true, _)) => t!(
+                "status.session_usage_unpriced",
+                input = format_token_count(tokens.input_tokens),
+                output = format_token_count(tokens.output_tokens)
+            )
+            .to_string(),
+            Some((input_cost, output_cost, false, _)) => t!(
+                "status.session_usage",
+                input = format_token_count(tokens.input_tokens),
+                input_cost = format_cost_2dp(input_cost),
+                output = format_token_count(tokens.output_tokens),
+                output_cost = format_cost_2dp(output_cost)
+            )
+            .to_string(),
+            None => t!(
+                "status.session_usage_tokens",
+                input = format_token_count(tokens.input_tokens),
+                output = format_token_count(tokens.output_tokens)
+            )
+            .to_string(),
         },
         StatusTone::Dim,
     ));
@@ -235,6 +253,48 @@ fn usage_line(state: &AppState) -> Vec<StatusSpan> {
         ));
     }
     spans
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TotalUsageSummary {
+    input_tokens: i64,
+    output_tokens: i64,
+    cost: Option<String>,
+}
+
+fn total_usage_summary(state: &AppState) -> Option<TotalUsageSummary> {
+    let tokens = &state.session.token_usage;
+    let sub = &state.session.subagent_usage;
+    let input_tokens = tokens.input_tokens.saturating_add(sub.input_tokens);
+    let output_tokens = tokens.output_tokens.saturating_add(sub.output_tokens);
+    let has_activity = input_tokens > 0 || output_tokens > 0 || sub.cost_usd > 0.0;
+    if !has_activity {
+        return None;
+    }
+
+    let cost = match state.session.session_usage.as_ref() {
+        Some(snapshot) => {
+            let total_cost = snapshot.totals.total_cost_usd + sub.cost_usd;
+            let all_main_unpriced = snapshot.totals.request_count > 0
+                && snapshot.totals.unpriced_request_count == snapshot.totals.request_count;
+            let has_partial_unpriced = !all_main_unpriced && !snapshot.unpriced_models.is_empty();
+            Some(if all_main_unpriced && sub.cost_usd <= 0.0 {
+                "$?".to_string()
+            } else if has_partial_unpriced {
+                format!("{}+?", format_cost_2dp(total_cost))
+            } else {
+                format_cost_2dp(total_cost)
+            })
+        }
+        None if sub.cost_usd > 0.0 => Some(format_cost_2dp(sub.cost_usd)),
+        None => None,
+    };
+
+    Some(TotalUsageSummary {
+        input_tokens,
+        output_tokens,
+        cost,
+    })
 }
 
 /// Fallback reserve (`min(max_output, 20K) = 20K` + `13K` buffer) used to

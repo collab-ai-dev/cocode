@@ -4918,6 +4918,13 @@
         "session_id": {
           "type": "string"
         },
+        "source_records": {
+          "description": "Provider/model/source records. This is the source of truth for\ndetailed usage views; `totals` and `models` are rollups.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionUsageSourceEntry"
+          }
+        },
         "totals": {
           "$ref": "#/$defs/SessionUsageTotals"
         },
@@ -4941,6 +4948,116 @@
         "session_id",
         "updated_at_ms",
         "totals"
+      ]
+    },
+    "SessionUsageSourceEntry": {
+      "description": "Cumulative usage for a single `(provider, model_id, source,\nagent_task_id)` bucket.",
+      "type": "object",
+      "properties": {
+        "agent_task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cache_creation_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "cache_creation_input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "cache_read_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "cache_read_input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "group": {
+          "$ref": "#/$defs/UsageSourceGroup",
+          "default": "session"
+        },
+        "input_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "output_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "priced": {
+          "description": "True only when every request in this bucket had known pricing.",
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "request_count": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "source": {
+          "$ref": "#/$defs/UsageSource",
+          "default": "main"
+        },
+        "total_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "unpriced_input_tokens": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "unpriced_output_tokens": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "unpriced_request_count": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "web_search_requests": {
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        }
+      },
+      "required": [
+        "provider",
+        "model_id",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "input_cost_usd",
+        "output_cost_usd",
+        "cache_read_cost_usd",
+        "cache_creation_cost_usd",
+        "total_cost_usd",
+        "request_count",
+        "priced"
       ]
     },
     "SessionUsageTotals": {
@@ -7786,6 +7903,33 @@
           "description": "Unspecified / unknown termination. Raw wire string is\npreserved on [`FinishReason::raw`] for diagnostics.",
           "type": "string",
           "const": "other"
+        }
+      ]
+    },
+    "UsageSource": {
+      "description": "Fine-grained source of a recorded LLM call.",
+      "type": "string",
+      "enum": [
+        "main",
+        "compact",
+        "side_query",
+        "memory_side_query",
+        "hook_prompt",
+        "hook_agent"
+      ]
+    },
+    "UsageSourceGroup": {
+      "description": "Top-level ownership bucket for a recorded LLM call.",
+      "oneOf": [
+        {
+          "description": "Main session work: main turns, session compaction, session side\nqueries, memory side queries, hook prompts, and HookAgent forks.",
+          "type": "string",
+          "const": "session"
+        },
+        {
+          "description": "Calls causally owned by an AgentTool child engine.",
+          "type": "string",
+          "const": "agent_tool_subagent"
         }
       ]
     },

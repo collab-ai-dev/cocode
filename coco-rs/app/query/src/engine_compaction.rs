@@ -706,6 +706,7 @@ impl QueryEngine {
                             &cache.model_id,
                             result.total_usage,
                             dispatch_started.elapsed().as_millis() as i64,
+                            coco_types::UsageSource::Compact,
                         )
                         .await;
                     }
@@ -858,6 +859,7 @@ impl QueryEngine {
                             &snapshot.model_id,
                             result.usage,
                             call_started.elapsed().as_millis() as i64,
+                            coco_types::UsageSource::Compact,
                         )
                         .await;
                     }

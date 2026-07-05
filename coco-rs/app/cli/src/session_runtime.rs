@@ -29,6 +29,7 @@ use std::sync::atomic::Ordering;
 use anyhow::Result;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 use tracing::info;
 use tracing::warn;
 
@@ -518,6 +519,8 @@ pub struct SessionRuntime {
     schedule_store: coco_tool_runtime::ScheduleStoreRef,
     model_runtimes: Arc<coco_inference::ModelRuntimeRegistry>,
     side_query: coco_tool_runtime::SideQueryHandle,
+    side_query_event_tx: Arc<RwLock<Option<mpsc::Sender<coco_query::CoreEvent>>>>,
+    usage_accounting: coco_query::usage_accounting::UsageAccounting,
     pub auto_title_enabled: bool,
     /// SwarmMailbox handle installed on every engine via `with_mailbox`.
     mailbox: MailboxHandleRef,
@@ -935,16 +938,47 @@ impl SessionRuntime {
                 }),
             )?),
         };
-        let side_query: coco_tool_runtime::SideQueryHandle = Arc::new(
-            crate::side_query_impl::SideQueryAdapter::new(model_runtimes.clone(), model_id.clone()),
-        );
-
         // Per-project filesystem layout — one `Arc<ProjectPaths>` shared
         // by the memory runtime, the transcript enumerator, and any
         // future subsystem that needs the same canonical slug. Built
         // once via `crate::paths::project_paths` (canonical-git-root
         // + slug).
         let project_paths = crate::paths::project_paths(&cwd);
+        let live_session_id = Arc::new(RwLock::new(session_id.clone()));
+        // Main-session transcript store, selected by `session.backend`.
+        // Constructed once so the per-turn message append, usage accounting,
+        // and agent-transcript persistence path share one instance.
+        let transcript_store: Arc<dyn coco_session::SessionStore> =
+            match runtime_config.settings.merged.session.backend {
+                coco_config::SessionBackend::Disk => {
+                    Arc::new(TranscriptStore::new(project_paths.clone()))
+                }
+                coco_config::SessionBackend::Memory => session_manager.store_for(&cwd),
+            };
+        let session_usage_tracker = Arc::new(tokio::sync::Mutex::new(
+            transcript_store
+                .load_usage_snapshot(&session_id)
+                .ok()
+                .flatten()
+                .map(CostTracker::from_snapshot)
+                .unwrap_or_default(),
+        ));
+        let session_usage_write_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let side_query_event_tx = Arc::new(RwLock::new(None));
+        let usage_accounting = coco_query::usage_accounting::UsageAccounting::new(
+            live_session_id.clone(),
+            session_usage_tracker.clone(),
+            session_usage_write_lock.clone(),
+            coco_types::UsageAttribution::session(coco_types::UsageSource::Main),
+        )
+        .with_persistence(transcript_store.clone(), persist_session)
+        .with_event_tx(side_query_event_tx.clone());
+        let side_query_usage_recorder =
+            crate::side_query_impl::SideQueryUsageRecorder::new(usage_accounting.clone());
+        let side_query: coco_tool_runtime::SideQueryHandle = Arc::new(
+            crate::side_query_impl::SideQueryAdapter::new(model_runtimes.clone(), model_id.clone())
+                .with_usage_recorder(side_query_usage_recorder.clone()),
+        );
 
         // ── Auto-memory runtime ──
         // Built once per session, gated on `Feature::AutoMemory`. The
@@ -1393,29 +1427,6 @@ impl SessionRuntime {
         // role overrides through the shared ModelRuntimeRegistry.
         let hook_llm_handle =
             Arc::new(coco_query::hook_llm::QueryHookLlm::for_session(model_runtimes.clone()).await);
-        // Main-session transcript store, selected by `session.backend`.
-        // Constructed once so the per-turn message append in
-        // `engine_finalize_turn` and the agent-transcript persistence path
-        // share one instance. `Disk` keys at `<memory_base>/projects/<slug>/`
-        // for this cwd (today's behavior); `Memory` pulls the shared
-        // in-memory store from the session manager's catalog so the engine
-        // and `SessionManager` observe the same ephemeral state.
-        let transcript_store: Arc<dyn coco_session::SessionStore> =
-            match runtime_config.settings.merged.session.backend {
-                coco_config::SessionBackend::Disk => {
-                    Arc::new(TranscriptStore::new(project_paths.clone()))
-                }
-                coco_config::SessionBackend::Memory => session_manager.store_for(&cwd),
-            };
-        let session_usage_tracker = Arc::new(tokio::sync::Mutex::new(
-            transcript_store
-                .load_usage_snapshot(&session_id)
-                .ok()
-                .flatten()
-                .map(CostTracker::from_snapshot)
-                .unwrap_or_default(),
-        ));
-        let session_usage_write_lock = Arc::new(tokio::sync::Mutex::new(()));
         let transcript_dedup = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::<
             uuid::Uuid,
         >::new()));
@@ -1501,11 +1512,13 @@ impl SessionRuntime {
             )),
             model_runtimes,
             side_query,
+            side_query_event_tx,
+            usage_accounting,
             auto_title_enabled,
             mailbox,
             permission_bridge,
             cancel: CancellationToken::new(),
-            session_id: Arc::new(RwLock::new(session_id.clone())),
+            session_id: live_session_id,
             engine_config: Arc::new(RwLock::new(engine_config)),
             orchestration_session_id,
             orchestration_engine_config,
@@ -1983,6 +1996,14 @@ impl SessionRuntime {
 
     pub fn side_query(&self) -> coco_tool_runtime::SideQueryHandle {
         self.side_query.clone()
+    }
+
+    pub(crate) fn usage_accounting(&self) -> coco_query::usage_accounting::UsageAccounting {
+        self.usage_accounting.clone()
+    }
+
+    pub async fn install_side_query_event_tx(&self, event_tx: mpsc::Sender<coco_query::CoreEvent>) {
+        *self.side_query_event_tx.write().await = Some(event_tx);
     }
 
     /// Generate the on-demand LLM risk explanation for a permission prompt.
@@ -2839,9 +2860,13 @@ impl SessionRuntime {
         // `is_async: true`) deliver via `CombinedHookEventsSource`.
         engine = engine.with_async_hook_registry(self.async_hook_registry.clone());
         // Same wiring for the LLM-driven hook handler so the engine's
-        // `orchestration_ctx` carries it on every fired event — Prompt
-        // / Agent settings hooks reach the LLM via `QueryHookLlm`.
-        engine = engine.with_hook_llm_handle(self.hook_llm_handle.clone());
+        // `orchestration_ctx` carries it on every fired event. Usage
+        // recording is scoped per engine; the shared handle only owns model
+        // runtime state and the late-bound HookAgent runner.
+        engine = engine.with_hook_llm_handle(Arc::new(
+            self.hook_llm_handle
+                .scoped_with_usage_accounting(self.usage_accounting.clone()),
+        ));
         engine = engine.with_model_runtimes(self.model_runtimes.clone());
         engine =
             engine.with_session_start_hook_side_effect_sink(Arc::new(QuerySessionStartHookSink {
@@ -2950,8 +2975,7 @@ impl SessionRuntime {
         if persistence == EnginePersistenceMode::MainSession && self.persist_session {
             let live_session_id = self.session_id.read().await.clone();
             engine = engine.with_transcript_store(self.transcript_store.clone(), live_session_id);
-            engine = engine.with_session_usage_tracker(self.session_usage_tracker.clone());
-            engine = engine.with_session_usage_write_lock(self.session_usage_write_lock.clone());
+            engine = engine.with_usage_accounting(self.usage_accounting.clone());
             engine = engine.with_transcript_dedup(self.transcript_dedup.clone());
             engine = engine
                 .with_terminal_goal_metadata_flag(self.terminal_goal_metadata_written.clone());

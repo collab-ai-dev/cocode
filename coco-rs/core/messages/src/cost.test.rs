@@ -95,6 +95,104 @@ fn same_model_id_on_different_providers_stays_separate() {
 }
 
 #[test]
+fn source_records_split_same_provider_model_by_attribution() {
+    let mut tracker = CostTracker::new();
+    tracker.record_usage_attributed(
+        "anthropic",
+        "claude-sonnet-4-5",
+        usage(10, 1),
+        11,
+        coco_types::UsageAttribution::session(coco_types::UsageSource::Main),
+    );
+    tracker.record_usage_attributed(
+        "anthropic",
+        "claude-sonnet-4-5",
+        usage(20, 2),
+        13,
+        coco_types::UsageAttribution::agent_tool_subagent(
+            coco_types::UsageSource::Compact,
+            Some("task-abc".to_string()),
+        ),
+    );
+
+    let snapshot = tracker.snapshot_at("s1", 123);
+    assert_eq!(snapshot.models.len(), 1);
+    assert_eq!(snapshot.models[0].input_tokens, 30);
+    assert_eq!(snapshot.source_records.len(), 2);
+    assert!(snapshot.source_records.iter().any(|entry| {
+        entry.group == coco_types::UsageSourceGroup::Session
+            && entry.source == coco_types::UsageSource::Main
+            && entry.agent_task_id.is_none()
+            && entry.input_tokens == 10
+            && entry.duration_ms == 11
+    }));
+    assert!(snapshot.source_records.iter().any(|entry| {
+        entry.group == coco_types::UsageSourceGroup::AgentToolSubagent
+            && entry.source == coco_types::UsageSource::Compact
+            && entry.agent_task_id.as_deref() == Some("task-abc")
+            && entry.input_tokens == 20
+            && entry.duration_ms == 13
+    }));
+}
+
+#[test]
+fn merge_preserves_source_record_counts_duration_cost_and_unpriced() {
+    let attribution = coco_types::UsageAttribution::agent_tool_subagent(
+        coco_types::UsageSource::HookAgent,
+        Some("task-abc".to_string()),
+    );
+    let mut left = CostTracker::new();
+    left.record_usage_attributed(
+        "anthropic",
+        "claude-sonnet-4-5",
+        usage(10, 1),
+        11,
+        attribution.clone(),
+    );
+    let mut right = CostTracker::new();
+    right.record_usage_attributed(
+        "anthropic",
+        "claude-sonnet-4-5",
+        usage(20, 2),
+        13,
+        attribution.clone(),
+    );
+    right.record_usage_attributed(
+        "unknown-provider",
+        "unknown-model",
+        usage(30, 3),
+        17,
+        attribution,
+    );
+
+    left.merge_from(&right);
+    let snapshot = left.snapshot_at("s1", 123);
+
+    let priced = snapshot
+        .source_records
+        .iter()
+        .find(|entry| entry.provider == "anthropic")
+        .expect("priced source record");
+    assert_eq!(priced.request_count, 2);
+    assert_eq!(priced.duration_ms, 24);
+    assert_eq!(priced.input_tokens, 30);
+    assert!(priced.total_cost_usd > 0.0);
+
+    let unpriced = snapshot
+        .source_records
+        .iter()
+        .find(|entry| entry.provider == "unknown-provider")
+        .expect("unpriced source record");
+    assert_eq!(unpriced.request_count, 1);
+    assert_eq!(unpriced.duration_ms, 17);
+    assert_eq!(unpriced.unpriced_request_count, 1);
+    assert_eq!(unpriced.unpriced_input_tokens, 30);
+    assert!(!unpriced.priced);
+    assert_eq!(snapshot.totals.request_count, 3);
+    assert_eq!(snapshot.totals.unpriced_request_count, 1);
+}
+
+#[test]
 fn partially_unpriced_bucket_remains_marked_unpriced() {
     let mut tracker = CostTracker::from_snapshot(coco_types::SessionUsageSnapshot {
         session_id: "s1".into(),
@@ -121,6 +219,30 @@ fn partially_unpriced_bucket_remains_marked_unpriced() {
     assert!(!sonnet.priced);
     assert_eq!(snapshot.totals.unpriced_request_count, 1);
     assert_eq!(snapshot.unpriced_models.len(), 1);
+}
+
+#[test]
+fn legacy_snapshot_models_rehydrate_as_session_main_source_records() {
+    let tracker = CostTracker::from_snapshot(coco_types::SessionUsageSnapshot {
+        session_id: "s1".into(),
+        models: vec![coco_types::SessionModelUsageEntry {
+            provider: "anthropic".into(),
+            model_id: "claude-sonnet-4-5".into(),
+            input_tokens: 50,
+            output_tokens: 5,
+            request_count: 1,
+            priced: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let snapshot = tracker.snapshot_at("s1", 123);
+    assert_eq!(snapshot.source_records.len(), 1);
+    let entry = &snapshot.source_records[0];
+    assert_eq!(entry.group, coco_types::UsageSourceGroup::Session);
+    assert_eq!(entry.source, coco_types::UsageSource::Main);
+    assert_eq!(entry.input_tokens, 50);
 }
 
 #[test]

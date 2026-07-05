@@ -87,6 +87,10 @@ pub struct AgentQueryConfig {
     pub system_prompt: String,
     /// Parent session + child agent identity.
     pub identity: AgentRunIdentity,
+    /// AgentTool task id when this query is owned by a task-registry
+    /// subagent. Used for usage attribution and TaskProgress correlation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_task_id: Option<String>,
     /// Typed runtime model selection. Use [`coco_types::LlmModelSelection::InheritMain`]
     /// explicitly when inheritance is intended.
     pub model_selection: coco_types::LlmModelSelection,
@@ -351,6 +355,7 @@ impl Default for AgentQueryConfig {
                 agent_id: "test-agent".to_string(),
                 kind: AgentRunKind::Test,
             },
+            agent_task_id: None,
             model_selection: coco_types::LlmModelSelection::InheritMain,
             permission_mode: coco_types::PermissionMode::Default,
             permission_prompt_policy: PermissionPromptPolicy::FailClosed,

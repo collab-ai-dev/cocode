@@ -100,7 +100,14 @@ pub(super) fn handle(
             true
         }
         ServerNotification::SessionUsageUpdated(snapshot) => {
-            let snapshot = *snapshot;
+            let mut snapshot = *snapshot;
+            if snapshot.auto_compact_threshold.is_none() {
+                snapshot.auto_compact_threshold = state
+                    .session
+                    .session_usage
+                    .as_ref()
+                    .and_then(|usage| usage.auto_compact_threshold);
+            }
             state.session.token_usage = token_usage_from_session_snapshot(&snapshot);
             state.session.session_usage = Some(snapshot);
             true

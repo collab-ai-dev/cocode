@@ -81,6 +81,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
                 coco_tool_runtime::AgentRunKind::Teammate,
             )
             .map_err(crate::CoordinatorError::generic)?,
+            agent_task_id: None,
             model_selection: config.model_selection,
             permission_mode: config
                 .permission_mode

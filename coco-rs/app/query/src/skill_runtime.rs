@@ -372,6 +372,7 @@ impl SkillHandle for QuerySkillRuntime {
                         coco_tool_runtime::AgentRunKind::Skill,
                     )
                     .map_err(|reason| SkillInvocationError::Forked { reason })?,
+                    agent_task_id: None,
                     model_selection: coco_types::LlmModelSelection::from_model_and_role(
                         skill.model.as_deref(),
                         skill.model_role,

@@ -378,6 +378,14 @@ pub struct QueryEngine {
     /// user message, so the runtime owns this and wires it into every
     /// engine instance.
     pub(crate) session_usage_tracker: Option<Arc<tokio::sync::Mutex<CostTracker>>>,
+    /// Base attribution for LLM usage emitted by this engine. Main
+    /// session engines default to `Session`; AgentTool children set
+    /// this to `AgentToolSubagent` with their task id.
+    pub(crate) usage_attribution: coco_types::UsageAttribution,
+    /// Shared usage accounting handle for all LLM calls owned by this engine.
+    pub(crate) usage_accounting: Option<crate::usage_accounting::UsageAccounting>,
+    /// Force all calls through one fine-grained source bucket.
+    pub(crate) usage_source_override: Option<coco_types::UsageSource>,
     /// Serializes update/snapshot/write for session usage so concurrent
     /// engines cannot overwrite a newer snapshot with an older one.
     pub(crate) session_usage_write_lock: Option<Arc<tokio::sync::Mutex<()>>>,
@@ -898,8 +906,15 @@ impl QueryEngine {
             let model_id = opened_runtime_snapshot.model_id.clone();
             acc.cost_tracker
                 .record_usage(&provider, &model_id, usage, api_elapsed_ms);
-            self.record_session_usage(&event_tx, &provider, &model_id, usage, api_elapsed_ms)
-                .await;
+            self.record_session_usage(
+                &event_tx,
+                &provider,
+                &model_id,
+                usage,
+                api_elapsed_ms,
+                coco_types::UsageSource::Main,
+            )
+            .await;
             coco_otel::events::emit_assistant_response(
                 &response_text,
                 &model_id,

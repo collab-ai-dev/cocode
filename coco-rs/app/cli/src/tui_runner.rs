@@ -935,6 +935,7 @@ async fn run_agent_driver(
     // for leader / standalone sessions.
     teammate_turn_done_tx: Option<mpsc::Sender<String>>,
 ) {
+    runtime.install_side_query_event_tx(event_tx.clone()).await;
     // Per-session one-shot gate: title gen runs at most once per
     // session id, never the process. After `/resume` or `/clear` the
     // session id changes; the new id is not in the set, so the gate
