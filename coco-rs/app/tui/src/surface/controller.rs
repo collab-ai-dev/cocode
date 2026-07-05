@@ -317,7 +317,7 @@ impl NativeSurfaceController {
         // `MessageAppended` → `TranscriptView` → `cells()`.
         let cells = state.session.transcript.cells();
         let transcript_revision = state.session.transcript.revision();
-        let history_start = perf_config.enabled.then(Instant::now);
+        let history_start = perf_config.frame_enabled.then(Instant::now);
         let history = if !plan.native_history_enabled() {
             HistoryEmissionOutcome::Noop
         } else {
@@ -435,7 +435,7 @@ impl NativeSurfaceController {
         }
 
         let mut layout = FrameLayout::default();
-        let viewport_start = perf_config.enabled.then(Instant::now);
+        let viewport_start = perf_config.frame_enabled.then(Instant::now);
         terminal.draw_viewport(|frame| {
             layout = render_interactive_viewport(
                 frame,

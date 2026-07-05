@@ -370,11 +370,11 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>, width:
             && !agent.is_backgrounded
             && matches!(agent.status, SubagentStatus::Running)
     });
-    let header_hint = subagent_header_hint(
+    let header_hints = subagent_header_hints(
         foreground_background_hint,
         !switcher_active && !live.is_empty(),
     );
-    let summary = agg.summary_text(header_hint.as_deref());
+    let summary = agg.summary_text();
 
     if tree_mode && !state.session.subagents.is_empty() {
         let mut leader = vec![
@@ -385,22 +385,26 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>, width:
         if let Some(summary) = &summary {
             let prefix_width = UnicodeWidthStr::width("● Leader (lead)");
             let summary_width = (width as usize).saturating_sub(prefix_width);
-            leader.push(ActivitySpan::tone(
-                truncate_to_width(&format!("   {summary}"), summary_width),
-                ActivityTone::Dim,
-            ));
+            append_summary_with_hints(
+                &mut leader,
+                &format!("   {summary}"),
+                summary_width,
+                &header_hints,
+            );
         }
         lines.push(ActivityLine { spans: leader });
     } else if let Some(summary) = &summary {
         // Flat (compact inline) view has no leader row — surface the
         // aggregate as a one-line header so the subagent cost stays
         // visible without expanding the Teammates view.
-        lines.push(ActivityLine {
-            spans: vec![ActivitySpan::tone(
-                truncate_to_width(&format!("  {summary}"), width as usize),
-                ActivityTone::Dim,
-            )],
-        });
+        let mut spans = Vec::new();
+        append_summary_with_hints(
+            &mut spans,
+            &format!("  {summary}"),
+            width as usize,
+            &header_hints,
+        );
+        lines.push(ActivityLine { spans });
     }
     for (pos, (i, agent)) in live.iter().enumerate() {
         let i = *i;
@@ -577,15 +581,61 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>, width:
     }
 }
 
-fn subagent_header_hint(background: bool, switcher: bool) -> Option<String> {
-    let mut parts: Vec<String> = Vec::new();
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HeaderHint {
+    text: String,
+    tone: ActivityTone,
+}
+
+fn subagent_header_hints(background: bool, switcher: bool) -> Vec<HeaderHint> {
+    let mut parts: Vec<HeaderHint> = Vec::new();
     if background {
-        parts.push(t!("activity.background_hint_short").to_string());
+        parts.push(HeaderHint {
+            text: t!("activity.background_hint_short").to_string(),
+            tone: ActivityTone::Warning,
+        });
     }
     if switcher {
-        parts.push(t!("switcher.hint_collapsed_short").to_string());
+        parts.push(HeaderHint {
+            text: t!("switcher.hint_collapsed_short").to_string(),
+            tone: ActivityTone::Accent,
+        });
     }
-    (!parts.is_empty()).then(|| parts.join(" · "))
+    parts
+}
+
+fn append_summary_with_hints(
+    spans: &mut Vec<ActivitySpan>,
+    summary: &str,
+    width: usize,
+    hints: &[HeaderHint],
+) {
+    let hint_width = hints
+        .iter()
+        .map(|hint| UnicodeWidthStr::width(hint.text.as_str()) + UnicodeWidthStr::width(" · "))
+        .sum::<usize>();
+    spans.push(ActivitySpan::tone(
+        truncate_summary_to_width(summary, width.saturating_sub(hint_width)),
+        ActivityTone::Dim,
+    ));
+    for hint in hints {
+        spans.push(ActivitySpan::tone(" · ", ActivityTone::Dim));
+        spans.push(ActivitySpan::tone(hint.text.clone(), hint.tone));
+    }
+}
+
+fn truncate_summary_to_width(summary: &str, width: usize) -> String {
+    let truncated = truncate_to_width(summary, width);
+    if truncated == summary {
+        return truncated;
+    }
+    if let Some((head, _)) = truncated.rsplit_once(" · ") {
+        let semantic = format!("{head} · …");
+        if UnicodeWidthStr::width(semantic.as_str()) <= width {
+            return semantic;
+        }
+    }
+    truncated
 }
 
 /// Whether a subagent row is shown in the (transient) Agents panel.
@@ -687,7 +737,7 @@ impl SubagentAggregate {
     /// landed; the token / cache / cost segments fill in as usage arrives, so
     /// the line is present from the first spawn instead of waiting on the
     /// first token report. Falls back to a bare count for teammate-only panels.
-    fn summary_text(&self, hint: Option<&str>) -> Option<String> {
+    fn summary_text(&self) -> Option<String> {
         if self.total == 0 && self.live == 0 {
             return None;
         }
@@ -713,9 +763,6 @@ impl SubagentAggregate {
         }
         if self.cost > 0.0 {
             parts.push(format!("${:.2}", self.cost));
-        }
-        if let Some(hint) = hint {
-            parts.push(hint.to_string());
         }
         Some(parts.join(" · "))
     }

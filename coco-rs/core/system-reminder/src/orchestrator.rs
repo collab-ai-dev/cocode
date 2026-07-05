@@ -279,6 +279,7 @@ impl SystemReminderOrchestrator {
                 .map(|r| r.attachment_type.as_str())
                 .collect::<Vec<_>>()
                 .join(","),
+            total_chars = reminders.iter().map(reminder_content_chars).sum::<usize>(),
             human_turn = ctx.turn_number,
             "orchestrator.generate_all done"
         );
@@ -361,6 +362,10 @@ fn reminder_log_content(reminder: &SystemReminder) -> (usize, String, bool) {
     let preview = chars.by_ref().take(REMINDER_LOG_PREVIEW_CHARS).collect();
     let truncated = chars.next().is_some();
     (content_chars, preview, truncated)
+}
+
+fn reminder_content_chars(reminder: &SystemReminder) -> usize {
+    reminder_log_text(reminder).chars().count()
 }
 
 fn reminder_log_text(reminder: &SystemReminder) -> String {

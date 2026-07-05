@@ -308,6 +308,23 @@ impl<'a> ToolCallRunner<'a> {
                     // the executor finishes driving — we can't
                     // `.await` from the sync `on_outcome` callback.
                     let output_text = render_completed_output(&outcome);
+                    tracing::debug!(
+                        target: "coco_query::memory_size",
+                        tool_name = %tool_name,
+                        tool_use_id = %outcome.tool_use_id(),
+                        tool_result_bytes = output_text.len(),
+                        is_error,
+                        "tool result size"
+                    );
+                    if tool_name == coco_types::ToolName::Agent.as_str() {
+                        tracing::debug!(
+                            target: "coco_query::memory_size",
+                            tool_use_id = %outcome.tool_use_id(),
+                            subagent_result_bytes = output_text.len(),
+                            is_error,
+                            "subagent result size"
+                        );
+                    }
                     let completed_event = PendingCompletedEvent {
                         call_id: outcome.tool_use_id().to_string(),
                         tool_name,

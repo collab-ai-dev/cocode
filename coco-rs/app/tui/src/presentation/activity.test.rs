@@ -102,8 +102,31 @@ fn foreground_subagent_header_shows_compact_hints() {
         .find(|row| row.contains("Subagents"))
         .expect("subagent header");
 
-    assert!(header.contains("bg Ctrl+B"), "{text}");
+    assert!(header.contains("background Ctrl+B"), "{text}");
     assert!(header.contains("switch Shift+↑"), "{text}");
+    let header_line = view
+        .lines
+        .iter()
+        .find(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.text.contains("Subagents"))
+        })
+        .expect("subagent header line");
+    assert!(
+        header_line
+            .spans
+            .iter()
+            .any(|span| { span.text == "background Ctrl+B" && span.tone == ActivityTone::Warning }),
+        "background hint should stand out: {header_line:?}"
+    );
+    assert!(
+        header_line
+            .spans
+            .iter()
+            .any(|span| span.text == "switch Shift+↑" && span.tone == ActivityTone::Accent),
+        "switch hint should use a different tone: {header_line:?}"
+    );
     assert!(
         !text.contains("Ctrl+B to run in background"),
         "long background hint should not occupy its own row: {text}"

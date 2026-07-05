@@ -95,7 +95,7 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
     assert!(text.contains("↑1.5K/$0.00 ↓250/$0.00"));
     assert!(text.contains("cache 750/50.0%"));
     assert!(!text.contains("F2 to expand"));
-    assert!(text.contains("ctx 80%/100"));
+    assert!(text.contains("ctx 80.0%/100"));
     assert!(text.contains("Σ↑1.5K ↓250 $0.01"));
     assert!(text.contains("→0 ←1"));
     // Trigger at 90% (window 100, threshold 90) → red band starts at
@@ -103,7 +103,7 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
     assert!(
         spans
             .iter()
-            .any(|span| span.text == "ctx 80%/100" && span.tone == StatusTone::Error)
+            .any(|span| span.text == "ctx 80.0%/100" && span.tone == StatusTone::Error)
     );
 }
 
@@ -152,7 +152,7 @@ fn status_bar_view_keeps_low_context_usage_green_with_low_compact_trigger() {
     assert!(
         spans
             .iter()
-            .any(|span| span.text == "ctx 3%/50.0K" && span.tone == StatusTone::Success),
+            .any(|span| span.text == "ctx 3.0%/50.0K" && span.tone == StatusTone::Success),
         "3% context usage should stay green even when the compact trigger is 34%"
     );
 }

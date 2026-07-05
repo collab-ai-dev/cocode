@@ -339,7 +339,8 @@ where
         frame_index: u64,
     ) -> Result<TuiDrawOutcome, B::Error> {
         let perf_config = state.ui.display_settings.performance;
-        self.terminal.set_perf_stats_enabled(perf_config.enabled);
+        self.terminal
+            .set_perf_stats_enabled(perf_config.frame_enabled);
         if self.suspend_context.take_resume_pending() {
             self.clear_surface_after_resume()?;
         }
@@ -411,7 +412,7 @@ where
             );
         }
         let drawn = self.draw_native_frame(state, plan, size, native_frame, frame_index);
-        let present_start = perf_config.enabled.then(std::time::Instant::now);
+        let present_start = perf_config.frame_enabled.then(std::time::Instant::now);
         let ended = self.terminal.end_synchronized_update();
         if let Some(start) = present_start {
             let elapsed = start.elapsed();
@@ -461,7 +462,7 @@ where
         // Pass the size read by the caller so the precomputed live tail (built
         // at `size.width`) and the viewport area are derived from one consistent
         // size, even if the terminal resizes mid-frame.
-        let sync_start = perf_config.enabled.then(std::time::Instant::now);
+        let sync_start = perf_config.frame_enabled.then(std::time::Instant::now);
         let geometry_commit = self.sync_surface_area(
             state,
             plan,
@@ -488,7 +489,7 @@ where
                 "tui frame stage completed",
             );
         }
-        let surface_start = perf_config.enabled.then(std::time::Instant::now);
+        let surface_start = perf_config.frame_enabled.then(std::time::Instant::now);
         let outcome = self.surface.draw_with_plan_at_frame(
             &mut self.terminal,
             state,
