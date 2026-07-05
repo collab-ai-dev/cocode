@@ -52,6 +52,10 @@ pub enum JemallocError {
         /// The `errno` jemalloc returned.
         code: i32,
     },
+    /// A heap-profile dump path contained an interior NUL byte, so it cannot
+    /// be passed to `prof.dump` as a C string.
+    #[error("heap profile dump path contains an interior NUL byte")]
+    InvalidDumpPath,
 }
 
 /// Read a fresh stats snapshot, or `None` when jemalloc control is unavailable
@@ -81,6 +85,55 @@ pub fn purge_all_arenas() -> Result<(), JemallocError> {
     }
     #[cfg(not(all(feature = "jemalloc", not(target_os = "windows"))))]
     {
+        Ok(())
+    }
+}
+
+/// Whether heap profiling can record samples in this process: requires the
+/// jemalloc backend (see [`ENABLED`]) AND `prof:true` in jemalloc's startup
+/// conf (`opt.prof` is fixed at init; profiling cannot be switched on later).
+/// The workspace bakes it into libjemalloc via `JEMALLOC_SYS_WITH_MALLOC_CONF`
+/// (.cargo/config.toml) rather than the `MALLOC_CONF` env, which would leak to
+/// every child process.
+pub fn heap_profiling_available() -> bool {
+    #[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
+    {
+        imp::heap_profiling_available()
+    }
+    #[cfg(not(all(feature = "jemalloc", not(target_os = "windows"))))]
+    {
+        false
+    }
+}
+
+/// Toggle jemalloc's `prof.active` sampling gate at runtime. Only meaningful
+/// when [`heap_profiling_available`] — writing the ctl is otherwise either an
+/// error (non-prof build) or a no-op jemalloc ignores. No-op `Ok(())` when the
+/// backend is disabled.
+pub fn set_heap_profiling_active(active: bool) -> Result<(), JemallocError> {
+    #[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
+    {
+        imp::set_heap_profiling_active(active)
+    }
+    #[cfg(not(all(feature = "jemalloc", not(target_os = "windows"))))]
+    {
+        let _ = active;
+        Ok(())
+    }
+}
+
+/// Dump the sampled live heap (`prof.dump`) to `path` in jemalloc's `.heap`
+/// format — analyze with `jeprof` or `jemalloc-pprof`. Captures only
+/// allocations made while `prof.active` sampling was on. No-op `Ok(())` when
+/// the backend is disabled; callers gate on [`heap_profiling_available`].
+pub fn dump_heap_profile(path: &std::path::Path) -> Result<(), JemallocError> {
+    #[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
+    {
+        imp::dump_heap_profile(path)
+    }
+    #[cfg(not(all(feature = "jemalloc", not(target_os = "windows"))))]
+    {
+        let _ = path;
         Ok(())
     }
 }

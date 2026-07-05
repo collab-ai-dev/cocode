@@ -369,7 +369,8 @@ fn test_parse_settings_accepts_tui_performance_policy() {
                     "frame_stage_slow_threshold_us": 750,
                     "memory_enabled": true,
                     "memory_sample_interval_secs": 0,
-                    "memory_delta_threshold_mb": 0
+                    "memory_delta_threshold_mb": 0,
+                    "heap_profile_enabled": true
                 }
             }
         }"#,
@@ -384,6 +385,7 @@ fn test_parse_settings_accepts_tui_performance_policy() {
     assert!(performance.memory_enabled);
     assert_eq!(performance.memory_sample_interval_secs, 0);
     assert_eq!(performance.memory_delta_threshold_mb, 0);
+    assert!(performance.heap_profile_enabled);
 }
 
 #[test]

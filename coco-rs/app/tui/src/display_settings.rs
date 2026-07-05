@@ -52,6 +52,7 @@ pub struct TuiPerformanceConfig {
     pub memory_enabled: bool,
     pub memory_sample_interval_secs: u64,
     pub memory_delta_threshold_bytes: u64,
+    pub heap_profile_enabled: bool,
 }
 
 impl Default for TuiPerformanceConfig {
@@ -129,6 +130,7 @@ fn performance_config(settings: TuiPerformanceSettings) -> TuiPerformanceConfig 
         memory_enabled: settings.memory_enabled,
         memory_sample_interval_secs: settings.memory_sample_interval_secs,
         memory_delta_threshold_bytes: mib_to_bytes(settings.memory_delta_threshold_mb),
+        heap_profile_enabled: settings.heap_profile_enabled,
     }
 }
 

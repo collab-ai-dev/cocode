@@ -94,6 +94,16 @@ grep for it.
   out growth that likely comes from allocator-retained pages or untracked native
   allocations. These lines require `tui.performance.memory_enabled=true` and
   log filter `tui=debug`.
+  - **Allocation-site attribution** (which call stacks hold the growth): with
+    `tui.performance.heap_profile_enabled=true` on a `just coco-jemalloc` run,
+    the TUI dumps a jemalloc heap profile per turn to
+    `<config_home>/logs/coco.<pid>.turn<N>.heap` (log anchor: `jemalloc heap
+    profile dumped`). Diff two consecutive dumps with `jeprof --text
+    <binary> --base=turn<N>.heap turn<N+1>.heap` (or `jemalloc-pprof`) to name
+    the retainer. If the log instead warns `jemalloc started without
+    prof:true`, the binary predates the baked-in prof conf
+    (`JEMALLOC_SYS_WITH_MALLOC_CONF` in `coco-rs/.cargo/config.toml`) —
+    rebuild via `just coco-jemalloc`.
 - **Provider / LLM** (`provider`, `llm`, `model`, `api`, `stream`) → the **wire** dir:
   `index.jsonl` for `outcome`/`status`, then the offending `*.resp.txt` (raw SSE) and
   `*.req.json` (params/tools/messages). Log anchors: `coco_inference`, retry / rate-limit.

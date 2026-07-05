@@ -1,4 +1,4 @@
-//! End-of-turn jemalloc arena purge.
+//! End-of-turn jemalloc arena purge + optional heap-profile dumps.
 //!
 //! macOS jemalloc builds have no `background_thread` (it's excluded for the
 //! macho ABI), so freed pages only decay lazily on allocation traffic — an
@@ -8,16 +8,35 @@
 //! sweep) on a blocking thread, off the render loop, and log the resident
 //! delta so `/coco-analyze --mem` can attribute the drop.
 //!
+//! When `tui.performance.heap_profile_enabled` is set (and the process was
+//! started with `prof:true` — `just coco-jemalloc` arranges that), the same
+//! turn boundary also writes a `prof.dump` heap profile, so allocated-bytes
+//! growth between two turns can be attributed to call stacks with `jeprof` /
+//! `jemalloc-pprof` instead of log bisection.
+//!
 //! Compiled to a no-op when the `jemalloc` feature is off — the wrapper crate's
 //! [`ENABLED`](coco_utils_jemalloc::ENABLED) short-circuits before any task is
 //! spawned.
 
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+
 use coco_utils_jemalloc::JemallocStats;
 
-/// Spawn the end-of-turn purge as a detached blocking task. Cheap to call on
-/// every turn: returns immediately when jemalloc control isn't compiled in, so
-/// the common (non-jemalloc) build never spawns anything.
-pub(crate) fn spawn_turn_ended_purge() {
+/// Monotonic sequence for heap-profile dump filenames within this process.
+/// Each `TurnEnded` dump takes the next value, so consecutive dumps diff as
+/// "what turn N retained".
+static HEAP_DUMP_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Last state pushed via [`sync_heap_profiling`], so settings hot-reloads only
+/// touch `prof.active` (and log) when the desired state actually changes.
+static HEAP_PROFILING_DESIRED: AtomicBool = AtomicBool::new(false);
+
+/// Spawn the end-of-turn purge (and, when enabled, a heap-profile dump) as a
+/// detached blocking task. Cheap to call on every turn: returns immediately
+/// when jemalloc control isn't compiled in, so the common (non-jemalloc)
+/// build never spawns anything.
+pub(crate) fn spawn_turn_ended_purge(heap_profile_enabled: bool) {
     if !coco_utils_jemalloc::ENABLED {
         return;
     }
@@ -25,7 +44,7 @@ pub(crate) fn spawn_turn_ended_purge() {
     // sweep dominates and can run into low-single-digit ms on a large dirty
     // set), so keep them off the UI thread. Fire-and-forget: the task borrows
     // nothing and only logs.
-    tokio::task::spawn_blocking(|| {
+    tokio::task::spawn_blocking(move || {
         let before = coco_utils_jemalloc::stats_snapshot();
         match coco_utils_jemalloc::purge_all_arenas() {
             Ok(()) => log_purge(before, coco_utils_jemalloc::stats_snapshot()),
@@ -33,7 +52,102 @@ pub(crate) fn spawn_turn_ended_purge() {
                 tracing::warn!(target: "tui::perf::mem", %err, "jemalloc arena purge failed");
             }
         }
+        if heap_profile_enabled {
+            dump_heap_profile();
+        }
     });
+}
+
+/// Push the desired `tui.performance.heap_profile_enabled` state into
+/// jemalloc's `prof.active` sampling gate. Called at startup and on every
+/// display-settings hot-reload; no-ops unless the desired state changed.
+///
+/// Activation only takes effect when the process started with `prof:true`
+/// (jemalloc fixes `opt.prof` at startup); otherwise a WARN explains how to
+/// get a profiling-capable run.
+pub(crate) fn sync_heap_profiling(enabled: bool) {
+    if HEAP_PROFILING_DESIRED.swap(enabled, Ordering::Relaxed) == enabled {
+        return;
+    }
+    if !coco_utils_jemalloc::ENABLED {
+        if enabled {
+            tracing::warn!(
+                target: "tui::perf::mem",
+                "tui.performance.heap_profile_enabled is set but this build has no jemalloc \
+                 control; launch through `just coco-jemalloc`"
+            );
+        }
+        return;
+    }
+    tokio::task::spawn_blocking(move || {
+        if !coco_utils_jemalloc::heap_profiling_available() {
+            if enabled {
+                tracing::warn!(
+                    target: "tui::perf::mem",
+                    "heap profiling requested but jemalloc started without `prof:true`; rebuild \
+                     through `just coco-jemalloc` (the workspace bakes it in via \
+                     JEMALLOC_SYS_WITH_MALLOC_CONF)"
+                );
+            }
+            return;
+        }
+        match coco_utils_jemalloc::set_heap_profiling_active(enabled) {
+            Ok(()) => {
+                tracing::info!(
+                    target: "tui::perf::mem",
+                    enabled,
+                    "jemalloc heap-profile sampling toggled"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "tui::perf::mem",
+                    %err,
+                    enabled,
+                    "jemalloc prof.active toggle failed"
+                );
+            }
+        }
+    });
+}
+
+/// Write one `prof.dump` next to the process logs:
+/// `<config_home>/logs/coco.<pid>.turn<N>.heap`. Runs on the purge's blocking
+/// task; silently skipped when profiling isn't available in this process.
+fn dump_heap_profile() {
+    if !coco_utils_jemalloc::heap_profiling_available() {
+        return;
+    }
+    let dir = coco_config::global_config::config_home().join("logs");
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(
+            target: "tui::perf::mem",
+            %err,
+            dir = %dir.display(),
+            "heap profile directory creation failed"
+        );
+        return;
+    }
+    let seq = HEAP_DUMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("coco.{}.turn{seq}.heap", std::process::id()));
+    match coco_utils_jemalloc::dump_heap_profile(&path) {
+        Ok(()) => {
+            tracing::info!(
+                target: "tui::perf::mem",
+                path = %path.display(),
+                dump_seq = seq,
+                "jemalloc heap profile dumped (turn_ended)"
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "tui::perf::mem",
+                %err,
+                path = %path.display(),
+                "jemalloc heap profile dump failed"
+            );
+        }
+    }
 }
 
 fn log_purge(before: Option<JemallocStats>, after: Option<JemallocStats>) {

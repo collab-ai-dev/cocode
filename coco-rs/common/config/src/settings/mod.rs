@@ -346,6 +346,10 @@ pub struct TuiSettings {
 /// Frame logging is disabled by default; when enabled, every Nth frame is
 /// sampled and frames/stages exceeding the slow thresholds are always logged.
 /// `frame_sample_every_n_frames = 0` opts out of sampling (slow-only).
+/// `heap_profile_enabled` turns on jemalloc heap-profile sampling plus an
+/// end-of-turn `prof.dump`; it needs a `jemalloc`-feature build started with
+/// `prof:true` (`just coco-jemalloc`), otherwise the TUI logs a WARN and
+/// ignores it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TuiPerformanceSettings {
@@ -356,6 +360,7 @@ pub struct TuiPerformanceSettings {
     pub memory_enabled: bool,
     pub memory_sample_interval_secs: u64,
     pub memory_delta_threshold_mb: u64,
+    pub heap_profile_enabled: bool,
 }
 
 impl Default for TuiPerformanceSettings {
@@ -368,6 +373,7 @@ impl Default for TuiPerformanceSettings {
             memory_enabled: false,
             memory_sample_interval_secs: 30,
             memory_delta_threshold_mb: 4,
+            heap_profile_enabled: false,
         }
     }
 }

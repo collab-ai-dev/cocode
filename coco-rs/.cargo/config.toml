@@ -26,8 +26,20 @@ SCCACHE_IDLE_TIMEOUT = "0"
 #                        hands it fully back. A 1s reuse buffer vs. (default 0).
 #   narenas:4            cap on arenas for thread<->arena multiplexing; fewer =
 #                        less per-thread over-provisioning. (default 4x ncpus)
-# Goal: keep a long-running TUI/server process's RSS bounded across sessions.
-JEMALLOC_SYS_WITH_MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:4"
+#   prof:true            initialize the heap profiler (the `jemalloc` feature
+#                        builds with `--enable-prof`, so the pair is always
+#                        recognized). Baked in — NOT passed via MALLOC_CONF env —
+#                        because env leaks to every child process: rustc /
+#                        sccache-server rebuilds inherit it, and their non-prof
+#                        toolchain jemalloc spams `Invalid conf pair`.
+#   prof_active:false    sampling stays off until the TUI flips `prof.active`
+#                        from `tui.performance.heap_profile_enabled`; dumps land
+#                        in `<config_home>/logs/coco.<pid>.turn<N>.heap`.
+#   lg_prof_sample:19    one sample per 512 KiB allocated — cheap, precise
+#                        enough to attribute MB-scale growth.
+# Goal: keep a long-running TUI/server process's RSS bounded across sessions,
+# with allocation-site attribution available on demand.
+JEMALLOC_SYS_WITH_MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:4,prof:true,prof_active:false,lg_prof_sample:19"
 
 [profile.dev]
 incremental = false

@@ -665,6 +665,7 @@ mod memory_tests {
             memory_enabled: true,
             memory_sample_interval_secs: 0,
             memory_delta_threshold_bytes: 0,
+            heap_profile_enabled: false,
         };
         assert!(MemoryPerfTracker::enabled(config));
         assert!(!MemoryPerfTracker::periodic_enabled(config));

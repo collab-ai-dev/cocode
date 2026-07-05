@@ -13,7 +13,19 @@ workspace = true
 # tests) stay light. Turned on transitively by the `coco` binary's `jemalloc`
 # feature, which also installs jemalloc as the global allocator — the two must
 # move together or the ctl calls would target a jemalloc that manages nothing.
-jemalloc = ["dep:tikv-jemalloc-ctl", "dep:tikv-jemalloc-sys", "dep:libc"]
+#
+# `tikv-jemalloc-sys/profiling` compiles jemalloc with `--enable-prof` so the
+# `prof.*` ctls exist. Compile-time capability only: sampling stays off unless
+# jemalloc's startup conf contains `prof:true` (the workspace bakes it in via
+# `JEMALLOC_SYS_WITH_MALLOC_CONF` in .cargo/config.toml — deliberately not the
+# MALLOC_CONF env, which leaks to child processes) AND a caller flips
+# `prof.active` on.
+jemalloc = [
+    "dep:tikv-jemalloc-ctl",
+    "dep:tikv-jemalloc-sys",
+    "dep:libc",
+    "tikv-jemalloc-sys/profiling",
+]
 
 [dependencies]
 thiserror.workspace = true
