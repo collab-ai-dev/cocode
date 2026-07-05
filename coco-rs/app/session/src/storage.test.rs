@@ -54,6 +54,7 @@ fn usage_snapshot_writes_under_session_artifact_dir() {
             priced: true,
             ..Default::default()
         }],
+        source_records: Vec::new(),
         unpriced_models: Vec::new(),
         auto_compact_threshold: None,
     };

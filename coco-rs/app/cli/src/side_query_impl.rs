@@ -8,6 +8,7 @@ use coco_inference::LanguageModelTool;
 use coco_inference::LanguageModelToolChoice;
 use coco_inference::ModelRuntimeQueryOutcome;
 use coco_inference::ModelRuntimeRegistry;
+use coco_inference::ModelRuntimeSnapshot;
 use coco_inference::ModelRuntimeSource;
 use coco_inference::QueryParams;
 use coco_inference::ResponseFormat;
@@ -23,6 +24,59 @@ use coco_types::SideQueryRole;
 use coco_types::SideQueryStopReason;
 use coco_types::SideQueryToolUse;
 use coco_types::SideQueryUsage;
+use coco_types::TokenUsage;
+
+#[derive(Clone)]
+pub struct SideQueryUsageRecorder {
+    accounting: coco_query::usage_accounting::UsageAccounting,
+}
+
+impl std::fmt::Debug for SideQueryUsageRecorder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SideQueryUsageRecorder")
+            .finish_non_exhaustive()
+    }
+}
+
+impl SideQueryUsageRecorder {
+    pub fn new(accounting: coco_query::usage_accounting::UsageAccounting) -> Self {
+        Self { accounting }
+    }
+
+    pub async fn record(
+        &self,
+        snapshot: &ModelRuntimeSnapshot,
+        usage: TokenUsage,
+        duration_ms: i64,
+        source: coco_types::UsageSource,
+    ) {
+        if usage.total() <= 0 {
+            return;
+        }
+
+        self.accounting
+            .record_snapshot_usage(snapshot, usage, duration_ms, source)
+            .await;
+    }
+}
+
+#[async_trait]
+impl coco_query::hook_llm::HookUsageRecorder for SideQueryUsageRecorder {
+    async fn record_hook_usage(
+        &self,
+        snapshot: &ModelRuntimeSnapshot,
+        usage: TokenUsage,
+        duration_ms: i64,
+    ) {
+        self.record(
+            snapshot,
+            usage,
+            duration_ms,
+            coco_types::UsageSource::HookPrompt,
+        )
+        .await;
+    }
+}
 
 /// `SideQuery` adapter that resolves every call through the session's
 /// model runtime registry. `model_role` takes precedence; otherwise a
@@ -30,6 +84,7 @@ use coco_types::SideQueryUsage;
 pub struct SideQueryAdapter {
     model_runtimes: Arc<ModelRuntimeRegistry>,
     default_model_id: String,
+    usage_recorder: Option<SideQueryUsageRecorder>,
 }
 
 impl SideQueryAdapter {
@@ -37,7 +92,13 @@ impl SideQueryAdapter {
         Self {
             model_runtimes,
             default_model_id,
+            usage_recorder: None,
         }
+    }
+
+    pub fn with_usage_recorder(mut self, recorder: SideQueryUsageRecorder) -> Self {
+        self.usage_recorder = Some(recorder);
+        self
     }
 
     fn resolve_source(request: &SideQueryRequest) -> ModelRuntimeSource {
@@ -139,14 +200,17 @@ impl SideQuery for SideQueryAdapter {
     ) -> Result<SideQueryResponse, coco_error::BoxedError> {
         let source = Self::resolve_source(&request);
 
-        let result = loop {
+        let started = std::time::Instant::now();
+        let (result, runtime_snapshot) = loop {
             let params = build_query_params(&request);
             match self
                 .model_runtimes
                 .query_once(source.clone(), &params)
                 .await
             {
-                ModelRuntimeQueryOutcome::Success { result, .. } => break result,
+                ModelRuntimeQueryOutcome::Success {
+                    result, snapshot, ..
+                } => break (result, snapshot),
                 ModelRuntimeQueryOutcome::Retry { .. } => continue,
                 ModelRuntimeQueryOutcome::Failed { error, .. } => {
                     return Err(Box::new(coco_error::PlainError::new(
@@ -156,6 +220,21 @@ impl SideQuery for SideQueryAdapter {
                 }
             }
         };
+        if let Some(recorder) = &self.usage_recorder {
+            let usage_source = if request.model_role == Some(ModelRole::Memory) {
+                coco_types::UsageSource::MemorySideQuery
+            } else {
+                coco_types::UsageSource::SideQuery
+            };
+            recorder
+                .record(
+                    &runtime_snapshot,
+                    result.usage,
+                    started.elapsed().as_millis() as i64,
+                    usage_source,
+                )
+                .await;
+        }
 
         let mut text_buf = String::new();
         let mut tool_uses = Vec::new();

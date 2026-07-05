@@ -67,6 +67,7 @@ mod tool_message;
 mod tool_outcome_builder;
 mod tool_runner;
 pub mod tool_use_summary;
+pub mod usage_accounting;
 mod wire_tap_adapter;
 
 pub use budget::BudgetDecision;

@@ -2,8 +2,11 @@ use coco_model_card::Pricing;
 use coco_types::ProviderModelSelection;
 use coco_types::SessionModelUsageEntry;
 use coco_types::SessionUsageSnapshot;
+use coco_types::SessionUsageSourceEntry;
 use coco_types::SessionUsageTotals;
 use coco_types::TokenUsage;
+use coco_types::UsageAttribution;
+use coco_types::UsageSource;
 use std::collections::HashMap;
 
 pub const SESSION_USAGE_SNAPSHOT_VERSION: i32 = 1;
@@ -12,8 +15,16 @@ pub const SESSION_USAGE_SNAPSHOT_VERSION: i32 = 1;
 #[derive(Debug, Clone, Default)]
 pub struct CostTracker {
     per_model: HashMap<ProviderModelSelection, SessionModelUsageEntry>,
+    per_source: HashMap<UsageRecordKey, SessionUsageSourceEntry>,
     pub total_api_calls: i64,
     pub total_duration_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct UsageRecordKey {
+    provider: String,
+    model_id: String,
+    attribution: UsageAttribution,
 }
 
 impl CostTracker {
@@ -28,6 +39,24 @@ impl CostTracker {
         model_id: &str,
         usage: TokenUsage,
         duration_ms: i64,
+    ) {
+        self.record_usage_attributed(
+            provider,
+            model_id,
+            usage,
+            duration_ms,
+            UsageAttribution::session(UsageSource::Main),
+        );
+    }
+
+    /// Record usage from a single API call with source attribution.
+    pub fn record_usage_attributed(
+        &mut self,
+        provider: &str,
+        model_id: &str,
+        usage: TokenUsage,
+        duration_ms: i64,
+        attribution: UsageAttribution,
     ) {
         let costs = usage_cost_usd(provider, model_id, &usage);
         let key = ProviderModelSelection {
@@ -69,6 +98,53 @@ impl CostTracker {
                 .saturating_add(usage.output_tokens.total);
         }
         entry.priced = entry.unpriced_request_count == 0;
+        let source_key = UsageRecordKey {
+            provider: provider.to_string(),
+            model_id: model_id.to_string(),
+            attribution,
+        };
+        let source_entry = self
+            .per_source
+            .entry(source_key.clone())
+            .or_insert_with(|| SessionUsageSourceEntry {
+                provider: source_key.provider.clone(),
+                model_id: source_key.model_id.clone(),
+                group: source_key.attribution.group,
+                source: source_key.attribution.source,
+                agent_task_id: source_key.attribution.agent_task_id.clone(),
+                priced: true,
+                ..Default::default()
+            });
+        source_entry.input_tokens = source_entry
+            .input_tokens
+            .saturating_add(usage.input_tokens.total);
+        source_entry.output_tokens = source_entry
+            .output_tokens
+            .saturating_add(usage.output_tokens.total);
+        source_entry.cache_read_input_tokens = source_entry
+            .cache_read_input_tokens
+            .saturating_add(usage.input_tokens.cache_read);
+        source_entry.cache_creation_input_tokens = source_entry
+            .cache_creation_input_tokens
+            .saturating_add(usage.input_tokens.cache_write);
+        source_entry.input_cost_usd += costs.input_cost_usd;
+        source_entry.output_cost_usd += costs.output_cost_usd;
+        source_entry.cache_read_cost_usd += costs.cache_read_cost_usd;
+        source_entry.cache_creation_cost_usd += costs.cache_creation_cost_usd;
+        source_entry.total_cost_usd += costs.total_cost_usd;
+        source_entry.request_count = source_entry.request_count.saturating_add(1);
+        source_entry.duration_ms = source_entry.duration_ms.saturating_add(duration_ms);
+        if !costs.priced {
+            source_entry.unpriced_request_count =
+                source_entry.unpriced_request_count.saturating_add(1);
+            source_entry.unpriced_input_tokens = source_entry
+                .unpriced_input_tokens
+                .saturating_add(usage.input_tokens.total);
+            source_entry.unpriced_output_tokens = source_entry
+                .unpriced_output_tokens
+                .saturating_add(usage.output_tokens.total);
+        }
+        source_entry.priced = source_entry.unpriced_request_count == 0;
         self.total_api_calls = self.total_api_calls.saturating_add(1);
         self.total_duration_ms = self.total_duration_ms.saturating_add(duration_ms);
     }
@@ -109,6 +185,40 @@ impl CostTracker {
         self.per_model.iter()
     }
 
+    pub fn merge_from(&mut self, other: &CostTracker) {
+        for (key, entry) in &other.per_model {
+            let target =
+                self.per_model
+                    .entry(key.clone())
+                    .or_insert_with(|| SessionModelUsageEntry {
+                        provider: entry.provider.clone(),
+                        model_id: entry.model_id.clone(),
+                        priced: true,
+                        ..Default::default()
+                    });
+            merge_model_entry(target, entry);
+        }
+        for (key, entry) in &other.per_source {
+            let target =
+                self.per_source
+                    .entry(key.clone())
+                    .or_insert_with(|| SessionUsageSourceEntry {
+                        provider: entry.provider.clone(),
+                        model_id: entry.model_id.clone(),
+                        group: entry.group,
+                        source: entry.source,
+                        agent_task_id: entry.agent_task_id.clone(),
+                        priced: true,
+                        ..Default::default()
+                    });
+            merge_source_entry(target, entry);
+        }
+        self.total_api_calls = self.total_api_calls.saturating_add(other.total_api_calls);
+        self.total_duration_ms = self
+            .total_duration_ms
+            .saturating_add(other.total_duration_ms);
+    }
+
     pub fn snapshot(&self, session_id: impl Into<String>) -> SessionUsageSnapshot {
         self.snapshot_at(session_id, timestamp_now_ms())
     }
@@ -123,6 +233,15 @@ impl CostTracker {
             a.provider
                 .cmp(&b.provider)
                 .then_with(|| a.model_id.cmp(&b.model_id))
+        });
+        let mut source_records: Vec<_> = self.per_source.values().cloned().collect();
+        source_records.sort_by(|a, b| {
+            a.provider
+                .cmp(&b.provider)
+                .then_with(|| a.model_id.cmp(&b.model_id))
+                .then_with(|| a.group.cmp(&b.group))
+                .then_with(|| a.source.cmp(&b.source))
+                .then_with(|| a.agent_task_id.cmp(&b.agent_task_id))
         });
 
         let mut totals = SessionUsageTotals::default();
@@ -169,6 +288,7 @@ impl CostTracker {
             session_id: session_id.into(),
             updated_at_ms,
             totals,
+            source_records,
             models,
             unpriced_models,
             // Populated by the engine (`record_session_usage`) which has the
@@ -195,8 +315,123 @@ impl CostTracker {
                 entry,
             );
         }
+        for mut entry in snapshot.source_records {
+            if !entry.priced && entry.unpriced_request_count == 0 {
+                entry.unpriced_request_count = entry.request_count;
+                entry.unpriced_input_tokens = entry.input_tokens;
+                entry.unpriced_output_tokens = entry.output_tokens;
+            }
+            entry.priced = entry.unpriced_request_count == 0;
+            tracker.per_source.insert(
+                UsageRecordKey {
+                    provider: entry.provider.clone(),
+                    model_id: entry.model_id.clone(),
+                    attribution: UsageAttribution {
+                        group: entry.group,
+                        source: entry.source,
+                        agent_task_id: entry.agent_task_id.clone(),
+                    },
+                },
+                entry,
+            );
+        }
+        if tracker.per_source.is_empty() {
+            for entry in tracker.per_model.values() {
+                tracker.per_source.insert(
+                    UsageRecordKey {
+                        provider: entry.provider.clone(),
+                        model_id: entry.model_id.clone(),
+                        attribution: UsageAttribution::session(UsageSource::Main),
+                    },
+                    SessionUsageSourceEntry {
+                        provider: entry.provider.clone(),
+                        model_id: entry.model_id.clone(),
+                        group: coco_types::UsageSourceGroup::Session,
+                        source: UsageSource::Main,
+                        agent_task_id: None,
+                        input_tokens: entry.input_tokens,
+                        output_tokens: entry.output_tokens,
+                        cache_read_input_tokens: entry.cache_read_input_tokens,
+                        cache_creation_input_tokens: entry.cache_creation_input_tokens,
+                        web_search_requests: entry.web_search_requests,
+                        input_cost_usd: entry.input_cost_usd,
+                        output_cost_usd: entry.output_cost_usd,
+                        cache_read_cost_usd: entry.cache_read_cost_usd,
+                        cache_creation_cost_usd: entry.cache_creation_cost_usd,
+                        total_cost_usd: entry.total_cost_usd,
+                        request_count: entry.request_count,
+                        duration_ms: 0,
+                        unpriced_request_count: entry.unpriced_request_count,
+                        unpriced_input_tokens: entry.unpriced_input_tokens,
+                        unpriced_output_tokens: entry.unpriced_output_tokens,
+                        priced: entry.priced,
+                    },
+                );
+            }
+        }
         tracker
     }
+}
+
+fn merge_model_entry(target: &mut SessionModelUsageEntry, source: &SessionModelUsageEntry) {
+    target.input_tokens = target.input_tokens.saturating_add(source.input_tokens);
+    target.output_tokens = target.output_tokens.saturating_add(source.output_tokens);
+    target.cache_read_input_tokens = target
+        .cache_read_input_tokens
+        .saturating_add(source.cache_read_input_tokens);
+    target.cache_creation_input_tokens = target
+        .cache_creation_input_tokens
+        .saturating_add(source.cache_creation_input_tokens);
+    target.web_search_requests = target
+        .web_search_requests
+        .saturating_add(source.web_search_requests);
+    target.input_cost_usd += source.input_cost_usd;
+    target.output_cost_usd += source.output_cost_usd;
+    target.cache_read_cost_usd += source.cache_read_cost_usd;
+    target.cache_creation_cost_usd += source.cache_creation_cost_usd;
+    target.total_cost_usd += source.total_cost_usd;
+    target.request_count = target.request_count.saturating_add(source.request_count);
+    target.unpriced_request_count = target
+        .unpriced_request_count
+        .saturating_add(source.unpriced_request_count);
+    target.unpriced_input_tokens = target
+        .unpriced_input_tokens
+        .saturating_add(source.unpriced_input_tokens);
+    target.unpriced_output_tokens = target
+        .unpriced_output_tokens
+        .saturating_add(source.unpriced_output_tokens);
+    target.priced = target.unpriced_request_count == 0;
+}
+
+fn merge_source_entry(target: &mut SessionUsageSourceEntry, source: &SessionUsageSourceEntry) {
+    target.input_tokens = target.input_tokens.saturating_add(source.input_tokens);
+    target.output_tokens = target.output_tokens.saturating_add(source.output_tokens);
+    target.cache_read_input_tokens = target
+        .cache_read_input_tokens
+        .saturating_add(source.cache_read_input_tokens);
+    target.cache_creation_input_tokens = target
+        .cache_creation_input_tokens
+        .saturating_add(source.cache_creation_input_tokens);
+    target.web_search_requests = target
+        .web_search_requests
+        .saturating_add(source.web_search_requests);
+    target.input_cost_usd += source.input_cost_usd;
+    target.output_cost_usd += source.output_cost_usd;
+    target.cache_read_cost_usd += source.cache_read_cost_usd;
+    target.cache_creation_cost_usd += source.cache_creation_cost_usd;
+    target.total_cost_usd += source.total_cost_usd;
+    target.request_count = target.request_count.saturating_add(source.request_count);
+    target.duration_ms = target.duration_ms.saturating_add(source.duration_ms);
+    target.unpriced_request_count = target
+        .unpriced_request_count
+        .saturating_add(source.unpriced_request_count);
+    target.unpriced_input_tokens = target
+        .unpriced_input_tokens
+        .saturating_add(source.unpriced_input_tokens);
+    target.unpriced_output_tokens = target
+        .unpriced_output_tokens
+        .saturating_add(source.unpriced_output_tokens);
+    target.priced = target.unpriced_request_count == 0;
 }
 
 /// Per-model pricing data (USD per million tokens).

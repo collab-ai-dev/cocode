@@ -68,10 +68,17 @@ async fn run_agent(
     configure_hook_agent(&mut config, &request);
 
     let cancel = CancellationToken::new();
-    let engine = runtime
+    let mut engine = runtime
         .build_engine_from_config_with_registries(config, cancel, tools, None)
         .await
         .with_model_runtime_source(request.model_source.clone());
+    let accounting = request
+        .usage_accounting
+        .clone()
+        .unwrap_or_else(|| runtime.usage_accounting());
+    engine = engine
+        .with_usage_accounting(accounting)
+        .with_usage_source_override(coco_types::UsageSource::HookAgent);
 
     let query_result = engine
         .run(&request.prompt)

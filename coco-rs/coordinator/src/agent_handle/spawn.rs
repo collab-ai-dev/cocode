@@ -1281,6 +1281,7 @@ impl SwarmAgentHandle {
                     ));
                 }
             },
+            agent_task_id: None,
             // Routing uses the SAME selection that drove `model_for_env`
             // above (fork pin > plan-mode promotion > spawn-resolved).
             model_selection: effective_model_selection,
@@ -1658,6 +1659,7 @@ impl SwarmAgentHandle {
         if let Some((tid, task_cancel)) = sync_task.as_ref() {
             let (event_tx, event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
             query_config.event_tx = Some(event_tx);
+            query_config.agent_task_id = Some(tid.clone());
             spawn_task_event_drain(
                 task_registry.clone(),
                 tid.clone(),
@@ -2115,6 +2117,7 @@ impl SwarmAgentHandle {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
         let mut query_config = query_config;
         query_config.event_tx = Some(event_tx);
+        query_config.agent_task_id = Some(task_id.clone());
         spawn_task_event_drain(
             task_registry.clone(),
             task_id.clone(),

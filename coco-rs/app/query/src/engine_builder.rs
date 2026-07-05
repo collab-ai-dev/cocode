@@ -144,6 +144,9 @@ impl QueryEngine {
             pending_just_compacted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             transcript_store: None,
             session_usage_tracker: None,
+            usage_attribution: coco_types::UsageAttribution::session(coco_types::UsageSource::Main),
+            usage_accounting: None,
+            usage_source_override: None,
             session_usage_write_lock: None,
             transcript_session_id: None,
             transcript_dedup: None,
@@ -289,11 +292,37 @@ impl QueryEngine {
         if self.session_usage_write_lock.is_none() {
             self.session_usage_write_lock = Some(Arc::new(tokio::sync::Mutex::new(())));
         }
+        self.refresh_legacy_usage_accounting();
+        self
+    }
+
+    pub fn with_usage_attribution(mut self, attribution: coco_types::UsageAttribution) -> Self {
+        self.usage_attribution = attribution;
+        if let Some(accounting) = self.usage_accounting.take() {
+            self.usage_accounting =
+                Some(accounting.with_base_attribution(self.usage_attribution.clone()));
+        }
         self
     }
 
     pub fn with_session_usage_write_lock(mut self, lock: Arc<tokio::sync::Mutex<()>>) -> Self {
         self.session_usage_write_lock = Some(lock);
+        self.refresh_legacy_usage_accounting();
+        self
+    }
+
+    pub fn with_usage_accounting(
+        mut self,
+        accounting: crate::usage_accounting::UsageAccounting,
+    ) -> Self {
+        self.session_usage_tracker = Some(accounting.tracker());
+        self.session_usage_write_lock = Some(accounting.write_lock());
+        self.usage_accounting = Some(accounting);
+        self
+    }
+
+    pub fn with_usage_source_override(mut self, source: coco_types::UsageSource) -> Self {
+        self.usage_source_override = Some(source);
         self
     }
 
@@ -304,7 +333,32 @@ impl QueryEngine {
         model_id: &str,
         usage: coco_types::TokenUsage,
         duration_ms: i64,
+        source: coco_types::UsageSource,
     ) {
+        let source = self.usage_source_override.unwrap_or(source);
+        let window = self.resolved_context_window();
+        let auto_compact_threshold = (window > 0).then(|| {
+            coco_compact::auto_compact_threshold(
+                window,
+                self.resolved_max_output_tokens(),
+                &self.config.compact.auto,
+            )
+        });
+        if let Some(accounting) = &self.usage_accounting {
+            accounting
+                .record_usage(crate::usage_accounting::UsageRecord {
+                    provider,
+                    model_id,
+                    usage,
+                    duration_ms,
+                    source,
+                    auto_compact_threshold,
+                    event_tx: event_tx.as_ref(),
+                })
+                .await;
+            return;
+        }
+
         let Some(tracker) = &self.session_usage_tracker else {
             return;
         };
@@ -314,20 +368,15 @@ impl QueryEngine {
         };
         let snapshot = {
             let mut guard = tracker.lock().await;
-            guard.record_usage(provider, model_id, usage, duration_ms);
+            guard.record_usage_attributed(
+                provider,
+                model_id,
+                usage,
+                duration_ms,
+                self.usage_attribution_for(source),
+            );
             let mut snap = guard.snapshot(&self.config.session_id);
-            // Attach the exact auto-compact trigger so the TUI can anchor its
-            // `ctx` color bands to the real compaction point (honors config
-            // overrides). Only when the window is known — a 0 would collapse
-            // the whole ramp to red.
-            let window = self.resolved_context_window();
-            if window > 0 {
-                snap.auto_compact_threshold = Some(coco_compact::auto_compact_threshold(
-                    window,
-                    self.resolved_max_output_tokens(),
-                    &self.config.compact.auto,
-                ));
-            }
+            snap.auto_compact_threshold = auto_compact_threshold;
             snap
         };
         let _ = crate::emit::emit_protocol(
@@ -361,6 +410,35 @@ impl QueryEngine {
                 }
             }
         }
+    }
+
+    fn usage_attribution_for(
+        &self,
+        source: coco_types::UsageSource,
+    ) -> coco_types::UsageAttribution {
+        let mut attribution = self.usage_attribution.clone();
+        attribution.source = source;
+        attribution
+    }
+
+    fn refresh_legacy_usage_accounting(&mut self) {
+        if self.usage_accounting.is_some() {
+            return;
+        }
+        let (Some(tracker), Some(write_lock)) = (
+            self.session_usage_tracker.clone(),
+            self.session_usage_write_lock.clone(),
+        ) else {
+            return;
+        };
+        self.usage_accounting = Some(
+            crate::usage_accounting::UsageAccounting::for_static_session(
+                self.config.session_id.clone(),
+                tracker,
+                write_lock,
+                self.usage_attribution.clone(),
+            ),
+        );
     }
 
     pub fn with_tool_result_replacement_state(

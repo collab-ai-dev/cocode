@@ -95,14 +95,15 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
     assert!(text.contains("↑1.5K/$0.00 ↓250/$0.00"));
     assert!(text.contains("cache 750/50.0%"));
     assert!(!text.contains("F2 to expand"));
-    assert!(text.contains("ctx 80%"));
+    assert!(text.contains("ctx 80%/100"));
+    assert!(text.contains("Σ↑1.5K ↓250 $0.01"));
     assert!(text.contains("→0 ←1"));
     // Trigger at 90% (window 100, threshold 90) → red band starts at
     // T-12 = 78%, so 80% renders red.
     assert!(
         spans
             .iter()
-            .any(|span| span.text == "ctx 80%" && span.tone == StatusTone::Error)
+            .any(|span| span.text == "ctx 80%/100" && span.tone == StatusTone::Error)
     );
 }
 
@@ -151,7 +152,7 @@ fn status_bar_view_keeps_low_context_usage_green_with_low_compact_trigger() {
     assert!(
         spans
             .iter()
-            .any(|span| span.text == "ctx 3%" && span.tone == StatusTone::Success),
+            .any(|span| span.text == "ctx 3%/50.0K" && span.tone == StatusTone::Success),
         "3% context usage should stay green even when the compact trigger is 34%"
     );
 }
@@ -425,6 +426,18 @@ fn status_bar_view_renders_subagent_usage_segment_only_when_active() {
         "segment hidden while no subagent has reported usage"
     );
 
+    state.session.token_usage.input_tokens = 1_000;
+    state.session.token_usage.output_tokens = 32;
+    state.session.session_usage = Some(coco_types::SessionUsageSnapshot {
+        totals: coco_types::SessionUsageTotals {
+            input_tokens: 1_000,
+            output_tokens: 32,
+            total_cost_usd: 0.02,
+            request_count: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
     state.session.subagent_usage = crate::state::session::SubagentUsageTotals {
         input_tokens: 68_100,
         output_tokens: 468,
@@ -434,6 +447,7 @@ fn status_bar_view_renders_subagent_usage_segment_only_when_active() {
         output_cost_usd: 0.04,
     };
     let text = render(&state);
+    assert!(text.contains("Σ↑69.1K ↓500 $0.20"), "text: {text}");
     assert!(
         text.contains("↳ subagents ↑68.1K/$0.14 ↓468/$0.04 · cache 64.7K/95.0%"),
         "text: {text}"

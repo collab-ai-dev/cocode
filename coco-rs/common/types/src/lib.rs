@@ -514,8 +514,12 @@ pub use token::ModelUsage;
 pub use token::OutputTokens;
 pub use token::SessionModelUsageEntry;
 pub use token::SessionUsageSnapshot;
+pub use token::SessionUsageSourceEntry;
 pub use token::SessionUsageTotals;
 pub use token::TokenUsage;
+pub use token::UsageAttribution;
+pub use token::UsageSource;
+pub use token::UsageSourceGroup;
 
 // Tool types (ToolResult moved to coco-messages because new_messages: Vec<Message>)
 pub use tool::AGENT_WORKTREE_BRANCH_PREFIX;

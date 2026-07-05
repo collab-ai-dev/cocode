@@ -17,6 +17,7 @@ use std::sync::Arc;
 use coco_tool_runtime::AgentQueryConfig;
 use coco_tool_runtime::AgentQueryEngine;
 use coco_tool_runtime::AgentQueryResult;
+use coco_tool_runtime::AgentRunKind;
 use coco_tool_runtime::PermissionPromptPolicy;
 use coco_types::Features;
 use coco_types::LlmModelSelection;
@@ -355,6 +356,16 @@ impl AgentQueryEngine for QueryEngineAdapter {
         engine = engine.with_session_usage_tracker(Arc::new(tokio::sync::Mutex::new(
             coco_messages::CostTracker::new(),
         )));
+        if matches!(identity.kind, AgentRunKind::Subagent) {
+            engine =
+                engine.with_usage_attribution(coco_types::UsageAttribution::agent_tool_subagent(
+                    coco_types::UsageSource::Main,
+                    config
+                        .agent_task_id
+                        .clone()
+                        .or_else(|| Some(identity.agent_id.clone())),
+                ));
+        }
 
         // Structured-output forcing (workflow `agent(prompt, {schema})`):
         // when the spawn carries an output schema, the child must emit its

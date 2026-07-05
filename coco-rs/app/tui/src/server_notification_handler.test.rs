@@ -1013,6 +1013,40 @@ fn test_session_usage_updated_replaces_footer_usage() {
     );
 }
 
+#[test]
+fn test_session_usage_updated_preserves_existing_auto_compact_threshold() {
+    let mut state = AppState::new();
+    state.session.session_usage = Some(coco_types::SessionUsageSnapshot {
+        auto_compact_threshold: Some(170_000),
+        ..Default::default()
+    });
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::SessionUsageUpdated(Box::new(
+            coco_types::SessionUsageSnapshot {
+                totals: coco_types::SessionUsageTotals {
+                    input_tokens: 150,
+                    output_tokens: 40,
+                    request_count: 2,
+                    ..Default::default()
+                },
+                auto_compact_threshold: None,
+                ..Default::default()
+            },
+        ))),
+    );
+
+    assert_eq!(
+        state
+            .session
+            .session_usage
+            .as_ref()
+            .and_then(|usage| usage.auto_compact_threshold),
+        Some(170_000)
+    );
+}
+
 fn subagent(
     agent_id: &str,
     kind: SubagentKind,
