@@ -155,13 +155,17 @@ alias c := coco
 coco *args:
     cargo run --bin coco -- "$@"
 
-# Run coco CLI with jemalloc allocator and background purging enabled
+# Run coco CLI with jemalloc allocator + page reclamation enabled
 coco-jemalloc *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-        export _RJEM_MALLOC_CONF="${_RJEM_MALLOC_CONF:+$_RJEM_MALLOC_CONF,}background_thread:true"
-    else
+    # `background_thread` is a Linux-only lever: jemalloc's macOS (macho ABI)
+    # build compiles it out entirely, so setting `_RJEM_MALLOC_CONF=background_thread`
+    # there is silently ignored. On macOS, page reclamation instead comes from the
+    # explicit end-of-turn `arena.*.purge` wired into the TUI (coco-utils-jemalloc),
+    # which the `jemalloc` feature turns on. On Linux we still ask jemalloc to run
+    # its own background decay thread as a belt-and-braces complement.
+    if [[ "$(uname -s)" != "Darwin" ]]; then
         export MALLOC_CONF="${MALLOC_CONF:+$MALLOC_CONF,}background_thread:true"
     fi
     cargo run --features jemalloc --bin coco -- "$@"

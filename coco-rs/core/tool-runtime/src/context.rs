@@ -110,6 +110,8 @@ pub struct ToolUseContext {
     pub debug: bool,
     /// Verbose mode.
     pub verbose: bool,
+    /// Settings-level assistant response body logging override.
+    pub log_assistant_responses: Option<bool>,
     /// Resolved tool runtime configuration.
     pub tool_config: coco_config::ToolConfig,
     /// Resolved sandbox runtime configuration. Tools read this for the
@@ -630,6 +632,7 @@ impl ToolUseContext {
             append_system_prompt: self.append_system_prompt.clone(),
             debug: self.debug,
             verbose: self.verbose,
+            log_assistant_responses: self.log_assistant_responses,
             tool_config: self.tool_config.clone(),
             sandbox_config: self.sandbox_config.clone(),
             sandbox_state: self.sandbox_state.clone(),
@@ -886,6 +889,7 @@ impl ToolUseContext {
             append_system_prompt: None,
             debug: false,
             verbose: false,
+            log_assistant_responses: None,
             tool_config: coco_config::ToolConfig::default(),
             sandbox_config: coco_config::SandboxSettings::default(),
             sandbox_state: None,

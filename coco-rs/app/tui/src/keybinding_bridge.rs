@@ -601,6 +601,10 @@ pub(crate) fn prompt_suggestion_visible(state: &AppState) -> bool {
             .is_some_and(|s| !s.is_empty())
 }
 
+pub(crate) fn prompt_suggestion_hint_text() -> &'static str {
+    "Tab/→ accept"
+}
+
 #[cfg(test)]
 #[path = "keybinding_bridge.test.rs"]
 mod tests;

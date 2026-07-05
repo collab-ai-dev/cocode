@@ -23,6 +23,7 @@ mod frame_layout;
 mod frame_requester;
 pub(crate) mod git_index_watcher;
 pub(crate) mod i18n;
+pub(crate) mod jemalloc_purge;
 pub(crate) mod job_control;
 pub mod keybinding_bridge;
 pub(crate) mod keybinding_dispatch;

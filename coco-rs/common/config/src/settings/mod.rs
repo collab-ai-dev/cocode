@@ -483,6 +483,8 @@ pub struct PartialLogSettings {
     pub location: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
+    #[serde(alias = "assistantResponses", skip_serializing_if = "Option::is_none")]
+    pub assistant_responses: Option<bool>,
 }
 
 /// Auto-mode/yolo classifier user configuration.

@@ -482,6 +482,7 @@ impl ToolContextFactory {
             append_system_prompt: self.config.append_system_prompt.clone(),
             debug: self.config.debug,
             verbose: self.config.verbose,
+            log_assistant_responses: self.config.log_assistant_responses,
             tool_config: self.config.tool_config.clone(),
             sandbox_config: self.config.sandbox_config.clone(),
             sandbox_state: self.config.sandbox_state.clone(),

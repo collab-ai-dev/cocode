@@ -9,6 +9,11 @@ workspace = true
 
 [features]
 testing = []
+# Enable end-of-turn jemalloc arena purge + stats logging. Off by default;
+# turned on transitively by the `coco` binary's `jemalloc` feature so it moves
+# in lockstep with jemalloc being the global allocator. Forwards to the
+# isolated FFI wrapper crate — coco-tui itself stays `unsafe`-free.
+jemalloc = ["coco-utils-jemalloc/jemalloc"]
 
 [dependencies]
 coco-config.workspace = true
@@ -27,6 +32,7 @@ coco-tui-markdown = { workspace = true, features = ["mermaid"] }
 coco-tui-ui.workspace = true
 coco-voice.workspace = true
 coco-utils-image.workspace = true
+coco-utils-jemalloc.workspace = true
 coco-utils-pty.workspace = true
 coco-utils-common.workspace = true
 coco-utils-string.workspace = true

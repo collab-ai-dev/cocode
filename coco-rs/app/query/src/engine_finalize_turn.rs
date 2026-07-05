@@ -1398,6 +1398,7 @@ impl QueryEngine {
         // finalizing; we don't want a slow suggestion fork blocking the
         // next user prompt.
         let abort_for_task = abort_token.clone();
+        let log_assistant_responses = self.config.log_assistant_responses;
         tokio::spawn(async move {
             // Bail if a newer spawn already cancelled this fork before
             // we got scheduled.
@@ -1433,6 +1434,26 @@ impl QueryEngine {
                         &generation.text,
                         aborted_after,
                     ) {
+                        if let crate::prompt_suggestion::SuggestionOutcome::Filtered { rule } =
+                            &outcome
+                        {
+                            let trimmed = generation.text.trim();
+                            let stats = crate::prompt_suggestion::suggestion_text_stats(trimmed);
+                            coco_otel::events::emit_prompt_suggestion_filtered(
+                                coco_otel::events::PromptSuggestionFilteredPayload {
+                                    rule: rule.as_str(),
+                                    suggestion_text: trimmed,
+                                    text_len_bytes: stats.text_len_bytes,
+                                    char_count: stats.char_count,
+                                    utf16_len: stats.utf16_len,
+                                    word_count: stats.word_count,
+                                    cjk_char_count: stats.cjk_char_count,
+                                    contains_cjk: stats.contains_cjk,
+                                    request_id: generation.request_id.as_deref(),
+                                    log_assistant_responses,
+                                },
+                            );
+                        }
                         tracing::debug!(
                             outcome = ?outcome,
                             text_len = generation.text.len(),

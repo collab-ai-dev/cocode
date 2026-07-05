@@ -48,6 +48,7 @@ impl OtelManager {
                 provider: provider.to_owned(),
                 model: model.to_owned(),
                 log_user_prompts,
+                log_assistant_responses: None,
                 app_version: env!("CARGO_PKG_VERSION"),
                 terminal_type,
             },
@@ -92,7 +93,7 @@ impl OtelManager {
     ) {
         tracing::event!(
             tracing::Level::INFO,
-            event.name = "codex.conversation_starts",
+            event.name = %crate::events::otel_event_name("conversation_starts"),
             event.timestamp = %timestamp(),
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
@@ -140,7 +141,7 @@ impl OtelManager {
     ) {
         tracing::event!(
             tracing::Level::INFO,
-            event.name = "codex.api_request",
+            event.name = %crate::events::otel_event_name("api_request"),
             event.timestamp = %timestamp(),
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
@@ -196,7 +197,7 @@ impl OtelManager {
     fn sse_event(&self, kind: &str, duration: Duration) {
         tracing::event!(
             tracing::Level::INFO,
-            event.name = "codex.sse_event",
+            event.name = %crate::events::otel_event_name("sse_event"),
             event.timestamp = %timestamp(),
             event.kind = %kind,
             conversation.id = %self.metadata.conversation_id,
@@ -218,7 +219,7 @@ impl OtelManager {
         match kind {
             Some(kind) => tracing::event!(
                 tracing::Level::INFO,
-                event.name = "codex.sse_event",
+                event.name = %crate::events::otel_event_name("sse_event"),
                 event.timestamp = %timestamp(),
                 event.kind = %kind,
                 conversation.id = %self.metadata.conversation_id,
@@ -234,7 +235,7 @@ impl OtelManager {
             ),
             None => tracing::event!(
                 tracing::Level::INFO,
-                event.name = "codex.sse_event",
+                event.name = %crate::events::otel_event_name("sse_event"),
                 event.timestamp = %timestamp(),
                 conversation.id = %self.metadata.conversation_id,
                 app.version = %self.metadata.app_version,
@@ -256,7 +257,7 @@ impl OtelManager {
     {
         tracing::event!(
             tracing::Level::INFO,
-            event.name = "codex.sse_event",
+            event.name = %crate::events::otel_event_name("sse_event"),
             event.kind = %"response.completed",
             event.timestamp = %timestamp(),
             conversation.id = %self.metadata.conversation_id,
@@ -281,7 +282,7 @@ impl OtelManager {
     ) {
         tracing::event!(
             tracing::Level::INFO,
-            event.name = "codex.sse_event",
+            event.name = %crate::events::otel_event_name("sse_event"),
             event.timestamp = %timestamp(),
             event.kind = %"response.completed",
             conversation.id = %self.metadata.conversation_id,
@@ -310,7 +311,7 @@ impl OtelManager {
 
         tracing::event!(
             tracing::Level::INFO,
-            event.name = "codex.user_prompt",
+            event.name = %crate::events::otel_event_name("user_prompt"),
             event.timestamp = %timestamp(),
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
@@ -339,13 +340,14 @@ impl OtelManager {
         let Some(payload) = crate::events::build_assistant_response_payload(
             response_text,
             self.metadata.log_user_prompts,
+            self.metadata.log_assistant_responses,
         ) else {
             return;
         };
 
         tracing::event!(
             tracing::Level::INFO,
-            event.name = "codex.assistant_response",
+            event.name = %crate::events::otel_event_name("assistant_response"),
             event.timestamp = %timestamp(),
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
@@ -372,7 +374,7 @@ impl OtelManager {
     ) {
         tracing::event!(
             tracing::Level::INFO,
-            event.name = "codex.tool_decision",
+            event.name = %crate::events::otel_event_name("tool_decision"),
             event.timestamp = %timestamp(),
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
@@ -425,7 +427,7 @@ impl OtelManager {
     pub fn log_tool_failed(&self, tool_name: &str, error: &str) {
         tracing::event!(
             tracing::Level::INFO,
-            event.name = "codex.tool_result",
+            event.name = %crate::events::otel_event_name("tool_result"),
             event.timestamp = %timestamp(),
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
@@ -453,13 +455,13 @@ impl OtelManager {
     ) {
         let success_str = if success { "true" } else { "false" };
         self.counter(
-            "codex.tool.call",
+            &crate::events::otel_event_name("tool.call"),
             1,
             &[("tool", tool_name), ("success", success_str)],
         );
         tracing::event!(
             tracing::Level::INFO,
-            event.name = "codex.tool_result",
+            event.name = %crate::events::otel_event_name("tool_result"),
             event.timestamp = %timestamp(),
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,

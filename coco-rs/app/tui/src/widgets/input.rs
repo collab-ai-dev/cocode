@@ -29,6 +29,7 @@ pub(crate) struct InputRenderModel {
     pub(crate) display_text: String,
     pub(crate) inline_hint: Option<String>,
     pub(crate) inline_ghost: Option<InlineGhostRender>,
+    pub(crate) prompt_suggestion_hint: bool,
     pub(crate) title: String,
     pub(crate) command_palette_filter: Option<String>,
     pub(crate) is_placeholder: bool,
@@ -70,27 +71,45 @@ impl InputRenderModel {
             1 + if body.starts_with(' ') { 1 } else { 0 }
         };
 
-        let (display_text, inline_hint, is_placeholder, command_palette_filter) =
-            if let Some(filter) = command_palette_filter {
-                (format!("/{filter}"), None, false, Some(filter.to_string()))
-            } else if is_empty {
-                if has_editable_queue {
-                    //: an empty composer
-                    // with queued messages hints how to recall them.
-                    (t!("input.placeholder_queued").to_string(), None, true, None)
-                } else if let Some(suggestion) = prompt_suggestion {
-                    (suggestion.to_string(), None, true, None)
-                } else {
-                    (String::new(), None, false, None)
-                }
-            } else {
+        let (
+            display_text,
+            inline_hint,
+            is_placeholder,
+            command_palette_filter,
+            prompt_suggestion_hint,
+        ) = if let Some(filter) = command_palette_filter {
+            (
+                format!("/{filter}"),
+                None,
+                false,
+                Some(filter.to_string()),
+                false,
+            )
+        } else if is_empty {
+            if has_editable_queue {
+                //: an empty composer
+                // with queued messages hints how to recall them.
                 (
-                    input.text()[prefix_consumed..].to_string(),
-                    input.inline_hint.clone(),
-                    false,
+                    t!("input.placeholder_queued").to_string(),
                     None,
+                    true,
+                    None,
+                    false,
                 )
-            };
+            } else if let Some(suggestion) = prompt_suggestion {
+                (suggestion.to_string(), None, true, None, true)
+            } else {
+                (String::new(), None, false, None, false)
+            }
+        } else {
+            (
+                input.text()[prefix_consumed..].to_string(),
+                input.inline_hint.clone(),
+                false,
+                None,
+                false,
+            )
+        };
         let inline_ghost = if is_placeholder || command_palette_filter.is_some() {
             None
         } else {
@@ -136,6 +155,7 @@ impl InputRenderModel {
             display_text,
             inline_hint,
             inline_ghost,
+            prompt_suggestion_hint,
             title,
             command_palette_filter,
             is_placeholder,
@@ -270,6 +290,15 @@ impl Widget for InputWidget<'_> {
                 .collect()
         } else {
             let mut spans = vec![indicator];
+            if model.prompt_suggestion_hint {
+                spans.push(Span::styled(
+                    format!(
+                        "suggestion ({}): ",
+                        crate::keybinding_bridge::prompt_suggestion_hint_text()
+                    ),
+                    Style::default().fg(self.styles.dim()),
+                ));
+            }
             if let Some(ghost) = model.inline_ghost.as_ref() {
                 let split = ghost.byte_pos.min(model.display_text.len());
                 let before = model.display_text[..split].to_string();

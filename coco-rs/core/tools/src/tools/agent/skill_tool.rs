@@ -176,6 +176,7 @@ impl Tool for SkillTool {
             tool_overrides: Some(ctx.tool_overrides.clone()),
             active_shell_tool: ctx.active_shell_tool,
             use_auto_mode_during_plan: ctx.use_auto_mode_during_plan,
+            log_assistant_responses: ctx.log_assistant_responses,
             parent_tool_filter: Some(ctx.tool_filter.clone()),
             // A fork-mode skill subagent is a sibling — it runs at the
             // invoker's depth, not one level deeper.

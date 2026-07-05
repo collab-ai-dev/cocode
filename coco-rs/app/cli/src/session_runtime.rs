@@ -1365,6 +1365,7 @@ impl SessionRuntime {
                 }),
             system_prompt: Some(system_prompt_with_memory),
             streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
+            log_assistant_responses: runtime_config.settings.merged.log.assistant_responses,
             session_id: session_id.clone(),
             project_dir: runtime_config
                 .paths
@@ -3087,6 +3088,7 @@ impl SessionRuntime {
             tool_overrides: Some(cfg.tool_overrides.clone()),
             active_shell_tool: cfg.active_shell_tool,
             use_auto_mode_during_plan: cfg.use_auto_mode_during_plan,
+            log_assistant_responses: cfg.log_assistant_responses,
             parent_tool_filter: None,
             // Fork-mode skill subagents count toward the same depth cap as
             // other forked subagents.

@@ -442,6 +442,7 @@ impl Tool for WorkflowTool {
                 tool_overrides: ctx.tool_overrides.clone(),
                 parent_tool_filter: ctx.tool_filter.clone(),
                 active_shell_tool: ctx.active_shell_tool,
+                log_assistant_responses: ctx.log_assistant_responses,
                 parent_mode: ctx.permission_context.mode,
                 agent_catalog: ctx.agent_catalog.clone(),
                 total_token_budget: ctx.total_token_budget,

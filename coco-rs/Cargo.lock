@@ -2615,6 +2615,7 @@ dependencies = [
  "coco-types",
  "coco-utils-common",
  "coco-utils-image",
+ "coco-utils-jemalloc",
  "coco-utils-pty",
  "coco-utils-string",
  "coco-voice",
@@ -2788,6 +2789,16 @@ dependencies = [
  "mime_guess",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "coco-utils-jemalloc"
+version = "0.1.1"
+dependencies = [
+ "libc",
+ "thiserror 2.0.18",
+ "tikv-jemalloc-ctl",
+ "tikv-jemalloc-sys",
 ]
 
 [[package]]
@@ -8789,6 +8800,17 @@ dependencies = [
  "lazy_static",
  "regex",
  "rustc-hash 1.1.0",
+]
+
+[[package]]
+name = "tikv-jemalloc-ctl"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a184c43b8ab2f41df2733b55556e3f5f632f4aeaa205b1bb018f574b7f5f142"
+dependencies = [
+ "libc",
+ "paste",
+ "tikv-jemalloc-sys",
 ]
 
 [[package]]

@@ -516,7 +516,9 @@ def parse_mem_samples(lines: list[str]) -> list[dict]:
     samples = []
     turn = 0
     for line in lines:
-        if "tui::perf::mem" not in line:
+        # The purge lines share the tui::perf::mem target but are a different
+        # record shape — parse_mem_purges handles them.
+        if "tui::perf::mem" not in line or "tui memory sample" not in line:
             continue
         phase = _kv_str("phase", line) or "unknown"
         if phase == "turn_started":
@@ -536,11 +538,42 @@ def parse_mem_samples(lines: list[str]) -> list[dict]:
             "retained_total_bytes": _kv_int("retained_total_bytes", line) or 0,
             "unexplained_rss_bytes": _kv_int("unexplained_rss_bytes", line),
             "unexplained_footprint_bytes": _kv_int("unexplained_footprint_bytes", line),
+            "jemalloc_available": _kv_bool("jemalloc_available", line),
+            "jemalloc_allocated_bytes": _kv_int("jemalloc_allocated_bytes", line) or 0,
+            "jemalloc_active_bytes": _kv_int("jemalloc_active_bytes", line) or 0,
+            "jemalloc_resident_bytes": _kv_int("jemalloc_resident_bytes", line) or 0,
+            "jemalloc_retained_bytes": _kv_int("jemalloc_retained_bytes", line) or 0,
+            "jemalloc_allocated_delta_bytes": _kv_int("jemalloc_allocated_delta_bytes", line) or 0,
         }
         for field in MEM_BUCKET_FIELDS:
             sample[field] = _kv_int(field, line) or 0
         samples.append(sample)
     return samples
+
+
+def parse_mem_purges(lines: list[str]) -> list[dict]:
+    """End-of-turn `jemalloc arena purge` records (same tui::perf::mem target)."""
+    purges = []
+    turn = 0
+    for line in lines:
+        if "tui::perf::mem" not in line:
+            continue
+        if "tui memory sample" in line:
+            if _kv_str("phase", line) == "turn_started":
+                turn += 1
+            continue
+        if "jemalloc arena purge" not in line:
+            continue
+        purges.append({
+            "turn": turn,
+            "failed": "purge failed" in line,
+            "resident_before_bytes": _kv_int("resident_before_bytes", line) or 0,
+            "resident_after_bytes": _kv_int("resident_after_bytes", line) or 0,
+            "resident_reclaimed_bytes": _kv_int("resident_reclaimed_bytes", line) or 0,
+            "allocated_bytes": _kv_int("allocated_bytes", line) or 0,
+            "active_bytes": _kv_int("active_bytes", line) or 0,
+        })
+    return purges
 
 
 def _delta(last: dict, first: dict, field: str) -> int:
@@ -565,6 +598,7 @@ def triage_mem(logs: list[str]) -> list[str]:
         return [f"- (could not read log: {e})"]
 
     samples = parse_mem_samples(lines)
+    purges = parse_mem_purges(lines)
     if not samples:
         return [
             "- memory perf埋点 OFF (no `tui::perf::mem` lines).",
@@ -575,6 +609,7 @@ def triage_mem(logs: list[str]) -> list[str]:
     overall_first = samples[0]
     overall_last = samples[-1]
     has_footprint = any(s.get("physical_footprint_available") for s in samples)
+    jm_samples = [s for s in samples if s.get("jemalloc_available")]
     out.append("### Overall")
     if has_footprint:
         out.append(
@@ -594,6 +629,19 @@ def triage_mem(logs: list[str]) -> list[str]:
     )
     bucket, bucket_delta = _largest_bucket_delta(overall_first, overall_last)
     out.append(f"- largest retained bucket delta: {bucket} {human_size(bucket_delta)}")
+    if jm_samples:
+        jm_first, jm_last = jm_samples[0], jm_samples[-1]
+        out.append(
+            f"- jemalloc allocated (live heap): {human_size(jm_first['jemalloc_allocated_bytes'])} -> "
+            f"{human_size(jm_last['jemalloc_allocated_bytes'])} "
+            f"(delta {human_size(_delta(jm_last, jm_first, 'jemalloc_allocated_bytes'))})"
+        )
+        end_overhead = jm_last["jemalloc_resident_bytes"] - jm_last["jemalloc_allocated_bytes"]
+        out.append(
+            f"- jemalloc allocator overhead at end (resident - allocated): {human_size(end_overhead)} "
+            f"(resident {human_size(jm_last['jemalloc_resident_bytes'])}, "
+            f"active {human_size(jm_last['jemalloc_active_bytes'])})"
+        )
 
     out.append("")
     out.append("### Physical footprint timeline")
@@ -620,6 +668,32 @@ def triage_mem(logs: list[str]) -> list[str]:
             f"unexplained={human_size(sample.get('unexplained_rss_bytes') or 0)}"
         )
 
+    if jm_samples:
+        out.append("")
+        out.append("### jemalloc timeline (allocated = live heap; growth here is real allocations, not allocator retention)")
+        for sample in jm_samples:
+            out.append(
+                f"- turn={sample['turn']} phase={sample['phase']} "
+                f"allocated={human_size(sample['jemalloc_allocated_bytes'])} "
+                f"allocated_delta={human_size(sample['jemalloc_allocated_delta_bytes'])} "
+                f"active={human_size(sample['jemalloc_active_bytes'])} "
+                f"resident={human_size(sample['jemalloc_resident_bytes'])}"
+            )
+
+    if purges:
+        out.append("")
+        out.append("### jemalloc purges (turn_ended)")
+        for purge in purges:
+            if purge["failed"]:
+                out.append(f"- turn={purge['turn']}: PURGE FAILED (see raw log)")
+                continue
+            out.append(
+                f"- turn={purge['turn']}: resident {human_size(purge['resident_before_bytes'])} -> "
+                f"{human_size(purge['resident_after_bytes'])} "
+                f"(reclaimed {human_size(purge['resident_reclaimed_bytes'])}), "
+                f"allocated={human_size(purge['allocated_bytes'])}"
+            )
+
     by_turn: dict[int, list[dict]] = {}
     for sample in samples:
         by_turn.setdefault(sample["turn"], []).append(sample)
@@ -634,9 +708,16 @@ def triage_mem(logs: list[str]) -> list[str]:
         bucket, bucket_delta = _largest_bucket_delta(first, last)
         triggers = ",".join(sorted({s["trigger"] for s in group}))
         footprint_delta = _delta(last, first, "physical_footprint_bytes") if has_footprint else 0
+        jm_group = [s for s in group if s.get("jemalloc_available")]
+        allocated_part = (
+            f"allocated_delta={human_size(_delta(jm_group[-1], jm_group[0], 'jemalloc_allocated_bytes'))} "
+            if jm_group
+            else ""
+        )
         out.append(
             f"- turn={turn}: footprint_delta={human_size(footprint_delta)} "
             f"rss_delta={human_size(_delta(last, first, 'rss_bytes'))} "
+            f"{allocated_part}"
             f"retained_delta={human_size(_delta(last, first, 'retained_total_bytes'))} "
             f"largest_bucket={bucket}:{human_size(bucket_delta)} triggers={triggers}"
         )
@@ -666,6 +747,26 @@ def triage_mem(logs: list[str]) -> list[str]:
         out.append("- Activity Monitor/System Monitor is expected to align more closely with Physical footprint than `ps` RSS.")
         out.append(f"- rough unexplained footprint delta: {human_size(unexplained_footprint)}")
     out.append(f"- rough unexplained RSS delta: {human_size(unexplained)}")
+    if jm_samples:
+        allocated_delta = _delta(jm_samples[-1], jm_samples[0], "jemalloc_allocated_bytes")
+        end_overhead = jm_samples[-1]["jemalloc_resident_bytes"] - jm_samples[-1]["jemalloc_allocated_bytes"]
+        if primary_delta > 0 and allocated_delta >= primary_delta * 0.6:
+            out.append(
+                "- jemalloc: growth is LIVE HEAP (allocated tracks the process growth) — real allocations "
+                "something still holds; a purge cannot reclaim this. Bisect with the jemalloc timeline above."
+            )
+        elif end_overhead > 20 * 1024 * 1024:
+            out.append(
+                f"- jemalloc: large allocator overhead at end ({human_size(end_overhead)} resident above allocated) — "
+                "dirty-page retention; check the purge lines and decay config."
+            )
+        else:
+            out.append(
+                f"- jemalloc: allocator overhead at end is modest ({human_size(end_overhead)}); "
+                f"live heap delta {human_size(allocated_delta)}."
+            )
+    elif purges:
+        out.append("- jemalloc purge lines present but samples carry no jemalloc stats — older build; rebuild to get the jemalloc timeline.")
     return out
 
 

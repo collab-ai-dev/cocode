@@ -64,6 +64,18 @@ fn test_app_event_type_as_str() {
 }
 
 #[test]
+fn test_otel_event_name_uses_product_namespace() {
+    assert_eq!(
+        otel_event_name("assistant_response"),
+        "cocode.assistant_response"
+    );
+    assert_eq!(
+        otel_event_name(AppEventType::PromptSuggestionFiltered.as_str()),
+        "cocode.prompt_suggestion_filtered"
+    );
+}
+
+#[test]
 fn test_event_serialization() {
     let event = AppEvent::new(AppEventType::ApiResponse)
         .with_str("model", "claude-opus-4-6")
@@ -88,6 +100,7 @@ fn test_emit_event_does_not_panic() {
         "claude-sonnet-4-6",
         Some("req-1"),
         "repl_main_thread",
+        None,
     );
 }
 
@@ -96,7 +109,7 @@ fn assistant_response_payload_skips_empty_text() {
     let _guard = lock_env();
     clear_assistant_response_env();
 
-    assert_eq!(build_assistant_response_payload("", true), None);
+    assert_eq!(build_assistant_response_payload("", true, None), None);
 }
 
 #[test]
@@ -105,7 +118,7 @@ fn assistant_response_logging_inherits_prompt_logging_when_unset() {
     clear_assistant_response_env();
 
     let payload =
-        build_assistant_response_payload("visible response", true).expect("payload emitted");
+        build_assistant_response_payload("visible response", true, None).expect("payload emitted");
 
     assert_eq!(
         payload,
@@ -125,7 +138,7 @@ fn assistant_response_logging_explicit_false_overrides_prompt_logging() {
     }
 
     let payload =
-        build_assistant_response_payload("visible response", true).expect("payload emitted");
+        build_assistant_response_payload("visible response", true, None).expect("payload emitted");
 
     assert_eq!(
         payload,
@@ -146,10 +159,24 @@ fn assistant_response_logging_explicit_true_overrides_prompt_redaction() {
     }
 
     let payload =
-        build_assistant_response_payload("visible response", false).expect("payload emitted");
+        build_assistant_response_payload("visible response", false, None).expect("payload emitted");
 
     assert_eq!(payload.response, "visible response");
     clear_assistant_response_env();
+}
+
+#[test]
+fn assistant_response_logging_uses_settings_before_prompt_logging() {
+    let _guard = lock_env();
+    clear_assistant_response_env();
+
+    let payload = build_assistant_response_payload("visible response", false, Some(true))
+        .expect("payload emitted");
+    assert_eq!(payload.response, "visible response");
+
+    let payload = build_assistant_response_payload("visible response", true, Some(false))
+        .expect("payload emitted");
+    assert_eq!(payload.response, REDACTED);
 }
 
 #[test]
@@ -160,7 +187,7 @@ fn assistant_response_length_matches_js_utf16_length() {
         std::env::set_var(EnvKey::OtelLogAssistantResponses, "1");
     }
 
-    let payload = build_assistant_response_payload("a😀", false).expect("payload emitted");
+    let payload = build_assistant_response_payload("a😀", false, None).expect("payload emitted");
 
     assert_eq!(payload.response_length, 3);
     clear_assistant_response_env();
@@ -175,7 +202,7 @@ fn assistant_response_logging_truncates_at_utf8_boundary() {
     }
     let content = format!("{}é", "a".repeat(TELEMETRY_CONTENT_LIMIT_BYTES - 1));
 
-    let payload = build_assistant_response_payload(&content, false).expect("payload emitted");
+    let payload = build_assistant_response_payload(&content, false, None).expect("payload emitted");
 
     assert!(payload.response.ends_with(TELEMETRY_TRUNCATION_MARKER));
     assert!(
@@ -198,6 +225,7 @@ fn emit_assistant_response_uses_env_inheritance() {
     let payload = build_assistant_response_payload(
         "visible response",
         is_env_truthy(EnvKey::OtelLogUserPrompts),
+        None,
     )
     .expect("payload emitted");
 

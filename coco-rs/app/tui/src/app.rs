@@ -511,14 +511,14 @@ impl App {
                     self.pending_frame_inputs.record_core_event(&event);
                     needs_redraw = self.handle_core_event(event).await?;
                     if let Some(phase) = memory_phase {
-                        self.log_memory_sample(phase, crate::perf::MemorySampleKind::Lifecycle);
+                        self.note_lifecycle_memory_phase(phase);
                     }
                     while let Ok(next) = self.notification_rx.try_recv() {
                         let memory_phase = crate::perf::memory_phase_for_core_event(&next);
                         self.pending_frame_inputs.record_core_event(&next);
                         needs_redraw |= self.handle_core_event(next).await?;
                         if let Some(phase) = memory_phase {
-                            self.log_memory_sample(phase, crate::perf::MemorySampleKind::Lifecycle);
+                            self.note_lifecycle_memory_phase(phase);
                         }
                     }
                 }
@@ -631,6 +631,19 @@ impl App {
         );
         self.memory_perf
             .maybe_log(config, phase, sample_kind, retained);
+    }
+
+    /// Handle a lifecycle-driven memory phase: log the sample, then — at the
+    /// end of a turn — reclaim jemalloc's decayed pages. `TurnEnded` is the
+    /// natural quiet point to purge (the turn's transient allocations are
+    /// freed and the process is about to idle), and on macOS it's the only
+    /// thing that advances page decay, since those builds have no
+    /// `background_thread`. No-op purge when the `jemalloc` feature is off.
+    fn note_lifecycle_memory_phase(&mut self, phase: crate::perf::MemoryPhase) {
+        self.log_memory_sample(phase, crate::perf::MemorySampleKind::Lifecycle);
+        if phase == crate::perf::MemoryPhase::TurnEnded {
+            crate::jemalloc_purge::spawn_turn_ended_purge();
+        }
     }
 
     fn refresh_status_line(&mut self) {
