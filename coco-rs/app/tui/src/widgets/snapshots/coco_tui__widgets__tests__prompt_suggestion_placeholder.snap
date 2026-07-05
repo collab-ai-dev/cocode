@@ -7,7 +7,7 @@ expression: output
  ╰─╯ ╰─╯                                                                        
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
-❯ Run the failing tests                                                         
+❯ suggestion (Tab/→ accept): Run the failing tests                              
 ────────────────────────────────────────────────────────────────────────────────
  opus-4 * auto * ctrl+t to cycle | ctx -- | →0 ←0                               
  ⏯ ask mode on · shift+tab to cycle

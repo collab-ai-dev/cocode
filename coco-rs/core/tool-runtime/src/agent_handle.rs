@@ -288,6 +288,10 @@ pub struct AgentSpawnRequest {
     /// explicitly opted out.
     #[serde(default = "default_use_auto_mode_during_plan")]
     pub use_auto_mode_during_plan: bool,
+    /// Settings-level assistant response body logging override inherited from
+    /// the parent session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_assistant_responses: Option<bool>,
     /// Per-spawn safety constraints (turn cap, write-path whitelist).
     /// Used by the memory crate's forked extraction / auto-dream
     /// agents to install a 5-turn cap and memdir-only write fence.

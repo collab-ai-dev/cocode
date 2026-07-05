@@ -164,6 +164,35 @@ pub enum SuggestionFilter {
     ClaudeVoice,
 }
 
+impl SuggestionFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::MetaText => "meta_text",
+            Self::MetaWrapped => "meta_wrapped",
+            Self::ErrorMessage => "error_message",
+            Self::PrefixedLabel => "prefixed_label",
+            Self::TooFewWords => "too_few_words",
+            Self::TooManyWords => "too_many_words",
+            Self::TooLong => "too_long",
+            Self::MultipleSentences => "multiple_sentences",
+            Self::HasFormatting => "has_formatting",
+            Self::Evaluative => "evaluative",
+            Self::ClaudeVoice => "claude_voice",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SuggestionTextStats {
+    pub text_len_bytes: i64,
+    pub char_count: i64,
+    pub utf16_len: i64,
+    pub word_count: i64,
+    pub cjk_char_count: i64,
+    pub contains_cjk: bool,
+}
+
 // ── Guard input / output context ───────────────────────────────
 
 /// Inputs to [`try_generate_suggestion`] — gates that need to be
@@ -443,7 +472,7 @@ static ALLOWED_SINGLE_WORDS_SET: Lazy<HashSet<&'static str>> =
 /// rule (or `None` to accept).
 pub fn should_filter_suggestion(text: &str) -> Option<SuggestionFilter> {
     let lower = text.to_ascii_lowercase();
-    let word_count = text.split_whitespace().count();
+    let stats = suggestion_text_stats(text);
 
     // Rule 1: bare "done"
     if lower == "done" {
@@ -476,7 +505,7 @@ pub fn should_filter_suggestion(text: &str) -> Option<SuggestionFilter> {
     }
 
     // Rule 6: too_few_words (with allow-list)
-    if word_count < 2 {
+    if stats.word_count < 2 && stats.cjk_char_count < 2 {
         // Slash commands are valid user inputs.
         if !text.starts_with('/') && !ALLOWED_SINGLE_WORDS_SET.contains(lower.as_str()) {
             return Some(SuggestionFilter::TooFewWords);
@@ -484,7 +513,7 @@ pub fn should_filter_suggestion(text: &str) -> Option<SuggestionFilter> {
     }
 
     // Rule 7: too_many_words
-    if word_count > 12 {
+    if stats.word_count > 12 {
         return Some(SuggestionFilter::TooManyWords);
     }
 
@@ -514,6 +543,33 @@ pub fn should_filter_suggestion(text: &str) -> Option<SuggestionFilter> {
     }
 
     None
+}
+
+pub fn suggestion_text_stats(text: &str) -> SuggestionTextStats {
+    let cjk_char_count = text.chars().filter(|c| is_cjk_char(*c)).count() as i64;
+    SuggestionTextStats {
+        text_len_bytes: text.len() as i64,
+        char_count: text.chars().count() as i64,
+        utf16_len: text.encode_utf16().count() as i64,
+        word_count: text.split_whitespace().count() as i64,
+        cjk_char_count,
+        contains_cjk: cjk_char_count > 0,
+    }
+}
+
+fn is_cjk_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{3400}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{20000}'..='\u{2A6DF}'
+            | '\u{2A700}'..='\u{2B73F}'
+            | '\u{2B740}'..='\u{2B81F}'
+            | '\u{2B820}'..='\u{2CEAF}'
+            | '\u{2CEB0}'..='\u{2EBEF}'
+            | '\u{30000}'..='\u{3134F}'
+    )
 }
 
 // ── Cache-cold helper ──────────────────────────────────────────

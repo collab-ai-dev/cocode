@@ -122,6 +122,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
             is_non_interactive: true,
+            log_assistant_responses: parent_engine_config.log_assistant_responses,
             // Forks are fire-and-forget — no UI to prompt, so a residual `Ask`
             // must fail closed.
             avoid_permission_prompts: true,

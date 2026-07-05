@@ -11,7 +11,7 @@ members = [
     "common/model-card",
     "common/llm-types",
 
-    # ─── utils/ (26) ── 24 existing + 2 new ───
+    # ─── utils/ (27) ───
     "utils/absolute-path",
     "utils/audio-capture",
     "utils/async-utils",
@@ -29,6 +29,7 @@ members = [
     "utils/frontmatter",
     "utils/git",
     "utils/image",
+    "utils/jemalloc",
     "utils/json-repair",
     "utils/json-to-toml",
     "utils/keyring-store",
@@ -162,6 +163,7 @@ coco-utils-cargo-bin = { path = "utils/cargo-bin" }
 coco-utils-common = { path = "utils/common" }
 coco-utils-download = { path = "utils/download" }
 coco-utils-image = { path = "utils/image" }
+coco-utils-jemalloc = { path = "utils/jemalloc" }
 coco-utils-json-repair = { path = "utils/json-repair" }
 coco-utils-json-to-toml = { path = "utils/json-to-toml" }
 coco-utils-pty = { path = "utils/pty" }
@@ -299,6 +301,14 @@ libc = "0.2"
 # linked when the `jemalloc` feature is enabled on the `coco` binary (not on
 # Windows, where jemalloc-sys does not build). See app/cli/src/main.rs.
 tikv-jemallocator = { version = "0.7.0", features = ["unprefixed_malloc_on_supported_platforms"] }
+# Runtime allocator introspection + control, paired with the allocator above.
+# `tikv-jemalloc-ctl` gives the typed `epoch`/`stats::*` reads; `tikv-jemalloc-sys`
+# is the raw `mallctl` FFI used for the void `arena.*.purge` call (which the ctl
+# write helpers can't express — jemalloc rejects a non-NULL `newp`). Both resolve
+# to the same jemalloc-sys 0.7 the allocator already links. Only pulled in behind
+# `coco-utils-jemalloc`'s `jemalloc` feature. See utils/jemalloc.
+tikv-jemalloc-ctl = { version = "0.7.0", features = ["stats"] }
+tikv-jemalloc-sys = "0.7"
 # `event` feature gates `rustix::event::poll`, used for the bounded OSC 11
 # terminal-background read (`auto` theme). Pinned to the version crossterm
 # already resolves so no extra crate version enters the tree.

@@ -134,6 +134,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             max_structured_output_retries: crate::config::max_structured_output_retries(),
             streaming_tool_execution: true,
             is_non_interactive: true,
+            log_assistant_responses: config.log_assistant_responses,
             // Hardcoded for ALL subagents: a residual `Ask` fails closed
             // (deny) since coco has no parent-terminal prompt routing for
             // child engines. `bubble`-mode subagents bubble the prompt to

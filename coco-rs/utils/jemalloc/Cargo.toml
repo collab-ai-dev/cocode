@@ -1,0 +1,27 @@
+[package]
+name = "coco-utils-jemalloc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Off by default: the crate compiles to trivial stubs and pulls in no jemalloc
+# dependency, so non-jemalloc builds (ordinary `cargo build`, every crate's
+# tests) stay light. Turned on transitively by the `coco` binary's `jemalloc`
+# feature, which also installs jemalloc as the global allocator — the two must
+# move together or the ctl calls would target a jemalloc that manages nothing.
+jemalloc = ["dep:tikv-jemalloc-ctl", "dep:tikv-jemalloc-sys", "dep:libc"]
+
+[dependencies]
+thiserror.workspace = true
+
+# jemalloc control is only linked behind the `jemalloc` feature, and never on
+# Windows (jemalloc-sys has no MSVC build). Both resolve to the same
+# jemalloc-sys 0.7 the allocator links, so no second jemalloc enters the tree.
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+tikv-jemalloc-ctl = { workspace = true, optional = true }
+tikv-jemalloc-sys = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }

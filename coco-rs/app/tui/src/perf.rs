@@ -147,6 +147,7 @@ impl RetainedMemoryStats {
 pub(crate) struct MemoryPerfTracker {
     last_logged_rss_bytes: Option<u64>,
     last_logged_physical_footprint_bytes: Option<u64>,
+    last_logged_jemalloc_allocated_bytes: Option<u64>,
 }
 
 impl MemoryPerfTracker {
@@ -203,6 +204,15 @@ impl MemoryPerfTracker {
             return;
         }
 
+        // jemalloc's own view (`None` on non-jemalloc builds). `allocated` is
+        // live application data — the ground truth separating real retention
+        // growth from allocator page overhead (`resident - allocated`).
+        let jemalloc = coco_utils_jemalloc::stats_snapshot();
+        let jemalloc_allocated_delta_bytes = jemalloc
+            .zip(self.last_logged_jemalloc_allocated_bytes)
+            .map(|(stats, previous)| stats.allocated as i128 - previous as i128)
+            .unwrap_or(0);
+
         let trigger = trigger_label(sample_kind, threshold_hit);
         let retained_total_bytes = retained.retained_total_bytes();
         let unexplained_rss_bytes = sample.rss_bytes as i128 - retained_total_bytes as i128;
@@ -223,6 +233,12 @@ impl MemoryPerfTracker {
             physical_footprint_delta_bytes,
             sample_ms = sample.sample_ms,
             source = sample.source_label(),
+            jemalloc_available = jemalloc.is_some(),
+            jemalloc_allocated_bytes = jemalloc.map_or(0, |stats| stats.allocated),
+            jemalloc_active_bytes = jemalloc.map_or(0, |stats| stats.active),
+            jemalloc_resident_bytes = jemalloc.map_or(0, |stats| stats.resident),
+            jemalloc_retained_bytes = jemalloc.map_or(0, |stats| stats.retained),
+            jemalloc_allocated_delta_bytes,
             message_history_payload_bytes = retained.message_history_payload_bytes,
             transcript_cell_text_bytes = retained.transcript_cell_text_bytes,
             tool_execution_bytes = retained.tool_execution_bytes,
@@ -239,6 +255,9 @@ impl MemoryPerfTracker {
         self.last_logged_rss_bytes = Some(sample.rss_bytes);
         if let Some(bytes) = sample.physical_footprint_bytes {
             self.last_logged_physical_footprint_bytes = Some(bytes);
+        }
+        if let Some(stats) = jemalloc {
+            self.last_logged_jemalloc_allocated_bytes = Some(stats.allocated);
         }
     }
 }

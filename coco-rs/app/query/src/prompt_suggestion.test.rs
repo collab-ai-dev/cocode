@@ -374,6 +374,20 @@ fn test_filter_rule_too_few_words_with_allow_list() {
 }
 
 #[test]
+fn test_filter_rule_too_few_words_allows_cjk_short_phrases() {
+    assert!(should_filter_suggestion("继续修复").is_none());
+    assert_eq!(
+        should_filter_suggestion("修"),
+        Some(SuggestionFilter::TooFewWords)
+    );
+
+    let stats = suggestion_text_stats("继续修复");
+    assert_eq!(stats.word_count, 1);
+    assert_eq!(stats.cjk_char_count, 4);
+    assert!(stats.contains_cjk);
+}
+
+#[test]
 fn test_filter_rule_too_many_words() {
     let s = "one two three four five six seven eight nine ten eleven twelve thirteen";
     assert_eq!(

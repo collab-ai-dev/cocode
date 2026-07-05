@@ -85,7 +85,11 @@ Three ways to set the tuning, by when it binds:
   build). Caveat: init runs before `main` (on the first allocation), so it must
   be present in the environment **before exec** — `coco` cannot set it for
   itself, and settings.json (parsed post-init) cannot drive it.
-- **Live, in-process.** Only the decay knobs (`arena.<i>.dirty_decay_ms` /
-  `muzzy_decay_ms`, both `rw` mallctl) are mutable after init, and only via a
-  `tikv-jemalloc-ctl` dep that is **not currently wired**. `narenas` is never
-  runtime-mutable post-init.
+- **Live, in-process.** The `jemalloc` feature wires `tikv-jemalloc-{ctl,sys}`
+  through the isolated `coco-utils-jemalloc` wrapper. It is currently used for
+  an end-of-turn `arena.*.purge` (forced page reclamation, driven from
+  `coco-tui`; see that crate + `utils/jemalloc`) plus `stats.*` reads for the
+  memory perf log. The decay knobs (`arena.<i>.dirty_decay_ms` /
+  `muzzy_decay_ms`, both `rw` mallctl) are also mutable after init through the
+  same wrapper but are not yet exposed. `narenas` is never runtime-mutable
+  post-init.

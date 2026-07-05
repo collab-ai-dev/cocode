@@ -73,6 +73,29 @@ fn test_parse_settings_accepts_respond_to_bash_commands_keys() {
 }
 
 #[test]
+fn test_parse_settings_accepts_log_assistant_responses_keys() {
+    let settings = parse_settings(
+        r#"{
+            "log": {
+                "assistant_responses": true
+            }
+        }"#,
+    )
+    .expect("parse snake-case assistant responses");
+    assert_eq!(settings.log.assistant_responses, Some(true));
+
+    let settings = parse_settings(
+        r#"{
+            "log": {
+                "assistantResponses": false
+            }
+        }"#,
+    )
+    .expect("parse camel-case assistant responses");
+    assert_eq!(settings.log.assistant_responses, Some(false));
+}
+
+#[test]
 fn test_plan_mode_clear_context_default_is_enabled() {
     let settings = parse_settings("{}").expect("parse empty settings");
     assert!(settings.plan_mode.show_clear_context_on_exit);

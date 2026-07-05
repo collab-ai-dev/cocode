@@ -224,6 +224,10 @@ pub struct AgentQueryConfig {
     /// defaults true to match Claude Code's opt-out setting.
     #[serde(default = "default_use_auto_mode_during_plan")]
     pub use_auto_mode_during_plan: bool,
+    /// Settings-level assistant response body logging override inherited from
+    /// the parent session. `None` preserves env-only behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_assistant_responses: Option<bool>,
     /// Working-directory override for this subagent. Set by worktree
     /// isolation to the freshly-created worktree path, or by explicit
     /// `cwd:` tool input. Child `ToolUseContext.cwd_override` reads
@@ -382,6 +386,7 @@ impl Default for AgentQueryConfig {
             plan_mode_required: false,
             permission_mode_availability: coco_types::PermissionModeAvailability::default(),
             use_auto_mode_during_plan: default_use_auto_mode_during_plan(),
+            log_assistant_responses: None,
             cwd_override: None,
             fork_context_messages: Vec::new(),
             allowed_write_roots: Vec::new(),

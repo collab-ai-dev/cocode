@@ -413,6 +413,7 @@ impl SkillHandle for QuerySkillRuntime {
                     plan_mode_required: false,
                     permission_mode_availability: coco_types::PermissionModeAvailability::default(),
                     use_auto_mode_during_plan: inherit.use_auto_mode_during_plan,
+                    log_assistant_responses: inherit.log_assistant_responses,
                     cwd_override: None,
                     // Skill fork: absent model/model_role inherits the
                     // parent session's Main client via `InheritMain`.

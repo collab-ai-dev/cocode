@@ -1414,6 +1414,7 @@ impl SwarmAgentHandle {
             parent_tool_filter: request.parent_tool_filter.clone(),
             active_shell_tool: request.active_shell_tool,
             use_auto_mode_during_plan: request.use_auto_mode_during_plan,
+            log_assistant_responses: request.log_assistant_responses,
             preserve_tool_use_results,
             is_teammate: false,
             is_in_process_teammate: false,

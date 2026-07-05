@@ -172,6 +172,10 @@ pub struct QueryEngineConfig {
     /// Verbose-logging surface for tools (CLI `--verbose`). Visible on
     /// `ToolUseContext.verbose`. Defaults to `false`.
     pub verbose: bool,
+    /// Settings-level assistant response body logging override. `None`
+    /// falls back to `OTEL_LOG_USER_PROMPTS` unless
+    /// `OTEL_LOG_ASSISTANT_RESPONSES` is set.
+    pub log_assistant_responses: Option<bool>,
     /// Thinking level applied to the main-loop model for this session.
     /// Surfaced on `ToolUseContext.thinking_level` so tools (and tool-
     /// spawned subqueries) see the same reasoning budget the engine is
@@ -406,6 +410,7 @@ impl Default for QueryEngineConfig {
             avoid_permission_prompts: false,
             debug: false,
             verbose: false,
+            log_assistant_responses: None,
             thinking_level: None,
             fast_mode: false,
             fallback_min_context_window: None,

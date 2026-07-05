@@ -199,6 +199,7 @@ fn subscriber_opts_env_overrides_settings_log_block() {
         stderr: Some(true),
         location: Some(true),
         timezone: Some("local".into()),
+        assistant_responses: None,
     });
     let log_env = LogEnv {
         level: Some("coco=info,info".into()),

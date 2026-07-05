@@ -6,8 +6,9 @@
 use chrono::SecondsFormat;
 use chrono::Utc;
 use coco_config::EnvKey;
+use coco_config::constants::PRODUCT_NAME;
 use coco_config::env::is_env_truthy;
-use coco_config::env::log_assistant_responses_enabled;
+use coco_config::env::resolve_log_assistant_responses;
 use coco_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -20,6 +21,20 @@ pub(crate) const REDACTED: &str = "<REDACTED>";
 pub(crate) struct AssistantResponsePayload {
     pub(crate) response_length: i64,
     pub(crate) response: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PromptSuggestionFilteredPayload<'a> {
+    pub rule: &'a str,
+    pub suggestion_text: &'a str,
+    pub text_len_bytes: i64,
+    pub char_count: i64,
+    pub utf16_len: i64,
+    pub word_count: i64,
+    pub cjk_char_count: i64,
+    pub contains_cjk: bool,
+    pub request_id: Option<&'a str>,
+    pub log_assistant_responses: Option<bool>,
 }
 
 /// Application event types (L3 — application-level analytics).
@@ -47,6 +62,7 @@ pub enum AppEventType {
     ApiRequest,
     ApiResponse,
     AssistantResponse,
+    PromptSuggestionFiltered,
     ApiError,
     ApiRetry,
     ModelSwitch,
@@ -107,6 +123,7 @@ impl AppEventType {
             Self::ApiRequest => "api_request",
             Self::ApiResponse => "api_response",
             Self::AssistantResponse => "assistant_response",
+            Self::PromptSuggestionFiltered => "prompt_suggestion_filtered",
             Self::ApiError => "api_error",
             Self::ApiRetry => "api_retry",
             Self::ModelSwitch => "model_switch",
@@ -136,6 +153,10 @@ impl AppEventType {
             Self::UserInterrupt => "user_interrupt",
         }
     }
+}
+
+pub fn otel_event_name(name: &str) -> String {
+    format!("{PRODUCT_NAME}.{name}")
 }
 
 /// A structured application event with typed attributes.
@@ -316,21 +337,50 @@ pub fn emit_assistant_response(
     model: &str,
     request_id: Option<&str>,
     query_source: &str,
+    log_assistant_responses: Option<bool>,
 ) {
     let log_user_prompts = is_env_truthy(EnvKey::OtelLogUserPrompts);
-    let Some(payload) = build_assistant_response_payload(response_text, log_user_prompts) else {
+    let Some(payload) =
+        build_assistant_response_payload(response_text, log_user_prompts, log_assistant_responses)
+    else {
         return;
     };
 
     tracing::event!(
         tracing::Level::INFO,
-        event.name = "codex.assistant_response",
+        event.name = %otel_event_name(AppEventType::AssistantResponse.as_str()),
         event.timestamp = %timestamp(),
         model = %model,
         response_length = payload.response_length,
         response = %payload.response,
         request_id = request_id,
         query_source = %query_source,
+    );
+}
+
+pub fn emit_prompt_suggestion_filtered(payload: PromptSuggestionFilteredPayload<'_>) {
+    let log_user_prompts = is_env_truthy(EnvKey::OtelLogUserPrompts);
+    let suggestion_text =
+        if resolve_log_assistant_responses(payload.log_assistant_responses, log_user_prompts) {
+            truncate_for_telemetry(payload.suggestion_text)
+        } else {
+            REDACTED.to_string()
+        };
+
+    tracing::event!(
+        tracing::Level::INFO,
+        event.name = %otel_event_name(AppEventType::PromptSuggestionFiltered.as_str()),
+        event.timestamp = %timestamp(),
+        rule = %payload.rule,
+        suggestion_text = %suggestion_text,
+        text_len_bytes = payload.text_len_bytes,
+        char_count = payload.char_count,
+        utf16_len = payload.utf16_len,
+        word_count = payload.word_count,
+        cjk_char_count = payload.cjk_char_count,
+        contains_cjk = payload.contains_cjk,
+        request_id = payload.request_id,
+        query_source = "prompt_suggestion",
     );
 }
 
@@ -352,12 +402,13 @@ pub fn emit_subagent_spawn(agent_id: &str, agent_type: &str, model: &str) {
 pub(crate) fn build_assistant_response_payload(
     response_text: &str,
     log_user_prompts: bool,
+    log_assistant_responses: Option<bool>,
 ) -> Option<AssistantResponsePayload> {
     if response_text.is_empty() {
         return None;
     }
 
-    let response = if log_assistant_responses_enabled(log_user_prompts) {
+    let response = if resolve_log_assistant_responses(log_assistant_responses, log_user_prompts) {
         truncate_for_telemetry(response_text)
     } else {
         REDACTED.to_string()

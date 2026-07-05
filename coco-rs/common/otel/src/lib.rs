@@ -38,6 +38,7 @@ pub struct OtelEventMetadata {
     /// Whether user prompt body logging is enabled. Assistant response body
     /// logging inherits this when `OTEL_LOG_ASSISTANT_RESPONSES` is unset.
     pub(crate) log_user_prompts: bool,
+    pub(crate) log_assistant_responses: Option<bool>,
     pub(crate) app_version: &'static str,
     pub(crate) terminal_type: String,
 }

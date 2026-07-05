@@ -136,6 +136,30 @@ fn test_log_assistant_responses_enabled_uses_tristate_override() {
 }
 
 #[test]
+fn test_resolve_log_assistant_responses_uses_settings_before_prompt_logging() {
+    let _guard = ENV_LOCK.lock().expect("env test lock");
+    unsafe { std::env::remove_var(EnvKey::OtelLogAssistantResponses) };
+
+    assert!(resolve_log_assistant_responses(Some(true), false));
+    assert!(!resolve_log_assistant_responses(Some(false), true));
+    assert!(resolve_log_assistant_responses(None, true));
+    assert!(!resolve_log_assistant_responses(None, false));
+}
+
+#[test]
+fn test_resolve_log_assistant_responses_env_overrides_settings() {
+    let _guard = ENV_LOCK.lock().expect("env test lock");
+
+    unsafe { std::env::set_var(EnvKey::OtelLogAssistantResponses, "1") };
+    assert!(resolve_log_assistant_responses(Some(false), false));
+
+    unsafe { std::env::set_var(EnvKey::OtelLogAssistantResponses, "0") };
+    assert!(!resolve_log_assistant_responses(Some(true), true));
+
+    unsafe { std::env::remove_var(EnvKey::OtelLogAssistantResponses) };
+}
+
+#[test]
 fn test_env_snapshot_from_pairs() {
     let env = EnvSnapshot::from_pairs([
         (EnvKey::CocoMaxToolUseConcurrency, "7"),

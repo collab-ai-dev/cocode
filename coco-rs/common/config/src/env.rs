@@ -533,7 +533,20 @@ pub fn env_truthy_opt<K: AsRef<OsStr>>(key: K) -> Option<bool> {
 /// `OTEL_LOG_ASSISTANT_RESPONSES` is a tri-state override: recognised truthy
 /// and falsy values win; unset or unrecognised values inherit prompt logging.
 pub fn log_assistant_responses_enabled(log_user_prompts: bool) -> bool {
-    env_truthy_opt(EnvKey::OtelLogAssistantResponses).unwrap_or(log_user_prompts)
+    resolve_log_assistant_responses(None, log_user_prompts)
+}
+
+/// Resolve assistant response body logging with an optional settings value.
+///
+/// Priority: `OTEL_LOG_ASSISTANT_RESPONSES` > settings
+/// `log.assistant_responses` > `OTEL_LOG_USER_PROMPTS`.
+pub fn resolve_log_assistant_responses(
+    settings_assistant_responses: Option<bool>,
+    log_user_prompts: bool,
+) -> bool {
+    env_truthy_opt(EnvKey::OtelLogAssistantResponses)
+        .or(settings_assistant_responses)
+        .unwrap_or(log_user_prompts)
 }
 
 /// Get an environment variable as an optional string.

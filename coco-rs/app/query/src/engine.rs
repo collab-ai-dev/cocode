@@ -920,6 +920,7 @@ impl QueryEngine {
                 &model_id,
                 response_id.as_deref(),
                 self.query_source_label(),
+                self.config.log_assistant_responses,
             );
 
             self.stamp_assistant_now();
