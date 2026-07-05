@@ -165,6 +165,15 @@ coco-jemalloc *args:
     # explicit end-of-turn `arena.*.purge` wired into the TUI (coco-utils-jemalloc),
     # which the `jemalloc` feature turns on. On Linux we still ask jemalloc to run
     # its own background decay thread as a belt-and-braces complement.
+    #
+    # Heap profiling needs NO env here: `prof:true,prof_active:false,
+    # lg_prof_sample:19` is baked into libjemalloc via
+    # `JEMALLOC_SYS_WITH_MALLOC_CONF` (.cargo/config.toml). Deliberately NOT
+    # passed via MALLOC_CONF env — the env leaks to every child process (rustc,
+    # the long-lived sccache server, tool calls run from inside coco), whose
+    # non-prof toolchain jemalloc then spams `Invalid conf pair`. The TUI
+    # activates sampling from `tui.performance.heap_profile_enabled` and dumps
+    # to `<config_home>/logs/coco.<pid>.turn<N>.heap` at every turn end.
     if [[ "$(uname -s)" != "Darwin" ]]; then
         export MALLOC_CONF="${MALLOC_CONF:+$MALLOC_CONF,}background_thread:true"
     fi

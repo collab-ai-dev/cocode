@@ -97,6 +97,7 @@ fn from_settings_converts_tui_performance_defaults_and_overrides() {
         display.performance.memory_delta_threshold_bytes,
         4 * 1024 * 1024
     );
+    assert!(!display.performance.heap_profile_enabled);
 
     let mut settings = Settings::default();
     settings.tui.performance.frame_enabled = true;
@@ -106,6 +107,7 @@ fn from_settings_converts_tui_performance_defaults_and_overrides() {
     settings.tui.performance.memory_enabled = true;
     settings.tui.performance.memory_sample_interval_secs = 0;
     settings.tui.performance.memory_delta_threshold_mb = 0;
+    settings.tui.performance.heap_profile_enabled = true;
 
     let display = DisplaySettings::from_settings(&settings);
 
@@ -116,6 +118,7 @@ fn from_settings_converts_tui_performance_defaults_and_overrides() {
     assert!(display.performance.memory_enabled);
     assert_eq!(display.performance.memory_sample_interval_secs, 0);
     assert_eq!(display.performance.memory_delta_threshold_bytes, 0);
+    assert!(display.performance.heap_profile_enabled);
 }
 
 #[test]

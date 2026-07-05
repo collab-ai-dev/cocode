@@ -465,6 +465,13 @@ impl App {
             crate::perf::MemoryPhase::Startup,
             crate::perf::MemorySampleKind::Lifecycle,
         );
+        crate::jemalloc_purge::sync_heap_profiling(
+            self.state
+                .ui
+                .display_settings
+                .performance
+                .heap_profile_enabled,
+        );
         // Initial render
         self.redraw()?;
         self.log_memory_sample(
@@ -550,6 +557,9 @@ impl App {
                     self.pending_frame_inputs.settings_reloads += 1;
                     self.state.ui.apply_display_settings(display_settings);
                     memory_interval = memory_perf_interval(self.state.ui.display_settings.performance);
+                    crate::jemalloc_purge::sync_heap_profiling(
+                        self.state.ui.display_settings.performance.heap_profile_enabled,
+                    );
                     needs_redraw = true;
                 }
                 Some(error) = recv_optional(&mut self.config_reload_errors_rx), if self.config_reload_errors_rx.is_some() => {
@@ -638,11 +648,19 @@ impl App {
     /// natural quiet point to purge (the turn's transient allocations are
     /// freed and the process is about to idle), and on macOS it's the only
     /// thing that advances page decay, since those builds have no
-    /// `background_thread`. No-op purge when the `jemalloc` feature is off.
+    /// `background_thread`. The same boundary also writes a heap-profile dump
+    /// when `tui.performance.heap_profile_enabled` is on. No-op when the
+    /// `jemalloc` feature is off.
     fn note_lifecycle_memory_phase(&mut self, phase: crate::perf::MemoryPhase) {
         self.log_memory_sample(phase, crate::perf::MemorySampleKind::Lifecycle);
         if phase == crate::perf::MemoryPhase::TurnEnded {
-            crate::jemalloc_purge::spawn_turn_ended_purge();
+            crate::jemalloc_purge::spawn_turn_ended_purge(
+                self.state
+                    .ui
+                    .display_settings
+                    .performance
+                    .heap_profile_enabled,
+            );
         }
     }
 
