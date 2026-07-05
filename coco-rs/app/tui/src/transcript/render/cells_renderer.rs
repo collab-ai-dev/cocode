@@ -98,7 +98,7 @@ impl<'a> CellsRenderer<'a> {
             reasoning_metadata: None,
             subagent_summaries: None,
             styles,
-            syntax_highlighting: SyntaxHighlighting::Enabled,
+            syntax_highlighting: SyntaxHighlighting::Full,
             width: 80,
             assistant_presentation_order: AssistantPresentationOrder::Source,
             cwd: None,

@@ -549,7 +549,7 @@ fn exit_plan_pending_history_lines_render_plan_without_choices() {
     let lines = exit_plan_pending_history_lines(
         &state,
         /*width*/ 80,
-        coco_tui_ui::display::SyntaxHighlighting::Disabled,
+        coco_tui_ui::display::SyntaxHighlighting::Off,
         UiStyles::new(&theme),
     );
     let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
@@ -577,7 +577,7 @@ fn exit_plan_pending_history_lines_lead_with_ready_to_code_title() {
     let lines = exit_plan_pending_history_lines(
         &state,
         /*width*/ 80,
-        coco_tui_ui::display::SyntaxHighlighting::Disabled,
+        coco_tui_ui::display::SyntaxHighlighting::Off,
         UiStyles::new(&theme),
     );
     let texts: Vec<String> = lines.iter().map(line_text).collect();
@@ -613,7 +613,7 @@ fn exit_plan_pending_history_lines_render_no_plan_notice_without_file() {
     let lines = exit_plan_pending_history_lines(
         &state,
         /*width*/ 80,
-        coco_tui_ui::display::SyntaxHighlighting::Disabled,
+        coco_tui_ui::display::SyntaxHighlighting::Off,
         UiStyles::new(&theme),
     );
     let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");

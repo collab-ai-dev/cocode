@@ -55,7 +55,7 @@ fn input<'a>(source: &'a str, theme: &'a Theme) -> StreamRenderInput<'a> {
         generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         styles: UiStyles::new(theme),
         width: 80,
-        syntax_highlighting: SyntaxHighlighting::Disabled,
+        syntax_highlighting: SyntaxHighlighting::Off,
     }
 }
 
@@ -92,7 +92,7 @@ fn test_stable_lines_are_row_prefix_of_full_committed_render() {
                   | col a | col b |\n| ----- | ----- |\n| one   | two   |\n\n\
                   See [the spec][ref] for details.\n\n[ref]: https://example.com\n\n\
                   Closing paragraph.\n\ntrailing partial line";
-    for syntax in [SyntaxHighlighting::Enabled, SyntaxHighlighting::Disabled] {
+    for syntax in [SyntaxHighlighting::Full, SyntaxHighlighting::Off] {
         for width in [80u16, 24] {
             let mut controller = StreamRenderController::default();
             let mut prev_stable: Vec<String> = Vec::new();

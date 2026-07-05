@@ -21,7 +21,7 @@ fn finalized_history_lines_render_committed_assistant_message() {
         HistoryLineRenderOptions {
             styles: UiStyles::new(&theme),
             width: 40,
-            syntax_highlighting: SyntaxHighlighting::Disabled,
+            syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
             cwd: None,
@@ -64,7 +64,7 @@ fn finalized_history_lines_do_not_emit_active_busy_tail() {
         HistoryLineRenderOptions {
             styles: UiStyles::new(&theme),
             width: 40,
-            syntax_highlighting: SyntaxHighlighting::Disabled,
+            syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
             cwd: None,
@@ -101,7 +101,7 @@ fn finalized_history_lines_hide_compact_boundary_and_summary_by_default() {
         HistoryLineRenderOptions {
             styles: UiStyles::new(&theme),
             width: 96,
-            syntax_highlighting: SyntaxHighlighting::Disabled,
+            syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
             cwd: None,
@@ -129,7 +129,7 @@ fn finalized_history_lines_collapse_meta_by_default() {
         HistoryLineRenderOptions {
             styles: UiStyles::new(&theme),
             width: 40,
-            syntax_highlighting: SyntaxHighlighting::Disabled,
+            syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
             cwd: None,
@@ -159,7 +159,7 @@ fn finalized_history_lines_render_empty_title_info_as_markdown() {
         HistoryLineRenderOptions {
             styles: UiStyles::new(&theme),
             width: 80,
-            syntax_highlighting: SyntaxHighlighting::Disabled,
+            syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
             cwd: None,
@@ -196,7 +196,7 @@ fn finalized_history_lines_show_collapsed_thinking_with_toggle_hint() {
         HistoryLineRenderOptions {
             styles: UiStyles::new(&theme),
             width: 80,
-            syntax_highlighting: SyntaxHighlighting::Disabled,
+            syntax_highlighting: SyntaxHighlighting::Off,
             show_system_reminders: false,
             show_thinking: false,
             cwd: None,
@@ -500,7 +500,7 @@ fn replay_cache_invalidates_on_width_display_theme_and_content_changes() {
     );
     let syntax_changed = render_replay_history_lines_cached(
         &cells,
-        options_with_syntax(&theme, 40, SyntaxHighlighting::Enabled),
+        options_with_syntax(&theme, 40, SyntaxHighlighting::Full),
         CACHE_TEST_MAX_ROWS,
         &mut cache,
     );
@@ -883,7 +883,7 @@ fn replay_syntax_highlighting_toggle_output_remains_correct() {
 
     let highlighted = render_replay_history_lines_cached(
         &cells,
-        options_with_syntax(&theme, 80, SyntaxHighlighting::Enabled),
+        options_with_syntax(&theme, 80, SyntaxHighlighting::Full),
         200,
         &mut cache,
     );
@@ -910,7 +910,7 @@ fn replay_finalized_mermaid_fence_renders_as_diagram() {
 
     let replay = render_replay_history_lines(
         &cells,
-        options_with_syntax(&theme, 96, SyntaxHighlighting::Enabled),
+        options_with_syntax(&theme, 96, SyntaxHighlighting::Full),
         500,
     );
     let output = plain_lines(&replay.lines).join("\n");
@@ -921,7 +921,7 @@ fn replay_finalized_mermaid_fence_renders_as_diagram() {
 }
 
 fn options(theme: &Theme, width: u16) -> HistoryLineRenderOptions<'_> {
-    options_with_syntax(theme, width, SyntaxHighlighting::Disabled)
+    options_with_syntax(theme, width, SyntaxHighlighting::Off)
 }
 
 fn options_with_policy(

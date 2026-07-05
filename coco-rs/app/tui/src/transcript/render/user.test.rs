@@ -136,7 +136,7 @@ fn slash_origin_gates_command_pill_rendering() {
     let opts = || crate::presentation::slash_command::SlashCommandRenderOptions {
         styles: UiStyles::new(&theme),
         width: 80,
-        syntax_highlighting: SyntaxHighlighting::Disabled,
+        syntax_highlighting: SyntaxHighlighting::Off,
         apply_user_background: false,
     };
     // Genuine slash echo (origin stamped) → eligible for the `❯ /cmd` pill.

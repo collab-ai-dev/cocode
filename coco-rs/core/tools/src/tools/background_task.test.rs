@@ -31,7 +31,7 @@ fn from_result_prefers_assistant_auto_then_user_then_explicit() {
 fn explicit_notice_names_id_and_path() {
     assert_eq!(
         format_background_notice(BackgroundKind::Explicit, "t-1", "/cache/t-1.output"),
-        "Command running in background with ID: t-1. Output is being written to: /cache/t-1.output"
+        "Command running in background with ID: t-1. Output is being written to: /cache/t-1.output. Use Read on this output path to inspect logs/results when needed."
     );
 }
 
@@ -39,7 +39,7 @@ fn explicit_notice_names_id_and_path() {
 fn user_notice_names_id_and_path() {
     assert_eq!(
         format_background_notice(BackgroundKind::User, "t-2", "/cache/t-2.output"),
-        "Command was manually backgrounded by user with ID: t-2. Output is being written to: /cache/t-2.output"
+        "Command was manually backgrounded by user with ID: t-2. Output is being written to: /cache/t-2.output. Use Read on this output path to inspect logs/results when needed."
     );
 }
 
@@ -55,5 +55,15 @@ fn assistant_auto_notice_names_budget_id_path_and_delegation() {
         text.contains("Output is being written to: /cache/t-3.output"),
         "got: {text}"
     );
-    assert!(text.contains("delegate long-running work"), "got: {text}");
+    assert!(text.contains("run_in_background: true"), "got: {text}");
+    assert!(text.contains("Use Read on this output path"), "got: {text}");
+}
+
+#[test]
+fn notice_without_output_path_omits_read_hint() {
+    let text = format_background_notice(BackgroundKind::Explicit, "t-4", "");
+    assert!(
+        !text.contains("Use Read on this output path"),
+        "got: {text}"
+    );
 }

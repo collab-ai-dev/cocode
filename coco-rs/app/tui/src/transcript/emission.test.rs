@@ -214,7 +214,7 @@ fn emit_append_only_accepts_finalized_transcript_renderer() {
                 HistoryLineRenderOptions {
                     styles: UiStyles::new(&theme),
                     width: 8,
-                    syntax_highlighting: SyntaxHighlighting::Disabled,
+                    syntax_highlighting: SyntaxHighlighting::Off,
                     show_system_reminders: false,
                     show_thinking: false,
                     cwd: None,

@@ -106,7 +106,7 @@ fn test_disabled_syntax_highlighting_renders_plain_command_preview() {
         syntax: "bash".into(),
     };
 
-    let spans = render_tool_input_preview_spans(&preview, styles, SyntaxHighlighting::Disabled, 80);
+    let spans = render_tool_input_preview_spans(&preview, styles, SyntaxHighlighting::Off, 80);
 
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].content.as_ref(), "echo hello");
@@ -118,7 +118,7 @@ fn test_styled_preview_truncation_respects_display_width() {
     let styles = UiStyles::new(&theme);
     let preview = super::ToolInputPreview::Plain("echo 界🙂abcdef".into());
 
-    let spans = render_tool_input_preview_spans(&preview, styles, SyntaxHighlighting::Disabled, 10);
+    let spans = render_tool_input_preview_spans(&preview, styles, SyntaxHighlighting::Off, 10);
     let text = spans
         .iter()
         .map(|span| span.content.as_ref())

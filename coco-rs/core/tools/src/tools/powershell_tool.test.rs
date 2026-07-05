@@ -62,6 +62,42 @@ async fn test_powershell_tool_spec_drops_run_in_background_when_disabled() {
     );
 }
 
+#[tokio::test]
+async fn test_powershell_prompt_explains_background_output_file_read_path() {
+    let desc = <PowerShellTool as DynTool>::prompt(
+        &PowerShellTool,
+        &coco_tool_runtime::PromptOptions::default(),
+    )
+    .await;
+    assert!(desc.contains("backgroundTaskId"), "got:\n{desc}");
+    assert!(desc.contains("outputPath"), "got:\n{desc}");
+    assert!(desc.contains("<output-file>"), "got:\n{desc}");
+    assert!(
+        desc.contains("use Read on the returned `outputPath` / `<output-file>` path"),
+        "got:\n{desc}"
+    );
+}
+
+#[tokio::test]
+async fn test_powershell_schema_explains_background_output_file_read_path() {
+    let spec = <PowerShellTool as DynTool>::tool_spec(
+        &PowerShellTool,
+        &coco_tool_runtime::SchemaContext::default(),
+        &coco_tool_runtime::PromptOptions::default(),
+    )
+    .await;
+    let coco_tool_runtime::ToolSpec::Function(spec) = spec else {
+        panic!("PowerShellTool must be a Function tool");
+    };
+    let desc = spec.parameters["properties"]["run_in_background"]["description"]
+        .as_str()
+        .expect("run_in_background description");
+    assert!(desc.contains("backgroundTaskId"), "got: {desc}");
+    assert!(desc.contains("outputPath"), "got: {desc}");
+    assert!(desc.contains("<output-file>"), "got: {desc}");
+    assert!(desc.contains("Use Read"), "got: {desc}");
+}
+
 /// Unsafe CLM type reference must be blocked before pwsh is spawned.
 /// Rejects types outside the allowlist.
 #[tokio::test]
@@ -355,7 +391,7 @@ mod render_tests {
         let parts = <PowerShellTool as DynTool>::render_for_model(&PowerShellTool, &data);
         assert_eq!(
             text_of(&parts),
-            "Command running in background with ID: ps-1. Output is being written to: /cfg/cache/tasks/sess/ps-1.output"
+            "Command running in background with ID: ps-1. Output is being written to: /cfg/cache/tasks/sess/ps-1.output. Use Read on this output path to inspect logs/results when needed."
         );
     }
 
@@ -434,6 +470,8 @@ mod render_tests {
             text.contains("Output is being written to: /cfg/cache/tasks/sess/ps-99.output"),
             "got: {text}"
         );
+        assert!(text.contains("run_in_background: true"), "got: {text}");
+        assert!(text.contains("Use Read on this output path"), "got: {text}");
     }
 
     #[test]
@@ -451,7 +489,7 @@ mod render_tests {
         let text = text_of(&parts);
         assert!(
             text.contains(
-                "Command was manually backgrounded by user with ID: ps-7. Output is being written to: /cfg/cache/tasks/sess/ps-7.output"
+                "Command was manually backgrounded by user with ID: ps-7. Output is being written to: /cfg/cache/tasks/sess/ps-7.output. Use Read on this output path to inspect logs/results when needed."
             ),
             "got: {text}"
         );
@@ -472,7 +510,7 @@ mod render_tests {
         let text = text_of(&parts);
         assert!(
             text.contains(
-                "Command running in background with ID: ps-3. Output is being written to: /cfg/cache/tasks/sess/ps-3.output"
+                "Command running in background with ID: ps-3. Output is being written to: /cfg/cache/tasks/sess/ps-3.output. Use Read on this output path to inspect logs/results when needed."
             ),
             "got: {text}"
         );

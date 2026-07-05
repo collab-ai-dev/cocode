@@ -36,7 +36,7 @@ impl StreamRenderKey {
     ) -> Self {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         width.hash(&mut h);
-        syntax_highlighting.is_enabled().hash(&mut h);
+        syntax_highlighting.hash(&mut h);
         styles.theme_hash().hash(&mut h);
         Self(h.finish())
     }

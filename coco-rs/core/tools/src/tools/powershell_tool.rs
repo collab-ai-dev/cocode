@@ -99,7 +99,7 @@ Usage notes:
   - You can specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). If not specified, commands will timeout after 120000ms (2 minutes).
   - It is very helpful if you write a clear, concise description of what this command does.
   - If the output exceeds 30000 characters, output will be truncated before being returned to you.
-  - You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes.
+  - You can use the `run_in_background` parameter to run the command in the background. The call returns immediately with `backgroundTaskId` and `outputPath`; the completion notification will include an `<output-file>` path. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. If you need shell output before then, use Read on the returned `outputPath` / `<output-file>` path instead of polling.
   - Avoid using PowerShell to run commands that have dedicated tools, unless explicitly instructed:
     - File search: Use Glob (NOT Get-ChildItem -Recurse)
     - Content search: Use Grep (NOT Select-String)
@@ -117,7 +117,7 @@ Usage notes:
     - Do not sleep between commands that can run immediately — just run them.
     - If your command is long running and you would like to be notified when it finishes — simply run your command using `run_in_background`. There is no need to sleep in this case.
     - Do not retry failing commands in a sleep loop — diagnose the root cause or consider an alternative approach.
-    - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.
+    - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll. Use Read on the returned `outputPath` / `<output-file>` path only when you need to inspect current output.
     - If you must poll an external process, use a check command rather than sleeping first.
     - If you must sleep, keep the duration short (1-5 seconds) to avoid blocking the user.
   - For git commands:
@@ -138,7 +138,9 @@ pub struct PowerShellInput {
     #[serde(default)]
     pub timeout: Option<u64>,
     /// Set to true to run this command in the background. Returns
-    /// immediately with a task_id.
+    /// immediately with backgroundTaskId and outputPath; completion
+    /// notifications include an <output-file> path. Use Read on that path
+    /// when you need shell logs or results; do not poll.
     #[serde(default)]
     pub run_in_background: bool,
     /// Set this to true to dangerously override sandbox mode and run

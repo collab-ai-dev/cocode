@@ -84,14 +84,16 @@ async fn running_includes_anti_duplicate_warning() {
     assert!(text.contains("Background agent \"scan repo\" (42) is still running."));
     assert!(text.contains("Progress: 10/100 files"));
     assert!(text.contains("Do NOT spawn a duplicate"));
-    assert!(text.contains("/tmp/task-42.log"));
     // Running agent status includes the SendMessage tool ref so the
     // model knows it can steer the running agent.
-    assert!(text.contains("send it a message with SendMessage"));
+    assert!(text.contains("use SendMessage only if you need to communicate"));
+    assert!(!text.contains("/tmp/task-42.log"));
+    assert!(!text.contains("partial output"));
+    assert!(!text.contains("Read"));
 }
 
 #[tokio::test]
-async fn running_without_output_file_includes_tool_refs() {
+async fn running_without_output_file_includes_send_message_ref() {
     let c = SystemReminderConfig::default();
     let ctx = GeneratorContext::builder(&c)
         .task_statuses(vec![TaskStatusSnapshot {
@@ -112,9 +114,9 @@ async fn running_without_output_file_includes_tool_refs() {
         .content()
         .unwrap()
         .to_string();
-    // No output path → must reference both TaskOutput and SendMessage tools.
-    assert!(text.contains("check its progress with the TaskOutput tool"));
-    assert!(text.contains("send it a message with SendMessage"));
+    assert!(text.contains("use SendMessage only if you need to communicate"));
+    assert!(!text.contains("TaskOutput"));
+    assert!(!text.contains("Read"));
 }
 
 #[tokio::test]
@@ -146,8 +148,8 @@ async fn completed_includes_delta_when_set() {
     assert!(text.contains("(status: completed)"));
     assert!(text.contains("(description: tidy)"));
     assert!(text.contains("Delta: removed 3 files"));
-    // No output file → must reference TaskOutput tool.
-    assert!(text.contains("You can check its output using the TaskOutput tool."));
+    assert!(text.contains("Result output path is unavailable."));
+    assert!(!text.contains("TaskOutput"));
 }
 
 #[tokio::test]
@@ -177,5 +179,5 @@ async fn failed_with_output_file_references_path() {
     assert!(text.contains("(status: failed)"));
     assert!(text.contains("(description: build)"));
     assert!(text.contains("Delta: compile error"));
-    assert!(text.contains("Read the output file to retrieve the result: /tmp/task-9.log"));
+    assert!(text.contains("Read the output file to restore the result: /tmp/task-9.log"));
 }

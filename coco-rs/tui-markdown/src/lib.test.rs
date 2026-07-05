@@ -16,7 +16,7 @@ fn render(text: &str) -> Vec<Line<'static>> {
     let styles = UiStyles::new(&theme);
     render_markdown(
         text,
-        MarkdownOptions::new(styles, 80, SyntaxHighlighting::Enabled),
+        MarkdownOptions::new(styles, 80, SyntaxHighlighting::Full),
         None,
     )
 }
@@ -30,7 +30,7 @@ fn render_with_width(text: &str, width: u16) -> Vec<Line<'static>> {
     let styles = UiStyles::new(&theme);
     render_markdown(
         text,
-        MarkdownOptions::new(styles, width, SyntaxHighlighting::Enabled),
+        MarkdownOptions::new(styles, width, SyntaxHighlighting::Full),
         None,
     )
 }
@@ -101,7 +101,7 @@ fn inline_code_uses_code_inline_token_matching_ts_permission() {
     let styles = UiStyles::new(&theme);
     let lines = render_markdown(
         "use `xyzzy` here",
-        MarkdownOptions::new(styles, 80, SyntaxHighlighting::Enabled),
+        MarkdownOptions::new(styles, 80, SyntaxHighlighting::Full),
         None,
     );
     let code = lines[0]
@@ -125,7 +125,7 @@ fn list_marker_uses_body_text_color_not_brand() {
     let styles = UiStyles::new(&theme);
     let lines = render_markdown(
         "- item",
-        MarkdownOptions::new(styles, 80, SyntaxHighlighting::Enabled),
+        MarkdownOptions::new(styles, 80, SyntaxHighlighting::Full),
         None,
     );
     let bullet = lines[0]
@@ -247,7 +247,7 @@ fn long_highlighted_rust_code_wraps_without_dropping_styles() {
     let code = "fn main() { let value: i32 = 12345; println!(\"abcdefghijklmnopqrstuvwxyz\"); }";
     let lines = render_markdown(
         &format!("```rust\n{code}\n```"),
-        MarkdownOptions::new(styles, 32, SyntaxHighlighting::Enabled),
+        MarkdownOptions::new(styles, 32, SyntaxHighlighting::Full),
         None,
     );
     let body_lines: Vec<&Line<'_>> = lines
@@ -309,7 +309,7 @@ fn lead_marker_lands_on_first_line() {
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
     let marker = LeadMarker::new("⏺", styles.assistant_message());
-    let opts = MarkdownOptions::new(styles, 80, SyntaxHighlighting::Enabled);
+    let opts = MarkdownOptions::new(styles, 80, SyntaxHighlighting::Full);
     let lines = render_markdown("hello\nworld", opts, Some(&marker));
     assert_eq!(line_text(&lines[0]), "⏺ hello");
     assert_eq!(line_text(&lines[1]), "  world");
@@ -320,7 +320,7 @@ fn empty_text_with_marker_emits_marker_line() {
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
     let marker = LeadMarker::new("⏺", styles.assistant_message());
-    let opts = MarkdownOptions::new(styles, 80, SyntaxHighlighting::Enabled);
+    let opts = MarkdownOptions::new(styles, 80, SyntaxHighlighting::Full);
     let lines = render_markdown("", opts, Some(&marker));
     assert_eq!(lines.len(), 1);
     assert_eq!(line_text(&lines[0]), "⏺");
@@ -676,7 +676,7 @@ fn streaming_suppresses_mermaid_diagram() {
     let src = "```mermaid\nflowchart LR\n  A[Start] --> B[Finish]\n```";
     let lines = render_markdown(
         src,
-        MarkdownOptions::new(styles, 80, SyntaxHighlighting::Enabled).streaming(),
+        MarkdownOptions::new(styles, 80, SyntaxHighlighting::Full).streaming(),
         None,
     );
     let joined: String = lines
@@ -750,7 +750,7 @@ fn inline_link_destination_uses_hyperlink_style() {
     let expected = UiStyles::new(&theme).hyperlink();
     let lines = render_markdown(
         "[click](https://example.com)",
-        MarkdownOptions::new(UiStyles::new(&theme), 80, SyntaxHighlighting::Enabled),
+        MarkdownOptions::new(UiStyles::new(&theme), 80, SyntaxHighlighting::Full),
         None,
     );
     let dest_span = lines

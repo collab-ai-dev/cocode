@@ -19,20 +19,23 @@ fn settings_with_source(
     }
 }
 
-fn raw_syntax_highlighting(disabled: bool) -> serde_json::Value {
+fn raw_syntax_highlighting(level: SyntaxHighlightingLevel) -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::from_iter([(
-        SYNTAX_HIGHLIGHTING_DISABLED_KEY.to_string(),
-        json!(disabled),
+        SYNTAX_HIGHLIGHTING_KEY.to_string(),
+        json!(level),
     )]))
 }
 
 #[test]
 fn from_settings_with_sources_allows_user_owned_syntax_highlighting() {
     let mut per_source = HashMap::new();
-    per_source.insert(SettingSource::User, raw_syntax_highlighting(true));
+    per_source.insert(
+        SettingSource::User,
+        raw_syntax_highlighting(SyntaxHighlightingLevel::Off),
+    );
     let settings = settings_with_source(
         Settings {
-            syntax_highlighting_disabled: true,
+            syntax_highlighting: SyntaxHighlightingLevel::Off,
             ..Settings::default()
         },
         per_source,
@@ -40,7 +43,7 @@ fn from_settings_with_sources_allows_user_owned_syntax_highlighting() {
 
     let display = DisplaySettings::from_settings_with_sources(&settings);
 
-    assert_eq!(display.syntax_highlighting, SyntaxHighlighting::Disabled);
+    assert_eq!(display.syntax_highlighting, SyntaxHighlighting::Off);
     assert!(!display.show_thinking);
     assert_eq!(
         display.syntax_highlighting_editability,
@@ -141,13 +144,20 @@ fn from_settings_carries_status_line_config() {
 #[test]
 fn from_settings_with_sources_marks_higher_priority_syntax_highlighting_as_overridden() {
     let mut per_source = HashMap::new();
-    per_source.insert(SettingSource::Project, raw_syntax_highlighting(true));
-    per_source.insert(SettingSource::Local, raw_syntax_highlighting(false));
+    per_source.insert(
+        SettingSource::Project,
+        raw_syntax_highlighting(SyntaxHighlightingLevel::Off),
+    );
+    per_source.insert(
+        SettingSource::Local,
+        raw_syntax_highlighting(SyntaxHighlightingLevel::Full),
+    );
     let settings = settings_with_source(Settings::default(), per_source);
 
     let display = DisplaySettings::from_settings_with_sources(&settings);
 
-    assert_eq!(display.syntax_highlighting, SyntaxHighlighting::Enabled);
+    // Merged is `Settings::default()`, whose tier default is `Lite`.
+    assert_eq!(display.syntax_highlighting, SyntaxHighlighting::Lite);
     assert_eq!(
         display.syntax_highlighting_editability,
         DisplaySettingEditability::OverriddenBy(SettingSource::Local)

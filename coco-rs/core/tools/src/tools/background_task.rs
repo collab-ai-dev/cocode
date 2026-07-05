@@ -38,26 +38,31 @@ impl BackgroundKind {
     }
 }
 
-/// Model-facing notice for a command that moved to the background. Every
-/// variant names the task id and the on-disk output path so the model can
-/// `Read` that file directly.
+/// Model-facing notice for a command that moved to the background. When the
+/// on-disk output path is available, the notice tells the model to `Read` that
+/// file directly.
 pub(crate) fn format_background_notice(
     kind: BackgroundKind,
     task_id: &str,
     output_path: &str,
 ) -> String {
+    let read_hint = if output_path.is_empty() {
+        String::new()
+    } else {
+        " Use Read on this output path to inspect logs/results when needed.".to_string()
+    };
     match kind {
         BackgroundKind::AssistantAuto => {
             let budget_seconds = ASSISTANT_BLOCKING_BUDGET_MS / 1000;
             format!(
-                "Command exceeded the assistant-mode blocking budget ({budget_seconds}s) and was moved to the background with ID: {task_id}. It is still running — you will be notified when it completes. Output is being written to: {output_path}. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive."
+                "Command exceeded the assistant-mode blocking budget ({budget_seconds}s) and was moved to the background with ID: {task_id}. It is still running — you will be notified when it completes. Future long-running shell commands should use run_in_background: true to keep this conversation responsive. Output is being written to: {output_path}.{read_hint}"
             )
         }
         BackgroundKind::User => format!(
-            "Command was manually backgrounded by user with ID: {task_id}. Output is being written to: {output_path}"
+            "Command was manually backgrounded by user with ID: {task_id}. Output is being written to: {output_path}.{read_hint}"
         ),
         BackgroundKind::Explicit => format!(
-            "Command running in background with ID: {task_id}. Output is being written to: {output_path}"
+            "Command running in background with ID: {task_id}. Output is being written to: {output_path}.{read_hint}"
         ),
     }
 }

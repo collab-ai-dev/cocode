@@ -224,7 +224,12 @@ pub fn render(n: &TaskNotification) -> String {
             killed_by: _,
         } => {
             let summary = n.summary();
-            render_terminal(n, *status, &summary, None, None, None, None)
+            let note = if n.output_file.is_empty() {
+                None
+            } else {
+                Some(SHELL_TERMINAL_OUTPUT_NOTE)
+            };
+            render_terminal(n, *status, &summary, None, None, None, note)
         }
         NotificationKind::AgentTerminal {
             status,
@@ -266,6 +271,10 @@ pub const TASK_NOTIFICATION_RECUR_NOTE: &str = "A task-notification fires each t
 /// Model-contract note appended to stopped agent task-notifications.
 pub const TASK_NOTIFICATION_STOPPED_NOTE: &str =
     "This agent was stopped and cannot be resumed. Spawn a fresh agent if more work is needed.";
+
+/// Model-contract note appended to shell terminal notifications.
+pub const SHELL_TERMINAL_OUTPUT_NOTE: &str =
+    "Use Read on the <output-file> path above to inspect the command output.";
 
 fn agent_terminal_note(status: TerminalStatus) -> &'static str {
     match status {
@@ -340,6 +349,11 @@ fn render_stall(n: &TaskNotification, tail: &str) -> String {
              Kill this task and re-run with piped input (e.g. `echo y | command`) \
              or a non-interactive flag if one exists.",
         );
+        if !n.output_file.is_empty() {
+            xml.push_str(
+                " Use Read on the <output-file> path above if you need the complete output.",
+            );
+        }
     }
     xml
 }

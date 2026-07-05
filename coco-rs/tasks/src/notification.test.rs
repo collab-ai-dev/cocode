@@ -37,8 +37,10 @@ fn shell_terminal_completed_with_exit_code() {
     assert!(!xml.contains("<result>"));
     assert!(!xml.contains("<usage>"));
     assert!(!xml.contains("<worktree>"));
-    // Shell terminals carry no agent recur-note (the note is agent-specific).
-    assert!(!xml.contains("<note>"));
+    assert!(xml.contains(&format!(
+        "<note>{}</note>",
+        escape_xml(SHELL_TERMINAL_OUTPUT_NOTE)
+    )));
     assert_payload_summary_matches_xml(&n);
     let payload = n.payload();
     assert_eq!(payload.status, Some(coco_types::TaskStatus::Completed));
@@ -68,6 +70,7 @@ fn shell_terminal_failed_with_exit_code() {
     assert!(xml.contains(
         "<summary>Background command &quot;make&quot; failed with exit code 2</summary>"
     ));
+    assert!(xml.contains("Use Read on the &lt;output-file&gt; path above"));
     assert_payload_summary_matches_xml(&n);
     assert_eq!(n.payload().status, Some(coco_types::TaskStatus::Failed));
 }
@@ -298,6 +301,9 @@ fn stall_omits_status_tag() {
     assert!(xml.contains("waiting for interactive input"));
     assert!(xml.contains("Last output:\nContinue? [y/N]"));
     assert!(xml.contains("Kill this task"));
+    assert!(
+        xml.contains("Use Read on the <output-file> path above if you need the complete output.")
+    );
     assert_payload_summary_matches_xml(&n);
     let payload = n.payload();
     assert_eq!(payload.status, None);
@@ -323,6 +329,24 @@ fn escape_xml_handles_5_chars() {
     };
     let xml = render(&n);
     assert!(xml.contains("&lt;x&gt;&amp;&quot;&apos;"));
+}
+
+#[test]
+fn shell_terminal_empty_output_file_omits_read_note() {
+    let n = TaskNotification {
+        task_id: "tb06".into(),
+        tool_use_id: None,
+        agent_id: None,
+        output_file: String::new(),
+        description: "true".into(),
+        kind: NotificationKind::ShellTerminal {
+            status: TerminalStatus::Completed,
+            exit_code: None,
+            killed_by: None,
+        },
+    };
+    let xml = render(&n);
+    assert!(!xml.contains("Use Read on the &lt;output-file&gt; path above"));
 }
 
 #[tokio::test]

@@ -37,7 +37,7 @@ fn renders_numbered_list_cursor_diff_and_footer() {
     let picker = fixture();
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
-    let lines = theme_picker_lines(&picker, SyntaxHighlighting::Enabled, styles, 60, 12);
+    let lines = theme_picker_lines(&picker, SyntaxHighlighting::Full, styles, 60, 12);
     let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
     // Friendly labels + numbering from the reusable list.
@@ -68,7 +68,7 @@ fn unsaved_themes_have_no_active_marker() {
     let picker = fixture();
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
-    let lines = theme_picker_lines(&picker, SyntaxHighlighting::Disabled, styles, 60, 12);
+    let lines = theme_picker_lines(&picker, SyntaxHighlighting::Off, styles, 60, 12);
     let auto_row = lines
         .iter()
         .map(line_text)

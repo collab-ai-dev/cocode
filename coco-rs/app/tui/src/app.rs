@@ -453,11 +453,12 @@ impl App {
         // per-grammar regex compilation. Once per process; detached — the
         // warm state lives in the process-global `SyntaxSet`.
         static SYNTAX_PREWARM: std::sync::Once = std::sync::Once::new();
-        SYNTAX_PREWARM.call_once(|| {
+        let syntax_tier = self.state.ui.display_settings.syntax_highlighting;
+        SYNTAX_PREWARM.call_once(move || {
             drop(
                 std::thread::Builder::new()
                     .name("syntect-prewarm".to_string())
-                    .spawn(coco_tui_markdown::prewarm_highlighting),
+                    .spawn(move || coco_tui_markdown::prewarm_highlighting(syntax_tier)),
             );
         });
         self.refresh_status_line();

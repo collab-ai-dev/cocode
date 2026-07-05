@@ -166,6 +166,27 @@ fn find_syntax<'s>(ss: &'s SyntaxSet, lang: &str) -> Option<&'s SyntaxReference>
         .or_else(|| ss.find_syntax_by_token(alias))
 }
 
+/// Grammars permitted under [`SyntaxHighlighting::Lite`] — the exact set the
+/// startup prewarm compiles. Because these are already warm, `Lite` pins
+/// syntect's highlighting memory to the prewarm baseline: no other grammar is
+/// ever allowed to compile. Matched on the resolved grammar *name* so every
+/// alias (`sh`/`zsh`/`shell`/`bash`) collapses to one entry.
+const LITE_GRAMMARS: &[&str] = &["Diff", "Bourne Again Shell (bash)"];
+
+/// Whether `lang` may be highlighted under the active tier. `Off` blocks
+/// everything; `Full` allows any grammar syntect can resolve; `Lite` allows
+/// only [`LITE_GRAMMARS`]. Resolving the grammar here is cheap — it is a
+/// metadata lookup, never a regex compile (that happens later in
+/// `ParseState::parse_line`), so the gate itself costs no resident memory.
+fn tier_allows(syntax: SyntaxHighlighting, lang: &str) -> bool {
+    match syntax {
+        SyntaxHighlighting::Off => false,
+        SyntaxHighlighting::Full => true,
+        SyntaxHighlighting::Lite => find_syntax(syntax_set(), lang)
+            .is_some_and(|s| LITE_GRAMMARS.contains(&s.name.as_str())),
+    }
+}
+
 /// Pre-compile the lazily-built syntect machinery for the grammars most
 /// likely to appear in tool output and assistant markdown.
 ///
@@ -199,9 +220,15 @@ fn find_syntax<'s>(ss: &'s SyntaxSet, lang: &str) -> Option<&'s SyntaxReference>
 /// still highlights correctly, just paying a one-time tens-of-ms compile on the
 /// first frame that renders it — the same tradeoff codex-rs makes for *every*
 /// grammar (it prewarms none).
-pub fn prewarm_highlighting() {
+pub fn prewarm_highlighting(syntax: SyntaxHighlighting) {
+    // Nothing highlights under `Off`, so warming grammars would only waste the
+    // resident pages the tier is meant to save.
+    if syntax.is_off() {
+        return;
+    }
     // Keep this snippet in sync with `examples/measure_grammar.rs` so the tool's
-    // memory numbers reflect the real prewarm cost.
+    // memory numbers reflect the real prewarm cost. The warm set is exactly
+    // `LITE_GRAMMARS`, so `Lite` never compiles anything beyond this baseline.
     const SNIPPET: &str = "# t *m* `c` fn x() { let y: i32 = 1; } [l](u)\n";
     const LANGS: &[&str] = &["diff", "bash"];
     let started = std::time::Instant::now();
@@ -313,7 +340,7 @@ pub(crate) fn highlight_code(
     syntax: SyntaxHighlighting,
     mode: HighlightMode,
 ) -> Option<Highlighted> {
-    if syntax.is_disabled() {
+    if !tier_allows(syntax, lang) {
         return None;
     }
     if code.len() > MAX_HIGHLIGHT_BYTES

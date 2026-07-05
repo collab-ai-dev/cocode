@@ -184,7 +184,7 @@ pub(crate) struct HistoryReplayCache {
 struct HistoryReplayCacheKey {
     max_rows: usize,
     width: u16,
-    syntax_enabled: bool,
+    syntax: SyntaxHighlighting,
     show_thinking: bool,
     show_system_reminders: bool,
     theme_hash: u64,
@@ -569,7 +569,7 @@ fn replay_cache_key(
     Some(HistoryReplayCacheKey {
         max_rows,
         width: options.width,
-        syntax_enabled: options.syntax_highlighting.is_enabled(),
+        syntax: options.syntax_highlighting,
         show_thinking: options.show_thinking,
         show_system_reminders: options.show_system_reminders,
         theme_hash: options.styles.theme_hash(),

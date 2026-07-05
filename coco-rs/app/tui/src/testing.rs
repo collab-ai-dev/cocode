@@ -220,7 +220,7 @@ impl NativeSurfaceNormalBench {
     ) -> Self {
         let mut state = AppState::new();
         if matches!(content, NativeSurfaceNormalBenchContent::SyntaxCode) {
-            state.ui.display_settings.syntax_highlighting = SyntaxHighlighting::Enabled;
+            state.ui.display_settings.syntax_highlighting = SyntaxHighlighting::Full;
         }
         push_bench_turns(&mut state, turns, content);
         if streaming {
@@ -409,10 +409,10 @@ fn replay_options(
 ) -> HistoryLineRenderOptions<'_> {
     let syntax_highlighting = match content {
         NativeReplayBenchContent::Markdown | NativeReplayBenchContent::ToolHeavy => {
-            SyntaxHighlighting::Disabled
+            SyntaxHighlighting::Off
         }
         NativeReplayBenchContent::SyntaxCode | NativeReplayBenchContent::Mermaid => {
-            SyntaxHighlighting::Enabled
+            SyntaxHighlighting::Full
         }
     };
     HistoryLineRenderOptions {
