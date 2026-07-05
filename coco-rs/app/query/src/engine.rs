@@ -363,12 +363,14 @@ pub struct QueryEngine {
     /// otherwise perform.
     pub(crate) pending_reactive_context_management:
         Arc<tokio::sync::Mutex<Option<serde_json::Value>>>,
-    /// One-shot post-compaction signal. Set to `true` whenever
+    /// One-shot post-compaction signal. Incremented whenever
     /// `do_reactive_compact` / full-compaction / SM-compaction succeeds;
-    /// consumed (swap-to-false) by the next `engine_turn_reminders` build.
+    /// consumed after successful task-status materialization by the next
+    /// `engine_turn_reminders` build. Epoch form avoids clearing a newer
+    /// compaction event that arrives while sources are materializing.
     /// Only the immediately-following turn surfaces background task status
     /// reminders.
-    pub(crate) pending_just_compacted: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) pending_just_compacted: Arc<std::sync::atomic::AtomicU64>,
     /// Transcript writer used for marble-origami persistence and the
     /// per-turn user/assistant JSONL append. `None` disables
     /// persistence (in-memory ledger only). Caller wires this via

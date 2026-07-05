@@ -2417,7 +2417,6 @@ dependencies = [
  "coco-config",
  "coco-error",
  "coco-session",
- "coco-system-reminder",
  "coco-tool-runtime",
  "coco-types",
  "fs2",

@@ -81,6 +81,14 @@ fn tool_results_dir_path() {
 }
 
 #[test]
+fn task_outputs_dir_path() {
+    assert_eq!(
+        paths().task_outputs_dir("sid-1"),
+        project_path("sid-1/tasks"),
+    );
+}
+
+#[test]
 fn session_memory_summary_path() {
     assert_eq!(
         paths().session_memory_summary("sid-1"),

@@ -1,7 +1,8 @@
 use super::*;
+use coco_system_reminder::TaskStatusSource;
 use coco_tool_runtime::{
     AgentCompletionPayload, AgentRegistration as AR, AgentUsage, AgentWorktree, ShellTaskRequest,
-    TaskHandle,
+    TaskHandle, WorkflowTaskRequest,
 };
 use coco_types::TaskStatus;
 use std::sync::Arc;
@@ -35,6 +36,37 @@ async fn insert_background_shell(rt: &TaskRuntime, issuing_agent: Option<&str>) 
     insert_background_shell_with_output(rt, issuing_agent, None).await
 }
 
+async fn insert_background_shell_with_disk(
+    rt: &TaskRuntime,
+    issuing_agent: Option<&str>,
+) -> String {
+    let task_id = coco_types::generate_task_id(coco_types::TaskType::Shell);
+    let dto = rt.disk.get_or_create(&task_id).await;
+    let output_file = Some(dto.path().display().to_string());
+    rt.manager()
+        .create_task(coco_tasks::TaskCreateRequest {
+            task_id: task_id.clone(),
+            task_type: coco_types::TaskType::Shell,
+            description: "sleep 999".to_string(),
+            output_file,
+            tool_use_id: None,
+            is_backgrounded: true,
+            status: TaskStatus::Running,
+            cancel: CancellationToken::new(),
+            invoking_agent: None,
+            workflow_run_id: String::new(),
+            workflow_name: None,
+            workflow_prompt: None,
+            shell_extras: Some(coco_types::ShellExtras {
+                command: "sleep 999".to_string(),
+                issuing_agent: issuing_agent.map(str::to_string),
+                is_backgrounded: true,
+                ..Default::default()
+            }),
+        })
+        .await
+}
+
 async fn insert_background_shell_with_output(
     rt: &TaskRuntime,
     issuing_agent: Option<&str>,
@@ -65,6 +97,23 @@ async fn insert_background_shell_with_output(
         .await
 }
 
+async fn register_workflow(rt: &TaskRuntime) -> String {
+    let task_id = coco_types::generate_task_id(coco_types::TaskType::LocalWorkflow);
+    rt.register_workflow_task(
+        WorkflowTaskRequest {
+            task_id: task_id.clone(),
+            run_id: "wf_test".to_string(),
+            workflow_name: Some("test workflow".to_string()),
+            prompt: None,
+            tool_use_id: None,
+            script: "echo hi".to_string(),
+            source_path: None,
+        },
+        CancellationToken::new(),
+    )
+    .await
+}
+
 fn now_ms_for_test() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -75,7 +124,7 @@ fn now_ms_for_test() -> i64 {
 #[tokio::test]
 async fn memory_pressure_reaper_marks_idle_top_level_shell_as_system_killed() {
     let rt = rt();
-    let task_id = insert_background_shell(&rt, None).await;
+    let task_id = insert_background_shell_with_disk(&rt, None).await;
 
     let killed = rt
         .reap_idle_background_shells_for_memory_pressure(i64::MAX / 2, 0)
@@ -310,6 +359,211 @@ async fn output_delta_returns_appended_chunks_with_offset() {
         .unwrap();
     assert!(delta2.content.is_empty());
     assert!(!delta2.is_complete);
+}
+
+#[tokio::test]
+async fn output_delta_reads_output_file_without_disk_handle() {
+    let rt = rt();
+    let output_path =
+        std::env::temp_dir().join(format!("coco-output-{}.log", uuid::Uuid::new_v4().simple()));
+    tokio::fs::write(&output_path, "persisted output")
+        .await
+        .expect("write output file");
+    let task_id =
+        insert_background_shell_with_output(&rt, None, Some(output_path.display().to_string()))
+            .await;
+
+    let delta = rt.get_task_output_delta(&task_id, 0).await.unwrap();
+    assert_eq!(delta.content, "persisted output");
+    assert_eq!(delta.new_offset, "persisted output".len() as i64);
+
+    let snapshots = rt.collect(None, /*just_compacted=*/ false).await;
+    assert!(snapshots.is_empty());
+    let state = rt.manager().get(&task_id).await.expect("task row");
+    assert_eq!(state.output_offset, "persisted output".len() as i64);
+}
+
+#[tokio::test]
+async fn task_status_collect_shell_advances_offset_without_snapshot() {
+    let rt = rt();
+    let task_id = insert_background_shell_with_disk(&rt, None).await;
+
+    rt.append_output(&task_id, "first ").await;
+    rt.append_output(&task_id, "second").await;
+
+    let first = rt.collect(None, /*just_compacted=*/ false).await;
+    assert!(first.is_empty());
+    let state = rt.manager().get(&task_id).await.expect("task row");
+    assert_eq!(state.output_offset, 12);
+
+    let second = rt.collect(None, /*just_compacted=*/ false).await;
+    assert!(second.is_empty());
+
+    rt.append_output(&task_id, " third").await;
+    let third = rt.collect(None, /*just_compacted=*/ false).await;
+    assert!(third.is_empty());
+    let state = rt.manager().get(&task_id).await.expect("task row");
+    assert_eq!(state.output_offset, 18);
+}
+
+#[tokio::test]
+async fn task_status_collect_supported_running_types_advance_offsets_only() {
+    let rt = rt();
+    let workflow_id = register_workflow(&rt).await;
+    let teammate_id = rt
+        .register_teammate_task(coco_tool_runtime::TeammateTaskRegistration::new(
+            "worker",
+            "test",
+            coco_types::BackendType::InProcess,
+            None,
+            "do work".to_string(),
+            CancellationToken::new(),
+        ))
+        .await;
+    let dream_id = rt
+        .register_dream_task("dream work", CancellationToken::new())
+        .await;
+
+    rt.append_output(&workflow_id, "workflow\n").await;
+    rt.append_output(&teammate_id, "teammate\n").await;
+    rt.append_output(&dream_id, "dream\n").await;
+
+    let out = rt.collect(None, /*just_compacted=*/ false).await;
+    assert!(out.is_empty());
+    assert!(
+        rt.manager()
+            .get(&workflow_id)
+            .await
+            .expect("workflow row")
+            .output_offset
+            > 0
+    );
+    assert_eq!(
+        rt.manager()
+            .get(&teammate_id)
+            .await
+            .expect("teammate row")
+            .output_offset,
+        "teammate\n".len() as i64
+    );
+    assert_eq!(
+        rt.manager()
+            .get(&dream_id)
+            .await
+            .expect("dream row")
+            .output_offset,
+        "dream\n".len() as i64
+    );
+}
+
+#[tokio::test]
+async fn task_status_collect_missing_output_file_does_not_advance_offset() {
+    let rt = rt();
+    let task_id = insert_background_shell_with_output(&rt, None, Some(String::new())).await;
+
+    let ordinary = rt.collect(None, /*just_compacted=*/ false).await;
+    assert!(ordinary.is_empty());
+    let compacted = rt.collect(None, /*just_compacted=*/ true).await;
+    assert!(compacted.is_empty());
+    let state = rt.manager().get(&task_id).await.expect("task row");
+    assert_eq!(state.output_offset, 0);
+}
+
+#[tokio::test]
+async fn task_status_collect_just_compacted_skips_running_shell() {
+    let rt = rt();
+    let _task_id = insert_background_shell(&rt, None).await;
+
+    let ordinary = rt.collect(None, /*just_compacted=*/ false).await;
+    assert!(ordinary.is_empty());
+    let compacted = rt.collect(None, /*just_compacted=*/ true).await;
+    assert!(compacted.is_empty());
+}
+
+#[tokio::test]
+async fn task_status_collect_bg_agent_running_is_progress_only() {
+    let rt = rt();
+    let task_id = rt
+        .register_agent_task(
+            "scan repo",
+            None,
+            None,
+            CancellationToken::new(),
+            AR::Background,
+        )
+        .await;
+    rt.append_output(&task_id, "partial output must not be surfaced")
+        .await;
+    rt.manager()
+        .set_progress_summary(&task_id, "10/100 files".to_string())
+        .await;
+
+    let ordinary = rt.collect(None, /*just_compacted=*/ false).await;
+    assert!(ordinary.is_empty());
+    let compacted = rt.collect(None, /*just_compacted=*/ true).await;
+    assert_eq!(compacted.len(), 1);
+    assert_eq!(compacted[0].task_type, coco_types::TaskType::BgAgent);
+    assert_eq!(
+        compacted[0].progress_summary.as_deref(),
+        Some("10/100 files")
+    );
+    let state = rt.manager().get(&task_id).await.expect("task row");
+    assert_eq!(state.output_offset, 0);
+}
+
+#[tokio::test]
+async fn task_status_collect_terminal_only_restores_unretrieved_bg_agent_after_compact() {
+    let rt = rt();
+    let bg_id = rt
+        .register_agent_task("done", None, None, CancellationToken::new(), AR::Background)
+        .await;
+    let shell_id = insert_background_shell(&rt, None).await;
+    rt.manager()
+        .transition_terminal(&bg_id, TaskStatus::Completed)
+        .await;
+    rt.manager()
+        .transition_terminal(&shell_id, TaskStatus::Completed)
+        .await;
+
+    let ordinary = rt.collect(None, /*just_compacted=*/ false).await;
+    assert!(ordinary.is_empty());
+    let compacted = rt.collect(None, /*just_compacted=*/ true).await;
+    assert_eq!(compacted.len(), 1);
+    assert_eq!(compacted[0].task_id, bg_id);
+    assert_eq!(
+        compacted[0].status,
+        coco_system_reminder::TaskRunStatus::Completed
+    );
+
+    rt.manager().mark_retrieved(&bg_id).await;
+    let after_retrieved = rt.collect(None, /*just_compacted=*/ true).await;
+    assert!(after_retrieved.is_empty());
+}
+
+#[tokio::test]
+async fn advance_output_offset_if_running_rejects_terminal_and_stale_offsets() {
+    let rt = rt();
+    let task_id = insert_background_shell(&rt, None).await;
+    assert!(
+        !rt.manager()
+            .advance_output_offset_if_running(&task_id, 1, 2)
+            .await,
+        "stale observed offset must not update"
+    );
+    assert!(
+        rt.manager()
+            .advance_output_offset_if_running(&task_id, 0, 2)
+            .await
+    );
+    rt.manager()
+        .transition_terminal(&task_id, TaskStatus::Completed)
+        .await;
+    assert!(
+        !rt.manager()
+            .advance_output_offset_if_running(&task_id, 2, 3)
+            .await,
+        "terminal rows must not update"
+    );
 }
 
 #[tokio::test]

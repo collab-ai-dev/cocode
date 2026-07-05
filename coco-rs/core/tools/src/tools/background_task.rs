@@ -1,8 +1,7 @@
 //! Shared helpers for the shell tools' (`Bash` / `PowerShell`) background
 //! path. A backgrounded command's result carries `backgroundTaskId` +
-//! `outputPath`, and the model-facing notice names both so the model can
-//! `Read` the output file directly instead of reaching for the deprecated
-//! TaskOutput tool. BashTool `backgroundInfo`
+//! `outputPath`, and the model-facing notice names both. BashTool
+//! `backgroundInfo`
 //! Background task output persistence.
 //! the deterministic `{session_dir}/{task_id}.output` location here.
 
@@ -38,31 +37,24 @@ impl BackgroundKind {
     }
 }
 
-/// Model-facing notice for a command that moved to the background. When the
-/// on-disk output path is available, the notice tells the model to `Read` that
-/// file directly.
+/// Model-facing notice for a command that moved to the background.
 pub(crate) fn format_background_notice(
     kind: BackgroundKind,
     task_id: &str,
     output_path: &str,
 ) -> String {
-    let read_hint = if output_path.is_empty() {
-        String::new()
-    } else {
-        " Use Read on this output path to inspect logs/results when needed.".to_string()
-    };
     match kind {
         BackgroundKind::AssistantAuto => {
             let budget_seconds = ASSISTANT_BLOCKING_BUDGET_MS / 1000;
             format!(
-                "Command exceeded the assistant-mode blocking budget ({budget_seconds}s) and was moved to the background with ID: {task_id}. It is still running — you will be notified when it completes. Future long-running shell commands should use run_in_background: true to keep this conversation responsive. Output is being written to: {output_path}.{read_hint}"
+                "Command exceeded the assistant-mode blocking budget ({budget_seconds}s) and was moved to the background with ID: {task_id}. It is still running — you will be notified when it completes. Future long-running shell commands should use run_in_background: true to keep this conversation responsive. Output is being written to: {output_path}."
             )
         }
         BackgroundKind::User => format!(
-            "Command was manually backgrounded by user with ID: {task_id}. Output is being written to: {output_path}.{read_hint}"
+            "Command was manually backgrounded by user with ID: {task_id}. Output is being written to: {output_path}."
         ),
         BackgroundKind::Explicit => format!(
-            "Command running in background with ID: {task_id}. Output is being written to: {output_path}.{read_hint}"
+            "Command running in background with ID: {task_id}. Output is being written to: {output_path}."
         ),
     }
 }

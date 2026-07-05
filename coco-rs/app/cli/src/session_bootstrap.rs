@@ -425,14 +425,12 @@ pub async fn install_session_late_binds(
     // background spawns and the engine's `Task*` tools see one
     // source of truth.
     //
-    // Disk-output session dir: `<config_home>/cache/tasks/<session_id>/`.
+    // Disk-output session dir:
+    // `<config_home>/projects/<slug>/<session_id>/tasks/`.
     // Captured ONCE here so subsequent `/clear` regenerations don't
     // invalidate paths held by in-flight `DiskTaskOutput` instances.
     let task_session_id = runtime.current_session_id().await;
-    let task_session_dir = coco_config::global_config::config_home()
-        .join("cache")
-        .join("tasks")
-        .join(&task_session_id);
+    let task_session_dir = crate::paths::project_paths(cwd).task_outputs_dir(&task_session_id);
     // Wire the session-scoped `CommandQueue` into the TaskRuntime
     // via the `NotificationSink` trait so terminal lifecycle events
     // (mark_completed / mark_failed / kill_task / bg shell exit)

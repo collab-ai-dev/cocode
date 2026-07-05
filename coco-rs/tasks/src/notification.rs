@@ -274,7 +274,7 @@ pub const TASK_NOTIFICATION_STOPPED_NOTE: &str =
 
 /// Model-contract note appended to shell terminal notifications.
 pub const SHELL_TERMINAL_OUTPUT_NOTE: &str =
-    "Use Read on the <output-file> path above to inspect the command output.";
+    "Use Read on the <output-file> path above if you need the command output.";
 
 fn agent_terminal_note(status: TerminalStatus) -> &'static str {
     match status {

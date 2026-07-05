@@ -82,6 +82,7 @@ pub struct MaterializedSources {
     pub hook_events: Vec<HookEvent>,
     pub diagnostics: Vec<DiagnosticFileSummary>,
     pub task_statuses: Vec<TaskStatusSnapshot>,
+    pub task_status_timed_out: bool,
     pub skill_listing: Option<String>,
     pub skill_discovery: Option<coco_types::SkillDiscoveryPayload>,
     pub invoked_skills: Vec<InvokedSkillEntry>,

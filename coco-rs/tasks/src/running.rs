@@ -696,6 +696,23 @@ impl TaskManager {
         self.rows.read().await.values().cloned().collect()
     }
 
+    pub async fn advance_output_offset_if_running(
+        &self,
+        task_id: &str,
+        observed_offset: i64,
+        new_offset: i64,
+    ) -> bool {
+        let mut rows = self.rows.write().await;
+        let Some(row) = rows.get_mut(task_id) else {
+            return false;
+        };
+        if row.status != TaskStatus::Running || row.output_offset != observed_offset {
+            return false;
+        }
+        row.output_offset = new_offset;
+        true
+    }
+
     pub async fn remove_completed(&self) -> usize {
         let now = current_time_ms();
         let removable: Vec<String> = {

@@ -80,6 +80,7 @@ async fn emits_removed_only() {
         .expect("emits");
     let text = r.content().unwrap();
     assert!(text.starts_with("The following deferred tools are no longer available"));
+    assert!(!text.contains("MCP server disconnected"));
     assert!(text.contains("OldTool"));
     assert!(text.contains("ToolSearch will return no match"));
 }

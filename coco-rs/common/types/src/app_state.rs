@@ -25,6 +25,7 @@ use crate::RateLimitEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
@@ -229,16 +230,17 @@ pub struct ToolAppState {
     pub active_worktree: Option<ActiveWorktreeState>,
 
     // ── Phase 2 delta-reminder announce state ────────────────────────
-    /// The set of tool wire-names announced to the agent via the most
-    /// recent `deferred_tools_delta` reminder. Engine diffs this
-    /// against the current `ToolUseContext.options.tools` each turn
-    /// to compute Added / Removed; post-emit, engine replaces this
-    /// with the current set. reconstructed by scanning
-    /// `deferred_tools_delta` attachments in history (`attachments.ts`
-    /// `getDeferredToolsDelta`); coco-rs persists the announced set
-    /// directly on app_state so the diff is O(1) instead of
-    /// O(history-length) per turn.
-    pub last_announced_tools: std::collections::HashSet<String>,
+    /// Main-session compatibility mirror for the scoped announced-tool
+    /// baseline. Use [`Self::last_announced_tools_for_scope`] and
+    /// [`Self::set_last_announced_tools_for_scope`] for new reads/writes.
+    pub last_announced_tools: HashSet<String>,
+
+    /// Tool wire-names announced via the most recent `deferred_tools_delta`
+    /// reminder, separated by visibility scope. The main session and each
+    /// subagent can have different filtered tool sets; sharing one baseline
+    /// makes a subagent's first turn look like the main session's tools were
+    /// removed.
+    pub last_announced_tools_by_scope: HashMap<String, HashSet<String>>,
 
     /// Wire-names of deferred tools the model has discovered via
     /// `ToolSearch` and that should now be exposed to the LLM with
@@ -268,11 +270,11 @@ pub struct ToolAppState {
     /// prompt-cache prefix once. After the model has discovered
     /// every tool it needs (typically a handful of early turns) the
     /// array is stable and the prefix stays warm.
-    pub discovered_tool_names: std::collections::HashSet<String>,
+    pub discovered_tool_names: HashSet<String>,
 
     /// Agent types announced via the most recent `agent_listing_delta`
     /// reminder. reconstructed from prior delta attachments.
-    pub last_announced_agents: std::collections::HashSet<String>,
+    pub last_announced_agents: HashSet<String>,
 
     /// Per-server MCP instructions announced via the most recent
     /// `mcp_instructions_delta` reminder. Keyed by server name;
@@ -336,6 +338,41 @@ pub struct ToolAppState {
     /// Read by `prompt_suggestion::build_suggestion_context` to gate
     /// `SuppressReason::RateLimit` against `cache.provider`.
     pub rate_limits: BTreeMap<String, RateLimitEntry>,
+}
+
+impl ToolAppState {
+    pub fn last_announced_tools_for_scope(&self, agent_id: Option<&str>) -> HashSet<String> {
+        let key = announced_tools_scope_key(agent_id);
+        self.last_announced_tools_by_scope
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| {
+                if agent_id.is_none() {
+                    self.last_announced_tools.clone()
+                } else {
+                    HashSet::new()
+                }
+            })
+    }
+
+    pub fn set_last_announced_tools_for_scope(
+        &mut self,
+        agent_id: Option<&str>,
+        tools: HashSet<String>,
+    ) {
+        if agent_id.is_none() {
+            self.last_announced_tools = tools.clone();
+        }
+        self.last_announced_tools_by_scope
+            .insert(announced_tools_scope_key(agent_id), tools);
+    }
+}
+
+fn announced_tools_scope_key(agent_id: Option<&str>) -> String {
+    match agent_id {
+        Some(id) => format!("agent:{id}"),
+        None => "main".to_string(),
+    }
 }
 
 /// Session-scoped goal metadata for `/goal`.

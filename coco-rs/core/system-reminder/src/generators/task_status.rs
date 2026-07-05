@@ -3,9 +3,9 @@
 //! Rendering varies by status:
 //!
 //! - `Killed`: brief stopped note with actor attribution when available.
-//! - `Running`: anti-duplicate warning, optional delta summary, and
-//!   SendMessage steering.
-//! - `Completed` / `Failed`: outcome summary with optional delta.
+//! - `Running`: anti-duplicate warning with type-specific output and
+//!   interaction affordances.
+//! - `Completed` / `Failed`: outcome summary with result recovery path.
 //!
 //! Multiple statuses emitted this turn are joined with `\n\n`.
 
@@ -59,28 +59,33 @@ fn render_one(t: &TaskStatusSnapshot) -> String {
             desc = t.description,
             id = t.task_id
         ),
-        TaskRunStatus::Running => {
-            // Parts joined by space, with the tool-name ref threaded through
-            // so the model knows the supported affordance for steering the
-            // running agent.
-            let mut parts = vec![format!(
-                "Background agent \"{desc}\" ({id}) is still running.",
-                desc = t.description,
-                id = t.task_id
-            )];
-            if let Some(s) = t.delta_summary.as_deref() {
-                parts.push(format!("Progress: {s}"));
+        TaskRunStatus::Running => match t.task_type {
+            coco_types::TaskType::BgAgent => {
+                let mut parts = vec![format!(
+                    "Background agent \"{desc}\" ({id}) is still running.",
+                    desc = t.description,
+                    id = t.task_id
+                )];
+                if let Some(s) = t.progress_summary.as_deref() {
+                    parts.push(format!("Progress: {s}"));
+                }
+                parts.push(format!(
+                    "Do NOT spawn a duplicate. You will be notified when it completes; use {send_message} only if you need to communicate with it while it runs."
+                ));
+                parts.join(" ")
             }
-            parts.push(format!(
-                "Do NOT spawn a duplicate. You will be notified when it completes; use {send_message} only if you need to communicate with it while it runs."
-            ));
-            parts.join(" ")
-        }
+            coco_types::TaskType::Shell => render_file_backed_running("Background command", t),
+            coco_types::TaskType::LocalWorkflow => render_file_backed_running("Local workflow", t),
+            coco_types::TaskType::Teammate => render_file_backed_running("Teammate task", t),
+            coco_types::TaskType::Dream => render_file_backed_running("Dream task", t),
+            coco_types::TaskType::RemoteTeammate => {
+                render_file_backed_running("Remote teammate task", t)
+            }
+        },
         TaskRunStatus::Completed | TaskRunStatus::Failed => {
             // Format: `Task {id} (type: ...) (status: ...) (description: ...)
-            // [Delta: ...] [Read the output file...
-            //  | You can check its output using the {TASK_OUTPUT_TOOL_NAME} tool.]`
-            // joined by single space.
+            // [Read the output file... | Result output path is unavailable.]`
+            // joined by single spaces.
             let display_status = match t.status {
                 TaskRunStatus::Completed => "completed",
                 TaskRunStatus::Failed => "failed",
@@ -88,13 +93,10 @@ fn render_one(t: &TaskStatusSnapshot) -> String {
             };
             let mut parts = vec![
                 format!("Task {id}", id = t.task_id),
-                format!("(type: {tt})", tt = t.task_type),
+                format!("(type: {tt})", tt = t.task_type.wire_name()),
                 format!("(status: {display_status})"),
                 format!("(description: {desc})", desc = t.description),
             ];
-            if let Some(s) = t.delta_summary.as_deref() {
-                parts.push(format!("Delta: {s}"));
-            }
             if let Some(p) = t.output_file_path.as_deref() {
                 parts.push(format!("Read the output file to restore the result: {p}"));
             } else {
@@ -103,6 +105,16 @@ fn render_one(t: &TaskStatusSnapshot) -> String {
             parts.join(" ")
         }
     }
+}
+
+fn render_file_backed_running(label: &str, t: &TaskStatusSnapshot) -> String {
+    let mut parts = vec![format!(
+        "{label} \"{desc}\" ({id}) is still running.",
+        desc = t.description,
+        id = t.task_id
+    )];
+    parts.push("Do NOT spawn a duplicate.".to_string());
+    parts.join(" ")
 }
 
 fn killed_suffix(killed_by: Option<coco_types::TaskKilledBy>) -> &'static str {

@@ -718,8 +718,8 @@ impl Tool for BashTool {
 
         // Background-info text: a backgrounded command carries
         // `backgroundTaskId` + `outputPath`. The notice names both so the
-        // model can `Read` the output file directly. The `assistantAuto` /
-        // `user` / `explicit` variant is decided by the flags in `data`.
+        // model can correlate completion notifications. The `assistantAuto`
+        // / `user` / `explicit` variant is decided by the flags in `data`.
         let background_info = data
             .get("backgroundTaskId")
             .and_then(Value::as_str)
@@ -1034,8 +1034,7 @@ async fn execute_via_task_runtime(
 
     // Bg path: return now. The task runs detached, will push a
     // `<task-notification>` envelope on terminal. The result carries the
-    // task id + the on-disk output path so the model can `Read` the file
-    // directly ( BashTool).
+    // task id + the on-disk output path.
     if run_in_background {
         let output_path = background_output_path(task_handle, &task_id).await;
         return Ok(ToolResult {

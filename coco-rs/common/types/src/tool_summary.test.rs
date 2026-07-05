@@ -35,6 +35,28 @@ fn test_read_summary_with_limit_shows_line_range() {
 }
 
 #[test]
+fn test_read_summary_shortens_task_output_path() {
+    assert_eq!(
+        tool_input_summary(
+            ToolName::Read.as_str(),
+            &json!({"file_path": "/Users/me/.coco/projects/my-repo/session-1/tasks/b833b4eu2.output"})
+        ),
+        "task b833b4eu2"
+    );
+}
+
+#[test]
+fn test_read_summary_keeps_non_task_output_path() {
+    assert_eq!(
+        tool_input_summary(
+            ToolName::Read.as_str(),
+            &json!({"file_path": "/repo/tasks/build.log.output"})
+        ),
+        "/repo/tasks/build.log.output"
+    );
+}
+
+#[test]
 fn test_agent_summary_prefers_description() {
     assert_eq!(
         tool_input_summary(

@@ -19,7 +19,6 @@ mod error;
 pub mod handle_impls;
 pub mod job_store;
 pub mod notification;
-pub mod reminder_source;
 pub mod running;
 pub mod stall;
 pub mod task_list;

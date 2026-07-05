@@ -141,9 +141,10 @@ P0–P1 normalization ports (see `docs/coco-rs/audit-gaps.md`):
 - `createPlanModeAttachmentIfNeeded` (Round 10c) — `post_compact_plan_mode.rs::create_plan_mode_attachment_if_needed` renders the Full-variant
   reminder text and emits an `AttachmentKind::PlanMode` message; engine
   snapshots `permission_mode == Plan` + plan settings pre-compact.
-- `createAsyncAgentAttachmentsIfNeeded` (Round 10c) — `post_compact_async_agents.rs::create_async_agent_attachments` renders
-  one `task_status` reminder per filtered running agent; engine snapshot
-  via `QueryEngine::with_running_tasks` builder + `snapshot_async_agents_for_post_compact`.
+- Post-compact task status rehydration is not owned here. Compaction sets
+  `QueryEngine::pending_just_compacted`; the next `system-reminder` pass
+  calls the CLI `TaskRuntime` source, which owns task state plus disk-output
+  offsets.
 - `RecompactionInfo` (Round 10c) — `CompactRunOptions.recompaction_info`
   plumbs the struct; `QueryEngine::last_compact_state` + `turn_counter`
   populate it; `CompactResult.is_recompaction` is now driven by it.

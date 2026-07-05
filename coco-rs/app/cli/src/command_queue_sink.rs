@@ -13,8 +13,8 @@
 //! ## Notification priority
 //!
 //! Translates [`coco_tasks::TaskNotification`] → [`QueuedCommand`]:
-//! defaults priority to `'later'` for terminal events,
-//! `'next'` for stalls.
+//! shell terminal and stall notifications use `'next'`; agent terminal
+//! notifications use `'later'`.
 
 use async_trait::async_trait;
 use coco_query::command_queue::{CommandQueue, QueuePriority, QueuedCommand};
@@ -44,13 +44,14 @@ impl NotificationSink for CommandQueueNotificationSink {
         fields(task_id = %n.task_id, agent_id = ?n.agent_id, kind = kind_label(&n.kind))
     )]
     async fn push(&self, n: TaskNotification) {
-        // Priority by notification kind: every non-stall call uses
-        // 'later', stall uses 'next'.
+        // Shell completions are small and often resolve before the next
+        // request; surface them immediately. Agent terminal notifications can
+        // be larger and recursive, so keep them delayed.
         let priority = match &n.kind {
-            NotificationKind::Stall { .. } => QueuePriority::Next,
-            NotificationKind::ShellTerminal { .. } | NotificationKind::AgentTerminal { .. } => {
-                QueuePriority::Later
+            NotificationKind::ShellTerminal { .. } | NotificationKind::Stall { .. } => {
+                QueuePriority::Next
             }
+            NotificationKind::AgentTerminal { .. } => QueuePriority::Later,
         };
         let agent_id = n.agent_id.clone();
         let payload = n.payload();

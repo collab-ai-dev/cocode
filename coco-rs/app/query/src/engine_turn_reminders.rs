@@ -297,7 +297,7 @@ impl QueryEngine {
         let reminder_deferred_tools_delta = compute_tools_delta(
             &reminder_deferred_tools,
             &reminder_loaded_tools,
-            &app_state_snapshot.last_announced_tools,
+            &app_state_snapshot.last_announced_tools_for_scope(self.config.agent_id.as_deref()),
         );
         // Hand the deferred list to post-emit bookkeeping — replaces
         // `announced` with the current deferred set after emission. Moved
@@ -400,12 +400,14 @@ impl QueryEngine {
             } else {
                 coco_system_reminder::DEFAULT_TIMEOUT_MS as u64
             });
-        // One-shot flag: every successful compaction (full / SM / reactive)
-        // sets it; the next reminder build consumes (swap-to-false) so
-        // `task_status` only fires on the immediately-following turn.
-        let just_compacted = self
+        // One-shot epoch: every successful compaction (full / SM / reactive)
+        // increments it. We consume the observed value only after task_status
+        // source materialization succeeds, so a timeout retries next turn and
+        // a concurrent newer compact event is not cleared accidentally.
+        let observed_compact_epoch = self
             .pending_just_compacted
-            .swap(false, std::sync::atomic::Ordering::SeqCst);
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let just_compacted = observed_compact_epoch > 0;
         // Tools the model successfully invoked since the previous human
         // turn. Fed into the `findRelevantMemories` ranker so it can
         // deprioritize reference docs for tools the model is actively
@@ -426,6 +428,14 @@ impl QueryEngine {
                 skill_tool_loaded: reminder_skill_tool_loaded,
             })
             .await;
+        if just_compacted && !materialized.task_status_timed_out {
+            let _ = self.pending_just_compacted.compare_exchange(
+                observed_compact_epoch,
+                0,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
 
         // Coordinator (leader) worker-tools context for the `user_context`
         // reminder's `# workerToolsContext` block. Only the main leader gets
@@ -700,8 +710,10 @@ impl QueryEngine {
                 // tool list after successful emission. Subsequent turns
                 // then diff against the fresh baseline.
                 if fired_types.contains(&ReminderAttachmentType::DeferredToolsDelta) {
-                    guard.last_announced_tools =
-                        reminder_deferred_tools_clone.iter().cloned().collect();
+                    guard.set_last_announced_tools_for_scope(
+                        self.config.agent_id.as_deref(),
+                        reminder_deferred_tools_clone.iter().cloned().collect(),
+                    );
                 }
                 // Same pattern for the agent-listing delta.
                 if fired_types.contains(&ReminderAttachmentType::AgentListingDelta) {

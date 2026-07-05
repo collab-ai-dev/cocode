@@ -2883,6 +2883,7 @@ impl SessionRuntime {
         // sessions still get hook + skill reminders. Each slot is
         // optional and silently skips if its data is empty.
         let team_snapshot = self.resolve_team_snapshot().await;
+        let task_runtime = self.current_task_runtime().await;
         let sources = coco_system_reminder::ReminderSources {
             // Combined hook source: async-hook registry drains first,
             // then the sync-hook buffer that orchestration just wrote.
@@ -2902,6 +2903,11 @@ impl SessionRuntime {
             // Skills source: in-process `SkillManager` Arc kept alive
             // for the session. Empty manager ⇒ generator short-circuits.
             skills: Some(self.skill_manager.clone() as Arc<dyn coco_system_reminder::SkillsSource>),
+            // Running-task source: TaskRuntime owns both the TaskManager row
+            // state and the disk output reader needed for offset-based
+            // task_status bookkeeping.
+            task_status: task_runtime
+                .map(|rt| rt as Arc<dyn coco_system_reminder::TaskStatusSource>),
             // Swarm source: drains peer messages from the shared pending
             // store, so a teammate's `SendMessage` surfaces as an
             // `agent_pending_messages` reminder on the recipient's next turn.

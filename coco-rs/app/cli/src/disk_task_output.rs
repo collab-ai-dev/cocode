@@ -12,7 +12,7 @@
 //!
 //! | Concept | coco-rs |
 //! |---|---|
-//! | Session output dir | `coco_config::config_home().join("cache/tasks").join(session_id)` |
+//! | Session output dir | `<config_home>/projects/<slug>/<session_id>/tasks/` |
 //! | Per-task file | `{taskId}.output` |
 //! | Open flags (Unix) | `OpenOptions().create(true).append(true)` + `custom_flags(O_NOFOLLOW)` |
 //! | Disk cap | `MAX_TASK_OUTPUT_BYTES = 5 GB`; `[output truncated: exceeded 5GB disk cap]` marker |
@@ -152,29 +152,12 @@ impl DiskTaskOutput {
         from_offset: i64,
         max_bytes: usize,
     ) -> std::io::Result<(String, i64)> {
-        let from = from_offset.max(0) as u64;
-        let mut file = match File::open(&self.inner.path).await {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok((String::new(), from_offset));
-            }
-            Err(e) => return Err(e),
-        };
-        file.seek(SeekFrom::Start(from)).await?;
-        let mut buf = vec![0u8; max_bytes];
-        let n = file.read(&mut buf).await?;
-        buf.truncate(n);
-        // Lossy because the buffer might cut a UTF-8 codepoint.
-        let content = String::from_utf8_lossy(&buf).into_owned();
-        Ok((content, from_offset + n as i64))
+        read_delta_from_path(&self.inner.path, from_offset, max_bytes).await
     }
 
     /// Total size of the output file in bytes.
     pub async fn size(&self) -> i64 {
-        match tokio::fs::metadata(&self.inner.path).await {
-            Ok(m) => m.len() as i64,
-            Err(_) => 0,
-        }
+        size_for_path(&self.inner.path).await
     }
 
     /// Read the **tail** of the output file (last `max_bytes`
@@ -186,29 +169,7 @@ impl DiskTaskOutput {
     /// recent activity, not the cold start. Use [`Self::read_delta`]
     /// when an offset-based incremental reader is needed.
     pub async fn read_tail(&self, max_bytes: usize) -> std::io::Result<String> {
-        let total = self.size().await;
-        let total_u = total.max(0) as u64;
-        if total_u == 0 {
-            return Ok(String::new());
-        }
-        let from = total_u.saturating_sub(max_bytes as u64);
-        let mut file = match File::open(&self.inner.path).await {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
-            Err(e) => return Err(e),
-        };
-        file.seek(SeekFrom::Start(from)).await?;
-        let mut buf = Vec::with_capacity((total_u - from) as usize);
-        let _ = file.read_to_end(&mut buf).await?;
-        let content = String::from_utf8_lossy(&buf).into_owned();
-        let omitted = total_u.saturating_sub(buf.len() as u64);
-        if omitted > 0 {
-            // Round to KB for the omitted-bytes header.
-            let kb = ((omitted as f64) / 1024.0).round() as u64;
-            Ok(format!("[{kb}KB of earlier output omitted]\n{content}"))
-        } else {
-            Ok(content)
-        }
+        read_tail_from_path(&self.inner.path, max_bytes).await
     }
 
     /// Cancel the drain task. Pending writes are dropped. The file
@@ -233,6 +194,61 @@ impl DiskTaskOutput {
         while self.inner.pending_ops.load(Ordering::Acquire) > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+    }
+}
+
+async fn size_for_path(path: &Path) -> i64 {
+    match tokio::fs::metadata(path).await {
+        Ok(m) => m.len() as i64,
+        Err(_) => 0,
+    }
+}
+
+async fn read_delta_from_path(
+    path: &Path,
+    from_offset: i64,
+    max_bytes: usize,
+) -> std::io::Result<(String, i64)> {
+    let from = from_offset.max(0) as u64;
+    let mut file = match File::open(path).await {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((String::new(), from_offset));
+        }
+        Err(e) => return Err(e),
+    };
+    file.seek(SeekFrom::Start(from)).await?;
+    let mut buf = vec![0u8; max_bytes];
+    let n = file.read(&mut buf).await?;
+    buf.truncate(n);
+    // Lossy because the buffer might cut a UTF-8 codepoint.
+    let content = String::from_utf8_lossy(&buf).into_owned();
+    Ok((content, from_offset + n as i64))
+}
+
+async fn read_tail_from_path(path: &Path, max_bytes: usize) -> std::io::Result<String> {
+    let total = size_for_path(path).await;
+    let total_u = total.max(0) as u64;
+    if total_u == 0 {
+        return Ok(String::new());
+    }
+    let from = total_u.saturating_sub(max_bytes as u64);
+    let mut file = match File::open(path).await {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(e) => return Err(e),
+    };
+    file.seek(SeekFrom::Start(from)).await?;
+    let mut buf = Vec::with_capacity((total_u - from) as usize);
+    let _ = file.read_to_end(&mut buf).await?;
+    let content = String::from_utf8_lossy(&buf).into_owned();
+    let omitted = total_u.saturating_sub(buf.len() as u64);
+    if omitted > 0 {
+        // Round to KB for the omitted-bytes header.
+        let kb = ((omitted as f64) / 1024.0).round() as u64;
+        Ok(format!("[{kb}KB of earlier output omitted]\n{content}"))
+    } else {
+        Ok(content)
     }
 }
 
@@ -309,7 +325,7 @@ pub struct DiskOutputs {
 
 impl DiskOutputs {
     /// `session_dir` is typically
-    /// `coco_config::config_home().join("cache/tasks").join(session_id)`.
+    /// `<config_home>/projects/<slug>/<session_id>/tasks/`.
     pub fn new(session_dir: PathBuf) -> Self {
         Self {
             session_dir,
@@ -345,6 +361,36 @@ impl DiskOutputs {
     /// Look up an entry without creating one.
     pub async fn get(&self, task_id: &str) -> Option<DiskTaskOutput> {
         self.outputs.read().await.get(task_id).cloned()
+    }
+
+    /// Flush any registered handle for `task_id`, then range-read the path
+    /// directly. The file path is the durable source of truth for readers;
+    /// the in-memory handle map is only a write/flush coordinator.
+    pub async fn read_delta_at_path(
+        &self,
+        task_id: &str,
+        path: &Path,
+        from_offset: i64,
+        max_bytes: usize,
+    ) -> std::io::Result<(String, i64)> {
+        if let Some(dto) = self.get(task_id).await {
+            let _ = dto.flush().await;
+        }
+        read_delta_from_path(path, from_offset, max_bytes).await
+    }
+
+    /// Flush any registered handle for `task_id`, then read the path tail
+    /// directly.
+    pub async fn read_tail_at_path(
+        &self,
+        task_id: &str,
+        path: &Path,
+        max_bytes: usize,
+    ) -> std::io::Result<String> {
+        if let Some(dto) = self.get(task_id).await {
+            let _ = dto.flush().await;
+        }
+        read_tail_from_path(path, max_bytes).await
     }
 
     /// Evict the in-memory handle (cancels the drain) but leaves

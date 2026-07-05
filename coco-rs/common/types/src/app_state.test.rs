@@ -2,6 +2,7 @@ use super::ElicitationGuard;
 use super::PendingPermissionGuard;
 use super::ToolAppState;
 use crate::PermissionMode;
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
 #[test]
@@ -104,4 +105,30 @@ fn struct_update_syntax_composes() {
     assert_eq!(s.last_permission_mode, Some(PermissionMode::AcceptEdits));
     // Unfilled fields stay default.
     assert!(!s.has_exited_plan_mode);
+}
+
+#[test]
+fn announced_tools_are_scoped_by_agent_id() {
+    let mut s = ToolAppState::default();
+    s.set_last_announced_tools_for_scope(None, HashSet::from(["TaskOutput".to_string()]));
+
+    assert_eq!(
+        s.last_announced_tools_for_scope(None),
+        HashSet::from(["TaskOutput".to_string()])
+    );
+    assert!(s.last_announced_tools_for_scope(Some("agent-a")).is_empty());
+
+    s.set_last_announced_tools_for_scope(
+        Some("agent-a"),
+        HashSet::from(["AgentScopedTool".to_string()]),
+    );
+
+    assert_eq!(
+        s.last_announced_tools_for_scope(Some("agent-a")),
+        HashSet::from(["AgentScopedTool".to_string()])
+    );
+    assert_eq!(
+        s.last_announced_tools_for_scope(None),
+        HashSet::from(["TaskOutput".to_string()])
+    );
 }

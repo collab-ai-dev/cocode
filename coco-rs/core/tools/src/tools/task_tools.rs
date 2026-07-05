@@ -1664,16 +1664,14 @@ fn task_status_wire(status: coco_types::TaskStatus) -> &'static str {
 
 // ── TaskOutputTool ────────────────────────────────────────────────────
 
-/// Prompt for [`TaskOutputTool`] — deprecated notice.
-const TASK_OUTPUT_PROMPT: &str = "DEPRECATED: Prefer using the Read tool on the task's output file path instead. Background tasks return their output file path in the tool result, and you receive a <task-notification> with the same path when the task completes — Read that file directly.
+/// Prompt for [`TaskOutputTool`]: deprecated notice.
+const TASK_OUTPUT_PROMPT: &str = "DEPRECATED compatibility fallback only. Prefer using the Read tool on the task's output file path. Background tasks return their output file path in the tool result, and completion notifications carry the same path.
 
-- Retrieves output from a running or completed task (background shell, agent, or remote session)
+- Use only when an older transcript or model call already depends on TaskOutput
 - Takes a task_id parameter identifying the task
-- Returns the task output along with status information
-- Use block=true (default) to wait for task completion
-- Use block=false for non-blocking check of current status
-- Task IDs can be found using the /tasks command
-- Works with all task types: background shells, async agents, and remote sessions";
+- Returns task output along with status information
+- block=true waits for task completion; block=false returns an immediate snapshot
+- Do not use for routine polling when an output file path is available";
 
 /// Typed input for [`TaskOutputTool`]. `task_id` is required, `block`
 /// defaults to true, `timeout` is `0..=600000` defaulting to 30000.
@@ -1718,10 +1716,10 @@ impl Tool for TaskOutputTool {
         ToolName::TaskOutput.as_str()
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("read output/logs from a background task")
+        Some("deprecated fallback for legacy task output reads")
     }
     fn description(&self, _input: &TaskOutputInput, _options: &DescriptionOptions) -> String {
-        "[Deprecated] — prefer Read on the task output file path".into()
+        "[Deprecated compatibility fallback] Prefer Read on the task output file path".into()
     }
     async fn prompt(&self, _options: &PromptOptions) -> String {
         TASK_OUTPUT_PROMPT.into()

@@ -390,9 +390,9 @@ impl QueryEngine {
             rt.session_memory.clear_after_compact().await;
         }
 
-        // The next reminder build consumes (and clears) this flag.
+        // The next reminder build consumes the observed compact epoch.
         self.pending_just_compacted
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         // Progress signal for `handle_context_overflow` / recovery
         // dispatcher (Finding **R1**). Client-side counts tokens freed;

@@ -141,7 +141,7 @@ impl QueryEngine {
                 std::collections::VecDeque::new(),
             )),
             pending_reactive_context_management: Arc::new(tokio::sync::Mutex::new(None)),
-            pending_just_compacted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pending_just_compacted: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             transcript_store: None,
             session_usage_tracker: None,
             usage_attribution: coco_types::UsageAttribution::session(coco_types::UsageSource::Main),
@@ -721,60 +721,13 @@ impl QueryEngine {
         self
     }
 
-    /// Install the running-task manager so post-compact attachments can
-    /// snapshot active background agents and re-emit them as
-    /// `task_status` reminders. Reads from the `TaskManager` exposed by
-    /// `coco-tasks::running`. Optional — when absent, post-compact emits
-    /// zero `task_status` attachments.
+    /// Install the running-task manager for periodic terminal-task eviction.
+    /// Task-status reminder collection is wired separately through
+    /// `ReminderSources.task_status` so the collector can read disk output
+    /// deltas and advance task offsets atomically.
     pub fn with_running_tasks(mut self, running: Arc<coco_tasks::running::TaskManager>) -> Self {
         self.running_tasks = Some(running);
         self
-    }
-
-    /// Snapshot running async-agent tasks for post-compact attachment
-    /// emission. Filters: skip the agent that owns this engine's
-    /// `agent_id`, drop pending tasks (not yet meaningful), drop
-    /// terminal tasks the `TaskOutput` tool already consumed
-    /// (`BgAgentExtras.retrieved`).
-    pub(crate) async fn snapshot_async_agents_for_post_compact(
-        &self,
-    ) -> Vec<coco_compact::AsyncAgentSnapshot> {
-        let Some(tasks) = &self.running_tasks else {
-            return Vec::new();
-        };
-        let listed = tasks.list().await;
-        let self_agent = self.config.agent_id.as_deref();
-        let mut out = Vec::with_capacity(listed.len());
-        for t in listed {
-            if !matches!(t.task_type(), coco_types::TaskType::BgAgent) {
-                continue;
-            }
-            if matches!(t.status, coco_types::TaskStatus::Pending) {
-                continue;
-            }
-            // Skip the engine's own agent — it's already part of the
-            // visible conversation, not a peer that the model could
-            // duplicate.
-            if let Some(a) = self_agent
-                && t.id.as_str() == a
-            {
-                continue;
-            }
-            // Once the `TaskOutput` tool serves a terminal agent's
-            // output, the compact reminder stops re-announcing it.
-            // Read through the typed `BgAgentExtras` variant on `TaskExtras`.
-            if t.status.is_terminal() && t.bg_agent_extras().map(|e| e.retrieved).unwrap_or(false) {
-                continue;
-            }
-            out.push(coco_compact::AsyncAgentSnapshot {
-                task_id: t.id.clone(),
-                status: task_status_to_ts_string(t.status),
-                description: t.description,
-                delta_summary: None,
-                output_file_path: t.output_file.unwrap_or_default(),
-            });
-        }
-        out
     }
 
     /// Stamp the most recent assistant timestamp. Called from
@@ -1166,19 +1119,6 @@ impl QueryEngine {
         self.permission_rule_handle = handle;
         self
     }
-}
-
-/// Render a `TaskStatus` to its wire string form —
-/// `'pending' | 'running' | 'completed' | 'failed' | 'killed'`.
-fn task_status_to_ts_string(status: coco_types::TaskStatus) -> String {
-    match status {
-        coco_types::TaskStatus::Pending => "pending",
-        coco_types::TaskStatus::Running => "running",
-        coco_types::TaskStatus::Completed => "completed",
-        coco_types::TaskStatus::Failed => "failed",
-        coco_types::TaskStatus::Killed => "killed",
-    }
-    .to_string()
 }
 
 #[cfg(test)]

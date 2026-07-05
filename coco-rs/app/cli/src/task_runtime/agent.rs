@@ -208,9 +208,7 @@ impl TaskRuntime {
     )]
     pub async fn mark_failed(&self, task_id: &str, error: &str) {
         self.append_output(task_id, error).await;
-        // Record the error text on the sidecar so the post-compact
-        // `task_status` reminder can surface it as `delta_summary` for
-        // failed terminal tasks.
+        // Record the error text on the sidecar for task inspection paths.
         self.manager.set_error(task_id, error.to_string()).await;
         self.transition_terminal(task_id, TaskStatus::Failed).await;
         self.push_agent_notification(
@@ -320,11 +318,16 @@ impl TaskHandle for TaskRuntime {
         self.read_terminal_outputs_impl(task_id).await
     }
     async fn read_output(&self, task_id: &str) -> String {
-        let Some(dto) = self.disk.get(task_id).await else {
-            return String::new();
-        };
-        let _ = dto.flush().await;
-        dto.read_tail(DEFAULT_MAX_READ_BYTES)
+        let path = self
+            .manager
+            .get(task_id)
+            .await
+            .and_then(|state| state.output_file)
+            .filter(|path| !path.is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| self.disk.output_path(task_id));
+        self.disk
+            .read_tail_at_path(task_id, &path, DEFAULT_MAX_READ_BYTES)
             .await
             .unwrap_or_default()
     }
@@ -332,6 +335,15 @@ impl TaskHandle for TaskRuntime {
         self.manager.get(task_id).await
     }
     async fn output_file_path(&self, task_id: &str) -> Option<std::path::PathBuf> {
+        if let Some(path) = self
+            .manager
+            .get(task_id)
+            .await
+            .and_then(|state| state.output_file)
+            .filter(|path| !path.is_empty())
+        {
+            return Some(std::path::PathBuf::from(path));
+        };
         Some(self.disk.output_path(task_id))
     }
     async fn is_terminal(&self, task_id: &str) -> bool {

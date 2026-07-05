@@ -32,6 +32,7 @@ mod agent;
 mod controller;
 mod reader;
 mod reaper;
+mod reminder_source;
 mod shell;
 mod stall;
 mod timers;
@@ -59,6 +60,12 @@ pub struct TaskRuntime {
     pub(in crate::task_runtime) notification_sink: NotificationSinkRef,
 }
 
+impl std::fmt::Debug for TaskRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskRuntime").finish_non_exhaustive()
+    }
+}
+
 impl TaskRuntime {
     /// Test-friendly constructor — temp dir, no-op notification
     /// sink. Production callers use [`Self::with_session_dir`] +
@@ -71,7 +78,7 @@ impl TaskRuntime {
 
     /// Production constructor. `session_dir` is the per-session
     /// root for on-disk task output files (typically
-    /// `<config_home>/cache/tasks/<session_id>`). Notification sink
+    /// `<config_home>/projects/<slug>/<session_id>/tasks/`). Notification sink
     /// defaults to no-op until [`Self::with_notification_sink`]
     /// attaches one.
     pub fn with_session_dir(manager: Arc<TaskManager>, session_dir: std::path::PathBuf) -> Self {
