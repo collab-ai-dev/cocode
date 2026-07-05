@@ -279,8 +279,26 @@ impl QueryEngine {
         if new_entries.is_empty() {
             return;
         }
+        let new_entry_count = new_entries.len();
+        let new_entry_bytes = new_entries
+            .iter()
+            .map(|entry| entry.path.len().saturating_add(entry.content.len()))
+            .sum::<usize>();
+        let loaded_nested_memory_path_count = self.loaded_nested_memory_paths.lock().await.len();
         let mut pending = self.pending_nested_memory.lock().await;
         pending.extend(new_entries);
+        tracing::debug!(
+            target: "coco_query::memory_size",
+            added_nested_memory_paths = new_entry_count,
+            added_nested_memory_bytes = new_entry_bytes,
+            pending_nested_memory_paths = pending.len(),
+            pending_nested_memory_bytes = pending
+                .iter()
+                .map(|entry| entry.path.len().saturating_add(entry.content.len()))
+                .sum::<usize>(),
+            loaded_nested_memory_path_count,
+            "nested memory pending size"
+        );
     }
 
     pub(crate) async fn drain_dynamic_skill_triggers(
@@ -355,6 +373,17 @@ impl QueryEngine {
     /// which short-circuits on empty input.
     pub(crate) async fn take_pending_nested_memory(&self) -> Vec<NestedMemoryInfo> {
         let mut pending = self.pending_nested_memory.lock().await;
+        if !pending.is_empty() {
+            tracing::debug!(
+                target: "coco_query::memory_size",
+                pending_nested_memory_paths = pending.len(),
+                pending_nested_memory_bytes = pending
+                    .iter()
+                    .map(|entry| entry.path.len().saturating_add(entry.content.len()))
+                    .sum::<usize>(),
+                "taking pending nested memory"
+            );
+        }
         std::mem::take(&mut *pending)
     }
 

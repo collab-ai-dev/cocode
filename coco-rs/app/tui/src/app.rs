@@ -652,7 +652,7 @@ impl App {
         self.frame_index = self.frame_index.saturating_add(1);
         let frame_index = self.frame_index;
         let perf_config = self.state.ui.display_settings.performance;
-        let frame_start = perf_config.enabled.then(Instant::now);
+        let frame_start = perf_config.frame_enabled.then(Instant::now);
         let frame_inputs = std::mem::take(&mut self.pending_frame_inputs);
         let now = self.state.clock.now();
 
@@ -674,7 +674,7 @@ impl App {
             streaming.advance_display();
         }
 
-        let draw_start = perf_config.enabled.then(Instant::now);
+        let draw_start = perf_config.frame_enabled.then(Instant::now);
         let outcome = self.tui.draw_with_frame_index(&self.state, frame_index)?;
         let draw_elapsed = draw_start.map(|start| start.elapsed());
         if outcome.retained_surface_visible && self.state.ui.terminal_focused {

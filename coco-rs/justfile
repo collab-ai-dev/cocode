@@ -154,3 +154,14 @@ pre-commit: fmt check-seam check-error-policy clippy-affected test sdk-py-check 
 alias c := coco
 coco *args:
     cargo run --bin coco -- "$@"
+
+# Run coco CLI with jemalloc allocator and background purging enabled
+coco-jemalloc *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        export _RJEM_MALLOC_CONF="${_RJEM_MALLOC_CONF:+$_RJEM_MALLOC_CONF,}background_thread:true"
+    else
+        export MALLOC_CONF="${MALLOC_CONF:+$MALLOC_CONF,}background_thread:true"
+    fi
+    cargo run --features jemalloc --bin coco -- "$@"

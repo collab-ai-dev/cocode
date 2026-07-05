@@ -298,7 +298,7 @@ libc = "0.2"
 # server process. Unprefixed so the `malloc_conf` startup symbol applies. Only
 # linked when the `jemalloc` feature is enabled on the `coco` binary (not on
 # Windows, where jemalloc-sys does not build). See app/cli/src/main.rs.
-tikv-jemallocator = { version = "0.6", features = ["unprefixed_malloc_on_supported_platforms"] }
+tikv-jemallocator = { version = "0.7.0", features = ["unprefixed_malloc_on_supported_platforms"] }
 # `event` feature gates `rustix::event::poll`, used for the bounded OSC 11
 # terminal-background read (`auto` theme). Pinned to the version crossterm
 # already resolves so no extra crate version enters the tree.

@@ -340,10 +340,10 @@ fn test_parse_settings_accepts_tui_performance_policy() {
         r#"{
             "tui": {
                 "performance": {
-                    "enabled": true,
-                    "sample_every_n_frames": 7,
-                    "slow_frame_ms": 33,
-                    "slow_stage_us": 750,
+                    "frame_enabled": true,
+                    "frame_sample_every_n_frames": 7,
+                    "frame_slow_threshold_ms": 33,
+                    "frame_stage_slow_threshold_us": 750,
                     "memory_enabled": true,
                     "memory_sample_interval_secs": 0,
                     "memory_delta_threshold_mb": 0
@@ -354,13 +354,32 @@ fn test_parse_settings_accepts_tui_performance_policy() {
     .expect("parse TUI settings");
 
     let performance = settings.tui.performance;
-    assert!(performance.enabled);
-    assert_eq!(performance.sample_every_n_frames, 7);
-    assert_eq!(performance.slow_frame_ms, 33);
-    assert_eq!(performance.slow_stage_us, 750);
+    assert!(performance.frame_enabled);
+    assert_eq!(performance.frame_sample_every_n_frames, 7);
+    assert_eq!(performance.frame_slow_threshold_ms, 33);
+    assert_eq!(performance.frame_stage_slow_threshold_us, 750);
     assert!(performance.memory_enabled);
     assert_eq!(performance.memory_sample_interval_secs, 0);
     assert_eq!(performance.memory_delta_threshold_mb, 0);
+}
+
+#[test]
+fn test_parse_settings_ignores_removed_tui_performance_fields() {
+    let settings = parse_settings(
+        r#"{
+            "tui": {
+                "performance": {
+                    "enabled": true,
+                    "sample_every_n_frames": 7,
+                    "slow_frame_ms": 33,
+                    "slow_stage_us": 750
+                }
+            }
+        }"#,
+    )
+    .expect("parse TUI settings");
+
+    assert_eq!(settings.tui.performance, Default::default());
 }
 
 #[test]

@@ -79,7 +79,7 @@ grep for it.
   (`viewport_draw` / `native_surface_draw` + `render/diff/draw/flush_us`), frames over the
   16.6ms/60fps budget, **action frequency** (`cmd=` / `key=` / input-load counters), and
   **flicker / 位移 proxies**. ⚠ These lines only exist if the run had
-  `tui.performance.enabled=true` **and** log filter `tui=debug`; if absent, the tool says
+  `tui.performance.frame_enabled=true` **and** log filter `tui=debug`; if absent, the tool says
   so — tell the user to enable both and reproduce.
   - **No direct `flicker`/`闪烁`/`位移` log key exists** — infer from proxies:
     **闪烁/flicker** ≈ `invalidated=true` (full repaint vs incremental diff) + high

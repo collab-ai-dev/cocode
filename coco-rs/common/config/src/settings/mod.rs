@@ -342,19 +342,17 @@ pub struct TuiSettings {
     pub performance: TuiPerformanceSettings,
 }
 
-/// TUI frame performance logging knobs.
-/// Disabled by default; when enabled, every Nth frame is sampled (an unbiased
-/// healthy-frame baseline — slow-only logs can't answer "what does a normal
-/// frame cost" or give cache hit rates) and frames/stages exceeding the slow
-/// thresholds are always logged. `sample_every_n_frames = 0` opts out of
-/// sampling (slow-only).
+/// TUI performance logging knobs.
+/// Frame logging is disabled by default; when enabled, every Nth frame is
+/// sampled and frames/stages exceeding the slow thresholds are always logged.
+/// `frame_sample_every_n_frames = 0` opts out of sampling (slow-only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TuiPerformanceSettings {
-    pub enabled: bool,
-    pub sample_every_n_frames: u64,
-    pub slow_frame_ms: u64,
-    pub slow_stage_us: u64,
+    pub frame_enabled: bool,
+    pub frame_sample_every_n_frames: u64,
+    pub frame_slow_threshold_ms: u64,
+    pub frame_stage_slow_threshold_us: u64,
     pub memory_enabled: bool,
     pub memory_sample_interval_secs: u64,
     pub memory_delta_threshold_mb: u64,
@@ -363,10 +361,10 @@ pub struct TuiPerformanceSettings {
 impl Default for TuiPerformanceSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
-            sample_every_n_frames: 10,
-            slow_frame_ms: 16,
-            slow_stage_us: 1000,
+            frame_enabled: false,
+            frame_sample_every_n_frames: 10,
+            frame_slow_threshold_ms: 16,
+            frame_stage_slow_threshold_us: 1000,
             memory_enabled: false,
             memory_sample_interval_secs: 30,
             memory_delta_threshold_mb: 4,

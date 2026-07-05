@@ -36,6 +36,7 @@ fn compact_boundary_anchors_context_usage() {
     assert_eq!(usage.used, 200_000);
     assert_eq!(usage.total, 1_000_000);
     assert_eq!(usage.percent, 20);
+    assert_eq!(usage.percent_tenths, 200);
 }
 
 /// The most recent anchor wins: a boundary after an earlier assistant turn

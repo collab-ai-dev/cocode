@@ -9,6 +9,7 @@ pub(crate) struct RenderContextUsage {
     pub used: i64,
     pub total: i64,
     pub percent: i64,
+    pub percent_tenths: i64,
 }
 
 /// The most recent point in history whose exact token footprint is known —
@@ -71,10 +72,13 @@ pub(crate) fn render_context_usage(state: &AppState) -> Option<RenderContextUsag
     };
     let tail_tokens = coco_messages::estimate_tokens_for_messages(&messages[tail_start..]);
     let used = baseline.saturating_add(tail_tokens);
+    let total = total.max(1);
     Some(RenderContextUsage {
         used,
         total,
-        percent: (used * 100 / total.max(1)).clamp(0, 100),
+        percent: (used.saturating_mul(100) / total).clamp(0, 100),
+        percent_tenths: (used.saturating_mul(1000).saturating_add(total / 2) / total)
+            .clamp(0, 1000),
     })
 }
 

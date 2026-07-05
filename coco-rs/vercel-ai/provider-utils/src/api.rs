@@ -8,6 +8,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::APICallError;
@@ -368,6 +370,26 @@ pub fn tap_byte_stream(stream: ByteStream, tap: Option<WireTapHandle>) -> ByteSt
     }
 }
 
+/// Count raw streamed response bytes for debug memory/perf correlation.
+fn count_wire_response_stream(stream: ByteStream) -> ByteStream {
+    use futures::StreamExt;
+    let accumulated = Arc::new(AtomicU64::new(0));
+    Box::pin(stream.inspect(move |item| {
+        if let Ok(bytes) = item {
+            let chunk_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            let total = accumulated
+                .fetch_add(chunk_bytes, Ordering::Relaxed)
+                .saturating_add(chunk_bytes);
+            tracing::debug!(
+                target: "coco_provider::memory_size",
+                wire_response_chunk_bytes = chunk_bytes,
+                wire_response_accumulated_bytes = total,
+                "wire response stream size"
+            );
+        }
+    }))
+}
+
 /// Feed the outgoing request to `tap` before send.
 fn tap_request(
     tap: &Option<WireTapHandle>,
@@ -375,9 +397,14 @@ fn tap_request(
     headers: &Option<HashMap<String, String>>,
     body: &Value,
 ) {
+    let body_bytes = serde_json::to_vec(body).unwrap_or_default();
+    tracing::debug!(
+        target: "coco_provider::memory_size",
+        request_body_bytes = body_bytes.len(),
+        "request body size"
+    );
     if let Some(t) = tap {
         let header_map = headers.clone().unwrap_or_default();
-        let body_bytes = serde_json::to_vec(body).unwrap_or_default();
         t.on_request(url, &header_map, &body_bytes);
     }
 }
@@ -468,7 +495,7 @@ pub async fn post_stream_to_api_with_client_tapped(
     let stream = post_stream_to_api_with_client(url, headers, body, abort_signal, client)
         .await
         .inspect_err(|e| tap_error(&tap, e))?;
-    Ok(tap_byte_stream(stream, tap))
+    Ok(count_wire_response_stream(tap_byte_stream(stream, tap)))
 }
 
 /// [`post_stream_to_api_with_client_and_headers`] with a wire-tap sink.
@@ -485,7 +512,10 @@ pub async fn post_stream_to_api_with_client_and_headers_tapped(
         post_stream_to_api_with_client_and_headers(url, headers, body, abort_signal, client)
             .await
             .inspect_err(|e| tap_error(&tap, e))?;
-    Ok((tap_byte_stream(stream, tap), response_headers))
+    Ok((
+        count_wire_response_stream(tap_byte_stream(stream, tap)),
+        response_headers,
+    ))
 }
 
 /// Error handler trait for API errors.

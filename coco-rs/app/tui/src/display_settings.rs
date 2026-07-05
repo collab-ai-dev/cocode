@@ -45,10 +45,10 @@ pub struct DisplaySettings {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TuiPerformanceConfig {
-    pub enabled: bool,
-    pub sample_every_n_frames: u64,
-    pub slow_frame_ms: u64,
-    pub slow_stage_us: u64,
+    pub frame_enabled: bool,
+    pub frame_sample_every_n_frames: u64,
+    pub frame_slow_threshold_ms: u64,
+    pub frame_stage_slow_threshold_us: u64,
     pub memory_enabled: bool,
     pub memory_sample_interval_secs: u64,
     pub memory_delta_threshold_bytes: u64,
@@ -122,10 +122,10 @@ fn replay_cache_policy(settings: NativeReplayCacheSettings) -> HistoryReplayCach
 
 fn performance_config(settings: TuiPerformanceSettings) -> TuiPerformanceConfig {
     TuiPerformanceConfig {
-        enabled: settings.enabled,
-        sample_every_n_frames: settings.sample_every_n_frames,
-        slow_frame_ms: settings.slow_frame_ms,
-        slow_stage_us: settings.slow_stage_us,
+        frame_enabled: settings.frame_enabled,
+        frame_sample_every_n_frames: settings.frame_sample_every_n_frames,
+        frame_slow_threshold_ms: settings.frame_slow_threshold_ms,
+        frame_stage_slow_threshold_us: settings.frame_stage_slow_threshold_us,
         memory_enabled: settings.memory_enabled,
         memory_sample_interval_secs: settings.memory_sample_interval_secs,
         memory_delta_threshold_bytes: mib_to_bytes(settings.memory_delta_threshold_mb),

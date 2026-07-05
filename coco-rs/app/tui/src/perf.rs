@@ -40,10 +40,11 @@ pub(crate) fn should_log_frame(
     frame_index: u64,
     duration: Duration,
 ) -> bool {
-    if !config.enabled {
+    if !config.frame_enabled {
         return false;
     }
-    sampled(config, frame_index) || duration.as_millis() >= u128::from(config.slow_frame_ms)
+    sampled(config, frame_index)
+        || duration.as_millis() >= u128::from(config.frame_slow_threshold_ms)
 }
 
 pub(crate) fn should_log_stage(
@@ -51,10 +52,11 @@ pub(crate) fn should_log_stage(
     frame_index: u64,
     duration: Duration,
 ) -> bool {
-    if !config.enabled {
+    if !config.frame_enabled {
         return false;
     }
-    sampled(config, frame_index) || duration.as_micros() >= u128::from(config.slow_stage_us)
+    sampled(config, frame_index)
+        || duration.as_micros() >= u128::from(config.frame_stage_slow_threshold_us)
 }
 
 pub(crate) fn duration_ms(duration: Duration) -> f64 {
@@ -66,7 +68,8 @@ pub(crate) fn duration_us(duration: Duration) -> u128 {
 }
 
 fn sampled(config: TuiPerformanceConfig, frame_index: u64) -> bool {
-    config.sample_every_n_frames != 0 && frame_index.is_multiple_of(config.sample_every_n_frames)
+    config.frame_sample_every_n_frames != 0
+        && frame_index.is_multiple_of(config.frame_sample_every_n_frames)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +113,8 @@ impl MemoryPhase {
 pub(crate) struct ProcessMemorySample {
     pub(crate) rss_bytes: u64,
     pub(crate) vsz_bytes: u64,
+    pub(crate) physical_footprint_bytes: Option<u64>,
+    pub(crate) physical_footprint_peak_bytes: Option<u64>,
     pub(crate) sample_ms: u128,
 }
 
@@ -141,6 +146,7 @@ impl RetainedMemoryStats {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MemoryPerfTracker {
     last_logged_rss_bytes: Option<u64>,
+    last_logged_physical_footprint_bytes: Option<u64>,
 }
 
 impl MemoryPerfTracker {
@@ -175,9 +181,20 @@ impl MemoryPerfTracker {
         let rss_delta_bytes = previous_rss
             .map(|previous| sample.rss_bytes as i128 - previous as i128)
             .unwrap_or(0);
+        let previous_footprint = self.last_logged_physical_footprint_bytes;
+        let physical_footprint_delta_bytes =
+            match (sample.physical_footprint_bytes, previous_footprint) {
+                (Some(current), Some(previous)) => current as i128 - previous as i128,
+                _ => 0,
+            };
         let threshold_hit = config.memory_delta_threshold_bytes != 0
-            && previous_rss.is_some()
-            && rss_delta_bytes.unsigned_abs() >= u128::from(config.memory_delta_threshold_bytes);
+            && ((previous_rss.is_some()
+                && rss_delta_bytes.unsigned_abs()
+                    >= u128::from(config.memory_delta_threshold_bytes))
+                || (sample.physical_footprint_bytes.is_some()
+                    && previous_footprint.is_some()
+                    && physical_footprint_delta_bytes.unsigned_abs()
+                        >= u128::from(config.memory_delta_threshold_bytes)));
         let should_log = matches!(
             sample_kind,
             MemorySampleKind::Lifecycle | MemorySampleKind::Periodic
@@ -187,6 +204,12 @@ impl MemoryPerfTracker {
         }
 
         let trigger = trigger_label(sample_kind, threshold_hit);
+        let retained_total_bytes = retained.retained_total_bytes();
+        let unexplained_rss_bytes = sample.rss_bytes as i128 - retained_total_bytes as i128;
+        let unexplained_footprint_bytes = sample
+            .physical_footprint_bytes
+            .map(|bytes| bytes as i128 - retained_total_bytes as i128);
+        let physical_footprint_available = sample.physical_footprint_bytes.is_some();
         tracing::debug!(
             target: MEM_TARGET,
             trigger,
@@ -194,8 +217,12 @@ impl MemoryPerfTracker {
             rss_bytes = sample.rss_bytes,
             vsz_bytes = sample.vsz_bytes,
             rss_delta_bytes,
+            physical_footprint_available,
+            physical_footprint_bytes = sample.physical_footprint_bytes.unwrap_or(0),
+            physical_footprint_peak_bytes = sample.physical_footprint_peak_bytes.unwrap_or(0),
+            physical_footprint_delta_bytes,
             sample_ms = sample.sample_ms,
-            source = "macos_ps",
+            source = sample.source_label(),
             message_history_payload_bytes = retained.message_history_payload_bytes,
             transcript_cell_text_bytes = retained.transcript_cell_text_bytes,
             tool_execution_bytes = retained.tool_execution_bytes,
@@ -204,10 +231,27 @@ impl MemoryPerfTracker {
             last_markdown_bytes = retained.last_markdown_bytes,
             markdown_memo_cache_bytes = retained.markdown_memo_cache_bytes,
             history_replay_cache_bytes = retained.history_replay_cache_bytes,
-            retained_total_bytes = retained.retained_total_bytes(),
+            retained_total_bytes,
+            unexplained_rss_bytes,
+            unexplained_footprint_bytes = unexplained_footprint_bytes.unwrap_or(0),
             "tui memory sample",
         );
         self.last_logged_rss_bytes = Some(sample.rss_bytes);
+        if let Some(bytes) = sample.physical_footprint_bytes {
+            self.last_logged_physical_footprint_bytes = Some(bytes);
+        }
+    }
+}
+
+impl ProcessMemorySample {
+    fn source_label(self) -> &'static str {
+        if self.physical_footprint_bytes.is_some() {
+            "macos_task_info+ps"
+        } else if self.rss_bytes != 0 || self.vsz_bytes != 0 {
+            "macos_ps"
+        } else {
+            "unknown"
+        }
     }
 }
 
@@ -233,6 +277,8 @@ impl PsMemoryKb {
         ProcessMemorySample {
             rss_bytes: self.rss_kib.saturating_mul(1024),
             vsz_bytes: self.vsz_kib.saturating_mul(1024),
+            physical_footprint_bytes: None,
+            physical_footprint_peak_bytes: None,
             sample_ms,
         }
     }
@@ -252,29 +298,133 @@ fn sample_current_process_memory() -> Result<ProcessMemorySample, ()> {
     #[cfg(target_os = "macos")]
     {
         let started = std::time::Instant::now();
-        let output = std::process::Command::new("/bin/ps")
-            .args([
-                "-o",
-                "rss=",
-                "-o",
-                "vsz=",
-                "-p",
-                &std::process::id().to_string(),
-            ])
-            .output()
-            .map_err(|_| ())?;
-        if !output.status.success() {
-            return Err(());
+        let mut sample = sample_current_process_ps_memory(started.elapsed().as_millis())?;
+        if let Some(footprint) = sample_current_process_footprint() {
+            sample.physical_footprint_bytes = Some(footprint.physical_footprint_bytes);
+            sample.physical_footprint_peak_bytes = Some(footprint.physical_footprint_peak_bytes);
         }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        parse_ps_memory_output(&stdout)
-            .map(|kb| kb.into_sample(started.elapsed().as_millis()))
-            .ok_or(())
+        sample.sample_ms = started.elapsed().as_millis();
+        Ok(sample)
     }
     #[cfg(not(target_os = "macos"))]
     {
         Err(())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn sample_current_process_ps_memory(sample_ms: u128) -> Result<ProcessMemorySample, ()> {
+    let output = std::process::Command::new("/bin/ps")
+        .args([
+            "-o",
+            "rss=",
+            "-o",
+            "vsz=",
+            "-p",
+            &std::process::id().to_string(),
+        ])
+        .output()
+        .map_err(|_| ())?;
+    if !output.status.success() {
+        return Err(());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_ps_memory_output(&stdout)
+        .map(|kb| kb.into_sample(sample_ms))
+        .ok_or(())
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FootprintMemorySample {
+    physical_footprint_bytes: u64,
+    physical_footprint_peak_bytes: u64,
+}
+
+#[cfg(target_os = "macos")]
+#[allow(non_camel_case_types)]
+type mach_msg_type_number_t = libc::c_uint;
+
+#[cfg(target_os = "macos")]
+#[allow(non_camel_case_types)]
+type kern_return_t = libc::c_int;
+
+#[cfg(target_os = "macos")]
+#[allow(non_camel_case_types)]
+type task_flavor_t = libc::c_int;
+
+#[cfg(target_os = "macos")]
+#[allow(non_camel_case_types)]
+type task_info_t = *mut libc::c_int;
+
+#[cfg(target_os = "macos")]
+const TASK_VM_INFO: task_flavor_t = 22;
+
+#[cfg(target_os = "macos")]
+const KERN_SUCCESS: kern_return_t = 0;
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct TaskVmInfo {
+    virtual_size: u64,
+    region_count: libc::c_int,
+    page_size: libc::c_int,
+    resident_size: u64,
+    resident_size_peak: u64,
+    device: u64,
+    device_peak: u64,
+    internal: u64,
+    internal_peak: u64,
+    external: u64,
+    external_peak: u64,
+    reusable: u64,
+    reusable_peak: u64,
+    purgeable_volatile_pmap: u64,
+    purgeable_volatile_resident: u64,
+    purgeable_volatile_virtual: u64,
+    compressed: u64,
+    compressed_peak: u64,
+    compressed_lifetime: u64,
+    physical_footprint: u64,
+    min_address: u64,
+    max_address: u64,
+    ledger_physical_footprint_peak: u64,
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn mach_task_self() -> libc::mach_port_t;
+    fn task_info(
+        target_task: libc::mach_port_t,
+        flavor: task_flavor_t,
+        task_info_out: task_info_t,
+        task_info_out_cnt: *mut mach_msg_type_number_t,
+    ) -> kern_return_t;
+}
+
+#[cfg(target_os = "macos")]
+fn sample_current_process_footprint() -> Option<FootprintMemorySample> {
+    let mut info = TaskVmInfo::default();
+    let mut count = (std::mem::size_of::<TaskVmInfo>() / std::mem::size_of::<libc::c_int>())
+        as mach_msg_type_number_t;
+    // SAFETY: `info` points to valid writable storage and `count` is the
+    // kernel ABI count of integer-sized words in that storage.
+    let result = unsafe {
+        task_info(
+            mach_task_self(),
+            TASK_VM_INFO,
+            std::ptr::addr_of_mut!(info).cast::<libc::c_int>(),
+            &mut count,
+        )
+    };
+    if result != KERN_SUCCESS {
+        return None;
+    }
+    Some(FootprintMemorySample {
+        physical_footprint_bytes: info.physical_footprint,
+        physical_footprint_peak_bytes: info.ledger_physical_footprint_peak,
+    })
 }
 
 pub(crate) fn retained_memory_stats(
@@ -473,12 +623,26 @@ mod memory_tests {
     }
 
     #[test]
+    fn memory_sample_source_prefers_physical_footprint() {
+        let mut sample = PsMemoryKb {
+            rss_kib: 42,
+            vsz_kib: 9001,
+        }
+        .into_sample(7);
+        assert_eq!(sample.source_label(), "macos_ps");
+
+        sample.physical_footprint_bytes = Some(123);
+        sample.physical_footprint_peak_bytes = Some(456);
+        assert_eq!(sample.source_label(), "macos_task_info+ps");
+    }
+
+    #[test]
     fn memory_periodic_and_threshold_can_be_disabled_independently() {
         let mut config = TuiPerformanceConfig {
-            enabled: false,
-            sample_every_n_frames: 10,
-            slow_frame_ms: 16,
-            slow_stage_us: 1000,
+            frame_enabled: false,
+            frame_sample_every_n_frames: 10,
+            frame_slow_threshold_ms: 16,
+            frame_stage_slow_threshold_us: 1000,
             memory_enabled: true,
             memory_sample_interval_secs: 0,
             memory_delta_threshold_bytes: 0,

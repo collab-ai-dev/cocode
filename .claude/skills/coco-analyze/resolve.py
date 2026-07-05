@@ -364,7 +364,7 @@ def triage_perf(logs: list[str]) -> list[str]:
 
     coco-rs has NO 'flicker'/'位移' log keyword — these are inferred from
     `invalidated=true` (full repaint) and input_bottom/viewport_bottom churn.
-    Lines only exist when the run had tui.performance.enabled + tui=debug.
+    Lines only exist when the run had tui.performance.frame_enabled + tui=debug.
     """
     if not logs:
         return ["- (no log file — cannot analyze perf)"]
@@ -434,7 +434,7 @@ def triage_perf(logs: list[str]) -> list[str]:
     if not stage_dur:
         return [
             "- perf埋点 OFF (no `tui::perf::frame` lines).",
-            "  Enable BOTH `tui.performance.enabled=true` (settings.json) AND log filter `tui=debug`, then reproduce.",
+            "  Enable BOTH `tui.performance.frame_enabled=true` (settings.json) AND log filter `tui=debug`, then reproduce.",
         ]
 
     out = ["- perf埋点 ON", ""]
@@ -528,8 +528,14 @@ def parse_mem_samples(lines: list[str]) -> list[dict]:
             "rss_bytes": _kv_int("rss_bytes", line) or 0,
             "vsz_bytes": _kv_int("vsz_bytes", line) or 0,
             "rss_delta_bytes": _kv_int("rss_delta_bytes", line) or 0,
+            "physical_footprint_available": _kv_bool("physical_footprint_available", line),
+            "physical_footprint_bytes": _kv_int("physical_footprint_bytes", line) or 0,
+            "physical_footprint_peak_bytes": _kv_int("physical_footprint_peak_bytes", line) or 0,
+            "physical_footprint_delta_bytes": _kv_int("physical_footprint_delta_bytes", line) or 0,
             "sample_ms": _kv_int("sample_ms", line) or 0,
             "retained_total_bytes": _kv_int("retained_total_bytes", line) or 0,
+            "unexplained_rss_bytes": _kv_int("unexplained_rss_bytes", line),
+            "unexplained_footprint_bytes": _kv_int("unexplained_footprint_bytes", line),
         }
         for field in MEM_BUCKET_FIELDS:
             sample[field] = _kv_int(field, line) or 0
@@ -538,7 +544,7 @@ def parse_mem_samples(lines: list[str]) -> list[dict]:
 
 
 def _delta(last: dict, first: dict, field: str) -> int:
-    return int(last.get(field, 0)) - int(first.get(field, 0))
+    return int(last.get(field) or 0) - int(first.get(field) or 0)
 
 
 def _largest_bucket_delta(first: dict, last: dict) -> tuple[str, int]:
@@ -568,9 +574,17 @@ def triage_mem(logs: list[str]) -> list[str]:
     out = ["- memory perf埋点 ON", f"- samples: {len(samples)}", ""]
     overall_first = samples[0]
     overall_last = samples[-1]
+    has_footprint = any(s.get("physical_footprint_available") for s in samples)
     out.append("### Overall")
+    if has_footprint:
+        out.append(
+            f"- Physical footprint (Activity Monitor/System Monitor): "
+            f"{human_size(overall_first.get('physical_footprint_bytes') or 0)} -> "
+            f"{human_size(overall_last.get('physical_footprint_bytes') or 0)} "
+            f"(delta {human_size(_delta(overall_last, overall_first, 'physical_footprint_bytes'))})"
+        )
     out.append(
-        f"- RSS: {human_size(overall_first['rss_bytes'])} -> {human_size(overall_last['rss_bytes'])} "
+        f"- RSS (`ps`): {human_size(overall_first['rss_bytes'])} -> {human_size(overall_last['rss_bytes'])} "
         f"(delta {human_size(_delta(overall_last, overall_first, 'rss_bytes'))})"
     )
     out.append(
@@ -582,13 +596,28 @@ def triage_mem(logs: list[str]) -> list[str]:
     out.append(f"- largest retained bucket delta: {bucket} {human_size(bucket_delta)}")
 
     out.append("")
-    out.append("### Timeline")
+    out.append("### Physical footprint timeline")
+    if has_footprint:
+        for sample in samples:
+            out.append(
+                f"- turn={sample['turn']} phase={sample['phase']} trigger={sample['trigger']} "
+                f"footprint={human_size(sample.get('physical_footprint_bytes') or 0)} "
+                f"footprint_delta={human_size(sample.get('physical_footprint_delta_bytes') or 0)} "
+                f"retained={human_size(sample['retained_total_bytes'])} "
+                f"unexplained={human_size(sample.get('unexplained_footprint_bytes') or 0)}"
+            )
+    else:
+        out.append("- (no physical footprint fields in these samples; likely non-macOS or older log format)")
+
+    out.append("")
+    out.append("### RSS timeline")
     for sample in samples:
         out.append(
             f"- turn={sample['turn']} phase={sample['phase']} trigger={sample['trigger']} "
             f"rss={human_size(sample['rss_bytes'])} "
             f"rss_delta={human_size(sample['rss_delta_bytes'])} "
-            f"retained={human_size(sample['retained_total_bytes'])}"
+            f"retained={human_size(sample['retained_total_bytes'])} "
+            f"unexplained={human_size(sample.get('unexplained_rss_bytes') or 0)}"
         )
 
     by_turn: dict[int, list[dict]] = {}
@@ -604,29 +633,38 @@ def triage_mem(logs: list[str]) -> list[str]:
         first, last = group[0], group[-1]
         bucket, bucket_delta = _largest_bucket_delta(first, last)
         triggers = ",".join(sorted({s["trigger"] for s in group}))
+        footprint_delta = _delta(last, first, "physical_footprint_bytes") if has_footprint else 0
         out.append(
-            f"- turn={turn}: rss_delta={human_size(_delta(last, first, 'rss_bytes'))} "
+            f"- turn={turn}: footprint_delta={human_size(footprint_delta)} "
+            f"rss_delta={human_size(_delta(last, first, 'rss_bytes'))} "
             f"retained_delta={human_size(_delta(last, first, 'retained_total_bytes'))} "
             f"largest_bucket={bucket}:{human_size(bucket_delta)} triggers={triggers}"
         )
 
     rss_delta = _delta(overall_last, overall_first, "rss_bytes")
+    footprint_delta = _delta(overall_last, overall_first, "physical_footprint_bytes") if has_footprint else 0
     retained_delta = _delta(overall_last, overall_first, "retained_total_bytes")
     unexplained = rss_delta - retained_delta
+    unexplained_footprint = footprint_delta - retained_delta
     out.append("")
     out.append("### Interpretation")
-    if rss_delta <= 0:
-        out.append("- RSS did not grow over this capture.")
-    elif retained_delta > 0 and retained_delta >= rss_delta * 0.6:
-        out.append("- RSS growth is mostly explained by retained TUI/message structures.")
+    primary_delta = footprint_delta if has_footprint else rss_delta
+    primary_label = "Physical footprint" if has_footprint else "RSS"
+    if primary_delta <= 0:
+        out.append(f"- {primary_label} did not grow over this capture.")
+    elif retained_delta > 0 and retained_delta >= primary_delta * 0.6:
+        out.append(f"- {primary_label} growth is mostly explained by retained TUI/message structures.")
     elif retained_delta > 0:
         out.append(
-            "- RSS grew more than retained structures; allocator retained pages or untracked caches are plausible."
+            f"- {primary_label} grew more than retained structures; check query/provider/reminder size logs and allocator retention."
         )
     else:
         out.append(
-            "- RSS grew while retained buckets were flat/down; allocator retained pages or untracked native allocations are likely."
+            f"- {primary_label} grew while retained buckets were flat/down; query/provider temporaries, allocator-retained pages, or native allocations are likely."
         )
+    if has_footprint:
+        out.append("- Activity Monitor/System Monitor is expected to align more closely with Physical footprint than `ps` RSS.")
+        out.append(f"- rough unexplained footprint delta: {human_size(unexplained_footprint)}")
     out.append(f"- rough unexplained RSS delta: {human_size(unexplained)}")
     return out
 

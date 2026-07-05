@@ -529,6 +529,8 @@ impl QueryEngine {
                         cache_creation = usage.input_tokens.cache_write,
                         text_chars = response_text.len(),
                         reasoning_chars = reasoning_text.len(),
+                        response_stream_accumulated_bytes =
+                            response_text.len().saturating_add(reasoning_text.len()),
                         tool_call_count = tool_order.len(),
                         "LLM stream finished"
                     );

@@ -87,10 +87,10 @@ fn from_settings_converts_native_replay_cache_kib_to_bytes() {
 fn from_settings_converts_tui_performance_defaults_and_overrides() {
     let display = DisplaySettings::from_settings(&Settings::default());
 
-    assert!(!display.performance.enabled);
-    assert_eq!(display.performance.sample_every_n_frames, 10);
-    assert_eq!(display.performance.slow_frame_ms, 16);
-    assert_eq!(display.performance.slow_stage_us, 1000);
+    assert!(!display.performance.frame_enabled);
+    assert_eq!(display.performance.frame_sample_every_n_frames, 10);
+    assert_eq!(display.performance.frame_slow_threshold_ms, 16);
+    assert_eq!(display.performance.frame_stage_slow_threshold_us, 1000);
     assert!(!display.performance.memory_enabled);
     assert_eq!(display.performance.memory_sample_interval_secs, 30);
     assert_eq!(
@@ -99,20 +99,20 @@ fn from_settings_converts_tui_performance_defaults_and_overrides() {
     );
 
     let mut settings = Settings::default();
-    settings.tui.performance.enabled = true;
-    settings.tui.performance.sample_every_n_frames = 5;
-    settings.tui.performance.slow_frame_ms = 24;
-    settings.tui.performance.slow_stage_us = 900;
+    settings.tui.performance.frame_enabled = true;
+    settings.tui.performance.frame_sample_every_n_frames = 5;
+    settings.tui.performance.frame_slow_threshold_ms = 24;
+    settings.tui.performance.frame_stage_slow_threshold_us = 900;
     settings.tui.performance.memory_enabled = true;
     settings.tui.performance.memory_sample_interval_secs = 0;
     settings.tui.performance.memory_delta_threshold_mb = 0;
 
     let display = DisplaySettings::from_settings(&settings);
 
-    assert!(display.performance.enabled);
-    assert_eq!(display.performance.sample_every_n_frames, 5);
-    assert_eq!(display.performance.slow_frame_ms, 24);
-    assert_eq!(display.performance.slow_stage_us, 900);
+    assert!(display.performance.frame_enabled);
+    assert_eq!(display.performance.frame_sample_every_n_frames, 5);
+    assert_eq!(display.performance.frame_slow_threshold_ms, 24);
+    assert_eq!(display.performance.frame_stage_slow_threshold_us, 900);
     assert!(display.performance.memory_enabled);
     assert_eq!(display.performance.memory_sample_interval_secs, 0);
     assert_eq!(display.performance.memory_delta_threshold_bytes, 0);

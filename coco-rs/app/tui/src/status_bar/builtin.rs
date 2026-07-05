@@ -118,7 +118,11 @@ fn identity_line(state: &AppState) -> Vec<StatusSpan> {
         let trigger = ctx_trigger_percent(state, usage.total);
         let (tone, bold) = ctx_tone(usage.percent, trigger);
         spans.push(StatusSpan {
-            text: format!("ctx {}%/{}", usage.percent, format_token_count(usage.total)),
+            text: format!(
+                "ctx {}/{}",
+                format_ctx_percent(usage.percent_tenths),
+                format_token_count(usage.total)
+            ),
             tone,
             bold,
         });
@@ -618,4 +622,8 @@ fn format_cache_percent(pct: f64) -> String {
     } else {
         format!("{pct:.1}%")
     }
+}
+
+fn format_ctx_percent(percent_tenths: i64) -> String {
+    format!("{}.{:01}%", percent_tenths / 10, percent_tenths % 10)
 }
