@@ -238,7 +238,7 @@ fn render_assistant_markdown(
         let mut h = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut h);
         opts.width.hash(&mut h);
-        opts.syntax.is_enabled().hash(&mut h);
+        opts.syntax.hash(&mut h);
         opts.body_indent.hash(&mut h);
         opts.streaming.hash(&mut h);
         options.styles.theme_hash().hash(&mut h);

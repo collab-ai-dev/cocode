@@ -81,7 +81,7 @@ fn sample_doc(blocks: usize) -> String {
 fn render_lines(doc: &str, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     render_markdown(
         doc,
-        MarkdownOptions::new(UiStyles::new(theme), width, SyntaxHighlighting::Enabled),
+        MarkdownOptions::new(UiStyles::new(theme), width, SyntaxHighlighting::Full),
         None,
     )
 }

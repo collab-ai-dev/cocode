@@ -210,7 +210,7 @@ impl Tool for AgentTool {
                     // "Multi-Provider Boundaries".
                     "run_in_background": {
                         "type": "boolean",
-                        "description": "Set to true to run this agent in the background. You will be notified when it completes."
+                        "description": "Set to true to run this agent in the background. You will be notified when it completes, and you can use SendMessage to communicate with it while it is running."
                     },
                     "isolation": {
                         "type": "string",
@@ -484,9 +484,9 @@ impl Tool for AgentTool {
                     "Async agent launched successfully.\nagentId: {agent_id} (internal ID - do not mention to user. Use SendMessage with to: '{agent_id}' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes."
                 );
                 let instructions = match output_file.as_deref() {
-                    None | Some("") => "Briefly tell the user what you launched, then continue with any non-overlapping work if useful. Do not duplicate this agent's work; agent results will arrive in a subsequent message.".to_string(),
+                    None | Some("") => "Briefly tell the user what you launched, then continue with any non-overlapping work if useful, or use SendMessage if you need to communicate with the agent. Do not duplicate this agent's work; agent results will arrive in a subsequent message.".to_string(),
                     Some(output_file) => format!(
-                        "Do not duplicate this agent's work; avoid working with the same files or topics it is using. Work on non-overlapping tasks if useful, or briefly tell the user what you launched.\noutput_file: {output_file}\nDo NOT read or tail this file with tools; it is the full subagent transcript and results will arrive in a subsequent message."
+                        "Do not duplicate this agent's work; avoid working with the same files or topics it is using. Work on non-overlapping tasks if useful, use SendMessage if you need to communicate with the agent, or briefly tell the user what you launched.\noutput_file: {output_file}\nDo NOT read or tail this file with tools; it is the full subagent transcript and results will arrive in a subsequent message."
                     ),
                 };
                 format!("{prefix}\n{instructions}")

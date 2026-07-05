@@ -62,7 +62,7 @@ fn render_ex_width_with_display(
     let cx = ToolResultRenderCtx {
         styles: UiStyles::new(&theme),
         width,
-        syntax_highlighting: SyntaxHighlighting::Enabled,
+        syntax_highlighting: SyntaxHighlighting::Full,
         plan_editor_hint: "ctrl+g to edit".to_string(),
         expand_hint: "(ctrl+o to expand)".to_string(),
         expanded,

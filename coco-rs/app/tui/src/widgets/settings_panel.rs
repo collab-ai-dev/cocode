@@ -103,8 +103,9 @@ impl Default for SettingsPanelState {
 
 pub(crate) fn syntax_highlighting_status(syntax_highlighting: SyntaxHighlighting) -> String {
     match syntax_highlighting {
-        SyntaxHighlighting::Enabled => t!("settings.enabled").to_string(),
-        SyntaxHighlighting::Disabled => t!("settings.disabled").to_string(),
+        SyntaxHighlighting::Off => t!("settings.syntax_off").to_string(),
+        SyntaxHighlighting::Lite => t!("settings.syntax_lite").to_string(),
+        SyntaxHighlighting::Full => t!("settings.syntax_full").to_string(),
     }
 }
 

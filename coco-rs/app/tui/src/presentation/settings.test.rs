@@ -21,7 +21,8 @@ fn settings_surface_content_renders_display_tab_and_syntax_row() {
     assert!(body.contains("[Display]   Output    Permissions    About "));
     // Theme selection moved to /theme; the Display tab points users there.
     assert!(body.contains("use /theme"));
-    assert!(body.contains("Syntax highlighting: Enabled"));
+    // Default tier is now `Lite` (memory-capped: diff & shell only).
+    assert!(body.contains("Syntax highlighting: Lite (diff & shell)"));
     assert!(body.contains("Tab Switch tab"));
 }
 

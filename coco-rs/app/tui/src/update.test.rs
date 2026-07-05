@@ -1293,7 +1293,7 @@ async fn up_on_empty_input_requests_edit_for_queued_commands() {
 fn toggle_syntax_highlighting_does_not_mutate_when_higher_priority_setting_wins() {
     let mut state = AppState::new();
     state.ui.display_settings = DisplaySettings {
-        syntax_highlighting: SyntaxHighlighting::Enabled,
+        syntax_highlighting: SyntaxHighlighting::Full,
         syntax_highlighting_editability: DisplaySettingEditability::OverriddenBy(
             coco_config::SettingSource::Project,
         ),
@@ -1307,7 +1307,7 @@ fn toggle_syntax_highlighting_does_not_mutate_when_higher_priority_setting_wins(
 
     assert_eq!(
         state.ui.display_settings.syntax_highlighting,
-        SyntaxHighlighting::Enabled
+        SyntaxHighlighting::Full
     );
     assert_eq!(state.ui.toasts.len(), 1);
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);

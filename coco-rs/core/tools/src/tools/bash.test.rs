@@ -54,6 +54,38 @@ async fn test_bash_prompt_includes_pr_creation_guidance() {
     assert!(desc.contains("gh pr create"));
 }
 
+#[tokio::test]
+async fn test_bash_prompt_explains_background_output_file_read_path() {
+    let desc = <BashTool as DynTool>::prompt(&BashTool, &PromptOptions::default()).await;
+    assert!(desc.contains("backgroundTaskId"), "got:\n{desc}");
+    assert!(desc.contains("outputPath"), "got:\n{desc}");
+    assert!(desc.contains("<output-file>"), "got:\n{desc}");
+    assert!(
+        desc.contains("use Read on the returned `outputPath` / `<output-file>` path"),
+        "got:\n{desc}"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_schema_explains_background_output_file_read_path() {
+    let spec = <BashTool as DynTool>::tool_spec(
+        &BashTool,
+        &coco_tool_runtime::SchemaContext::default(),
+        &PromptOptions::default(),
+    )
+    .await;
+    let coco_tool_runtime::ToolSpec::Function(spec) = spec else {
+        panic!("BashTool must be a Function tool");
+    };
+    let desc = spec.parameters["properties"]["run_in_background"]["description"]
+        .as_str()
+        .expect("run_in_background description");
+    assert!(desc.contains("backgroundTaskId"), "got: {desc}");
+    assert!(desc.contains("outputPath"), "got: {desc}");
+    assert!(desc.contains("<output-file>"), "got: {desc}");
+    assert!(desc.contains("Use Read"), "got: {desc}");
+}
+
 #[test]
 fn test_bash_description_is_short_label() {
     // `command` is required (no `#[serde(default)]`), so the no-description
@@ -1217,7 +1249,7 @@ mod render_for_model_tests {
         };
         assert_eq!(
             text,
-            "Command running in background with ID: task-42. Output is being written to: /cfg/cache/tasks/sess/task-42.output"
+            "Command running in background with ID: task-42. Output is being written to: /cfg/cache/tasks/sess/task-42.output. Use Read on this output path to inspect logs/results when needed."
         );
     }
 
@@ -1359,7 +1391,8 @@ mod render_for_model_tests {
             text.contains("Output is being written to: /cfg/cache/tasks/sess/task-99.output"),
             "got: {text}"
         );
-        assert!(text.contains("delegate long-running work"), "got: {text}");
+        assert!(text.contains("run_in_background: true"), "got: {text}");
+        assert!(text.contains("Use Read on this output path"), "got: {text}");
     }
 
     #[test]
@@ -1382,7 +1415,7 @@ mod render_for_model_tests {
         };
         assert!(
             text.contains(
-                "Command was manually backgrounded by user with ID: task-7. Output is being written to: /cfg/cache/tasks/sess/task-7.output"
+                "Command was manually backgrounded by user with ID: task-7. Output is being written to: /cfg/cache/tasks/sess/task-7.output. Use Read on this output path to inspect logs/results when needed."
             ),
             "got: {text}"
         );
@@ -1406,7 +1439,7 @@ mod render_for_model_tests {
         };
         assert!(
             text.contains(
-                "Command running in background with ID: task-3. Output is being written to: /cfg/cache/tasks/sess/task-3.output"
+                "Command running in background with ID: task-3. Output is being written to: /cfg/cache/tasks/sess/task-3.output. Use Read on this output path to inspect logs/results when needed."
             ),
             "got: {text}"
         );

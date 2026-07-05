@@ -36,9 +36,26 @@ use crate::sections::PartialWebSearchSettings;
 
 pub use source::SettingSource;
 
-pub const SYNTAX_HIGHLIGHTING_DISABLED_KEY: &str = "syntax_highlighting_disabled";
+pub const SYNTAX_HIGHLIGHTING_KEY: &str = "syntax_highlighting";
 pub const SHOW_THINKING_KEY: &str = "show_thinking";
 pub const COPY_FULL_RESPONSE_KEY: &str = "copy_full_response";
+
+/// How much fenced-code syntax highlighting the TUI applies. The tier gates
+/// which syntect grammars are allowed to compile — the dominant highlighting
+/// memory cost — so `Lite` keeps a long session's resident footprint flat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyntaxHighlightingLevel {
+    /// No highlighting; every code block renders as plain text.
+    Off,
+    /// Only the hot-path grammars (diff, bash) highlight; every other language
+    /// falls back to plain text. Caps highlighting memory at the startup
+    /// baseline. Default.
+    #[default]
+    Lite,
+    /// All grammars highlight, compiled lazily on first use.
+    Full,
+}
 
 /// The merged settings snapshot. Immutable after loading.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -168,7 +185,7 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     #[serde(default)]
-    pub syntax_highlighting_disabled: bool,
+    pub syntax_highlighting: SyntaxHighlightingLevel,
     /// Initial TUI visibility for assistant thinking content. Runtime
     /// toggling is UI-local; settings reload reapplies this default.
     #[serde(default)]

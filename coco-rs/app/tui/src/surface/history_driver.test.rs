@@ -950,7 +950,7 @@ fn prepared_stream_append(
     streaming.append_text(source);
     streaming.reveal_all();
     state.ui.streaming = Some(streaming);
-    state.ui.display_settings.syntax_highlighting = SyntaxHighlighting::Disabled;
+    state.ui.display_settings.syntax_highlighting = SyntaxHighlighting::Off;
     let prepared = SurfaceStreamDriver::default().prepare(
         &state,
         width,
@@ -1066,7 +1066,7 @@ fn options(theme: &Theme, width: u16) -> HistoryLineRenderOptions<'_> {
     HistoryLineRenderOptions {
         styles: UiStyles::new(theme),
         width,
-        syntax_highlighting: SyntaxHighlighting::Disabled,
+        syntax_highlighting: SyntaxHighlighting::Off,
         show_system_reminders: false,
         show_thinking: false,
         cwd: None,

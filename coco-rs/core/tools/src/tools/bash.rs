@@ -113,7 +113,7 @@ While the Bash tool can do similar things, it's better to use the built-in tools
  - Always quote file paths that contain spaces with double quotes in your command (e.g., cd \"path with spaces/file.txt\")
  - Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.
  - You may specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). By default, your command will timeout after 120000ms (2 minutes).
- - You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. You do not need to use '&' at the end of the command when using this parameter.
+ - You can use the `run_in_background` parameter to run the command in the background. The call returns immediately with `backgroundTaskId` and `outputPath`; the completion notification will include an `<output-file>` path. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. If you need shell output before then, use Read on the returned `outputPath` / `<output-file>` path instead of polling. You do not need to use '&' at the end of the command when using this parameter.
  - When issuing multiple commands:
   - If the commands are independent and can run in parallel, make multiple Bash tool calls in a single message. Example: if you need to run \"git status\" and \"git diff\", send a single message with two Bash tool calls in parallel.
   - If the commands depend on each other and must run sequentially, use a single Bash call with '&&' to chain them together.
@@ -127,7 +127,7 @@ While the Bash tool can do similar things, it's better to use the built-in tools
   - Do not sleep between commands that can run immediately — just run them.
   - If your command is long running and you would like to be notified when it finishes — use `run_in_background`. No sleep needed.
   - Do not retry failing commands in a sleep loop — diagnose the root cause.
-  - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.
+  - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll. Use Read on the returned `outputPath` / `<output-file>` path only when you need to inspect current output.
   - If you must poll an external process, use a check command (e.g. `gh run view`) rather than sleeping first.
   - If you must sleep, keep the duration short (1-5 seconds) to avoid blocking the user.
 
@@ -300,7 +300,7 @@ impl Tool for BashTool {
                     },
                     "run_in_background": {
                         "type": "boolean",
-                        "description": "Set to true to run this command in the background. Use Read to read the output later."
+                        "description": "Set to true to run this command in the background. The call returns immediately with backgroundTaskId and outputPath, and completion notifications include an <output-file> path. Use Read on that outputPath / <output-file> when you need shell logs or results; do not poll."
                     },
                     "dangerouslyDisableSandbox": {
                         "type": "boolean",

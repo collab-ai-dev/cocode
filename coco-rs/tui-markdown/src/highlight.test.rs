@@ -17,7 +17,7 @@ fn highlights_known_language() {
         "fn main() {}\n",
         "rust",
         styles,
-        SyntaxHighlighting::Enabled,
+        SyntaxHighlighting::Full,
         HighlightMode::Committed,
     );
     let lines = out.expect("rust is a known grammar");
@@ -25,6 +25,49 @@ fn highlights_known_language() {
     // The first line carries the `fn` keyword as a styled span.
     let text: String = lines[0].iter().map(|s| s.content.as_ref()).collect();
     assert!(text.contains("fn"), "expected keyword in {text:?}");
+}
+
+#[test]
+fn lite_tier_highlights_only_prewarmed_grammars() {
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    // In `LITE_GRAMMARS`: shell resolves to the bash grammar → highlighted.
+    assert!(
+        highlight_code(
+            "echo hi\n",
+            "bash",
+            styles,
+            SyntaxHighlighting::Lite,
+            HighlightMode::Committed,
+        )
+        .is_some(),
+        "lite must still highlight the prewarmed hot-path grammars"
+    );
+    // Not in `LITE_GRAMMARS`: rust falls back to plain (None) so its grammar
+    // is never compiled — the whole point of the memory cap.
+    assert!(
+        highlight_code(
+            "fn main() {}\n",
+            "rust",
+            styles,
+            SyntaxHighlighting::Lite,
+            HighlightMode::Committed,
+        )
+        .is_none(),
+        "lite must not highlight languages outside the prewarm set"
+    );
+    // Off blocks everything, including the prewarmed grammars.
+    assert!(
+        highlight_code(
+            "echo hi\n",
+            "bash",
+            styles,
+            SyntaxHighlighting::Off,
+            HighlightMode::Committed,
+        )
+        .is_none(),
+        "off disables highlighting entirely"
+    );
 }
 
 #[test]
@@ -66,7 +109,7 @@ fn two_face_extended_grammars_resolve() {
                 code,
                 lang,
                 styles,
-                SyntaxHighlighting::Enabled,
+                SyntaxHighlighting::Full,
                 HighlightMode::Committed
             )
             .is_some(),
@@ -89,7 +132,7 @@ fn test_streaming_checkpoint_matches_fresh_tokenize() {
             continue;
         }
         let prefix = &code[..end];
-        let streamed = highlight_code(prefix, "rust", styles, SyntaxHighlighting::Enabled, {
+        let streamed = highlight_code(prefix, "rust", styles, SyntaxHighlighting::Full, {
             HighlightMode::Streaming
         })
         .expect("rust grammar");
@@ -113,12 +156,12 @@ fn test_streaming_mode_does_not_pollute_committed_lru() {
         "fn keep_me() {}\n",
         "rust",
         styles,
-        SyntaxHighlighting::Enabled,
+        SyntaxHighlighting::Full,
         HighlightMode::Committed,
     )
     .expect("rust grammar");
     for end in ["let x", "let x = 1;\n", "let x = 1;\nlet y = 2;\n"] {
-        let _ = highlight_code(end, "rust", styles, SyntaxHighlighting::Enabled, {
+        let _ = highlight_code(end, "rust", styles, SyntaxHighlighting::Full, {
             HighlightMode::Streaming
         });
     }
@@ -126,7 +169,7 @@ fn test_streaming_mode_does_not_pollute_committed_lru() {
         "fn keep_me() {}\n",
         "rust",
         styles,
-        SyntaxHighlighting::Enabled,
+        SyntaxHighlighting::Full,
         HighlightMode::Committed,
     )
     .expect("rust grammar");
@@ -145,7 +188,7 @@ fn unknown_language_falls_back_to_none() {
             "some text\n",
             "definitely-not-a-language",
             styles,
-            SyntaxHighlighting::Enabled,
+            SyntaxHighlighting::Full,
             HighlightMode::Committed
         )
         .is_none()
@@ -161,7 +204,7 @@ fn disabled_highlighting_returns_none() {
             "fn main() {}\n",
             "rust",
             styles,
-            SyntaxHighlighting::Disabled,
+            SyntaxHighlighting::Off,
             HighlightMode::Committed
         )
         .is_none()
@@ -178,7 +221,7 @@ fn cache_hit_returns_ptr_equal_arc() {
         code,
         "rust",
         styles,
-        SyntaxHighlighting::Enabled,
+        SyntaxHighlighting::Full,
         HighlightMode::Committed,
     )
     .expect("a");
@@ -186,7 +229,7 @@ fn cache_hit_returns_ptr_equal_arc() {
         code,
         "rust",
         styles,
-        SyntaxHighlighting::Enabled,
+        SyntaxHighlighting::Full,
         HighlightMode::Committed,
     )
     .expect("b");
@@ -208,7 +251,7 @@ fn cache_key_includes_theme() {
         code,
         "rust",
         UiStyles::new(&t1),
-        SyntaxHighlighting::Enabled,
+        SyntaxHighlighting::Full,
         HighlightMode::Committed,
     )
     .expect("a");
@@ -216,7 +259,7 @@ fn cache_key_includes_theme() {
         code,
         "rust",
         UiStyles::new(&t2),
-        SyntaxHighlighting::Enabled,
+        SyntaxHighlighting::Full,
         HighlightMode::Committed,
     )
     .expect("b");
@@ -234,7 +277,7 @@ fn cache_key_includes_code() {
         "fn aaa_distinct() {}\n",
         "rust",
         styles,
-        SyntaxHighlighting::Enabled,
+        SyntaxHighlighting::Full,
         HighlightMode::Committed,
     )
     .expect("a");
@@ -242,7 +285,7 @@ fn cache_key_includes_code() {
         "fn bbb_distinct() {}\n",
         "rust",
         styles,
-        SyntaxHighlighting::Enabled,
+        SyntaxHighlighting::Full,
         HighlightMode::Committed,
     )
     .expect("b");
@@ -254,7 +297,7 @@ fn cache_key_includes_code() {
 
 #[test]
 fn prewarm_highlighting_compiles_grammars_without_panicking() {
-    prewarm_highlighting();
+    prewarm_highlighting(SyntaxHighlighting::Lite);
     // Warmed grammars still highlight correctly afterwards.
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
@@ -262,7 +305,7 @@ fn prewarm_highlighting_compiles_grammars_without_panicking() {
         "# title\n",
         "md",
         styles,
-        SyntaxHighlighting::Enabled,
+        SyntaxHighlighting::Full,
         HighlightMode::Committed,
     )
     .expect("markdown highlights after prewarm");

@@ -61,12 +61,12 @@ pub(crate) fn toggle_syntax_highlighting(state: &mut AppState) {
         .ui
         .display_settings
         .clone()
-        .with_syntax_highlighting(state.ui.display_settings.syntax_highlighting.toggle());
+        .with_syntax_highlighting(state.ui.display_settings.syntax_highlighting.cycle());
 
-    let disabled = next.syntax_highlighting.is_disabled();
+    let level = crate::display_settings::syntax_highlighting_to_level(next.syntax_highlighting);
     match coco_config::global_config::write_user_setting(
-        coco_config::settings::SYNTAX_HIGHLIGHTING_DISABLED_KEY,
-        serde_json::json!(disabled),
+        coco_config::settings::SYNTAX_HIGHLIGHTING_KEY,
+        serde_json::json!(level),
     ) {
         Ok(path) => {
             let status = crate::widgets::settings_panel::syntax_highlighting_status(

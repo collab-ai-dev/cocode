@@ -261,6 +261,13 @@ async fn test_agent_tool_input_schema_exposes_eight_user_fields_by_default() {
         keys, expected,
         "schema must expose exactly the 8 user fields (cwd is never model-facing)"
     );
+    let run_bg_desc = p["run_in_background"]["description"]
+        .as_str()
+        .expect("run_in_background description");
+    assert!(run_bg_desc.contains("notified when it completes"));
+    assert!(run_bg_desc.contains("SendMessage"));
+    assert!(!run_bg_desc.contains("Read"));
+    assert!(!run_bg_desc.contains("output"));
 
     // `mode` enum = the model-pickable teammate modes: the 5 external modes
     // plus `auto`. `bubble` (internal fork/coordinator mode) and `ask`/`deny`
@@ -2468,11 +2475,13 @@ mod render_for_model_tests {
         assert!(text.contains("agent-99"), "got: {text}");
         assert!(text.contains("/tmp/agent-99.log"), "got: {text}");
         assert!(text.contains("non-overlapping"), "got: {text}");
+        assert!(text.contains("SendMessage"), "got: {text}");
         assert!(
             text.contains("Do NOT read or tail this file"),
             "got: {text}"
         );
         assert!(!text.contains("FileRead or Bash tail"), "got: {text}");
+        assert!(!text.contains("Use Read"), "got: {text}");
         assert!(!text.contains("end your response"), "got: {text}");
     }
 
@@ -2490,8 +2499,10 @@ mod render_for_model_tests {
         };
         assert!(text.contains("Briefly tell the user"), "got: {text}");
         assert!(text.contains("non-overlapping"), "got: {text}");
+        assert!(text.contains("SendMessage"), "got: {text}");
         assert!(!text.contains("end your response"), "got: {text}");
         assert!(!text.contains("output_file"), "got: {text}");
+        assert!(!text.contains("Read"), "got: {text}");
     }
 
     #[test]

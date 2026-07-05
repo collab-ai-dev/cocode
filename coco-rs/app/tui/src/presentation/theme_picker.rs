@@ -78,10 +78,11 @@ pub(crate) fn theme_picker_lines(
     lines.extend(render_diff_lines(DEMO_DIFF, styles, width));
     lines.push(Line::from(Span::styled(rule, rule_style)));
 
-    // Syntax-highlight status line (ctrl+t toggles).
+    // Syntax-highlight status line (ctrl+t cycles off → lite → full).
     let syntax_text = match syntax {
-        SyntaxHighlighting::Enabled => t!("dialog.theme_syntax_on"),
-        SyntaxHighlighting::Disabled => t!("dialog.theme_syntax_off"),
+        SyntaxHighlighting::Off => t!("dialog.theme_syntax_off"),
+        SyntaxHighlighting::Lite => t!("dialog.theme_syntax_lite"),
+        SyntaxHighlighting::Full => t!("dialog.theme_syntax_full"),
     };
     lines.push(Line::from(Span::styled(
         format!(" {syntax_text}"),

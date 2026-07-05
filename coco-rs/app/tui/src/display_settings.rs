@@ -3,7 +3,8 @@
 use coco_config::SettingSource;
 use coco_config::SettingsWithSource;
 use coco_config::settings::NativeReplayCacheSettings;
-use coco_config::settings::SYNTAX_HIGHLIGHTING_DISABLED_KEY;
+use coco_config::settings::SYNTAX_HIGHLIGHTING_KEY;
+use coco_config::settings::SyntaxHighlightingLevel;
 use coco_config::settings::TuiPerformanceSettings;
 use coco_tui_ui::display::SyntaxHighlighting;
 use std::time::Duration;
@@ -64,9 +65,7 @@ impl Default for TuiPerformanceConfig {
 impl DisplaySettings {
     pub fn from_settings(settings: &coco_config::Settings) -> Self {
         Self {
-            syntax_highlighting: SyntaxHighlighting::from_disabled(
-                settings.syntax_highlighting_disabled,
-            ),
+            syntax_highlighting: syntax_highlighting_from_level(settings.syntax_highlighting),
             syntax_highlighting_editability: DisplaySettingEditability::Editable,
             show_thinking: settings.show_thinking,
             copy_full_response: settings.copy_full_response,
@@ -78,8 +77,8 @@ impl DisplaySettings {
 
     pub fn from_settings_with_sources(settings: &SettingsWithSource) -> Self {
         Self {
-            syntax_highlighting: SyntaxHighlighting::from_disabled(
-                settings.merged.syntax_highlighting_disabled,
+            syntax_highlighting: syntax_highlighting_from_level(
+                settings.merged.syntax_highlighting,
             ),
             syntax_highlighting_editability: syntax_highlighting_editability(settings),
             show_thinking: settings.merged.show_thinking,
@@ -142,13 +141,34 @@ fn mib_to_bytes(mib: u64) -> u64 {
     mib.saturating_mul(1024 * 1024)
 }
 
+/// Map the persisted config tier onto the render-time tier. The two enums are
+/// deliberately separate: `coco-config` (Common layer) must not depend on the
+/// TUI presentational crate, and `coco-tui-ui` must not depend on config.
+pub(crate) fn syntax_highlighting_from_level(level: SyntaxHighlightingLevel) -> SyntaxHighlighting {
+    match level {
+        SyntaxHighlightingLevel::Off => SyntaxHighlighting::Off,
+        SyntaxHighlightingLevel::Lite => SyntaxHighlighting::Lite,
+        SyntaxHighlightingLevel::Full => SyntaxHighlighting::Full,
+    }
+}
+
+/// Inverse of [`syntax_highlighting_from_level`], for persisting a runtime
+/// toggle back into `settings.json`.
+pub(crate) fn syntax_highlighting_to_level(syntax: SyntaxHighlighting) -> SyntaxHighlightingLevel {
+    match syntax {
+        SyntaxHighlighting::Off => SyntaxHighlightingLevel::Off,
+        SyntaxHighlighting::Lite => SyntaxHighlightingLevel::Lite,
+        SyntaxHighlighting::Full => SyntaxHighlightingLevel::Full,
+    }
+}
+
 fn syntax_highlighting_editability(settings: &SettingsWithSource) -> DisplaySettingEditability {
     settings
         .per_source
         .iter()
         .filter_map(|(source, value)| {
             if *source > SettingSource::User
-                && value_contains_dotted_key(value, SYNTAX_HIGHLIGHTING_DISABLED_KEY)
+                && value_contains_dotted_key(value, SYNTAX_HIGHLIGHTING_KEY)
             {
                 Some(*source)
             } else {
