@@ -17,6 +17,7 @@ dist/
 .DS_Store
 
 .coco/
+.cocode/
 .claude/scheduled_tasks.lock
 .env*
 !.env.example
