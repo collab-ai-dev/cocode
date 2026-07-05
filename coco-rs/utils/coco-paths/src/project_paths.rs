@@ -13,6 +13,7 @@
 //! | `<slug>/<sid>/subagents/agent-<id>.meta.json`       |  | bg agent sidecar |
 //! | `<slug>/<sid>/remote-agents/remote-agent-<tid>.meta.json` |  | CCR remote task sidecar |
 //! | `<slug>/<sid>/tool-results/`                        |  | persisted tool blobs |
+//! | `<slug>/<sid>/tasks/`                               |  | task output files |
 //! | `<slug>/<sid>/session-memory/summary.md`            | `services/SessionMemory/sessionMemory.ts` | per-session notes |
 //! | `<slug>/<sid>/usage.json`                            | (coco-rs) | per-session usage snapshot |
 //! | `<slug>/memory/`                                    |  | personal auto-memory |
@@ -129,6 +130,10 @@ impl ProjectPaths {
 
     pub fn tool_results_dir(&self, session_id: &str) -> PathBuf {
         self.session_dir(session_id).join("tool-results")
+    }
+
+    pub fn task_outputs_dir(&self, session_id: &str) -> PathBuf {
+        self.session_dir(session_id).join("tasks")
     }
 
     pub fn session_memory_dir(&self, session_id: &str) -> PathBuf {

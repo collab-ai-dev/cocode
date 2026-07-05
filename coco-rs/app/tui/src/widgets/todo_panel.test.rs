@@ -71,6 +71,44 @@ fn v1_renders_when_no_v2() {
     append_lines(&state, &mut out);
     let joined = lines_text(&out).join("\n");
     assert!(joined.contains("v1 todo"), "V1 row missing: {joined}");
+    assert!(
+        joined.contains("[agent]"),
+        "V1 source label missing: {joined}"
+    );
+    assert!(
+        !joined.contains("Todos:"),
+        "V1 inner heading should not render: {joined}"
+    );
+}
+
+#[test]
+fn v1_empty_agent_lists_append_nothing() {
+    let mut state = AppState::new();
+    state
+        .session
+        .todos_by_agent
+        .insert("agent".into(), Vec::new());
+    let mut out = Vec::new();
+    append_lines(&state, &mut out);
+    assert!(out.is_empty(), "empty V1 lists should not render: {out:?}");
+}
+
+#[test]
+fn v2_renders_task_rows_without_inner_heading() {
+    let mut state = AppState::new();
+    state
+        .session
+        .plan_tasks
+        .push(task("1", "first task", TaskListStatus::Pending));
+    let mut out = Vec::new();
+    append_lines(&state, &mut out);
+    let lines = lines_text(&out);
+    let joined = lines.join("\n");
+    assert_eq!(lines.first().map(String::as_str), Some("  ☐ #1 first task"));
+    assert!(
+        !joined.contains("Plan items:"),
+        "V2 inner heading should not render: {joined}"
+    );
 }
 
 #[test]

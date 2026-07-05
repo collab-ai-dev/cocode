@@ -98,12 +98,44 @@ grep for it.
     `tui.performance.heap_profile_enabled=true` on a `just coco-jemalloc` run,
     the TUI dumps a jemalloc heap profile per turn to
     `<config_home>/logs/coco.<pid>.turn<N>.heap` (log anchor: `jemalloc heap
-    profile dumped`). Diff two consecutive dumps with `jeprof --text
-    <binary> --base=turn<N>.heap turn<N+1>.heap` (or `jemalloc-pprof`) to name
-    the retainer. If the log instead warns `jemalloc started without
+    profile dumped`). If the log instead warns `jemalloc started without
     prof:true`, the binary predates the baked-in prof conf
-    (`JEMALLOC_SYS_WITH_MALLOC_CONF` in `coco-rs/.cargo/config.toml`) —
-    rebuild via `just coco-jemalloc`.
+    (`JEMALLOC_SYS_WITH_MALLOC_CONF` in `coco-rs/.cargo/config.toml`) — rebuild
+    via `just coco-jemalloc`.
+    - **`jeprof` is not on PATH** — it ships in the build tree:
+      `coco-rs/target/*/build/tikv-jemalloc-sys-*/out/build/bin/jeprof` (a Perl
+      script — run `perl <that> --text <binary> <heap>`; `<binary>` =
+      `coco-rs/target/debug/coco`). `--base=turn<N>.heap turn<N+1>.heap` diffs
+      two dumps to name the *per-turn* retainer; no `--base` = absolute live heap.
+    - **Dumps hold LIVE allocations only.** Allocator retention (`resident −
+      allocated`, the `--mem` "overhead" line) and transient compile-time RSS
+      spikes (e.g. the syntect grammar prewarm — its "12MB" is peak-RSS, not
+      retained heap) never appear here. For the reliable "what grew" signal,
+      trust the `--mem` retained buckets (instrumented), not backtrace guesses.
+    - **macOS caveat — stacks are unusable, don't chase them (⚠ platform-specific).**
+      jemalloc's prof backtraces are effectively garbage on macOS/ARM64 —
+      everything rolls up under one bogus shared prefix (`core::ptr::drop_in_place`
+      / `GCC_except_table*` at ~100%); only the leaf frame + `Total` are
+      trustworthy. **Root cause (confirmed by the build tree):** `tikv-jemalloc-sys`
+      compiles NO prof unwinder backend on Darwin —
+      `JEMALLOC_PROF_{LIBUNWIND,LIBGCC,GCC}` are all `#undef` in its generated
+      `out/build/.../jemalloc_internal_defs.h` — so the stacks are jemalloc-side,
+      and **no Rust codegen flag can fix them**. (A `-C force-frame-pointers=yes`
+      rustflag was tried in `just coco-jemalloc` and removed as useless:
+      aarch64-apple-darwin already ABI-mandates FP, and the missing piece is the
+      C-library unwinder, not Rust frames.) **On macOS, attribute via the
+      instrumented `--mem` retained buckets, not the stacks.** If you still need a
+      single leaf address by hand, `atos -o <binary> -l 0x100000000 <addr>` — the
+      **zero-slide __TEXT base** (`0x100000000` for the `coco` executable), **NOT**
+      the coco base printed in the dump's memory map (`0x1003…`); the map base
+      yields plausible-but-wrong stacks. Verify the slide against one
+      `jeprof`-resolved address before trusting a batch.
+    - **Linux is the reliable stack path** — `jeprof` symbolizes natively via
+      DWARF `.eh_frame` and jemalloc's usual libgcc `_Unwind_Backtrace` backend
+      doesn't need frame pointers, so no atos/slide dance and no FP concern. If
+      Linux dumps ever come back empty/garbage too, the fix is enabling a jemalloc
+      prof unwinder (libunwind/libgcc) in `tikv-jemalloc-sys`'s build — again, not
+      a frame-pointer rustflag.
 - **Provider / LLM** (`provider`, `llm`, `model`, `api`, `stream`) → the **wire** dir:
   `index.jsonl` for `outcome`/`status`, then the offending `*.resp.txt` (raw SSE) and
   `*.req.json` (params/tools/messages). Log anchors: `coco_inference`, retry / rate-limit.

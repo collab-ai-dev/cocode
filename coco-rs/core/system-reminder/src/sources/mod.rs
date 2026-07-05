@@ -105,15 +105,30 @@ impl ReminderSources {
             },
         );
 
-        let task_status_fut = gate(
-            self.task_status.as_ref(),
-            config.attachments.task_status,
-            t,
-            |s| {
-                let s = s.clone();
-                async move { s.collect(a, just_compacted).await }
-            },
-        );
+        let task_status_fut = {
+            let s = self
+                .task_status
+                .as_ref()
+                .filter(|_| config.attachments.task_status);
+            async move {
+                match s {
+                    Some(s) => {
+                        let s = s.clone();
+                        match timeout(t, async move { s.collect(a, just_compacted).await }).await {
+                            Ok(v) => (v, false),
+                            Err(_) => {
+                                tracing::warn!(
+                                    timeout_ms = t.as_millis() as u64,
+                                    "task_status source timed out"
+                                );
+                                (Vec::new(), true)
+                            }
+                        }
+                    }
+                    None => (Vec::new(), false),
+                }
+            }
+        };
 
         let skill_listing_fut = {
             let so = so.clone();
@@ -332,7 +347,7 @@ impl ReminderSources {
         let (
             hook_events,
             diagnostics,
-            task_statuses,
+            (task_statuses, task_status_timed_out),
             skill_listing,
             invoked_skills,
             skill_discovery,
@@ -367,6 +382,7 @@ impl ReminderSources {
             hook_events,
             diagnostics,
             task_statuses,
+            task_status_timed_out,
             skill_listing,
             skill_discovery,
             invoked_skills,

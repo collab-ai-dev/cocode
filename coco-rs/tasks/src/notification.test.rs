@@ -70,7 +70,9 @@ fn shell_terminal_failed_with_exit_code() {
     assert!(xml.contains(
         "<summary>Background command &quot;make&quot; failed with exit code 2</summary>"
     ));
-    assert!(xml.contains("Use Read on the &lt;output-file&gt; path above"));
+    assert!(xml.contains(
+        "Use Read on the &lt;output-file&gt; path above if you need the command output."
+    ));
     assert_payload_summary_matches_xml(&n);
     assert_eq!(n.payload().status, Some(coco_types::TaskStatus::Failed));
 }

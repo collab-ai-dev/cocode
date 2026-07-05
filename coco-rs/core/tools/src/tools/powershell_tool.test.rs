@@ -382,8 +382,7 @@ mod render_tests {
     #[test]
     fn explicit_background_emits_task_id_and_output_path() {
         // Explicit `run_in_background: true` returns `{backgroundTaskId,
-        // outputPath}` (no stdout) — the notice names both so the model can
-        // `Read` the output file directly.
+        // outputPath}` (no stdout) — the notice names both.
         let data = json!({
             "backgroundTaskId": "ps-1",
             "outputPath": "/cfg/cache/tasks/sess/ps-1.output",
@@ -391,7 +390,7 @@ mod render_tests {
         let parts = <PowerShellTool as DynTool>::render_for_model(&PowerShellTool, &data);
         assert_eq!(
             text_of(&parts),
-            "Command running in background with ID: ps-1. Output is being written to: /cfg/cache/tasks/sess/ps-1.output. Use Read on this output path to inspect logs/results when needed."
+            "Command running in background with ID: ps-1. Output is being written to: /cfg/cache/tasks/sess/ps-1.output."
         );
     }
 
@@ -471,7 +470,10 @@ mod render_tests {
             "got: {text}"
         );
         assert!(text.contains("run_in_background: true"), "got: {text}");
-        assert!(text.contains("Use Read on this output path"), "got: {text}");
+        assert!(
+            !text.contains("Use Read on this output path"),
+            "got: {text}"
+        );
     }
 
     #[test]
@@ -489,7 +491,7 @@ mod render_tests {
         let text = text_of(&parts);
         assert!(
             text.contains(
-                "Command was manually backgrounded by user with ID: ps-7. Output is being written to: /cfg/cache/tasks/sess/ps-7.output. Use Read on this output path to inspect logs/results when needed."
+                "Command was manually backgrounded by user with ID: ps-7. Output is being written to: /cfg/cache/tasks/sess/ps-7.output."
             ),
             "got: {text}"
         );
@@ -510,7 +512,7 @@ mod render_tests {
         let text = text_of(&parts);
         assert!(
             text.contains(
-                "Command running in background with ID: ps-3. Output is being written to: /cfg/cache/tasks/sess/ps-3.output. Use Read on this output path to inspect logs/results when needed."
+                "Command running in background with ID: ps-3. Output is being written to: /cfg/cache/tasks/sess/ps-3.output."
             ),
             "got: {text}"
         );

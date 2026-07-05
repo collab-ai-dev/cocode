@@ -19,10 +19,37 @@ fn shell_terminal(task_id: &str, agent_id: Option<&str>) -> TaskNotification {
 }
 
 #[tokio::test]
-async fn push_terminal_uses_later_priority() {
+async fn push_shell_terminal_uses_next_priority() {
     let q = CommandQueue::new();
     let sink = CommandQueueNotificationSink::new(q.clone());
     sink.push(shell_terminal("a", None)).await;
+    let drained = q
+        .dequeue_matching(|c| !c.is_slash_command && c.agent_id.is_none())
+        .await;
+    assert_eq!(drained.len(), 1);
+    assert_eq!(drained[0].priority, QueuePriority::Next);
+}
+
+#[tokio::test]
+async fn push_agent_terminal_uses_later_priority() {
+    let q = CommandQueue::new();
+    let sink = CommandQueueNotificationSink::new(q.clone());
+    sink.push(TaskNotification {
+        task_id: "agent-a".into(),
+        tool_use_id: None,
+        agent_id: None,
+        output_file: "/tmp/agent.out".into(),
+        description: "explore".into(),
+        kind: NotificationKind::AgentTerminal {
+            status: TerminalStatus::Completed,
+            result: Some("done".into()),
+            usage: None,
+            worktree: None,
+            error: None,
+            killed_by: None,
+        },
+    })
+    .await;
     let drained = q
         .dequeue_matching(|c| !c.is_slash_command && c.agent_id.is_none())
         .await;

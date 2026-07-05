@@ -10,8 +10,8 @@ fn snap(id: &str, desc: &str, status: TaskRunStatus) -> TaskStatusSnapshot {
         description: desc.into(),
         status,
         killed_by: None,
-        task_type: "local_agent".into(),
-        delta_summary: None,
+        task_type: coco_types::TaskType::BgAgent,
+        progress_summary: None,
         output_file_path: None,
     }
 }
@@ -68,8 +68,8 @@ async fn running_includes_anti_duplicate_warning() {
             description: "scan repo".into(),
             status: TaskRunStatus::Running,
             killed_by: None,
-            task_type: "local_agent".into(),
-            delta_summary: Some("10/100 files".into()),
+            task_type: coco_types::TaskType::BgAgent,
+            progress_summary: Some("10/100 files".into()),
             output_file_path: Some("/tmp/task-42.log".into()),
         }])
         .build();
@@ -88,6 +88,7 @@ async fn running_includes_anti_duplicate_warning() {
     // model knows it can steer the running agent.
     assert!(text.contains("use SendMessage only if you need to communicate"));
     assert!(!text.contains("/tmp/task-42.log"));
+    assert!(!text.contains("partial log"));
     assert!(!text.contains("partial output"));
     assert!(!text.contains("Read"));
 }
@@ -101,8 +102,8 @@ async fn running_without_output_file_includes_send_message_ref() {
             description: "lint".into(),
             status: TaskRunStatus::Running,
             killed_by: None,
-            task_type: "local_agent".into(),
-            delta_summary: None,
+            task_type: coco_types::TaskType::BgAgent,
+            progress_summary: None,
             output_file_path: None,
         }])
         .build();
@@ -120,7 +121,66 @@ async fn running_without_output_file_includes_send_message_ref() {
 }
 
 #[tokio::test]
-async fn completed_includes_delta_when_set() {
+async fn running_shell_is_duplicate_warning_only() {
+    let c = SystemReminderConfig::default();
+    let ctx = GeneratorContext::builder(&c)
+        .task_statuses(vec![TaskStatusSnapshot {
+            task_id: "b1".into(),
+            description: "cargo test".into(),
+            status: TaskRunStatus::Running,
+            killed_by: None,
+            task_type: coco_types::TaskType::Shell,
+            progress_summary: Some("ignored for shell".into()),
+            output_file_path: Some("/tmp/task-b1.log".into()),
+        }])
+        .build();
+    let text = TaskStatusGenerator
+        .generate(&ctx)
+        .await
+        .unwrap()
+        .unwrap()
+        .content()
+        .unwrap()
+        .to_string();
+    assert!(text.contains("Background command \"cargo test\" (b1) is still running."));
+    assert!(text.contains("Do NOT spawn a duplicate."));
+    assert!(!text.contains("Recent output"));
+    assert!(!text.contains("/tmp/task-b1.log"));
+    assert!(!text.contains("SendMessage"));
+    assert!(!text.contains("TaskOutput"));
+    assert!(!text.contains("Read"));
+}
+
+#[tokio::test]
+async fn running_teammate_does_not_include_send_message_or_read_hint() {
+    let c = SystemReminderConfig::default();
+    let ctx = GeneratorContext::builder(&c)
+        .task_statuses(vec![TaskStatusSnapshot {
+            task_id: "t1".into(),
+            description: "worker@test".into(),
+            status: TaskRunStatus::Running,
+            killed_by: None,
+            task_type: coco_types::TaskType::Teammate,
+            progress_summary: None,
+            output_file_path: Some("/tmp/task-t1.log".into()),
+        }])
+        .build();
+    let text = TaskStatusGenerator
+        .generate(&ctx)
+        .await
+        .unwrap()
+        .unwrap()
+        .content()
+        .unwrap()
+        .to_string();
+    assert!(text.contains("Teammate task \"worker@test\" (t1) is still running."));
+    assert!(!text.contains("Recent output"));
+    assert!(!text.contains("SendMessage"));
+    assert!(!text.contains("Use Read"));
+}
+
+#[tokio::test]
+async fn completed_uses_typed_wire_name_and_output_path_status() {
     let c = SystemReminderConfig::default();
     let ctx = GeneratorContext::builder(&c)
         .task_statuses(vec![TaskStatusSnapshot {
@@ -128,8 +188,8 @@ async fn completed_includes_delta_when_set() {
             description: "tidy".into(),
             status: TaskRunStatus::Completed,
             killed_by: None,
-            task_type: "local_agent".into(),
-            delta_summary: Some("removed 3 files".into()),
+            task_type: coco_types::TaskType::BgAgent,
+            progress_summary: Some("removed 3 files".into()),
             output_file_path: None,
         }])
         .build();
@@ -141,13 +201,13 @@ async fn completed_includes_delta_when_set() {
         .content()
         .unwrap()
         .to_string();
-    // Format: parts joined by space,
-    // `(type: ...) (status: ...) (description: ...) Delta: ... <output-or-tool-ref>`.
+    // Format: parts joined by space:
+    // `(type: ...) (status: ...) (description: ...) <output-path-status>`.
     assert!(text.starts_with("Task x"));
     assert!(text.contains("(type: local_agent)"));
     assert!(text.contains("(status: completed)"));
     assert!(text.contains("(description: tidy)"));
-    assert!(text.contains("Delta: removed 3 files"));
+    assert!(!text.contains("removed 3 files"));
     assert!(text.contains("Result output path is unavailable."));
     assert!(!text.contains("TaskOutput"));
 }
@@ -161,8 +221,8 @@ async fn failed_with_output_file_references_path() {
             description: "build".into(),
             status: TaskRunStatus::Failed,
             killed_by: None,
-            task_type: "local_bash".into(),
-            delta_summary: Some("compile error".into()),
+            task_type: coco_types::TaskType::Shell,
+            progress_summary: None,
             output_file_path: Some("/tmp/task-9.log".into()),
         }])
         .build();
@@ -178,6 +238,6 @@ async fn failed_with_output_file_references_path() {
     assert!(text.contains("(type: local_bash)"));
     assert!(text.contains("(status: failed)"));
     assert!(text.contains("(description: build)"));
-    assert!(text.contains("Delta: compile error"));
+    assert!(!text.contains("compile error"));
     assert!(text.contains("Read the output file to restore the result: /tmp/task-9.log"));
 }

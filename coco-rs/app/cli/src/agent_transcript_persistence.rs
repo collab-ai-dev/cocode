@@ -19,11 +19,11 @@
 //! ## Why a separate file from the per-task `.output`
 //!
 //! `coco_cli::disk_task_output` writes raw text deltas to
-//! `<config_home>/cache/tasks/<session>/<task_id>.output` for the
-//! `TaskOutput` model-facing tool. That file is text — coco-rs keeps
+//! `<config_home>/projects/<slug>/<session>/tasks/<task_id>.output`.
+//! That file is text — coco-rs keeps
 //! them as separate streams: text for the model's progress view,
-//! JSONL for resume. This preserves `TaskOutput`'s text contract
-//! while still giving `agent/resume` a clean conversation log to
+//! JSONL for resume. This preserves the compatibility output reader's
+//! text contract while still giving `agent/resume` a clean conversation log to
 //! rehydrate from.
 
 use std::sync::Arc;

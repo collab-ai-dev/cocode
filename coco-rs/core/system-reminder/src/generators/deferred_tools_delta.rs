@@ -68,7 +68,7 @@ fn render(info: &DeferredToolsDeltaInfo) -> String {
     }
     if !info.removed_names.is_empty() {
         parts.push(format!(
-            "The following deferred tools are no longer available (their MCP server disconnected). Do not search for them \u{2014} ToolSearch will return no match:\n{}",
+            "The following deferred tools are no longer available in this tool scope. Do not search for them \u{2014} ToolSearch will return no match:\n{}",
             info.removed_names.join("\n")
         ));
     }

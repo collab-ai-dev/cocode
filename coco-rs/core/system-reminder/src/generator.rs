@@ -1190,19 +1190,20 @@ pub struct QueuedCommandImage {
 
 /// Background-task status snapshot. Rendered differently per status:
 /// `killed` emits a brief stopped note with actor attribution when available;
-/// `running` warns against duplicate spawns with optional delta
-/// summary + output-file pointer; `completed` / `failed` surface the
-/// full delta with `(type: ...) (status: ...) (description: ...)`
-/// metadata so the agent can route a follow-up.
+/// `running` warns against duplicate spawns with optional progress;
+/// `completed` / `failed` surface the output path with `(type: ...)`
+/// `(status: ...)` `(description: ...)` metadata so the agent can restore
+/// the result via `Read`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskStatusSnapshot {
     pub task_id: String,
     pub description: String,
     pub status: TaskRunStatus,
     pub killed_by: Option<coco_types::TaskKilledBy>,
-    /// Task type used in `(type: ...)` metadata for completed / failed renderings.
-    pub task_type: String,
-    pub delta_summary: Option<String>,
+    /// Strong task discriminator. Renderers convert to wire form at the edge.
+    pub task_type: coco_types::TaskType,
+    /// Agent-owned progress, separate from captured task output.
+    pub progress_summary: Option<String>,
     pub output_file_path: Option<String>,
 }
 

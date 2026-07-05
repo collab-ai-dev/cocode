@@ -183,7 +183,6 @@ impl QueryEngine {
             .read()
             .map(|g| g.clone())
             .unwrap_or_default();
-        let captured_async_agents = self.snapshot_async_agents_for_post_compact().await;
         let captured_plan_mode_snapshot = self.snapshot_plan_mode_attachment().await;
         let prioritized_paths = self.recently_mentioned_paths_snapshot().await;
 
@@ -328,12 +327,6 @@ impl QueryEngine {
                 {
                     result.attachments.push(att);
                 }
-                result
-                    .attachments
-                    .extend(coco_compact::create_async_agent_attachments(
-                        &captured_async_agents,
-                    ));
-
                 if let Some(registry) = self.hooks.as_ref() {
                     let _ = emit_protocol(
                         event_tx,
@@ -410,7 +403,7 @@ impl QueryEngine {
                 )
                 .await;
                 self.pending_just_compacted
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 coco_compact::CompactOutcome::Applied
             }
             Err(e) => {
@@ -647,7 +640,7 @@ impl QueryEngine {
         .await;
         // Surface task_status reminders on the next turn.
         self.pending_just_compacted
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         true
     }
 
@@ -956,7 +949,7 @@ impl QueryEngine {
             preserved_history,
             coco_types::AttachmentKind::DeferredToolsDelta,
         ) {
-            app_state_snapshot.last_announced_tools.clone()
+            app_state_snapshot.last_announced_tools_for_scope(self.config.agent_id.as_deref())
         } else {
             HashSet::new()
         };
@@ -1029,6 +1022,7 @@ impl QueryEngine {
 
         let state = PostCompactDeltaState {
             current_deferred_tools,
+            agent_id: self.config.agent_id.clone(),
             current_agents,
             current_mcp_instructions,
         };
@@ -1075,7 +1069,10 @@ impl QueryEngine {
             return;
         };
         let mut guard = app_state.write().await;
-        guard.last_announced_tools = delta_state.current_deferred_tools.into_iter().collect();
+        guard.set_last_announced_tools_for_scope(
+            delta_state.agent_id.as_deref(),
+            delta_state.current_deferred_tools.into_iter().collect(),
+        );
         guard.last_announced_agents = delta_state.current_agents.into_iter().collect();
         guard.last_announced_mcp_instructions = delta_state.current_mcp_instructions;
     }
@@ -1400,9 +1397,6 @@ impl QueryEngine {
                 })
             }
         };
-        // Async-agent snapshot: read running TaskManager state and filter
-        // for unretrieved local_agent tasks owned by another agent.
-        let captured_async_agents = self.snapshot_async_agents_for_post_compact().await;
         // Snapshot recently @mentioned paths for priority restoration.
         // The closure runs synchronously inside `compact_conversation`, so
         // we read the lock now and move the resolved set in.
@@ -1472,7 +1466,7 @@ impl QueryEngine {
                 // reminderType='full' so plan instructions land on the
                 // FIRST post-compact turn rather than waiting for the
                 // system-reminder cadence to next fire.
-                if let Some(pm_attachment) = captured_plan_mode_snapshot.clone()
+                if let Some(pm_attachment) = captured_plan_mode_snapshot
                     && let Some(att) = coco_compact::create_plan_mode_attachment_if_needed(
                         /*is_plan_mode*/ true,
                         pm_attachment,
@@ -1480,13 +1474,6 @@ impl QueryEngine {
                 {
                     atts.push(att);
                 }
-
-                // Emit one `task_status` attachment per running
-                // background agent so the model doesn't spawn duplicates
-                // after compaction wipes the visible conversation.
-                atts.extend(coco_compact::create_async_agent_attachments(
-                    &captured_async_agents,
-                ));
 
                 atts
             });
@@ -1739,7 +1726,7 @@ impl QueryEngine {
                 .await;
                 // Surface task_status reminders on the next turn.
                 self.pending_just_compacted
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 coco_compact::CompactOutcome::Applied
             }
             Err(e) => {
@@ -1767,6 +1754,7 @@ impl QueryEngine {
 
 struct PostCompactDeltaState {
     current_deferred_tools: Vec<String>,
+    agent_id: Option<String>,
     current_agents: Vec<String>,
     current_mcp_instructions: HashMap<String, String>,
 }

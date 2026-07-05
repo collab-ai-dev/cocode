@@ -48,6 +48,26 @@ fn test_read_preview_path_only_has_no_range_suffix() {
 }
 
 #[test]
+fn test_read_preview_task_output_path_shows_short_task_label() {
+    let input = serde_json::json!({
+        "file_path": "/Users/me/.coco/projects/my-repo/session-1/tasks/b833b4eu2.output"
+    });
+    assert_eq!(
+        tool_input_preview(ToolName::Read.as_str(), &input),
+        "task b833b4eu2"
+    );
+}
+
+#[test]
+fn test_read_preview_ordinary_output_path_still_shows_path() {
+    let input = serde_json::json!({"file_path": "/repo/tasks/build.log.output"});
+    assert_eq!(
+        tool_input_preview(ToolName::Read.as_str(), &input),
+        "/repo/tasks/build.log.output"
+    );
+}
+
+#[test]
 fn test_read_preview_with_limit_shows_line_range() {
     let input = serde_json::json!({"file_path": "/repo/README.md", "limit": 10});
     assert_eq!(

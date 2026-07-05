@@ -10,6 +10,7 @@ use coco_messages::Message;
 use coco_messages::create_assistant_message;
 use coco_messages::create_user_message;
 use coco_types::TokenUsage;
+use coco_types::ToolAppState;
 use std::collections::HashSet;
 
 fn assistant_with_total(total: i64) -> Message {
@@ -100,4 +101,16 @@ fn compute_tools_delta_ignores_retired_tools_when_adding() {
         compute_tools_delta(&current_deferred, &[], &HashSet::new()).expect("new MCP tool added");
 
     assert_eq!(delta.added_lines, vec!["- NewMcpTool".to_string()]);
+}
+
+#[test]
+fn scoped_announced_tools_prevent_subagent_false_removal() {
+    let mut state = ToolAppState::default();
+    state.set_last_announced_tools_for_scope(None, HashSet::from(["TaskOutput".to_string()]));
+
+    let agent_baseline = state.last_announced_tools_for_scope(Some("agent-a"));
+    assert!(
+        compute_tools_delta(&[], &[], &agent_baseline).is_none(),
+        "subagent first turn must not inherit main-session deferred tools"
+    );
 }

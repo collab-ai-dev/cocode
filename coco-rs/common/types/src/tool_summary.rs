@@ -89,9 +89,10 @@ pub fn apply_patch_target_paths(patch: &str) -> Vec<&str> {
 /// suffix when offset/limit are present (`lines {start}-{end}` when a limit
 /// is set, else `from line {start}`).
 fn read_target_preview(input: &Value) -> String {
-    let path = scalar_value(input, "file_path")
+    let raw_path = scalar_value(input, "file_path")
         .or_else(|| scalar_value(input, "path"))
         .unwrap_or_default();
+    let path = task_output_label(&raw_path).unwrap_or(raw_path);
     let offset = input.get("offset").and_then(Value::as_i64);
     let limit = input.get("limit").and_then(Value::as_i64);
     if offset.is_none() && limit.is_none() {
@@ -107,6 +108,22 @@ fn read_target_preview(input: &Value) -> String {
     } else {
         format!("{path} · {range}")
     }
+}
+
+fn task_output_label(path: &str) -> Option<String> {
+    let parts = path
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let projects_index = parts.iter().position(|part| *part == "projects")?;
+    if parts.get(projects_index + 3)? != &"tasks" {
+        return None;
+    }
+    if parts.len() != projects_index + 5 {
+        return None;
+    }
+    let task_id = parts[projects_index + 4].strip_suffix(".output")?;
+    (!task_id.is_empty()).then(|| format!("task {task_id}"))
 }
 
 /// Multi-line input dump capped at `max_chars` — one `key: value` per

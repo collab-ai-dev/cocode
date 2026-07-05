@@ -35,15 +35,17 @@ impl TaskRuntime {
                 coco_error::StatusCode::FileNotFound,
             ));
         };
-        let Some(dto) = self.disk.get(task_id).await else {
+        let Some(path) = output_path(&state) else {
             return Ok(TaskOutputDelta {
                 content: String::new(),
                 new_offset: from_offset,
                 is_complete: state.status.is_terminal(),
             });
         };
-        let _ = dto.flush().await;
-        let (content, new_offset) = match dto.read_delta(from_offset, DEFAULT_MAX_READ_BYTES).await
+        let (content, new_offset) = match self
+            .disk
+            .read_delta_at_path(task_id, &path, from_offset, DEFAULT_MAX_READ_BYTES)
+            .await
         {
             Ok(pair) => pair,
             Err(_) => (String::new(), from_offset),
@@ -98,9 +100,9 @@ impl TaskRuntime {
                 coco_error::StatusCode::FileNotFound,
             ));
         };
-        let stdout = if let Some(dto) = self.disk.get(task_id).await {
-            let _ = dto.flush().await;
-            dto.read_tail(DEFAULT_MAX_READ_BYTES)
+        let stdout = if let Some(path) = output_path(&state) {
+            self.disk
+                .read_tail_at_path(task_id, &path, DEFAULT_MAX_READ_BYTES)
                 .await
                 .unwrap_or_default()
         } else {
@@ -130,4 +132,12 @@ impl TaskRuntime {
             interrupted,
         })
     }
+}
+
+fn output_path(state: &TaskStateBase) -> Option<std::path::PathBuf> {
+    state
+        .output_file
+        .as_deref()
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
 }

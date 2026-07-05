@@ -22,6 +22,7 @@ async fn empty_sources_materializes_all_defaults() {
     assert!(out.hook_events.is_empty());
     assert!(out.diagnostics.is_empty());
     assert!(out.task_statuses.is_empty());
+    assert!(!out.task_status_timed_out);
     assert!(out.skill_listing.is_none());
     assert!(out.invoked_skills.is_empty());
     assert!(out.mcp_instructions_current.is_empty());
@@ -56,6 +57,7 @@ async fn noop_bundle_also_materializes_defaults_through_trait_dispatch() {
     assert!(out.hook_events.is_empty());
     assert!(out.diagnostics.is_empty());
     assert!(out.task_statuses.is_empty());
+    assert!(!out.task_status_timed_out);
     assert!(out.mcp_resources.is_empty());
     assert!(out.nested_memories.is_empty());
     assert!(out.relevant_memories.is_empty());
@@ -112,6 +114,49 @@ async fn disabled_config_skips_sources_even_when_present() {
         !spy.called.load(std::sync::atomic::Ordering::Relaxed),
         "config-gated source must not be called when disabled"
     );
+}
+
+#[tokio::test]
+async fn task_status_timeout_is_reported() {
+    use async_trait::async_trait;
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct SlowTaskStatusSource;
+
+    #[async_trait]
+    impl TaskStatusSource for SlowTaskStatusSource {
+        async fn collect(
+            &self,
+            _agent_id: Option<&str>,
+            _just_compacted: bool,
+        ) -> Vec<crate::TaskStatusSnapshot> {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Vec::new()
+        }
+    }
+
+    let sources = ReminderSources {
+        task_status: Some(Arc::new(SlowTaskStatusSource)),
+        ..Default::default()
+    };
+    let cfg = SystemReminderConfig::default();
+    let out = sources
+        .materialize(MaterializeContext {
+            config: &cfg,
+            agent_id: None,
+            user_input: None,
+            mentioned_paths: &[],
+            recent_tools: &[],
+            just_compacted: true,
+            per_source_timeout: Duration::from_millis(1),
+            skill_overrides: &coco_config::SkillOverrideTiers::default(),
+            skill_tool_loaded: true,
+        })
+        .await;
+
+    assert!(out.task_statuses.is_empty());
+    assert!(out.task_status_timed_out);
 }
 
 #[tokio::test]

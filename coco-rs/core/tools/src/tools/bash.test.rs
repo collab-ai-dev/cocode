@@ -1236,8 +1236,7 @@ mod render_for_model_tests {
     fn explicit_background_emits_task_id_and_output_path() {
         // Explicit `run_in_background: true` returns `{backgroundTaskId,
         // outputPath}` (no stdout). render_for_model must name both the task
-        // id and the output path so the model can `Read` the file directly
-        // (replaces the deprecated TaskOutput tool).
+        // id and the output path.
         let data = json!({
             "backgroundTaskId": "task-42",
             "outputPath": "/cfg/cache/tasks/sess/task-42.output",
@@ -1249,7 +1248,7 @@ mod render_for_model_tests {
         };
         assert_eq!(
             text,
-            "Command running in background with ID: task-42. Output is being written to: /cfg/cache/tasks/sess/task-42.output. Use Read on this output path to inspect logs/results when needed."
+            "Command running in background with ID: task-42. Output is being written to: /cfg/cache/tasks/sess/task-42.output."
         );
     }
 
@@ -1392,7 +1391,10 @@ mod render_for_model_tests {
             "got: {text}"
         );
         assert!(text.contains("run_in_background: true"), "got: {text}");
-        assert!(text.contains("Use Read on this output path"), "got: {text}");
+        assert!(
+            !text.contains("Use Read on this output path"),
+            "got: {text}"
+        );
     }
 
     #[test]
@@ -1415,7 +1417,7 @@ mod render_for_model_tests {
         };
         assert!(
             text.contains(
-                "Command was manually backgrounded by user with ID: task-7. Output is being written to: /cfg/cache/tasks/sess/task-7.output. Use Read on this output path to inspect logs/results when needed."
+                "Command was manually backgrounded by user with ID: task-7. Output is being written to: /cfg/cache/tasks/sess/task-7.output."
             ),
             "got: {text}"
         );
@@ -1439,7 +1441,7 @@ mod render_for_model_tests {
         };
         assert!(
             text.contains(
-                "Command running in background with ID: task-3. Output is being written to: /cfg/cache/tasks/sess/task-3.output. Use Read on this output path to inspect logs/results when needed."
+                "Command running in background with ID: task-3. Output is being written to: /cfg/cache/tasks/sess/task-3.output."
             ),
             "got: {text}"
         );

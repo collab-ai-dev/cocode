@@ -174,6 +174,21 @@ coco-jemalloc *args:
     # non-prof toolchain jemalloc then spams `Invalid conf pair`. The TUI
     # activates sampling from `tui.performance.heap_profile_enabled` and dumps
     # to `<config_home>/logs/coco.<pid>.turn<N>.heap` at every turn end.
+    #
+    # Backtrace quality is a jemalloc-BUILD property, not something we can set
+    # here: the per-turn dumps carry corrupt call stacks on macOS/ARM64 because
+    # `tikv-jemalloc-sys` compiles NO prof unwinder backend on Darwin
+    # (`JEMALLOC_PROF_{LIBUNWIND,LIBGCC,GCC}` all `#undef` in its generated
+    # `jemalloc_internal_defs.h`). A `-C force-frame-pointers=yes` rustflag was
+    # tried here and dropped as useless — aarch64-apple-darwin already
+    # ABI-mandates FP, and the missing piece is the C-library unwinder, not Rust
+    # frames. So on macOS trust only leaf+Total and attribute growth via the
+    # instrumented `tui::perf::mem` retained buckets; Linux is the reliable stack
+    # path (jeprof + DWARF `.eh_frame`, no FP dependency). If Linux stacks ever
+    # come back empty too, the fix is enabling a jemalloc prof unwinder in
+    # `tikv-jemalloc-sys`'s build — not a rustflag here (which would also fork the
+    # build fingerprint from plain `just coco` and force a full recompile on every
+    # toggle).
     if [[ "$(uname -s)" != "Darwin" ]]; then
         export MALLOC_CONF="${MALLOC_CONF:+$MALLOC_CONF,}background_thread:true"
     fi

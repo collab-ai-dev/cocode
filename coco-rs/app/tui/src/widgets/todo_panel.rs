@@ -2,12 +2,12 @@
 //!
 //! ## V1/V2 mutual exclusion
 //!
-//! INTENTIONAL UI DIVERGENCE: Claude Code TS keeps V1 `TodoWrite` out of the
-//! expanded V2 task panel and surfaces it through summary/status state. coco-rs
-//! uses one right-rail task panel for both V2 `plan_tasks` and V1
+//! INTENTIONAL PRODUCT DIVERGENCE: Claude Code TS keeps V1 `TodoWrite` out of
+//! the expanded V2 task panel and surfaces it through summary/status state.
+//! coco-rs uses one right-rail task panel for both V2 `plan_tasks` and V1
 //! `todos_by_agent` so multi-provider sessions have a single visible planning
-//! surface. Do not remove the V1 fallback during TS parity work unless the
-//! product decision changes.
+//! surface. Row rendering stays aligned with TS by omitting inner list titles;
+//! the outer right-rail panel title provides the grouping.
 //!
 //! V2 wins when `plan_tasks` is non-empty; otherwise V1 wins when
 //! `todos_by_agent` is non-empty. Both empty → no rows.
@@ -30,7 +30,6 @@
 //! - `◼` (in_progress, accent-tone)
 //! - `☐` (pending, dim)
 
-use crate::i18n::t;
 use crate::presentation::activity::ActivityLine;
 use crate::presentation::activity::ActivitySpan;
 use crate::presentation::activity::ActivityTone;
@@ -84,10 +83,6 @@ fn append_v2(state: &AppState, out: &mut Vec<ActivityLine>) {
         return;
     }
 
-    out.push(ActivityLine::section(
-        t!("plan_panel.section_tasks").to_string(),
-    ));
-
     let unresolved_ids: HashSet<&str> = state
         .session
         .plan_tasks
@@ -137,10 +132,7 @@ fn append_v2(state: &AppState, out: &mut Vec<ActivityLine>) {
 }
 
 fn append_v1(state: &AppState, out: &mut Vec<ActivityLine>) {
-    out.push(ActivityLine::section(
-        t!("plan_panel.section_todos").to_string(),
-    ));
-
+    let mut emitted = false;
     let mut keys: Vec<&String> = state.session.todos_by_agent.keys().collect();
     keys.sort();
     for key in keys {
@@ -148,6 +140,7 @@ fn append_v1(state: &AppState, out: &mut Vec<ActivityLine>) {
         if items.is_empty() {
             continue;
         }
+        emitted = true;
         out.push(ActivityLine::text(format!("  [{key}]"), ActivityTone::Dim));
 
         // Sort by status priority. V1 status is a free-form string, so
@@ -167,7 +160,9 @@ fn append_v1(state: &AppState, out: &mut Vec<ActivityLine>) {
             });
         }
     }
-    out.push(ActivityLine::blank());
+    if emitted {
+        out.push(ActivityLine::blank());
+    }
 }
 
 fn visible_v2_indices(
