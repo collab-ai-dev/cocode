@@ -1241,13 +1241,14 @@ impl QueryEngine {
         }
 
         let cancel = self.cancel.clone();
+        let usage_accounting = self.usage_accounting.clone();
         let handle = tokio::spawn(async move {
             // Tie the fork to the parent's cancellation. When the user
             // hits Esc, the side-fork doesn't keep running after the
             // turn loop exits.
             tokio::select! {
                 _ = cancel.cancelled() => None,
-                result = crate::tool_use_summary::generate_tool_use_summary(input, model_runtimes) => result,
+                result = crate::tool_use_summary::generate_tool_use_summary(input, model_runtimes, usage_accounting) => result,
             }
         });
 

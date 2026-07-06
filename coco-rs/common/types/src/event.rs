@@ -515,7 +515,7 @@ matching `NotificationMethod` discriminant.",
     /// Agents killed.
     "agents/killed" => AgentsKilled(AgentsKilledParams),
 
-    // === Model (4) ===
+    // === Model (7) ===
 
     /// Model fallback started.
     "model/fallbackStarted" => ModelFallbackStarted(ModelFallbackParams),
@@ -528,6 +528,12 @@ matching `NotificationMethod` discriminant.",
     /// needs to refresh its `model_by_role` cache and, for `Main`,
     /// status-bar fields (`model`, `provider`, `thinking_effort`).
     "model/roleChanged" => ModelRoleChanged(ModelRoleChangedParams),
+    /// A MoA reference model call started.
+    "model/moaReferenceStarted" => MoaReferenceStarted(MoaReferenceParams),
+    /// A MoA reference model call completed. Carries advisory text or failure.
+    "model/moaReferenceCompleted" => MoaReferenceCompleted(MoaReferenceParams),
+    /// MoA reference fan-out finished and the aggregator is about to run.
+    "model/moaAggregating" => MoaAggregating(MoaAggregatingParams),
 
     // === Permission (1) ===
 
@@ -1546,6 +1552,33 @@ pub struct ModelRoleChangedParams {
     /// `default_thinking_level`. `Some(_)` ⇒ explicit user choice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<crate::ReasoningEffort>,
+}
+
+/// Payload for MoA reference lifecycle events.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoaReferenceParams {
+    pub turn_id: String,
+    pub role: crate::ModelRole,
+    pub preset: String,
+    pub index: i32,
+    pub count: i32,
+    pub provider: String,
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    #[serde(default)]
+    pub failed: bool,
+}
+
+/// Payload for the MoA aggregation marker.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoaAggregatingParams {
+    pub turn_id: String,
+    pub role: crate::ModelRole,
+    pub preset: String,
+    pub count: i32,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

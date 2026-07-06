@@ -41,6 +41,7 @@ pub mod names {
     // Configuration
     pub const CONFIG: &str = "config";
     pub const MODEL: &str = "model";
+    pub const MOA: &str = "moa";
     pub const PROVIDER: &str = "provider";
     pub const PERMISSIONS: &str = "permissions";
     pub const THEME: &str = "theme";
@@ -1579,6 +1580,27 @@ pub fn register_ts_parity_handlers(
                 handler: names::PROVIDER.to_string(),
             }),
             handler: Some(Arc::new(handlers::provider::ProviderHandler)),
+            is_enabled: None,
+        });
+    }
+
+    // /moa — one-shot prompt through settings.moa.default_preset. Does not
+    // mutate model role bindings.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::MOA,
+            "Run one prompt through the default MoA preset",
+            &[],
+            CommandSafety::AlwaysSafe,
+            Some("<prompt>"),
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::Local(LocalCommandData {
+                handler: names::MOA.to_string(),
+            }),
+            handler: Some(Arc::new(handlers::moa::MoaHandler)),
             is_enabled: None,
         });
     }

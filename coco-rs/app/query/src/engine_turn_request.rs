@@ -183,6 +183,7 @@ impl QueryEngine {
 
         let mut params = QueryParams {
             prompt,
+            temperature: None,
             max_tokens: None,
             thinking_level: self.config.thinking_level.clone(),
             // config#247: fast-mode support is capability-driven and

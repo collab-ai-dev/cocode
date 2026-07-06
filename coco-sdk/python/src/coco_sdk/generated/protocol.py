@@ -638,6 +638,7 @@ class UsageSource(str, Enum):
     memory_side_query = "memory_side_query"
     hook_prompt = "hook_prompt"
     hook_agent = "hook_agent"
+    moa_reference = "moa_reference"
 
 
 class UsageSourceGroup(str, Enum):
@@ -1821,6 +1822,30 @@ class ServerNotificationModelRoleChanged(BaseModel):
     params: ModelRoleChangedParams
 
 
+class ServerNotificationModelMoaReferenceStarted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["model/moaReferenceStarted"] = Field(
+        default="model/moaReferenceStarted", alias="method"
+    )
+    params: MoaReferenceParams
+
+
+class ServerNotificationModelMoaReferenceCompleted(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["model/moaReferenceCompleted"] = Field(
+        default="model/moaReferenceCompleted", alias="method"
+    )
+    params: MoaReferenceParams
+
+
+class ServerNotificationModelMoaAggregating(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["model/moaAggregating"] = Field(
+        default="model/moaAggregating", alias="method"
+    )
+    params: MoaAggregatingParams
+
+
 class ServerNotificationPermissionModeChanged(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["permission/modeChanged"] = Field(
@@ -2105,6 +2130,9 @@ ServerNotification = Annotated[
         ServerNotificationModelFallbackCompleted,
         ServerNotificationModelFastModeChanged,
         ServerNotificationModelRoleChanged,
+        ServerNotificationModelMoaReferenceStarted,
+        ServerNotificationModelMoaReferenceCompleted,
+        ServerNotificationModelMoaAggregating,
         ServerNotificationPermissionModeChanged,
         ServerNotificationPromptSuggestion,
         ServerNotificationError,
@@ -3474,6 +3502,25 @@ class McpStartupStatusParams(BaseModel):
     status: McpConnectionStatus
 
 
+class MoaAggregatingParams(BaseModel):
+    count: int
+    preset: str
+    role: ModelRole
+    turn_id: str
+
+
+class MoaReferenceParams(BaseModel):
+    count: int
+    index: int
+    model_id: str
+    preset: str
+    provider: str
+    role: ModelRole
+    turn_id: str
+    failed: bool = False
+    text: str | None = None
+
+
 class ModelFallbackParams(BaseModel):
     from_model: str
     reason: str
@@ -3816,6 +3863,9 @@ class NotificationMethod(str, Enum):
     MODEL_FALLBACK_COMPLETED = "model/fallbackCompleted"
     MODEL_FAST_MODE_CHANGED = "model/fastModeChanged"
     MODEL_ROLE_CHANGED = "model/roleChanged"
+    MODEL_MOA_REFERENCE_STARTED = "model/moaReferenceStarted"
+    MODEL_MOA_REFERENCE_COMPLETED = "model/moaReferenceCompleted"
+    MODEL_MOA_AGGREGATING = "model/moaAggregating"
     PERMISSION_MODE_CHANGED = "permission/modeChanged"
     PROMPT_SUGGESTION = "prompt/suggestion"
     ERROR = "error"

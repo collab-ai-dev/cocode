@@ -1,7 +1,14 @@
+pub mod moa;
 pub mod partial;
 pub mod registry;
 pub mod role_slots;
 
+pub use moa::MAX_REFERENCE_MODELS;
+pub use moa::MOA_PROVIDER;
+pub use moa::MoaEndpointSpec;
+pub use moa::MoaFanout;
+pub use moa::MoaPresetSettings;
+pub use moa::MoaSettings;
 pub use partial::PartialModelInfo;
 pub use registry::ModelRegistry;
 pub use registry::ResolvedModel;
@@ -280,6 +287,8 @@ impl PartialEq for ModelInfo {
 #[derive(Debug, Clone, Default)]
 pub struct ModelRoles {
     pub roles: HashMap<ModelRole, RoleSlots<ModelSpec>>,
+    pub moa_presets: HashMap<String, MoaEndpointSpec>,
+    pub moa_endpoints: HashMap<ModelRole, MoaEndpointSpec>,
 }
 
 impl ModelRoles {
@@ -319,6 +328,14 @@ impl ModelRoles {
     /// Full `RoleSlots` for a role.
     pub fn role_slots(&self, role: ModelRole) -> Option<&RoleSlots<ModelSpec>> {
         self.roles.get(&role)
+    }
+
+    pub fn moa_endpoint(&self, role: ModelRole) -> Option<&MoaEndpointSpec> {
+        self.moa_endpoints.get(&role)
+    }
+
+    pub fn moa_preset(&self, preset_name: &str) -> Option<&MoaEndpointSpec> {
+        self.moa_presets.get(preset_name)
     }
 }
 

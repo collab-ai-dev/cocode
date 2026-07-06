@@ -181,7 +181,9 @@ pub(super) fn build_model_entries(state: &AppState, role: ModelRole) -> Vec<Mode
         .session
         .model_catalog
         .iter()
-        .filter(|entry| is_model_allowed(&entry.provider, &entry.model_id, allowlist))
+        .filter(|entry| {
+            entry.provider == "moa" || is_model_allowed(&entry.provider, &entry.model_id, allowlist)
+        })
         .map(|entry| ModelEntry {
             provider: entry.provider.clone(),
             provider_display: entry.provider_display.clone(),

@@ -163,6 +163,11 @@ impl QueryEngine {
         }
     }
 
+    pub fn with_model_runtime_source(mut self, source: ModelRuntimeSource) -> Self {
+        self.model_runtime_source = source;
+        self
+    }
+
     /// Install a shared sync-hook-event buffer. The same buffer instance
     /// must back the `CombinedHookEventsSource` registered via
     /// [`Self::with_reminder_sources`], so SessionStart /
@@ -198,12 +203,6 @@ impl QueryEngine {
     /// Install the shared model runtime registry for helper LLM calls.
     pub fn with_model_runtimes(mut self, registry: Arc<ModelRuntimeRegistry>) -> Self {
         self.model_runtimes = registry;
-        self
-    }
-
-    /// Select the runtime source used by this engine's agent loop.
-    pub fn with_model_runtime_source(mut self, source: ModelRuntimeSource) -> Self {
-        self.model_runtime_source = source;
         self
     }
 

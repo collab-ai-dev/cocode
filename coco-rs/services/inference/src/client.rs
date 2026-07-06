@@ -40,6 +40,10 @@ use vercel_ai_provider::LanguageModelV4CallOptions;
 pub struct QueryParams {
     /// Messages to send (as LlmPrompt).
     pub prompt: LlmPrompt,
+    /// Optional per-call temperature override. `None` preserves the resolved
+    /// model/provider default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
     /// Maximum output tokens. Use [`coco_config::PositiveTokens`] when
     /// validation is required at the JSON boundary; this field stays
     /// `Option<i64>` because callers (TUI, CLI overrides) supply it
@@ -1011,6 +1015,7 @@ impl ApiClient {
             }
         });
         let per_call = PerCallOverrides {
+            temperature: params.temperature,
             // Priority chain: explicit per-call level (layer 1) wins;
             // otherwise seed the serving slot's effort (layer 2). A
             // `None` from both leaves `build_call_options` to apply the

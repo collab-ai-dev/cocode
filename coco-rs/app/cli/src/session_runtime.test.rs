@@ -14,6 +14,7 @@ use tempfile::TempDir;
 
 use super::SessionRuntime;
 use super::SessionRuntimeBuildOpts;
+use super::resolve_model_selection_from_runtime_config;
 use super::thinking_level_for_effort_from;
 use crate::Cli;
 
@@ -110,6 +111,59 @@ async fn sdk_model_selection_resolves_bare_model_against_main_provider() {
         .expect("explicit model should resolve");
     assert_eq!(explicit.provider, "deepseek-openai");
     assert_eq!(explicit.model_id, "deepseek-v4-pro");
+}
+
+#[test]
+fn sdk_model_selection_accepts_configured_moa_preset() {
+    let home = TempDir::new().expect("home tempdir");
+    let mut presets = std::collections::BTreeMap::new();
+    presets.insert(
+        "default".to_string(),
+        coco_config::MoaPresetSettings {
+            aggregator: Some(ProviderModelSelection {
+                provider: "anthropic".to_string(),
+                model_id: "claude-sonnet-4-6".to_string(),
+            }),
+            reference_models: vec![ProviderModelSelection {
+                provider: "openai".to_string(),
+                model_id: "gpt-5-4".to_string(),
+            }],
+            ..Default::default()
+        },
+    );
+    let settings = SettingsWithSource {
+        merged: Settings {
+            models: coco_config::ModelSelectionSettings {
+                main: Some(RoleSlots::new(ProviderModelSelection {
+                    provider: "anthropic".into(),
+                    model_id: "claude-sonnet-4-6".into(),
+                })),
+                ..Default::default()
+            },
+            moa: coco_config::MoaSettings {
+                default_preset: Some("default".to_string()),
+                presets,
+            },
+            ..Default::default()
+        },
+        per_source: std::collections::HashMap::new(),
+        source_paths: std::collections::HashMap::new(),
+    };
+    let runtime_config = coco_config::build_runtime_config_with(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        CatalogPaths::empty_in(home.path()),
+        coco_config::parse_enabled_setting_sources(None),
+    )
+    .expect("runtime config");
+
+    let selection = resolve_model_selection_from_runtime_config(&runtime_config, "moa/default")
+        .expect("configured MoA preset should resolve");
+
+    assert_eq!(selection.provider, "moa");
+    assert_eq!(selection.model_id, "default");
+    assert!(resolve_model_selection_from_runtime_config(&runtime_config, "moa/missing").is_none());
 }
 
 #[test]

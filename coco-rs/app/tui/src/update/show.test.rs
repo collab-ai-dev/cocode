@@ -135,6 +135,38 @@ fn cycle_model_marks_provider_config_unavailable() {
 }
 
 #[test]
+fn cycle_model_keeps_moa_virtual_entry_with_allowlist() {
+    let mut state = AppState::new();
+    seed_catalog(&mut state);
+    state
+        .session
+        .model_catalog
+        .push(catalog_entry("moa", "MoA", "default"));
+    state.session.available_models = Some(vec!["anthropic/claude-sonnet-4-6".to_string()]);
+    state.session.model_by_role.insert(
+        ModelRole::Plan,
+        crate::state::ModelBinding {
+            provider: "moa".to_string(),
+            model_id: "default".to_string(),
+            context_window: Some(200_000),
+            effort: None,
+        },
+    );
+
+    cycle_model(&mut state);
+    cycle_model_role(&mut state, 1);
+    cycle_model_role(&mut state, 1);
+    let m = match state.ui.modal.as_ref() {
+        Some(ModalState::ModelPicker(m)) => m,
+        other => panic!("expected ModelPicker, got {other:?}"),
+    };
+    assert_eq!(m.role, ModelRole::Plan);
+    let moa = m.entries.iter().find(|e| e.provider == "moa").unwrap();
+    assert_eq!(moa.model_id, "default");
+    assert!(moa.is_current_for_role);
+}
+
+#[test]
 fn cycle_model_adds_unavailable_provider_without_models() {
     let mut state = AppState::new();
     seed_catalog(&mut state);

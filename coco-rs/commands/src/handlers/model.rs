@@ -7,6 +7,8 @@
 //! [`coco_config::builtin_models_partial`] registry.
 
 use async_trait::async_trait;
+use coco_types::ModelRole;
+use std::str::FromStr;
 
 use crate::CommandHandler;
 use crate::CommandResult;
@@ -36,23 +38,49 @@ impl CommandHandler for ModelHandler {
 /// `models.main`, and return a user-facing summary line. Pure
 /// (no overlay side effects) so the typed-arg path stays inline.
 fn handle_with_args(requested: &str) -> String {
+    let (role, requested) = split_role_arg(requested);
+    if let Some(preset) = requested.strip_prefix("moa/").filter(|s| !s.is_empty()) {
+        let key = format!("models.{}", role.as_str());
+        let selection = format!("moa/{preset}");
+        return match coco_config::global_config::write_user_setting(
+            &key,
+            serde_json::Value::String(selection.clone()),
+        ) {
+            Ok(path) => format!(
+                "Set {} → {} (persisted to {})",
+                title_case_role(role),
+                selection,
+                path.display()
+            ),
+            Err(err) => format!(
+                "Set {} → {} (failed to persist: {err})",
+                title_case_role(role),
+                selection
+            ),
+        };
+    }
+
     match resolve_model(requested) {
         Some(resolved) => {
             let selection = format!("{}/{}", resolved.provider, resolved.model_id);
+            let key = format!("models.{}", role.as_str());
             match coco_config::global_config::write_user_setting(
-                "models.main",
+                &key,
                 serde_json::Value::String(selection),
             ) {
                 Ok(path) => format!(
-                    "Set Main → {}/{} (persisted to {})\n  {}",
+                    "Set {} → {}/{} (persisted to {})\n  {}",
+                    title_case_role(role),
                     resolved.provider,
                     resolved.model_id,
                     path.display(),
                     resolved.summary
                 ),
                 Err(err) => format!(
-                    "Set Main → {}/{} (failed to persist: {err})",
-                    resolved.provider, resolved.model_id
+                    "Set {} → {}/{} (failed to persist: {err})",
+                    title_case_role(role),
+                    resolved.provider,
+                    resolved.model_id
                 ),
             }
         }
@@ -69,6 +97,27 @@ fn handle_with_args(requested: &str) -> String {
             out
         }
     }
+}
+
+fn split_role_arg(args: &str) -> (ModelRole, &str) {
+    let mut parts = args.split_whitespace();
+    let Some(first) = parts.next() else {
+        return (ModelRole::Main, args);
+    };
+    if let Ok(role) = ModelRole::from_str(first) {
+        let rest = args[first.len()..].trim();
+        if !rest.is_empty() {
+            return (role, rest);
+        }
+    }
+    (ModelRole::Main, args)
+}
+
+fn title_case_role(role: ModelRole) -> String {
+    let mut chars = role.as_str().chars();
+    chars.next().map_or_else(String::new, |first| {
+        format!("{}{}", first.to_uppercase(), chars.as_str())
+    })
 }
 
 pub struct ResolvedBuiltin {

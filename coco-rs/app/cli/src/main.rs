@@ -236,6 +236,9 @@ async fn async_main() -> Result<()> {
             Commands::Plugin { action } => {
                 return bin_handlers::plugin::run_plugin_subcommand(action).await;
             }
+            Commands::Moa { action } => {
+                return bin_handlers::moa::handle_moa(action);
+            }
             Commands::Agents => {
                 return bin_handlers::agents::run_agents_subcommand().await;
             }

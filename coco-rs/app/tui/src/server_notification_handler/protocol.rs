@@ -161,6 +161,14 @@ pub(super) fn handle(
         // === Content deltas (SDK path — TUI uses Stream layer) ===
         ServerNotification::AgentMessageDelta(_) | ServerNotification::ReasoningDelta(_) => false,
 
+        // === MoA lifecycle (SDK/API path) ===
+        // The TUI receives reference text as Stream::ThinkingDelta from
+        // app/query so it renders in the existing thinking block path. Keep
+        // these protocol events as explicit no-ops for SDK/API consumers.
+        ServerNotification::MoaReferenceStarted(_)
+        | ServerNotification::MoaReferenceCompleted(_)
+        | ServerNotification::MoaAggregating(_) => false,
+
         // === MCP ===
         ServerNotification::McpStartupStatus(p) => {
             let connected = matches!(p.status, coco_types::McpConnectionStatus::Connected);

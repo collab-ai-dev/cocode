@@ -1013,6 +1013,7 @@ async fn run_agent_driver(
                 let mut effective_content = content;
                 let mut slash_metadata = None;
                 let mut slash_thinking_level = None;
+                let mut slash_model_runtime_source = None;
                 if let Some((name, args)) = parse_slash_command(&effective_content) {
                     let outcome = dispatch_slash_command(name, args, &runtime, &event_tx).await;
                     match handle_slash_outcome(
@@ -1032,10 +1033,12 @@ async fn run_agent_driver(
                             content,
                             metadata,
                             thinking_level,
+                            model_runtime_source,
                         } => {
                             effective_content = content;
                             slash_metadata = metadata;
                             slash_thinking_level = thinking_level;
+                            slash_model_runtime_source = model_runtime_source;
                         }
                     }
                 }
@@ -1074,6 +1077,7 @@ async fn run_agent_driver(
                         effective_content,
                         slash_metadata,
                         slash_thinking_level,
+                        slash_model_runtime_source,
                         images,
                         runtime_t,
                         event_tx_t,
@@ -1311,6 +1315,7 @@ async fn run_agent_driver(
                         content,
                         metadata,
                         thinking_level,
+                        model_runtime_source,
                     } => {
                         drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                         spawn_slash_run_engine_turn(
@@ -1318,6 +1323,7 @@ async fn run_agent_driver(
                                 content,
                                 metadata,
                                 thinking_level,
+                                model_runtime_source,
                             },
                             &runtime,
                             &event_tx,
@@ -1358,6 +1364,7 @@ async fn run_agent_driver(
                         content,
                         metadata,
                         thinking_level,
+                        model_runtime_source,
                     } => {
                         drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                         spawn_slash_run_engine_turn(
@@ -1365,6 +1372,7 @@ async fn run_agent_driver(
                                 content,
                                 metadata,
                                 thinking_level,
+                                model_runtime_source,
                             },
                             &runtime,
                             &event_tx,
@@ -2247,6 +2255,7 @@ enum SlashOutcome {
         content: String,
         metadata: Option<String>,
         thinking_level: Option<coco_types::ThinkingLevel>,
+        model_runtime_source: Option<coco_inference::ModelRuntimeSource>,
     },
     /// A user-typed fork-mode skill (`/<name>` with `context: fork`).
     /// Unlike `RunEngine` (which re-queries the main model with the
@@ -3064,6 +3073,7 @@ enum SlashFollowup {
         content: String,
         metadata: Option<String>,
         thinking_level: Option<coco_types::ThinkingLevel>,
+        model_runtime_source: Option<coco_inference::ModelRuntimeSource>,
     },
 }
 
@@ -3071,6 +3081,7 @@ struct SlashEnginePrompt {
     content: String,
     metadata: Option<String>,
     thinking_level: Option<coco_types::ThinkingLevel>,
+    model_runtime_source: Option<coco_inference::ModelRuntimeSource>,
 }
 
 /// Process a [`SlashOutcome`] into a [`SlashFollowup`] for the
@@ -3090,10 +3101,12 @@ async fn handle_slash_outcome(
             content,
             metadata,
             thinking_level,
+            model_runtime_source,
         } => SlashFollowup::RunEngine {
             content,
             metadata,
             thinking_level,
+            model_runtime_source,
         },
         SlashOutcome::RunForkSkill { name, args } => {
             run_fork_skill(runtime, event_tx, &name, &args, active_turn).await;
@@ -3231,6 +3244,7 @@ async fn drain_queued_slash_commands(
                 content,
                 metadata,
                 thinking_level,
+                model_runtime_source,
             } => {
                 let session_id = runtime.current_session_id().await;
                 spawn_slash_run_engine_turn(
@@ -3238,6 +3252,7 @@ async fn drain_queued_slash_commands(
                         content,
                         metadata,
                         thinking_level,
+                        model_runtime_source,
                     },
                     runtime,
                     event_tx,
@@ -3283,6 +3298,7 @@ async fn drain_queued_slash_commands(
                     content,
                     metadata,
                     thinking_level,
+                    model_runtime_source,
                 } = run_goal_command(runtime, event_tx, request).await
                 {
                     let session_id = runtime.current_session_id().await;
@@ -3291,6 +3307,7 @@ async fn drain_queued_slash_commands(
                             content,
                             metadata,
                             thinking_level,
+                            model_runtime_source,
                         },
                         runtime,
                         event_tx,
@@ -3495,6 +3512,7 @@ async fn spawn_slash_run_engine_turn(
         content,
         metadata,
         thinking_level,
+        model_runtime_source,
     } = prompt;
     let task = tokio::spawn(async move {
         let _done = TurnDoneGuard {
@@ -3506,6 +3524,7 @@ async fn spawn_slash_run_engine_turn(
             content,
             metadata,
             thinking_level,
+            model_runtime_source,
             Vec::new(),
             runtime_t,
             event_tx_t,
@@ -3736,6 +3755,7 @@ async fn dispatch_slash_command(
             content: prompt,
             metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
             thinking_level: None,
+            model_runtime_source: None,
         };
     }
     // Fork-mode skills (`context: fork`) run as a subagent via the
@@ -3832,7 +3852,28 @@ async fn dispatch_slash_command(
             content: text,
             metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
             thinking_level: None,
+            model_runtime_source: None,
         },
+        CommandResult::MoaOneShot { prompt } => {
+            let preset = runtime
+                .runtime_config
+                .settings
+                .merged
+                .moa
+                .default_preset_name()
+                .to_string();
+            SlashOutcome::RunEngine {
+                content: prompt,
+                metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
+                thinking_level: None,
+                model_runtime_source: Some(coco_inference::ModelRuntimeSource::Explicit(
+                    coco_types::ProviderModelSelection {
+                        provider: coco_config::MOA_PROVIDER.to_string(),
+                        model_id: preset,
+                    },
+                )),
+            }
+        }
         CommandResult::Prompt { parts, .. } => {
             // Concatenate text parts. `File` parts are not yet wired —
             // none of the in-tree Prompt handlers emit them today.
@@ -3861,6 +3902,7 @@ async fn dispatch_slash_command(
                         coco_types::CommandType::Prompt(data) => data.thinking_level.clone(),
                         _ => None,
                     },
+                    model_runtime_source: None,
                 }
             }
         }
@@ -4239,6 +4281,7 @@ async fn dispatch_plan(
             content: desc.to_string(),
             metadata: Some(format_slash_command_metadata("plan", args)),
             thinking_level: None,
+            model_runtime_source: None,
         },
         None => {
             // Unreachable in practice — bare `/plan` and `/plan open`
@@ -4801,6 +4844,7 @@ async fn run_goal_command(
                 content: kickoff,
                 metadata: Some(format_slash_command_metadata("goal", &args)),
                 thinking_level: None,
+                model_runtime_source: None,
             }
         }
     }
@@ -5502,6 +5546,7 @@ async fn process_submit_turn(
     content: String,
     slash_metadata: Option<String>,
     slash_thinking_level: Option<coco_types::ThinkingLevel>,
+    slash_model_runtime_source: Option<coco_inference::ModelRuntimeSource>,
     images: Vec<coco_tui::ImageData>,
     runtime: Arc<crate::session_runtime::SessionRuntime>,
     event_tx: mpsc::Sender<CoreEvent>,
@@ -5632,6 +5677,11 @@ async fn process_submit_turn(
             }
         })
         .await;
+    let engine = if let Some(source) = slash_model_runtime_source {
+        engine.with_model_runtime_source(source)
+    } else {
+        engine
+    };
 
     // Mention priority for post-compact restoration.
     if !inputs.mentioned_paths.is_empty() {
@@ -7280,6 +7330,27 @@ fn build_model_catalog(
             }
         })
         .collect();
+    for endpoint in runtime_config.model_roles.moa_presets.values() {
+        if entries.iter().any(|entry| {
+            entry.provider == endpoint.display_provider()
+                && entry.model_id == endpoint.display_model_id()
+        }) {
+            continue;
+        }
+        let context_window = runtime_config
+            .model_registry
+            .resolve(&endpoint.aggregator.provider, &endpoint.aggregator.model_id)
+            .map(|resolved| resolved.info.context_window.get() as i64);
+        entries.push(ModelCatalogEntry {
+            provider: endpoint.display_provider().to_string(),
+            provider_display: "MoA".to_string(),
+            model_id: endpoint.display_model_id().to_string(),
+            display_name: format!("MoA {}", endpoint.display_model_id()),
+            context_window,
+            supported_efforts: Vec::new(),
+            default_effort: None,
+        });
+    }
 
     // Stable sort: provider_display → display_name. Matches the
     // picker's section-by-provider rendering.
@@ -7412,6 +7483,13 @@ fn build_model_by_role(
     let mut out = std::collections::HashMap::new();
     for role in ROLES {
         if let Some(spec) = runtime_config.model_roles.get(role) {
+            let display = runtime_config.model_roles.moa_endpoint(role);
+            let provider = display
+                .map(|endpoint| endpoint.display_provider().to_string())
+                .unwrap_or_else(|| spec.provider.clone());
+            let model_id = display
+                .map(|endpoint| endpoint.display_model_id().to_string())
+                .unwrap_or_else(|| spec.model_id.clone());
             let context_window = runtime_config
                 .model_registry
                 .resolve(&spec.provider, &spec.model_id)
@@ -7419,8 +7497,8 @@ fn build_model_by_role(
             out.insert(
                 role,
                 ModelBinding {
-                    model_id: spec.model_id.clone(),
-                    provider: spec.provider.clone(),
+                    model_id,
+                    provider,
                     context_window,
                     effort: None,
                 },
@@ -7466,36 +7544,61 @@ async fn apply_role_in_memory(
     effort: Option<coco_types::ReasoningEffort>,
     event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
 ) {
+    let moa_endpoint = if provider == "moa" {
+        runtime
+            .runtime_config
+            .model_roles
+            .moa_preset(&model_id)
+            .cloned()
+    } else {
+        None
+    };
+    let (acting_provider, acting_model_id, display_provider, display_model_id) =
+        if let Some(endpoint) = moa_endpoint.as_ref() {
+            (
+                endpoint.aggregator.provider.clone(),
+                endpoint.aggregator.model_id.clone(),
+                provider.clone(),
+                model_id.clone(),
+            )
+        } else {
+            (
+                provider.clone(),
+                model_id.clone(),
+                provider.clone(),
+                model_id.clone(),
+            )
+        };
     // Best-effort display name lookup from the resolved registry.
     // Falls back to the model_id itself so the TUI always has *some*
     // label.
     let display_name = runtime
         .runtime_config
         .model_registry
-        .resolve(&provider, &model_id)
+        .resolve(&acting_provider, &acting_model_id)
         .map(|resolved| {
             resolved
                 .info
                 .display_name
                 .clone()
-                .unwrap_or_else(|| model_id.clone())
+                .unwrap_or_else(|| acting_model_id.clone())
         })
-        .unwrap_or_else(|| model_id.clone());
+        .unwrap_or_else(|| acting_model_id.clone());
     let context_window = runtime
         .runtime_config
         .model_registry
-        .resolve(&provider, &model_id)
+        .resolve(&acting_provider, &acting_model_id)
         .map(|resolved| resolved.info.context_window.get() as i64);
     let api = runtime
         .runtime_config
         .providers
-        .get(&provider)
+        .get(&acting_provider)
         .map(|p| p.api)
         .unwrap_or(coco_types::ProviderApi::Anthropic);
     let spec = coco_types::ModelSpec {
-        provider: provider.clone(),
+        provider: acting_provider.clone(),
         api,
-        model_id: model_id.clone(),
+        model_id: acting_model_id.clone(),
         display_name: display_name.clone(),
     };
     // Main: this rebinds the registry runtime. The build can fail
@@ -7510,8 +7613,8 @@ async fn apply_role_in_memory(
     {
         tracing::warn!(
             role = %role.as_str(),
-            %provider,
-            %model_id,
+            provider = %display_provider,
+            model_id = %display_model_id,
             error = %err,
             "apply_role_override failed; reverting picker mirror"
         );
@@ -7521,6 +7624,8 @@ async fn apply_role_in_memory(
                     message: format!(
                         "failed to apply {role_label} → {provider}/{model_id}: {err}",
                         role_label = role.as_str(),
+                        provider = display_provider,
+                        model_id = display_model_id,
                     ),
                     category: Some("model_role_apply_failed".to_string()),
                     retryable: true,
@@ -7529,10 +7634,13 @@ async fn apply_role_in_memory(
             .await;
         return;
     }
+    runtime
+        .model_runtimes()
+        .set_role_moa_endpoint_override(role, moa_endpoint);
     tracing::info!(
         role = %role.as_str(),
-        %provider,
-        %model_id,
+        provider = %display_provider,
+        model_id = %display_model_id,
         effort = ?effort,
         "applied in-memory model-role override (not persisted)"
     );
@@ -7540,8 +7648,8 @@ async fn apply_role_in_memory(
         .send(CoreEvent::Protocol(ServerNotification::ModelRoleChanged(
             coco_types::ModelRoleChangedParams {
                 role,
-                model_id: model_id.clone(),
-                provider: provider.clone(),
+                model_id: display_model_id.clone(),
+                provider: display_provider.clone(),
                 context_window,
                 effort,
             },
@@ -7558,7 +7666,12 @@ async fn apply_role_in_memory(
     let effort_suffix = effort
         .map(|e| format!(" · thinking: {e}"))
         .unwrap_or_default();
-    let output = format!("Set {role_label} → {provider}/{display_name}{effort_suffix}");
+    let display_label = if display_provider == "moa" {
+        format!("{display_provider}/{display_model_id}")
+    } else {
+        format!("{display_provider}/{display_name}")
+    };
+    let output = format!("Set {role_label} → {display_label}{effort_suffix}");
     let messages = coco_messages::build_slash_command_messages(
         "model", /*args*/ "", &output, /*is_sensitive*/ false,
     );

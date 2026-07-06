@@ -23,6 +23,7 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
             LlmMessage::system("You are a helpful assistant. Be concise."),
             LlmMessage::user_text("Say 'hello world' exactly."),
         ],
+        temperature: None,
         // 16k removes max_tokens as a variable in any failure: the
         // model still stops naturally at ~150 tokens. Real flakes here
         // are gateway / model side (`stop_reason=Some(Error)` with 0
@@ -139,6 +140,7 @@ async fn run_with_tools_choice(
                 "What's the weather in Tokyo? Call get_weather with city='Tokyo'.",
             ),
         ],
+        temperature: None,
         max_tokens: Some(16_384),
         thinking_level: None,
         fast_mode: false,
@@ -297,6 +299,7 @@ pub async fn run_thinking_with_option_typed_tools(target: &LiveTarget) -> Result
                 "Search logs for query='timeout', limit=5, mode='lines'. Call search_logs.",
             ),
         ],
+        temperature: None,
         // Gemini-3 with thinking burns a budget on reasoning before
         // any output. With `thinking_level: medium` + per-variant enum
         // schemas in the tool the model can spend several thousand

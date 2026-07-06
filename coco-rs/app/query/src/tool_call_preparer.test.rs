@@ -346,6 +346,7 @@ async fn decide_in_auto_mode(tool: Arc<dyn DynTool>) -> PermissionDecision {
         Some(&auto),
         Some(&tracker),
         &model_runtimes,
+        None,
         &rules,
         &tools,
     )
@@ -416,6 +417,7 @@ async fn bypass_mode_preserves_ask_for_ask_user_question() {
         None, // auto mode not active in bypass
         None,
         &model_runtimes,
+        None,
         &rules,
         &tools,
     )

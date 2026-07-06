@@ -63,6 +63,42 @@ fn role_slots_of(provider: &str, model_id: &str) -> crate::RoleSlots<ProviderMod
     crate::RoleSlots::new(model_selection(provider, model_id))
 }
 
+fn moa_default_settings(role: ModelRole) -> SettingsWithSource {
+    let mut presets = BTreeMap::new();
+    presets.insert(
+        "default".to_string(),
+        crate::MoaPresetSettings {
+            aggregator: Some(model_selection("anthropic", "claude-sonnet-4-6")),
+            reference_models: vec![model_selection("openai", "gpt-5-4")],
+            ..Default::default()
+        },
+    );
+    let slots = role_slots_of("moa", "default");
+    let mut models = crate::ModelSelectionSettings::default();
+    match role {
+        ModelRole::Main => models.main = Some(slots),
+        ModelRole::Plan => {
+            models.main = Some(role_slots_of("anthropic", "claude-sonnet-4-6"));
+            models.plan = Some(slots);
+        }
+        ModelRole::Review => {
+            models.main = Some(role_slots_of("anthropic", "claude-sonnet-4-6"));
+            models.review = Some(slots);
+        }
+        _ => {
+            models.main = Some(role_slots_of("anthropic", "claude-sonnet-4-6"));
+        }
+    }
+    settings_with(Settings {
+        models,
+        moa: crate::MoaSettings {
+            default_preset: Some("default".to_string()),
+            presets,
+        },
+        ..Default::default()
+    })
+}
+
 fn settings_with_main(provider: &str, model_id: &str) -> SettingsWithSource {
     settings_with(Settings {
         models: crate::ModelSelectionSettings {
@@ -78,6 +114,171 @@ fn model_selection(provider: &str, model_id: &str) -> ProviderModelSelection {
         provider: provider.to_string(),
         model_id: model_id.to_string(),
     }
+}
+
+#[test]
+fn test_moa_main_role_resolves_display_and_acting_models() {
+    let runtime = build_isolated(
+        moa_default_settings(ModelRole::Main),
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("runtime config");
+
+    let acting = runtime.model_roles.get(ModelRole::Main).expect("main");
+    assert_eq!(acting.provider, "anthropic");
+    assert_eq!(acting.model_id, "claude-sonnet-4-6");
+    let endpoint = runtime
+        .model_roles
+        .moa_endpoint(ModelRole::Main)
+        .expect("moa endpoint");
+    assert_eq!(endpoint.display_provider(), "moa");
+    assert_eq!(endpoint.display_model_id(), "default");
+    assert_eq!(endpoint.reference_models[0].provider, "openai");
+    assert_eq!(endpoint.reference_models[0].model_id, "gpt-5-4");
+}
+
+#[test]
+fn test_moa_plan_and_review_roles_parse() {
+    for role in [ModelRole::Plan, ModelRole::Review] {
+        let runtime = build_isolated(
+            moa_default_settings(role),
+            EnvSnapshot::default(),
+            RuntimeOverrides::default(),
+        )
+        .expect("runtime config");
+        assert!(runtime.model_roles.moa_endpoint(role).is_some());
+    }
+}
+
+#[test]
+fn test_moa_preset_rejects_recursive_member() {
+    let mut settings = moa_default_settings(ModelRole::Main);
+    settings
+        .merged
+        .moa
+        .presets
+        .get_mut("default")
+        .expect("preset")
+        .reference_models = vec![model_selection("moa", "other")];
+
+    let err = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect_err("recursive MoA member must fail");
+    assert!(err.to_string().contains("must use a real provider/model"));
+}
+
+#[test]
+fn test_moa_available_models_checks_references() {
+    let mut settings = moa_default_settings(ModelRole::Main);
+    settings.merged.available_models = Some(vec!["anthropic/claude-sonnet-4-6".to_string()]);
+
+    let err = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect_err("reference outside allowlist must fail");
+    assert!(err.to_string().contains("available_models allowlist"));
+}
+
+#[test]
+fn test_moa_default_preset_synthesizes_from_main_review_fast() {
+    let settings = settings_with(Settings {
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("anthropic", "claude-sonnet-4-6")),
+            plan: Some(role_slots_of("moa", "default")),
+            review: Some(role_slots_of("openai", "gpt-5-4")),
+            fast: Some(role_slots_of(
+                "gemini-code-assist",
+                "gemini-3.1-pro-preview",
+            )),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("runtime config");
+    let endpoint = runtime
+        .model_roles
+        .moa_endpoint(ModelRole::Plan)
+        .expect("synthesized moa endpoint");
+
+    assert_eq!(endpoint.aggregator.provider, "anthropic");
+    assert_eq!(endpoint.aggregator.model_id, "claude-sonnet-4-6");
+    assert_eq!(
+        endpoint
+            .reference_models
+            .iter()
+            .map(|spec| format!("{}/{}", spec.provider, spec.model_id))
+            .collect::<Vec<_>>(),
+        vec![
+            "openai/gpt-5-4",
+            "gemini-code-assist/gemini-3.1-pro-preview"
+        ]
+    );
+}
+
+#[test]
+fn test_moa_default_preset_synthesizes_for_one_shot_without_role_binding() {
+    let settings = settings_with(Settings {
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("anthropic", "claude-sonnet-4-6")),
+            review: Some(role_slots_of("openai", "gpt-5-4")),
+            fast: Some(role_slots_of(
+                "gemini-code-assist",
+                "gemini-3.1-pro-preview",
+            )),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("runtime config");
+    let endpoint = runtime
+        .model_roles
+        .moa_preset("default")
+        .expect("synthesized default preset");
+
+    assert_eq!(endpoint.aggregator.provider, "anthropic");
+    assert_eq!(endpoint.aggregator.model_id, "claude-sonnet-4-6");
+    assert!(runtime.model_roles.moa_endpoint(ModelRole::Main).is_none());
+}
+
+#[test]
+fn test_moa_default_preset_synthesis_rejects_moa_main() {
+    let settings = settings_with(Settings {
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("moa", "default")),
+            review: Some(role_slots_of("openai", "gpt-5-4")),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let err = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect_err("moa main cannot seed synthesized default");
+    assert!(
+        err.to_string()
+            .contains("cannot synthesize settings.moa.presets.default")
+    );
 }
 
 #[test]

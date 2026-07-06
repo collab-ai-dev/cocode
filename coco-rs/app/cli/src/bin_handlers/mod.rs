@@ -7,6 +7,7 @@
 
 pub mod agents;
 pub mod config;
+pub mod moa;
 pub mod plugin;
 pub mod ps;
 pub mod sessions;
