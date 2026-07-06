@@ -400,6 +400,7 @@ impl QueryEngine {
                             auto_mode_state: self.auto_mode_state.as_ref(),
                             denial_tracker: self.denial_tracker.as_ref(),
                             model_runtimes: &self.model_runtimes,
+                            usage_accounting: self.usage_accounting.as_ref(),
                             auto_mode_rules: &self.auto_mode_rules,
                             completion_event_mode: crate::helpers::ToolCompletionEventMode::Defer,
                             deferred_tool_completions: Some(&mut deferred_tool_completions),

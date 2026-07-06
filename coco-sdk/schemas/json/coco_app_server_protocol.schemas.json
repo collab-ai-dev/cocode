@@ -5141,6 +5141,76 @@
         }
       ]
     },
+    "MoaAggregatingParams": {
+      "description": "Payload for the MoA aggregation marker.",
+      "properties": {
+        "count": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "preset": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ModelRole"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "role",
+        "preset",
+        "count"
+      ],
+      "type": "object"
+    },
+    "MoaReferenceParams": {
+      "description": "Payload for MoA reference lifecycle events.",
+      "properties": {
+        "count": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "failed": {
+          "default": false,
+          "type": "boolean"
+        },
+        "index": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "preset": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ModelRole"
+        },
+        "text": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "role",
+        "preset",
+        "index",
+        "count",
+        "provider",
+        "model_id"
+      ],
+      "type": "object"
+    },
     "ModelCatalogInfo": {
       "description": "Wire payload for one model row in the picker catalog. Ships on\n[`crate::TuiOnlyEvent::ModelCatalogRefreshed`] so a post-login `/models`\ndiscovery can augment the TUI's session-frozen `model_catalog` without a\nrestart. Mirrors the TUI's `ModelCatalogEntry`.",
       "properties": {
@@ -5347,6 +5417,9 @@
         "model/fallbackCompleted",
         "model/fastModeChanged",
         "model/roleChanged",
+        "model/moaReferenceStarted",
+        "model/moaReferenceCompleted",
+        "model/moaAggregating",
         "permission/modeChanged",
         "prompt/suggestion",
         "error",
@@ -8088,6 +8161,57 @@
             },
             "params": {
               "$ref": "#/$defs/ModelRoleChangedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A MoA reference model call started.",
+          "properties": {
+            "method": {
+              "const": "model/moaReferenceStarted",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/MoaReferenceParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A MoA reference model call completed. Carries advisory text or failure.",
+          "properties": {
+            "method": {
+              "const": "model/moaReferenceCompleted",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/MoaReferenceParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "MoA reference fan-out finished and the aggregator is about to run.",
+          "properties": {
+            "method": {
+              "const": "model/moaAggregating",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/MoaAggregatingParams"
             }
           },
           "required": [
@@ -14427,7 +14551,8 @@
         "side_query",
         "memory_side_query",
         "hook_prompt",
-        "hook_agent"
+        "hook_agent",
+        "moa_reference"
       ],
       "type": "string"
     },

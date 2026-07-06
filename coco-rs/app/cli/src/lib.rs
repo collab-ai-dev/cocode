@@ -51,6 +51,7 @@ pub mod voice_bootstrap;
 
 use clap::Parser;
 use clap::Subcommand;
+use clap::ValueEnum;
 
 pub const BUILD_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const BUILD_GIT_HASH: &str = env!("COCO_BUILD_GIT_HASH");
@@ -435,6 +436,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: PluginAction,
     },
+    /// Manage Mixture-of-Agents presets.
+    Moa {
+        #[command(subcommand)]
+        action: MoaAction,
+    },
     /// List discovered agent definitions.
     ///
     /// Walks `config home/agents/` and `project config dir/agents/` for markdown frontmatter agent specs.
@@ -527,6 +533,58 @@ pub enum ConfigAction {
     List,
     /// Reset to defaults.
     Reset,
+}
+
+/// MoA preset management actions.
+#[derive(Clone, Subcommand)]
+pub enum MoaAction {
+    /// List configured MoA presets.
+    List,
+    /// Create or replace a MoA preset.
+    Configure {
+        /// Preset name.
+        name: String,
+        /// Aggregator model as provider/model.
+        #[arg(long, value_name = "provider/model")]
+        aggregator: String,
+        /// Reference model as provider/model. May be repeated.
+        #[arg(long = "reference", value_name = "provider/model", required = true)]
+        references: Vec<String>,
+        /// Reference fanout policy.
+        #[arg(long, value_enum, default_value = "per_iteration")]
+        fanout: MoaFanoutArg,
+        /// Maximum tokens for each reference response.
+        #[arg(long = "reference-max-tokens", value_name = "N")]
+        reference_max_tokens: Option<i64>,
+        /// Temperature override for reference calls.
+        #[arg(long = "reference-temperature", value_name = "FLOAT")]
+        reference_temperature: Option<f32>,
+        /// Temperature override for the aggregator call.
+        #[arg(long = "aggregator-temperature", value_name = "FLOAT")]
+        aggregator_temperature: Option<f32>,
+        /// Make this preset the default for `/moa`.
+        #[arg(long = "default")]
+        make_default: bool,
+        /// Enable this preset.
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Disable this preset.
+        #[arg(long, conflicts_with = "enable")]
+        disable: bool,
+    },
+    /// Delete a MoA preset.
+    Delete {
+        /// Preset name.
+        name: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub enum MoaFanoutArg {
+    #[default]
+    PerIteration,
+    UserTurn,
 }
 
 /// MCP subcommand actions.

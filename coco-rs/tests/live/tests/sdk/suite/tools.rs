@@ -32,6 +32,7 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
                 "What's the weather in Tokyo? Call get_weather with city='Tokyo'.",
             ),
         ],
+        temperature: None,
         // 16k removes max_tokens as a possible variable in the
         // assertion failure — see the assertion below: stop_reason
         // is surfaced so an intermittent gateway / model-side flake

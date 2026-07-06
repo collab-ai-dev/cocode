@@ -43,6 +43,10 @@ impl SideQueryUsageRecorder {
         Self { accounting }
     }
 
+    fn accounting(&self) -> &coco_query::usage_accounting::UsageAccounting {
+        &self.accounting
+    }
+
     pub async fn record(
         &self,
         snapshot: &ModelRuntimeSnapshot,
@@ -173,6 +177,7 @@ fn build_query_params(request: &SideQueryRequest) -> QueryParams {
 
     QueryParams {
         prompt,
+        temperature: None,
         max_tokens: request.max_tokens.map(i64::from),
         thinking_level: None,
         fast_mode: false,
@@ -199,10 +204,23 @@ impl SideQuery for SideQueryAdapter {
         request: SideQueryRequest,
     ) -> Result<SideQueryResponse, coco_error::BoxedError> {
         let source = Self::resolve_source(&request);
+        let moa_turn_id = uuid::Uuid::new_v4().to_string();
 
         let started = std::time::Instant::now();
         let (result, runtime_snapshot) = loop {
             let params = build_query_params(&request);
+            let usage_accounting = self
+                .usage_recorder
+                .as_ref()
+                .map(SideQueryUsageRecorder::accounting);
+            let params = coco_query::prepare_moa_query_once_params_with_usage_accounting(
+                &self.model_runtimes,
+                &source,
+                &params,
+                &moa_turn_id,
+                usage_accounting,
+            )
+            .await;
             match self
                 .model_runtimes
                 .query_once(source.clone(), &params)

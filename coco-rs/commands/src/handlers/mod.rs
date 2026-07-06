@@ -24,6 +24,7 @@ pub mod lsp;
 pub mod mcp;
 pub mod memory;
 pub mod memory_dialog;
+pub mod moa;
 pub mod model;
 pub mod permissions;
 pub mod plugin;

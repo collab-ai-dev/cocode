@@ -4,6 +4,8 @@
 //! the half-open probe state machine (backoff ramp, attempts cap,
 //! deep-chain revert, owned probe state).
 
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -18,15 +20,72 @@ use crate::RetryConfig;
 use crate::client::ApiClient;
 use coco_config::FallbackPolicy;
 use coco_config::ModelInfo;
+use coco_config::PartialModelInfo;
+use coco_config::PartialProviderConfig;
+use coco_config::PartialProviderModelOverride;
 use coco_config::PositiveTokens;
+use coco_config::RedactedSecret;
+use coco_config::RuntimeOverrides;
+use coco_config::Settings;
+use coco_config::SettingsWithSource;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::StopReason;
 use coco_llm_types::TextPart;
 use coco_llm_types::Usage;
+use coco_types::ProviderApi;
 use pretty_assertions::assert_eq;
 
 use super::*;
+
+fn selection(provider: &str, model_id: &str) -> coco_types::ProviderModelSelection {
+    coco_types::ProviderModelSelection {
+        provider: provider.to_string(),
+        model_id: model_id.to_string(),
+    }
+}
+
+fn role_slots(
+    provider: &str,
+    model_id: &str,
+) -> coco_config::RoleSlots<coco_types::ProviderModelSelection> {
+    coco_config::RoleSlots::new(selection(provider, model_id))
+}
+
+fn isolated_settings(settings: Settings) -> SettingsWithSource {
+    SettingsWithSource {
+        merged: settings,
+        per_source: HashMap::new(),
+        source_paths: HashMap::new(),
+    }
+}
+
+fn local_model_override() -> PartialProviderModelOverride {
+    PartialProviderModelOverride {
+        api_model_name: None,
+        overrides: PartialModelInfo {
+            context_window: Some(PositiveTokens::new(128_000)),
+            max_output_tokens: Some(PositiveTokens::new(4_096)),
+            ..Default::default()
+        },
+    }
+}
+
+fn local_provider(models: &[&str]) -> PartialProviderConfig {
+    PartialProviderConfig {
+        api: Some(ProviderApi::OpenaiCompat),
+        env_key: Some("LOCAL_TEST_API_KEY".to_string()),
+        api_key: Some(RedactedSecret::new("test-key")),
+        base_url: Some("http://localhost:65535/v1".to_string()),
+        models: Some(
+            models
+                .iter()
+                .map(|model| ((*model).to_string(), local_model_override()))
+                .collect(),
+        ),
+        ..Default::default()
+    }
+}
 
 struct StubModel {
     id: &'static str,
@@ -206,6 +265,66 @@ fn test_primary_only_reports_primary_model_id() {
     assert_eq!(rt.current_model_id(), "primary");
     assert_eq!(rt.active_index(), 0);
     assert!(!rt.has_fallback());
+}
+
+#[test]
+fn test_explicit_moa_source_uses_aggregator_runtime() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let mut providers = BTreeMap::new();
+    providers.insert("local".to_string(), local_provider(&["agg", "ref"]));
+    let runtime_config = coco_config::build_runtime_config_with(
+        isolated_settings(Settings {
+            models: coco_config::ModelSelectionSettings {
+                main: Some(role_slots("local", "agg")),
+                review: Some(role_slots("local", "ref")),
+                ..Default::default()
+            },
+            providers,
+            ..Default::default()
+        }),
+        coco_config::EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        coco_config::CatalogPaths::empty_in(tmp.path()),
+        coco_config::parse_enabled_setting_sources(None),
+    )
+    .expect("runtime config");
+    let endpoint = runtime_config
+        .model_roles
+        .moa_preset("default")
+        .expect("default moa preset")
+        .clone();
+    let registry = ModelRuntimeRegistry::new(
+        Arc::new(runtime_config),
+        None,
+        Arc::new(crate::header_template::HeaderVars::empty()),
+    )
+    .expect("runtime registry");
+
+    let source = ModelRuntimeSource::Explicit(selection(coco_config::MOA_PROVIDER, "default"));
+    let snapshot = registry
+        .snapshot_for_source(source.clone())
+        .expect("moa snapshot");
+
+    assert_eq!(snapshot.source, source);
+    assert_eq!(snapshot.provider, "local");
+    assert_eq!(snapshot.model_id, "agg");
+
+    assert!(
+        registry
+            .moa_endpoint_for_source(&ModelRuntimeSource::Role(coco_types::ModelRole::Plan))
+            .is_none()
+    );
+    registry.set_role_moa_endpoint_override(coco_types::ModelRole::Plan, Some(endpoint));
+    let role_endpoint = registry
+        .moa_endpoint_for_source(&ModelRuntimeSource::Role(coco_types::ModelRole::Plan))
+        .expect("role moa override");
+    assert_eq!(role_endpoint.preset_name, "default");
+    registry.set_role_moa_endpoint_override(coco_types::ModelRole::Plan, None);
+    assert!(
+        registry
+            .moa_endpoint_for_source(&ModelRuntimeSource::Role(coco_types::ModelRole::Plan))
+            .is_none()
+    );
 }
 
 #[test]

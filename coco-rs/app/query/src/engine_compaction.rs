@@ -827,6 +827,7 @@ impl QueryEngine {
 
         let source = ModelRuntimeSource::Role(coco_types::ModelRole::Main);
         let fallback_min_context_window = self.compact_fallback_min_context_window();
+        let moa_turn_id = uuid::Uuid::new_v4().to_string();
 
         loop {
             let params = compact_summary_query_params(
@@ -834,6 +835,15 @@ impl QueryEngine {
                 attempt.max_summary_tokens,
                 fallback_min_context_window,
             );
+            let params = crate::moa::maybe_attach_moa_guidance_for_query_once(
+                &self.model_runtimes,
+                &source,
+                &params,
+                event_tx,
+                &moa_turn_id,
+                crate::moa::MoaReferenceUsageRecorder::Engine(self),
+            )
+            .await;
             let call_started = std::time::Instant::now();
             match self
                 .model_runtimes
@@ -1952,6 +1962,7 @@ fn compact_summary_query_params(
 ) -> QueryParams {
     QueryParams {
         prompt,
+        temperature: None,
         max_tokens: Some(max_summary_tokens),
         // Multi-provider compact helper: do not force an explicit
         // "disable thinking" override here. Some providers/models have

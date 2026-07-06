@@ -25,6 +25,7 @@ use crate::common::usage_report;
 fn factual_params(prompt: Vec<LlmMessage>, scenario: &str) -> QueryParams {
     QueryParams {
         prompt,
+        temperature: None,
         max_tokens: Some(96),
         thinking_level: None,
         fast_mode: false,

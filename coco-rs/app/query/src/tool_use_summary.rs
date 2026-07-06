@@ -220,6 +220,7 @@ pub fn build_input_from_history<M: std::borrow::Borrow<coco_messages::Message>>(
 pub async fn generate_tool_use_summary(
     input: ToolUseSummaryInput,
     model_runtimes: std::sync::Arc<ModelRuntimeRegistry>,
+    usage_accounting: Option<crate::usage_accounting::UsageAccounting>,
 ) -> Option<ToolUseSummaryParams> {
     if !input.has_tools() {
         return None;
@@ -235,11 +236,14 @@ pub async fn generate_tool_use_summary(
     }
 
     let prompt = build_prompt(&input);
+    let event_tx = None;
+    let moa_turn_id = uuid::Uuid::new_v4().to_string();
 
     let result = tokio::time::timeout(TOOL_USE_SUMMARY_TIMEOUT, async {
         loop {
             let params = QueryParams {
                 prompt: prompt.clone(),
+                temperature: None,
                 // Intentionally `None`: defer to the Fast model's own
                 // `max_output_tokens` (resolved from `ModelInfo` via
                 // `coco-config`). See module docs "Max-tokens policy".
@@ -260,6 +264,18 @@ pub async fn generate_tool_use_summary(
                 cancel: None,
                 wire_tap: None,
             };
+            let params = crate::moa::maybe_attach_moa_guidance_for_query_once(
+                &model_runtimes,
+                &source,
+                &params,
+                &event_tx,
+                &moa_turn_id,
+                usage_accounting
+                    .as_ref()
+                    .map(crate::moa::MoaReferenceUsageRecorder::Accounting)
+                    .unwrap_or(crate::moa::MoaReferenceUsageRecorder::None),
+            )
+            .await;
             match model_runtimes.query_once(source.clone(), &params).await {
                 ModelRuntimeQueryOutcome::Success { result, .. } => return Ok(result),
                 ModelRuntimeQueryOutcome::Retry { .. } => continue,

@@ -149,6 +149,7 @@ pub enum UsageSource {
     MemorySideQuery,
     HookPrompt,
     HookAgent,
+    MoaReference,
 }
 
 /// Attribution required for every session-usage record.

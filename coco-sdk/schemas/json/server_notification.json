@@ -716,6 +716,57 @@
       ]
     },
     {
+      "description": "A MoA reference model call started.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "model/moaReferenceStarted"
+        },
+        "params": {
+          "$ref": "#/$defs/MoaReferenceParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "A MoA reference model call completed. Carries advisory text or failure.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "model/moaReferenceCompleted"
+        },
+        "params": {
+          "$ref": "#/$defs/MoaReferenceParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "MoA reference fan-out finished and the aggregator is about to run.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "model/moaAggregating"
+        },
+        "params": {
+          "$ref": "#/$defs/MoaAggregatingParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
       "description": "Permission mode changed.",
       "type": "object",
       "properties": {
@@ -3989,6 +4040,76 @@
           "type": "string",
           "const": "queued_steering"
         }
+      ]
+    },
+    "MoaAggregatingParams": {
+      "description": "Payload for the MoA aggregation marker.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "preset": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ModelRole"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "role",
+        "preset",
+        "count"
+      ]
+    },
+    "MoaReferenceParams": {
+      "description": "Payload for MoA reference lifecycle events.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "failed": {
+          "type": "boolean",
+          "default": false
+        },
+        "index": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "preset": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ModelRole"
+        },
+        "text": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn_id",
+        "role",
+        "preset",
+        "index",
+        "count",
+        "provider",
+        "model_id"
       ]
     },
     "ModelFallbackParams": {
@@ -7915,7 +8036,8 @@
         "side_query",
         "memory_side_query",
         "hook_prompt",
-        "hook_agent"
+        "hook_agent",
+        "moa_reference"
       ]
     },
     "UsageSourceGroup": {

@@ -75,6 +75,7 @@ pub(crate) struct PendingToolPreparation<'a> {
     pub auto_mode_state: Option<&'a Arc<coco_permissions::AutoModeState>>,
     pub denial_tracker: Option<&'a Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,
     pub model_runtimes: &'a Arc<ModelRuntimeRegistry>,
+    pub usage_accounting: Option<&'a crate::usage_accounting::UsageAccounting>,
     pub auto_mode_rules: &'a AutoModeRules,
     pub completion_event_mode: ToolCompletionEventMode,
     pub deferred_tool_completions: Option<&'a mut crate::helpers::DeferredToolCompletionBuffer>,
@@ -232,6 +233,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         args.auto_mode_state,
         args.denial_tracker,
         args.model_runtimes,
+        args.usage_accounting.cloned(),
         args.auto_mode_rules,
         args.tools,
     )
@@ -379,6 +381,7 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
     auto_mode_state: Option<&Arc<coco_permissions::AutoModeState>>,
     denial_tracker: Option<&Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,
     model_runtimes: &Arc<ModelRuntimeRegistry>,
+    usage_accounting: Option<crate::usage_accounting::UsageAccounting>,
     auto_mode_rules: &AutoModeRules,
     tools: &ToolRegistry,
 ) -> PermissionDecision {
@@ -506,6 +509,7 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
             &mut tracker_guard,
             history_messages,
             model_runtimes,
+            usage_accounting.clone(),
             auto_mode_rules,
             auto_ctx,
             tools,
@@ -851,6 +855,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
     tracker: &mut coco_permissions::DenialTracker,
     messages: &[M],
     model_runtimes: &Arc<ModelRuntimeRegistry>,
+    usage_accounting: Option<crate::usage_accounting::UsageAccounting>,
     auto_mode_rules: &AutoModeRules,
     auto_ctx: coco_permissions::AutoModeContext<'_>,
     tools: &ToolRegistry,
@@ -858,6 +863,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
     let model_runtimes = model_runtimes.clone();
     let classify_fn = move |req: coco_permissions::ClassifyRequest| {
         let model_runtimes = Arc::clone(&model_runtimes);
+        let usage_accounting = usage_accounting.clone();
         async move {
             let prompt: coco_llm_types::LlmPrompt = vec![
                 coco_llm_types::LlmMessage::System {
@@ -879,9 +885,13 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     provider_options: None,
                 },
             ];
+            let event_tx = None;
+            let moa_turn_id = uuid::Uuid::new_v4().to_string();
+            let source = ModelRuntimeSource::Role(ModelRole::Main);
             loop {
                 let params = QueryParams {
                     prompt: prompt.clone(),
+                    temperature: None,
                     max_tokens: Some(req.max_tokens),
                     thinking_level: None,
                     // The classifier runs on the shared Main runtime. No
@@ -909,10 +919,19 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     cancel: None,
                     wire_tap: None,
                 };
-                match model_runtimes
-                    .query_once(ModelRuntimeSource::Role(ModelRole::Main), &params)
-                    .await
-                {
+                let params = crate::moa::maybe_attach_moa_guidance_for_query_once(
+                    &model_runtimes,
+                    &source,
+                    &params,
+                    &event_tx,
+                    &moa_turn_id,
+                    usage_accounting
+                        .as_ref()
+                        .map(crate::moa::MoaReferenceUsageRecorder::Accounting)
+                        .unwrap_or(crate::moa::MoaReferenceUsageRecorder::None),
+                )
+                .await;
+                match model_runtimes.query_once(source.clone(), &params).await {
                     ModelRuntimeQueryOutcome::Success { result, .. } => {
                         // auto-mode classifier input — preserve tool-call
                         // boundary markers so permission decisions see the

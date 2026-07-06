@@ -32,6 +32,8 @@ pub async fn single_turn_query(
     max_tokens: Option<i64>,
 ) -> Result<SingleTurnResult, coco_error::BoxedError> {
     let start = std::time::Instant::now();
+    let event_tx = None;
+    let moa_turn_id = uuid::Uuid::new_v4().to_string();
 
     let prompt: LlmPrompt = vec![
         coco_llm_types::LlmMessage::system(system_prompt),
@@ -41,6 +43,7 @@ pub async fn single_turn_query(
     let (result, snapshot) = loop {
         let params = QueryParams {
             prompt: prompt.clone(),
+            temperature: None,
             max_tokens,
             thinking_level: None,
             fast_mode: false,
@@ -60,6 +63,15 @@ pub async fn single_turn_query(
             cancel: None,
             wire_tap: None,
         };
+        let params = crate::moa::maybe_attach_moa_guidance_for_query_once(
+            model_runtimes,
+            &source,
+            &params,
+            &event_tx,
+            &moa_turn_id,
+            crate::moa::MoaReferenceUsageRecorder::None,
+        )
+        .await;
         match model_runtimes.query_once(source.clone(), &params).await {
             ModelRuntimeQueryOutcome::Success {
                 result, snapshot, ..

@@ -247,6 +247,8 @@ impl HookLlmHandle for QueryHookLlm {
         let user_prompt = prompt.to_string();
 
         let result = async {
+            let event_tx = None;
+            let moa_turn_id = uuid::Uuid::new_v4().to_string();
             let mut prompt_too_long_retried = false;
             loop {
                 let prompt = build_prompt(
@@ -260,6 +262,7 @@ impl HookLlmHandle for QueryHookLlm {
                 );
                 let params = QueryParams {
                     prompt: prompt.clone(),
+                    temperature: None,
                     max_tokens: Some(1024),
                     thinking_level: None,
                     fast_mode: false,
@@ -277,6 +280,20 @@ impl HookLlmHandle for QueryHookLlm {
                     cancel: None,
                     wire_tap: None,
                 };
+                let usage_recorder = self
+                    .usage_accounting
+                    .as_ref()
+                    .map(crate::moa::MoaReferenceUsageRecorder::Accounting)
+                    .unwrap_or(crate::moa::MoaReferenceUsageRecorder::None);
+                let params = crate::moa::maybe_attach_moa_guidance_for_query_once(
+                    &self.model_runtimes,
+                    &source,
+                    &params,
+                    &event_tx,
+                    &moa_turn_id,
+                    usage_recorder,
+                )
+                .await;
                 let started = std::time::Instant::now();
                 match self
                     .model_runtimes

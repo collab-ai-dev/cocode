@@ -39,6 +39,7 @@ const VISION_IMAGE_BYTES: &[u8] = include_bytes!("../../../../../vercel-ai/ai/sh
 fn params_for(prompt: Vec<LlmMessage>, source: &str) -> QueryParams {
     QueryParams {
         prompt,
+        temperature: None,
         max_tokens: Some(1024),
         thinking_level: None,
         fast_mode: false,

@@ -134,6 +134,9 @@ pub enum CommandResult {
         progress_message: String,
         parts: Vec<PromptPart>,
     },
+    /// One-shot MoA prompt. The caller runs this prompt through
+    /// `settings.moa.default_preset` without changing any role binding.
+    MoaOneShot { prompt: String },
     /// Open a TUI dialog/overlay.
     OpenDialog(DialogSpec),
     /// No output.
@@ -457,6 +460,7 @@ impl CommandRegistry {
             CommandResult::Text(s) => Ok(s),
             CommandResult::InjectPrompt(s) => Ok(s),
             CommandResult::Compact { display_text, .. } => Ok(display_text),
+            CommandResult::MoaOneShot { prompt } => Ok(prompt),
             CommandResult::Prompt { parts, .. } => Ok(parts
                 .iter()
                 .filter_map(|p| match p {
@@ -539,6 +543,7 @@ fn command_result_kind(r: &CommandResult) -> &'static str {
         CommandResult::InjectPrompt(_) => "inject_prompt",
         CommandResult::Compact { .. } => "compact",
         CommandResult::Prompt { .. } => "prompt",
+        CommandResult::MoaOneShot { .. } => "moa_one_shot",
         CommandResult::OpenDialog(_) => "open_dialog",
         CommandResult::Skip => "skip",
     }

@@ -436,10 +436,15 @@ fn resolve_model_selection_from_runtime_config(
     }
 
     if let Ok(selection) = ProviderModelSelection::from_slash_str(raw_model)
-        && runtime_config
-            .model_registry
-            .resolve(&selection.provider, &selection.model_id)
-            .is_some()
+        && ((selection.provider == coco_config::MOA_PROVIDER
+            && runtime_config
+                .model_roles
+                .moa_preset(&selection.model_id)
+                .is_some())
+            || runtime_config
+                .model_registry
+                .resolve(&selection.provider, &selection.model_id)
+                .is_some())
     {
         return Some(selection);
     }

@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::compact_settings::PartialCompactSettings;
+use crate::model::MoaSettings;
 use crate::model::ModelSelectionSettings;
 use crate::prompt_cache_settings::PartialAccountSettings;
 use crate::prompt_cache_settings::PartialPromptCacheSettings;
@@ -87,6 +88,8 @@ pub struct Settings {
     pub providers: BTreeMap<String, PartialProviderConfig>,
     #[serde(default)]
     pub models: ModelSelectionSettings,
+    #[serde(default)]
+    pub moa: MoaSettings,
 
     // === Environment ===
     #[serde(default)]

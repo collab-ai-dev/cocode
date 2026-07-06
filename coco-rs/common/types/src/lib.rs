@@ -159,6 +159,8 @@ pub use event::McpStartupStatusParams;
 pub use event::MemoryDialogEntry;
 pub use event::MemoryDialogRowKind;
 pub use event::MemoryDialogScope;
+pub use event::MoaAggregatingParams;
+pub use event::MoaReferenceParams;
 pub use event::ModelFallbackParams;
 pub use event::ModelRoleChangedParams;
 pub use event::NotificationMethod;

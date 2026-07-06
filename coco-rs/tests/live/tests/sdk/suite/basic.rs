@@ -14,6 +14,7 @@ const SYSTEM: &str = "You are a helpful assistant. Be concise.";
 fn params_for(prompt: Vec<LlmMessage>, source: &str) -> QueryParams {
     QueryParams {
         prompt,
+        temperature: None,
         // 1024 leaves headroom for reasoning models (gpt-5 etc.) that
         // burn the budget on hidden reasoning before emitting output.
         // Non-reasoning models still answer briefly — max_tokens is a

@@ -765,6 +765,10 @@ impl QueryEngine {
             }
 
             let api_start = std::time::Instant::now();
+            let event_turn_id = cycle_turn_id
+                .as_ref()
+                .map(coco_types::TurnId::as_str)
+                .unwrap_or(turn_id.as_str());
             let opened_stream = match self
                 .open_turn_stream(
                     &active_snapshot,
@@ -774,6 +778,7 @@ impl QueryEngine {
                     &mut *history,
                     &event_tx,
                     &turn_id,
+                    event_turn_id,
                 )
                 .await
             {

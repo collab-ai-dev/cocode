@@ -100,6 +100,7 @@ pub(crate) fn filtered_models(m: &ModelPickerState) -> Vec<&ModelEntry> {
         .filter(|e| {
             filter_lower.is_empty()
                 || e.display_name.to_lowercase().contains(&filter_lower)
+                || e.model_id.to_lowercase().contains(&filter_lower)
                 || e.provider_display.to_lowercase().contains(&filter_lower)
         })
         .collect()

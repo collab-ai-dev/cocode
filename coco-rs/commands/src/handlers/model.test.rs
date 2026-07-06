@@ -120,6 +120,22 @@ async fn test_handler_valid_model_persists() {
 }
 
 #[tokio::test]
+async fn test_handler_role_moa_selection_persists() {
+    let output = with_tmp_config_dir(|| async {
+        let handler = ModelHandler;
+        handler.execute_command("plan moa/default").await.unwrap()
+    })
+    .await;
+    let text = match output {
+        CommandResult::Text(t) => t,
+        other => panic!("expected Text result, got {other:?}"),
+    };
+    assert!(text.contains("Set Plan"), "missing 'Set Plan' in {text}");
+    assert!(text.contains("moa/default"));
+    assert!(text.contains("persisted to"));
+}
+
+#[tokio::test]
 async fn test_handler_unknown_model() {
     let handler = ModelHandler;
     let result = handler.execute_command("llama").await.unwrap();

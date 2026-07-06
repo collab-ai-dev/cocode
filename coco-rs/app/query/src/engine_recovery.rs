@@ -730,13 +730,23 @@ impl QueryEngine {
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
         turn_id: &str,
+        event_turn_id: &str,
     ) -> Result<OpenedTurnStream, StreamErrorOutcome> {
+        let params = crate::moa::maybe_attach_moa_guidance(
+            self,
+            &self.model_runtimes,
+            &services.runtime_source,
+            params,
+            event_tx,
+            event_turn_id,
+        )
+        .await;
         match self
             .model_runtimes
             .open_stream_for_runtime(
                 services.runtime.clone(),
                 services.runtime_source.clone(),
-                params,
+                &params,
             )
             .await
         {

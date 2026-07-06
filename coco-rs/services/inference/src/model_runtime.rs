@@ -729,6 +729,7 @@ pub struct ModelRuntimeRegistry {
     header_vars: std::sync::RwLock<Arc<HeaderVars>>,
     role_runtimes: std::sync::RwLock<HashMap<ModelRole, Arc<std::sync::Mutex<ModelRuntime>>>>,
     role_overrides: std::sync::RwLock<HashMap<ModelRole, RoleSlot<ModelSpec>>>,
+    role_moa_overrides: std::sync::RwLock<HashMap<ModelRole, coco_config::MoaEndpointSpec>>,
     explicit_runtimes:
         std::sync::RwLock<HashMap<ProviderModelSelection, Arc<std::sync::Mutex<ModelRuntime>>>>,
     recovery_tasks: std::sync::Mutex<HashMap<ModelRuntimeSource, tokio::task::JoinHandle<()>>>,
@@ -852,6 +853,7 @@ impl ModelRuntimeRegistry {
             header_vars: std::sync::RwLock::new(header_vars),
             role_runtimes: std::sync::RwLock::new(role_runtimes),
             role_overrides: std::sync::RwLock::new(HashMap::new()),
+            role_moa_overrides: std::sync::RwLock::new(HashMap::new()),
             explicit_runtimes: std::sync::RwLock::new(HashMap::new()),
             recovery_tasks: std::sync::Mutex::new(HashMap::new()),
             event_tx,
@@ -874,6 +876,7 @@ impl ModelRuntimeRegistry {
                     .collect(),
             ),
             role_overrides: std::sync::RwLock::new(HashMap::new()),
+            role_moa_overrides: std::sync::RwLock::new(HashMap::new()),
             explicit_runtimes: std::sync::RwLock::new(HashMap::new()),
             recovery_tasks: std::sync::Mutex::new(HashMap::new()),
             event_tx,
@@ -1201,7 +1204,44 @@ impl ModelRuntimeRegistry {
     ) -> Result<Arc<std::sync::Mutex<ModelRuntime>>, InferenceError> {
         match source {
             ModelRuntimeSource::Role(role) => self.runtime_for_role(role),
+            ModelRuntimeSource::Explicit(selection)
+                if selection.provider == coco_config::MOA_PROVIDER =>
+            {
+                let endpoint = self
+                    .moa_endpoint_for_source(&ModelRuntimeSource::Explicit(selection.clone()))
+                    .ok_or_else(|| {
+                        crate::errors::ProviderBuildFailedSnafu {
+                            provider: "model_runtime",
+                            provider_name: selection.provider.clone(),
+                            message: format!("unknown MoA preset `{}`", selection.model_id),
+                        }
+                        .build()
+                    })?;
+                self.runtime_for_explicit(ProviderModelSelection {
+                    provider: endpoint.aggregator.provider,
+                    model_id: endpoint.aggregator.model_id,
+                })
+            }
             ModelRuntimeSource::Explicit(selection) => self.runtime_for_explicit(selection),
+        }
+    }
+
+    pub fn moa_endpoint_for_source(
+        &self,
+        source: &ModelRuntimeSource,
+    ) -> Option<coco_config::MoaEndpointSpec> {
+        let cfg = rw_read(&self.runtime_config).clone()?;
+        match source {
+            ModelRuntimeSource::Role(role) => rw_read(&self.role_moa_overrides)
+                .get(role)
+                .cloned()
+                .or_else(|| cfg.model_roles.moa_endpoint(*role).cloned()),
+            ModelRuntimeSource::Explicit(selection)
+                if selection.provider == coco_config::MOA_PROVIDER =>
+            {
+                cfg.model_roles.moa_preset(&selection.model_id).cloned()
+            }
+            ModelRuntimeSource::Explicit(_) => None,
         }
     }
 
@@ -1230,6 +1270,19 @@ impl ModelRuntimeRegistry {
         let runtime = self.runtime_for_source(source)?;
         let runtime = mutex_lock(&runtime);
         Ok(runtime.primary_model_info())
+    }
+
+    pub fn set_role_moa_endpoint_override(
+        &self,
+        role: ModelRole,
+        endpoint: Option<coco_config::MoaEndpointSpec>,
+    ) {
+        let mut overrides = rw_write(&self.role_moa_overrides);
+        if let Some(endpoint) = endpoint {
+            overrides.insert(role, endpoint);
+        } else {
+            overrides.remove(&role);
+        }
     }
 
     /// Rebind a role's primary to `spec` for the session. `effort` binds
@@ -1791,6 +1844,7 @@ fn recovery_probe_params() -> QueryParams {
             content: vec![UserContentPart::text(RECOVERY_PROBE_PROMPT)],
             provider_options: None,
         }],
+        temperature: None,
         max_tokens: Some(RECOVERY_PROBE_MAX_TOKENS),
         thinking_level: None,
         fast_mode: false,

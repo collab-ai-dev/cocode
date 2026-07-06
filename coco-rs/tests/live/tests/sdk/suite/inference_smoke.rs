@@ -36,6 +36,7 @@ pub async fn run(provider: &str, model_id: &str) -> Result<()> {
 
     let params = QueryParams {
         prompt,
+        temperature: None,
         // 1024 leaves headroom for reasoning models — see the same
         // rationale on `basic::params_for`.
         max_tokens: Some(1024),
