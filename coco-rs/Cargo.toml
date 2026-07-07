@@ -464,7 +464,12 @@ tree-sitter-tags = "0.25"
 tree-sitter-typescript = "0.23"
 
 # External - storage / SQLite
-rusqlite = { version = "0.32", features = ["bundled"] }
+# Pinned to 0.31 (not latest 0.32) to stay in lockstep with the embedded rtk
+# fork, which pins rusqlite 0.31. libsqlite3-sys sets `links = "sqlite3"`, so a
+# 0.31/0.32 split across the graph is a hard build failure ("multiple packages
+# link to native library sqlite3"), not just a duplicate compile. Revert to
+# 0.32 only once rtk drops rusqlite from its lib target.
+rusqlite = { version = "0.31", features = ["bundled"] }
 sqlite-vec = "0.1"
 zerocopy = { version = "0.7", features = ["derive"] }
 
