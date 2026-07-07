@@ -812,25 +812,30 @@ Rtk,
 FeatureSpec {
     id: Feature::Rtk,
     key: "rtk",
-    stage: Stage::Experimental {
-        name: "RTK Bash Compression",
-        menu_description: "Compress Bash dev-tool output (git/cargo/test/lint) — 60-90% smaller tool results",
-        announcement: "RTK enabled — Bash dev-tool command output will be compressed.",
-    },
-    default_enabled: false,
+    stage: Stage::Stable,
+    default_enabled: true,
 },
 ```
 
-Menu/announcement copy is deliberately tier-neutral so it survives the
-phase-2 switch unchanged.
+`Stage::Stable` + `default_enabled: true`: RTK is **on by default**. What makes
+default-on defensible is that the downside is bounded to zero — the never-worse
+guard (§3.3) and the `catch_unwind` around every filter make a bad filter
+degrade to raw output, never worse than today. The §7.3 metrics become
+**post-hoc validation and a rollback signal**, not a promotion gate. Opt out any
+time via `settings.json features.rtk = false`, `COCO_FEATURE_RTK=0`, or
+`RuntimeOverrides`; per-command via the `RTK_DISABLED=1` prefix (§6). As
+`Stable` (not `Experimental`) it has no `/experimental` menu entry and no
+announcement — the model-facing note lives on the Bash tool description instead.
 
-`default_enabled: false` + `Experimental`: in phase 1 it changes what binary
-executes the user's commands and depends on an external install; in phase 2
-the risk shifts to "a new dependency shapes every Bash result the model
-sees" — both warrant the same opt-in posture as `Sandbox` / `Voice`.
-Promotion to default-on is gated on the §7.3 exit criterion. Toggle layers
-come free: `settings.json features.rtk`, `COCO_FEATURE_RTK`,
-`RuntimeOverrides`, and the `/experimental` menu.
+**Caveat while `cmds` is unexposed** (the `crate::Commands` coupling, §3.2; see
+the upstream `refacto/vitest-decouple` branch): default-on delivers the
+declarative TOML long-tail + rewrite/guard in-process, but the *specialized*
+git / cargo / pytest formatters (the marquee failure-focus wins) arrive only via
+the external `rtk` binary (phase 1) or once the embedded `cmds` decouple lands.
+So default-on is immediately valuable for the external tier and the TOML
+long-tail; embedded git/cargo/pytest compression turns on automatically at the
+rev that exposes `cmds`. It never *blocks* those commands — they always run and
+are captured; they simply fall back to head-truncation until compressed.
 
 Gate placement follows the "subsystem entry point" rule: the
 `ToolUseContext` builder constructs `Option<Arc<RtkRewriter>>` (phase 2:
@@ -959,9 +964,10 @@ coco-rs measures its own gains, in real tokens-adjacent units:
   `rtk gain --project --format json` (per-command savings, top offenders)
   without coco re-implementing analytics.
 
-Exit criterion for promoting the feature out of Experimental: ≥ 4 weeks of
-metrics showing p50 Bash-result shrink ≥ 50 % with no regression in
-command-retry rate.
+Since RTK ships `Stable` / default-on (§5.1), these metrics are **post-hoc
+validation and a rollback signal**, not a promotion gate: expect ≥ 4 weeks of
+p50 Bash-result shrink ≥ 50 % with no regression in command-retry rate; if the
+shrink underperforms or retries regress, flip `default_enabled` to `false`.
 
 ---
 
