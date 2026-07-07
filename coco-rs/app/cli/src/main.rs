@@ -153,8 +153,9 @@ async fn async_main() -> Result<()> {
                     None => cli_for_resume.continue_session = true,
                 }
                 let cwd = startup_cwd.clone();
+                let runtime_paths = coco_cli::paths::runtime_paths();
                 let plan =
-                    resume_resolver::resolve(&cli_for_resume, &global_config::config_home(), &cwd)?;
+                    resume_resolver::resolve(&cli_for_resume, runtime_paths.memory_base(), &cwd)?;
                 if plan.is_none() {
                     println!("No sessions to resume.");
                     return Ok(());
@@ -380,8 +381,9 @@ async fn async_main() -> Result<()> {
         // and hand off to the TUI runner. `None` keeps the default
         // fresh-session bootstrap.
         let cwd = startup_cwd.clone();
+        let runtime_paths = coco_cli::paths::runtime_paths();
         let plan: Option<ResumePlan> =
-            resume_resolver::resolve(&cli, &global_config::config_home(), &cwd)?;
+            resume_resolver::resolve(&cli, runtime_paths.memory_base(), &cwd)?;
         coco_cli::startup_profile::mark("resume_resolved");
         tracing::info!(
             target: "coco_cli::startup",
@@ -399,7 +401,8 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>, cwd: PathBuf) -> Result<()> {
     // the boot edge so headless and TUI share identical semantics.
     // `None` means no resume flag was set; fall through to a fresh
     // session.
-    let plan = resume_resolver::resolve(cli, &global_config::config_home(), &cwd)?;
+    let runtime_paths = coco_cli::paths::runtime_paths();
+    let plan = resume_resolver::resolve(cli, runtime_paths.memory_base(), &cwd)?;
     if let Some(p) = &plan {
         eprintln!(
             "{} session {} ({} prior message(s))",

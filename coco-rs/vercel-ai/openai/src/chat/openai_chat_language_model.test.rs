@@ -45,6 +45,26 @@ fn get_args_basic() {
 }
 
 #[test]
+fn get_args_rejects_malformed_typed_provider_options() {
+    let model = OpenAIChatLanguageModel::new("gpt-4o", make_config());
+    let mut po = vercel_ai_provider::ProviderOptions::default();
+    let mut inner = std::collections::HashMap::new();
+    inner.insert("serviceTier".to_string(), serde_json::json!({"bad": true}));
+    po.set("openai", inner);
+    let options = LanguageModelV4CallOptions {
+        provider_options: Some(po),
+        ..simple_user_options()
+    };
+
+    let err = model
+        .get_args(&options)
+        .expect_err("malformed provider options must fail request build");
+    assert!(err.message.contains("invalid provider options"));
+    assert!(err.message.contains("namespace `openai`"));
+    assert!(err.message.contains("serviceTier"));
+}
+
+#[test]
 fn get_args_reasoning_model() {
     let model = OpenAIChatLanguageModel::new("o3", make_config());
     let options = LanguageModelV4CallOptions {

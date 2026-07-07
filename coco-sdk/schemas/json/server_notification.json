@@ -92,8 +92,14 @@
               "$ref": "#/$defs/Message"
             },
             "session_id": {
-              "type": "string",
-              "default": ""
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -128,8 +134,14 @@
               "format": "int64"
             },
             "session_id": {
-              "type": "string",
-              "default": ""
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -160,12 +172,16 @@
               ]
             },
             "session_id": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
-          },
-          "required": [
-            "session_id"
-          ]
+          }
         }
       },
       "required": [
@@ -201,8 +217,14 @@
               "default": "hydrate"
             },
             "session_id": {
-              "type": "string",
-              "default": ""
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -1258,9 +1280,13 @@
           "type": "object",
           "properties": {
             "turn_id": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnId"
+                },
+                {
+                  "type": "null"
+                }
               ]
             }
           }
@@ -2348,9 +2374,13 @@
           ]
         },
         "turn_id": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnId"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -4057,7 +4087,7 @@
           "$ref": "#/$defs/ModelRole"
         },
         "turn_id": {
-          "type": "string"
+          "$ref": "#/$defs/TurnId"
         }
       },
       "required": [
@@ -4099,7 +4129,7 @@
           "type": "string"
         },
         "turn_id": {
-          "type": "string"
+          "$ref": "#/$defs/TurnId"
         }
       },
       "required": [
@@ -4650,6 +4680,10 @@
         "reason"
       ]
     },
+    "SessionId": {
+      "description": "Branded session identifier.",
+      "type": "string"
+    },
     "SessionModelUsage": {
       "description": "Matches TS `ModelUsageSchema` (coreSchemas.ts:17-28).",
       "type": "object",
@@ -4854,7 +4888,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "stop_reason": {
           "type": "string"
@@ -4959,7 +4993,7 @@
           "type": "string"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "skills": {
           "description": "Skill names loaded.",
@@ -5037,7 +5071,7 @@
           }
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "source_records": {
           "description": "Provider/model/source records. This is the source of truth for\ndetailed usage views; `totals` and `models` are rollups.",
@@ -6705,7 +6739,7 @@
           "type": "string"
         },
         "turn_id": {
-          "type": "string"
+          "$ref": "#/$defs/TurnId"
         }
       },
       "required": [

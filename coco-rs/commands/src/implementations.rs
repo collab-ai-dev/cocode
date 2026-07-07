@@ -778,29 +778,97 @@ fn version_handler(_args: &str) -> String {
 fn sandbox_handler(args: &str) -> String {
     let arg = args.trim();
     if arg.is_empty() {
-        return "Sandbox mode: (read from settings.json `sandbox.mode`)\n\n\
+        return "Sandbox mode is read from settings.json `sandbox.mode`.\n\n\
                 Modes:\n\
-                  none     — No sandboxing (default)\n\
-                  readonly — Read-only filesystem access\n\
-                  strict   — Full sandboxing with restricted execution\n\n\
-                Use /sandbox <mode> to change — persisted, effective on next session."
+                  read_only\n\
+                  workspace_write\n\
+                  full_access\n\
+                  external_sandbox\n\n\
+                Exclusions:\n\
+                  /sandbox exclusions\n\
+                  /sandbox exclude <pattern>\n\
+                  /sandbox unexclude <pattern>"
             .to_string();
     }
+
+    if arg == "exclusions" {
+        let excluded = read_sandbox_exclusions();
+        if excluded.is_empty() {
+            return "No sandbox command exclusions configured.".to_string();
+        }
+        let mut out = String::from("Sandbox command exclusions:\n\n");
+        for pattern in excluded {
+            out.push_str(&format!("- {pattern}\n"));
+        }
+        return out;
+    }
+    if let Some(pattern) = arg.strip_prefix("exclude ").map(str::trim) {
+        if pattern.is_empty() {
+            return "Usage: /sandbox exclude <pattern>".to_string();
+        }
+        let mut excluded = read_sandbox_exclusions();
+        if !excluded.iter().any(|p| p == pattern) {
+            excluded.push(pattern.to_string());
+        }
+        return write_sandbox_exclusions(excluded, "Added sandbox exclusion");
+    }
+    if let Some(pattern) = arg.strip_prefix("unexclude ").map(str::trim) {
+        if pattern.is_empty() {
+            return "Usage: /sandbox unexclude <pattern>".to_string();
+        }
+        let mut excluded = read_sandbox_exclusions();
+        excluded.retain(|p| p != pattern);
+        return write_sandbox_exclusions(excluded, "Removed sandbox exclusion");
+    }
+
     let mode = match arg {
-        "none" | "off" | "disable" => "none",
-        "readonly" => "readonly",
-        "strict" => "strict",
-        other => return format!("Unknown sandbox mode: {other}. Use none, readonly, or strict."),
+        "read_only" | "readonly" | "read-only" => "read_only",
+        "workspace_write" | "workspace-write" | "strict" => "workspace_write",
+        "full_access" | "full-access" | "none" | "off" | "disable" => "full_access",
+        "external_sandbox" | "external-sandbox" => "external_sandbox",
+        other => {
+            return format!(
+                "Unknown sandbox mode: {other}. Use read_only, workspace_write, full_access, or external_sandbox."
+            );
+        }
     };
     match coco_config::global_config::write_user_setting(
         "sandbox.mode",
         serde_json::Value::String(mode.to_string()),
     ) {
-        Ok(path) => format!(
-            "Sandbox mode set to `{mode}` in {} (effective on next session).",
-            path.display()
-        ),
+        Ok(path) => format!("Sandbox mode set to `{mode}` in {}.", path.display()),
         Err(e) => format!("Failed to persist sandbox mode: {e}"),
+    }
+}
+
+fn read_sandbox_exclusions() -> Vec<String> {
+    let path = coco_config::global_config::user_settings_path();
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(json) = coco_config::parse_jsonc_value(&raw) else {
+        return Vec::new();
+    };
+    json.pointer("/sandbox/excluded_commands")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str().map(ToString::to_string))
+        .collect()
+}
+
+fn write_sandbox_exclusions(excluded: Vec<String>, action: &str) -> String {
+    match coco_config::global_config::write_user_setting(
+        "sandbox.excluded_commands",
+        serde_json::Value::Array(
+            excluded
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
+    ) {
+        Ok(path) => format!("{action} in {}.", path.display()),
+        Err(e) => format!("Failed to persist sandbox exclusions: {e}"),
     }
 }
 

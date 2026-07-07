@@ -84,9 +84,9 @@ pub fn collect_with_jobs(config_home: &Path, include_all: bool) -> Vec<PsEntry> 
             .into_values()
             .filter(|j| !seen.contains(j.session_id.as_str()))
             .filter_map(|j| terminal_outcome(j.status).map(|o| (j, o)))
-            .filter_map(|(j, outcome)| {
+            .map(|(j, outcome)| {
                 let session_id = j.session_id;
-                Some(PsEntry {
+                PsEntry {
                     pid: 0,
                     id: session_id.clone(),
                     cwd: j.cwd,
@@ -101,7 +101,7 @@ pub fn collect_with_jobs(config_home: &Path, include_all: bool) -> Vec<PsEntry> 
                         TerminalJobOutcome::Failed => PsViewState::Failed,
                         TerminalJobOutcome::Stopped => PsViewState::Stopped,
                     },
-                })
+                }
             })
             .collect();
         entries.append(&mut extra);

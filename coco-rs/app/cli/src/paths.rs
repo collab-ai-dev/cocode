@@ -9,8 +9,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use coco_config::env;
+use coco_config::env::EnvKey;
 use coco_config::global_config;
 use coco_paths::ProjectPaths;
+use coco_paths::RuntimePaths;
 
 /// Resolved path anchors for one session.
 ///
@@ -46,17 +49,16 @@ pub fn resolve_project_root(cwd: &Path) -> PathBuf {
     git_root_for(cwd).unwrap_or_else(|| cwd.to_path_buf())
 }
 
-/// `config home/sessions` — legacy flat session directory.
+/// Resolve runtime path roots at the CLI/context boundary.
 ///
-/// **DEPRECATED** for new code. The current layout puts session files
-/// under `config home/projects/{sanitized_cwd}/{session_id}.jsonl` — use
-/// [`project_paths`] to construct paths in the new layout.
-///
-/// This function is retained until every consumer migrates to
-/// `ProjectPaths`. TODO: remove once the migration in
-/// `docs/coco-rs/session-projects-migration.md` is complete.
-pub fn sessions_dir() -> PathBuf {
-    global_config::config_home().join("sessions")
+/// `coco-paths` deliberately does not read process env. This is the single
+/// app/cli production entrypoint that folds `COCO_REMOTE_MEMORY_DIR` into the
+/// project-scoped path layout while leaving config-home artifacts on
+/// `global_config::config_home()`.
+pub fn runtime_paths() -> RuntimePaths {
+    let config_home = global_config::config_home();
+    let memory_base_override = env::var_os(EnvKey::CocoRemoteMemoryDir).map(PathBuf::from);
+    RuntimePaths::new(config_home, memory_base_override)
 }
 
 /// Build [`ProjectPaths`] for `cwd`.
@@ -68,8 +70,7 @@ pub fn sessions_dir() -> PathBuf {
 /// layer, session paths intentionally keep the worktree/project cwd so linked
 /// worktrees get distinct transcript project dirs, mirroring the TS runtime.
 pub fn project_paths(cwd: &Path) -> Arc<ProjectPaths> {
-    let memory_base = global_config::config_home();
-    Arc::new(ProjectPaths::new(memory_base, cwd))
+    Arc::new(runtime_paths().project_paths(cwd))
 }
 
 /// `config home/output-styles` — user-scope output style markdown dir.

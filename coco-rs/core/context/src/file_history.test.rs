@@ -276,6 +276,61 @@ async fn test_get_diff_stats_between_missing_from_errors() {
 }
 
 #[tokio::test]
+async fn test_render_session_diff_uses_first_snapshot_to_worktree() {
+    let (config_home, work_dir) = setup();
+    let file = work_dir.path().join("session-diff.txt");
+    tokio::fs::write(&file, "one\ntwo\n").await.unwrap();
+
+    let mut state = FileHistoryState::new();
+    state.track_file(file.clone());
+    state
+        .make_snapshot("msg-1", config_home.path(), "session-1")
+        .await
+        .unwrap();
+    tokio::fs::write(&file, "one\ntwo\nthree\n").await.unwrap();
+
+    let rendered = state
+        .render_session_diff(config_home.path(), "session-1")
+        .await
+        .unwrap();
+
+    assert_eq!(rendered.stats.files_changed, vec![file.clone()]);
+    assert_eq!(rendered.stats.insertions, 1);
+    assert!(rendered.unified_diff.contains("--- a/"));
+    assert!(rendered.unified_diff.contains("+++ b/"));
+    assert!(rendered.unified_diff.contains("+three"));
+}
+
+#[tokio::test]
+async fn test_render_diff_between_two_snapshots() {
+    let (config_home, work_dir) = setup();
+    let file = work_dir.path().join("turn-diff.txt");
+    tokio::fs::write(&file, "before\n").await.unwrap();
+
+    let mut state = FileHistoryState::new();
+    state.track_file(file.clone());
+    state
+        .make_snapshot("msg-1", config_home.path(), "session-1")
+        .await
+        .unwrap();
+    tokio::fs::write(&file, "before\nafter\n").await.unwrap();
+    state
+        .make_snapshot("msg-2", config_home.path(), "session-1")
+        .await
+        .unwrap();
+
+    let rendered = state
+        .render_diff_between("msg-1", Some("msg-2"), config_home.path(), "session-1")
+        .await
+        .unwrap();
+
+    assert_eq!(rendered.stats.files_changed, vec![file]);
+    assert_eq!(rendered.stats.insertions, 1);
+    assert_eq!(rendered.stats.deletions, 0);
+    assert!(rendered.unified_diff.contains("+after"));
+}
+
+#[tokio::test]
 async fn test_can_restore() {
     let state = FileHistoryState {
         snapshots: vec![FileHistorySnapshot {

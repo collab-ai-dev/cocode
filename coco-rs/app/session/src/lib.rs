@@ -461,7 +461,7 @@ impl SessionManager {
             store.append_metadata(
                 id,
                 &storage::MetadataEntry::Mode {
-                    session_id: typed_id.clone(),
+                    session_id: typed_id,
                     mode: mode.to_string(),
                 },
             )?;

@@ -102,7 +102,7 @@ fn agent_shell_runtime_carriers_default_disabled() {
         coco_types::ActiveShellTool::Disabled
     );
     assert_eq!(
-        AgentSpawnRequest::default().active_shell_tool,
+        AgentSpawnRequest::default().inheritance.active_shell_tool,
         coco_types::ActiveShellTool::Disabled
     );
 }
@@ -115,8 +115,8 @@ fn agent_spawn_request_session_id_is_typed_and_required() {
     assert!(err.contains("session_id is required"), "got: {err}");
 
     let req: AgentSpawnRequest = serde_json::from_value(json!({
-        "prompt": "p",
-        "session_id": "session-abc"
+        "input": { "prompt": "p" },
+        "routing": { "session_id": "session-abc" }
     }))
     .expect("valid session id should deserialize");
     assert_eq!(
@@ -128,8 +128,8 @@ fn agent_spawn_request_session_id_is_typed_and_required() {
 #[test]
 fn agent_spawn_request_rejects_unsafe_session_id_at_serde_boundary() {
     let err = serde_json::from_value::<AgentSpawnRequest>(json!({
-        "prompt": "p",
-        "session_id": "bad/session"
+        "input": { "prompt": "p" },
+        "routing": { "session_id": "bad/session" }
     }))
     .expect_err("unsafe session id should be rejected");
     assert!(err.to_string().contains("path separator"), "got: {err}");

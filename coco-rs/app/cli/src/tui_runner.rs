@@ -41,6 +41,7 @@ use coco_query::QueuedCommand;
 use coco_query::QueuedImage;
 use coco_query::ServerNotification;
 use coco_system_reminder::QueueOrigin;
+use coco_tool_runtime::TaskHandle;
 use coco_tool_runtime::TurnAbortController;
 use coco_tool_runtime::TurnAbortSignal;
 use coco_tui::App;
@@ -3162,7 +3163,12 @@ async fn handle_slash_outcome(
         }
         SlashOutcome::ShowStatus => {
             let text = runtime.status_report().await;
-            emit_slash_text(event_tx, "status", "", &text).await;
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::OpenGoalStatus {
+                    title: "Status".to_string(),
+                    body: text,
+                }))
+                .await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerGoal { request } => run_goal_command(session, event_tx, request).await,
@@ -3310,7 +3316,12 @@ async fn drain_queued_slash_commands(
             }
             SlashOutcome::ShowStatus => {
                 let text = runtime.status_report().await;
-                emit_slash_text(event_tx, "status", "", &text).await;
+                let _ = event_tx
+                    .send(CoreEvent::Tui(TuiOnlyEvent::OpenGoalStatus {
+                        title: "Status".to_string(),
+                        body: text,
+                    }))
+                    .await;
             }
             SlashOutcome::TriggerGoal { request } => {
                 if let SlashFollowup::RunEngine {
@@ -3743,6 +3754,14 @@ async fn dispatch_slash_command(
     // `DialogSpec::MessageSelector` → `OpenRewindPicker` path. The
     // handler ignores args; this dispatcher does only the
     // mechanical translation in the generic `DialogSpec` arm below.
+    if name == "tasks" || name == "bashes" {
+        run_tasks_command(runtime, event_tx, name, args).await;
+        return SlashOutcome::Handled;
+    }
+    if name == "diff" && matches!(args.split_whitespace().next(), Some("session" | "turn")) {
+        run_file_history_diff_command(runtime, event_tx, args).await;
+        return SlashOutcome::Handled;
+    }
 
     // Snapshot once per dispatch — `/reload-plugins` may swap the
     // registry mid-call, but the snapshot keeps the resolved command
@@ -4142,6 +4161,251 @@ async fn dispatch_slash_command(
             SlashOutcome::Handled
         }
     }
+}
+
+const MAX_FILE_HISTORY_DIFF_CHARS: usize = 6000;
+
+async fn run_file_history_diff_command(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    args: &str,
+) {
+    let Some(file_history) = &runtime.file_history else {
+        emit_slash_text(
+            event_tx,
+            "diff",
+            args,
+            "File history is not enabled for this session.",
+        )
+        .await;
+        return;
+    };
+
+    let mut parts = args.split_whitespace();
+    match parts.next() {
+        Some("session") => {
+            let session_id = runtime.current_typed_session_id().await.to_string();
+            let rendered = {
+                let file_history = file_history.read().await;
+                file_history
+                    .render_session_diff(&runtime.config_home, &session_id)
+                    .await
+            };
+            let text = match rendered {
+                Ok(diff) => format_file_history_diff("Session diff", diff),
+                Err(err) => format!("Unable to build session diff: {err}"),
+            };
+            emit_slash_text(event_tx, "diff", args, &text).await;
+        }
+        Some("turn") => {
+            let Some(message_id) = parts.next() else {
+                emit_slash_text(event_tx, "diff", args, "Usage: /diff turn <message-id>").await;
+                return;
+            };
+            let session_id = runtime.current_typed_session_id().await.to_string();
+            let rendered = {
+                let file_history = file_history.read().await;
+                let Some(next_message_id) =
+                    next_file_history_snapshot_id(&file_history, message_id)
+                else {
+                    emit_slash_text(event_tx, "diff", args, "No snapshot found for message id.")
+                        .await;
+                    return;
+                };
+                file_history
+                    .render_diff_between(
+                        message_id,
+                        next_message_id.as_deref(),
+                        &runtime.config_home,
+                        &session_id,
+                    )
+                    .await
+            };
+            let text = match rendered {
+                Ok(diff) => format_file_history_diff("Turn diff", diff),
+                Err(err) => format!("Unable to build turn diff: {err}"),
+            };
+            emit_slash_text(event_tx, "diff", args, &text).await;
+        }
+        _ => {
+            emit_slash_text(
+                event_tx,
+                "diff",
+                args,
+                "Usage: /diff session | /diff turn <message-id>",
+            )
+            .await;
+        }
+    }
+}
+
+fn next_file_history_snapshot_id(
+    file_history: &coco_context::FileHistoryState,
+    message_id: &str,
+) -> Option<Option<String>> {
+    let idx = file_history
+        .snapshots
+        .iter()
+        .position(|snapshot| snapshot.message_id == message_id)?;
+    Some(
+        file_history
+            .snapshots
+            .get(idx + 1)
+            .map(|snapshot| snapshot.message_id.clone()),
+    )
+}
+
+fn format_file_history_diff(title: &str, diff: coco_context::RenderedDiff) -> String {
+    if diff.stats.files_changed.is_empty() {
+        return format!("{title}: no file-history changes.");
+    }
+
+    let mut out = format!(
+        "{title}: {} file{}, +{}, -{}\n\n",
+        diff.stats.files_changed.len(),
+        if diff.stats.files_changed.len() == 1 {
+            ""
+        } else {
+            "s"
+        },
+        diff.stats.insertions,
+        diff.stats.deletions
+    );
+    append_truncated_file_history_diff(&mut out, &diff.unified_diff);
+    out
+}
+
+fn append_truncated_file_history_diff(out: &mut String, diff: &str) {
+    let trimmed = diff.trim();
+    if trimmed.len() <= MAX_FILE_HISTORY_DIFF_CHARS {
+        out.push_str(trimmed);
+        return;
+    }
+
+    let head = coco_utils_string::take_bytes_at_char_boundary(trimmed, MAX_FILE_HISTORY_DIFF_CHARS);
+    let truncate_at = head.rfind('\n').unwrap_or(head.len());
+    out.push_str(&trimmed[..truncate_at]);
+    let remaining_lines = trimmed[truncate_at..].lines().count();
+    out.push_str(&format!("\n\n... truncated ({remaining_lines} more lines)"));
+}
+
+async fn run_tasks_command(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    name: &str,
+    args: &str,
+) {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        let _ = event_tx
+            .send(CoreEvent::Tui(TuiOnlyEvent::OpenBackgroundTasks))
+            .await;
+        return;
+    }
+
+    let Some(task_runtime) = runtime.current_task_runtime().await else {
+        emit_slash_text(
+            event_tx,
+            name,
+            args,
+            "Task runtime is not available in this session.",
+        )
+        .await;
+        return;
+    };
+
+    let mut parts = trimmed.split_whitespace();
+    match parts.next() {
+        Some("list") => {
+            let tasks = task_runtime.list_tasks().await;
+            let text = format_task_list(&tasks);
+            emit_slash_text(event_tx, name, args, &text).await;
+        }
+        Some("detail") => {
+            let Some(task_id) = parts.next() else {
+                emit_slash_text(event_tx, name, args, "Usage: /tasks detail <id>").await;
+                return;
+            };
+            match task_runtime.read_terminal_outputs(task_id).await {
+                Ok(outputs) => {
+                    let text = format_task_detail(task_id, &outputs);
+                    emit_slash_text(event_tx, name, args, &text).await;
+                }
+                Err(err) => {
+                    emit_slash_text(event_tx, name, args, &format!("Failed to read task: {err}"))
+                        .await;
+                }
+            }
+        }
+        Some("cancel") => {
+            let Some(task_id) = parts.next() else {
+                emit_slash_text(event_tx, name, args, "Usage: /tasks cancel <id>").await;
+                return;
+            };
+            match task_runtime.kill_task(task_id).await {
+                Ok(()) => {
+                    emit_slash_text(event_tx, name, args, &format!("Cancelled task {task_id}."))
+                        .await;
+                }
+                Err(err) => {
+                    emit_slash_text(
+                        event_tx,
+                        name,
+                        args,
+                        &format!("Failed to cancel task {task_id}: {err}"),
+                    )
+                    .await;
+                }
+            }
+        }
+        Some(_) | None => {
+            emit_slash_text(
+                event_tx,
+                name,
+                args,
+                "Usage: /tasks [list|detail <id>|cancel <id>]",
+            )
+            .await;
+        }
+    }
+}
+
+fn format_task_list(tasks: &[coco_types::TaskStateBase]) -> String {
+    if tasks.is_empty() {
+        return "No tasks in this session.".to_string();
+    }
+
+    let mut out = String::from("Active tasks:\n\n");
+    for task in tasks {
+        out.push_str(&format!(
+            "- {}  {:?}  {}\n",
+            task.id, task.status, task.description
+        ));
+    }
+    out
+}
+
+fn format_task_detail(task_id: &str, outputs: &coco_tool_runtime::TerminalOutputs) -> String {
+    let mut out = format!("Task {task_id}\n\n");
+    out.push_str(&format!("Interrupted: {}\n", outputs.interrupted));
+    if let Some(code) = outputs.exit_code {
+        out.push_str(&format!("Exit code: {code}\n"));
+    }
+    if !outputs.stdout.trim().is_empty() {
+        out.push_str("\nstdout:\n");
+        out.push_str(&outputs.stdout);
+        if !outputs.stdout.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    if !outputs.stderr.trim().is_empty() {
+        out.push_str("\nstderr:\n");
+        out.push_str(&outputs.stderr);
+        if !outputs.stderr.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Pure decision used by `dispatch_plan`: after a `/plan <description>`

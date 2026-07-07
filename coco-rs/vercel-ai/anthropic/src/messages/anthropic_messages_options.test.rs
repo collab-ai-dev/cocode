@@ -25,7 +25,8 @@ fn extras_carry_unknown_keys_but_not_typed_keys() {
     outer.insert("anthropic".into(), inner);
     let provider_options = Some(options_with(outer));
 
-    let (typed, raw) = extract_anthropic_options(&provider_options, "anthropic.messages");
+    let (typed, raw) =
+        extract_anthropic_options(&provider_options, "anthropic.messages").expect("valid options");
     assert_eq!(typed.disable_parallel_tool_use, Some(true));
 
     // Typed-consumed key absent; unknown keys remain.
@@ -50,7 +51,8 @@ fn internal_signals_never_leak_into_extras() {
     outer.insert("anthropic".into(), inner);
     let provider_options = Some(options_with(outer));
 
-    let (typed, raw) = extract_anthropic_options(&provider_options, "anthropic.messages");
+    let (typed, raw) =
+        extract_anthropic_options(&provider_options, "anthropic.messages").expect("valid options");
     // Typed fields received the internal signals.
     assert_eq!(typed.agentic_query, Some(true));
     assert_eq!(typed.query_source.as_deref(), Some("main_loop"));
@@ -64,7 +66,7 @@ fn internal_signals_never_leak_into_extras() {
 
 #[test]
 fn raw_is_empty_when_no_provider_options() {
-    let (typed, raw) = extract_anthropic_options(&None, "anthropic.messages");
+    let (typed, raw) = extract_anthropic_options(&None, "anthropic.messages").expect("no options");
     assert!(raw.is_empty());
     assert!(typed.thinking.is_none());
 }
@@ -85,7 +87,8 @@ fn raw_merges_canonical_and_custom_namespace() {
     outer.insert("my-proxy".into(), custom);
     let provider_options = Some(options_with(outer));
 
-    let (_typed, raw) = extract_anthropic_options(&provider_options, "my-proxy.messages");
+    let (_typed, raw) =
+        extract_anthropic_options(&provider_options, "my-proxy.messages").expect("valid options");
     assert_eq!(raw.get("xCanonical"), Some(&json!("from-canonical")));
     assert_eq!(raw.get("xCustom"), Some(&json!("from-custom")));
     assert_eq!(

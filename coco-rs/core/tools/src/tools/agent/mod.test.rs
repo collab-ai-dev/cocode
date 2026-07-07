@@ -407,7 +407,7 @@ async fn test_agent_tool_allows_subagent_type_inside_allow_list() {
         .await
         .clone()
         .expect("allowed type should spawn");
-    assert_eq!(request.subagent_type.as_deref(), Some("Explore"));
+    assert_eq!(request.input.subagent_type.as_deref(), Some("Explore"));
 }
 
 /// Schema-honesty gate for the team parameters. `team_name` / `mode` / `name`
@@ -594,25 +594,58 @@ fn test_agent_spawn_request_inheritance_fields_are_serde_skip() {
     // state across boundaries (or noisily fails on transports that
     // don't tolerate them).
     let req = AgentSpawnRequest {
-        prompt: "p".into(),
-        description: Some("d".into()),
+        input: coco_tool_runtime::AgentSpawnInput {
+            prompt: "p".into(),
+            description: Some("d".into()),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let json = serde_json::to_string(&req).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let object = value.as_object().expect("request serializes as object");
+    for group in [
+        "input",
+        "execution",
+        "permissions",
+        "inheritance",
+        "routing",
+        "telemetry",
+    ] {
+        assert!(
+            object.contains_key(group),
+            "missing group `{group}`: {json}"
+        );
+    }
     // Note: `parent_runtime_snapshot` is no longer a field on
     // `AgentSpawnRequest` — it moved inside `SpawnMode::Fork` as a
     // non-optional `Arc<SubagentRuntimeSnapshot>`. The `spawn_mode`
     // field itself is `#[serde(skip)]`, so the snapshot never reaches
     // JSON either way.
+    fn contains_key_recursive(value: &serde_json::Value, key: &str) -> bool {
+        match value {
+            serde_json::Value::Object(map) => map
+                .iter()
+                .any(|(candidate, nested)| candidate == key || contains_key_recursive(nested, key)),
+            serde_json::Value::Array(values) => values
+                .iter()
+                .any(|nested| contains_key_recursive(nested, key)),
+            _ => false,
+        }
+    }
+
     for forbidden in [
         "features",
         "tool_overrides",
         "parent_tool_filter",
         "spawn_mode",
         "definition",
+        "output_schema",
+        "can_use_tool",
+        "parent_turn_abort",
     ] {
         assert!(
-            !json.contains(forbidden),
+            !contains_key_recursive(&value, forbidden),
             "field `{forbidden}` must be #[serde(skip)] but appears in json: {json}"
         );
     }
@@ -935,7 +968,10 @@ async fn test_agent_tool_omitted_subagent_type_resolves_general_purpose() {
         .await
         .clone()
         .expect("captured request");
-    assert_eq!(request.subagent_type.as_deref(), Some("general-purpose"));
+    assert_eq!(
+        request.input.subagent_type.as_deref(),
+        Some("general-purpose")
+    );
 }
 
 #[tokio::test]
@@ -967,9 +1003,9 @@ async fn test_agent_tool_omitted_subagent_type_for_team_spawn_stays_untyped() {
         .await
         .clone()
         .expect("captured request");
-    assert_eq!(request.subagent_type, None);
-    assert_eq!(request.team_name.as_deref(), Some("alpha"));
-    assert_eq!(request.name.as_deref(), Some("helper"));
+    assert_eq!(request.input.subagent_type, None);
+    assert_eq!(request.input.team_name.as_deref(), Some("alpha"));
+    assert_eq!(request.input.name.as_deref(), Some("helper"));
 }
 
 /// A model-supplied non-`plan` `mode` must NOT escalate a team spawn's
@@ -1016,12 +1052,15 @@ async fn test_agent_tool_team_spawn_model_mode_does_not_escalate() {
         .expect("captured request");
     // The model asked for bypass; the resolved child mode must instead be the
     // inherited parent mode — and in no case an escalation.
-    assert_eq!(request.mode, Some(parent_mode));
+    assert_eq!(request.permissions.mode, Some(parent_mode));
     assert_ne!(
-        request.mode,
+        request.permissions.mode,
         Some(coco_types::PermissionMode::BypassPermissions)
     );
-    assert_ne!(request.mode, Some(coco_types::PermissionMode::AcceptEdits));
+    assert_ne!(
+        request.permissions.mode,
+        Some(coco_types::PermissionMode::AcceptEdits)
+    );
 }
 
 /// `mode:"plan"` IS honored for a team spawn, and as a RESTRICTION: it forces
@@ -1062,7 +1101,7 @@ async fn test_agent_tool_team_spawn_plan_mode_forced_over_permissive_parent() {
         .clone()
         .expect("captured request");
     assert_eq!(
-        request.mode,
+        request.permissions.mode,
         Some(coco_types::PermissionMode::Plan),
         "mode:\"plan\" must force the teammate into Plan, overriding the \
          permissive parent mode"
@@ -1129,8 +1168,11 @@ async fn test_agent_tool_name_without_agent_teams_is_ordinary_subagent() {
         .expect("captured request");
     // Not a team spawn: the implicit team is unavailable with teams off, so
     // the spawn carries no team name and gets a default subagent type.
-    assert_eq!(request.team_name, None);
-    assert_eq!(request.subagent_type.as_deref(), Some("general-purpose"));
+    assert_eq!(request.input.team_name, None);
+    assert_eq!(
+        request.input.subagent_type.as_deref(),
+        Some("general-purpose")
+    );
 }
 
 #[tokio::test]
@@ -2135,7 +2177,7 @@ async fn test_agent_tool_threads_definition_from_catalog_to_spawn_request() {
     // T7 contract: when `ToolUseContext.agent_catalog` is installed
     // and the user's `subagent_type` matches a catalog entry,
     // AgentTool must thread `Arc<AgentDefinition>` through
-    // `AgentSpawnRequest.definition`. This is what lets the runner
+    // `AgentSpawnRequest.input.definition`. This is what lets the runner
     // consult `definition.model` / `definition.model_role` at the
     // resolution boundary.
     use coco_subagent::AgentCatalogSnapshot;
@@ -2178,6 +2220,7 @@ async fn test_agent_tool_threads_definition_from_catalog_to_spawn_request() {
     let captured = capturing.last_request.lock().await;
     let req = captured.as_ref().expect("spawn request must be captured");
     let def = req
+        .input
         .definition
         .as_ref()
         .expect("AgentTool must thread the catalog's AgentDefinition into the request");
@@ -2241,6 +2284,7 @@ async fn test_agent_tool_permission_mode_from_definition_ignores_model_mode() {
             .await
             .as_ref()
             .expect("spawn request captured")
+            .permissions
             .mode,
         Some(PermissionMode::Plan),
         "non-fork child mode must come from AgentDefinition.permissionMode (plan), \
@@ -2274,6 +2318,7 @@ async fn test_agent_tool_permission_mode_from_definition_ignores_model_mode() {
             .await
             .as_ref()
             .expect("spawn request captured")
+            .permissions
             .mode,
         Some(PermissionMode::AcceptEdits),
         "parent trust mode (AcceptEdits) must take precedence over the \
@@ -2324,7 +2369,7 @@ async fn test_agent_tool_isolation_falls_back_to_definition() {
     let captured = capturing.last_request.lock().await;
     let req = captured.as_ref().expect("spawn request must be captured");
     assert_eq!(
-        req.isolation,
+        req.execution.isolation,
         Some(coco_types::AgentIsolation::Worktree),
         "definition isolation must flow into the spawn request when the param is omitted"
     );
@@ -2403,7 +2448,7 @@ async fn test_agent_tool_threads_none_when_catalog_absent() {
     let captured = capturing.last_request.lock().await;
     let req = captured.as_ref().expect("spawn request must be captured");
     assert!(
-        req.definition.is_none(),
+        req.input.definition.is_none(),
         "without a catalog, no definition should be threaded",
     );
 }

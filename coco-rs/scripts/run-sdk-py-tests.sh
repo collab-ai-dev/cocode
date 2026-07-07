@@ -128,4 +128,10 @@ if [[ pyproject.toml -nt "${VENV_DIR}/pyvenv.cfg" ]]; then
     touch "${VENV_DIR}/pyvenv.cfg"
 fi
 
+if ! "${VENV_DIR}/bin/python" -c 'import pydantic, pytest, pytest_asyncio' >/dev/null 2>&1; then
+    echo "[sdk-py-test] venv is missing dev dependencies; reinstalling" >&2
+    "${VENV_DIR}/bin/python" -m pip install --quiet -e ".[dev]"
+    touch "${VENV_DIR}/pyvenv.cfg"
+fi
+
 exec "${VENV_DIR}/bin/python" -m pytest "$@"

@@ -112,7 +112,7 @@ impl QueryEngine {
         };
         let prompt_context = coco_context::PromptContext::build(prompt_context_mode);
         self.record_context_epoch_if_changed(&prompt_context);
-        prompt.push(LlmMessage::system(prompt_context.system_prompt()));
+        prompt.push(system_message_from_prompt_context(&prompt_context));
 
         // Pre-build hook: apply staged-collapse commits so each
         // archived range is a single placeholder rather than full turns.
@@ -887,6 +887,26 @@ impl QueryEngine {
             }
         }
     }
+}
+
+fn system_message_from_prompt_context(prompt_context: &coco_context::PromptContext) -> LlmMessage {
+    let parts: Vec<coco_inference::SystemPromptPart> = prompt_context
+        .prompt
+        .parts()
+        .into_iter()
+        .map(|part| coco_inference::SystemPromptPart {
+            text: part.text,
+            cache_hint: match part.cache_hint {
+                coco_context::CacheHint::Ephemeral => coco_inference::CacheHint::Ephemeral,
+                coco_context::CacheHint::Stable => coco_inference::CacheHint::Stable,
+                coco_context::CacheHint::Breakpoint => coco_inference::CacheHint::Breakpoint,
+            },
+        })
+        .collect();
+
+    let mut provider_options = coco_llm_types::ProviderOptions::default();
+    coco_inference::put_system_prompt_parts(&mut provider_options, &parts);
+    LlmMessage::system_with_options(prompt_context.system_prompt(), provider_options)
 }
 
 /// Index of the cache-boundary tool — the LAST built-in — when a non-empty

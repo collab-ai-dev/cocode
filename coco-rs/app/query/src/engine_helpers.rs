@@ -45,6 +45,9 @@ const RETIRED_DEFERRED_TOOL_NAMES: &[&str] = &[
 pub(crate) struct StreamingToolCallBuffer {
     pub(crate) tool_name: String,
     pub(crate) input_json: String,
+    pub(crate) input_state: coco_inference::ToolInputWireState,
+    pub(crate) invalid: bool,
+    pub(crate) invalid_reason: Option<coco_llm_types::ToolInputInvalidReason>,
     pub(crate) complete: bool,
 }
 

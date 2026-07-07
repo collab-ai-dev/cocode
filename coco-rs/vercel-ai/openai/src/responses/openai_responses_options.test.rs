@@ -17,7 +17,7 @@ fn extras_carry_unknown_keys_but_not_typed_keys() {
     outer.insert("openai".into(), inner);
     let po = Some(ProviderOptions(outer));
 
-    let (typed, raw) = extract_responses_options(&po);
+    let (typed, raw) = extract_responses_options(&po).expect("valid provider options");
     assert_eq!(typed.reasoning_summary.as_deref(), Some("auto"));
     // typed-consumed key is gone from raw; unknown key remains.
     assert!(!raw.contains_key("reasoningSummary"));

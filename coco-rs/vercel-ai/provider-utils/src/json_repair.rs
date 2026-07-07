@@ -19,9 +19,11 @@
 //! Always defer to the terminal event (`ToolInputEnd` / `ToolCall` /
 //! `content_block_stop`).
 //!
-//! Adapters that fail this call fall back to `Value::Object({})` (not
-//! `invalid = true`) so the schema-validation schema validator reports the
-//! missing fields specifically.
+//! Most adapters that fail this call preserve the raw string for downstream
+//! diagnostics. Anthropic streaming is stricter at `content_block_stop`: its
+//! `tool_use.input` contract is a JSON object, so unrecoverable or repaired
+//! non-object input is marked as `JsonParseFailed` before crossing into
+//! inference.
 //!
 //! Parallel implementation: `coco-utils-json-repair` lives one layer
 //! higher (`utils/`) and is used by `app/query` for schema-validation work; we

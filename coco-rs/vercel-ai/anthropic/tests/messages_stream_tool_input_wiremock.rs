@@ -13,10 +13,9 @@
 //!
 //! Adapter behaviour we lock here: the `parse_with_repair` call on
 //! the accumulated `input_json` buffer succeeds for repairable
-//! payloads (markdown fence, trailing comma) and falls back to `{}`
-//! for unrecoverable garbage. The streaming tracker still emits a
-//! `LanguageModelV4ToolCall` with the stringified input — engine
-//! reconstruction then parses again at the seam.
+//! payloads (markdown fence, trailing comma). Unrecoverable garbage is
+//! carried as raw input with `JsonParseFailed`, so downstream code can
+//! skip schema validation and emit the right tool-use error prefix.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -174,15 +173,14 @@ async fn anthropic_stream_markdown_fence_repaired() {
 }
 
 #[tokio::test]
-async fn anthropic_stream_unrecoverable_falls_back_without_invalidating() {
-    // Anthropic adapter's repair path returns the canonical `Value`
-    // re-serialised to string; unrecoverable garbage forwards the
-    // raw `input_json` so downstream consumers run repair again.
-    // Either way, `invalid` stays `false` at Layer 1.
-    let tc = dispatch_stream("\u{0000}!!!@@@%%%").await;
-    // Don't pin the exact bytes (forwarded raw or canonicalised
-    // depending on llm_json's behaviour); just verify Layer 1
-    // didn't unilaterally invalidate.
-    assert!(!tc.invalid);
-    assert!(tc.invalid_reason.is_none());
+async fn anthropic_stream_unrecoverable_is_marked_json_parse_failed() {
+    let tc = dispatch_stream("\u{0000}\u{0001}\u{0002}").await;
+    assert!(tc.invalid);
+    match tc.invalid_reason.expect("invalid reason") {
+        vercel_ai_provider::ToolInputInvalidReason::JsonParseFailed { raw, error } => {
+            assert_eq!(raw, "\u{0000}\u{0001}\u{0002}");
+            assert!(!error.is_empty());
+        }
+        other => panic!("expected JsonParseFailed, got {other:?}"),
+    }
 }

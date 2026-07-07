@@ -263,7 +263,8 @@ async fn run_shell_task(
     // W6: sandbox wrap. `try_wrap_command_with_binds` mutates `cmd`
     // in place to swap the program/args with the platform-specific
     // wrapper (bwrap on Linux, Seatbelt sandbox-exec on macOS).
-    // No-op when sandbox is None / inactive / command excluded.
+    // No-op when sandbox is None / inactive / command excluded. When a command
+    // should be wrapped, wrap failure is terminal; never spawn it unsandboxed.
     if let Some(state) = &request.sandbox_state
         && let Err(e) = state.try_wrap_command_with_binds(
             command,
@@ -275,8 +276,14 @@ async fn run_shell_task(
         warn!(
             target: "coco::task_runtime::shell",
             error = %e,
-            "sandbox wrap failed; spawning unsandboxed"
+            "sandbox wrap failed; refusing to spawn unsandboxed"
         );
+        let msg = format!("\n[sandbox wrap failed: {e}]\n");
+        dto.append(&msg);
+        let _ = dto.flush().await;
+        return ShellOutcome {
+            wait: WaitOutcome::SpawnFailed,
+        };
     }
     let mut child = match cmd.kill_on_drop(true).spawn() {
         Ok(c) => c,

@@ -1352,12 +1352,16 @@
       "type": "object",
       "properties": {
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         }
       },
       "required": [
         "session_id"
       ]
+    },
+    "SessionId": {
+      "description": "Branded session identifier.",
+      "type": "string"
     },
     "SessionReadParams": {
       "description": "Params for `session/read`.",
@@ -1378,7 +1382,7 @@
           "format": "int32"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         }
       },
       "required": [
@@ -1390,7 +1394,7 @@
       "type": "object",
       "properties": {
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         }
       },
       "required": [

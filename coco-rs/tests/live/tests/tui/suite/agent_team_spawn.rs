@@ -89,7 +89,7 @@ impl AgentHandle for TestAgentHandle {
 
         let result = self
             .adapter
-            .execute_query(&request.prompt, config)
+            .execute_query(&request.input.prompt, config)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -101,7 +101,7 @@ impl AgentHandle for TestAgentHandle {
             total_tokens: result.input_tokens + result.output_tokens,
             input_tokens: result.input_tokens,
             output_tokens: result.output_tokens,
-            prompt: Some(request.prompt),
+            prompt: Some(request.input.prompt),
             ..Default::default()
         })
     }

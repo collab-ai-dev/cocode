@@ -17,6 +17,58 @@ use tokio::sync::RwLock;
 // each other under threaded `cargo test`.
 use crate::test_support::isolate_teams_dir;
 
+macro_rules! set_agent_spawn_request_field {
+    ($request:ident, prompt, $value:expr) => {
+        $request.input.prompt = $value;
+    };
+    ($request:ident, description, $value:expr) => {
+        $request.input.description = $value;
+    };
+    ($request:ident, subagent_type, $value:expr) => {
+        $request.input.subagent_type = $value;
+    };
+    ($request:ident, name, $value:expr) => {
+        $request.input.name = $value;
+    };
+    ($request:ident, team_name, $value:expr) => {
+        $request.input.team_name = $value;
+    };
+    ($request:ident, definition, $value:expr) => {
+        $request.input.definition = $value;
+    };
+    ($request:ident, run_in_background, $value:expr) => {
+        $request.execution.run_in_background = $value;
+    };
+    ($request:ident, isolation, $value:expr) => {
+        $request.execution.isolation = $value;
+    };
+    ($request:ident, spawn_mode, $value:expr) => {
+        $request.execution.spawn_mode = $value;
+    };
+    ($request:ident, mode, $value:expr) => {
+        $request.permissions.mode = $value;
+    };
+    ($request:ident, session_id, $value:expr) => {
+        $request.routing.session_id = $value;
+    };
+    ($request:ident, child_query_depth, $value:expr) => {
+        $request.routing.child_query_depth = $value;
+    };
+    ($request:ident, parent_turn_abort, $value:expr) => {
+        $request.routing.parent_turn_abort = $value;
+    };
+}
+
+macro_rules! agent_spawn_request {
+    ($($field:ident : $value:expr,)* ..Default::default()) => {{
+        let mut request = AgentSpawnRequest::default();
+        $(
+            set_agent_spawn_request_field!(request, $field, $value);
+        )*
+        request
+    }};
+}
+
 fn build_test_runtime() -> coco_config::RuntimeConfig {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let catalogs = coco_config::CatalogPaths::empty_in(tmp.path());
@@ -1030,7 +1082,7 @@ async fn test_spawn_subagent_sync_without_engine_fails_cleanly() {
     // "Agent completed (no result channel)" — that's a silent-bug
     // anti-pattern.
     let handle = create_test_handle();
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "Find files".to_string(),
         description: Some("search".to_string()),
         subagent_type: Some("Explore".to_string()),
@@ -1089,7 +1141,7 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
     let mut handle = create_test_handle();
     handle.set_execution_engine(Arc::new(StubEngine));
 
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "do work".into(),
         subagent_type: Some("Explore".into()),
         session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
@@ -1105,7 +1157,7 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
 #[tokio::test]
 async fn test_spawn_subagent_sync_classifier_respects_permission_mode() {
     // Production-path coverage for the handoff-classifier gate: the sync
-    // spawn flow must thread `request.mode` (parsed to PermissionMode)
+    // spawn flow must thread `request.permissions.mode` (parsed to PermissionMode)
     // into the classifier so a non-`auto` mode skips classification.
     // The StubSideQuery has no canned responses, so if the gate were
     // bypassed the classifier query would error and prepend
@@ -1149,7 +1201,7 @@ async fn test_spawn_subagent_sync_classifier_respects_permission_mode() {
         responses: tokio::sync::Mutex::new(Vec::new()), // would error if queried
     }));
 
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "do work".into(),
         subagent_type: Some("general-purpose".into()),
         mode: Some(coco_types::PermissionMode::Default),
@@ -1222,7 +1274,7 @@ async fn test_spawn_subagent_sync_drains_stream_events_to_task_registry() {
     handle.set_execution_engine(Arc::new(StreamingEngine));
 
     let response = handle
-        .spawn_agent(AgentSpawnRequest {
+        .spawn_agent(agent_spawn_request! {
             prompt: "do work".into(),
             subagent_type: Some("Explore".into()),
             session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
@@ -1309,7 +1361,7 @@ async fn test_drain_fills_task_activity_summary_from_tool_input() {
     handle.set_execution_engine(Arc::new(ToolEngine));
 
     let response = handle
-        .spawn_agent(AgentSpawnRequest {
+        .spawn_agent(agent_spawn_request! {
             prompt: "do work".into(),
             subagent_type: Some("Explore".into()),
             session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
@@ -1344,7 +1396,7 @@ async fn test_spawn_subagent_worktree_without_manager_fails_cleanly() {
     // with a descriptive error — not silently run without
     // isolation.
     let handle = create_test_handle();
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "isolated work".into(),
         isolation: Some(coco_types::AgentIsolation::Worktree),
         session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
@@ -1500,7 +1552,7 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
         release: release.clone(),
     }));
 
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "long work".into(),
         subagent_type: Some("general-purpose".into()),
         session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
@@ -1688,7 +1740,7 @@ async fn test_spawn_subagent_parent_abort_cancels_foreground() {
     // The parent turn's abort controller — threaded into the request the
     // way `AgentTool::execute` threads `ctx.abort.turn_signal()`.
     let parent_abort = TurnAbortController::new();
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "long work".into(),
         subagent_type: Some("general-purpose".into()),
         session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
@@ -1769,7 +1821,7 @@ async fn test_spawn_subagent_async() {
     let mut handle = create_test_handle();
     handle.set_execution_engine(Arc::new(BgStubEngine));
 
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "Background work".to_string(),
         run_in_background: true,
         session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
@@ -1786,7 +1838,7 @@ async fn test_spawn_subagent_async_without_engine_fails_cleanly() {
     // Without an engine the bg path can't drive the spawn — surface
     // a real failure instead of the prior phantom AsyncLaunched.
     let handle = create_test_handle();
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "Background work".to_string(),
         run_in_background: true,
         session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
@@ -1803,7 +1855,7 @@ async fn test_spawn_teammate() {
     let _ = crate::team_file::cleanup_team_directories(&team_name);
     let handle = create_test_handle();
     create_team(&handle, &team_name).await;
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "Help me".to_string(),
         name: Some("researcher".to_string()),
         team_name: Some(team_name.clone()),
@@ -1876,7 +1928,7 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
     create_team(&handle, &team_name).await;
 
     let response = handle
-        .spawn_agent(AgentSpawnRequest {
+        .spawn_agent(agent_spawn_request! {
             prompt: "do work".into(),
             name: Some("worker".into()),
             team_name: Some(team_name.clone()),
@@ -2016,7 +2068,7 @@ async fn test_spawn_subagent_fresh_threads_definition_system_prompt() {
         ..Default::default()
     });
 
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "do work".into(),
         subagent_type: Some("Explore".into()),
         definition: Some(definition),
@@ -2092,7 +2144,7 @@ async fn test_spawn_subagent_threads_definition_allowed_tools() {
         ..Default::default()
     });
 
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "do work".into(),
         subagent_type: Some("restricted".into()),
         definition: Some(definition),
@@ -2164,7 +2216,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
     // `Agent` is still ALLOWED (nested spawning is gated by depth, not the
     // base block), so the child can spawn one level deeper.
     handle
-        .spawn_agent(AgentSpawnRequest {
+        .spawn_agent(agent_spawn_request! {
             prompt: "do work".into(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(wildcard_def.clone()),
@@ -2195,7 +2247,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
     // At the depth limit, `Agent` stays visible; AgentTool's call-entry
     // guard rejects actual spawn attempts from that leaf depth.
     handle
-        .spawn_agent(AgentSpawnRequest {
+        .spawn_agent(agent_spawn_request! {
             prompt: "do work".into(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(wildcard_def.clone()),
@@ -2214,7 +2266,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
     // Plan mode past the depth limit: ExitPlanMode is re-admitted; Agent
     // (and the rest of the block) stay blocked.
     handle
-        .spawn_agent(AgentSpawnRequest {
+        .spawn_agent(agent_spawn_request! {
             prompt: "do work".into(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(wildcard_def),
@@ -2283,7 +2335,7 @@ async fn test_spawn_teammate_uses_base_system_prompt_when_no_initial_prompt() {
         .await;
 
     handle
-        .spawn_agent(AgentSpawnRequest {
+        .spawn_agent(agent_spawn_request! {
             prompt: "do work".into(),
             name: Some("worker".into()),
             team_name: Some(team_name.clone()),
@@ -2351,7 +2403,7 @@ async fn test_spawn_teammate_forwards_runner_query_options() {
     // Static effort lives on `AgentDefinition.effort`; the coordinator
     // All static knobs (effort / use_exact_tools / mcp_servers /
     // disallowed_tools / max_turns / initial_prompt) live on
-    // `AgentDefinition` and are read via `request.definition` at
+    // `AgentDefinition` and are read via `request.input.definition` at
     // RunnerConfig assembly time. Per-spawn override slots on the
     // request struct are gone (audit pass: dead-field cleanup).
     let def = std::sync::Arc::new(coco_types::AgentDefinition {
@@ -2364,7 +2416,7 @@ async fn test_spawn_teammate_forwards_runner_query_options() {
         ..Default::default()
     });
     handle
-        .spawn_agent(AgentSpawnRequest {
+        .spawn_agent(agent_spawn_request! {
             prompt: "do work".into(),
             name: Some("worker".into()),
             team_name: Some(team_name.clone()),
@@ -2423,7 +2475,7 @@ async fn test_team_lifecycle_writes_roster_and_spawns_teammate() {
     assert_eq!(team_file.lead_agent_id, format!("team-lead@{team_name}"));
 
     let spawned = handle
-        .spawn_agent(AgentSpawnRequest {
+        .spawn_agent(agent_spawn_request! {
             prompt: "inspect the repo".into(),
             name: Some("researcher".into()),
             team_name: Some(team_name.clone()),
@@ -2591,7 +2643,7 @@ async fn test_spawn_subagent_validation_failure_does_not_leak_state() {
     let handle = create_test_handle_with_registry(
         registry.clone() as coco_tool_runtime::AgentTaskRegistryRef
     );
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "isolated work".into(),
         // Worktree without a manager — first gate fails.
         isolation: Some(coco_types::AgentIsolation::Worktree),
@@ -2673,7 +2725,7 @@ async fn test_subagent_start_hook_injects_additional_context() {
     handle.set_hook_registry(Arc::new(registry));
 
     let response = handle
-        .spawn_agent(AgentSpawnRequest {
+        .spawn_agent(agent_spawn_request! {
             prompt: "ORIGINAL PROMPT".into(),
             subagent_type: Some("Explore".into()),
             session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
@@ -2747,7 +2799,7 @@ async fn test_subagent_start_hook_no_context_leaves_prompt_unchanged() {
     handle.set_hook_registry(Arc::new(coco_hooks::HookRegistry::new()));
 
     handle
-        .spawn_agent(AgentSpawnRequest {
+        .spawn_agent(agent_spawn_request! {
             prompt: "ORIGINAL PROMPT".into(),
             subagent_type: Some("Explore".into()),
             session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
@@ -2815,7 +2867,7 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
         false,
     ));
     let parent_messages = vec![tool_result_msg];
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "follow up".into(),
         spawn_mode: coco_tool_runtime::SpawnMode::Resume {
             parent_messages: parent_messages.clone(),
@@ -2980,7 +3032,7 @@ async fn resume_agent_full_wiring_reuses_id_restores_mode_and_replays_history() 
 /// `is_in_fork_child(parent_messages)` scan can detect recursion.
 ///
 /// Pre-fix, spawn.rs called `build_fork_context` but threw away
-/// `ctx.directive` and sent `request.prompt` verbatim — recursion
+/// `ctx.directive` and sent `request.input.prompt` verbatim — recursion
 /// guard could never trigger.
 #[tokio::test]
 async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
@@ -3047,7 +3099,7 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
         wire_api: None,
     });
 
-    let request = AgentSpawnRequest {
+    let request = agent_spawn_request! {
         prompt: "Research how Foo works".into(),
         // Fork mode is only chosen by AgentTool when no subagent_type
         // is supplied; mirror that here so the runner takes the Fork

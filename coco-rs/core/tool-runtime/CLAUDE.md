@@ -58,35 +58,27 @@ Plan: [`docs/coco-rs/tool-result-budget-plan.md`](../../../docs/coco-rs/tool-res
 Tracked here for future contributors — none of these changes behavior;
 they're all structural cleanups identified in the May 2026 audit.
 
-### Split `AgentSpawnRequest` into 4 sub-structs
+### `AgentSpawnRequest` grouping
 
-`AgentSpawnRequest` carries 27 fields covering four distinct concerns:
-model-visible input (prompt / description / subagent_type / model /
-run_in_background / isolation / cwd / effort / name / team_name / mode /
-auto_background_ms), permission policy (mcp_servers / disallowed_tools /
-max_turns / can_use_tool / require_can_use_tool / features /
-tool_overrides / parent_tool_filter), routing (tool_use_id /
-invoking_agent_id / session_id / fork_label), and spawn-mode discriminant
-(spawn_mode / definition / constraints / fork_context_messages /
-skip_transcript / use_exact_tools / initial_prompt / model_role /
-enable_summarization / is_non_interactive).
-
-Mechanical split:
+`AgentSpawnRequest` is intentionally nested by concern:
 
 ```rust
 pub struct AgentSpawnRequest {
     pub input: AgentSpawnInput,
-    pub policy: AgentSpawnPolicy,
+    pub execution: AgentSpawnExecution,
+    pub permissions: AgentSpawnPermissions,
+    pub inheritance: AgentSpawnInheritance,
     pub routing: AgentSpawnRouting,
-    pub spawn_mode: SpawnMode,
-    pub definition: Option<Arc<AgentDefinition>>,
-    pub constraints: Option<AgentSpawnConstraints>,
-    pub fork_context_messages: Vec<Arc<Message>>,
+    pub telemetry: AgentSpawnTelemetry,
 }
 ```
 
-Touches 5 callers (`AgentTool`, `memory::{extract, dream, session}`,
-`coordinator::resume`). Pure refactor, no semantics change.
+Portable wire fields live in those nested structs. Runtime-only handles and
+process-local state stay behind `#[serde(skip)]`: definitions/output schema in
+`input`, `SpawnMode` in `execution`, can-use-tool callbacks in `permissions`,
+parent feature/tool/filter inheritance in `inheritance`, and abort signals in
+`routing`. New spawn fields should be added to the smallest matching group,
+not to the request root.
 
 ### `TaskExtras` enum on `TaskStateBase`
 

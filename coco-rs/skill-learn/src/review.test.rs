@@ -60,26 +60,29 @@ async fn review_fork_uses_memory_role_fence_and_label() {
         .expect("spawn_agent should have been called");
 
     // Routing + fencing invariants.
-    assert_eq!(req.fork_label, Some(ForkLabel::SkillReview));
-    assert_eq!(req.session_id, Some(session_id));
+    assert_eq!(req.telemetry.fork_label, Some(ForkLabel::SkillReview));
+    assert_eq!(req.routing.session_id, Some(session_id));
     assert!(
-        req.skip_transcript,
+        req.execution.skip_transcript,
         "review fork must not pollute transcript"
     );
     assert!(
-        req.require_can_use_tool,
+        req.permissions.require_can_use_tool,
         "fence must run even under a hook Allow"
     );
-    assert!(req.can_use_tool.is_some(), "write fence must be installed");
+    assert!(
+        req.permissions.can_use_tool.is_some(),
+        "write fence must be installed"
+    );
 
-    let def = req.definition.expect("synthetic definition");
+    let def = req.input.definition.expect("synthetic definition");
     assert_eq!(
         def.model_role,
         Some(ModelRole::Memory),
         "background self-improvement routes to the memory role, not review"
     );
 
-    let constraints = req.constraints.expect("write-root constraints");
+    let constraints = req.permissions.constraints.expect("write-root constraints");
     assert!(
         constraints
             .allowed_write_roots

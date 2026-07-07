@@ -45,6 +45,7 @@ use std::time::Duration;
 
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use super::BatchId;
 use super::CoordinatorFileChange;
@@ -320,47 +321,61 @@ impl UnifiedCoordinator {
             repomap_building: self.features.repomap_enabled,
         };
 
-        // Dispatch to index pipeline (all events are Changed, processor checks existence)
-        let index_receiver = if let Some(ref pipeline) = self.index_pipeline {
-            pipeline.mark_building(batch_id.clone()).await;
-            let rx = pipeline.start_batch(batch_id.clone(), file_count).await;
+        let (index_receiver, tag_receiver) = async {
+            // Dispatch to index pipeline (all events are Changed, processor checks existence)
+            let index_receiver = if let Some(ref pipeline) = self.index_pipeline {
+                pipeline.mark_building(batch_id.clone()).await;
+                let rx = pipeline.start_batch(batch_id.clone(), file_count).await;
 
-            for file in &files {
-                let seq = pipeline.assign_seq();
-                let event = TrackedEvent::new(
-                    WatchEventKind::Changed,
-                    Some(batch_id.clone()),
-                    seq,
-                    generate_trace_id(TriggerSource::SessionStart, epoch),
-                );
-                pipeline.push_event(file.clone(), event).await;
-            }
+                for file in &files {
+                    let seq = pipeline.assign_seq();
+                    let event = TrackedEvent::new(
+                        WatchEventKind::Changed,
+                        Some(batch_id.clone()),
+                        seq,
+                        generate_trace_id(TriggerSource::SessionStart, epoch),
+                    );
+                    pipeline.push_event(file.clone(), event).await;
+                }
 
-            Some(rx)
-        } else {
-            None
-        };
+                Some(rx)
+            } else {
+                None
+            };
 
-        // Dispatch to tag pipeline (all events are Changed, processor checks existence)
-        let tag_receiver = if let Some(ref pipeline) = self.tag_pipeline {
-            pipeline.mark_building(batch_id.clone()).await;
-            let rx = pipeline.start_batch(batch_id.clone(), file_count).await;
+            // Dispatch to tag pipeline (all events are Changed, processor checks existence)
+            let tag_receiver = if let Some(ref pipeline) = self.tag_pipeline {
+                pipeline.mark_building(batch_id.clone()).await;
+                let rx = pipeline.start_batch(batch_id.clone(), file_count).await;
 
-            for file in &files {
-                let seq = pipeline.assign_seq();
-                let event = TrackedEvent::new(
-                    TagEventKind::Changed,
-                    Some(batch_id.clone()),
-                    seq,
-                    generate_trace_id(TriggerSource::SessionStart, epoch),
-                );
-                pipeline.push_event(file.clone(), event).await;
-            }
+                for file in &files {
+                    let seq = pipeline.assign_seq();
+                    let event = TrackedEvent::new(
+                        TagEventKind::Changed,
+                        Some(batch_id.clone()),
+                        seq,
+                        generate_trace_id(TriggerSource::SessionStart, epoch),
+                    );
+                    pipeline.push_event(file.clone(), event).await;
+                }
 
-            Some(rx)
-        } else {
-            None
-        };
+                Some(rx)
+            } else {
+                None
+            };
+
+            (index_receiver, tag_receiver)
+        }
+        .instrument(tracing::debug_span!(
+            crate::trace_names::COORDINATOR_DISPATCH,
+            source = "session_start",
+            batch_id = %batch_id,
+            epoch,
+            changes = file_count,
+            search = self.features.search_enabled,
+            repomap = self.features.repomap_enabled,
+        ))
+        .await;
 
         Ok(SessionStartResult {
             batch_id,
@@ -373,34 +388,52 @@ impl UnifiedCoordinator {
     /// Dispatch file changes to enabled pipelines (for Timer/Watcher).
     pub async fn dispatch_changes(&self, changes: Vec<CoordinatorFileChange>) {
         let epoch = self.next_epoch();
+        let change_count = changes.len() as i64;
 
-        for change in changes {
-            let path = change.path().to_path_buf();
+        async {
+            for change in changes {
+                let path = change.path().to_path_buf();
+                let index_path = path.clone();
+                let tag_path = path;
 
-            // Dispatch to index pipeline
-            if let Some(ref pipeline) = self.index_pipeline {
-                let seq = pipeline.assign_seq();
-                let event = TrackedEvent::new(
-                    change.to_event_kind(),
-                    None,
-                    seq,
-                    generate_trace_id(TriggerSource::Watcher, epoch),
-                );
-                pipeline.push_event(path.clone(), event).await;
-            }
+                let index_push = async {
+                    if let Some(ref pipeline) = self.index_pipeline {
+                        let seq = pipeline.assign_seq();
+                        let event = TrackedEvent::new(
+                            change.to_event_kind(),
+                            None,
+                            seq,
+                            generate_trace_id(TriggerSource::Watcher, epoch),
+                        );
+                        pipeline.push_event(index_path, event).await;
+                    }
+                };
 
-            // Dispatch to tag pipeline (all events are Changed, processor checks existence)
-            if let Some(ref pipeline) = self.tag_pipeline {
-                let seq = pipeline.assign_seq();
-                let event = TrackedEvent::new(
-                    TagEventKind::Changed,
-                    None,
-                    seq,
-                    generate_trace_id(TriggerSource::Watcher, epoch),
-                );
-                pipeline.push_event(path, event).await;
+                let tag_push = async {
+                    if let Some(ref pipeline) = self.tag_pipeline {
+                        let seq = pipeline.assign_seq();
+                        let event = TrackedEvent::new(
+                            TagEventKind::Changed,
+                            None,
+                            seq,
+                            generate_trace_id(TriggerSource::Watcher, epoch),
+                        );
+                        pipeline.push_event(tag_path, event).await;
+                    }
+                };
+
+                tokio::join!(index_push, tag_push);
             }
         }
+        .instrument(tracing::debug_span!(
+            crate::trace_names::COORDINATOR_DISPATCH,
+            source = "watcher",
+            epoch,
+            changes = change_count,
+            search = self.features.search_enabled,
+            repomap = self.features.repomap_enabled,
+        ))
+        .await;
     }
 
     /// Mark index pipeline as ready with stats.
@@ -465,18 +498,20 @@ impl UnifiedCoordinator {
 
     /// Check if search is ready.
     pub async fn is_search_ready(&self) -> bool {
-        self.index_pipeline
-            .as_ref()
-            .map(|p| futures::executor::block_on(p.is_ready()))
-            .unwrap_or(false)
+        if let Some(pipeline) = self.index_pipeline.as_ref() {
+            pipeline.is_ready().await
+        } else {
+            false
+        }
     }
 
     /// Check if repomap is ready.
     pub async fn is_repomap_ready(&self) -> bool {
-        self.tag_pipeline
-            .as_ref()
-            .map(|p| futures::executor::block_on(p.is_ready()))
-            .unwrap_or(false)
+        if let Some(pipeline) = self.tag_pipeline.as_ref() {
+            pipeline.is_ready().await
+        } else {
+            false
+        }
     }
 
     /// Start periodic timer for freshness checks.

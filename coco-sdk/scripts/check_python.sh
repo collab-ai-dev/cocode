@@ -28,6 +28,12 @@ bootstrap_sdk_venv() {
         "$SDK_VENV_DIR/bin/python" -m pip install --quiet -e "$PY_ROOT[dev]"
         touch "$SDK_VENV_DIR/pyvenv.cfg"
     fi
+
+    if ! "$SDK_VENV_DIR/bin/python" -c 'import pydantic, pytest, pytest_asyncio' >/dev/null 2>&1; then
+        echo "==> SDK venv is missing dev dependencies; reinstalling" >&2
+        "$SDK_VENV_DIR/bin/python" -m pip install --quiet -e "$PY_ROOT[dev]"
+        touch "$SDK_VENV_DIR/pyvenv.cfg"
+    fi
 }
 
 ruff_version_matches() {

@@ -370,7 +370,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "source": {
           "$ref": "#/$defs/ConfigChangeSource"
@@ -437,7 +437,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -517,7 +517,7 @@
         },
         "requested_schema": true,
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -602,7 +602,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -677,7 +677,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -760,7 +760,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -831,7 +831,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "title": {
           "type": [
@@ -888,7 +888,7 @@
           "type": "string"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "tool_input": true,
         "tool_name": {
@@ -948,7 +948,7 @@
           "description": "Suggested permission updates from upstream classifiers."
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "tool_input": true,
         "tool_name": {
@@ -1003,7 +1003,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -1064,7 +1064,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "tool_input": true,
         "tool_name": {
@@ -1121,7 +1121,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "tool_input": true,
         "tool_name": {
@@ -1186,7 +1186,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -1236,7 +1236,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "tool_input": true,
         "tool_name": {
@@ -1295,7 +1295,7 @@
           "$ref": "#/$defs/ExitReason"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -1313,6 +1313,10 @@
         "cwd",
         "reason"
       ]
+    },
+    "SessionId": {
+      "description": "Branded session identifier.",
+      "type": "string"
     },
     "SessionStartInput": {
       "description": "Input for SessionStart hooks.",
@@ -1347,7 +1351,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "source": {
           "$ref": "#/$defs/SessionStartSource"
@@ -1407,7 +1411,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -1480,7 +1484,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -1533,7 +1537,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "stop_hook_active": {
           "description": "`true` when the Stop hook is firing recursively (a previous\nStop hook blocked, the loop continued, and Stop is firing\nagain). Hooks should typically pass through to avoid infinite\nloops.",
@@ -1576,7 +1580,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -1626,7 +1630,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "stop_hook_active": {
           "type": "boolean"
@@ -1679,7 +1683,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "task_description": {
           "type": [
@@ -1751,7 +1755,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "task_description": {
           "type": [
@@ -1823,7 +1827,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "team_name": {
           "type": "string"
@@ -1880,7 +1884,7 @@
           "type": "string"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -1930,7 +1934,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -1977,7 +1981,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",

@@ -28,6 +28,19 @@ Depends on everything — wires registries, builds model runtime registry, start
 5. `--non-interactive` (print mode) → single `QueryEngine::run` + `output::*` formatter
 6. Interactive → `tui_runner::run` (launches `coco-tui`)
 
+## Runtime Paths
+
+`crate::paths::runtime_paths()` is the app/cli boundary for project-scoped
+paths. It reads `global_config::config_home()` plus
+`EnvKey::CocoRemoteMemoryDir` and builds `coco_paths::RuntimePaths`.
+Production code should derive transcript/session task-output/memory
+`ProjectPaths` through `crate::paths::project_paths(cwd)`.
+
+`config_home` remains the root for user/global artifacts such as logs,
+plugins, settings, output styles, models, task lists, and file-history
+metadata. `coco-paths` stays pure: no env reads and no dependency on
+`coco-config`.
+
 ## Flag Highlights
 
 Session: `--prompt`, `--output-format`, `--input-format`, `--json-schema`, `--max-turns`, `--max-budget-usd`
@@ -86,10 +99,9 @@ Three ways to set the tuning, by when it binds:
   be present in the environment **before exec** — `coco` cannot set it for
   itself, and settings.json (parsed post-init) cannot drive it.
 - **Live, in-process.** The `jemalloc` feature wires `tikv-jemalloc-{ctl,sys}`
-  through the isolated `coco-utils-jemalloc` wrapper. It is currently used for
-  an end-of-turn `arena.*.purge` (forced page reclamation, driven from
-  `coco-tui`; see that crate + `utils/jemalloc`) plus `stats.*` reads for the
-  memory perf log. The decay knobs (`arena.<i>.dirty_decay_ms` /
-  `muzzy_decay_ms`, both `rw` mallctl) are also mutable after init through the
-  same wrapper but are not yet exposed. `narenas` is never runtime-mutable
-  post-init.
+  through the isolated `coco-utils-jemalloc` wrapper. Runtime support is
+  intentionally limited to end-of-turn `arena.*.purge` (forced page
+  reclamation, driven from `coco-tui`; see that crate + `utils/jemalloc`) plus
+  `stats.*` reads for the memory perf log. Runtime decay tuning is not
+  supported: do not expose `dirty_decay_ms`, `muzzy_decay_ms`, or `narenas`
+  mutation through settings, slash commands, or live APIs.

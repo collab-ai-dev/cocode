@@ -2462,6 +2462,9 @@ pub enum TuiOnlyEvent {
     /// slash dispatcher resolves `/theme` with no args. The TUI builds the
     /// choice list from its live `ThemeRuntimeState`.
     OpenThemePicker,
+    /// Tell the TUI to open the background tasks dialog. Emitted when the
+    /// slash dispatcher resolves `/tasks` with no args.
+    OpenBackgroundTasks,
     /// Tell the TUI to open the `/skills` read-only overlay. The slash
     /// dispatcher pre-builds the entry list + per-group subtitles so
     /// the TUI doesn't recompute paths or token estimates.

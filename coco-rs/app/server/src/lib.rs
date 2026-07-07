@@ -148,7 +148,7 @@ impl Default for NotificationPrefs {
 }
 
 impl NotificationPrefs {
-    fn accepts(&self, envelope: &SessionEnvelope) -> bool {
+    fn accepts(self, envelope: &SessionEnvelope) -> bool {
         match &envelope.event {
             coco_types::CoreEvent::Protocol(_) => self.protocol,
             coco_types::CoreEvent::Stream(_) => self.stream,
@@ -528,7 +528,7 @@ impl RoutingState {
         session_id: SessionId,
         options: AttachSurfaceOptions,
     ) -> Result<(), AttachError> {
-        self.validate_attach(&connection, &surface_id, &session_id, options.role)?;
+        self.validate_attach(connection, &surface_id, &session_id, options.role)?;
         self.detach_surface(&surface_id);
         let attachment = SurfaceAttachment {
             surface_id: surface_id.clone(),
@@ -1153,14 +1153,14 @@ impl RoutingState {
 
     fn validate_attach(
         &self,
-        connection: &ConnectionKey,
+        connection: ConnectionKey,
         surface_id: &SurfaceId,
         session_id: &SessionId,
         role: SurfaceRole,
     ) -> Result<(), AttachError> {
         let current_connection_count = self
             .connection_to_surfaces
-            .get(connection)
+            .get(&connection)
             .into_iter()
             .flat_map(|surfaces| surfaces.iter())
             .filter(|existing_surface| *existing_surface != surface_id)
@@ -1173,7 +1173,7 @@ impl RoutingState {
         let same_connection_retarget = self
             .surface_to_connection
             .get(surface_id)
-            .is_some_and(|current| current == connection);
+            .is_some_and(|current| current == &connection);
         if !same_connection_retarget
             && current_connection_count >= self.limits.max_surfaces_per_connection
         {
@@ -1185,6 +1185,13 @@ impl RoutingState {
                 if let Some(owner_surface) = self.interactive_owners.get(session_id)
                     && owner_surface != surface_id
                 {
+                    // `interactive_owners` and `attachments` are kept in sync
+                    // (crate invariant), so an interactive owner surface always
+                    // has a live attachment entry here.
+                    #[expect(
+                        clippy::expect_used,
+                        reason = "interactive_owners is kept in sync with attachments"
+                    )]
                     let owner = self
                         .attachments
                         .get(owner_surface)
@@ -2094,10 +2101,7 @@ mod tests {
         assert_eq!(outcome.detached_surfaces, vec![surface_id.clone()]);
         assert_eq!(
             request_id_strings(outcome.cancelled_requests),
-            request_id_strings(vec![
-                keychain.request_id.clone(),
-                notifications.request_id.clone()
-            ])
+            request_id_strings(vec![keychain.request_id.clone(), notifications.request_id])
         );
         assert!(
             routing
@@ -2146,7 +2150,7 @@ mod tests {
             .open_server_request(
                 session_id.clone(),
                 SurfaceCapability::Notifications,
-                Some(turn_2.clone()),
+                Some(turn_2),
             )
             .expect("open second");
 

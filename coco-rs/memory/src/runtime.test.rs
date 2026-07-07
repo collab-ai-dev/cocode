@@ -132,7 +132,7 @@ impl AgentHandle for SessionRecordingHandle {
         self.sessions
             .lock()
             .expect("recorded sessions lock")
-            .push(request.session_id);
+            .push(request.routing.session_id);
         Ok(AgentSpawnResponse {
             status: AgentSpawnStatus::Completed,
             agent_id: Some("memory".into()),

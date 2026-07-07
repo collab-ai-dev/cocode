@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use vercel_ai_provider_utils::ExtractExtras;
+use vercel_ai_provider_utils::ExtractNamespacedError;
 use vercel_ai_provider_utils::extract_namespaced;
 
 use crate::openai_capabilities::SystemMessageMode;
@@ -165,11 +166,15 @@ impl<'de> Deserialize<'de> for SystemMessageMode {
 /// names (`reasoningEffort`, `serviceTier`, …) cannot leak to the root.
 pub fn extract_openai_options(
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
-) -> (
-    OpenAIChatProviderOptions,
-    BTreeMap<String, serde_json::Value>,
-) {
+) -> Result<
+    (
+        OpenAIChatProviderOptions,
+        BTreeMap<String, serde_json::Value>,
+    ),
+    ExtractNamespacedError,
+> {
     extract_namespaced(provider_options.as_ref(), "openai", "openai")
+        .map(|extracted| (extracted.typed, extracted.extras))
 }
 
 #[cfg(test)]

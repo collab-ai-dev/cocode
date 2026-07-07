@@ -55,6 +55,7 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 anyhow.workspace = true
+coco-test-harness.workspace = true
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 coco-paths.workspace = true

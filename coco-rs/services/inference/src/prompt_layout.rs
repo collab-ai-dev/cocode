@@ -89,6 +89,12 @@ pub struct PromptLayoutOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemPromptPart {
+    pub text: String,
+    pub cache_hint: CacheHint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnthropicSystemBlock {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -106,6 +112,7 @@ pub struct AnthropicCacheControl {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptHashInputs {
     pub system_text_hash: u64,
+    pub system_char_count: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_control_hash: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -141,6 +148,18 @@ pub fn take_layout_options(opts: &ProviderOptions) -> Option<PromptLayoutOptions
     serde_json::from_value(JSONValue::Object(object)).ok()
 }
 
+pub fn put_system_prompt_parts(opts: &mut ProviderOptions, parts: &[SystemPromptPart]) {
+    let mut existing = opts
+        .get(PROMPT_LAYOUT_NAMESPACE)
+        .cloned()
+        .unwrap_or_default();
+    existing.insert(
+        "system_parts".to_string(),
+        serde_json::to_value(parts).unwrap_or(JSONValue::Null),
+    );
+    opts.set(PROMPT_LAYOUT_NAMESPACE, existing);
+}
+
 /// Build a `PromptLayoutOptions` for a given provider family from the
 /// normalized vercel-ai prompt that `build_call_options` is about to
 /// send.
@@ -162,7 +181,9 @@ pub fn build_prompt_layout_from_prompt(
     api: ProviderApi,
     tools: Option<&[LanguageModelV4Tool]>,
 ) -> PromptLayoutOptions {
-    let (system_text, _) = collect_role_text(prompt, |m| matches!(m, LlmMessage::System { .. }));
+    let system_parts = collect_system_prompt_parts(prompt);
+    let system_text = flatten_system_parts(&system_parts);
+    let system_char_count = i64::try_from(system_text.chars().count()).unwrap_or(i64::MAX);
     let (developer_text, _) =
         collect_role_text(prompt, |m| matches!(m, LlmMessage::Developer { .. }));
     let (contextual_user_text, contextual_user_chars) =
@@ -176,10 +197,7 @@ pub fn build_prompt_layout_from_prompt(
                 layout.instructions = Some(system_text.clone());
             }
             ProviderApi::Anthropic => {
-                layout.system_blocks = Some(vec![AnthropicSystemBlock {
-                    text: system_text.clone(),
-                    cache_control: None,
-                }]);
+                layout.system_blocks = Some(anthropic_system_blocks_from_parts(&system_parts));
             }
             ProviderApi::Gemini => {
                 layout.system_instruction = Some(system_text.clone());
@@ -211,7 +229,8 @@ pub fn build_prompt_layout_from_prompt(
 
     layout.prompt_hash_inputs = Some(PromptHashInputs {
         system_text_hash,
-        cache_control_hash: None,
+        system_char_count,
+        cache_control_hash: cache_control_hash_from_parts(&system_parts),
         developer_text_hash,
         contextual_user_text_hash,
         contextual_user_char_count: contextual_user_chars,
@@ -220,6 +239,91 @@ pub fn build_prompt_layout_from_prompt(
     });
 
     layout
+}
+
+fn collect_system_prompt_parts(prompt: &LlmPrompt) -> Vec<SystemPromptPart> {
+    let mut parts = Vec::new();
+    for msg in prompt {
+        let LlmMessage::System {
+            content,
+            provider_options,
+        } = msg
+        else {
+            continue;
+        };
+
+        if let Some(mut semantic_parts) = system_parts_from_provider_options(provider_options) {
+            parts.append(&mut semantic_parts);
+            continue;
+        }
+
+        let text = text_from_content_parts(content);
+        if !text.is_empty() {
+            parts.push(SystemPromptPart {
+                text,
+                cache_hint: CacheHint::Ephemeral,
+            });
+        }
+    }
+    parts
+}
+
+fn system_parts_from_provider_options(
+    provider_options: &Option<ProviderOptions>,
+) -> Option<Vec<SystemPromptPart>> {
+    let opts = provider_options.as_ref()?;
+    let namespace = opts.get(PROMPT_LAYOUT_NAMESPACE)?;
+    let value = namespace.get("system_parts")?.clone();
+    serde_json::from_value(value).ok()
+}
+
+fn text_from_content_parts(parts: &[UserContentPart]) -> String {
+    let mut text = String::new();
+    for part in parts {
+        if let UserContentPart::Text(t) = part {
+            text.push_str(&t.text);
+        }
+    }
+    text
+}
+
+fn flatten_system_parts(parts: &[SystemPromptPart]) -> String {
+    parts
+        .iter()
+        .map(|part| part.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn anthropic_system_blocks_from_parts(parts: &[SystemPromptPart]) -> Vec<AnthropicSystemBlock> {
+    parts
+        .iter()
+        .filter(|part| !part.text.is_empty())
+        .map(|part| AnthropicSystemBlock {
+            text: part.text.clone(),
+            cache_control: matches!(part.cache_hint, CacheHint::Breakpoint).then(|| {
+                AnthropicCacheControl {
+                    type_name: "ephemeral".to_string(),
+                    ttl: None,
+                }
+            }),
+        })
+        .collect()
+}
+
+fn cache_control_hash_from_parts(parts: &[SystemPromptPart]) -> Option<u64> {
+    let materialized_parts = parts.iter().filter(|part| !part.text.is_empty()).count();
+    let has_cache_control = parts
+        .iter()
+        .any(|part| matches!(part.cache_hint, CacheHint::Breakpoint));
+    if materialized_parts <= 1 && !has_cache_control {
+        return None;
+    }
+
+    let blocks = anthropic_system_blocks_from_parts(parts);
+    Some(canonical_extra_body_hash(
+        &serde_json::to_value(blocks).unwrap_or(JSONValue::Null),
+    ))
 }
 
 fn collect_role_text<F>(prompt: &LlmPrompt, predicate: F) -> (String, i64)

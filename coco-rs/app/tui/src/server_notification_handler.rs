@@ -205,6 +205,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::OpenProviderWizard => "OpenProviderWizard",
         E::OpenSettings => "OpenSettings",
         E::OpenThemePicker => "OpenThemePicker",
+        E::OpenBackgroundTasks => "OpenBackgroundTasks",
         E::OpenSkillsDialog { .. } => "OpenSkillsDialog",
         E::OpenPluginDialog { .. } => "OpenPluginDialog",
         E::OpenAgentsDialog { .. } => "OpenAgentsDialog",

@@ -41,6 +41,7 @@ uuid = { workspace = true, features = ["v4"] }
 walkdir.workspace = true
 
 [dev-dependencies]
+coco-test-harness.workspace = true
 filetime.workspace = true
 pretty_assertions.workspace = true
 tempfile.workspace = true

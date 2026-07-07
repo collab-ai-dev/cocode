@@ -102,6 +102,9 @@ pub use delay::parse_retry_after;
 pub use error_message::get_error_message;
 
 pub use extract_namespaced::ExtractExtras;
+pub use extract_namespaced::ExtractNamespacedError;
+pub use extract_namespaced::ExtractNamespacedResult;
+pub use extract_namespaced::ExtractedNamespaced;
 pub use extract_namespaced::extract_namespaced;
 
 pub use fetch::Fetch;

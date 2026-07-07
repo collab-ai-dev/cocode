@@ -1670,6 +1670,18 @@ impl ModelRuntime {
         outcome: ModelCommunicationOutcome,
         fallback_min_context_window: Option<i64>,
     ) -> ModelRuntimeTransition {
+        let span = tracing::debug_span!(
+            crate::trace_names::MODEL_RUNTIME_FALLBACK_TRANSITION,
+            source = ?token.source,
+            runtime_id = token.runtime_id,
+            generation = token.generation,
+            slot_index = token.slot_index,
+            active_slot = self.active,
+            outcome = ?outcome,
+            fallback_min_context_window,
+        );
+        let _entered = span.enter();
+
         if token.runtime_id != self.instance_id {
             return ModelRuntimeTransition::Noop;
         }

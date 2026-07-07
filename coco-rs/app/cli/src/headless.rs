@@ -1381,8 +1381,7 @@ async fn persist_headless_local_transcript_messages(
     if cli.no_session_persistence || local_messages.is_empty() {
         return;
     }
-    let config_home = coco_config::global_config::config_home();
-    let paths = Arc::new(coco_paths::ProjectPaths::new(config_home, cwd));
+    let paths = crate::paths::project_paths(cwd);
     let store = coco_session::TranscriptStore::new(paths);
     let mut seen: std::collections::HashSet<uuid::Uuid> = prior_messages
         .iter()

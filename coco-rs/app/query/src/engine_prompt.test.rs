@@ -10,9 +10,45 @@ use coco_llm_types::LlmMessage;
 use coco_llm_types::ToolContentPart;
 use coco_llm_types::ToolResultContent;
 use coco_llm_types::ToolResultPart;
+use coco_llm_types::UserContentPart;
 use coco_types::messages::{Message, ToolResultMessage};
 
 use super::*;
+
+#[test]
+fn system_prompt_context_message_carries_prompt_parts_metadata() {
+    let prompt_context =
+        coco_context::PromptContext::build(coco_context::PromptContextMode::literal(
+            coco_context::PromptContextLiteralSource::ConfigOverride,
+            "system body",
+        ));
+
+    let message = system_message_from_prompt_context(&prompt_context);
+
+    let LlmMessage::System {
+        content,
+        provider_options,
+    } = message
+    else {
+        panic!("expected system message");
+    };
+    let UserContentPart::Text(text) = &content[0] else {
+        panic!("expected text system part");
+    };
+    assert_eq!(text.text, "system body");
+
+    let namespace = provider_options
+        .as_ref()
+        .and_then(|opts| opts.get(coco_inference::PROMPT_LAYOUT_NAMESPACE))
+        .expect("prompt_layout namespace");
+    let parts = namespace
+        .get("system_parts")
+        .and_then(|v| v.as_array())
+        .expect("system_parts array");
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0]["text"], "system body");
+    assert_eq!(parts[0]["cache_hint"], "ephemeral");
+}
 
 fn make_tool_result(
     tool_use_id: &str,

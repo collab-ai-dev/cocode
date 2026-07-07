@@ -4,6 +4,7 @@ pub mod ask_user_question;
 pub(crate) mod background_task;
 pub mod bash;
 pub mod bash_advanced;
+pub(crate) mod blocking_fs;
 pub mod config;
 pub mod edit;
 pub mod edit_utils;

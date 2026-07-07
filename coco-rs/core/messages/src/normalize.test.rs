@@ -1201,6 +1201,8 @@ fn normalize_does_not_strip_plan_field_from_other_tools() {
 
 mod pipeline_invariants {
     use super::*;
+    use crate::normalize::NORMALIZE_PASS_ORDER;
+    use crate::normalize::normalize_passes_would_mutate;
     use crate::normalize::passes;
     use crate::pipeline::MessagePass;
 
@@ -1244,6 +1246,22 @@ mod pipeline_invariants {
     }
 
     // Helpers tailored for each pass's trigger condition.
+
+    #[test]
+    fn normalize_pass_order_is_single_declared_pipeline_order() {
+        assert_eq!(
+            NORMALIZE_PASS_ORDER,
+            &[
+                "OrphanedThinkingOnly",
+                "TrailingThinking",
+                "WhitespaceOnly",
+                "EnsureNonEmptyContent",
+                "MergeConsecutiveUsers",
+                "MergeAssistantsByRequestId",
+                "StripExitPlanModeInjectedFields",
+            ],
+        );
+    }
 
     fn asst_with_content(content: Vec<AssistantContent>) -> Message {
         Message::Assistant(AssistantMessage {
@@ -1455,13 +1473,7 @@ mod pipeline_invariants {
     #[test]
     fn empty_input_no_pass_mutates() {
         let empty: Vec<&Message> = Vec::new();
-        assert!(!passes::OrphanedThinkingOnly.would_mutate(&empty));
-        assert!(!passes::TrailingThinking.would_mutate(&empty));
-        assert!(!passes::WhitespaceOnly.would_mutate(&empty));
-        assert!(!passes::EnsureNonEmptyContent.would_mutate(&empty));
-        assert!(!passes::MergeConsecutiveUsers.would_mutate(&empty));
-        assert!(!passes::MergeAssistantsByRequestId.would_mutate(&empty));
-        assert!(!passes::StripExitPlanModeInjectedFields.would_mutate(&empty));
+        assert!(!normalize_passes_would_mutate(&empty));
     }
 }
 

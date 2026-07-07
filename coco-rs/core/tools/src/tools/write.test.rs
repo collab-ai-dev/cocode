@@ -749,6 +749,9 @@ async fn test_write_secret_guard_respects_custom_memory_dir_config() {
     let file = team_dir.join("token.md");
 
     let mut ctx = ToolUseContext::test_default();
+    // Stage-1 team detection resolves against the session's project root; the
+    // classifier no longer falls back to the live process cwd, so provide one.
+    ctx.original_cwd = Some(dir.path().to_path_buf());
     ctx.memory_config.directory = Some(custom_memory_dir);
     let result = <WriteTool as DynTool>::execute(
         &WriteTool,

@@ -48,6 +48,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::SystemTime;
+
+use super::blocking_fs::BlockingFsTask;
 use tokio_util::sync::CancellationToken;
 
 /// Default max results when glob_limits.max_results is None.
@@ -230,7 +232,7 @@ impl Tool for GlobTool {
         let cancel = ctx.cancel_token();
         let pattern_owned = input.pattern.clone();
         let read_ignore_patterns = ctx.tool_config.file_read_ignore_patterns.clone();
-        let search_future = tokio::task::spawn_blocking(move || {
+        let search_task = BlockingFsTask::spawn("glob search", move || {
             run_glob_search(
                 &pattern_owned,
                 &search_path,
@@ -242,16 +244,11 @@ impl Tool for GlobTool {
         });
 
         let (paths, truncated) =
-            tokio::time::timeout(Duration::from_secs(timeout_secs), search_future)
+            tokio::time::timeout(Duration::from_secs(timeout_secs), search_task.join())
                 .await
                 .map_err(|_| ToolError::Timeout {
                     timeout_ms: (timeout_secs * 1000) as i64,
-                })?
-                .map_err(|e| ToolError::ExecutionFailed {
-                    message: format!("glob search task failed: {e}"),
-                    display_data: None,
-                    source: None,
-                })?
+                })??
                 .map_err(|e| ToolError::ExecutionFailed {
                     message: e,
                     display_data: None,

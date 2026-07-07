@@ -98,6 +98,48 @@ async fn test_coordinator_epoch() {
 }
 
 #[tokio::test]
+async fn dispatch_changes_pushes_to_index_and_tag_queues() {
+    let features = FeatureFlags::default();
+    let (dir, coord) = create_test_coordinator(features).await;
+    let changed = dir.path().join("changed.rs");
+
+    coord
+        .dispatch_changes(vec![CoordinatorFileChange::new(changed)])
+        .await;
+
+    let index_len = coord
+        .index_pipeline()
+        .expect("index pipeline")
+        .event_queue()
+        .len()
+        .await;
+    let tag_len = coord
+        .tag_pipeline()
+        .expect("tag pipeline")
+        .event_queue()
+        .len()
+        .await;
+
+    assert_eq!(index_len, 1);
+    assert_eq!(tag_len, 1);
+}
+
+#[tokio::test]
+async fn readiness_checks_await_pipeline_state() {
+    let features = FeatureFlags::default();
+    let (_dir, coord) = create_test_coordinator(features).await;
+
+    assert!(!coord.is_search_ready().await);
+    assert!(!coord.is_repomap_ready().await);
+
+    coord.mark_index_ready(IndexStats::default()).await;
+    coord.mark_tag_ready(TagStats::default()).await;
+
+    assert!(coord.is_search_ready().await);
+    assert!(coord.is_repomap_ready().await);
+}
+
+#[tokio::test]
 async fn test_generate_trace_id() {
     let id1 = generate_trace_id(TriggerSource::SessionStart, 1);
     let id2 = generate_trace_id(TriggerSource::Timer, 2);

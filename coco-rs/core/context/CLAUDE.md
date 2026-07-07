@@ -20,7 +20,7 @@ System context assembly: environment info, memory-file discovery (`CLAUDE.md` / 
 - **Memory (legacy info type)**: `MemoryFileInfo`, `MemoryType`
 - **Mentions**: `MentionResolveOptions`, `resolve_mentions`
 - **User input**: `ProcessedInput`, `Mention`, `MentionType`, `process_user_input`
-- **Prompt**: `SystemPrompt`, `SystemPromptBlock`, `build_system_prompt`, `build_minimal_prompt`
+- **Prompt**: `SystemPrompt`, `SystemPromptBlock`, `SystemPromptPart`, `build_system_prompt`, `build_minimal_prompt`. `SystemPrompt::parts()` is the single derived view used for prompt-layout metadata; `full_text()` flattens those parts rather than independently walking the block stream.
 - **Tokens**: `estimate_tokens`, `estimate_tokens_for_messages`, `is_over_threshold`
 
 ## Module Layout

@@ -130,20 +130,17 @@ pub fn run_message_passes(
   (slow path runs unnecessarily but correctness preserved). Under-
   reporting (false negative) IS a bug — silently skips mutation.
 
-**Pipeline construction** — explicit static dispatch, no `dyn`:
+**Pipeline construction** — explicit static dispatch, no `dyn`, with one
+pass-order declaration:
 
 ```rust
-let refs = borrow_refs(input);
-let needs_mutate = Pass1.would_mutate(&refs) || Pass2.would_mutate(&refs);
-drop(refs);
-run_message_passes(input, needs_mutate, |owned| {
-    Pass1.apply(owned);
-    Pass2.apply(owned);
-})
+declare_normalize_passes!(Pass1, Pass2);
 ```
 
-The `||` chain and `.apply()` chain must list passes in the same order.
-Adding a pass requires editing both (caught at review, not compile).
+The macro generates `NORMALIZE_PASS_ORDER`,
+`normalize_passes_would_mutate(&refs)`, and
+`apply_normalize_passes(&mut owned)`, so adding or reordering a
+normalize pass requires editing one list.
 
 **Fast path** (no pass would mutate) → `input.to_vec()` (N×Arc::clone,
 zero Message::clone). **Slow path** → materialize once, run all
@@ -163,8 +160,8 @@ mode (false-negative predicate → mutation silently skipped).
    (`normalize::passes` or `compact::compact_passes`).
 2. `impl MessagePass for X` with `would_mutate` (cheap scan) and
    `apply` (delegates to the existing `pub(crate) fn` algorithm).
-3. Add the pass to the pipeline's `||` chain AND `.apply()` chain
-   at the call site (e.g., `normalize_messages_for_api`).
+3. Add the pass once to `declare_normalize_passes!(...)` in
+   `normalize.rs`.
 4. Cover the new trigger condition in `pipeline_invariants` so the
    drift test exercises both fast and slow paths.
 

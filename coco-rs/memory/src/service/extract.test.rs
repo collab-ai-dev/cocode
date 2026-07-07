@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::MemoryConfig;
-use crate::service::test_support::RecordingHandle;
+use coco_test_harness::recording::RecordingAgentHandle as RecordingHandle;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use coco_types::ToolOverrides;
@@ -109,17 +109,21 @@ async fn fires_with_constraints_and_fork_messages() {
     assert!(matches!(outcome, ExtractOutcome::Completed { .. }));
     let calls = handle.calls();
     assert_eq!(calls.len(), 1);
-    let constraints = calls[0].constraints.as_ref().expect("constraints");
+    let constraints = calls[0]
+        .permissions
+        .constraints
+        .as_ref()
+        .expect("constraints");
     assert_eq!(constraints.max_turns, Some(5));
     assert_eq!(
         constraints.allowed_write_roots,
         vec![temp.path().to_path_buf()]
     );
     // Fork behaviour is driven by fork_context_messages, not isolation.
-    assert_eq!(calls[0].isolation, None);
-    assert_eq!(calls[0].fork_context_messages.len(), 1);
+    assert_eq!(calls[0].execution.isolation, None);
+    assert_eq!(calls[0].routing.fork_context_messages.len(), 1);
     assert_eq!(
-        calls[0].active_shell_tool,
+        calls[0].inheritance.active_shell_tool,
         coco_types::ActiveShellTool::Disabled
     );
 }
@@ -146,9 +150,9 @@ async fn spawned_prompt_uses_apply_patch_when_configured() {
     assert!(matches!(outcome, ExtractOutcome::Completed { .. }));
     let calls = handle.calls();
     assert_eq!(calls.len(), 1);
-    assert!(calls[0].prompt.contains("apply_patch"));
-    assert!(!calls[0].prompt.contains("Write"));
-    assert!(!calls[0].prompt.contains("Edit requires a prior Read"));
+    assert!(calls[0].input.prompt.contains("apply_patch"));
+    assert!(!calls[0].input.prompt.contains("Write"));
+    assert!(!calls[0].input.prompt.contains("Edit requires a prior Read"));
 }
 
 #[tokio::test]

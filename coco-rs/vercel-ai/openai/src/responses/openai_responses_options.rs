@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use vercel_ai_provider_utils::ExtractExtras;
+use vercel_ai_provider_utils::ExtractNamespacedError;
 use vercel_ai_provider_utils::extract_namespaced;
 
 use crate::chat::openai_chat_options::PromptCacheRetention;
@@ -62,11 +63,15 @@ impl ExtractExtras for OpenAIResponsesProviderOptions {
 /// provider options map. Single-namespace `"openai"`.
 pub fn extract_responses_options(
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
-) -> (
-    OpenAIResponsesProviderOptions,
-    BTreeMap<String, serde_json::Value>,
-) {
+) -> Result<
+    (
+        OpenAIResponsesProviderOptions,
+        BTreeMap<String, serde_json::Value>,
+    ),
+    ExtractNamespacedError,
+> {
     extract_namespaced(provider_options.as_ref(), "openai", "openai")
+        .map(|extracted| (extracted.typed, extracted.extras))
 }
 
 #[cfg(test)]

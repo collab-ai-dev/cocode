@@ -320,9 +320,10 @@ fn test_bash_suggestion_targets_tool_name() {
 
 #[test]
 fn test_bash_suggestion_filters_noop_cd_before_git() {
-    let cwd = std::env::current_dir().expect("test cwd");
-    let command = format!("cd {} && git diff", cwd.display());
-    let s = bash_permission_suggestions("Bash", &command);
+    // `bash_permission_suggestions` classifies against a canonical `/` cwd (no
+    // live-process-cwd dependency), so the no-op `cd` is `cd .` rather than an
+    // absolute `cd` to the current directory.
+    let s = bash_permission_suggestions("Bash", "cd . && git diff");
     assert_eq!(one_rule(&s), ("Bash", "git diff:*"));
 }
 
@@ -353,9 +354,7 @@ fn test_bash_suggestion_filters_noop_cd_against_supplied_cwd() {
 
 #[test]
 fn test_bash_suggestion_filters_noop_cd_before_git_log() {
-    let cwd = std::env::current_dir().expect("test cwd");
-    let command = format!("cd {} && git log --oneline", cwd.display());
-    let s = bash_permission_suggestions("Bash", &command);
+    let s = bash_permission_suggestions("Bash", "cd . && git log --oneline");
     assert_eq!(one_rule(&s), ("Bash", "git log:*"));
 }
 
@@ -452,11 +451,10 @@ fn test_compound_command_fully_allowed_false_for_control_structure() {
 
 #[test]
 fn test_editable_prefix_uses_single_backend_suggestion() {
-    let cwd = std::env::current_dir().expect("test cwd");
-    let command = format!("cd {} && git diff", cwd.display());
-    let suggestions = bash_permission_suggestions("Bash", &command);
+    let command = "cd . && git diff";
+    let suggestions = bash_permission_suggestions("Bash", command);
     assert_eq!(
-        editable_prefix_from_suggestions_or_command(&command, &suggestions),
+        editable_prefix_from_suggestions_or_command(command, &suggestions),
         Some("git diff:*".to_string())
     );
 }

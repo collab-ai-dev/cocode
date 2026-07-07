@@ -36,6 +36,7 @@ struct ScriptedForkHandle;
 impl AgentHandle for ScriptedForkHandle {
     async fn spawn_agent(&self, request: AgentSpawnRequest) -> Result<AgentSpawnResponse, String> {
         let root = request
+            .permissions
             .constraints
             .as_ref()
             .and_then(|c| c.allowed_write_roots.first())

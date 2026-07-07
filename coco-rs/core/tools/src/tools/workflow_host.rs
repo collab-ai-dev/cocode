@@ -17,8 +17,14 @@ use tokio::sync::Semaphore;
 
 use coco_tool_runtime::AgentCompletionPayload;
 use coco_tool_runtime::AgentHandleRef;
+use coco_tool_runtime::AgentSpawnExecution;
+use coco_tool_runtime::AgentSpawnInheritance;
+use coco_tool_runtime::AgentSpawnInput;
+use coco_tool_runtime::AgentSpawnPermissions;
 use coco_tool_runtime::AgentSpawnRequest;
+use coco_tool_runtime::AgentSpawnRouting;
 use coco_tool_runtime::AgentSpawnStatus;
+use coco_tool_runtime::AgentSpawnTelemetry;
 use coco_tool_runtime::SpawnMode;
 use coco_tool_runtime::TaskHandleRef;
 use coco_types::SessionId;
@@ -116,47 +122,53 @@ impl WorkflowRunHost {
             .or_else(|| definition.as_ref().map(|def| def.isolation))
             .filter(|isolation| *isolation != coco_types::AgentIsolation::None);
         Ok(AgentSpawnRequest {
-            prompt,
-            description: Some(
-                opts.label
-                    .clone()
-                    .unwrap_or_else(|| "workflow step".to_string()),
-            ),
-            subagent_type: opts.agent_type.clone(),
-            // Foreground: we await the result inline. The universal
-            // subagent deny-list already blocks Agent + Workflow, so a
-            // workflow subagent cannot recurse.
-            run_in_background: false,
-            session_id: ctx.session_id.clone(),
-            mode: Some(coco_permissions::resolve_subagent_mode(
-                ctx.parent_mode,
-                None,
-            )),
-            features: Some(ctx.features.clone()),
-            skill_overrides: Some(ctx.skill_overrides.clone()),
-            tool_overrides: Some(ctx.tool_overrides.clone()),
-            parent_tool_filter: Some(ctx.parent_tool_filter.clone()),
-            active_shell_tool: ctx.active_shell_tool,
-            log_assistant_responses: ctx.log_assistant_responses,
-            spawn_mode: SpawnMode::Fresh,
-            tool_use_id: ctx.tool_use_id.clone(),
-            invoking_agent_id: ctx.invoking_agent_id.clone(),
-            isolation,
-            definition,
-            is_non_interactive: true,
-            // Per-attempt abort: the stall watchdog aborts *this* spawn (and
-            // only this one) on timeout, so a fresh signal is threaded per
-            // attempt. It is linked to the shared `workflow_abort` so a
-            // whole-run cancel still tears the in-flight subagent down.
-            parent_turn_abort: Some(attempt_abort),
-            // `agent(prompt, {schema})` forces the StructuredOutput contract:
-            // the spawn driver registers `StructuredOutputTool`, enables the
-            // inline `requires_structured_output` nudge on the child, and
-            // routes the captured tool-call input back through
-            // `AgentSpawnResponse.structured_output`. The schema-blob `Value`
-            // is the sanctioned passthrough exception.
-            output_schema: opts.schema.clone().map(std::sync::Arc::new),
-            ..Default::default()
+            input: AgentSpawnInput {
+                prompt,
+                description: Some(
+                    opts.label
+                        .clone()
+                        .unwrap_or_else(|| "workflow step".to_string()),
+                ),
+                subagent_type: opts.agent_type.clone(),
+                definition,
+                output_schema: opts.schema.clone().map(std::sync::Arc::new),
+                ..Default::default()
+            },
+            execution: AgentSpawnExecution {
+                // Foreground: we await the result inline. The universal
+                // subagent deny-list already blocks Agent + Workflow.
+                run_in_background: false,
+                spawn_mode: SpawnMode::Fresh,
+                isolation,
+                ..Default::default()
+            },
+            permissions: AgentSpawnPermissions {
+                mode: Some(coco_permissions::resolve_subagent_mode(
+                    ctx.parent_mode,
+                    None,
+                )),
+                ..Default::default()
+            },
+            inheritance: AgentSpawnInheritance {
+                features: Some(ctx.features.clone()),
+                skill_overrides: Some(ctx.skill_overrides.clone()),
+                tool_overrides: Some(ctx.tool_overrides.clone()),
+                parent_tool_filter: Some(ctx.parent_tool_filter.clone()),
+                active_shell_tool: ctx.active_shell_tool,
+                ..Default::default()
+            },
+            routing: AgentSpawnRouting {
+                session_id: ctx.session_id.clone(),
+                parent_turn_abort: Some(attempt_abort),
+                ..Default::default()
+            },
+            telemetry: AgentSpawnTelemetry {
+                tool_use_id: ctx.tool_use_id.clone(),
+                invoking_agent_id: ctx.invoking_agent_id.clone(),
+                log_assistant_responses: ctx.log_assistant_responses,
+                is_non_interactive: true,
+                ..Default::default()
+            },
         })
     }
 
@@ -365,6 +377,56 @@ fn is_script_path_ref(name_or_ref: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("ts") || ext.eq_ignore_ascii_case("js"))
 }
 
+/// Current-thread Tokio runtime paired with a `LocalSet` for the `!Send`
+/// QuickJS workflow engine. Keeping the constructor private makes the
+/// workflow host the single boundary that can drive these futures.
+struct LocalWorkflowRuntime {
+    runtime: tokio::runtime::Runtime,
+    local: tokio::task::LocalSet,
+}
+
+impl LocalWorkflowRuntime {
+    fn new() -> std::io::Result<Self> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        Ok(Self {
+            runtime,
+            local: tokio::task::LocalSet::new(),
+        })
+    }
+
+    fn block_on<F>(&self, future: F) -> F::Output
+    where
+        F: std::future::Future,
+    {
+        self.local.block_on(&self.runtime, future)
+    }
+}
+
+/// Small `!Send` future used by tests to guard the local-runtime boundary.
+#[cfg(test)]
+struct LocalOnlyReady(std::marker::PhantomData<std::rc::Rc<()>>);
+
+#[cfg(test)]
+impl LocalOnlyReady {
+    fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+#[cfg(test)]
+impl std::future::Future for LocalOnlyReady {
+    type Output = ();
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::task::Poll::Ready(())
+    }
+}
+
 /// Launch the workflow engine on a dedicated OS thread (the engine is `!Send`).
 /// Fire-and-forget: returns immediately; the thread runs the script to
 /// completion, then marks the task terminal. `agent()`/progress bridge to
@@ -401,18 +463,14 @@ pub(crate) fn spawn_workflow_engine(
                 me: me.clone() as Weak<dyn WorkflowHost>,
             });
             let host: Arc<dyn WorkflowHost> = host;
-            let runtime = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
+            let runtime = match LocalWorkflowRuntime::new() {
                 Ok(runtime) => runtime,
                 Err(error) => {
                     tracing::error!(target: "coco::workflow", %error, "failed to build workflow runtime");
                     return;
                 }
             };
-            let local = tokio::task::LocalSet::new();
-            local.block_on(&runtime, async move {
+            runtime.block_on(async move {
                 let outcome = WorkflowEngine::run(
                     script,
                     args,

@@ -1,11 +1,11 @@
 //! wire-parsing tool-input parsing helper for the streaming / non-streaming
 //! engine paths.
 //!
-//! Wraps [`coco_utils_json_repair::parse_with_repair`] with the
-//! `parse_failure → Value::Object({})` fallback that schema validation depends
-//! on. By handing the validator an empty object instead of a `Null` sentinel,
-//! the LLM receives a precise "missing required field foo" reply on the next
-//! turn instead of a generic "JSON broken".
+//! Wraps [`coco_utils_json_repair::parse_with_repair`] with the same raw
+//! preservation fallback used by provider-utils. Empty input maps to `{}` for
+//! parameterless tools; non-empty unrecoverable input stays as `Value::String`
+//! so schema validation/tool-runtime coercion can classify it with full raw
+//! context.
 //!
 //! Parallel to `vercel_ai_provider_utils::parse_tool_arguments_or_empty`
 //! (used inside provider adapters). Both delegate to `llm_json` so

@@ -154,6 +154,23 @@ fn cache_breakpoint_falls_after_output_style() {
     assert!(prev_text.unwrap().contains("# Output Style: Learning"));
 }
 
+#[test]
+fn system_prompt_parts_mark_previous_text_at_cache_breakpoint() {
+    let mut prompt = SystemPrompt::new();
+    prompt.add_text("identity");
+    prompt.add_cache_breakpoint();
+    prompt.add_text("environment");
+
+    let parts = prompt.parts();
+
+    assert_eq!(prompt.full_text(), "identity\nenvironment");
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0].text, "identity");
+    assert_eq!(parts[0].cache_hint, CacheHint::Breakpoint);
+    assert_eq!(parts[1].text, "environment");
+    assert_eq!(parts[1].cache_hint, CacheHint::Ephemeral);
+}
+
 /// G6 regression: AGENT_NOTES (passed via `notes_after_env`) must render
 /// BEFORE the memory section (`enhanceSystemPromptWithEnvDetails` bundles
 /// `notes` with the env block, not after memory).

@@ -304,6 +304,9 @@ impl QueryEngine {
                         StreamingToolCallBuffer {
                             tool_name,
                             input_json: String::new(),
+                            input_state: coco_inference::ToolInputWireState::Empty,
+                            invalid: false,
+                            invalid_reason: None,
                             complete: false,
                         },
                     );
@@ -322,8 +325,18 @@ impl QueryEngine {
                     )
                     .await;
                 }
-                StreamEvent::ToolCallEnd { id } => {
+                StreamEvent::ToolCallEnd {
+                    id,
+                    input_json,
+                    input_state,
+                    invalid,
+                    invalid_reason,
+                } => {
                     if let Some(buf) = tool_buffers.get_mut(&id) {
+                        buf.input_json = input_json;
+                        buf.input_state = input_state;
+                        buf.invalid = invalid;
+                        buf.invalid_reason = invalid_reason;
                         buf.complete = true;
                     }
                     // Streaming mode: parse the freshly-completed
@@ -357,13 +370,14 @@ impl QueryEngine {
                         && let Some(buf) = tool_buffers.get(&id)
                         && buf.complete
                     {
-                        let parsed_input = crate::tool_input_parse::parse_tool_arguments_or_empty(
-                            &buf.input_json,
+                        let (input, invalid, invalid_reason) =
+                            crate::engine::tool_input_from_wire_state(
+                                &buf.tool_name,
+                                &buf.input_state,
+                            );
+                        let input = crate::tool_input_pipeline::normalize_observable(
                             &buf.tool_name,
-                        );
-                        let input = crate::tool_input_normalizer::normalize_observable_tool_input(
-                            &buf.tool_name,
-                            parsed_input,
+                            input,
                             crate::tool_input_normalizer::ToolInputNormalizationContext {
                                 cwd: None,
                             },
@@ -373,8 +387,8 @@ impl QueryEngine {
                             tool_name: buf.tool_name.clone(),
                             input,
                             provider_executed: None,
-                            invalid: false,
-                            invalid_reason: None,
+                            invalid: invalid || buf.invalid,
+                            invalid_reason: invalid_reason.or_else(|| buf.invalid_reason.clone()),
                             provider_metadata: None,
                         };
                         let slice = std::slice::from_ref(&tcp);
@@ -641,13 +655,14 @@ impl QueryEngine {
                             id: id.clone(),
                             tool_name: buf.tool_name.clone(),
                             input_json: buf.input_json.clone(),
+                            input_state: buf.input_state.clone(),
                             provider_executed: None,
                             dynamic: None,
                             is_input_complete: buf.complete,
                             is_complete: false,
                             provider_metadata: None,
-                            invalid: false,
-                            invalid_reason: None,
+                            invalid: buf.invalid,
+                            invalid_reason: buf.invalid_reason.clone(),
                         })
                     })
                     .collect();

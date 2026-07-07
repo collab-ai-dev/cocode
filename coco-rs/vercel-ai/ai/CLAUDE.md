@@ -2,6 +2,13 @@
 
 High-level SDK matching `@ai-sdk/ai` v4 (generate_text / stream_text / generate_object / embed / rerank / generate_image / generate_speech / generate_video / transcribe). Builds on `vercel-ai-provider` types + `vercel-ai-provider-utils` helpers.
 
+**coco-rs production calls do not route through this crate.**
+`services/inference::ModelRuntime` calls provider adapters directly via
+`LanguageModelV4::do_generate` / `do_stream`. Treat this crate as the SDK /
+spec facade and test/live compatibility surface; agent-loop behavior belongs
+in `services/inference` and `app/query`, not in `generate_text` /
+`stream_text`.
+
 ## SDK Spec
 
 Implements the `@ai-sdk/ai` v4 specification. Anthropic-specific concerns (OAuth, policy limits, 529 retry, etc.) belong in `vercel-ai-anthropic`, not here — see the "Multi-Provider SDK" design decision in the workspace `CLAUDE.md`.

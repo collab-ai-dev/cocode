@@ -31,6 +31,7 @@ use coco_types::ToolName;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::helpers::ToolCompletionEventMode;
 use crate::helpers::complete_tool_call_with_error_mode;
@@ -99,8 +100,16 @@ pub(crate) async fn prepare_pending_tool_calls(
     // so the inner loop can re-borrow args freely.
     let tool_calls = args.tool_calls;
     for tc in tool_calls {
+        let span = tracing::debug_span!(
+            crate::trace_names::TOOL_CALL_PREPARATION,
+            tool_call_id = %tc.tool_call_id,
+            tool_name = %tc.tool_name,
+            invalid = tc.invalid,
+        );
         if let Some((pending_call, ctx)) =
-            prepare_one_pending_tool_call(&mut args, tc, &mut permission_aborted).await
+            prepare_one_pending_tool_call(&mut args, tc, &mut permission_aborted)
+                .instrument(span)
+                .await
         {
             tool_result_contexts.insert(tc.tool_call_id.clone(), ctx);
             pending.push(pending_call);
@@ -1130,7 +1139,7 @@ async fn validate_effective_input_or_complete_error(
     // lock-free). A schema-compile failure is impossible here — a tool is
     // only registered if its schema compiled at construction.
     let validation_input = input.clone();
-    let validated = match ValidatedInput::validate(tool.as_ref(), input) {
+    let validated = match crate::tool_input_pipeline::validate_updated_input(tool.as_ref(), input) {
         Ok(validated) => validated,
         Err(issues) => {
             let message = format!(

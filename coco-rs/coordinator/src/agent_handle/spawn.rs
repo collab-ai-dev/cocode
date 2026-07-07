@@ -867,6 +867,7 @@ impl SwarmAgentHandle {
     ) -> Result<AgentSpawnResponse, String> {
         let start = Instant::now();
         let agent_type = request
+            .input
             .subagent_type
             .as_deref()
             .unwrap_or("general-purpose");
@@ -874,7 +875,7 @@ impl SwarmAgentHandle {
         // Resume reuses the ORIGINAL agent id so the rehydrated run appends to
         // the same per-agent transcript / content-replacement records / metadata
         // (continuity, mirroring TS). Every other mode mints a fresh id.
-        let agent_id = match &request.spawn_mode {
+        let agent_id = match &request.execution.spawn_mode {
             coco_tool_runtime::SpawnMode::Resume {
                 resumed_agent_id, ..
             } => resumed_agent_id.clone(),
@@ -891,9 +892,12 @@ impl SwarmAgentHandle {
             }
         };
         let task_registry = self.task_registry().clone();
-        let is_dream = matches!(request.fork_label, Some(coco_types::ForkLabel::AutoDream));
+        let is_dream = matches!(
+            request.telemetry.fork_label,
+            Some(coco_types::ForkLabel::AutoDream)
+        );
         let is_skip_registration = matches!(
-            request.fork_label,
+            request.telemetry.fork_label,
             Some(coco_types::ForkLabel::ExtractMemories)
                 | Some(coco_types::ForkLabel::SessionMemoryAuto)
                 | Some(coco_types::ForkLabel::SessionMemoryManual)
@@ -907,63 +911,64 @@ impl SwarmAgentHandle {
         tracing::info!(
             agent_id = %agent_id,
             agent_type = %agent_type,
-            run_in_background = request.run_in_background,
-            isolation = ?request.isolation,
-            spawn_mode = ?request.spawn_mode,
+            run_in_background = request.execution.run_in_background,
+            isolation = ?request.execution.isolation,
+            spawn_mode = ?request.execution.spawn_mode,
             "subagent spawn dispatch"
         );
 
         // Worktree isolation: any creation error returns a model-visible
         // failure — never silently fall back to sync-without-isolation.
-        let worktree_session = if request.isolation == Some(coco_types::AgentIsolation::Worktree) {
-            match self.worktree_manager() {
-                Some(m) => {
-                    let slug = format!(
-                        "agent-{}",
-                        agent_id
-                            .strip_prefix("agent-")
-                            .unwrap_or(&agent_id)
-                            .chars()
-                            .take(8)
-                            .collect::<String>()
-                    );
-                    match m.create_for(&slug) {
-                        Ok(s) => {
-                            // Fire WorktreeCreate hook so user hooks can
-                            // react to per-agent worktree creation.
-                            // This runtime always uses git internally — the
-                            // hook is observe-only.
-                            fire_worktree_create_hook(
-                                self.hook_registry().cloned(),
-                                &self.cwd,
-                                &parent_session_id,
-                                &slug,
-                            )
-                            .await;
-                            Some(s)
-                        }
-                        Err(e) => {
-                            return Ok(spawn_failed(
-                                agent_id,
-                                format!("Worktree creation failed: {e}"),
-                                start.elapsed().as_millis() as i64,
-                            ));
+        let worktree_session =
+            if request.execution.isolation == Some(coco_types::AgentIsolation::Worktree) {
+                match self.worktree_manager() {
+                    Some(m) => {
+                        let slug = format!(
+                            "agent-{}",
+                            agent_id
+                                .strip_prefix("agent-")
+                                .unwrap_or(&agent_id)
+                                .chars()
+                                .take(8)
+                                .collect::<String>()
+                        );
+                        match m.create_for(&slug) {
+                            Ok(s) => {
+                                // Fire WorktreeCreate hook so user hooks can
+                                // react to per-agent worktree creation.
+                                // This runtime always uses git internally — the
+                                // hook is observe-only.
+                                fire_worktree_create_hook(
+                                    self.hook_registry().cloned(),
+                                    &self.cwd,
+                                    &parent_session_id,
+                                    &slug,
+                                )
+                                .await;
+                                Some(s)
+                            }
+                            Err(e) => {
+                                return Ok(spawn_failed(
+                                    agent_id,
+                                    format!("Worktree creation failed: {e}"),
+                                    start.elapsed().as_millis() as i64,
+                                ));
+                            }
                         }
                     }
-                }
-                None => {
-                    return Ok(spawn_failed(
-                        agent_id,
-                        "Isolation 'worktree' requested but no AgentWorktreeManager is \
+                    None => {
+                        return Ok(spawn_failed(
+                            agent_id,
+                            "Isolation 'worktree' requested but no AgentWorktreeManager is \
                          configured. Use SwarmAgentHandle::set_worktree_manager."
-                            .into(),
-                        start.elapsed().as_millis() as i64,
-                    ));
+                                .into(),
+                            start.elapsed().as_millis() as i64,
+                        ));
+                    }
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
 
         let Some(engine) = self.execution_engine() else {
             if let (Some(m), Some(session)) = (self.worktree_manager(), worktree_session.clone()) {
@@ -989,7 +994,7 @@ impl SwarmAgentHandle {
         let cwd_override = worktree_session
             .as_ref()
             .map(|s| s.path.clone())
-            .or_else(|| request.cwd.clone());
+            .or_else(|| request.execution.cwd.clone());
 
         // Spawn-time identity resolution (T3 + T7). Single source of
         // truth for model routing: `AgentDefinition`. No per-request
@@ -1004,18 +1009,19 @@ impl SwarmAgentHandle {
         // or `model_role` — multi-LLM design rules out LLM-driven
         // model selection (LLM has no awareness of operator's
         // provider/model_id mappings).
-        // The definition flows through `AgentSpawnRequest.definition`,
+        // The definition flows through `AgentSpawnRequest.input.definition`,
         // populated either by AgentTool from `ctx.agent_catalog` (LLM
         // path) or by internal callers constructing a synthetic def
         // at spawn time (memory crate forks).
         // When `definition` is `None` (test contexts), the resolver
         // degrades cleanly to subagent_type→role mapping.
         let agent_type_id: Option<coco_types::AgentTypeId> = request
+            .input
             .subagent_type
             .as_deref()
             .map(|t| t.parse().expect("AgentTypeId::from_str is Infallible"));
         let selection = coco_subagent::resolve_subagent_selection(
-            request.definition.as_deref(),
+            request.input.definition.as_deref(),
             agent_type_id.as_ref(),
         );
 
@@ -1067,7 +1073,7 @@ impl SwarmAgentHandle {
         // the exact cache bust this snapshot exists to prevent. (base_url /
         // wire_api still resolve from that provider's config by name;
         // pinning the provider closes the role-remap gap.)
-        let fork_pin = match &request.spawn_mode {
+        let fork_pin = match &request.execution.spawn_mode {
             coco_tool_runtime::SpawnMode::Fork {
                 parent_snapshot, ..
             } => Some((
@@ -1096,9 +1102,9 @@ impl SwarmAgentHandle {
         // (`definition.model` > role-resolved).
         let effective_model_selection = if let Some(sel) = fork_model_selection {
             sel
-        } else if request.mode == Some(coco_types::PermissionMode::Plan)
+        } else if request.permissions.mode == Some(coco_types::PermissionMode::Plan)
             && !matches!(
-                request.spawn_mode,
+                request.execution.spawn_mode,
                 coco_tool_runtime::SpawnMode::Fork { .. }
             )
         {
@@ -1126,12 +1132,16 @@ impl SwarmAgentHandle {
         // Per-agent memory block. Fork inherits parent's rendered prompt
         // verbatim so memory injection is skipped there.
         let inject_memory = !matches!(
-            request.spawn_mode,
+            request.execution.spawn_mode,
             coco_tool_runtime::SpawnMode::Fork { .. }
         );
         let memory_block = match (
             inject_memory,
-            request.definition.as_deref().and_then(|d| d.memory_scope),
+            request
+                .input
+                .definition
+                .as_deref()
+                .and_then(|d| d.memory_scope),
         ) {
             (true, Some(scope)) => Some(coco_memory::agent_memory::load_agent_memory_prompt(
                 agent_type,
@@ -1159,7 +1169,7 @@ impl SwarmAgentHandle {
         // the static base only.
         let coco_guide_context_builder = self.coco_guide_context_builder().cloned();
         let build_fresh_prompt = || -> String {
-            let def = request.definition.as_deref();
+            let def = request.input.definition.as_deref();
             let default_identity;
             let static_identity = if let Some(system_prompt) = def
                 .and_then(|d| d.system_prompt.as_deref())
@@ -1239,7 +1249,7 @@ impl SwarmAgentHandle {
         // detect fork-of-fork and the worker receives its rules. TS
         //
         let (system_prompt, fork_context_messages, preserve_tool_use_results, is_fork) =
-            match &request.spawn_mode {
+            match &request.execution.spawn_mode {
                 coco_tool_runtime::SpawnMode::Fork {
                     rendered_system_prompt,
                     parent_messages,
@@ -1265,7 +1275,7 @@ impl SwarmAgentHandle {
                 } => (build_fresh_prompt(), parent_messages.clone(), true, false),
                 coco_tool_runtime::SpawnMode::Fresh => (
                     build_fresh_prompt(),
-                    request.fork_context_messages.clone(),
+                    request.routing.fork_context_messages.clone(),
                     false,
                     false,
                 ),
@@ -1293,6 +1303,7 @@ impl SwarmAgentHandle {
         // snapshot push entirely (zero cost on the non-summarized hot path).
         // The same handle flows into `spawn_background` via `query_config`.
         let live_transcript = request
+            .execution
             .enable_summarization
             .then(coco_tool_runtime::LiveTranscript::new);
         let mut query_config = coco_tool_runtime::AgentQueryConfig {
@@ -1315,8 +1326,13 @@ impl SwarmAgentHandle {
             // Routing uses the SAME selection that drove `model_for_env`
             // above (fork pin > plan-mode promotion > spawn-resolved).
             model_selection: effective_model_selection,
-            permission_mode: request.mode.unwrap_or(coco_types::PermissionMode::Default),
-            permission_prompt_policy: if request.run_in_background || request.fork_label.is_some() {
+            permission_mode: request
+                .permissions
+                .mode
+                .unwrap_or(coco_types::PermissionMode::Default),
+            permission_prompt_policy: if request.execution.run_in_background
+                || request.telemetry.fork_label.is_some()
+            {
                 coco_tool_runtime::PermissionPromptPolicy::FailClosed
             } else {
                 coco_tool_runtime::PermissionPromptPolicy::PromptAllowed
@@ -1324,19 +1340,20 @@ impl SwarmAgentHandle {
             // Read-scope inheritance: forward the parent's read working dirs so
             // an isolated-worktree subagent can read the parent project without
             // a prompt (TS subagent cwd + additionalWorkingDirectories parity).
-            inherited_read_dirs: request.inherited_read_dirs.clone(),
+            inherited_read_dirs: request.inheritance.inherited_read_dirs.clone(),
             // Depth this child engine runs at (= parent + 1, stamped at
             // the AgentTool boundary). The adapter copies it onto the
             // child `QueryEngineConfig.query_depth`.
-            child_query_depth: request.child_query_depth,
+            child_query_depth: request.routing.child_query_depth,
             // `max_turns` precedence: constraints (memory forks tighten
             // via `AgentSpawnConstraints.max_turns`) > definition. Top-
             // level `request.max_turns` was a dead slot and is gone.
             max_turns: request
+                .permissions
                 .constraints
                 .as_ref()
                 .and_then(|c| c.max_turns)
-                .or_else(|| request.definition.as_ref().and_then(|d| d.max_turns)),
+                .or_else(|| request.input.definition.as_ref().and_then(|d| d.max_turns)),
             context_window: None,
             prompt_cache: None,
             max_output_tokens: None,
@@ -1353,6 +1370,7 @@ impl SwarmAgentHandle {
             // allow-list so a restricted custom agent ran with the
             // parent's full tool surface.
             allowed_tools: if request
+                .inheritance
                 .features
                 .as_deref()
                 .is_some_and(coco_subagent::is_coordinator_mode)
@@ -1363,7 +1381,7 @@ impl SwarmAgentHandle {
                     .map(str::to_string)
                     .collect()
             } else {
-                match request.definition.as_ref().map(|d| &d.allowed_tools) {
+                match request.input.definition.as_ref().map(|d| &d.allowed_tools) {
                     // Normalise `Bash(*)` → `Bash`: a `ToolFilter` matches
                     // by `ToolId`, so a parenthesised entry would parse to
                     // `Custom("Bash(*)")` and never match the real tool.
@@ -1387,14 +1405,16 @@ impl SwarmAgentHandle {
             // from the child's tool list.
             disallowed_tools: {
                 let mut denied = request
+                    .input
                     .definition
                     .as_ref()
                     .map(|d| d.disallowed_tools.clone())
                     .unwrap_or_default();
-                let plan_mode = request.mode == Some(coco_types::PermissionMode::Plan);
-                for name in
-                    coco_subagent::subagent_disallowed_tools(plan_mode, request.child_query_depth)
-                {
+                let plan_mode = request.permissions.mode == Some(coco_types::PermissionMode::Plan);
+                for name in coco_subagent::subagent_disallowed_tools(
+                    plan_mode,
+                    request.routing.child_query_depth,
+                ) {
                     if !denied.iter().any(|d| d == name) {
                         denied.push(name.to_string());
                     }
@@ -1407,23 +1427,25 @@ impl SwarmAgentHandle {
                 // the parent's exact tool pool. So this only applies to a
                 // plain background AgentTool spawn.
                 let is_coordinator = request
+                    .inheritance
                     .features
                     .as_deref()
                     .is_some_and(coco_subagent::is_coordinator_mode);
-                let is_async = request.run_in_background
+                let is_async = request.execution.run_in_background
                     || request
+                        .input
                         .definition
                         .as_ref()
                         .map(|d| d.background)
                         .unwrap_or(false);
                 let is_fork = matches!(
-                    request.spawn_mode,
+                    request.execution.spawn_mode,
                     coco_tool_runtime::SpawnMode::Fork { .. }
                 );
                 if is_async && !is_coordinator && !is_fork {
                     for name in coco_subagent::async_subagent_disallowed_tools(
                         plan_mode,
-                        request.child_query_depth,
+                        request.routing.child_query_depth,
                     ) {
                         if !denied.iter().any(|d| d == name) {
                             denied.push(name.to_string());
@@ -1438,13 +1460,13 @@ impl SwarmAgentHandle {
             extra_permission_rules: Vec::new(),
             live_permission_rules: None,
             live_permission_mode: None,
-            tool_overrides: request.tool_overrides.clone(),
-            features: request.features.clone(),
-            skill_overrides: request.skill_overrides.clone(),
-            parent_tool_filter: request.parent_tool_filter.clone(),
-            active_shell_tool: request.active_shell_tool,
-            use_auto_mode_during_plan: request.use_auto_mode_during_plan,
-            log_assistant_responses: request.log_assistant_responses,
+            tool_overrides: request.inheritance.tool_overrides.clone(),
+            features: request.inheritance.features.clone(),
+            skill_overrides: request.inheritance.skill_overrides.clone(),
+            parent_tool_filter: request.inheritance.parent_tool_filter.clone(),
+            active_shell_tool: request.inheritance.active_shell_tool,
+            use_auto_mode_during_plan: request.inheritance.use_auto_mode_during_plan,
+            log_assistant_responses: request.telemetry.log_assistant_responses,
             preserve_tool_use_results,
             is_teammate: false,
             is_in_process_teammate: false,
@@ -1455,6 +1477,7 @@ impl SwarmAgentHandle {
             cwd_override,
             fork_context_messages,
             allowed_write_roots: request
+                .permissions
                 .constraints
                 .as_ref()
                 .map(|c| c.allowed_write_roots.clone())
@@ -1466,16 +1489,18 @@ impl SwarmAgentHandle {
             // looked up against the active model's
             // `supported_thinking_levels` by
             // `session_runtime::thinking_level_for_effort_from`.
-            effort: request.definition.as_ref().and_then(|d| d.effort),
+            effort: request.input.definition.as_ref().and_then(|d| d.effort),
             // The four fields below all read from `AgentDefinition` —
             // the previously-dead `request.<field>` pass-through slots
             // are gone.
             use_exact_tools: request
+                .input
                 .definition
                 .as_ref()
                 .map(|d| d.use_exact_tools)
                 .unwrap_or(false),
             mcp_servers: request
+                .input
                 .definition
                 .as_ref()
                 .map(|d| {
@@ -1486,10 +1511,11 @@ impl SwarmAgentHandle {
                 })
                 .unwrap_or_default(),
             initial_prompt: request
+                .input
                 .definition
                 .as_ref()
                 .and_then(|d| d.initial_prompt.clone()),
-            definition: request.definition.clone(),
+            definition: request.input.definition.clone(),
             // In-process AgentTool spawns inherit the leader's
             // `ToolPermissionBridge` via `wire_engine`. Setting an override
             // here would mask whatever the leader installed (SDK
@@ -1504,10 +1530,10 @@ impl SwarmAgentHandle {
             // Per-fork canUseTool callback inherits from the request. The
             // AgentTool spawn path doesn't set one by default; memory /
             // dream / session services thread their per-policy handle
-            // via `request.can_use_tool` after PR 4.
-            can_use_tool: request.can_use_tool.clone(),
-            require_can_use_tool: request.require_can_use_tool,
-            fork_label: request.fork_label,
+            // via `request.permissions.can_use_tool` after PR 4.
+            can_use_tool: request.permissions.can_use_tool.clone(),
+            require_can_use_tool: request.permissions.require_can_use_tool,
+            fork_label: request.telemetry.fork_label,
             cancel: None,
             live_transcript: live_transcript.clone(),
             // Structured-output contract for workflow `agent(prompt, {schema})`
@@ -1515,10 +1541,10 @@ impl SwarmAgentHandle {
             // StructuredOutput tool, enables the inline enforcement nudge,
             // and routes the captured tool-call input back through
             // `AgentQueryResult.structured_output`.
-            output_schema: request.output_schema.clone(),
+            output_schema: request.input.output_schema.clone(),
         };
 
-        if request.run_in_background {
+        if request.execution.run_in_background {
             return self
                 .spawn_background(
                     request,
@@ -1539,13 +1565,13 @@ impl SwarmAgentHandle {
         // SubagentStop below. No-op when def.hooks is null / hook
         // registry unwired.
         let registered_frontmatter_hooks =
-            self.register_frontmatter_hooks(&agent_id, request.definition.as_deref());
+            self.register_frontmatter_hooks(&agent_id, request.input.definition.as_deref());
 
         // ── Per-agent MCP servers ──
         // String-ref entries piggyback on the parent's pre-existing
         // connections; inline `{name: config}` entries get registered
         // as dynamic servers and torn down at SubagentStop.
-        self.initialize_per_agent_mcp(&agent_id, request.definition.as_deref())
+        self.initialize_per_agent_mcp(&agent_id, request.input.definition.as_deref())
             .await;
 
         // ── Frontmatter skills preload ──
@@ -1555,7 +1581,7 @@ impl SwarmAgentHandle {
         // blocks so the model can distinguish them from the actual
         // task prompt.
         let prompt_with_skills = self
-            .preload_frontmatter_skills(request.definition.as_deref(), &request.prompt)
+            .preload_frontmatter_skills(request.input.definition.as_deref(), &request.input.prompt)
             .await;
 
         // ── SubagentStart hook firing ──
@@ -1606,6 +1632,7 @@ impl SwarmAgentHandle {
         } else {
             let task_cancel = tokio_util::sync::CancellationToken::new();
             let description = request
+                .input
                 .description
                 .clone()
                 .unwrap_or_else(|| agent_type.to_string());
@@ -1618,8 +1645,9 @@ impl SwarmAgentHandle {
                 // auto-detach timer. Background spawns ignore the
                 // field — they detach immediately by definition.
                 let registration = match request
+                    .execution
                     .auto_background_ms
-                    .filter(|_| !request.run_in_background)
+                    .filter(|_| !request.execution.run_in_background)
                 {
                     Some(ms) => {
                         coco_tool_runtime::AgentRegistration::ForegroundWithAutoDetach { ms }
@@ -1630,8 +1658,8 @@ impl SwarmAgentHandle {
                     .register_agent_task_with_id(
                         agent_id.clone(),
                         &description,
-                        request.tool_use_id.as_deref(),
-                        request.invoking_agent_id.as_deref(),
+                        request.telemetry.tool_use_id.as_deref(),
+                        request.telemetry.invoking_agent_id.as_deref(),
                         task_cancel.clone(),
                         registration,
                     )
@@ -1678,7 +1706,7 @@ impl SwarmAgentHandle {
         // Permission mode gates the post-spawn handoff classifier (auto
         // only). Pre-cloned so the detached engine task can read it
         // without borrowing `request` across the `await`.
-        let mode_for_engine = request.mode;
+        let mode_for_engine = request.permissions.mode;
         let task_id_for_engine = sync_task.as_ref().map(|(id, _)| id.clone());
         let task_cancel_for_engine = sync_task.as_ref().map(|(_, c)| c.clone());
         let worktree_session_for_engine = worktree_session.clone();
@@ -1704,7 +1732,7 @@ impl SwarmAgentHandle {
                 event_rx,
                 self.panel_event_sink().cloned(),
             );
-            // `live_transcript` is `Some` iff `request.enable_summarization`,
+            // `live_transcript` is `Some` iff `request.execution.enable_summarization`,
             // so this gates the timer on the same condition while handing it
             // the reader half of the engine's snapshot sink.
             if let Some(live) = live_transcript.clone() {
@@ -1714,7 +1742,7 @@ impl SwarmAgentHandle {
                     cancel: task_cancel.clone(),
                     agent_type: agent_type.to_string(),
                     engine: engine.clone(),
-                    definition: request.definition.clone(),
+                    definition: request.input.definition.clone(),
                     model_selection: query_config.model_selection.clone(),
                     session_id: query_config.identity.session_id.clone(),
                     live_transcript: live,
@@ -1743,8 +1771,8 @@ impl SwarmAgentHandle {
         // `spawn_complete` releases the linker on normal completion so it
         // never outlives the engine task.
         let spawn_complete = tokio_util::sync::CancellationToken::new();
-        if !request.run_in_background
-            && let Some(parent_abort) = request.parent_turn_abort.clone()
+        if !request.execution.run_in_background
+            && let Some(parent_abort) = request.routing.parent_turn_abort.clone()
             && let Some((_, task_cancel)) = sync_task.as_ref()
         {
             let task_cancel = task_cancel.clone();
@@ -2096,12 +2124,13 @@ impl SwarmAgentHandle {
         engine: coco_tool_runtime::AgentQueryEngineRef,
         is_fork: bool,
     ) -> Result<AgentSpawnResponse, String> {
-        let prompt = request.prompt.clone();
+        let prompt = request.input.prompt.clone();
         let agent_id_for_task = agent_id.clone();
 
         let cancel = tokio_util::sync::CancellationToken::new();
         let task_registry = self.task_registry().clone();
         let description = request
+            .input
             .description
             .clone()
             .unwrap_or_else(|| agent_type.to_string());
@@ -2117,8 +2146,8 @@ impl SwarmAgentHandle {
             .register_agent_task_with_id(
                 agent_id.clone(),
                 &description,
-                request.tool_use_id.as_deref(),
-                request.invoking_agent_id.as_deref(),
+                request.telemetry.tool_use_id.as_deref(),
+                request.telemetry.invoking_agent_id.as_deref(),
                 cancel.clone(),
                 coco_tool_runtime::AgentRegistration::Background,
             )
@@ -2137,11 +2166,11 @@ impl SwarmAgentHandle {
                 worktree_path: worktree_session
                     .as_ref()
                     .map(|s| s.path.display().to_string()),
-                description: request.description.clone(),
+                description: request.input.description.clone(),
                 killed_by: None,
                 // Persist so resume can restore them.
-                mode: request.mode,
-                isolation: request.isolation,
+                mode: request.permissions.mode,
+                isolation: request.execution.isolation,
             };
             if let Err(e) = store_for_meta
                 .write_agent_metadata(&session_for_meta, &task_for_meta, &meta)
@@ -2178,14 +2207,14 @@ impl SwarmAgentHandle {
                 cancel: cancel.clone(),
                 agent_type: agent_type.to_string(),
                 engine: engine.clone(),
-                definition: request.definition.clone(),
+                definition: request.input.definition.clone(),
                 model_selection: query_config.model_selection.clone(),
                 session_id: query_config.identity.session_id.clone(),
                 live_transcript: live,
             }),
             None => tracing::debug!(
                 %agent_id,
-                "periodic AgentSummary disabled (request.enable_summarization = false)"
+                "periodic AgentSummary disabled (request.execution.enable_summarization = false)"
             ),
         }
 
@@ -2202,12 +2231,12 @@ impl SwarmAgentHandle {
         // mode only). Clone the side-query handle + permission mode so the
         // detached task can gate and run it after completion.
         let side_query_for_task = self.side_query().cloned();
-        let mode_for_task = request.mode;
+        let mode_for_task = request.permissions.mode;
         // Preload frontmatter skills synchronously here — bg task can't
         // borrow `&self`, so resolve bodies upfront and prepend
         // before handing the prompt to the detached task.
         let prompt_after_skills = self
-            .preload_frontmatter_skills(request.definition.as_deref(), &prompt)
+            .preload_frontmatter_skills(request.input.definition.as_deref(), &prompt)
             .await;
         let prompt = prompt_after_skills;
         // Register frontmatter hooks BEFORE the detached task starts
@@ -2215,18 +2244,18 @@ impl SwarmAgentHandle {
         // task can clear them at SubagentStop time without re-borrowing
         // `&self`.
         let registered_frontmatter_hooks =
-            self.register_frontmatter_hooks(&agent_id, request.definition.as_deref());
+            self.register_frontmatter_hooks(&agent_id, request.input.definition.as_deref());
         // Initialise per-agent MCP servers synchronously here. Cleanup
         // happens after the spawn completes — we capture the dynamic
         // server map + handle into the task so it can run cleanup
         // without re-borrowing `&self`.
-        self.initialize_per_agent_mcp(&agent_id, request.definition.as_deref())
+        self.initialize_per_agent_mcp(&agent_id, request.input.definition.as_deref())
             .await;
         let mcp_handle_for_task = self.mcp_handle().cloned();
         let dynamic_mcp_servers_for_task = self.dynamic_mcp_servers().clone();
         let worktree_manager_for_task = self.worktree_manager().cloned();
         let worktree_session_for_task = worktree_session.clone();
-        let description_for_task = request.description.clone();
+        let description_for_task = request.input.description.clone();
         let bg_start = std::time::Instant::now();
         tokio::spawn(async move {
             // Fire SubagentStart hooks before kicking off execution and

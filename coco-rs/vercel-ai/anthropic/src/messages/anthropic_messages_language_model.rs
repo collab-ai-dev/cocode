@@ -287,7 +287,8 @@ impl AnthropicMessagesLanguageModel {
     ) -> Result<GetArgsResult, AISdkError> {
         let mut warnings = Vec::new();
         let (mut anthropic_options, raw_provider_options) =
-            extract_anthropic_options(&options.provider_options, &self.config.provider);
+            extract_anthropic_options(&options.provider_options, &self.config.provider)
+                .map_err(|err| AISdkError::new(err.to_string()).with_cause(Box::new(err)))?;
 
         // Unsupported standard parameters
         if options.frequency_penalty.is_some() {
@@ -1694,6 +1695,17 @@ fn citation_to_source(
 // Streaming implementation
 // ---------------------------------------------------------------------------
 
+fn input_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 /// In-progress content block accumulator.
 enum InProgressBlock {
     Text {
@@ -2341,55 +2353,57 @@ impl AnthropicStreamState {
                                             },
                                         );
                                     }
-                                    // Intermediate parse is only needed to inject
-                                    // `type` field for code_execution variants.
-                                    // Run through `llm_json`-backed repair so the
-                                    // type-injection happy path also covers buffers
-                                    // that need trailing-comma / unquoted-key fixups.
-                                    // When repair still fails, forward the raw
-                                    // `input_json` — downstream engine consumers run
-                                    // the same repair + `{}` fallback so the model's
-                                    // emission is never silently discarded.
-                                    let input_str: String = if input_json.is_empty() {
-                                        "{}".to_string()
+                                    let input_result = if input_json.is_empty() {
+                                        Ok(Value::Object(Default::default()))
                                     } else {
-                                        match vercel_ai_provider_utils::parse_with_repair(
-                                            input_json,
-                                        ) {
-                                            Ok((mut input, _)) => {
-                                                if let Some(ptn) = provider_tool_name {
-                                                    match ptn.as_str() {
-                                                        "text_editor_code_execution"
-                                                        | "bash_code_execution" => {
-                                                            if let Some(obj) = input.as_object_mut()
-                                                            {
-                                                                obj.insert(
-                                                                    "type".to_string(),
-                                                                    Value::String(ptn.clone()),
-                                                                );
-                                                            }
-                                                        }
-                                                        "code_execution" => {
-                                                            if let Some(obj) = input.as_object_mut()
-                                                                && obj.contains_key("code")
-                                                                && !obj.contains_key("type")
-                                                            {
-                                                                obj.insert(
-                                                                    "type".to_string(),
-                                                                    Value::String(
-                                                                        "programmatic-tool-call"
-                                                                            .to_string(),
-                                                                    ),
-                                                                );
-                                                            }
-                                                        }
-                                                        _ => {}
-                                                    }
+                                        vercel_ai_provider_utils::parse_with_repair(input_json)
+                                            .and_then(|(input, _)| {
+                                                if input.is_object() {
+                                                    Ok(input)
+                                                } else {
+                                                    Err(format!(
+                                                        "tool input parsed to non-object JSON: {}",
+                                                        input_type_name(&input)
+                                                    ))
                                                 }
-                                                serde_json::to_string(&input).unwrap_or_default()
+                                            })
+                                    };
+                                    let (input_str, parse_error) = match input_result {
+                                        Ok(mut input) => {
+                                            if let Some(ptn) = provider_tool_name {
+                                                match ptn.as_str() {
+                                                    "text_editor_code_execution"
+                                                    | "bash_code_execution" => {
+                                                        if let Some(obj) = input.as_object_mut() {
+                                                            obj.insert(
+                                                                "type".to_string(),
+                                                                Value::String(ptn.clone()),
+                                                            );
+                                                        }
+                                                    }
+                                                    "code_execution" => {
+                                                        if let Some(obj) = input.as_object_mut()
+                                                            && obj.contains_key("code")
+                                                            && !obj.contains_key("type")
+                                                        {
+                                                            obj.insert(
+                                                                "type".to_string(),
+                                                                Value::String(
+                                                                    "programmatic-tool-call"
+                                                                        .to_string(),
+                                                                ),
+                                                            );
+                                                        }
+                                                    }
+                                                    _ => {}
+                                                }
                                             }
-                                            Err(_) => input_json.clone(),
+                                            (
+                                                serde_json::to_string(&input).unwrap_or_default(),
+                                                None,
+                                            )
                                         }
+                                        Err(err) => (input_json.clone(), Some(err)),
                                     };
 
                                     // Build ToolCall with caller, dynamic, and provider_executed (Gap 2-4)
@@ -2403,6 +2417,14 @@ impl AnthropicStreamState {
                                     }
                                     if let Some(d) = *dynamic {
                                         tc = tc.with_dynamic(d);
+                                    }
+                                    if let Some(error) = parse_error {
+                                        tc = tc.with_invalid_reason(
+                                            vercel_ai_provider::ToolInputInvalidReason::JsonParseFailed {
+                                                raw: input_json.clone(),
+                                                error,
+                                            },
+                                        );
                                     }
                                     // Include caller in providerMetadata (Gap 4)
                                     if let Some(c) = caller {

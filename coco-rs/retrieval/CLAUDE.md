@@ -82,9 +82,19 @@ Convenience: `create_manager(cwd, coco_home) -> Option<Arc<RetrievalFacade>>`
 `RetrievalEvent` is **intentionally isolated** from the main agent `CoreEvent`
 stream (see `event-system-design.md` §1.7 and plan WS-7). Subscribe via
 `EventEmitter::subscribe()`; do not bridge the full taxonomy into
-`coco_types::ServerNotification`. If a slash command ever needs retrieval
-progress in the agent stream, add a single aggregate variant via an optional
-sink (pattern: `TaskManager::with_event_sink()`).
+`coco_types::ServerNotification`. Callers that need coarse progress can install
+`EventEmitter::set_aggregate_sink(...)`; the sink receives only
+`RetrievalAggregateEvent` summaries for started/progress/completed/error and
+leaves the detailed retrieval event stream isolated.
+
+## Unified Coordinator
+
+`UnifiedCoordinator` owns independent Index and Tag pipelines. Readiness
+methods are async all the way down; do not call `futures::executor::block_on`
+inside coordinator async methods. Watcher/timer dispatch may push the same file
+change to both pipelines concurrently with `tokio::join!`, but each pipeline
+keeps its own sequence allocation, queue ordering, lag tracker, and batch
+tracker.
 
 ## Error Handling
 

@@ -9,8 +9,13 @@
 //! connection. The resumed spawn gets a NEW `agent_id` / `task_id`;
 //! the model sees an `AsyncLaunched` response just like a fresh spawn.
 
+use coco_tool_runtime::AgentSpawnExecution;
+use coco_tool_runtime::AgentSpawnInheritance;
+use coco_tool_runtime::AgentSpawnInput;
+use coco_tool_runtime::AgentSpawnPermissions;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnResponse;
+use coco_tool_runtime::AgentSpawnRouting;
 use coco_types::SessionId;
 
 use super::SwarmAgentHandle;
@@ -102,31 +107,43 @@ impl SwarmAgentHandle {
         let definition = self.resolve_agent_definition(&meta.agent_type).await;
 
         let resume_request = AgentSpawnRequest {
-            prompt,
-            description: meta
-                .description
-                .clone()
-                .or_else(|| Some("(resumed)".into())),
-            subagent_type: Some(meta.agent_type.clone()),
-            definition,
-            // Restore the spawn-time permission mode (Plan etc.) so the resumed
-            // agent doesn't silently drop to Default.
-            mode: meta.mode,
-            isolation,
-            features,
-            run_in_background: true,
-            cwd: cwd_override,
-            session_id: Some(parent_session_id.clone()),
-            // `Resume` (not `Fork`) — the child engine sees the persisted
-            // history as its starting point but builds a fresh system
-            // prompt from the agent definition (Fork instead inherits the
-            // parent's pre-rendered prompt verbatim for cache parity).
-            spawn_mode: coco_tool_runtime::SpawnMode::Resume {
-                parent_messages: filtered,
-                // Reuse the original id so the resumed run's transcript,
-                // content-replacement records, and metadata stay in the same
-                // per-agent files (continuity), mirroring TS.
-                resumed_agent_id: original_agent_id.to_string(),
+            input: AgentSpawnInput {
+                prompt,
+                description: meta
+                    .description
+                    .clone()
+                    .or_else(|| Some("(resumed)".into())),
+                subagent_type: Some(meta.agent_type.clone()),
+                definition,
+                ..Default::default()
+            },
+            execution: AgentSpawnExecution {
+                run_in_background: true,
+                cwd: cwd_override,
+                isolation,
+                // `Resume` (not `Fork`) — the child engine sees the persisted
+                // history as its starting point but builds a fresh system
+                // prompt from the agent definition.
+                spawn_mode: coco_tool_runtime::SpawnMode::Resume {
+                    parent_messages: filtered,
+                    // Reuse the original id so metadata append to the same
+                    // per-agent files.
+                    resumed_agent_id: original_agent_id.to_string(),
+                },
+                ..Default::default()
+            },
+            permissions: AgentSpawnPermissions {
+                // Restore the spawn-time permission mode (Plan etc.).
+                mode: meta.mode,
+                ..Default::default()
+            },
+            inheritance: AgentSpawnInheritance {
+                features,
+                ..Default::default()
+            },
+            routing: AgentSpawnRouting {
+                session_id: Some(parent_session_id.clone()),
+                ..Default::default()
             },
             ..Default::default()
         };

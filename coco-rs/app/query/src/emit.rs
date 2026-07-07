@@ -250,6 +250,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::OpenProviderWizard => "open_provider_wizard",
         TuiOnlyEvent::OpenSettings => "open_settings",
         TuiOnlyEvent::OpenThemePicker => "open_theme_picker",
+        TuiOnlyEvent::OpenBackgroundTasks => "open_background_tasks",
         TuiOnlyEvent::OpenSkillsDialog { .. } => "open_skills_dialog",
         TuiOnlyEvent::OpenPluginDialog { .. } => "open_plugin_dialog",
         TuiOnlyEvent::OpenAgentsDialog { .. } => "open_agents_dialog",

@@ -86,3 +86,13 @@ impl ErrorExt for SandboxError {
 }
 
 pub type Result<T> = std::result::Result<T, SandboxError>;
+
+impl SandboxError {
+    /// Construct a generic sandbox-apply error for platform adapters and tests.
+    pub fn apply_error(message: impl Into<String>) -> Self {
+        Self::ApplyError {
+            message: message.into(),
+            location: Location::default(),
+        }
+    }
+}
