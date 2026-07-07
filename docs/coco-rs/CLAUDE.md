@@ -61,6 +61,7 @@ Each piece of information has exactly one owner. No duplication across docs.
 | Current prioritized gap fix plan | `current-gap-fix-plan.md` | `audit-gaps.md` remains the historical/deferred tracker; this doc owns near-term fix ordering and stale-gap cleanup |
 | Permission/sandbox hardening — refactor background, decisions, status & prioritized TODO (resume handoff) | `permission-sandbox-hardening.md` | owns the permission/sandbox parity-fix status + remaining work; crate internals stay in `crate-coco-{permissions,sandbox,shell}.md` |
 | TUI v2 target architecture: three-way comparison (coco/codex-rs/jcode), anchored finalize without fingerprint reconciliation, engine-owned seating, staged Scope B implementation plan | `ui/tui-v2-design.md` | `ui/single-render-path-refactor.md` and `ui/terminal-surface-design.md` describe the current/landed state and reference, not redefine, the v2 target |
+| RTK integration: `Feature::Rtk`, `RtkConfig`/`RtkEngine`, two-tier design (phase-1 `rtk rewrite` subprocess, phase-2 embedded post-exec filter core), shared `.rtk/filters.toml` + trust store, grep/glob native absorptions | `rtk-integration-design.md` | crate docs (`crate-coco-tools.md`, `crate-coco-shell.md`, `crate-coco-config.md`) reference, not redefine |
 
 ### Rules
 
@@ -683,6 +684,7 @@ Added in Round 2 review:
 | `ui/native-scrollback-architecture.md` | Native terminal scrollback architecture for coco-tui, based on codex-rs custom terminal / insert-history / transcript-reflow design rather than stock ratatui inline viewport. |
 | `ui/single-render-path-refactor.md` | Refactor plan to collapse the streaming→scrollback seam onto a single render path (codex-rs stable/tail watermark model), removing the `#160` provisional-commit / finalize-reconcile machinery and restoring native-scrollback Core Decision #4. |
 | `ui/tui-v2-design.md` | TUI v2 target: fair three-way comparison (coco / codex-rs / jcode), root-cause of the streaming-seam churn, anchored finalize without rasterized fingerprint reconciliation (§6.2/§6.2.1, twice source-corrected), engine-owned viewport seating, and the staged Scope B implementation plan (§10). Supersedes the dual-projection model in `ui/single-render-path-refactor.md` as the forward design. |
+| `rtk-integration-design.md` | RTK (Rust Token Killer) integration: two-tier Bash output compression (subprocess rewrite → embedded post-exec filter core), `Feature::Rtk` + `RtkConfig`/`RtkEngine`, shared `.rtk/filters.toml` + trust store, rr-rtk evaluation, grep/glob formatting absorptions, savings projections + metrics |
 | `config-file-map.md` | Every file coco-rs reads/writes, which crate owns it |
 | `audit-gaps.md` | Gap analysis with fix status and priority |
 | `current-gap-fix-plan.md` | Current prioritized fix plan for active gaps, plus stale audit rows to clean up before assigning implementation work. |
