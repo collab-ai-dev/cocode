@@ -139,7 +139,7 @@ async fn spawned_prompt_uses_apply_patch_when_configured() {
             coco_types::ActiveShellTool::Disabled,
             patch_overrides(),
         ),
-        "test-session".into(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
     );
 
     let outcome = svc.force(turn_input(20, false)).await;

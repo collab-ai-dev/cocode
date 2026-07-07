@@ -21,6 +21,7 @@ use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnStatus;
 use coco_tool_runtime::SpawnMode;
 use coco_tool_runtime::TaskHandleRef;
+use coco_types::SessionId;
 use coco_types::WorkflowProgressEvent;
 use coco_workflow_runtime::AgentCacheKey;
 use coco_workflow_runtime::WORKFLOW_STALL_MS_DEFAULT;
@@ -38,7 +39,7 @@ use super::workflow_journal::WorkflowJournal;
 /// spawn requests (inheritance must thread through; subagents narrow, never
 /// widen).
 pub(crate) struct WorkflowSpawnContext {
-    pub session_id: String,
+    pub session_id: Option<SessionId>,
     pub invoking_agent_id: Option<String>,
     pub tool_use_id: Option<String>,
     pub features: Arc<coco_types::Features>,

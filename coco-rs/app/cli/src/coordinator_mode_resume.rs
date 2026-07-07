@@ -14,6 +14,7 @@ use coco_subagent::is_coordinator_mode_env;
 use coco_subagent::session_mode_switch_action;
 use coco_types::Feature;
 use coco_types::Features;
+use coco_types::SessionId;
 
 /// Reconcile coordinator mode against a resumed session's stored mode
 /// string (`coordinator` / `normal` / absent).
@@ -54,7 +55,7 @@ pub fn reconcile_on_resume(stored_mode: Option<&str>, features: &Features) -> Op
 /// `spawn_blocking`.
 pub fn persist_session_mode(
     session_manager: &coco_session::SessionManager,
-    session_id: &str,
+    session_id: &SessionId,
     features: &Features,
 ) {
     if !features.enabled(Feature::AgentTeams) {
@@ -65,7 +66,7 @@ pub fn persist_session_mode(
     } else {
         "normal"
     };
-    if let Err(e) = session_manager.save_mode(session_id, mode) {
+    if let Err(e) = session_manager.save_mode(session_id.as_str(), mode) {
         tracing::warn!(error = %e, mode, "failed to persist coordinator mode to transcript");
     }
 }

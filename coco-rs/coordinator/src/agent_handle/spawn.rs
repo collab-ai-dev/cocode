@@ -18,6 +18,7 @@ use std::time::Instant;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnResponse;
 use coco_tool_runtime::AgentSpawnStatus;
+use coco_types::SessionId;
 
 use super::SwarmAgentHandle;
 
@@ -27,8 +28,11 @@ use super::SwarmAgentHandle;
 /// feature surface (project_dir resolution, per-session disable
 /// flag, attachment emitter) is approximated here — subagent-spawn
 /// hooks don't need the same wire-up the parent's per-turn hooks do.
-pub(super) fn hook_ctx_for_cwd(cwd: &str) -> coco_hooks::orchestration::OrchestrationContext {
-    hook_ctx_for_subagent(cwd, None, None)
+pub(super) fn hook_ctx_for_cwd(
+    cwd: &str,
+    session_id: &SessionId,
+) -> coco_hooks::orchestration::OrchestrationContext {
+    hook_ctx_for_subagent(cwd, session_id, None, None)
 }
 
 /// Variant that stamps `agent_id` / `agent_type` onto the
@@ -36,11 +40,12 @@ pub(super) fn hook_ctx_for_cwd(cwd: &str) -> coco_hooks::orchestration::Orchestr
 /// hook's `BaseHookInput` carries the subagent identity.
 pub(super) fn hook_ctx_for_subagent(
     cwd: &str,
+    session_id: &SessionId,
     agent_id: Option<&str>,
     agent_type: Option<&str>,
 ) -> coco_hooks::orchestration::OrchestrationContext {
     coco_hooks::orchestration::OrchestrationContext {
-        session_id: String::new(),
+        session_id: session_id.clone(),
         cwd: std::path::PathBuf::from(cwd),
         project_dir: Some(std::path::PathBuf::from(cwd)),
         permission_mode: None,
@@ -71,10 +76,11 @@ pub(super) fn hook_ctx_for_subagent(
 pub(super) async fn fire_worktree_create_hook(
     registry: Option<Arc<coco_hooks::HookRegistry>>,
     cwd: &str,
+    session_id: &SessionId,
     name: &str,
 ) {
     let Some(registry) = registry else { return };
-    let ctx = hook_ctx_for_cwd(cwd);
+    let ctx = hook_ctx_for_cwd(cwd, session_id);
     if let Err(e) = coco_hooks::orchestration::execute_worktree_create(&registry, &ctx, name).await
     {
         tracing::warn!(error = %e, %name, "WorktreeCreate hook firing failed");
@@ -88,10 +94,11 @@ pub(super) async fn fire_worktree_create_hook(
 pub(super) async fn fire_worktree_remove_hook(
     registry: Option<Arc<coco_hooks::HookRegistry>>,
     cwd: &str,
+    session_id: &SessionId,
     worktree_path: &str,
 ) {
     let Some(registry) = registry else { return };
-    let ctx = hook_ctx_for_cwd(cwd);
+    let ctx = hook_ctx_for_cwd(cwd, session_id);
     if let Err(e) =
         coco_hooks::orchestration::execute_worktree_remove(&registry, &ctx, worktree_path).await
     {
@@ -104,6 +111,7 @@ pub(super) async fn fire_worktree_remove_hook(
 pub(super) async fn fire_subagent_start_for_task(
     registry: Option<Arc<coco_hooks::HookRegistry>>,
     cwd: &str,
+    session_id: &SessionId,
     agent_id: &str,
     agent_type: &str,
     prompt: &str,
@@ -111,7 +119,7 @@ pub(super) async fn fire_subagent_start_for_task(
     let Some(registry) = registry else {
         return prompt.to_string();
     };
-    let ctx = hook_ctx_for_subagent(cwd, Some(agent_id), Some(agent_type));
+    let ctx = hook_ctx_for_subagent(cwd, session_id, Some(agent_id), Some(agent_type));
     match coco_hooks::orchestration::execute_subagent_start(&registry, &ctx, agent_type, agent_id)
         .await
     {
@@ -142,12 +150,13 @@ pub(super) async fn fire_subagent_start_for_task(
 pub(super) async fn fire_subagent_stop_for_task(
     registry: Option<Arc<coco_hooks::HookRegistry>>,
     cwd: &str,
+    session_id: &SessionId,
     agent_id: &str,
     agent_type: &str,
     transcript_path: Option<&str>,
 ) {
     let Some(registry) = registry else { return };
-    let ctx = hook_ctx_for_subagent(cwd, Some(agent_id), Some(agent_type));
+    let ctx = hook_ctx_for_subagent(cwd, session_id, Some(agent_id), Some(agent_type));
     if let Err(e) = coco_hooks::orchestration::execute_subagent_stop(
         &registry,
         &ctx,
@@ -172,8 +181,11 @@ impl SwarmAgentHandle {
     /// Build an `OrchestrationContext` keyed off the handle's cwd.
     /// Thin wrapper around [`hook_ctx_for_cwd`] for sync-path callers
     /// that already hold `&self`.
-    fn hook_orchestration_context(&self) -> coco_hooks::orchestration::OrchestrationContext {
-        hook_ctx_for_cwd(&self.cwd)
+    fn hook_orchestration_context(
+        &self,
+        session_id: &SessionId,
+    ) -> coco_hooks::orchestration::OrchestrationContext {
+        hook_ctx_for_cwd(&self.cwd, session_id)
     }
 
     /// Fire SubagentStart hooks and prepend the aggregated
@@ -183,6 +195,7 @@ impl SwarmAgentHandle {
     /// returned unchanged.
     pub(super) async fn fire_subagent_start_hook(
         &self,
+        session_id: &SessionId,
         agent_id: &str,
         agent_type: &str,
         prompt: &str,
@@ -193,7 +206,7 @@ impl SwarmAgentHandle {
         let Some(registry) = self.hook_registry().cloned() else {
             return (prompt.to_string(), None);
         };
-        let ctx = self.hook_orchestration_context();
+        let ctx = self.hook_orchestration_context(session_id);
         match coco_hooks::orchestration::execute_subagent_start(
             &registry, &ctx, agent_type, agent_id,
         )
@@ -453,12 +466,13 @@ impl SwarmAgentHandle {
     #[allow(dead_code)]
     pub(super) async fn fire_subagent_stop_hook(
         &self,
+        session_id: &SessionId,
         agent_id: &str,
         agent_type: &str,
         transcript_path: Option<&str>,
     ) -> Option<coco_hooks::orchestration::AggregatedHookResult> {
         let registry = self.hook_registry().cloned()?;
-        let ctx = self.hook_orchestration_context();
+        let ctx = self.hook_orchestration_context(session_id);
         match coco_hooks::orchestration::execute_subagent_stop(
             &registry,
             &ctx,
@@ -735,7 +749,7 @@ struct AgentSummaryTimer {
     engine: coco_tool_runtime::AgentQueryEngineRef,
     definition: Option<std::sync::Arc<coco_types::AgentDefinition>>,
     model_selection: coco_types::LlmModelSelection,
-    session_id: String,
+    session_id: coco_types::SessionId,
     /// Reader half of the child engine's per-turn message snapshot.
     live_transcript: coco_tool_runtime::LiveTranscript,
 }
@@ -783,7 +797,7 @@ fn spawn_agent_summary_timer(timer: AgentSummaryTimer) {
             let (sys, user) =
                 coco_subagent::build_summary_prompts(&agent_type, previous.as_deref());
             let user_with_buf = format!("{user}\n\n--- recent transcript ---\n{transcript}");
-            let identity = match coco_tool_runtime::AgentRunIdentity::new(
+            let identity = match coco_tool_runtime::AgentRunIdentity::from_session_id(
                 session_id.clone(),
                 format!("{task_id}-summary"),
                 coco_tool_runtime::AgentRunKind::Summary,
@@ -866,6 +880,16 @@ impl SwarmAgentHandle {
             } => resumed_agent_id.clone(),
             _ => coco_types::generate_task_id(coco_types::TaskType::BgAgent),
         };
+        let parent_session_id = match request.parent_session_id() {
+            Ok(session_id) => session_id,
+            Err(e) => {
+                return Ok(spawn_failed(
+                    agent_id,
+                    e,
+                    start.elapsed().as_millis() as i64,
+                ));
+            }
+        };
         let task_registry = self.task_registry().clone();
         let is_dream = matches!(request.fork_label, Some(coco_types::ForkLabel::AutoDream));
         let is_skip_registration = matches!(
@@ -912,6 +936,7 @@ impl SwarmAgentHandle {
                             fire_worktree_create_hook(
                                 self.hook_registry().cloned(),
                                 &self.cwd,
+                                &parent_session_id,
                                 &slug,
                             )
                             .await;
@@ -944,8 +969,13 @@ impl SwarmAgentHandle {
             if let (Some(m), Some(session)) = (self.worktree_manager(), worktree_session.clone()) {
                 let removed_path = session.path.display().to_string();
                 let _ = m.cleanup_if_unchanged(session);
-                fire_worktree_remove_hook(self.hook_registry().cloned(), &self.cwd, &removed_path)
-                    .await;
+                fire_worktree_remove_hook(
+                    self.hook_registry().cloned(),
+                    &self.cwd,
+                    &parent_session_id,
+                    &removed_path,
+                )
+                .await;
             }
             return Ok(spawn_failed(
                 agent_id,
@@ -1267,8 +1297,8 @@ impl SwarmAgentHandle {
             .then(coco_tool_runtime::LiveTranscript::new);
         let mut query_config = coco_tool_runtime::AgentQueryConfig {
             system_prompt,
-            identity: match coco_tool_runtime::AgentRunIdentity::new(
-                request.session_id.clone(),
+            identity: match coco_tool_runtime::AgentRunIdentity::from_session_id(
+                parent_session_id.clone(),
                 agent_id.clone(),
                 coco_tool_runtime::AgentRunKind::Subagent,
             ) {
@@ -1533,7 +1563,12 @@ impl SwarmAgentHandle {
         // `additional_contexts` into the child's prompt as a leading
         // system-reminder block.
         let (decorated_prompt, _start_result) = self
-            .fire_subagent_start_hook(&agent_id, agent_type, &prompt_with_skills)
+            .fire_subagent_start_hook(
+                &query_config.identity.session_id,
+                &agent_id,
+                agent_type,
+                &prompt_with_skills,
+            )
             .await;
 
         // Fork mode: wrap the decorated directive in the
@@ -1648,6 +1683,7 @@ impl SwarmAgentHandle {
         let task_cancel_for_engine = sync_task.as_ref().map(|(_, c)| c.clone());
         let worktree_session_for_engine = worktree_session.clone();
         let registered_frontmatter_hooks_for_engine = registered_frontmatter_hooks;
+        let session_id_for_hooks_engine = query_config.identity.session_id.clone();
 
         // Detach handle for the inline caller's race. Internal memory
         // forks skip TaskManager registration, so they have no detach arm.
@@ -1751,6 +1787,7 @@ impl SwarmAgentHandle {
             fire_subagent_stop_for_task(
                 hook_registry_for_engine.clone(),
                 &cwd_for_engine,
+                &session_id_for_hooks_engine,
                 &agent_id_for_engine,
                 &agent_type_for_engine,
                 /*transcript*/ None,
@@ -1791,6 +1828,7 @@ impl SwarmAgentHandle {
                             fire_worktree_remove_hook(
                                 hook_registry_for_engine.clone(),
                                 &cwd_for_engine,
+                                &session_id_for_hooks_engine,
                                 &session_path,
                             )
                             .await;
@@ -2089,7 +2127,7 @@ impl SwarmAgentHandle {
         // Per-agent metadata sidecar. Persisted at registration so
         // resume can route the rehydrated spawn to the right `agent_type`
         // and (if worktree-isolated) restore cwd_override.
-        let session_id = request.session_id.clone();
+        let session_id = query_config.identity.session_id.to_string();
         if let Some(store) = self.transcript_store() {
             let store_for_meta = store.clone();
             let session_for_meta = session_id.clone();
@@ -2156,6 +2194,7 @@ impl SwarmAgentHandle {
         let cancel_for_task = cancel.clone();
         let transcript_store_for_task = self.transcript_store().cloned();
         let session_id_for_task = session_id.clone();
+        let session_id_for_hooks_task = query_config.identity.session_id.clone();
         let hook_registry_for_task = self.hook_registry().cloned();
         let cwd_for_task = self.cwd.clone();
         let agent_type_for_task = agent_type.to_string();
@@ -2196,6 +2235,7 @@ impl SwarmAgentHandle {
             let decorated_prompt = fire_subagent_start_for_task(
                 hook_registry_for_task.clone(),
                 &cwd_for_task,
+                &session_id_for_hooks_task,
                 &agent_id_for_task,
                 &agent_type_for_task,
                 &prompt,
@@ -2236,6 +2276,7 @@ impl SwarmAgentHandle {
             fire_subagent_stop_for_task(
                 hook_registry_for_task.clone(),
                 &cwd_for_task,
+                &session_id_for_hooks_task,
                 &agent_id_for_task,
                 &agent_type_for_task,
                 transcript_path.as_deref(),
@@ -2283,6 +2324,7 @@ impl SwarmAgentHandle {
                     fire_worktree_remove_hook(
                         hook_registry_for_task.clone(),
                         &cwd_for_task,
+                        &session_id_for_hooks_task,
                         &session_path,
                     )
                     .await;

@@ -330,10 +330,10 @@ pub(super) async fn handle_plugin_reload(ctx: &HandlerContext) -> HandlerResult 
         });
     };
 
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cwd = ctx.state.workspace_cwd().await;
     let command_count = runtime.reload_plugins(&cwd).await;
     runtime.reload_agent_catalog().await;
-    runtime.reload_lsp_servers(&cwd).await;
+    runtime.reload_lsp_servers().await;
     let error_count = match runtime.reload_hooks().await {
         Ok(_) => 0,
         Err(e) => {

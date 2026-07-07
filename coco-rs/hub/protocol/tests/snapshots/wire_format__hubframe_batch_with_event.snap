@@ -8,9 +8,10 @@ expression: json
     {
       "instanceId": "00000000-0000-0000-0000-000000000000",
       "sessionId": "sess-1",
-      "seq": 7,
+      "agentId": "aagent-0000000000000001",
+      "sessionSeq": 7,
       "ts": "2024-01-01T00:00:00Z",
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "payload": {
         "kind": "tool_use_completed",
         "value": {

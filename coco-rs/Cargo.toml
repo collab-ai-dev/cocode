@@ -105,8 +105,11 @@ members = [
     "coordinator",
     "output-styles",
 
-    # ─── app/ (5) ───
+    # ─── app/ (8) ───
     "app/query",
+    "app/server",
+    "app/server-client",
+    "app/server-transport",
     "app/state",
     "app/session",
     "app/tui",
@@ -237,6 +240,9 @@ coco-output-styles = { path = "output-styles" }
 
 # Internal - app
 coco-query = { path = "app/query" }
+coco-app-server = { path = "app/server" }
+coco-app-server-client = { path = "app/server-client" }
+coco-app-server-transport = { path = "app/server-transport" }
 coco-state = { path = "app/state" }
 coco-session = { path = "app/session" }
 coco-tui = { path = "app/tui" }

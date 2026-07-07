@@ -7,7 +7,7 @@
 //!
 //! Scope:
 //! - One QueryEngine per turn (fresh config). Multi-turn context is
-//!   threaded forward via `SessionHandle.history`: the runner locks
+//!   threaded forward via `TurnHandoff.history`: the runner locks
 //!   the shared history, builds
 //!   `prior_history + [create_user_message(prompt)]`, calls
 //!   `run_with_messages`, and replaces the history with
@@ -39,12 +39,12 @@ use crate::sdk_server::handlers::TurnRunner;
 /// `TurnRunner` implementation that spawns a fresh `QueryEngine` per
 /// turn.
 ///
-/// Holds an `Arc<SessionRuntime>` — the same per-session state container
+/// Holds a `SessionHandle` for the same per-session state container
 /// the TUI runner uses. Per-turn engine assembly routes through
 /// `runtime.build_engine_from_config(...)` so SDK and TUI share the
 /// `with_*` install list.
 pub struct QueryEngineRunner {
-    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    session: crate::session_runtime::SessionHandle,
     /// Max internal agent turns (tool-use iterations) per SDK turn.
     /// `None` = unbounded unless `max_turns` is supplied in the request
     /// or `loop.max_turns` in settings.
@@ -54,16 +54,16 @@ pub struct QueryEngineRunner {
 }
 
 impl QueryEngineRunner {
-    /// Build a runner from a pre-constructed [`SessionRuntime`] (which
+    /// Build a runner from a pre-constructed [`SessionHandle`] (which
     /// already owns the client / tools / fallbacks / hook registry / all
     /// session subsystems).
     pub fn new(
-        runtime: Arc<crate::session_runtime::SessionRuntime>,
+        session: crate::session_runtime::SessionHandle,
         max_turns: Option<i32>,
         system_prompt: Option<String>,
     ) -> Self {
         Self {
-            runtime,
+            session,
             max_turns,
             system_prompt,
         }
@@ -81,7 +81,8 @@ impl TurnRunner for QueryEngineRunner {
         let mut prompt = params.prompt;
         let system_prompt = self.system_prompt.clone();
         let max_turns = self.max_turns;
-        let runtime = self.runtime.clone();
+        let session = self.session.clone();
+        let runtime = self.session.runtime().clone();
         let history_handle = handoff.history.clone();
         // Keep our own handle on the cancel token. The engine consumes
         // its copy; we still need to know post-run whether the user
@@ -250,7 +251,7 @@ impl TurnRunner for QueryEngineRunner {
                     }
                     crate::goal_command::GoalOutcome::StatusThenText { status, text } => {
                         sdk_append_goal_status_and_slash_text(
-                            &self.runtime,
+                            &session,
                             &history_handle,
                             &event_tx,
                             status,
@@ -258,7 +259,7 @@ impl TurnRunner for QueryEngineRunner {
                             &text,
                         )
                         .await;
-                        sdk_emit_active_goal_snapshot(&self.runtime, &handoff.app_state, &event_tx)
+                        sdk_emit_active_goal_snapshot(&session, &handoff.app_state, &event_tx)
                             .await;
                         return Ok(());
                     }
@@ -268,7 +269,7 @@ impl TurnRunner for QueryEngineRunner {
                         kickoff,
                     } => {
                         sdk_append_goal_status(&history_handle, &event_tx, status).await;
-                        sdk_emit_active_goal_snapshot(&self.runtime, &handoff.app_state, &event_tx)
+                        sdk_emit_active_goal_snapshot(&session, &handoff.app_state, &event_tx)
                             .await;
                         sdk_append_slash_text(&history_handle, &event_tx, "goal", &args, &text)
                             .await;
@@ -360,7 +361,7 @@ impl TurnRunner for QueryEngineRunner {
                 let name = match req {
                     coco_commands::ParsedRename::Explicit(n) => n,
                     coco_commands::ParsedRename::Auto => {
-                        match crate::session_rename::auto_generate_session_name(&runtime).await {
+                        match crate::session_rename::auto_generate_session_name(&session).await {
                             Ok(n) => n,
                             Err(err) => {
                                 tracing::warn!(
@@ -372,7 +373,7 @@ impl TurnRunner for QueryEngineRunner {
                         }
                     }
                 };
-                if let Err(e) = crate::session_rename::persist_rename(&runtime, name.clone()).await
+                if let Err(e) = crate::session_rename::persist_rename(&session, name.clone()).await
                 {
                     tracing::warn!(
                         error = %e,
@@ -485,8 +486,7 @@ impl TurnRunner for QueryEngineRunner {
                             .send(CoreEvent::Protocol(
                                 coco_types::ServerNotification::MessageAppended {
                                     message: msg,
-                                    session_id: String::new(),
-                                    agent_id: None,
+                                    identity: coco_types::ServerNotificationIdentity::default(),
                                 },
                             ))
                             .await;
@@ -522,8 +522,7 @@ impl TurnRunner for QueryEngineRunner {
                     .send(CoreEvent::Protocol(
                         coco_types::ServerNotification::MessageAppended {
                             message: warning_msg,
-                            session_id: String::new(),
-                            agent_id: None,
+                            identity: coco_types::ServerNotificationIdentity::default(),
                         },
                     ))
                     .await;
@@ -577,8 +576,7 @@ impl TurnRunner for QueryEngineRunner {
                     .send(CoreEvent::Protocol(
                         coco_types::ServerNotification::MessageAppended {
                             message: prompt_msg,
-                            session_id: String::new(),
-                            agent_id: None,
+                            identity: coco_types::ServerNotificationIdentity::default(),
                         },
                     ))
                     .await;
@@ -586,8 +584,7 @@ impl TurnRunner for QueryEngineRunner {
                     .send(CoreEvent::Protocol(
                         coco_types::ServerNotification::MessageAppended {
                             message: stop_msg_obj,
-                            session_id: String::new(),
-                            agent_id: None,
+                            identity: coco_types::ServerNotificationIdentity::default(),
                         },
                     ))
                     .await;
@@ -621,8 +618,7 @@ impl TurnRunner for QueryEngineRunner {
                     .send(CoreEvent::Protocol(
                         coco_types::ServerNotification::MessageAppended {
                             message: std::sync::Arc::new(m),
-                            session_id: String::new(),
-                            agent_id: None,
+                            identity: coco_types::ServerNotificationIdentity::default(),
                         },
                     ))
                     .await;
@@ -725,7 +721,7 @@ impl TurnRunner for QueryEngineRunner {
 
                     // Emit a synthetic `SessionResult` with `is_error=true`
                     // so the forwarder's `accumulate_session_result` folds
-                    // the failure into `SessionHandle.stats`. Without
+                    // the failure into the SDK session stats accumulator. Without
                     // this, true engine-bail paths (compaction failure,
                     // transport crash, etc.) don't surface in the final
                     // aggregated `SessionResult` emitted by `session/archive`.
@@ -736,7 +732,7 @@ impl TurnRunner for QueryEngineRunner {
                     // usage is zero; cost is 0.0; errors list is the one
                     // message we provide).
                     let error_params = coco_types::SessionResultParams {
-                        session_id: session_id_for_error,
+                        session_id: session_id_for_error.clone(),
                         total_turns: 1,
                         duration_ms: 0,
                         duration_api_ms: 0,
@@ -830,7 +826,7 @@ async fn sdk_append_goal_status(
 }
 
 async fn sdk_append_goal_status_and_slash_text(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
     event_tx: &mpsc::Sender<CoreEvent>,
     payload: coco_types::GoalStatusPayload,
@@ -844,11 +840,12 @@ async fn sdk_append_goal_status_and_slash_text(
         "goal", args, text, /*is_sensitive*/ false,
     ));
     sdk_append_messages(history_handle, event_tx, messages.clone()).await;
+    let runtime = session.runtime();
     runtime.persist_local_transcript_messages(&messages).await;
 }
 
 async fn sdk_emit_active_goal_snapshot(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     app_state: &tokio::sync::RwLock<coco_types::ToolAppState>,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
@@ -858,6 +855,7 @@ async fn sdk_emit_active_goal_snapshot(
             crate::goal_command::active_goal_changed_notification(goal.clone()),
         ))
         .await;
+    let runtime = session.runtime();
     runtime
         .persist_goal_metadata(goal.as_ref().map(|goal| {
             coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
@@ -878,8 +876,7 @@ async fn sdk_append_messages(
             .send(CoreEvent::Protocol(
                 coco_types::ServerNotification::MessageAppended {
                     message,
-                    session_id: String::new(),
-                    agent_id: None,
+                    identity: coco_types::ServerNotificationIdentity::default(),
                 },
             ))
             .await;

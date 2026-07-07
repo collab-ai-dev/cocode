@@ -15,12 +15,12 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use arc_swap::ArcSwap;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_types::ActiveShellTool;
 use coco_types::ModelRole;
+use coco_types::SessionId;
 use coco_types::ToolOverrides;
 
 use coco_background_review::LockOutcome;
@@ -30,6 +30,7 @@ use crate::lock::consolidate_lock;
 use crate::prompt::FileMutationPromptTools;
 use crate::prompt::build_dream_prompt;
 use crate::service::MemoryForkToolConfig;
+use crate::service::SessionIdSlot;
 use crate::telemetry::AutoDreamFailurePhase;
 use crate::telemetry::AutoDreamSkipReason;
 use crate::telemetry::MemoryEvent;
@@ -179,7 +180,7 @@ async fn count_daily_logs(memory_dir: &std::path::Path) -> i32 {
 
 /// Auto-dream service.
 pub struct DreamService {
-    session_id: ArcSwap<String>,
+    session_id: SessionIdSlot,
     memory_dir: PathBuf,
     config: MemoryConfig,
     agent: crate::service::extract::AgentSlot,
@@ -242,7 +243,10 @@ impl DreamService {
             telemetry,
             crate::notice::NoticeInbox::default(),
             MemoryForkToolConfig::disabled(),
-            "test-session".to_string(),
+            match SessionId::try_new("test-session") {
+                Ok(id) => id,
+                Err(_) => unreachable!("test session id must be valid"),
+            },
         )
     }
 
@@ -255,7 +259,7 @@ impl DreamService {
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
         notices: crate::notice::NoticeInbox,
         tool_config: MemoryForkToolConfig,
-        session_id: String,
+        session_id: SessionId,
     ) -> Self {
         Self::with_shared_agent_and_notice_channels(
             memory_dir,
@@ -275,10 +279,31 @@ impl DreamService {
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
         channels: DreamNoticeChannels,
         tool_config: MemoryForkToolConfig,
-        session_id: String,
+        session_id: SessionId,
+    ) -> Self {
+        let session_id = Arc::new(arc_swap::ArcSwap::from_pointee(session_id));
+        Self::with_shared_agent_channels_and_session_id_slot(
+            memory_dir,
+            config,
+            agent,
+            telemetry,
+            channels,
+            tool_config,
+            session_id,
+        )
+    }
+
+    pub(crate) fn with_shared_agent_channels_and_session_id_slot(
+        memory_dir: PathBuf,
+        config: MemoryConfig,
+        agent: crate::service::extract::AgentSlot,
+        telemetry: Arc<dyn MemoryTelemetryEmitter>,
+        channels: DreamNoticeChannels,
+        tool_config: MemoryForkToolConfig,
+        session_id: SessionIdSlot,
     ) -> Self {
         Self {
-            session_id: ArcSwap::from_pointee(session_id),
+            session_id,
             memory_dir,
             config,
             agent,
@@ -292,7 +317,7 @@ impl DreamService {
         }
     }
 
-    pub fn set_session_id(&self, new_id: String) {
+    pub fn set_session_id(&self, new_id: SessionId) {
         self.session_id.store(Arc::new(new_id));
     }
 
@@ -490,7 +515,7 @@ impl DreamService {
         let request = AgentSpawnRequest {
             prompt,
             description: Some("auto-dream consolidation".into()),
-            session_id: (**self.session_id.load()).clone(),
+            session_id: Some(self.session_id.load().as_ref().clone()),
             subagent_type: Some("general-purpose".into()),
             definition: Some(memory_def),
             constraints: Some(AgentSpawnConstraints {

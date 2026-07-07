@@ -276,7 +276,7 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
 
     let session_id = entries
         .iter()
-        .find_map(|entry| (!entry.session_id.is_empty()).then(|| entry.session_id.clone()))
+        .find_map(|entry| entry.session_id.as_ref().map(ToString::to_string))
         .unwrap_or_else(|| {
             transcript_path
                 .file_stem()
@@ -309,7 +309,7 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
             else {
                 continue;
             };
-            if entry_session_id != &session_id || replacements.is_empty() {
+            if entry_session_id.as_str() != session_id || replacements.is_empty() {
                 continue;
             }
             agent_content_replacements

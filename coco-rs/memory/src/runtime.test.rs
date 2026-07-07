@@ -28,6 +28,11 @@ struct RecordingTelemetry {
     events: Mutex<Vec<MemoryEvent>>,
 }
 
+#[derive(Default)]
+struct SessionRecordingHandle {
+    sessions: Mutex<Vec<Option<coco_types::SessionId>>>,
+}
+
 impl crate::telemetry::MemoryTelemetryEmitter for RecordingTelemetry {
     fn emit(&self, event: MemoryEvent) {
         self.events
@@ -68,6 +73,15 @@ impl SlowHandle {
     }
 }
 
+impl SessionRecordingHandle {
+    fn sessions(&self) -> Vec<Option<coco_types::SessionId>> {
+        self.sessions
+            .lock()
+            .expect("recorded sessions lock")
+            .clone()
+    }
+}
+
 #[async_trait::async_trait]
 impl AgentHandle for SlowHandle {
     async fn spawn_agent(&self, _request: AgentSpawnRequest) -> Result<AgentSpawnResponse, String> {
@@ -98,7 +112,51 @@ impl AgentHandle for SlowHandle {
         &self,
         _agent_id: &str,
         _prompt: &str,
-        _session_id: &str,
+        _session_id: &coco_types::SessionId,
+    ) -> Result<AgentSpawnResponse, String> {
+        Err("unused".into())
+    }
+
+    async fn query_agent_status(&self, _agent_id: &str) -> Result<AgentSpawnResponse, String> {
+        Err("unused".into())
+    }
+
+    async fn get_agent_output(&self, _agent_id: &str) -> Result<String, String> {
+        Err("unused".into())
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentHandle for SessionRecordingHandle {
+    async fn spawn_agent(&self, request: AgentSpawnRequest) -> Result<AgentSpawnResponse, String> {
+        self.sessions
+            .lock()
+            .expect("recorded sessions lock")
+            .push(request.session_id);
+        Ok(AgentSpawnResponse {
+            status: AgentSpawnStatus::Completed,
+            agent_id: Some("memory".into()),
+            result: Some("ok".into()),
+            total_tool_use_count: 1,
+            duration_ms: 1,
+            ..Default::default()
+        })
+    }
+
+    async fn send_message(
+        &self,
+        _to: &str,
+        _content: &str,
+        _summary: Option<&str>,
+    ) -> Result<coco_tool_runtime::TeamMessageDispatchResult, String> {
+        Err("unused".into())
+    }
+
+    async fn resume_agent(
+        &self,
+        _agent_id: &str,
+        _prompt: &str,
+        _session_id: &coco_types::SessionId,
     ) -> Result<AgentSpawnResponse, String> {
         Err("unused".into())
     }
@@ -890,6 +948,42 @@ async fn finalize_turn_schedules_memory_work_without_waiting_for_agent() {
     );
     assert!(runtime.drain(Duration::from_secs(2)).await);
     assert_eq!(agent.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn retargeted_memory_runtime_updates_extract_session_identity() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let agent = Arc::new(SessionRecordingHandle::default());
+    let mut config = MemoryConfig {
+        dream_enabled: false,
+        session_memory_enabled: false,
+        extraction_throttle: 1,
+        ..Default::default()
+    };
+    config.directory = Some(tmp.path().join("memory"));
+    let runtime = MemoryRuntimeBuilder::new(
+        tmp.path().join("home"),
+        tmp.path().join("project"),
+        "session-old",
+        config,
+        agent.clone(),
+    )
+    .build();
+
+    runtime
+        .set_session_id(coco_types::SessionId::try_new("session-new").expect("session id"))
+        .await;
+
+    let report = runtime.finalize_turn(finalize_ctx("msg-1")).await;
+
+    assert!(!report.skipped);
+    assert!(runtime.drain(Duration::from_secs(2)).await);
+    assert_eq!(
+        agent.sessions(),
+        vec![Some(
+            coco_types::SessionId::try_new("session-new").expect("session id")
+        )]
+    );
 }
 
 #[tokio::test]

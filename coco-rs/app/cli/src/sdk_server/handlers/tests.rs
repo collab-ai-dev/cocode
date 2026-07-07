@@ -37,6 +37,13 @@ use crate::sdk_server::handlers::SdkServerState;
 
 // ----- shared test helpers --------------------------------------------
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    match coco_types::SessionId::try_new(value) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id should be valid"),
+    }
+}
+
 fn req(id: i64, method: &str, params: serde_json::Value) -> JsonRpcMessage {
     JsonRpcMessage::Request(JsonRpcRequest {
         jsonrpc: coco_types::JSONRPC_VERSION.into(),
@@ -80,12 +87,18 @@ async fn spawn_server_with_runner(
     (handle, client_end)
 }
 
-async fn start_session(client: &InMemoryTransport) {
+async fn start_session(client: &InMemoryTransport) -> String {
     client
         .send(req(1, "session/start", serde_json::json!({})))
         .await
         .unwrap();
-    let _ = client.recv().await.unwrap().unwrap();
+    match client.recv().await.unwrap().unwrap() {
+        JsonRpcMessage::Response(r) => r.result["session_id"]
+            .as_str()
+            .expect("session_id string")
+            .to_string(),
+        other => panic!("expected session/start response, got {other:?}"),
+    }
 }
 
 /// Build a unique temp directory for tests that need disk persistence.
@@ -130,7 +143,7 @@ fn seed_session_transcript(
         uuid: format!("{sid}-u1"),
         parent_uuid: None,
         logical_parent_uuid: None,
-        session_id: sid.to_string(),
+        session_id: Some(coco_types::SessionId::try_new(sid).expect("valid session id")),
         cwd: cwd.to_string(),
         timestamp: "2025-01-15T10:00:00Z".to_string(),
         version: None,
@@ -260,7 +273,7 @@ impl TurnRunner for StatsEmittingRunner {
             use coco_types::PermissionDenialInfo;
             use coco_types::SessionResultParams;
             let params = SessionResultParams {
-                session_id: "ignored-the-forwarder-overrides".into(),
+                session_id: test_session_id("ignored-the-forwarder-overrides"),
                 total_turns: 1,
                 duration_ms: 42,
                 duration_api_ms: 30,
@@ -421,6 +434,9 @@ impl crate::sdk_server::InitializeBootstrap for MockFastModeBootstrap {
     async fn fast_mode_state(&self) -> Option<coco_types::FastModeState> {
         Some(self.state)
     }
+    async fn cwd(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from(".")
+    }
 }
 
 #[tokio::test]
@@ -553,7 +569,7 @@ async fn session_start_returns_session_id() {
         JsonRpcMessage::Response(r) => {
             assert_eq!(r.request_id, RequestId::Integer(2));
             let session_id = r.result["session_id"].as_str().expect("session_id string");
-            assert!(session_id.starts_with("session-"));
+            uuid::Uuid::parse_str(session_id).expect("session/start id should be UUID");
         }
         other => panic!("expected Response, got {other:?}"),
     }
@@ -664,7 +680,7 @@ async fn turn_start_returns_turn_id_and_forwards_notifications() {
     });
     let (server_task, client) = spawn_server_with_runner(runner).await;
 
-    start_session(&client).await;
+    let session_id = start_session(&client).await;
 
     client
         .send(req(2, "turn/start", serde_json::json!({ "prompt": "hi" })))
@@ -690,7 +706,7 @@ async fn turn_start_returns_turn_id_and_forwards_notifications() {
 
     let reply = turn_start_reply.expect("turn/start response not seen");
     let turn_id = reply.result["turn_id"].as_str().expect("turn_id string");
-    assert!(turn_id.starts_with("turn-session-"));
+    assert_eq!(turn_id, format!("turn-{session_id}-1"));
     assert_eq!(
         notif_methods,
         vec!["turn/started".to_string(), "turn/ended".to_string()]
@@ -2920,7 +2936,7 @@ async fn session_resume_installs_session_from_disk() {
     // Verify the session is now the active SDK session.
     let slot = state.session.read().await;
     let session = slot.as_ref().expect("session should be installed");
-    assert_eq!(session.session_id, "resume-test");
+    assert_eq!(session.session_id.as_str(), "resume-test");
     assert_eq!(session.cwd, "/tmp/resume");
 
     drop(slot);

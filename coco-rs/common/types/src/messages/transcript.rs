@@ -9,6 +9,7 @@ use crate::AiTitleEntry;
 use crate::AttributionSnapshotEntry;
 use crate::CustomTitleEntry;
 use crate::PrLinkEntry;
+use crate::SessionId;
 use crate::SummaryEntry;
 use crate::TagEntry;
 use crate::TaskSummaryEntry;
@@ -22,7 +23,7 @@ pub struct TranscriptMessage {
     pub message: Message,
     pub cwd: String,
     pub user_type: String,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub timestamp: String,
     pub version: String,
     pub parent_uuid: Option<Uuid>,
@@ -63,3 +64,7 @@ pub enum TranscriptEntry {
     PrLink(PrLinkEntry),
     AttributionSnapshot(AttributionSnapshotEntry),
 }
+
+#[cfg(test)]
+#[path = "transcript.test.rs"]
+mod tests;

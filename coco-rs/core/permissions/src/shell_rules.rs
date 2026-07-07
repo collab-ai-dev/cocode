@@ -515,10 +515,7 @@ pub fn bash_permission_suggestions(
     tool_name: &str,
     command: &str,
 ) -> Vec<coco_types::PermissionUpdate> {
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "/".to_string());
-    bash_permission_suggestions_in_cwd(tool_name, command, &cwd)
+    bash_permission_suggestions_in_cwd(tool_name, command, "/")
 }
 
 pub fn bash_permission_suggestions_in_cwd(
@@ -586,10 +583,7 @@ fn bash_permission_suggestions_for_single(
 }
 
 fn significant_bash_subcommands(command: &str) -> Vec<String> {
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "/".to_string());
-    significant_bash_subcommands_in_cwd(command, &cwd)
+    significant_bash_subcommands_in_cwd(command, "/")
 }
 
 fn significant_bash_subcommands_in_cwd(command: &str, cwd: &str) -> Vec<String> {

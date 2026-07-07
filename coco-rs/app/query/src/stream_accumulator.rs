@@ -35,11 +35,12 @@ use coco_types::ThreadItem;
 use coco_types::ThreadItemDetails;
 use coco_types::ToolId;
 use coco_types::ToolName;
+use coco_types::TurnId;
 
 /// Stateful accumulator that converts `AgentStreamEvent` into
 /// `ServerNotification` sequences suitable for SDK consumption.
 pub struct StreamAccumulator {
-    turn_id: String,
+    turn_id: TurnId,
     /// Active thread item ID for text content (if any).
     text_item_id: Option<String>,
     /// Accumulated text buffer for the current text item.
@@ -56,7 +57,7 @@ pub struct StreamAccumulator {
 
 impl StreamAccumulator {
     /// Create a new accumulator scoped to a turn.
-    pub fn new(turn_id: impl Into<String>) -> Self {
+    pub fn new(turn_id: impl Into<TurnId>) -> Self {
         Self {
             turn_id: turn_id.into(),
             text_item_id: None,

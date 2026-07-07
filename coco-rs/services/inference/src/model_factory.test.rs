@@ -214,7 +214,7 @@ fn templated_header_known_var_builds_with_session_context() {
     ));
     let s = spec("local-router", ProviderApi::OpenaiCompat, "local-model");
     let vars = crate::header_template::HeaderVars {
-        session_id: "sess-1".into(),
+        session_id: Some(coco_types::SessionId::try_new("sess-1").expect("session id")),
         cwd: "/tmp".into(),
         app_version: "1.2.3".into(),
     };

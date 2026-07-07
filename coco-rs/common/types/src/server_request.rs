@@ -556,9 +556,9 @@ pub enum ApiProvider {
 
 /// Minimal session metadata returned by `session/list` and `session/read`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SdkSessionSummary {
-    pub session_id: String,
+    pub session_id: crate::SessionId,
     pub model: String,
     pub cwd: String,
     pub created_at: String,
@@ -585,7 +585,7 @@ pub struct SessionListResult {
 /// `messages` / `next_cursor` / `has_more` fields are reserved for
 /// when the transcript reader is wired.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReadResult {
     pub session: SdkSessionSummary,
     /// Messages paginated by `cursor`/`limit` from the original
@@ -603,7 +603,7 @@ pub struct SessionReadResult {
 /// from disk and installs it as the active session. The SDK client
 /// can then issue `turn/start` to continue the conversation.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResumeResult {
     pub session: SdkSessionSummary,
 }
@@ -613,9 +613,9 @@ pub struct SessionResumeResult {
 /// `session/started` notification. Subsequent ClientRequests
 /// (turn/start, approval/resolve, etc.) operate on this session.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartResult {
-    pub session_id: String,
+    pub session_id: crate::SessionId,
 }
 
 /// Response to `ClientRequest::TurnStart`.
@@ -624,11 +624,11 @@ pub struct SessionStartResult {
 /// with a handle. Progress is delivered via `turn/started`, streaming
 /// deltas, and the terminal `turn/ended` notification.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnStartResult {
     /// Opaque turn identifier the client can use to correlate notifications
     /// and issue `turn/interrupt` for cancellation.
-    pub turn_id: String,
+    pub turn_id: crate::TurnId,
 }
 
 #[cfg(test)]

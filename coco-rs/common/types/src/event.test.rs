@@ -6,6 +6,13 @@ use crate::TokenUsage;
 use crate::WorkflowAgentState;
 use crate::WorkflowProgressEvent;
 
+fn test_session_id(value: &str) -> crate::SessionId {
+    match crate::SessionId::try_new(value) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id should be valid"),
+    }
+}
+
 #[test]
 fn agent_stream_event_serializes_with_snake_case_tag() {
     let event = AgentStreamEvent::TextDelta {
@@ -21,6 +28,192 @@ fn agent_stream_event_serializes_with_snake_case_tag() {
             "delta": "hello"
         })
     );
+}
+
+#[test]
+fn agent_stream_event_deserializes_turn_id_as_newtype() {
+    let event: AgentStreamEvent = serde_json::from_value(json!({
+        "type": "thinking_delta",
+        "turn_id": "turn-typed",
+        "delta": "hmm"
+    }))
+    .unwrap();
+
+    match event {
+        AgentStreamEvent::ThinkingDelta { turn_id, delta } => {
+            assert_eq!(turn_id.as_str(), "turn-typed");
+            assert_eq!(delta, "hmm");
+        }
+        other => panic!("expected thinking delta, got {other:?}"),
+    }
+}
+
+#[test]
+fn session_envelope_durable_carries_session_seq() {
+    let turn_id = crate::TurnId::from("turn-1");
+    let envelope = SessionEnvelope::durable(
+        crate::SessionId::try_new("session-1").unwrap(),
+        None,
+        Some(turn_id.clone()),
+        42,
+        CoreEvent::Protocol(ServerNotification::TurnStarted(TurnStartedParams {
+            turn_id: turn_id.clone(),
+        })),
+    );
+
+    assert_eq!(envelope.session_id.as_str(), "session-1");
+    assert_eq!(envelope.turn_id.as_ref(), Some(&turn_id));
+    assert_eq!(envelope.session_seq, Some(42));
+    assert!(envelope.is_durable());
+}
+
+#[test]
+fn session_envelope_ephemeral_has_no_session_seq() {
+    let turn_id = crate::TurnId::from("turn-live");
+    let envelope = SessionEnvelope::ephemeral(
+        crate::SessionId::try_new("session-1").unwrap(),
+        Some(crate::AgentId::try_new("agent-1").unwrap()),
+        Some(turn_id.clone()),
+        CoreEvent::Stream(AgentStreamEvent::TextDelta {
+            turn_id: turn_id.clone(),
+            delta: "hello".to_string(),
+        }),
+    );
+
+    assert_eq!(
+        envelope.agent_id.as_ref().map(crate::AgentId::as_str),
+        Some("agent-1")
+    );
+    assert_eq!(envelope.turn_id.as_ref(), Some(&turn_id));
+    assert_eq!(envelope.session_seq, None);
+    assert!(!envelope.is_durable());
+}
+
+#[test]
+fn session_envelope_stamp_assigns_seq_to_durable_event() {
+    let turn_id = crate::TurnId::from("turn-stamp");
+    let envelope = SessionEnvelope::stamp(
+        crate::SessionId::try_new("session-1").unwrap(),
+        None,
+        CoreEvent::Protocol(ServerNotification::TurnStarted(TurnStartedParams {
+            turn_id: turn_id.clone(),
+        })),
+        || 7,
+    );
+
+    assert_eq!(envelope.turn_id.as_ref(), Some(&turn_id));
+    assert_eq!(envelope.session_seq, Some(7));
+    assert!(envelope.is_durable());
+}
+
+#[test]
+fn session_envelope_stamp_does_not_allocate_seq_for_ephemeral_event() {
+    let turn_id = crate::TurnId::from("turn-live");
+    let envelope = SessionEnvelope::stamp(
+        crate::SessionId::try_new("session-1").unwrap(),
+        None,
+        CoreEvent::Stream(AgentStreamEvent::TextDelta {
+            turn_id: turn_id.clone(),
+            delta: "hello".to_string(),
+        }),
+        || panic!("ephemeral events must not allocate a session_seq"),
+    );
+
+    assert_eq!(envelope.turn_id.as_ref(), Some(&turn_id));
+    assert_eq!(envelope.session_seq, None);
+    assert!(!envelope.is_durable());
+}
+
+#[test]
+fn core_event_replay_policy_matches_app_server_taxonomy() {
+    let turn_id = crate::TurnId::from("turn-policy");
+    let protocol = CoreEvent::Protocol(ServerNotification::TurnStarted(TurnStartedParams {
+        turn_id: turn_id.clone(),
+    }));
+    let stream = CoreEvent::Stream(AgentStreamEvent::TextDelta {
+        turn_id,
+        delta: "hello".to_string(),
+    });
+    let tui = CoreEvent::Tui(TuiOnlyEvent::QuestionAsked {
+        request_id: "question-1".to_string(),
+        input: json!({ "questions": [] }),
+    });
+
+    assert_eq!(protocol.replay_policy(), EventReplayPolicy::Durable);
+    assert_eq!(stream.replay_policy(), EventReplayPolicy::Ephemeral);
+    assert_eq!(tui.replay_policy(), EventReplayPolicy::Ephemeral);
+}
+
+#[test]
+fn agent_stream_event_turn_id_only_for_delta_events() {
+    let turn_id = crate::TurnId::from("turn-stream");
+    let delta = AgentStreamEvent::TextDelta {
+        turn_id: turn_id.clone(),
+        delta: "hello".to_string(),
+    };
+    let tool = AgentStreamEvent::ToolUseQueued {
+        call_id: "call-1".to_string(),
+        name: "Read".to_string(),
+        input: json!({ "file_path": "README.md" }),
+    };
+
+    assert_eq!(delta.turn_id(), Some(turn_id));
+    assert_eq!(tool.turn_id(), None);
+}
+
+#[test]
+fn server_notification_turn_id_reads_protocol_payloads() {
+    let turn_id = crate::TurnId::from("turn-protocol");
+    let item = ThreadItem {
+        item_id: "item-1".to_string(),
+        turn_id: turn_id.clone(),
+        details: ThreadItemDetails::AgentMessage {
+            text: String::new(),
+        },
+    };
+
+    let started = ServerNotification::TurnStarted(TurnStartedParams {
+        turn_id: turn_id.clone(),
+    });
+    let item_completed = ServerNotification::ItemCompleted { item };
+    let delta = ServerNotification::AgentMessageDelta(ContentDeltaParams {
+        item_id: Some("item-1".to_string()),
+        turn_id: Some(turn_id.clone()),
+        delta: "hello".to_string(),
+    });
+    let moa = ServerNotification::MoaAggregating(MoaAggregatingParams {
+        turn_id: turn_id.clone(),
+        role: crate::ModelRole::Main,
+        preset: "default".to_string(),
+        count: 2,
+    });
+    let stall = ServerNotification::StreamStallDetected {
+        turn_id: Some(turn_id.clone()),
+    };
+
+    assert_eq!(started.turn_id(), Some(turn_id.clone()));
+    assert_eq!(item_completed.turn_id(), Some(turn_id.clone()));
+    assert_eq!(delta.turn_id(), Some(turn_id.clone()));
+    assert_eq!(moa.turn_id(), Some(turn_id.clone()));
+    assert_eq!(stall.turn_id(), Some(turn_id));
+}
+
+#[test]
+fn core_event_turn_id_uses_protocol_and_stream_layers() {
+    let protocol_turn_id = crate::TurnId::from("turn-protocol");
+    let stream_turn_id = crate::TurnId::from("turn-stream");
+    let protocol = CoreEvent::Protocol(ServerNotification::TurnEnded(
+        TurnEndedParams::interrupted(protocol_turn_id.clone(), None, TurnAbortReason::UserCancel),
+    ));
+    let stream = CoreEvent::Stream(AgentStreamEvent::ThinkingDelta {
+        turn_id: stream_turn_id.clone(),
+        delta: "thinking".to_string(),
+    });
+    let no_turn = CoreEvent::Protocol(ServerNotification::KeepAlive { timestamp: 1 });
+
+    assert_eq!(protocol.turn_id(), Some(protocol_turn_id));
+    assert_eq!(stream.turn_id(), Some(stream_turn_id));
+    assert_eq!(no_turn.turn_id(), None);
 }
 
 #[test]
@@ -122,6 +315,41 @@ fn server_notification_turn_started_wire_method() {
     assert_eq!(json["method"], "turn/started");
     assert_eq!(json["params"]["turn_id"], "t1");
     assert_eq!(json["params"]["turn_id"], "t1");
+}
+
+#[test]
+fn history_reset_session_id_wire_stays_string_when_present() {
+    let session_id = test_session_id("session-1");
+    let notif = ServerNotification::SessionResetForResume {
+        identity: ServerNotificationIdentity::new(Some(session_id.clone()), None),
+    };
+
+    let json = serde_json::to_value(&notif).unwrap();
+
+    assert_eq!(json["method"], "history/resetForResume");
+    assert_eq!(json["params"]["session_id"], "session-1");
+    assert_eq!(notif.session_id(), Some(&session_id));
+    assert_eq!(notif.agent_id(), None);
+}
+
+#[test]
+fn history_reset_session_id_accepts_missing_or_empty_as_none() {
+    for value in [
+        json!({
+            "method": "history/resetForResume",
+            "params": {}
+        }),
+        json!({
+            "method": "history/resetForResume",
+            "params": { "session_id": "" }
+        }),
+    ] {
+        let notif: ServerNotification = serde_json::from_value(value).unwrap();
+        let ServerNotification::SessionResetForResume { .. } = notif else {
+            panic!("expected history reset notification");
+        };
+        assert_eq!(notif.session_id(), None);
+    }
 }
 
 #[test]
@@ -658,7 +886,7 @@ fn session_result_has_model_usage_and_permission_denials() {
         },
     );
     let p = SessionResultParams {
-        session_id: "s1".into(),
+        session_id: test_session_id("s1"),
         total_turns: 5,
         duration_ms: 10_000,
         duration_api_ms: 8_000,
@@ -688,6 +916,7 @@ fn session_result_has_model_usage_and_permission_denials() {
         num_api_calls: Some(3),
     };
     let j = serde_json::to_value(&p).unwrap();
+    assert_eq!(j["session_id"], "s1");
     assert_eq!(j["total_cost_usd"], 0.01);
     assert_eq!(j["model_usage"]["claude-opus"]["input_tokens"], 100);
     assert_eq!(j["permission_denials"][0]["tool_name"], "Bash");
@@ -697,7 +926,7 @@ fn session_result_has_model_usage_and_permission_denials() {
 #[test]
 fn session_started_has_all_init_fields() {
     let p = SessionStartedParams {
-        session_id: "s1".into(),
+        session_id: test_session_id("s1"),
         protocol_version: "1.0".into(),
         cwd: "/tmp".into(),
         model: "claude-opus".into(),
@@ -720,6 +949,7 @@ fn session_started_has_all_init_fields() {
         lsp_active: false,
     };
     let j = serde_json::to_value(&p).unwrap();
+    assert_eq!(j["session_id"], "s1");
     assert_eq!(j["cwd"], "/tmp");
     assert_eq!(j["provider"], "anthropic");
     assert_eq!(j["tools"].as_array().unwrap().len(), 2);

@@ -28,11 +28,13 @@ use coco_messages::HookNonBlockingErrorPayload;
 use coco_types::HookEventType;
 use coco_types::HookOutcome;
 use coco_types::PermissionBehavior;
+use coco_types::SessionId;
 
 use crate::HookExecutionResult;
 use crate::HookHandler;
 use crate::HookRegistry;
-use crate::execute_hook;
+use crate::execute_hook_in_cwd;
+use crate::execute_hook_with_async_options_in_cwd;
 
 /// Default timeout for tool-related hook execution (10 minutes).
 const DEFAULT_HOOK_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -704,6 +706,11 @@ async fn execute_hooks_parallel_filtered(
         };
         let cancel = cancel.clone();
         let env = env_vars.clone();
+        let cwd = env
+            .get("HOOK_CWD")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
         let input_json = hook_input_json.to_string();
         let transcript_history = transcript_history
             .map(render_transcript_history)
@@ -814,6 +821,7 @@ async fn execute_hooks_parallel_filtered(
                         handler: &handler,
                         env_vars: &env,
                         stdin_input: Some(&input_json),
+                        cwd: &cwd,
                         llm_handle: llm_handle_clone.as_ref(),
                         sdk_hook_callback: sdk_hook_callback.as_ref(),
                         event,
@@ -1415,7 +1423,7 @@ fn apply_hook_specific_output(
 /// Context passed to all orchestration functions.
 #[derive(Debug, Clone)]
 pub struct OrchestrationContext {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub cwd: PathBuf,
     pub project_dir: Option<PathBuf>,
     pub permission_mode: Option<String>,
@@ -1492,7 +1500,7 @@ pub async fn execute_event(
     }
     let json_input = serde_json::to_string(input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         match_value,
         event,
@@ -1541,7 +1549,7 @@ pub async fn execute_pre_tool_use(
 
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         Some(tool_name),
         HookEventType::PreToolUse,
@@ -1595,7 +1603,7 @@ pub async fn execute_post_tool_use(
 
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         Some(tool_name),
         HookEventType::PostToolUse,
@@ -1654,7 +1662,7 @@ pub async fn execute_post_tool_use_failure(
 
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         Some(tool_name),
         HookEventType::PostToolUseFailure,
@@ -1705,7 +1713,7 @@ pub async fn execute_pre_compact(
 
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::PreCompact,
@@ -1793,7 +1801,7 @@ pub async fn execute_post_compact(
 
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::PostCompact,
@@ -1903,7 +1911,7 @@ async fn execute_session_start_raw(
 
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::SessionStart,
@@ -1958,7 +1966,7 @@ pub async fn execute_user_prompt_submit(
 
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::UserPromptSubmit,
@@ -2102,7 +2110,7 @@ pub async fn execute_subagent_start(
 
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::SubagentStart,
@@ -2166,7 +2174,7 @@ pub async fn execute_subagent_stop(
 
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::SubagentStop,
@@ -2214,7 +2222,7 @@ pub async fn execute_session_end(
 
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::SessionEnd,
@@ -2275,7 +2283,7 @@ pub async fn execute_stop(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::Stop,
@@ -2436,7 +2444,7 @@ pub async fn execute_stop_failure(
 
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::StopFailure,
@@ -2491,7 +2499,7 @@ pub async fn execute_setup(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::Setup,
@@ -2544,7 +2552,7 @@ pub async fn execute_notification(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::Notification,
@@ -2599,7 +2607,7 @@ pub async fn execute_permission_request(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         Some(tool_name),
         HookEventType::PermissionRequest,
@@ -2655,7 +2663,7 @@ pub async fn execute_permission_denied(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         Some(tool_name),
         HookEventType::PermissionDenied,
@@ -2715,7 +2723,7 @@ pub async fn execute_elicitation(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::Elicitation,
@@ -2772,7 +2780,7 @@ pub async fn execute_elicitation_result(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::ElicitationResult,
@@ -2821,7 +2829,7 @@ pub async fn execute_config_change(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::ConfigChange,
@@ -2881,7 +2889,7 @@ pub async fn execute_instructions_loaded(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::InstructionsLoaded,
@@ -2930,7 +2938,7 @@ pub async fn execute_cwd_changed(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         new_cwd,
         None,
         HookEventType::CwdChanged,
@@ -2981,7 +2989,7 @@ pub async fn execute_file_changed(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::FileChanged,
@@ -3034,7 +3042,7 @@ pub async fn execute_worktree_create(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::WorktreeCreate,
@@ -3081,7 +3089,7 @@ pub async fn execute_worktree_remove(
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         HookEventType::WorktreeRemove,
@@ -3128,7 +3136,7 @@ async fn run_event_with_input<I: serde::Serialize>(
     }
     let json_input = serde_json::to_string(input)?;
     let env = build_hook_env(
-        &ctx.session_id,
+        ctx.session_id.as_str(),
         &ctx.cwd.to_string_lossy(),
         None,
         event,
@@ -3251,6 +3259,7 @@ struct HookExecutionRequest<'a> {
     handler: &'a HookHandler,
     env_vars: &'a std::collections::HashMap<String, String>,
     stdin_input: Option<&'a str>,
+    cwd: &'a std::path::Path,
     llm_handle: Option<&'a std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
     sdk_hook_callback: Option<&'a crate::SdkHookCallback>,
     event: HookEventType,
@@ -3268,6 +3277,7 @@ async fn run_hook_via_handle_or_fallback(
         handler,
         env_vars,
         stdin_input,
+        cwd,
         llm_handle,
         sdk_hook_callback,
         event,
@@ -3314,10 +3324,10 @@ async fn run_hook_via_handle_or_fallback(
     let Some(llm) = llm_handle else {
         return match async_options {
             Some(options) => {
-                crate::execute_hook_with_async_options(handler, env_vars, stdin_input, options)
+                execute_hook_with_async_options_in_cwd(handler, env_vars, stdin_input, options, cwd)
                     .await
             }
-            None => execute_hook(handler, env_vars, stdin_input).await,
+            None => execute_hook_in_cwd(handler, env_vars, stdin_input, cwd).await,
         };
     };
 
@@ -3328,10 +3338,16 @@ async fn run_hook_via_handle_or_fallback(
         _ => {
             return match async_options {
                 Some(options) => {
-                    crate::execute_hook_with_async_options(handler, env_vars, stdin_input, options)
-                        .await
+                    execute_hook_with_async_options_in_cwd(
+                        handler,
+                        env_vars,
+                        stdin_input,
+                        options,
+                        cwd,
+                    )
+                    .await
                 }
-                None => execute_hook(handler, env_vars, stdin_input).await,
+                None => execute_hook_in_cwd(handler, env_vars, stdin_input, cwd).await,
             };
         }
     };

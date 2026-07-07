@@ -15,10 +15,11 @@ use crate::HookHandler;
 use crate::HookRegistry;
 
 fn test_ctx() -> OrchestrationContext {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     OrchestrationContext {
-        session_id: "test-session-123".to_string(),
-        cwd: PathBuf::from("/tmp/test"),
-        project_dir: Some(PathBuf::from("/tmp/project")),
+        session_id: coco_types::SessionId::try_new("test-session-123").unwrap(),
+        cwd: cwd.clone(),
+        project_dir: Some(cwd),
         permission_mode: Some("default".to_string()),
         transcript_path: None,
         agent_id: None,

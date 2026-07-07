@@ -71,6 +71,9 @@ pub struct CliInitializeBootstrap {
     /// resolved through [`coco_subagent::BuiltinAgentCatalog::interactive`]
     /// are always included on top.
     pub agent_search_paths: AgentSearchPaths,
+    /// Workspace cwd captured by the SDK-mode bootstrap path. Used for
+    /// initialize-time agent snapshot inspection before a session exists.
+    pub cwd: std::path::PathBuf,
     /// Resolved auth method for the active session. Controls how
     /// `account()` maps to [`coco_types::SdkAccountInfo`]. `None` →
     /// no auth configured, empty account.
@@ -86,8 +89,14 @@ impl CliInitializeBootstrap {
             output_style,
             available_styles: BUILTIN_OUTPUT_STYLES.iter().map(|s| (*s).into()).collect(),
             agent_search_paths: AgentSearchPaths::empty(),
+            cwd: std::path::PathBuf::from("."),
             auth_method: None,
         }
+    }
+
+    pub fn with_cwd(mut self, cwd: std::path::PathBuf) -> Self {
+        self.cwd = cwd;
+        self
     }
 
     pub fn with_command_registry(
@@ -152,7 +161,7 @@ impl InitializeBootstrap for CliInitializeBootstrap {
         // timestamp so the SDK's `initialize.agents` listing surfaces drift
         // to clients. The closure runs blocking IO inside the spawn_blocking
         // closure below, so its captured paths are owned `PathBuf`s.
-        let cwd = std::env::current_dir().unwrap_or_default();
+        let cwd = self.cwd.clone();
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
         tokio::task::spawn_blocking(move || {
             let mut store = AgentDefinitionStore::new(BuiltinAgentCatalog::interactive(), paths);
@@ -204,6 +213,10 @@ impl InitializeBootstrap for CliInitializeBootstrap {
         // not currently exposed. Advertise `None` until an accessor
         // lands.
         None
+    }
+
+    async fn cwd(&self) -> std::path::PathBuf {
+        self.cwd.clone()
     }
 }
 

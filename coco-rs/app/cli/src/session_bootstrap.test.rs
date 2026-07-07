@@ -18,6 +18,7 @@ use tempfile::TempDir;
 
 use crate::Cli;
 use crate::session_bootstrap::install_session_late_binds;
+use crate::session_runtime::SessionHandle;
 use crate::session_runtime::SessionRuntime;
 use crate::session_runtime::SessionRuntimeBuildOpts;
 
@@ -81,6 +82,10 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         permission_bridge: None,
         command_registry,
         skill_manager,
+        project_services: Arc::new(crate::project_services::ProjectServices::load(
+            home.path(),
+            home.path(),
+        )),
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
@@ -96,7 +101,7 @@ async fn install_session_late_binds_populates_every_slot_without_mcp() {
     let runtime = build_runtime(&home).await;
     let cwd = home.path().to_path_buf();
 
-    install_session_late_binds(runtime.clone(), &cwd, None, None, None)
+    install_session_late_binds(SessionHandle::new(runtime.clone()), &cwd, None, None, None)
         .await
         .expect("install_session_late_binds");
 
@@ -130,9 +135,15 @@ async fn install_session_late_binds_attaches_mcp_when_some() {
 
     let mcp_handle: coco_tool_runtime::McpHandleRef = Arc::new(coco_tool_runtime::NoOpMcpHandle);
 
-    install_session_late_binds(runtime.clone(), &cwd, Some(mcp_handle), None, None)
-        .await
-        .expect("install_session_late_binds");
+    install_session_late_binds(
+        SessionHandle::new(runtime.clone()),
+        &cwd,
+        Some(mcp_handle),
+        None,
+        None,
+    )
+    .await
+    .expect("install_session_late_binds");
 
     assert!(
         runtime.current_mcp_handle().await.is_some(),
@@ -150,7 +161,10 @@ async fn bootstrap_session_mcp_attaches_handle_and_manager_with_no_servers() {
     // still attach the manager + an `McpManagerAdapter` handle (the background
     // connect pass simply has nothing to connect).
     crate::session_bootstrap::bootstrap_session_mcp(
-        &runtime, &cwd, None, /*await_connect*/ true,
+        &SessionHandle::new(runtime.clone()),
+        &cwd,
+        None,
+        /*await_connect*/ true,
     )
     .await;
 
@@ -161,7 +175,7 @@ async fn bootstrap_session_mcp_attaches_handle_and_manager_with_no_servers() {
     // A manager is now attached, so `reload_plugin_mcp_servers` runs the manager
     // path (returns 0 servers but bumps the reconnect key from 0 → 1). Without
     // `attach_mcp_manager` it would have no-op'd at key 0.
-    assert_eq!(runtime.reload_plugin_mcp_servers(&cwd).await, 0);
+    assert_eq!(runtime.reload_plugin_mcp_servers().await, 0);
     assert_eq!(runtime.mcp_reconnect_key(), 1);
 }
 
@@ -173,9 +187,15 @@ async fn install_session_late_binds_attaches_lsp_when_some() {
 
     let lsp_handle: coco_tool_runtime::LspHandleRef = Arc::new(coco_tool_runtime::NoOpLspHandle);
 
-    install_session_late_binds(runtime.clone(), &cwd, None, Some(lsp_handle), None)
-        .await
-        .expect("install_session_late_binds");
+    install_session_late_binds(
+        SessionHandle::new(runtime.clone()),
+        &cwd,
+        None,
+        Some(lsp_handle),
+        None,
+    )
+    .await
+    .expect("install_session_late_binds");
 
     assert!(
         runtime.current_lsp_handle().await.is_some(),

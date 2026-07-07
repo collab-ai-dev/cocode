@@ -13,6 +13,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 
+fn test_session_id() -> coco_types::SessionId {
+    coco_types::SessionId::try_new("test-session").unwrap()
+}
+
 #[test]
 fn test_for_label_is_cache_safe() {
     // The cache-safe defaults are what `/btw` / promptSuggestion /
@@ -80,7 +84,7 @@ fn test_build_query_config_inherits_prompt_cache_and_sets_skip_cache_write() {
     };
     let options = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
 
-    let config = build_query_config(&cache, &options, "test-session");
+    let config = build_query_config(&cache, &options, &test_session_id());
 
     let prompt_cache = config
         .prompt_cache
@@ -125,13 +129,13 @@ fn test_build_query_config_mirrors_parent_effective_effort() {
     let config = build_query_config(
         &cache_with_effort(Some(coco_types::ReasoningEffort::High)),
         &options,
-        "test-session",
+        &test_session_id(),
     );
     assert_eq!(config.effort, Some(coco_types::ReasoningEffort::High));
 
     // Parent ran on the model default → fork stays None (same model ⇒
     // same default ⇒ parity without a snapshot).
-    let config = build_query_config(&cache_with_effort(None), &options, "test-session");
+    let config = build_query_config(&cache_with_effort(None), &options, &test_session_id());
     assert_eq!(config.effort, None);
 
     // An explicit per-fork override (deliberately cache-busting) still
@@ -141,7 +145,7 @@ fn test_build_query_config_mirrors_parent_effective_effort() {
     let config = build_query_config(
         &cache_with_effort(Some(coco_types::ReasoningEffort::High)),
         &options,
-        "test-session",
+        &test_session_id(),
     );
     assert_eq!(config.effort, Some(coco_types::ReasoningEffort::Low));
 }

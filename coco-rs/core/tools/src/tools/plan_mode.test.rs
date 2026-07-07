@@ -57,7 +57,7 @@ async fn execute_and_apply_patch(
 #[tokio::test]
 async fn enter_plan_mode_rejects_in_agent_context() {
     let mut ctx = ctx_with_mode(PermissionMode::Default);
-    ctx.agent_id = Some(AgentId::new("aabcdef0"));
+    ctx.agent_id = Some(AgentId::try_new("aabcdef0").unwrap());
     let validation =
         <EnterPlanModeTool as DynTool>::validate_input(&EnterPlanModeTool, &json!({}), &ctx);
     match validation {
@@ -1431,6 +1431,33 @@ async fn exit_plan_mode_approved_edit_without_path_returns_typed_error() {
 }
 
 #[tokio::test]
+async fn exit_plan_mode_approved_edit_rejects_unsafe_session_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.plans_dir = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some("bad/session".into());
+    ctx.permission_resolution_detail = Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+        choice: coco_types::ExitPlanChoice::KeepDefault,
+        edited_plan: Some("edited plan".into()),
+    });
+
+    let err = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await
+    .expect_err("unsafe session id must be rejected");
+
+    match err {
+        coco_tool_runtime::ToolError::ExecutionFailed { message, .. } => {
+            assert!(message.contains("session_id_for_history"), "got: {message}");
+        }
+        other => panic!("expected ExecutionFailed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn exit_plan_mode_no_plan_notice_is_not_saved_as_plan() {
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -1722,7 +1749,7 @@ async fn teammate_exit_plan_writes_approval_request_to_team_lead() {
     // The tool falls back to `ctx.agent_id` when env vars aren't set,
     // so we can control identity without mutating the global env
     // (`env::set_var` is unsafe in newer Rust + banned by CLAUDE.md).
-    ctx.agent_id = Some(coco_types::AgentId::new("alice"));
+    ctx.agent_id = Some(coco_types::AgentId::try_new("alice").unwrap());
 
     let mut result = <ExitPlanModeTool as DynTool>::execute(
         &ExitPlanModeTool,
@@ -1858,7 +1885,7 @@ async fn teammate_exit_plan_with_blank_plan_file_errors() {
         .into(),
     );
     ctx.mailbox = capture.clone();
-    ctx.agent_id = Some(coco_types::AgentId::new("alice"));
+    ctx.agent_id = Some(coco_types::AgentId::try_new("alice").unwrap());
 
     let result = <ExitPlanModeTool as DynTool>::execute(
         &ExitPlanModeTool,

@@ -8,7 +8,6 @@
 //! transcript response.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Duration;
 
 use coco_types::CoreEvent;
@@ -17,6 +16,7 @@ use coco_types::ProviderApi;
 use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
+use crate::session_runtime::SessionHandle;
 use crate::session_runtime::SessionRuntime;
 
 /// Hard cap so a hung `/models` request can never wedge the refresh task.
@@ -27,11 +27,12 @@ const DISCOVERY_HTTP_TIMEOUT_SECS: i64 = 20;
 /// Spawn a background `/models` refresh for the just-logged-in `instance`.
 /// A no-op for non-OpenAI providers (the task exits before emitting anything).
 pub fn spawn_after_login(
-    runtime: Arc<SessionRuntime>,
+    session: SessionHandle,
     instance: String,
     event_tx: mpsc::Sender<CoreEvent>,
     base_catalog: Vec<ModelCatalogInfo>,
 ) {
+    let runtime = session.runtime().clone();
     tokio::spawn(async move {
         let Some(discovered) = discover(&runtime, &instance).await else {
             return;

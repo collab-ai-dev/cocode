@@ -7,6 +7,7 @@
 use coco_types::ApprovalResolveParams;
 use coco_types::CoreEvent;
 use coco_types::ElicitationResolveParams;
+use coco_types::TurnId;
 use coco_types::TurnStartParams;
 use coco_types::UserInputResolveParams;
 use tokio::sync::mpsc;
@@ -64,7 +65,10 @@ pub(super) async fn handle_turn_start(
             };
         }
         session.turn_counter = session.turn_counter.saturating_add(1);
-        let turn_id = format!("turn-{}-{}", session.session_id, session.turn_counter);
+        let turn_id = TurnId::from(format!(
+            "turn-{}-{}",
+            session.session_id, session.turn_counter
+        ));
         let cancel_token = CancellationToken::new();
         session.active_turn_cancel = Some(cancel_token.clone());
         // Narrow handoff built under the lock — avoids cloning `stats` /

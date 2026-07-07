@@ -4,6 +4,7 @@ use coco_inference::ModelRuntimeSnapshot;
 use coco_messages::CostTracker;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
+use coco_types::SessionId;
 use coco_types::SessionUsageSnapshot;
 use coco_types::TokenUsage;
 use coco_types::UsageAttribution;
@@ -14,12 +15,12 @@ use tokio::sync::mpsc;
 
 #[derive(Clone)]
 pub struct UsageAccounting {
-    session_id: Arc<RwLock<String>>,
+    session_id: Arc<RwLock<SessionId>>,
     tracker: Arc<Mutex<CostTracker>>,
     write_lock: Arc<Mutex<()>>,
     transcript_store: Option<Arc<dyn coco_session::SessionStore>>,
     persist_session: bool,
-    event_tx: Option<Arc<RwLock<Option<mpsc::Sender<CoreEvent>>>>>,
+    event_tx: Arc<RwLock<Option<mpsc::Sender<CoreEvent>>>>,
     base_attribution: UsageAttribution,
 }
 
@@ -42,35 +43,40 @@ impl std::fmt::Debug for UsageAccounting {
 }
 
 impl UsageAccounting {
-    pub fn new(
-        session_id: Arc<RwLock<String>>,
+    pub fn new(session_id: SessionId, base_attribution: UsageAttribution) -> Self {
+        Self::with_tracker(
+            session_id,
+            Arc::new(Mutex::new(CostTracker::default())),
+            Arc::new(Mutex::new(())),
+            base_attribution,
+        )
+    }
+
+    fn with_tracker(
+        session_id: SessionId,
         tracker: Arc<Mutex<CostTracker>>,
         write_lock: Arc<Mutex<()>>,
         base_attribution: UsageAttribution,
     ) -> Self {
         Self {
-            session_id,
+            session_id: Arc::new(RwLock::new(session_id)),
             tracker,
             write_lock,
             transcript_store: None,
             persist_session: false,
-            event_tx: None,
+            event_tx: Arc::new(RwLock::new(None)),
             base_attribution,
         }
     }
 
-    pub fn for_static_session(
-        session_id: impl Into<String>,
+    #[cfg(test)]
+    pub(crate) fn for_static_session(
+        session_id: SessionId,
         tracker: Arc<Mutex<CostTracker>>,
         write_lock: Arc<Mutex<()>>,
         base_attribution: UsageAttribution,
     ) -> Self {
-        Self::new(
-            Arc::new(RwLock::new(session_id.into())),
-            tracker,
-            write_lock,
-            base_attribution,
-        )
+        Self::with_tracker(session_id, tracker, write_lock, base_attribution)
     }
 
     pub fn with_persistence(
@@ -83,9 +89,8 @@ impl UsageAccounting {
         self
     }
 
-    pub fn with_event_tx(mut self, event_tx: Arc<RwLock<Option<mpsc::Sender<CoreEvent>>>>) -> Self {
-        self.event_tx = Some(event_tx);
-        self
+    pub async fn install_event_tx(&self, event_tx: mpsc::Sender<CoreEvent>) {
+        *self.event_tx.write().await = Some(event_tx);
     }
 
     pub fn with_base_attribution(mut self, attribution: UsageAttribution) -> Self {
@@ -93,17 +98,102 @@ impl UsageAccounting {
         self
     }
 
-    pub fn tracker(&self) -> Arc<Mutex<CostTracker>> {
-        self.tracker.clone()
+    pub async fn load_current_session_tracker_from_store(&self) {
+        let _write_guard = self.write_lock.lock().await;
+        let session_id = self.session_id.read().await.clone();
+        let tracker = self.load_tracker_from_store(&session_id).await;
+        self.replace_tracker(tracker).await;
     }
 
-    pub fn write_lock(&self) -> Arc<Mutex<()>> {
-        self.write_lock.clone()
+    pub async fn retarget_to_loaded_session(&self, session_id: SessionId) {
+        let _write_guard = self.write_lock.lock().await;
+        let tracker = self.load_tracker_from_store(&session_id).await;
+        self.retarget_session_id(session_id).await;
+        self.replace_tracker(tracker).await;
+    }
+
+    pub async fn retarget_to_empty_session(&self, session_id: SessionId) {
+        let _write_guard = self.write_lock.lock().await;
+        self.retarget_session_id(session_id).await;
+        self.reset_tracker().await;
+    }
+
+    async fn retarget_session_id(&self, session_id: SessionId) {
+        *self.session_id.write().await = session_id;
+    }
+
+    async fn replace_tracker(&self, tracker: CostTracker) {
+        *self.tracker.lock().await = tracker;
+    }
+
+    async fn reset_tracker(&self) {
+        self.replace_tracker(CostTracker::new()).await;
+    }
+
+    async fn load_tracker_from_store(&self, session_id: &SessionId) -> CostTracker {
+        let Some(store) = &self.transcript_store else {
+            return CostTracker::new();
+        };
+
+        let store = Arc::clone(store);
+        let session_id_for_load = session_id.to_string();
+        let session_id_for_log = session_id_for_load.clone();
+        match tokio::task::spawn_blocking(move || store.load_usage_snapshot(&session_id_for_load))
+            .await
+        {
+            Ok(Ok(Some(snapshot))) => CostTracker::from_snapshot(snapshot),
+            Ok(Ok(None)) => CostTracker::new(),
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    error = %e,
+                    session_id = %session_id_for_log,
+                    "failed to load session usage snapshot"
+                );
+                CostTracker::new()
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    session_id = %session_id_for_log,
+                    "session usage load task failed"
+                );
+                CostTracker::new()
+            }
+        }
     }
 
     pub async fn snapshot(&self) -> SessionUsageSnapshot {
         let session_id = self.session_id.read().await.clone();
         self.tracker.lock().await.snapshot(session_id)
+    }
+
+    pub async fn flush_snapshot(&self) {
+        if !self.persist_session {
+            return;
+        }
+
+        let Some(store) = &self.transcript_store else {
+            return;
+        };
+
+        let _write_guard = self.write_lock.lock().await;
+        let session_id = self.session_id.read().await.clone();
+        let snapshot = self.tracker.lock().await.snapshot(session_id.clone());
+        let store = Arc::clone(store);
+        let session_id_for_write = session_id.clone();
+        match tokio::task::spawn_blocking(move || {
+            store.write_usage_snapshot(session_id_for_write.as_str(), &snapshot)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, session_id = %session_id, "failed to flush usage snapshot");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, session_id = %session_id, "usage snapshot flush task failed");
+            }
+        }
     }
 
     pub async fn record_snapshot_usage(
@@ -150,7 +240,7 @@ impl UsageAccounting {
                 duration_ms,
                 self.attribution_for(source),
             );
-            let mut snapshot = guard.snapshot(&session_id);
+            let mut snapshot = guard.snapshot(session_id.clone());
             snapshot.auto_compact_threshold = auto_compact_threshold;
             snapshot
         };
@@ -162,7 +252,7 @@ impl UsageAccounting {
             let session_id_for_write = session_id.clone();
             let snapshot_for_write = usage_snapshot.clone();
             match tokio::task::spawn_blocking(move || {
-                store.write_usage_snapshot(&session_id_for_write, &snapshot_for_write)
+                store.write_usage_snapshot(session_id_for_write.as_str(), &snapshot_for_write)
             })
             .await
             {
@@ -170,14 +260,14 @@ impl UsageAccounting {
                 Ok(Err(e)) => {
                     tracing::warn!(
                         error = %e,
-                        session_id,
+                        session_id = %session_id,
                         "failed to write usage snapshot"
                     );
                 }
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        session_id,
+                        session_id = %session_id,
                         "usage snapshot write task failed"
                     );
                 }
@@ -193,9 +283,7 @@ impl UsageAccounting {
             return;
         }
 
-        if let Some(event_tx) = &self.event_tx
-            && let Some(tx) = event_tx.read().await.clone()
-        {
+        if let Some(tx) = self.event_tx.read().await.clone() {
             let _ = tx
                 .send(CoreEvent::Protocol(
                     ServerNotification::SessionUsageUpdated(Box::new(usage_snapshot)),
@@ -210,3 +298,7 @@ impl UsageAccounting {
         attribution
     }
 }
+
+#[cfg(test)]
+#[path = "usage_accounting.test.rs"]
+mod tests;

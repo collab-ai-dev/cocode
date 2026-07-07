@@ -33,6 +33,7 @@
 //! mirrors the `coco-session` PID-registry IO idioms.
 
 use coco_session::SessionKind;
+use coco_types::SessionId;
 use coco_types::TaskStatus;
 use serde::Deserialize;
 use serde::Serialize;
@@ -51,7 +52,7 @@ pub struct JobState {
     pub id: String,
     /// Session this job belongs to — the merge key against the PID
     /// registry's `SessionRegistration.session_id`.
-    pub session_id: String,
+    pub session_id: SessionId,
     pub cwd: PathBuf,
     pub kind: SessionKind,
     /// Unix-ms timestamp.

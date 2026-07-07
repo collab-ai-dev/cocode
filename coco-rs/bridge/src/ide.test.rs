@@ -1,7 +1,12 @@
+use coco_types::SessionId;
 use coco_types::ToolName;
 use pretty_assertions::assert_eq;
 
 use super::*;
+
+fn test_session_id(id: &str) -> SessionId {
+    SessionId::try_new(id).expect("valid test session id")
+}
 
 #[test]
 fn test_ide_bridge_message_file_open_serialization() {
@@ -83,7 +88,7 @@ fn test_ide_bridge_message_diagnostic_serialization() {
 #[test]
 fn test_ide_bridge_message_status_update_serialization() {
     let msg = IdeBridgeMessage::StatusUpdate {
-        session_id: "session-123".to_string(),
+        session_id: test_session_id("session-123"),
         state: SessionState::Running,
         model: Some("claude-3-5-sonnet".to_string()),
         activity: Some(SessionActivity {
@@ -104,7 +109,7 @@ fn test_ide_bridge_message_status_update_serialization() {
             model,
             activity,
         } => {
-            assert_eq!(session_id, "session-123");
+            assert_eq!(session_id.as_str(), "session-123");
             assert_eq!(state, SessionState::Running);
             assert_eq!(model.as_deref(), Some("claude-3-5-sonnet"));
             assert!(activity.is_some());
@@ -274,6 +279,7 @@ async fn test_ide_bridge_server_incoming_channel() {
 async fn test_ide_bridge_server_record_activity() {
     let server = IdeBridgeServer::new();
     let _rx = server.subscribe_outgoing();
+    let session_id = test_session_id("session-1");
 
     let activity = SessionActivity {
         activity_type: ActivityType::ToolStart,
@@ -282,11 +288,11 @@ async fn test_ide_bridge_server_record_activity() {
     };
 
     server
-        .record_activity("session-1", activity)
+        .record_activity(&session_id, activity)
         .await
         .unwrap();
 
-    let activities = server.recent_activities("session-1").await;
+    let activities = server.recent_activities(&session_id).await;
     assert_eq!(activities.len(), 1);
     assert_eq!(activities[0].summary, "Reading file");
 }
@@ -295,6 +301,7 @@ async fn test_ide_bridge_server_record_activity() {
 async fn test_ide_bridge_server_activity_bounded() {
     let server = IdeBridgeServer::new();
     let _rx = server.subscribe_outgoing();
+    let session_id = test_session_id("session-1");
 
     // Add more than MAX_ACTIVITIES
     for i in 0..MAX_ACTIVITIES + 5 {
@@ -304,12 +311,12 @@ async fn test_ide_bridge_server_activity_bounded() {
             timestamp: i as i64,
         };
         server
-            .record_activity("session-1", activity)
+            .record_activity(&session_id, activity)
             .await
             .unwrap();
     }
 
-    let activities = server.recent_activities("session-1").await;
+    let activities = server.recent_activities(&session_id).await;
     assert_eq!(activities.len(), MAX_ACTIVITIES);
     // Should have the latest activities
     assert_eq!(activities[0].summary, "Activity 5");
@@ -339,7 +346,12 @@ async fn test_ide_bridge_server_send_status() {
     let mut rx = server.subscribe_outgoing();
 
     server
-        .send_status("s1", SessionState::Completed, Some("claude"), None)
+        .send_status(
+            &test_session_id("s1"),
+            SessionState::Completed,
+            Some("claude"),
+            None,
+        )
         .unwrap();
 
     let msg = rx.recv().await.unwrap();
@@ -350,7 +362,7 @@ async fn test_ide_bridge_server_send_status() {
             model,
             ..
         } => {
-            assert_eq!(session_id, "s1");
+            assert_eq!(session_id.as_str(), "s1");
             assert_eq!(state, SessionState::Completed);
             assert_eq!(model.as_deref(), Some("claude"));
         }

@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
+use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -17,9 +18,9 @@ use coco_types::ProviderModelSelection;
 use serde_json::Map;
 use serde_json::Value;
 
-pub fn handle_moa(action: &MoaAction) -> Result<()> {
+pub fn handle_moa(action: &MoaAction, cwd: &Path) -> Result<()> {
     match action {
-        MoaAction::List => list_presets(),
+        MoaAction::List => list_presets(cwd),
         MoaAction::Configure {
             name,
             aggregator,
@@ -142,9 +143,8 @@ fn delete_preset(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn list_presets() -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let settings = coco_config::settings::load_settings(&cwd, None)?;
+fn list_presets(cwd: &Path) -> Result<()> {
+    let settings = coco_config::settings::load_settings(cwd, None)?;
     let moa = &settings.merged.moa;
     if moa.presets.is_empty() {
         println!("No MoA presets configured.");

@@ -312,12 +312,11 @@ async fn build_dialog_payload_loads_coco_skills_dir_too() {
 #[tokio::test]
 async fn skills_handler_no_args_opens_dialog() {
     // No-args path emits OpenDialog so the TUI gets a real overlay.
-    let h = SkillsHandler;
+    let tmp = tempfile::tempdir().unwrap();
+    let h = SkillsHandler::new(tmp.path().join("project"));
     let result = h.execute_command("").await.unwrap();
-    // Variant shape only — entry contents depend on the process cwd
-    // (`SkillsHandler` uses `std::env::current_dir()`), so a content
-    // assertion would be flaky across test runners. Content checks
-    // live in `build_dialog_payload_*` tests with controlled tmpdirs.
+    // Variant shape only; content checks live in `build_dialog_payload_*`
+    // tests with controlled tmpdirs.
     assert!(
         matches!(
             result,
@@ -370,7 +369,8 @@ async fn build_dialog_payload_includes_bundled_skills_as_built_in_source() {
 #[tokio::test]
 async fn skills_handler_with_args_returns_text() {
     // Sub-command path stays text so SDK / scripted callers can parse it.
-    let h = SkillsHandler;
+    let tmp = tempfile::tempdir().unwrap();
+    let h = SkillsHandler::new(tmp.path().join("project"));
     let result = h.execute_command("list").await.unwrap();
     match result {
         CommandResult::Text(out) => {

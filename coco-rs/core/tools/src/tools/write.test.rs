@@ -232,7 +232,7 @@ fn validate_blocks_subagent_report_files() {
 
     // Subagent writing a REPORT*.md → blocked with errorCode 5.
     let mut sub_ctx = ToolUseContext::test_default();
-    sub_ctx.agent_id = Some(AgentId::new("subagent-1"));
+    sub_ctx.agent_id = Some(AgentId::try_new("subagent-1").unwrap());
     match Tool::validate_input(&WriteTool, &report, &sub_ctx) {
         ValidationResult::Invalid { error_code, .. } => {
             assert_eq!(error_code.as_deref(), Some("5"));

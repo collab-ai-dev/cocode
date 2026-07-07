@@ -28,6 +28,13 @@ struct PluginEntry {
 pub fn handler(
     args: String,
 ) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
+    handler_with_cwd(args, PathBuf::from("."))
+}
+
+fn handler_with_cwd(
+    args: String,
+    cwd: PathBuf,
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let subcommand = args.trim().to_string();
 
@@ -47,11 +54,11 @@ pub fn handler(
                 } else if let Some(query) = subcommand.strip_prefix("search ") {
                     search_plugins(query.trim()).await
                 } else if let Some(name) = subcommand.strip_prefix("enable ") {
-                    enable_plugin(name.trim()).await
+                    enable_plugin(name.trim(), &cwd).await
                 } else if let Some(name) = subcommand.strip_prefix("disable ") {
-                    disable_plugin(name.trim()).await
+                    disable_plugin(name.trim(), &cwd).await
                 } else if let Some(mkt_args) = subcommand.strip_prefix("marketplace ") {
-                    marketplace_subcommand(mkt_args.trim()).await
+                    marketplace_subcommand(mkt_args.trim(), &cwd).await
                 } else {
                     Ok(plugin_usage())
                 }
@@ -65,7 +72,15 @@ pub fn handler(
 /// Bare `/plugin`, `/plugins`, and `/marketplace` open the plugin manager
 /// overlay. Explicit subcommands keep the legacy text path
 /// so headless/scripted use remains stable.
-pub struct PluginHandler;
+pub struct PluginHandler {
+    cwd: PathBuf,
+}
+
+impl PluginHandler {
+    pub fn new(cwd: PathBuf) -> Self {
+        Self { cwd }
+    }
+}
 
 #[async_trait]
 impl CommandHandler for PluginHandler {
@@ -73,7 +88,9 @@ impl CommandHandler for PluginHandler {
         if args.trim().is_empty() {
             return Ok(CommandResult::OpenDialog(DialogSpec::PluginPicker));
         }
-        Ok(CommandResult::Text(handler(args.to_string()).await?))
+        Ok(CommandResult::Text(
+            handler_with_cwd(args.to_string(), self.cwd.clone()).await?,
+        ))
     }
 
     fn handler_name(&self) -> &str {
@@ -511,11 +528,11 @@ fn settings_dir_for_plugins() -> PathBuf {
 /// Enable a plugin: set `enabled_plugins[<id>].enabled = true` in settings.json
 /// — the single source of truth the loader and policy layer read.
 /// The orphaned `disabled_plugins.json` is gone.
-async fn enable_plugin(name: &str) -> crate::Result<String> {
+async fn enable_plugin(name: &str, cwd: &Path) -> crate::Result<String> {
     if name.is_empty() {
         return Ok("Usage: /plugin enable <name>".to_string());
     }
-    let Some(plugin_id) = resolve_installed_plugin_id(name) else {
+    let Some(plugin_id) = resolve_installed_plugin_id(name, cwd) else {
         return Ok(format!("Plugin '{name}' not found."));
     };
     // Enterprise-policy guard: org-blocked plugins cannot be enabled at any
@@ -549,11 +566,11 @@ async fn enable_plugin(name: &str) -> crate::Result<String> {
 
 /// Disable a plugin: set `enabled_plugins[<id>].enabled = false` in
 /// settings.json. Same source of truth as enable/install.
-async fn disable_plugin(name: &str) -> crate::Result<String> {
+async fn disable_plugin(name: &str, cwd: &Path) -> crate::Result<String> {
     if name.is_empty() {
         return Ok("Usage: /plugin disable <name>".to_string());
     }
-    let Some(plugin_id) = resolve_installed_plugin_id(name) else {
+    let Some(plugin_id) = resolve_installed_plugin_id(name, cwd) else {
         return Ok(format!("Plugin '{name}' not found."));
     };
     let settings_dir = settings_dir_for_plugins();
@@ -581,17 +598,19 @@ async fn disable_plugin(name: &str) -> crate::Result<String> {
 /// — so `/plugin enable|disable` refuses to silently mutate state for unknown
 /// names, and now works for marketplace plugins the standing-dir scan can't
 /// see.
-fn resolve_installed_plugin_id(name: &str) -> Option<coco_plugins::identifier::PluginId> {
+fn resolve_installed_plugin_id(
+    name: &str,
+    cwd: &Path,
+) -> Option<coco_plugins::identifier::PluginId> {
     let config_home = settings_dir_for_plugins();
-    let cwd = std::env::current_dir().unwrap_or_default();
-    coco_plugins::load_all_installed_plugins(&config_home, &cwd)
+    coco_plugins::load_all_installed_plugins(&config_home, cwd)
         .into_iter()
         .find(|p| p.id.to_string() == name || p.id.name == name)
         .map(|p| coco_plugins::identifier::PluginId::parse(&p.id.to_string()))
 }
 
 /// Marketplace subcommand dispatcher.
-async fn marketplace_subcommand(args: &str) -> crate::Result<String> {
+async fn marketplace_subcommand(args: &str, cwd: &Path) -> crate::Result<String> {
     match args {
         "" | "list" => marketplace_list().await,
         "add" => Ok("Usage: /plugin marketplace add <source>\n\n\
@@ -605,7 +624,7 @@ async fn marketplace_subcommand(args: &str) -> crate::Result<String> {
             if let Some(name) = args.strip_prefix("remove ") {
                 marketplace_remove(name.trim()).await
             } else if let Some(source) = args.strip_prefix("add ") {
-                marketplace_add(source.trim()).await
+                marketplace_add(source.trim(), cwd).await
             } else if let Some(name) = args.strip_prefix("update ") {
                 marketplace_update(name.trim()).await
             } else if args == "update" {
@@ -660,14 +679,15 @@ async fn marketplace_list() -> crate::Result<String> {
 /// Input parsing: SSH git URLs, HTTP/HTTPS (`.git` / Azure `/_git/` → Git
 /// source; github.com → Git with `.git` appended; everything else → Url
 /// source), local paths, and `owner/repo[#ref|@ref]` shorthand.
-async fn marketplace_add(source: &str) -> crate::Result<String> {
+async fn marketplace_add(source: &str, cwd: &Path) -> crate::Result<String> {
     if source.trim().is_empty() {
         return Ok("Usage: /plugin marketplace add <source>".to_string());
     }
 
-    let mkt_source = match coco_plugins::parse_marketplace_input::parse_marketplace_input(
+    let mkt_source = match coco_plugins::parse_marketplace_input::parse_marketplace_input_in_cwd(
         source,
         dirs::home_dir,
+        cwd,
     ) {
         Ok(Some(s)) => s,
         Ok(None) => {

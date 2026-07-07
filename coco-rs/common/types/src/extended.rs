@@ -13,6 +13,11 @@ use crate::PermissionDecision;
 use crate::PermissionMode;
 use crate::PermissionRule;
 use crate::PermissionUpdate;
+use crate::SessionId;
+
+#[cfg(test)]
+#[path = "extended.test.rs"]
+mod tests;
 
 // ============================================================================
 // Hook Extended Types (from hooks.ts)
@@ -334,7 +339,7 @@ pub struct SummaryEntry {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomTitleEntry {
-    pub session_id: Uuid,
+    pub session_id: SessionId,
     pub custom_title: String,
 }
 
@@ -342,7 +347,7 @@ pub struct CustomTitleEntry {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiTitleEntry {
-    pub session_id: Uuid,
+    pub session_id: SessionId,
     pub ai_title: String,
 }
 
@@ -350,7 +355,7 @@ pub struct AiTitleEntry {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagEntry {
-    pub session_id: Uuid,
+    pub session_id: SessionId,
     pub tag: String,
 }
 
@@ -358,7 +363,7 @@ pub struct TagEntry {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentNameEntry {
-    pub session_id: Uuid,
+    pub session_id: SessionId,
     pub agent_name: String,
 }
 
@@ -366,7 +371,7 @@ pub struct AgentNameEntry {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentColorEntry {
-    pub session_id: Uuid,
+    pub session_id: SessionId,
     pub agent_color: String,
 }
 
@@ -374,7 +379,7 @@ pub struct AgentColorEntry {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSettingEntry {
-    pub session_id: Uuid,
+    pub session_id: SessionId,
     pub agent_setting: String,
 }
 
@@ -382,7 +387,7 @@ pub struct AgentSettingEntry {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSummaryEntry {
-    pub session_id: Uuid,
+    pub session_id: SessionId,
     pub summary: String,
     pub timestamp: String,
 }
@@ -391,7 +396,7 @@ pub struct TaskSummaryEntry {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrLinkEntry {
-    pub session_id: Uuid,
+    pub session_id: SessionId,
     pub pr_number: i32,
     pub pr_url: String,
     /// "owner/repo" format.
@@ -421,7 +426,7 @@ pub struct PersistedWorktreeSession {
     pub original_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_head_commit: Option<String>,
-    pub session_id: String,
+    pub session_id: SessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tmux_session_name: Option<String>,
     #[serde(default)]

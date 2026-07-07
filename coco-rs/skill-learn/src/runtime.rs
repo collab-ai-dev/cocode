@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use coco_tool_runtime::{AgentHandleRef, NoOpAgentHandle};
+use coco_types::SessionId;
 use coco_types::messages::Message;
 
 use crate::curator::SkillCurator;
@@ -116,7 +117,7 @@ impl SkillReviewRuntime {
         &self,
         turn_delivered: bool,
         is_subagent: bool,
-        session_id: &str,
+        session_id: &SessionId,
         fork_context: impl FnOnce() -> Vec<Arc<Message>>,
     ) -> ReviewTrigger {
         if !turn_delivered || is_subagent {
@@ -134,7 +135,7 @@ impl SkillReviewRuntime {
         self.turns_since.store(0, Ordering::SeqCst);
         // Only a firing turn pays for the clone (same lazy contract as
         // `fork_context`).
-        let session_id = session_id.to_string();
+        let session_id = session_id.clone();
         let ctx = fork_context();
         let service = self.service.clone();
         let flag = self.in_progress.clone();

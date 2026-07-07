@@ -7,6 +7,7 @@ use coco_session::InMemoryStore;
 use coco_session::TranscriptEntry;
 use coco_session::TranscriptIo;
 use coco_session::TranscriptStore;
+use coco_types::SessionId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -16,6 +17,10 @@ use crate::store::EventQuery;
 use crate::store::EventStore;
 use crate::store::ListInstancesParams;
 use crate::store::SearchQuery;
+
+fn test_session_id(id: &str) -> SessionId {
+    SessionId::try_new(id).expect("valid test session id")
+}
 
 fn seed(memory_base: &Path, cwd: &str, session_id: &str) {
     let paths = Arc::new(coco_paths::ProjectPaths::new(
@@ -28,7 +33,7 @@ fn seed(memory_base: &Path, cwd: &str, session_id: &str) {
         uuid: "u1".into(),
         parent_uuid: None,
         logical_parent_uuid: None,
-        session_id: session_id.into(),
+        session_id: Some(test_session_id(session_id)),
         cwd: cwd.into(),
         timestamp: "2026-05-17T01:00:00Z".into(),
         version: Some("0.0.0".into()),
@@ -47,7 +52,7 @@ fn seed(memory_base: &Path, cwd: &str, session_id: &str) {
         uuid: "a1".into(),
         parent_uuid: Some("u1".into()),
         logical_parent_uuid: None,
-        session_id: session_id.into(),
+        session_id: Some(test_session_id(session_id)),
         cwd: cwd.into(),
         timestamp: "2026-05-17T01:00:02Z".into(),
         version: Some("0.0.0".into()),
@@ -106,7 +111,7 @@ async fn list_events_denormalizes_tool_use_blocks() {
     let events = store
         .list_events(EventQuery {
             instance_id,
-            session_id: Some("session-a".to_string()),
+            session_id: Some(test_session_id("session-a")),
             before: None,
             limit: 100,
             filter: EventFilter::default(),
@@ -161,7 +166,7 @@ async fn list_events_surface_subagent_activity_from_per_agent_files() {
     let events = store
         .list_events(EventQuery {
             instance_id,
-            session_id: Some(sid.to_string()),
+            session_id: Some(test_session_id(sid)),
             before: None,
             limit: 100,
             filter: EventFilter::default(),
@@ -197,7 +202,7 @@ async fn local_hub_reads_from_injected_session_catalog() {
         uuid: "u1".into(),
         parent_uuid: None,
         logical_parent_uuid: None,
-        session_id: session_id.into(),
+        session_id: Some(test_session_id(session_id)),
         cwd: cwd.into(),
         timestamp: "2026-05-17T01:00:00Z".into(),
         version: Some("0.0.0".into()),
@@ -224,7 +229,7 @@ async fn local_hub_reads_from_injected_session_catalog() {
     let events = store
         .list_events(EventQuery {
             instance_id: instance.instance_id,
-            session_id: Some(session_id.to_string()),
+            session_id: Some(test_session_id(session_id)),
             before: None,
             limit: 100,
             filter: EventFilter::default(),
@@ -281,7 +286,7 @@ async fn list_events_returns_stable_pagination_cursors() {
     let first_page = store
         .list_events(EventQuery {
             instance_id: instance_id.clone(),
-            session_id: Some("session-a".to_string()),
+            session_id: Some(test_session_id("session-a")),
             before: None,
             limit: 1,
             filter: EventFilter::default(),
@@ -291,7 +296,7 @@ async fn list_events_returns_stable_pagination_cursors() {
     let second_page = store
         .list_events(EventQuery {
             instance_id,
-            session_id: Some("session-a".to_string()),
+            session_id: Some(test_session_id("session-a")),
             before: first_page.next_cursor.clone(),
             limit: 1,
             filter: EventFilter::default(),
@@ -327,7 +332,10 @@ fn event_rows_do_not_collide_after_many_content_blocks() {
     rows.extend(super::event_rows_from_line(
         "instance", "session", 1, &next_line,
     ));
-    let unique = rows.iter().map(|row| row.seq).collect::<HashSet<_>>();
+    let unique = rows
+        .iter()
+        .map(|row| row.session_seq)
+        .collect::<HashSet<_>>();
 
     assert_eq!(unique.len(), rows.len());
 }

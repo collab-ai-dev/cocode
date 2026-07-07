@@ -9,6 +9,7 @@
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
+use coco_types::TurnId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -18,10 +19,10 @@ use serde::Serialize;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TraceEvent {
     /// A user-prompt cycle began.
-    TurnStarted { turn_id: String },
+    TurnStarted { turn_id: TurnId },
     /// A user-prompt cycle ended (outcome detail intentionally omitted — the
     /// boundary is the durable fact; outcome lives in the transcript).
-    TurnEnded { turn_id: String },
+    TurnEnded { turn_id: TurnId },
     /// A tool call was received from the model (input complete).
     ToolQueued { call_id: String, name: String },
     /// A tool began executing (post permission check).
@@ -113,10 +114,10 @@ impl TraceEvent {
     fn from_protocol(notification: &ServerNotification) -> Option<Self> {
         match notification {
             ServerNotification::TurnStarted(params) => Some(Self::TurnStarted {
-                turn_id: params.turn_id.to_string(),
+                turn_id: params.turn_id.clone(),
             }),
             ServerNotification::TurnEnded(params) => Some(Self::TurnEnded {
-                turn_id: params.turn_id.to_string(),
+                turn_id: params.turn_id.clone(),
             }),
             ServerNotification::CompactionStarted => Some(Self::CompactionStarted),
             ServerNotification::ContextCompacted(_) => Some(Self::ContextCompacted),

@@ -8,6 +8,7 @@
 //! Hook input/output shapes for pre/post tool-use events.
 
 use coco_types::HookEventType;
+use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -232,9 +233,9 @@ pub fn elicitation_action_wire_str(action: ElicitationAction) -> &'static str {
 /// Base fields for all hook inputs. `transcript_path` defaults to
 /// `""` via `base_from_ctx` when no transcript file is being persisted.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaseHookInput {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub cwd: String,
     /// Path to the on-disk transcript file. Empty string when the
     /// session is not persisting a transcript. Defaults to `""` on

@@ -16,7 +16,7 @@ use coco_types::CoreEvent;
 use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
-use crate::session_runtime::SessionRuntime;
+use crate::session_runtime::SessionHandle;
 
 /// Skill directories watched in every interactive session — the same
 /// dirs [`crate::session_runtime::SessionRuntime::reload_plugins`] /
@@ -41,11 +41,12 @@ pub fn default_watch_paths(cwd: &Path, config_home: &Path) -> Vec<PathBuf> {
 /// `None` when construction fails (logged at `warn`); the session
 /// continues without hot-reload rather than aborting.
 pub fn spawn(
-    runtime: Arc<SessionRuntime>,
+    session: SessionHandle,
     notify_tx: mpsc::Sender<CoreEvent>,
     cwd: PathBuf,
     config_home: PathBuf,
 ) -> Option<Arc<SkillChangeDetector>> {
+    let runtime = session.runtime().clone();
     let scopes = session_reload_scopes(&config_home, &cwd);
     match SkillChangeDetector::new(runtime.skill_manager(), scopes) {
         Ok(detector) => {

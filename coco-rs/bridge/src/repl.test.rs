@@ -1,6 +1,11 @@
+use coco_types::SessionId;
 use pretty_assertions::assert_eq;
 
 use super::*;
+
+fn test_session_id(id: &str) -> SessionId {
+    SessionId::try_new(id).expect("valid test session id")
+}
 
 #[test]
 fn test_repl_in_message_user_serialization() {
@@ -85,7 +90,7 @@ fn test_repl_out_message_stream_event_serialization() {
 fn test_repl_out_message_result_serialization() {
     let msg = ReplOutMessage::Result {
         text: "done".to_string(),
-        session_id: Some("sess-1".to_string()),
+        session_id: Some(test_session_id("sess-1")),
     };
     let json = serde_json::to_string(&msg).unwrap();
     assert!(json.contains("\"type\":\"result\""));
@@ -152,7 +157,7 @@ fn test_decode_repl_ndjson_with_whitespace() {
 
 #[tokio::test]
 async fn test_repl_bridge_creation() {
-    let bridge = ReplBridge::new("test-session".to_string());
+    let bridge = ReplBridge::new(test_session_id("test-session"));
     assert_eq!(bridge.session_id(), "test-session");
     assert_eq!(bridge.state(), BridgeState::Idle);
     assert_eq!(bridge.buffer_len().await, 0);
@@ -160,7 +165,7 @@ async fn test_repl_bridge_creation() {
 
 #[tokio::test]
 async fn test_repl_bridge_state_transitions() {
-    let bridge = ReplBridge::new("sess-1".to_string());
+    let bridge = ReplBridge::new(test_session_id("sess-1"));
     let mut rx = bridge.watch_state();
 
     assert_eq!(bridge.state(), BridgeState::Idle);
@@ -180,7 +185,7 @@ async fn test_repl_bridge_state_transitions() {
 
 #[tokio::test]
 async fn test_repl_bridge_buffer_when_disconnected() {
-    let bridge = ReplBridge::new("sess-1".to_string());
+    let bridge = ReplBridge::new(test_session_id("sess-1"));
 
     // Bridge is Idle, messages should be buffered
     bridge
@@ -204,7 +209,7 @@ async fn test_repl_bridge_buffer_when_disconnected() {
 
 #[tokio::test]
 async fn test_repl_bridge_send_when_connected() {
-    let mut bridge = ReplBridge::new("sess-1".to_string());
+    let mut bridge = ReplBridge::new(test_session_id("sess-1"));
     let mut rx = bridge.take_outgoing().unwrap();
 
     bridge.set_state(BridgeState::Connected);
@@ -228,7 +233,7 @@ async fn test_repl_bridge_send_when_connected() {
 
 #[tokio::test]
 async fn test_repl_bridge_drain_buffer() {
-    let mut bridge = ReplBridge::new("sess-1".to_string());
+    let mut bridge = ReplBridge::new(test_session_id("sess-1"));
     let mut rx = bridge.take_outgoing().unwrap();
 
     // Buffer messages while disconnected
@@ -262,7 +267,7 @@ async fn test_repl_bridge_drain_buffer() {
 
 #[tokio::test]
 async fn test_repl_bridge_send_result() {
-    let mut bridge = ReplBridge::new("sess-1".to_string());
+    let mut bridge = ReplBridge::new(test_session_id("sess-1"));
     let mut rx = bridge.take_outgoing().unwrap();
 
     bridge.set_state(BridgeState::Connected);
@@ -275,7 +280,7 @@ async fn test_repl_bridge_send_result() {
     match msg {
         ReplOutMessage::Result { text, session_id } => {
             assert_eq!(text, "final answer");
-            assert_eq!(session_id.as_deref(), Some("sess-1"));
+            assert_eq!(session_id.as_ref().map(SessionId::as_str), Some("sess-1"));
         }
         _ => panic!("expected Result"),
     }

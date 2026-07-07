@@ -1,13 +1,17 @@
 use super::*;
 use crate::types::TeamMember;
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    coco_types::SessionId::try_new(value).expect("valid session id")
+}
+
 fn make_test_team_file() -> TeamFile {
     TeamFile {
         name: "test-team".to_string(),
         description: Some("A test team".to_string()),
         created_at: 1000,
         lead_agent_id: "leader@test-team".to_string(),
-        lead_session_id: Some("session-1".to_string()),
+        lead_session_id: Some(test_session_id("session-1")),
         hidden_pane_ids: Vec::new(),
         team_allowed_paths: Vec::new(),
         members: vec![TeamMember {

@@ -31,8 +31,7 @@ pub struct InitPromptHandler {
     pub features: Features,
     /// Project root, used by `maybe_mark_project_onboarding_complete` to
     /// flip the onboarding-completed flag in the global config file when the
-    /// project already has a `CLAUDE.md`. `None` falls back to the
-    /// process cwd at invocation time.
+    /// project already has a `CLAUDE.md`.
     pub project_root: Option<PathBuf>,
 }
 
@@ -58,7 +57,6 @@ impl CommandHandler for InitPromptHandler {
         let cwd = self
             .project_root
             .clone()
-            .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
         coco_config::global_config::maybe_mark_project_onboarding_complete(&cwd);
 

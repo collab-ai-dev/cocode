@@ -153,11 +153,13 @@ impl Tool for VerifyPlanExecutionTool {
             None => false,
         };
 
-        let session_id = ctx.session_id_for_history.as_deref();
+        let session_id = ctx
+            .checked_session_id_for_history()
+            .map_err(ToolError::execution_failed)?;
         let agent_id = ctx.agent_id.as_ref().map(|a| a.as_str().to_string());
         let plan_file_path = match (session_id, ctx.plans_dir.as_ref()) {
             (Some(sid), Some(plans_dir)) => Some(
-                coco_context::get_plan_file_path(sid, plans_dir, agent_id.as_deref())
+                coco_context::get_plan_file_path(sid.as_str(), plans_dir, agent_id.as_deref())
                     .to_string_lossy()
                     .into_owned(),
             ),

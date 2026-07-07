@@ -15,13 +15,17 @@ fn write_pid_file(config_home: &Path, pid: u32, contents: &str) {
     std::fs::write(dir.join(format!("{pid}.json")), contents).unwrap();
 }
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    coco_types::SessionId::try_new(value).unwrap()
+}
+
 #[test]
 fn register_writes_pid_file_with_expected_shape() {
     let cfg = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
-    let session_id = "session-abc";
+    let session_id = test_session_id("session-abc");
 
-    let registry = SessionRegistry::register(cfg.path(), session_id, cwd.path(), None)
+    let registry = SessionRegistry::register(cfg.path(), &session_id, cwd.path(), None)
         .unwrap()
         .expect("not a subagent so registration must succeed");
 
@@ -44,9 +48,9 @@ fn subagent_context_skips_registration() {
     let cfg = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
 
+    let session_id = test_session_id("session-sub");
     let result =
-        SessionRegistry::register(cfg.path(), "session-sub", cwd.path(), Some("agent-123"))
-            .unwrap();
+        SessionRegistry::register(cfg.path(), &session_id, cwd.path(), Some("agent-123")).unwrap();
 
     assert!(
         result.is_none(),
@@ -62,7 +66,7 @@ fn unregister_removes_file_and_is_idempotent() {
     let cfg = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
 
-    let registry = SessionRegistry::register(cfg.path(), "s", cwd.path(), None)
+    let registry = SessionRegistry::register(cfg.path(), &test_session_id("s"), cwd.path(), None)
         .unwrap()
         .unwrap();
     let pid_file = registry.pid_file().to_path_buf();
@@ -77,7 +81,7 @@ fn update_session_name_persists_into_existing_file() {
     let cfg = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
 
-    let registry = SessionRegistry::register(cfg.path(), "sid", cwd.path(), None)
+    let registry = SessionRegistry::register(cfg.path(), &test_session_id("sid"), cwd.path(), None)
         .unwrap()
         .unwrap();
     registry.update_session_name("my-bg-session");
@@ -92,7 +96,7 @@ fn update_session_name_persists_into_existing_file() {
 fn update_session_name_empty_is_noop() {
     let cfg = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
-    let registry = SessionRegistry::register(cfg.path(), "sid", cwd.path(), None)
+    let registry = SessionRegistry::register(cfg.path(), &test_session_id("sid"), cwd.path(), None)
         .unwrap()
         .unwrap();
     registry.update_session_name("");
@@ -106,7 +110,7 @@ fn update_session_name_empty_is_noop() {
 fn update_session_bridge_id_set_and_clear() {
     let cfg = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
-    let registry = SessionRegistry::register(cfg.path(), "sid", cwd.path(), None)
+    let registry = SessionRegistry::register(cfg.path(), &test_session_id("sid"), cwd.path(), None)
         .unwrap()
         .unwrap();
 
@@ -129,7 +133,7 @@ fn update_session_bridge_id_set_and_clear() {
 fn update_session_activity_stamps_updated_at() {
     let cfg = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
-    let registry = SessionRegistry::register(cfg.path(), "sid", cwd.path(), None)
+    let registry = SessionRegistry::register(cfg.path(), &test_session_id("sid"), cwd.path(), None)
         .unwrap()
         .unwrap();
 
@@ -155,9 +159,10 @@ fn count_includes_self_even_without_file() {
 fn count_includes_self_when_registered() {
     let cfg = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
-    let _registry = SessionRegistry::register(cfg.path(), "sid", cwd.path(), None)
-        .unwrap()
-        .unwrap();
+    let _registry =
+        SessionRegistry::register(cfg.path(), &test_session_id("sid"), cwd.path(), None)
+            .unwrap()
+            .unwrap();
     let n = count_concurrent_sessions(cfg.path());
     assert!(n >= 1, "self-pid must always be counted; got {n}");
 }
@@ -194,7 +199,7 @@ fn count_sweeps_stale_files() {
         stale_pid,
         &serde_json::to_string(&SessionRegistration {
             pid: stale_pid,
-            session_id: "ghost".into(),
+            session_id: test_session_id("ghost"),
             cwd: dir.clone(),
             started_at: 0,
             kind: SessionKind::Interactive,
@@ -220,10 +225,10 @@ fn count_sweeps_stale_files() {
 }
 
 #[test]
-fn registration_json_wire_format_is_camel_case() {
+fn registration_json_wire_format_is_snake_case() {
     let rec = SessionRegistration {
         pid: 42,
-        session_id: "abc".into(),
+        session_id: test_session_id("abc"),
         cwd: PathBuf::from("/tmp"),
         started_at: 123_456_789,
         kind: SessionKind::DaemonWorker,
@@ -256,7 +261,7 @@ fn reg(
 ) -> SessionRegistration {
     SessionRegistration {
         pid,
-        session_id: format!("sid-{pid}"),
+        session_id: test_session_id(&format!("sid-{pid}")),
         cwd: PathBuf::from("/work"),
         started_at,
         kind: SessionKind::Bg,

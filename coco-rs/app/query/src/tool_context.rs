@@ -48,7 +48,6 @@ use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolSearchStrategy;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::TurnAbortSignal;
-use coco_types::AgentId;
 use coco_types::AppStateReadHandle;
 use coco_types::PermissionBehavior;
 use coco_types::PermissionRule;
@@ -327,9 +326,9 @@ impl ToolContextFactory {
             self.config.plans_directory.as_deref(),
         );
         let session_plan_file = Some(coco_context::get_plan_file_path(
-            &self.config.session_id,
+            self.config.session_id.as_str(),
             &plans_directory,
-            self.config.agent_id.as_deref(),
+            self.config.agent_id_str(),
         ));
         let plans_dir = Some(plans_directory);
 
@@ -514,7 +513,7 @@ impl ToolContextFactory {
             // teammate spawner for cross-process scenarios. Env namespace
             // is `COCO_*` — see swarm_constants.
             agent_name: env::env_opt(EnvKey::CocoAgentName)
-                .or_else(|| self.config.agent_id.clone()),
+                .or_else(|| self.config.agent_id_string()),
             team_name,
             plan_verify_execution: self.config.plan_mode_settings.verify_execution,
             // `isPlanModeInterviewPhaseEnabled()` is settings-only
@@ -554,19 +553,13 @@ impl ToolContextFactory {
             // Fork isolation: when fork_isolation is set and the
             // config didn't pre-supply an agent_id, auto-gen one
             // (a fresh agentId is always allocated per fork).
-            agent_id: self
-                .config
-                .agent_id
-                .clone()
-                .or_else(|| {
-                    self.config.fork_isolation.as_ref().map(|iso| {
-                        iso.agent_id
-                            .clone()
-                            .unwrap_or_else(|| crate::fork_context::auto_agent_id(iso.fork_label))
-                    })
+            agent_id: self.config.agent_id.clone().or_else(|| {
+                self.config.fork_isolation.as_ref().map(|iso| {
+                    iso.agent_id
+                        .clone()
+                        .unwrap_or_else(|| crate::fork_context::auto_agent_id(iso.fork_label))
                 })
-                .as_ref()
-                .map(AgentId::new),
+            }),
             agent_type: None,
             // T7: agent catalog snapshot. Filled when the session
             // bootstrap calls `ToolContextFactory::with_agent_catalog`;
@@ -673,7 +666,7 @@ impl ToolContextFactory {
             file_read_state: self.file_read_state.clone(),
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
-            session_id_for_history: Some(self.config.session_id.clone()),
+            session_id_for_history: Some(self.config.session_id.to_string()),
             tool_output_store: self.tool_output_store.clone(),
             transcript_path: self.transcript_path.clone(),
             approval_feedback: None,

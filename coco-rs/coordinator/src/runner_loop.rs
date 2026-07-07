@@ -29,6 +29,7 @@ use coco_messages::Message;
 use coco_tool_runtime::AgentTaskRegistryRef;
 use coco_tool_runtime::TaskListHandleRef;
 use coco_tool_runtime::TeammateTaskUpdate;
+use coco_types::SessionId;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -44,7 +45,7 @@ use crate::types::TeammateIdentity;
 // ── Trait: AgentExecutionEngine ──
 
 /// Configuration for a single query/turn within the teammate loop.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AgentQueryConfig {
     /// System prompt (base + addendum).
     pub system_prompt: String,
@@ -96,8 +97,42 @@ pub struct AgentQueryConfig {
     pub live_permission_rules: Option<Arc<RwLock<Vec<coco_types::PermissionRule>>>>,
     pub live_permission_mode: Option<Arc<RwLock<coco_types::PermissionMode>>>,
     pub cancel: Option<CancellationToken>,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub agent_id: String,
+}
+
+impl Default for AgentQueryConfig {
+    fn default() -> Self {
+        Self {
+            system_prompt: String::new(),
+            model: None,
+            max_turns: None,
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            fork_context_messages: Vec::new(),
+            preserve_tool_use_results: false,
+            bypass_permissions_available: false,
+            features: None,
+            tool_overrides: None,
+            parent_tool_filter: None,
+            active_shell_tool: coco_types::ActiveShellTool::Disabled,
+            effort: None,
+            use_exact_tools: false,
+            mcp_servers: Vec::new(),
+            model_role: None,
+            model_selection: coco_types::LlmModelSelection::default(),
+            permission_mode: None,
+            extra_permission_rules: Vec::new(),
+            live_permission_rules: None,
+            live_permission_mode: None,
+            cancel: None,
+            session_id: match SessionId::try_new("test-session") {
+                Ok(id) => id,
+                Err(_) => unreachable!("default session id must be valid"),
+            },
+            agent_id: String::new(),
+        }
+    }
 }
 
 /// Result from running a single query/turn.
@@ -154,7 +189,7 @@ pub trait AgentExecutionEngine: Send + Sync {
         // Parent session + teammate agent id — used by real engines to
         // scope the summarization sub-run's identity. Ignored by the
         // no-op default.
-        _session_id: &str,
+        _session_id: &SessionId,
         _agent_id: &str,
     ) -> crate::Result<Vec<Arc<Message>>> {
         // No-op default: keep the input. Real engines should override.
@@ -172,7 +207,7 @@ pub struct InProcessRunnerConfig {
     /// Task ID in AppState.
     pub task_id: String,
     /// Parent session id shared by this teammate run.
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Initial prompt/task.
     pub prompt: String,
     /// Model override.
@@ -432,9 +467,9 @@ pub async fn run_in_process_teammate(
                 team_name: config.identity.team_name.clone(),
                 color: config.identity.color.map(|c| c.as_str().to_string()),
                 plan_mode_required: config.identity.plan_mode_required,
-                // Not consumed during the turn; the resume/transcript path
-                // that reads it was removed. Empty keeps tier-1 self-consistent.
-                parent_session_id: String::new(),
+                // Keep tier-1 identity complete for any identity-aware tool
+                // invoked inside this teammate turn.
+                parent_session_id: config.session_id.clone(),
                 // Share THIS teammate's cancel flag so an approved
                 // `shutdown_response` (via `signal_self_stop`) breaks the loop
                 // on the next `config.cancelled` check below. A rejection

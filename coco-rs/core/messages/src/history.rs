@@ -3,6 +3,7 @@ use crate::LlmMessage;
 use crate::Message;
 use crate::MessageKind;
 use coco_types::ProviderModelSelection;
+use coco_types::SessionId;
 use coco_types::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
@@ -83,7 +84,7 @@ pub struct MessageHistory {
     /// `SessionResetForResume`). AgentTeams (plan §11 F9) consumers
     /// read this off the wire to demux merged timelines. Empty for
     /// legacy paths; set via [`set_envelope`](Self::set_envelope).
-    session_id: String,
+    session_id: Option<SessionId>,
     /// Active agent id — `None` for the main agent, `Some` for
     /// teammate / subagent emits. Forward-compat field for AgentTeams.
     agent_id: Option<String>,
@@ -106,15 +107,15 @@ impl MessageHistory {
     /// `history_sync::*` emit carries the envelope automatically.
     /// Called once at history construction by the engine builder; no
     /// other call site should need to touch it.
-    pub fn set_envelope(&mut self, session_id: String, agent_id: Option<String>) {
-        self.session_id = session_id;
+    pub fn set_envelope(&mut self, session_id: SessionId, agent_id: Option<String>) {
+        self.session_id = Some(session_id);
         self.agent_id = agent_id;
     }
 
-    /// Active session id. Empty when [`set_envelope`](Self::set_envelope)
+    /// Active session id. `None` when [`set_envelope`](Self::set_envelope)
     /// hasn't been called (legacy / test fixtures).
-    pub fn session_id(&self) -> &str {
-        &self.session_id
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session_id.as_ref()
     }
 
     /// Active agent id, if any.
@@ -562,5 +563,5 @@ pub struct HistoryEntry {
     pub display: String,
     pub timestamp: String,
     pub project: String,
-    pub session_id: String,
+    pub session_id: SessionId,
 }

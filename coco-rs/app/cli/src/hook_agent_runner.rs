@@ -9,6 +9,7 @@ use coco_types::ToolId;
 use coco_types::ToolName;
 use tokio_util::sync::CancellationToken;
 
+use crate::session_runtime::SessionHandle;
 use crate::session_runtime::SessionRuntime;
 
 const MAX_AGENT_HOOK_TURNS: i32 = 50;
@@ -31,7 +32,7 @@ When done, return your result using the StructuredOutput tool with:
 - impossible: true with reason if the condition can never be satisfied";
 
 pub struct SessionRuntimeHookAgentRunner {
-    runtime: Arc<SessionRuntime>,
+    session: SessionHandle,
 }
 
 impl std::fmt::Debug for SessionRuntimeHookAgentRunner {
@@ -41,8 +42,8 @@ impl std::fmt::Debug for SessionRuntimeHookAgentRunner {
 }
 
 impl SessionRuntimeHookAgentRunner {
-    pub fn new(runtime: Arc<SessionRuntime>) -> Self {
-        Self { runtime }
+    pub fn new(session: SessionHandle) -> Self {
+        Self { session }
     }
 }
 
@@ -50,7 +51,7 @@ impl SessionRuntimeHookAgentRunner {
 impl HookAgentRunner for SessionRuntimeHookAgentRunner {
     async fn run(&self, request: HookAgentRunRequest) -> HookEvaluationResult {
         let result =
-            tokio::time::timeout(request.timeout, run_agent(self.runtime.clone(), request)).await;
+            tokio::time::timeout(request.timeout, run_agent(self.session.clone(), request)).await;
         match result {
             Err(_elapsed) => HookEvaluationResult::Cancelled,
             Ok(Ok(output)) => output,
@@ -60,22 +61,22 @@ impl HookAgentRunner for SessionRuntimeHookAgentRunner {
 }
 
 async fn run_agent(
-    runtime: Arc<SessionRuntime>,
+    session: SessionHandle,
     request: HookAgentRunRequest,
 ) -> Result<HookEvaluationResult, String> {
-    let tools = scoped_tool_registry(&runtime)?;
-    let mut config = runtime.current_engine_config().await;
+    let tools = scoped_tool_registry(&session)?;
+    let mut config = session.current_engine_config().await;
     configure_hook_agent(&mut config, &request);
 
     let cancel = CancellationToken::new();
-    let mut engine = runtime
+    let mut engine = session
         .build_engine_from_config_with_registries(config, cancel, tools, None)
         .await
         .with_model_runtime_source(request.model_source.clone());
     let accounting = request
         .usage_accounting
         .clone()
-        .unwrap_or_else(|| runtime.usage_accounting());
+        .unwrap_or_else(|| session.usage_accounting());
     engine = engine
         .with_usage_accounting(accounting)
         .with_usage_source_override(coco_types::UsageSource::HookAgent);
@@ -137,7 +138,11 @@ fn configure_hook_agent(config: &mut QueryEngineConfig, request: &HookAgentRunRe
     config.thinking_level = None;
     config.query_source_override = Some(coco_types::ForkLabel::HookAgent.as_str().to_string());
     config.fork_label = Some(coco_types::ForkLabel::HookAgent);
-    config.session_id = format!("hook-agent-{}", uuid::Uuid::new_v4());
+    let session_id = format!("hook-agent-{}", uuid::Uuid::new_v4());
+    config.session_id = match coco_types::SessionId::try_new(session_id) {
+        Ok(id) => id,
+        Err(_) => unreachable!("hook agent session id is path-safe"),
+    };
 }
 
 fn hook_agent_schema() -> serde_json::Value {
@@ -195,10 +200,10 @@ fn parse_structured_output(
     Ok(HookEvaluationResult::Blocking { reason })
 }
 
-pub async fn install(runtime: Arc<SessionRuntime>) {
+pub async fn install(session: SessionHandle) {
     let runner: coco_query::hook_llm::HookAgentRunnerRef =
-        Arc::new(SessionRuntimeHookAgentRunner::new(runtime.clone()));
-    runtime.attach_hook_agent_runner(runner).await;
+        Arc::new(SessionRuntimeHookAgentRunner::new(session.clone()));
+    session.attach_hook_agent_runner(runner).await;
 }
 
 #[cfg(test)]

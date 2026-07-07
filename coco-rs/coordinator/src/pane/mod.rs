@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 use crate::mailbox;
 use crate::types::BackendType;
 use coco_types::AgentColorName;
+use coco_types::SessionId;
 
 // ── Pane Types ──
 
@@ -99,7 +100,7 @@ pub trait PaneBackend: Send + Sync {
 // ── TeammateExecutor Trait ──
 
 /// Configuration for spawning a teammate.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TeammateSpawnConfig {
     pub name: String,
     pub team_name: String,
@@ -111,7 +112,7 @@ pub struct TeammateSpawnConfig {
     pub system_prompt: Option<String>,
     pub system_prompt_mode: SystemPromptMode,
     pub worktree_path: Option<String>,
-    pub parent_session_id: String,
+    pub parent_session_id: SessionId,
     pub permissions: Vec<String>,
     pub allow_permission_prompts: bool,
     /// Reasoning-effort override (`effort` input).
@@ -124,6 +125,34 @@ pub struct TeammateSpawnConfig {
     pub disallowed_tools: Vec<String>,
     /// Hard cap on agent turns.
     pub max_turns: Option<i32>,
+}
+
+impl Default for TeammateSpawnConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            team_name: String::new(),
+            color: None,
+            plan_mode_required: false,
+            prompt: String::new(),
+            cwd: String::new(),
+            model: None,
+            system_prompt: None,
+            system_prompt_mode: SystemPromptMode::Default,
+            worktree_path: None,
+            parent_session_id: match SessionId::try_new("test-session") {
+                Ok(id) => id,
+                Err(_) => unreachable!("default session id must be valid"),
+            },
+            permissions: Vec::new(),
+            allow_permission_prompts: false,
+            effort: None,
+            use_exact_tools: false,
+            mcp_servers: Vec::new(),
+            disallowed_tools: Vec::new(),
+            max_turns: None,
+        }
+    }
 }
 
 /// System prompt assembly mode.

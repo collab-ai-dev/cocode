@@ -21,7 +21,6 @@
 //! tasks created in those modes still persist to disk and fire in a later
 //! interactive session.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use coco_cron::CronTickState;
@@ -33,7 +32,7 @@ use coco_system_reminder::QueueOrigin;
 use coco_tool_runtime::CronTask;
 use tokio::task::JoinHandle;
 
-use crate::session_runtime::SessionRuntime;
+use crate::session_runtime::SessionHandle;
 
 const CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -58,11 +57,12 @@ fn timing(t: &CronTask) -> CronTiming<'_> {
 /// Spawn the per-session cron tick. Self-terminates on the session shutdown
 /// signal. Hold the returned handle for the session's lifetime (drop = let it
 /// run until cancel, same pattern as the other watchers).
-pub fn spawn(runtime: Arc<SessionRuntime>) -> JoinHandle<()> {
+pub fn spawn(session: SessionHandle) -> JoinHandle<()> {
+    let runtime = session.runtime().clone();
     let cancel = runtime.shutdown_signal();
     let store = runtime.schedule_store();
     let queue = runtime.command_queue().clone();
-    let project_root = runtime.original_cwd.clone();
+    let project_root = runtime.project_root.clone();
     let current_cwd = runtime.current_cwd.clone();
     let loop_sentinel_state = runtime.loop_sentinel_state.clone();
     let loop_persistent_preamble_enabled = runtime

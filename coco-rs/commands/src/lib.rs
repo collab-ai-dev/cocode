@@ -28,6 +28,7 @@ use coco_types::CommandSource;
 use coco_types::CommandType;
 use coco_types::Feature;
 use coco_types::LocalCommandData;
+use coco_types::SessionId;
 use coco_types::SlashCommandInfo;
 use coco_utils_common::BuildProvenance;
 
@@ -65,7 +66,7 @@ pub(crate) type SharedBashToolHandle = Arc<std::sync::RwLock<Option<Arc<dyn Bash
 /// Late-bound session id shared with every skill handler so user-typed slash
 /// commands can substitute `${CLAUDE_SESSION_ID}`. Filled by
 /// [`CommandRegistry::set_session_id`] at session bootstrap.
-pub(crate) type SharedSessionId = Arc<std::sync::RwLock<Option<String>>>;
+pub(crate) type SharedSessionId = Arc<std::sync::RwLock<Option<SessionId>>>;
 
 /// Late-bound build provenance shared with commands that report runtime
 /// diagnostics. Filled by [`CommandRegistry::set_build_provenance`] from the
@@ -322,7 +323,7 @@ impl CommandRegistry {
     /// Inject the current session id so skill handlers can substitute
     /// `${CLAUDE_SESSION_ID}`. Called at session bootstrap (and after a
     /// `/reload-plugins` registry swap) alongside [`Self::set_bash_tool_handle`].
-    pub fn set_session_id(&self, session_id: String) {
+    pub fn set_session_id(&self, session_id: SessionId) {
         if let Ok(mut slot) = self.session_id.write() {
             *slot = Some(session_id);
         }
@@ -586,7 +587,7 @@ pub fn build_command_registry(
 
     // 1. Hardcoded slash commands.
     register_builtins(&mut registry);
-    implementations::register_extended_builtins(&mut registry);
+    implementations::register_extended_builtins_with_cwd(&mut registry, project_root.clone());
 
     // 2-5. Skill-derived commands (filtered by feature gates + the
     // `off` override; the dialog's gate keeps the `name-only` /
@@ -826,11 +827,10 @@ impl CommandHandler for SkillPromptHandler {
         // Argument substitution via the canonical implementation
         // in `coco_skills::prompt_render`.
         let mut text = if self.name == "loop" {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| self.project_root.clone());
             coco_skills::bundled::loop_skill::prompt_for_command(
                 args,
                 &self.project_root,
-                &cwd,
+                &self.project_root,
                 self.loop_default_prompt_enabled,
                 self.loop_dynamic_enabled,
                 self.loop_persistent_preamble_enabled,
@@ -846,7 +846,7 @@ impl CommandHandler for SkillPromptHandler {
         text = coco_skills::prompt_render::substitute_skill_env(
             &text,
             self.skill_dir.as_deref(),
-            session_id.as_deref(),
+            session_id.as_ref().map(SessionId::as_str),
         );
         // MCP-source gate: skip in-prompt shell for MCP skills; otherwise route
         // through the real Bash tool (per-command permission check) when a

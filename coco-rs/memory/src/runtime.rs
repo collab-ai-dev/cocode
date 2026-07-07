@@ -18,6 +18,7 @@ use coco_tool_runtime::SideQueryHandle;
 use coco_tool_runtime::SideQueryRequest;
 use coco_types::Capability;
 use coco_types::ModelRole;
+use coco_types::SessionId;
 use coco_types::SideQueryToolDef;
 use coco_types::ToolOverrides;
 
@@ -486,7 +487,7 @@ impl std::fmt::Debug for MemoryRuntime {
 pub struct MemoryRuntimeBuilder {
     pub config_home: PathBuf,
     pub project_root: PathBuf,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub config: MemoryConfig,
     pub agent: AgentHandleRef,
     pub telemetry: Arc<dyn MemoryTelemetryEmitter>,
@@ -513,10 +514,14 @@ impl MemoryRuntimeBuilder {
         config: MemoryConfig,
         agent: AgentHandleRef,
     ) -> Self {
+        let session_id = match SessionId::try_new(session_id.into()) {
+            Ok(id) => id,
+            Err(_) => unreachable!("MemoryRuntimeBuilder requires a valid session id"),
+        };
         Self {
             config_home: config_home.into(),
             project_root: project_root.into(),
-            session_id: session_id.into(),
+            session_id,
             config,
             agent,
             telemetry: Arc::new(NoopEmitter),
@@ -623,35 +628,39 @@ impl MemoryRuntimeBuilder {
         // shares the inbox for API uniformity if a future surface lands.
         let notices = crate::notice::NoticeInbox::default();
         let memory_updates = crate::notice::MemoryUpdateInbox::default();
-        let session_id = self.session_id.clone();
+        let session_id_slot = Arc::new(arc_swap::ArcSwap::from_pointee(self.session_id.clone()));
         let fork_tool_config = crate::service::MemoryForkToolConfig::new(
             self.active_shell_tool,
             self.tool_overrides.clone(),
         );
-        let extract = Arc::new(ExtractService::with_shared_agent_and_notices(
-            directories.personal.clone(),
-            self.config.clone(),
-            agent_slot.clone(),
-            self.telemetry.clone(),
-            notices.clone(),
-            fork_tool_config.clone(),
-            session_id.clone(),
-        ));
-        let dream = Arc::new(DreamService::with_shared_agent_and_notice_channels(
-            directories.personal.clone(),
-            self.config.clone(),
-            agent_slot.clone(),
-            self.telemetry.clone(),
-            crate::service::dream::DreamNoticeChannels::new(
+        let extract = Arc::new(
+            ExtractService::with_shared_agent_notices_and_session_id_slot(
+                directories.personal.clone(),
+                self.config.clone(),
+                agent_slot.clone(),
+                self.telemetry.clone(),
                 notices.clone(),
-                memory_updates.clone(),
+                fork_tool_config.clone(),
+                session_id_slot.clone(),
             ),
-            fork_tool_config,
-            session_id,
-        ));
-        let session_memory = Arc::new(SessionMemoryService::with_shared_agent(
+        );
+        let dream = Arc::new(
+            DreamService::with_shared_agent_channels_and_session_id_slot(
+                directories.personal.clone(),
+                self.config.clone(),
+                agent_slot.clone(),
+                self.telemetry.clone(),
+                crate::service::dream::DreamNoticeChannels::new(
+                    notices.clone(),
+                    memory_updates.clone(),
+                ),
+                fork_tool_config,
+                session_id_slot.clone(),
+            ),
+        );
+        let session_memory = Arc::new(SessionMemoryService::with_shared_agent_and_session_id_slot(
             project_paths,
-            self.session_id,
+            session_id_slot,
             self.config.clone(),
             agent_slot.clone(),
             self.telemetry.clone(),
@@ -944,9 +953,7 @@ impl MemoryRuntime {
     }
 
     /// Repoint session-scoped memory services at a new parent session id.
-    pub async fn set_session_id(&self, new_id: String) {
-        self.extract.set_session_id(new_id.clone());
-        self.dream.set_session_id(new_id.clone());
+    pub async fn set_session_id(&self, new_id: SessionId) {
         self.session_memory.set_session_id(new_id).await;
     }
 

@@ -28,7 +28,7 @@ impl WireSink for VecSink {
 
 fn ctx() -> WireTurnCtx<'static> {
     WireTurnCtx {
-        turn_id: "turn-3",
+        turn_id: coco_types::TurnId::from("turn-3"),
         provider: "openai",
         model: "gpt-5.4",
     }

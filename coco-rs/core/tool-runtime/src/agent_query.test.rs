@@ -8,6 +8,13 @@ fn agent_run_identity_rejects_empty_session_id() {
 }
 
 #[test]
+fn agent_run_identity_rejects_unsafe_session_id() {
+    let err = AgentRunIdentity::new("bad/session", "agent-1", AgentRunKind::Subagent)
+        .expect_err("unsafe session_id must be rejected");
+    assert!(err.contains("session_id"));
+}
+
+#[test]
 fn agent_run_identity_rejects_empty_agent_id() {
     let err = AgentRunIdentity::new("session-1", " ", AgentRunKind::Subagent)
         .expect_err("empty agent_id must be rejected");

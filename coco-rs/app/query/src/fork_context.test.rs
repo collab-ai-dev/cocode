@@ -37,8 +37,10 @@ fn test_child_query_depth_counts_fork_toward_cap() {
 fn test_auto_agent_id_format_and_uniqueness() {
     let a = auto_agent_id(ForkLabel::SessionMemoryAuto);
     let b = auto_agent_id(ForkLabel::SessionMemoryAuto);
-    assert!(a.starts_with("fork-session_memory_auto-"));
-    assert!(b.starts_with("fork-session_memory_auto-"));
+    assert!(a.as_str().starts_with("afork-session_memory_auto-"));
+    assert!(b.as_str().starts_with("afork-session_memory_auto-"));
+    assert!(coco_types::AgentId::try_new_generated(a.as_str()).is_ok());
+    assert!(coco_types::AgentId::try_new_generated(b.as_str()).is_ok());
     assert_ne!(a, b, "two simultaneous forks must get distinct ids");
 }
 

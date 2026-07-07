@@ -42,8 +42,8 @@ use unicode_normalization::UnicodeNormalization;
 ///
 /// 1. `ctx.cwd_override` — set by `AgentTool` for worktree-isolated subagents.
 /// 2. `ctx.session_cwd` — live session cwd updated after each command.
-/// 3. `std::env::current_dir()` — fallback for tests / SDK paths without session state.
-/// 4. `/tmp` — last-resort floor when even `current_dir()` fails.
+/// 3. `ctx.original_cwd` — bootstrap cwd for sessions without live cwd state.
+/// 4. `/tmp` — last-resort floor for legacy/test contexts.
 pub async fn resolve_spawn_cwd(ctx: &ToolUseContext) -> PathBuf {
     ctx.effective_shell_cwd().await
 }

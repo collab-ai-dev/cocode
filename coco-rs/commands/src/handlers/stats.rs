@@ -4,27 +4,38 @@
 //! file's creation time, counts all sessions, runs `git status --porcelain`
 //! to count file changes, and reports the current working directory.
 
+use std::path::Path;
+use std::path::PathBuf;
 use std::pin::Pin;
+
+use async_trait::async_trait;
+
+use crate::CommandHandler;
+use crate::CommandResult;
 
 /// Async handler for `/stats`.
 pub fn handler(
     _args: String,
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
+    handler_with_cwd(PathBuf::from("."))
+}
+
+fn handler_with_cwd(
+    cwd: PathBuf,
 ) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let sessions_dir = coco_config::global_config::config_home().join("sessions");
 
         let (session_count, session_start_secs) = scan_sessions(&sessions_dir).await;
         let duration_str = format_duration(session_start_secs);
-        let git_changes = collect_git_changes().await;
-        let cwd = std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "unknown".to_string());
+        let git_changes = collect_git_changes(&cwd).await;
+        let cwd_display = cwd.display().to_string();
 
         let mut out = String::from("## Session Statistics\n\n");
 
         out.push_str(&format!("  Sessions total:       {session_count}\n"));
         out.push_str(&format!("  Current session:      {duration_str}\n"));
-        out.push_str(&format!("  Working directory:    {cwd}\n"));
+        out.push_str(&format!("  Working directory:    {cwd_display}\n"));
 
         out.push_str("\n### Git Changes\n\n");
         match git_changes {
@@ -40,6 +51,29 @@ pub fn handler(
 
         Ok(out)
     })
+}
+
+pub struct StatsHandler {
+    cwd: PathBuf,
+}
+
+impl StatsHandler {
+    pub fn new(cwd: PathBuf) -> Self {
+        Self { cwd }
+    }
+}
+
+#[async_trait]
+impl CommandHandler for StatsHandler {
+    async fn execute_command(&self, _args: &str) -> crate::Result<CommandResult> {
+        Ok(CommandResult::Text(
+            handler_with_cwd(self.cwd.clone()).await?,
+        ))
+    }
+
+    fn handler_name(&self) -> &str {
+        "stats"
+    }
 }
 
 /// Counts of git file changes from `git status --porcelain`.
@@ -120,9 +154,10 @@ fn format_duration(start_secs: u64) -> String {
 /// Parse `git status --porcelain` output into change counts.
 ///
 /// Returns `None` when not inside a git repository.
-async fn collect_git_changes() -> Option<GitChanges> {
+async fn collect_git_changes(cwd: &Path) -> Option<GitChanges> {
     let output = tokio::process::Command::new("git")
         .args(["status", "--porcelain"])
+        .current_dir(cwd)
         .output()
         .await
         .ok()?;

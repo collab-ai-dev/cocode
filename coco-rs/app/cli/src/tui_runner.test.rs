@@ -499,7 +499,7 @@ impl coco_inference::LanguageModel for QueuedTurnMockModel {
 async fn build_runtime_with_registry(
     home: &TempDir,
     registry: coco_commands::CommandRegistry,
-) -> Arc<crate::session_runtime::SessionRuntime> {
+) -> crate::session_runtime::SessionHandle {
     build_runtime_with_registry_and_settings(home, registry, Settings::default()).await
 }
 
@@ -507,7 +507,7 @@ async fn build_runtime_with_registry_and_settings(
     home: &TempDir,
     registry: coco_commands::CommandRegistry,
     settings_overrides: Settings,
-) -> Arc<crate::session_runtime::SessionRuntime> {
+) -> crate::session_runtime::SessionHandle {
     let settings = SettingsWithSource {
         merged: Settings {
             models: coco_config::ModelSelectionSettings {
@@ -535,7 +535,7 @@ async fn build_runtime_with_registry_and_settings(
     let model_id = coco_cli::headless::resolve_main_model(&runtime_config).model_id;
     let cli = coco_cli::Cli::try_parse_from(["coco"]).expect("parse cli");
 
-    crate::session_runtime::SessionRuntime::build(crate::session_runtime::SessionRuntimeBuildOpts {
+    crate::session_runtime::SessionHandle::build(crate::session_runtime::SessionRuntimeBuildOpts {
         cli: &cli,
         runtime_config: Arc::new(runtime_config),
         cwd: home.path().to_path_buf(),
@@ -554,6 +554,10 @@ async fn build_runtime_with_registry_and_settings(
         permission_bridge: None,
         command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(registry))),
         skill_manager: Arc::new(coco_skills::SkillManager::new()),
+        project_services: Arc::new(coco_cli::project_services::ProjectServices::load(
+            home.path(),
+            home.path(),
+        )),
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
@@ -786,7 +790,10 @@ fn session_plan_file_path_uses_runtime_plan_directory_setting() {
         config_home.path(),
         Some(project.path()),
         Some("plans"),
-        "session-1",
+        &match coco_types::SessionId::try_new("session-1") {
+            Ok(id) => id,
+            Err(_) => unreachable!("test session id must be valid"),
+        },
     );
 
     assert!(path.starts_with(project.path().canonicalize().unwrap().join("plans")));

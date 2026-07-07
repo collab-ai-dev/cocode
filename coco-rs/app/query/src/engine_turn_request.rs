@@ -204,7 +204,7 @@ impl QueryEngine {
             tool_choice: None,
             context_management,
             query_source: Some(query_source.to_string()),
-            agent_id: self.config.agent_id.clone(),
+            agent_id: self.config.agent_id_string(),
             time_since_last_assistant_ms,
             agentic: true,
             cache: self.config.prompt_cache.clone(),
@@ -309,7 +309,7 @@ impl QueryEngine {
         // can report the typed outcome via `finish`.
         if let Some(wire_dump) = self.config.wire_dump.as_ref() {
             let recorder = wire_dump.begin(coco_wire_dump::WireTurnCtx {
-                turn_id,
+                turn_id: coco_types::TurnId::from(turn_id),
                 provider: &active_snapshot.provider,
                 model: &active_snapshot.model_id,
             });

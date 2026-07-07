@@ -156,6 +156,7 @@ impl PermissionEvaluator {
                     &tool_str,
                     input,
                     context,
+                    options.shell_cwd.as_deref(),
                     shell_rules::RuleMatchPolicy::DenyOrAsk,
                 ) {
                     continue;
@@ -258,6 +259,7 @@ impl PermissionEvaluator {
                         &tool_str,
                         input,
                         context,
+                        options.shell_cwd.as_deref(),
                         shell_rules::RuleMatchPolicy::Allow,
                     ) {
                         continue;
@@ -393,7 +395,13 @@ impl PermissionEvaluator {
             for rule in rules {
                 if is_file_rule_for_tool(&rule.value.tool_pattern, &tool_str)
                     && rule.value.rule_content.is_some()
-                    && file_rule_matches_input(rule, &tool_str, input, context)
+                    && file_rule_matches_input(
+                        rule,
+                        &tool_str,
+                        input,
+                        context,
+                        options.shell_cwd.as_deref(),
+                    )
                 {
                     tracing::debug!(
                         tool_name = %tool_str,
@@ -457,6 +465,7 @@ impl PermissionEvaluator {
                             &tool_str,
                             input,
                             context,
+                            options.shell_cwd.as_deref(),
                             shell_rules::RuleMatchPolicy::Allow,
                         )
                     {
@@ -827,16 +836,14 @@ fn file_rule_matches_input(
     tool_name: &str,
     input: &Value,
     context: &ToolPermissionContext,
+    cwd: Option<&str>,
 ) -> bool {
     let Some(path) = extract_file_modifying_path(tool_name, input) else {
         return false;
     };
-    let cwd = std::env::current_dir()
-        .ok()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "/".to_string());
-    let paths_to_check = filesystem::get_paths_for_permission_check(&path, &cwd);
-    let match_context = crate::file_rules::FileRuleMatchContext::new(&cwd)
+    let cwd = cwd.unwrap_or("/");
+    let paths_to_check = filesystem::get_paths_for_permission_check(&path, cwd);
+    let match_context = crate::file_rules::FileRuleMatchContext::new(cwd)
         .with_source_roots(&context.permission_rule_source_roots);
     crate::file_rules::file_rule_matches_paths(
         rule,
@@ -906,6 +913,7 @@ fn central_rule_applies(
     tool_str: &str,
     input: &Value,
     context: &ToolPermissionContext,
+    cwd: Option<&str>,
     policy: shell_rules::RuleMatchPolicy,
 ) -> bool {
     if !matches_tool_pattern(&rule.value.tool_pattern, tool_str) {
@@ -933,7 +941,7 @@ fn central_rule_applies(
     // File content rule (Write/Edit/NotebookEdit/ApplyPatch): apply only if the
     // path matches the rule's glob; otherwise defer.
     if is_file_rule_for_tool(&rule.value.tool_pattern, tool_str) {
-        return file_rule_matches_input(rule, tool_str, input, context);
+        return file_rule_matches_input(rule, tool_str, input, context, cwd);
     }
     // Any OTHER tool with a content-bearing rule (Agent/WebFetch/Read/Grep/Glob)
     // NEVER matches centrally — defer to the tool's own scoped check_permissions.

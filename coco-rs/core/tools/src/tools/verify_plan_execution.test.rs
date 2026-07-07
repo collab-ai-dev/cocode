@@ -78,6 +78,25 @@ async fn execute_is_idempotent_without_pending_verification() {
 }
 
 #[tokio::test]
+async fn execute_rejects_unsafe_session_id() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.session_id_for_history = Some("bad/session".into());
+    ctx.plans_dir = Some(std::env::temp_dir());
+
+    let err =
+        <VerifyPlanExecutionTool as DynTool>::execute(&VerifyPlanExecutionTool, json!({}), &ctx)
+            .await
+            .expect_err("unsafe session id must be rejected");
+
+    match err {
+        coco_tool_runtime::ToolError::ExecutionFailed { message, .. } => {
+            assert!(message.contains("session_id_for_history"), "got: {message}");
+        }
+        other => panic!("expected ExecutionFailed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn check_permissions_allows_without_prompt() {
     let mut ctx = ToolUseContext::test_default();
     ctx.permission_context.mode = PermissionMode::Default;

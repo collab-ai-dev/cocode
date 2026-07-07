@@ -103,7 +103,11 @@ async fn full_loop_write_stamp_load_measure_promote_degrade_retire() {
     //    stamp pass corrects provenance on disk and records the patch.
     let slot: AgentSlot = Arc::new(RwLock::new(Arc::new(ScriptedForkHandle) as AgentHandleRef));
     let svc = SkillReviewService::new(slot, &config_home);
-    let outcome = svc.run("sess-e2e".into(), Vec::new()).await;
+    let session_id = match coco_types::SessionId::try_new("sess-e2e") {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id must be valid"),
+    };
+    let outcome = svc.run(session_id, Vec::new()).await;
     assert_eq!(outcome, SkillReviewOutcome::Completed { paths_written: 1 });
 
     let skill_md = coco_skills::agent_scope::agent_skills_dir(&config_home)

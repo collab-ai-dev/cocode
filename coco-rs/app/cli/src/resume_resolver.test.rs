@@ -67,8 +67,8 @@ fn resume_by_id_loads_messages() {
         .expect("resolve runs")
         .expect("plan emitted");
 
-    assert_eq!(plan.session_id, "alpha");
-    assert_eq!(plan.source_session_id, "alpha");
+    assert_eq!(plan.session_id.as_str(), "alpha");
+    assert_eq!(plan.source_session_id.as_str(), "alpha");
     assert!(!plan.is_fork);
     assert_eq!(plan.prior_messages.len(), 2);
     assert_eq!(plan.conversation.turn_count, 1);
@@ -105,7 +105,7 @@ fn continue_picks_most_recent() {
     let plan = resolve(&cli, dir.path(), std::path::Path::new(TEST_CWD))
         .expect("resolve runs")
         .expect("plan emitted");
-    assert_eq!(plan.source_session_id, "newer");
+    assert_eq!(plan.source_session_id.as_str(), "newer");
 }
 
 #[test]
@@ -119,8 +119,8 @@ fn fork_creates_new_id_and_copies_jsonl() {
         .expect("plan emitted");
 
     assert!(plan.is_fork);
-    assert_eq!(plan.source_session_id, "src");
-    assert_ne!(plan.session_id, "src", "fork must mint a fresh id");
+    assert_eq!(plan.source_session_id.as_str(), "src");
+    assert_ne!(plan.session_id.as_str(), "src", "fork must mint a fresh id");
     assert_ne!(
         plan.destination_path, plan.source_path,
         "fork must write to a fresh path"
@@ -136,7 +136,8 @@ fn fork_creates_new_id_and_copies_jsonl() {
     for line in dest.lines().filter(|l| !l.trim().is_empty()) {
         let entry: serde_json::Value = serde_json::from_str(line).unwrap();
         assert_eq!(
-            entry["session_id"], plan.session_id,
+            entry["session_id"],
+            plan.session_id.to_string(),
             "every entry must carry the fork id, not the source id"
         );
     }
@@ -159,7 +160,7 @@ fn fork_honors_explicit_session_id() {
     let plan = resolve(&cli, dir.path(), std::path::Path::new(TEST_CWD))
         .expect("resolve runs")
         .expect("plan emitted");
-    assert_eq!(plan.session_id, "forked-1");
+    assert_eq!(plan.session_id.as_str(), "forked-1");
     assert!(
         plan.destination_path
             .file_name()
@@ -167,4 +168,22 @@ fn fork_honors_explicit_session_id() {
             .unwrap_or_default()
             .starts_with("forked-1"),
     );
+}
+
+#[test]
+fn fork_rejects_unsafe_explicit_session_id() {
+    let dir = tempfile::tempdir().unwrap();
+    write_minimal_session(dir.path(), "src");
+
+    let cli = cli_with(&[
+        "--resume",
+        "src",
+        "--fork-session",
+        "--session-id",
+        "bad/session",
+    ]);
+    let err = resolve(&cli, dir.path(), std::path::Path::new(TEST_CWD))
+        .expect_err("unsafe fork session id should fail");
+
+    assert!(err.to_string().contains("invalid session id"));
 }

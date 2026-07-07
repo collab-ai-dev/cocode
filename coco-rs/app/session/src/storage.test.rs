@@ -21,6 +21,13 @@ fn test_store() -> (tempfile::TempDir, TranscriptStore, PathBuf) {
     (dir, store, project_dir)
 }
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    match coco_types::SessionId::try_new(value) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id should be valid"),
+    }
+}
+
 fn run_git(dir: &StdPath, args: &[&str]) -> bool {
     Command::new("git")
         .args(args)
@@ -35,7 +42,7 @@ fn usage_snapshot_writes_under_session_artifact_dir() {
     let (_dir, store, project_dir) = test_store();
     let snapshot = coco_types::SessionUsageSnapshot {
         version: 1,
-        session_id: "sid-usage".into(),
+        session_id: test_session_id("sid-usage"),
         updated_at_ms: 42,
         totals: coco_types::SessionUsageTotals {
             input_tokens: 100,
@@ -150,12 +157,12 @@ fn usage_snapshot_concurrent_writes_use_distinct_temp_files() {
         handles.push(std::thread::spawn(move || {
             let snapshot = coco_types::SessionUsageSnapshot {
                 version: 1,
-                session_id: "sid-race".into(),
+                session_id: test_session_id("sid-race"),
                 totals: coco_types::SessionUsageTotals {
                     request_count,
                     ..Default::default()
                 },
-                ..Default::default()
+                ..coco_types::SessionUsageSnapshot::empty(test_session_id("sid-race"))
             };
             store.write_usage_snapshot("sid-race", &snapshot)
         }));
@@ -180,7 +187,7 @@ fn make_user_entry(uuid: &str, session_id: &str, text: &str) -> TranscriptEntry 
         uuid: uuid.to_string(),
         parent_uuid: None,
         logical_parent_uuid: None,
-        session_id: session_id.to_string(),
+        session_id: Some(test_session_id(session_id)),
         cwd: "/tmp/project".to_string(),
         timestamp: "2025-01-15T10:00:00Z".to_string(),
         version: Some("1.0.0".to_string()),
@@ -205,7 +212,7 @@ fn make_assistant_entry(uuid: &str, parent_uuid: &str, session_id: &str) -> Tran
         uuid: uuid.to_string(),
         parent_uuid: Some(parent_uuid.to_string()),
         logical_parent_uuid: None,
-        session_id: session_id.to_string(),
+        session_id: Some(test_session_id(session_id)),
         cwd: "/tmp/project".to_string(),
         timestamp: "2025-01-15T10:00:01Z".to_string(),
         version: Some("1.0.0".to_string()),
@@ -290,7 +297,7 @@ fn test_metadata_entries_round_trip() {
         .append_metadata(
             sid,
             &MetadataEntry::CustomTitle {
-                session_id: sid.to_string(),
+                session_id: test_session_id(sid),
                 custom_title: "Bug fix session".to_string(),
             },
         )
@@ -299,7 +306,7 @@ fn test_metadata_entries_round_trip() {
         .append_metadata(
             sid,
             &MetadataEntry::Tag {
-                session_id: sid.to_string(),
+                session_id: test_session_id(sid),
                 tag: "bugfix".to_string(),
             },
         )
@@ -308,7 +315,7 @@ fn test_metadata_entries_round_trip() {
         .append_metadata(
             sid,
             &MetadataEntry::LastPrompt {
-                session_id: sid.to_string(),
+                session_id: test_session_id(sid),
                 last_prompt: "Fix the bug".to_string(),
                 leaf_uuid: None,
                 explicit: false,
@@ -319,7 +326,7 @@ fn test_metadata_entries_round_trip() {
 
     // Load metadata.
     let meta = store.read_metadata(sid).unwrap();
-    assert_eq!(meta.session_id, sid);
+    assert_eq!(meta.session_id.as_str(), sid);
     assert_eq!(meta.custom_title.as_deref(), Some("Bug fix session"));
     assert_eq!(meta.tag.as_deref(), Some("bugfix"));
     assert_eq!(meta.last_prompt.as_deref(), Some("Fix the bug"));
@@ -363,7 +370,7 @@ fn test_main_session_with_interleaved_sidechain_stays_in_main_list() {
 
     let main = store.list_main_sessions().unwrap();
     assert!(
-        main.iter().any(|m| m.session_id == sid),
+        main.iter().any(|m| m.session_id.as_str() == sid),
         "interleaved-sidechain main session must appear in list_main_sessions"
     );
 }
@@ -394,7 +401,7 @@ fn test_pure_agent_transcript_is_flagged_sidechain() {
 
     let main = store.list_main_sessions().unwrap();
     assert!(
-        !main.iter().any(|m| m.session_id == sid),
+        !main.iter().any(|m| m.session_id.as_str() == sid),
         "pure agent transcript must be filtered from list_main_sessions"
     );
 }
@@ -582,7 +589,7 @@ fn test_goal_metadata_last_wins() {
         .append_metadata(
             sid,
             &MetadataEntry::Goal {
-                session_id: sid.to_string(),
+                session_id: test_session_id(sid),
                 goal: Some(active.clone()),
             },
         )
@@ -602,7 +609,7 @@ fn test_goal_metadata_last_wins() {
         .append_metadata(
             sid,
             &MetadataEntry::Goal {
-                session_id: sid.to_string(),
+                session_id: test_session_id(sid),
                 goal: Some(achieved.clone()),
             },
         )
@@ -613,7 +620,7 @@ fn test_goal_metadata_last_wins() {
         .append_metadata(
             sid,
             &MetadataEntry::Goal {
-                session_id: sid.to_string(),
+                session_id: test_session_id(sid),
                 goal: None,
             },
         )
@@ -695,8 +702,8 @@ fn test_list_sessions_newest_first() {
     let sessions = store.list_sessions().unwrap();
     assert_eq!(sessions.len(), 2);
     // Newest first.
-    assert_eq!(sessions[0].session_id, "session-b");
-    assert_eq!(sessions[1].session_id, "session-a");
+    assert_eq!(sessions[0].session_id.as_str(), "session-b");
+    assert_eq!(sessions[1].session_id.as_str(), "session-a");
 }
 
 #[test]
@@ -710,7 +717,7 @@ fn test_load_transcript_messages_filters_metadata() {
         .append_metadata(
             sid,
             &MetadataEntry::CustomTitle {
-                session_id: sid.to_string(),
+                session_id: test_session_id(sid),
                 custom_title: "Test".to_string(),
             },
         )
@@ -1011,7 +1018,7 @@ fn test_transcript_entry_serializes_with_snake_case_keys() {
         uuid: "uu".into(),
         parent_uuid: Some("pp".into()),
         logical_parent_uuid: None,
-        session_id: "ss".into(),
+        session_id: Some(test_session_id("ss")),
         cwd: "/tmp".into(),
         timestamp: "2025-01-15T10:00:00Z".into(),
         version: Some("1.0".into()),
@@ -1053,7 +1060,7 @@ fn test_transcript_entry_serializes_with_snake_case_keys() {
 #[test]
 fn test_metadata_entry_serializes_with_snake_case_payload() {
     let m = MetadataEntry::CustomTitle {
-        session_id: "ss".into(),
+        session_id: test_session_id("ss"),
         custom_title: "My Bug Hunt".into(),
     };
     let v = serde_json::to_value(&m).unwrap();
@@ -1072,7 +1079,7 @@ fn test_content_replacement_serializes_ts_shape() {
     // Three fields per record — `kind`, `tool_use_id`, `replacement`.
     // No `message_uuid` — records are matched on `tool_use_id` only.
     let m = MetadataEntry::ContentReplacement {
-        session_id: "ss".into(),
+        session_id: test_session_id("ss"),
         agent_id: None,
         replacements: vec![ContentReplacementRecord::tool_result(
             "toolu_1",
@@ -1111,7 +1118,7 @@ fn test_content_replacement_serializes_ts_shape() {
 #[test]
 fn test_context_epoch_serializes_snake_case_snapshot() {
     let m = MetadataEntry::ContextEpoch {
-        session_id: "ss".into(),
+        session_id: test_session_id("ss"),
         agent_id: Some("agent-1".into()),
         record: ContextEpochRecord::new(
             "epoch-a",
@@ -1155,7 +1162,7 @@ fn test_tool_result_transcript_serializes_as_user_message_with_tool_result_block
     let entries = transcript_entries_for_message(
         &tool_result,
         TranscriptEntryOptions {
-            session_id: "ss",
+            session_id: Some(&test_session_id("ss")),
             cwd: "/tmp",
             timestamp: "2025-01-15T10:00:00Z",
             parent_uuid: Some("assistant-uuid"),
@@ -1203,7 +1210,7 @@ fn test_transcript_only_flag_survives_jsonl_round_trip() {
     let entries = transcript_entries_for_message(
         &messages[1],
         TranscriptEntryOptions {
-            session_id: "ss",
+            session_id: Some(&test_session_id("ss")),
             cwd: "/tmp",
             timestamp: "2025-01-15T10:00:00Z",
             parent_uuid: None,
@@ -1244,7 +1251,7 @@ fn test_assistant_request_id_survives_jsonl_round_trip() {
     let entries = transcript_entries_for_message(
         &message,
         TranscriptEntryOptions {
-            session_id: "ss",
+            session_id: Some(&test_session_id("ss")),
             cwd: "/tmp",
             timestamp: "2025-01-15T10:00:00Z",
             parent_uuid: None,
@@ -1335,7 +1342,7 @@ fn test_replay_metadata_filters_to_selected_chain_and_agent() {
             is_snapshot_update: false,
         }),
         Entry::Metadata(MetadataEntry::ContentReplacement {
-            session_id: "s".into(),
+            session_id: test_session_id("s"),
             agent_id: None,
             replacements: vec![
                 ContentReplacementRecord::tool_result("toolu_1", "stale"),
@@ -1343,7 +1350,7 @@ fn test_replay_metadata_filters_to_selected_chain_and_agent() {
             ],
         }),
         Entry::Metadata(MetadataEntry::ContentReplacement {
-            session_id: "s".into(),
+            session_id: test_session_id("s"),
             agent_id: Some("agent-a".into()),
             replacements: vec![ContentReplacementRecord::tool_result("toolu_1", "agent")],
         }),

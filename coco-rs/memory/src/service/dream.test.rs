@@ -72,7 +72,7 @@ impl AgentHandle for FailingHandle {
         &self,
         _agent_id: &str,
         _prompt: &str,
-        _session_id: &str,
+        _session_id: &coco_types::SessionId,
     ) -> Result<AgentSpawnResponse, String> {
         Err("unused".into())
     }
@@ -115,7 +115,7 @@ impl AgentHandle for PathWritingHandle {
         &self,
         _agent_id: &str,
         _prompt: &str,
-        _session_id: &str,
+        _session_id: &coco_types::SessionId,
     ) -> Result<AgentSpawnResponse, String> {
         Err("unused".into())
     }
@@ -437,7 +437,7 @@ async fn spawned_prompt_uses_apply_patch_when_configured() {
             coco_types::ActiveShellTool::Disabled,
             patch_overrides(),
         ),
-        "test-session".into(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
     );
 
     let outcome = svc
@@ -484,7 +484,7 @@ async fn completed_dream_queues_memory_update_for_topic_paths() {
         std::sync::Arc::new(crate::telemetry::NoopEmitter),
         DreamNoticeChannels::new(notices.clone(), updates.clone()),
         crate::service::MemoryForkToolConfig::disabled(),
-        "test-session".into(),
+        coco_types::SessionId::try_new("test-session").unwrap(),
     );
 
     let outcome = svc

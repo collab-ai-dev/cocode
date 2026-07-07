@@ -7,7 +7,7 @@ fn temp_store() -> SessionAgentTranscriptStore {
         std::path::Path::new("/test-project"),
     ));
     let store = Arc::new(TranscriptStore::new(paths));
-    SessionAgentTranscriptStore::new(store)
+    SessionAgentTranscriptStore::new(store, std::path::PathBuf::from("/test-project"))
 }
 
 #[tokio::test]

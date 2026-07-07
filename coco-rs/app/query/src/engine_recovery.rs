@@ -730,7 +730,7 @@ impl QueryEngine {
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
         turn_id: &str,
-        event_turn_id: &str,
+        event_turn_id: &coco_types::TurnId,
     ) -> Result<OpenedTurnStream, StreamErrorOutcome> {
         let params = crate::moa::maybe_attach_moa_guidance(
             self,
@@ -791,7 +791,7 @@ impl QueryEngine {
                             event_tx,
                             &from_model_id,
                             &to_model_id,
-                            &self.config.session_id,
+                            event_turn_id.clone(),
                             crate::model_runtime::ModelFallbackReason::CapacityDegrade {
                                 consecutive_errors: 1,
                             },
@@ -810,6 +810,7 @@ impl QueryEngine {
                     turn_state,
                     history,
                     event_tx,
+                    event_turn_id,
                 )
                 .await),
         }
@@ -849,6 +850,7 @@ impl QueryEngine {
         turn_state: &mut LoopTurnState,
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+        event_turn_id: &coco_types::TurnId,
     ) -> StreamErrorOutcome {
         let err_msg = e.to_string();
         // Typed enum match only — `coco-inference`'s provider seam maps
@@ -933,7 +935,7 @@ impl QueryEngine {
                         event_tx,
                         &from_model_id,
                         &to_model_id,
-                        &self.config.session_id,
+                        event_turn_id.clone(),
                         crate::model_runtime::ModelFallbackReason::CapacityDegrade {
                             consecutive_errors: 1,
                         },
@@ -984,6 +986,7 @@ impl QueryEngine {
         event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
         streaming_handle: &mut Option<StreamingHandle<F, Fut>>,
         turn_id: &str,
+        event_turn_id: &coco_types::TurnId,
     ) -> StreamErrorOutcome
     where
         F: Fn(PreparedToolCall, RunOneRuntime) -> Fut + Send + Sync + 'static,
@@ -1104,7 +1107,7 @@ impl QueryEngine {
                         event_tx,
                         &from_model_id,
                         &to_model_id,
-                        &self.config.session_id,
+                        event_turn_id.clone(),
                         crate::model_runtime::ModelFallbackReason::CapacityDegrade {
                             consecutive_errors: 1,
                         },

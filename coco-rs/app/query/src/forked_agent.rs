@@ -203,7 +203,7 @@ impl ForkedAgentOptions {
 pub fn build_query_config(
     cache: &CacheSafeParams,
     options: &ForkedAgentOptions,
-    session_id: &str,
+    session_id: &coco_types::SessionId,
 ) -> AgentQueryConfig {
     let mut prompt_cache = cache.prompt_cache.clone();
     if let Some(cfg) = prompt_cache.as_mut() {
@@ -216,7 +216,7 @@ pub fn build_query_config(
         // does not read this back, but populating it keeps the config
         // honest and avoids a fabricated test identity in a real run.
         identity: coco_tool_runtime::AgentRunIdentity {
-            session_id: session_id.to_string(),
+            session_id: session_id.clone(),
             agent_id: crate::fork_context::auto_agent_id(options.fork_label),
             kind: coco_tool_runtime::AgentRunKind::Fork,
         },

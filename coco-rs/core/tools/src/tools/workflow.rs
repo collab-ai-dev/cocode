@@ -272,15 +272,15 @@ impl Tool for WorkflowTool {
             };
         }
         if matching_workflow_rule(&ctx.permission_context.ask_rules, name).is_some() {
-            return workflow_ask(name, resolved_script_preview(input, ctx));
+            return workflow_ask(name, resolved_script_preview(input, ctx).await);
         }
         if matching_workflow_rule(&ctx.permission_context.allow_rules, name).is_some() {
             return ToolCheckResult::Allow {
-                updated_input: resolve_for_permission(input, ctx),
+                updated_input: resolve_for_permission(input, ctx).await,
                 feedback: None,
             };
         }
-        workflow_ask(name, resolved_script_preview(input, ctx))
+        workflow_ask(name, resolved_script_preview(input, ctx).await)
     }
 
     fn prepare_permission_matcher(&self, input: &WorkflowInput) -> String {
@@ -352,7 +352,7 @@ impl Tool for WorkflowTool {
                     script_path: input.script_path.as_ref().map(PathBuf::from),
                     name: input.name.clone(),
                     script: input.script.clone(),
-                    cwd: ctx.cwd_override.clone(),
+                    cwd: ctx.cwd_anchor().await,
                 };
                 let (spec, script) = coco_workflow::resolve_workflow_source(source_input)
                     .and_then(|spec| {
@@ -426,6 +426,9 @@ impl Tool for WorkflowTool {
 
         // Launch the engine on a dedicated thread (it is `!Send`); run the
         // body (meta stripped), exposing `args` from the tool input.
+        let session_id = ctx
+            .checked_session_id_for_history()
+            .map_err(ToolError::execution_failed)?;
         workflow_host::spawn_workflow_engine(
             script.script_body,
             input.args.clone(),
@@ -434,7 +437,7 @@ impl Tool for WorkflowTool {
             task_id.clone(),
             cancel.clone(),
             workflow_host::WorkflowSpawnContext {
-                session_id: ctx.session_id_for_history.clone().unwrap_or_default(),
+                session_id,
                 invoking_agent_id: ctx.agent_id.as_ref().map(|id| id.as_str().to_string()),
                 tool_use_id: ctx.tool_use_id.clone(),
                 features: ctx.features.clone(),
@@ -585,12 +588,12 @@ fn workflow_rule_key(input: &WorkflowInput) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-fn resolve_for_permission(input: &WorkflowInput, ctx: &ToolUseContext) -> Option<Value> {
+async fn resolve_for_permission(input: &WorkflowInput, ctx: &ToolUseContext) -> Option<Value> {
     let source_input = coco_workflow::WorkflowSourceInput {
         script_path: input.script_path.as_ref().map(PathBuf::from),
         name: input.name.clone(),
         script: input.script.clone(),
-        cwd: ctx.cwd_override.clone(),
+        cwd: ctx.cwd_anchor().await,
     };
     let spec = coco_workflow::resolve_workflow_source(source_input).ok()?;
     let mut updated = serde_json::to_value(input).ok()?;
@@ -624,12 +627,12 @@ fn workflow_ask(name: &str, script_preview: Option<String>) -> ToolCheckResult {
 
 /// Resolve the workflow source and return a bounded preview for the approval
 /// prompt. `None` if the source can't be resolved (the prompt then omits it).
-fn resolved_script_preview(input: &WorkflowInput, ctx: &ToolUseContext) -> Option<String> {
+async fn resolved_script_preview(input: &WorkflowInput, ctx: &ToolUseContext) -> Option<String> {
     let source_input = coco_workflow::WorkflowSourceInput {
         script_path: input.script_path.as_ref().map(PathBuf::from),
         name: input.name.clone(),
         script: input.script.clone(),
-        cwd: ctx.cwd_override.clone(),
+        cwd: ctx.cwd_anchor().await,
     };
     let spec = coco_workflow::resolve_workflow_source(source_input).ok()?;
     let preview: String = spec.source.chars().take(WORKFLOW_PREVIEW_CHARS).collect();

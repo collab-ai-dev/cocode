@@ -140,7 +140,7 @@ impl Tool for ApplyPatchTool {
         input: &ApplyPatchInput,
         ctx: &ToolUseContext,
     ) -> ToolCheckResult {
-        let Ok(cwd) = apply_patch_cwd(ctx) else {
+        let Ok(cwd) = apply_patch_cwd(ctx).await else {
             return ToolCheckResult::Passthrough;
         };
         let Ok(parsed) = coco_apply_patch::parse_patch(&input.patch) else {
@@ -196,16 +196,12 @@ impl Tool for ApplyPatchTool {
         let preview = build_apply_patch_preview(patch);
         let display_data = preview.clone().map(ToolDisplayData::ApplyPatchPreview);
 
-        let cwd_path = ctx
-            .cwd_override
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
-            .ok_or_else(|| {
-                execution_failed_with_preview(
-                    "no working directory available for apply_patch",
-                    display_data.clone(),
-                )
-            })?;
+        let cwd_path = ctx.cwd_anchor().await.ok_or_else(|| {
+            execution_failed_with_preview(
+                "no working directory available for apply_patch",
+                display_data.clone(),
+            )
+        })?;
         let cwd = AbsolutePathBuf::from_absolute_path(&cwd_path).map_err(|e| {
             execution_failed_with_preview(
                 format!("cwd `{}` is not absolute: {e}", cwd_path.display()),
@@ -513,11 +509,10 @@ fn cap_preview_text(text: &str) -> String {
     text.chars().take(APPLY_PATCH_PREVIEW_ROW_CHARS).collect()
 }
 
-fn apply_patch_cwd(ctx: &ToolUseContext) -> Result<AbsolutePathBuf, String> {
+async fn apply_patch_cwd(ctx: &ToolUseContext) -> Result<AbsolutePathBuf, String> {
     let cwd_path = ctx
-        .cwd_override
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
+        .cwd_anchor()
+        .await
         .ok_or_else(|| "no working directory available for apply_patch".to_string())?;
     AbsolutePathBuf::from_absolute_path(&cwd_path)
         .map_err(|e| format!("cwd `{}` is not absolute: {e}", cwd_path.display()))

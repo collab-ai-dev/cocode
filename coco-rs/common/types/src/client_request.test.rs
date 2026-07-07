@@ -56,6 +56,40 @@ fn turn_interrupt_is_unit_variant() {
 }
 
 #[test]
+fn session_id_params_stay_string_shaped_on_wire() {
+    let req = ClientRequest::SessionRead(SessionReadParams {
+        session_id: crate::SessionId::try_new("session-1").unwrap(),
+        cursor: None,
+        limit: None,
+    });
+    let j = serde_json::to_value(&req).unwrap();
+    assert_eq!(j["method"], "session/read");
+    assert_eq!(j["params"]["session_id"], "session-1");
+
+    let back: ClientRequest = serde_json::from_value(json!({
+        "method": "session/archive",
+        "params": { "session_id": "session-1" }
+    }))
+    .unwrap();
+    match back {
+        ClientRequest::SessionArchive(params) => {
+            assert_eq!(params.session_id.as_str(), "session-1");
+        }
+        other => panic!("expected SessionArchive, got {other:?}"),
+    }
+}
+
+#[test]
+fn session_id_params_reject_unsafe_path_components() {
+    let err = serde_json::from_value::<ClientRequest>(json!({
+        "method": "session/read",
+        "params": { "session_id": "../escape" }
+    }))
+    .unwrap_err();
+    assert!(err.to_string().contains("path separator"));
+}
+
+#[test]
 fn turn_start_carries_prompt_and_overrides() {
     let req = ClientRequest::TurnStart(TurnStartParams {
         prompt: "hello".into(),

@@ -75,7 +75,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
         });
         let tool_runtime_config = coco_tool_runtime::AgentQueryConfig {
             system_prompt: config.system_prompt,
-            identity: coco_tool_runtime::AgentRunIdentity::new(
+            identity: coco_tool_runtime::AgentRunIdentity::from_session_id(
                 config.session_id,
                 config.agent_id,
                 coco_tool_runtime::AgentRunKind::Teammate,
@@ -152,7 +152,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
         &self,
         messages: Vec<std::sync::Arc<coco_messages::Message>>,
         _total_tokens: i64,
-        session_id: &str,
+        session_id: &coco_types::SessionId,
         agent_id: &str,
     ) -> crate::Result<Vec<std::sync::Arc<coco_messages::Message>>> {
         const KEEP_RECENT_FOR_MICRO: usize = 5;
@@ -175,7 +175,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
         // closure here per call keeps the borrow simple — the
         // engine ref is `Arc<dyn>` so cloning is cheap.
         let engine = self.inner.clone();
-        let session_id = session_id.to_string();
+        let session_id = session_id.clone();
         let agent_id = agent_id.to_string();
         let summarize = move |attempt: coco_compact::CompactSummaryAttempt| {
             let engine = engine.clone();
@@ -186,7 +186,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
                 // session with a derived child agent id. On a bad identity
                 // (e.g. empty session) the closure errors and the caller
                 // falls back to the micro-compacted history.
-                let identity = coco_tool_runtime::AgentRunIdentity::new(
+                let identity = coco_tool_runtime::AgentRunIdentity::from_session_id(
                     session_id,
                     format!("{agent_id}-compact"),
                     coco_tool_runtime::AgentRunKind::Summary,

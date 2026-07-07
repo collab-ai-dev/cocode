@@ -31,6 +31,10 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+#[cfg(test)]
+#[path = "task.test.rs"]
+mod tests;
+
 // ─── Backends ──────────────────────────────────────────────────────────
 
 /// Backend that drives a teammate's execution.
@@ -549,9 +553,9 @@ impl TeammateExtras {
 /// every consumer match arm must consider remote teammates rather
 /// than the abstraction being "unified" by deleting the inconvenient
 /// variant.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteTeammateExtras {
-    pub session_id: String,
+    pub session_id: crate::SessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<TaskProgress>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -868,13 +872,7 @@ pub fn generate_task_id(task_type: TaskType) -> String {
 /// Generate the `a<16hex>` id shape used for backgrounded agent tasks.
 /// Returned as `String` (the BgAgent's task id IS its agent id).
 pub fn generate_bg_agent_id() -> String {
-    let mut random = String::with_capacity(16);
-    for _ in 0..8 {
-        let byte = rand_u8();
-        random.push(hex_digit(byte >> 4));
-        random.push(hex_digit(byte & 0x0f));
-    }
-    format!("a{random}")
+    crate::AgentId::generate(None).into_inner()
 }
 
 fn random_alphanumeric(n: usize) -> String {
@@ -888,14 +886,6 @@ fn random_alphanumeric(n: usize) -> String {
             }
         })
         .collect()
-}
-
-fn hex_digit(nibble: u8) -> char {
-    if nibble < 10 {
-        (b'0' + nibble) as char
-    } else {
-        (b'a' + nibble - 10) as char
-    }
 }
 
 fn rand_u8() -> u8 {

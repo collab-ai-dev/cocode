@@ -70,9 +70,7 @@ pub struct WorkflowRegistryEntry {
 }
 
 pub fn resolve_workflow_source(input: WorkflowSourceInput) -> Result<WorkflowSourceSpec> {
-    let cwd = input
-        .cwd
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let cwd = input.cwd.unwrap_or_else(|| PathBuf::from("."));
     if let Some(script_path) = input.script_path {
         // Reject UNC on the RAW input before the cwd join: a backslash-UNC
         // (`\\server\share`) is not absolute on Linux, so joining it to cwd
@@ -128,7 +126,7 @@ pub fn resolve_workflow_source(input: WorkflowSourceInput) -> Result<WorkflowSou
 }
 
 pub fn list_workflows(cwd: Option<PathBuf>) -> Vec<WorkflowRegistryEntry> {
-    let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let cwd = cwd.unwrap_or_else(|| PathBuf::from("."));
     let mut out = Vec::new();
     for (path, _, meta) in scan_workflow_registry(&cwd) {
         if out

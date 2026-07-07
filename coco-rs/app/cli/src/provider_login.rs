@@ -74,9 +74,8 @@ pub fn instance_name(provider: Option<&str>) -> String {
 /// layered config (honors `config home/providers.json` + settings) and falling back
 /// to builtins when a full build needs a Main model that isn't set yet (e.g. a
 /// brand-new machine running `coco login` before configuring anything).
-fn provider_auth_for(provider_name: &str) -> Result<ProviderAuth> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    if let Ok(rc) = coco_config::RuntimeConfigBuilder::from_process(&cwd).build() {
+fn provider_auth_for(provider_name: &str, cwd: &Path) -> Result<ProviderAuth> {
+    if let Ok(rc) = coco_config::RuntimeConfigBuilder::from_process(cwd).build() {
         return rc
             .providers
             .get(provider_name)
@@ -101,8 +100,8 @@ fn provider_auth_for(provider_name: &str) -> Result<ProviderAuth> {
 
 /// Resolve the OAuth flow for a provider instance, or explain why it isn't an
 /// OAuth-login provider.
-fn oauth_flow_for(provider_name: &str) -> Result<OAuthFlowId> {
-    match provider_auth_for(provider_name)? {
+fn oauth_flow_for(provider_name: &str, cwd: &Path) -> Result<OAuthFlowId> {
+    match provider_auth_for(provider_name, cwd)? {
         ProviderAuth::OAuth { flow } => Ok(flow),
         ProviderAuth::ApiKey => bail!(
             "provider '{provider_name}' authenticates with an API key, not OAuth login — \
@@ -117,9 +116,10 @@ pub async fn run_login(
     provider: Option<String>,
     no_browser: bool,
     import: Option<PathBuf>,
+    cwd: &Path,
 ) -> Result<()> {
     let name = instance_name(provider.as_deref());
-    let flow = oauth_flow_for(&name)?;
+    let flow = oauth_flow_for(&name, cwd)?;
     if let Some(path) = import {
         return run_import(&name, flow, &path).await;
     }
@@ -206,10 +206,11 @@ pub async fn run_logout(provider: Option<String>) -> Result<()> {
 /// TUI) instead of printed. Loopback-only — the TUI owns stdin, so no paste.
 pub async fn run_login_session(
     provider: Option<String>,
+    cwd: &Path,
     url_sink: Arc<dyn Fn(String) + Send + Sync>,
 ) -> Result<String> {
     let name = instance_name(provider.as_deref());
-    let flow = oauth_flow_for(&name)?;
+    let flow = oauth_flow_for(&name, cwd)?;
     let service = shared_auth_service();
     let opts = LoginOptions {
         open_browser: true,

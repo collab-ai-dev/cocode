@@ -3,14 +3,18 @@
 //! Defines all command name constants and registers the 15 most important
 //! handlers beyond the original 25 in `lib.rs::register_builtins`.
 
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::AsyncBuiltinCommand;
 use crate::BuiltinCommand;
+use crate::CommandHandler;
 use crate::CommandRegistry;
 use crate::RegisteredCommand;
 use crate::builtin_base_ext;
 use crate::handlers;
+use async_trait::async_trait;
 use coco_types::CommandArgumentKind;
 use coco_types::CommandSafety;
 use coco_types::CommandType;
@@ -139,6 +143,10 @@ type AsyncSpec = (
 /// These complement the original 25 from `register_builtins()` with real
 /// logic: reading files, running git, formatting output, etc.
 pub fn register_extended_builtins(registry: &mut CommandRegistry) {
+    register_extended_builtins_with_cwd(registry, PathBuf::from("."));
+}
+
+pub fn register_extended_builtins_with_cwd(registry: &mut CommandRegistry, cwd: PathBuf) {
     use CommandSafety::AlwaysSafe;
     use CommandSafety::BridgeSafe;
     use CommandSafety::LocalOnly;
@@ -353,15 +361,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         // parity-handler version owns the real handler.
         // ── PR-G4 batch 1 ──
         (
-            names::ENV,
-            "Show runtime environment (cwd, model, shell, version)",
-            &["environment"],
-            env_handler,
-            false,
-            AlwaysSafe,
-            None,
-        ),
-        (
             names::DEBUG_TOOL_CALL,
             "Emit debug info for a pending tool call",
             &[],
@@ -392,6 +391,25 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             is_enabled: None,
         });
     }
+
+    registry.register(RegisteredCommand {
+        base: {
+            let mut base = builtin_base_ext(
+                names::ENV,
+                "Show runtime environment (cwd, model, shell, version)",
+                &["environment"],
+                AlwaysSafe,
+                None,
+            );
+            base.argument_kind = builtin_argument_kind(names::ENV, base.argument_kind);
+            base
+        },
+        command_type: CommandType::Local(LocalCommandData {
+            handler: names::ENV.to_string(),
+        }),
+        handler: Some(Arc::new(EnvCommand { cwd })),
+        is_enabled: None,
+    });
 
     let mut base = builtin_base_ext(
         names::FEEDBACK,
@@ -1443,11 +1461,23 @@ fn doctor_handler_async(
 /// `/env` — dump runtime environment (cwd, shell, platform, version).
 /// Local-only: the output is printed in the TUI and not sent to the
 /// agent.
-fn env_handler(_args: &str) -> String {
-    let cwd = std::env::current_dir()
-        .ok()
-        .and_then(|p| p.to_str().map(str::to_string))
-        .unwrap_or_else(|| "?".into());
+struct EnvCommand {
+    cwd: PathBuf,
+}
+
+#[async_trait]
+impl CommandHandler for EnvCommand {
+    async fn execute(&self, _args: &str) -> crate::Result<String> {
+        Ok(render_env(&self.cwd))
+    }
+
+    fn handler_name(&self) -> &str {
+        names::ENV
+    }
+}
+
+fn render_env(cwd: &Path) -> String {
+    let cwd = cwd.display();
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".into());
     let version = option_env!("CARGO_PKG_VERSION").unwrap_or("dev");
     format!(
@@ -1641,7 +1671,9 @@ pub fn register_ts_parity_handlers(
             command_type: CommandType::LocalOverlay(LocalCommandData {
                 handler: names::SKILLS.to_string(),
             }),
-            handler: Some(Arc::new(handlers::skills::SkillsHandler)),
+            handler: Some(Arc::new(handlers::skills::SkillsHandler::new(
+                project_root.clone(),
+            ))),
             is_enabled: None,
         });
     }
@@ -1663,7 +1695,9 @@ pub fn register_ts_parity_handlers(
             command_type: CommandType::LocalOverlay(LocalCommandData {
                 handler: names::AGENTS.to_string(),
             }),
-            handler: Some(Arc::new(handlers::agents::AgentsHandler)),
+            handler: Some(Arc::new(handlers::agents::AgentsHandler::new(
+                project_root.clone(),
+            ))),
             is_enabled: None,
         });
     }
@@ -1685,7 +1719,54 @@ pub fn register_ts_parity_handlers(
             command_type: CommandType::LocalOverlay(LocalCommandData {
                 handler: names::PLUGIN.to_string(),
             }),
-            handler: Some(Arc::new(handlers::plugin::PluginHandler)),
+            handler: Some(Arc::new(handlers::plugin::PluginHandler::new(
+                project_root.clone(),
+            ))),
+            is_enabled: None,
+        });
+    }
+
+    // /lsp — same command metadata as the early extended builtin, but
+    // context-bound so project config resolution uses the session root.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::LSP,
+            "Manage LSP servers (status, install, enable/disable, add/remove)",
+            &[],
+            CommandSafety::LocalOnly,
+            Some("[list|install|enable|disable|add|remove] [server]"),
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::LocalOverlay(LocalCommandData {
+                handler: names::LSP.to_string(),
+            }),
+            handler: Some(Arc::new(handlers::lsp::LspHandler::new(
+                project_root.clone(),
+            ))),
+            is_enabled: None,
+        });
+    }
+
+    // /stats — reports and inspects git state under the session root.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::STATS,
+            "Show usage statistics and activity",
+            &[],
+            CommandSafety::LocalOnly,
+            None,
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::LocalOverlay(LocalCommandData {
+                handler: names::STATS.to_string(),
+            }),
+            handler: Some(Arc::new(handlers::stats::StatsHandler::new(
+                project_root.clone(),
+            ))),
             is_enabled: None,
         });
     }
@@ -1728,7 +1809,7 @@ pub fn register_ts_parity_handlers(
         let handler = handlers::init_prompt::InitPromptHandler {
             user_type,
             features: features.clone(),
-            project_root: Some(project_root),
+            project_root: Some(project_root.clone()),
         };
         registry.register(RegisteredCommand {
             base,
@@ -1895,7 +1976,7 @@ pub fn register_ts_parity_handlers(
                 hooks: None,
             }),
             handler: Some(Arc::new(
-                handlers::commit_push_pr::CommitPushPrHandler::new(),
+                handlers::commit_push_pr::CommitPushPrHandler::new(project_root.clone()),
             )),
             is_enabled: None,
         });
@@ -1925,7 +2006,9 @@ pub fn register_ts_parity_handlers(
                 thinking_level: None,
                 hooks: None,
             }),
-            handler: Some(Arc::new(handlers::commit_prompt::CommitPromptHandler::new())),
+            handler: Some(Arc::new(handlers::commit_prompt::CommitPromptHandler::new(
+                project_root,
+            ))),
             is_enabled: None,
         });
     }

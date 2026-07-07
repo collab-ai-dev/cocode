@@ -400,18 +400,8 @@ fn append_suggestions(
 
 /// Project-relative when the file is under `cwd`, else `~`-shortened for
 /// files in `$HOME`, else the absolute path verbatim.
-///
-/// `cwd` is the threaded session working dir, but the native-scrollback
-/// render path leaves it `None`, so fall back to the process cwd.
 fn display_path(path: &str, cwd: Option<&str>) -> String {
-    let resolved_cwd = cwd
-        .filter(|c| !c.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|p| p.to_string_lossy().into_owned())
-        });
+    let resolved_cwd = cwd.filter(|c| !c.is_empty()).map(str::to_string);
     if let Some(cwd) = resolved_cwd.as_deref().filter(|c| !c.is_empty())
         && let Some(rest) = path
             .strip_prefix(cwd.trim_end_matches('/'))

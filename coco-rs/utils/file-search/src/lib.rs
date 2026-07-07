@@ -248,9 +248,8 @@ pub async fn run_main<T: Reporter>(
     }: Cli,
     reporter: T,
 ) -> Result<(), FileSearchError> {
-    let search_directory = match cwd {
-        Some(dir) => dir,
-        None => std::env::current_dir()?,
+    let Some(search_directory) = cwd else {
+        return Err(FileSearchError::MissingSearchRoot);
     };
     let pattern_text = match pattern {
         Some(pattern) => pattern,

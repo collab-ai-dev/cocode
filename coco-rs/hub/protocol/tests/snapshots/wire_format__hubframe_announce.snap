@@ -5,6 +5,9 @@ expression: json
 {
   "kind": "announce",
   "instanceId": "00000000-0000-0000-0000-000000000000",
+  "liveSessions": [
+    "sess-1"
+  ],
   "host": "test-host",
   "cwd": "/work",
   "pid": 4242,

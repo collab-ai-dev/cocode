@@ -21,11 +21,37 @@ use crate::types::ScopedMcpServerConfig;
 /// Loads MCP server configurations from all sources.
 pub struct McpConfigLoader;
 
+/// Filesystem roots used while loading MCP config layers.
+pub struct McpConfigRoots<'a> {
+    /// Project-scoped config root: `.mcp.json` and `.coco/mcp.json`.
+    pub project_root: &'a Path,
+    /// Session-local root: `.coco.local/mcp.json`.
+    pub session_cwd: &'a Path,
+}
+
 impl McpConfigLoader {
     /// Load MCP configs from all sources, deduplicating by server name.
     ///
     /// Later sources override earlier ones (by server name).
     pub fn load(cwd: &Path, config_home: &Path) -> Vec<ScopedMcpServerConfig> {
+        Self::load_with_roots(
+            McpConfigRoots {
+                project_root: cwd,
+                session_cwd: cwd,
+            },
+            config_home,
+        )
+    }
+
+    /// Load MCP configs using distinct project and session roots.
+    ///
+    /// Project files are rooted at `project_root`; local files stay rooted at
+    /// `session_cwd` so callers can split ProjectServices-owned config from
+    /// session-local overrides without changing layer priority.
+    pub fn load_with_roots(
+        roots: McpConfigRoots<'_>,
+        config_home: &Path,
+    ) -> Vec<ScopedMcpServerConfig> {
         let mut configs_by_name: HashMap<String, ScopedMcpServerConfig> = HashMap::new();
 
         // 1. Managed scope: policy-pushed config
@@ -45,12 +71,13 @@ impl McpConfigLoader {
 
         // 4. Project scope: .mcp.json in project directory
         load_mcp_json(
-            &cwd.join(".mcp.json"),
+            &roots.project_root.join(".mcp.json"),
             ConfigScope::Project,
             &mut configs_by_name,
         );
 
-        let project_mcp = cwd
+        let project_mcp = roots
+            .project_root
             .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
             .join("mcp.json");
         load_mcp_json(&project_mcp, ConfigScope::Project, &mut configs_by_name);
@@ -61,7 +88,7 @@ impl McpConfigLoader {
 
         // 7. Local scope
         let local_dir = format!("{}.local", coco_utils_common::COCO_CONFIG_DIR_NAME);
-        let local_mcp = cwd.join(local_dir).join("mcp.json");
+        let local_mcp = roots.session_cwd.join(local_dir).join("mcp.json");
         load_mcp_json(&local_mcp, ConfigScope::Local, &mut configs_by_name);
 
         configs_by_name.into_values().collect()

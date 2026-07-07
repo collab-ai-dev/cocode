@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 use crate::sdk_server::handlers::SdkServerState;
 use crate::sdk_server::outbound::OutboundMessage;
-use crate::session_runtime::SessionRuntime;
+use crate::session_runtime::SessionHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LivePermissionModeChange {
@@ -40,32 +40,32 @@ pub async fn apply_to_app_state(
 }
 
 pub async fn apply_to_runtime(
-    runtime: &Arc<SessionRuntime>,
+    session: &SessionHandle,
     mode: PermissionMode,
     event_tx: &mpsc::Sender<CoreEvent>,
     bypass_available: bool,
 ) -> LivePermissionModeChange {
-    let fallback_mode = runtime.current_engine_config().await.permission_mode;
-    runtime
+    let fallback_mode = session.current_engine_config().await.permission_mode;
+    session
         .update_engine_config(move |cfg| cfg.permission_mode = mode)
         .await;
     // The dangerous-rule snapshot the transition strips must come from the LIVE
     // allow rules (the single base the factory reads), not the now-dead config
     // maps. Read them off the shared `ToolAppState.permissions` base.
-    let live_allow_rules = runtime
+    let live_allow_rules = session
         .app_state
         .read()
         .await
         .permissions
         .allow_rules
         .clone();
-    let config = runtime.current_engine_config().await;
+    let config = session.current_engine_config().await;
     let plan_auto_options = coco_permissions::PlanModeAutoOptions {
         use_auto_mode_during_plan: config.use_auto_mode_during_plan,
         auto_mode_available: config.permission_mode_availability.auto,
     };
     let change = apply_to_app_state(
-        &runtime.app_state,
+        &session.app_state,
         fallback_mode,
         mode,
         &live_allow_rules,

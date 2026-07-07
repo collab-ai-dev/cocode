@@ -30,12 +30,12 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use arc_swap::ArcSwap;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_types::ActiveShellTool;
 use coco_types::ModelRole;
+use coco_types::SessionId;
 use coco_types::ToolOverrides;
 use coco_types::messages::Message;
 use tokio::sync::Mutex;
@@ -46,6 +46,7 @@ use crate::prompt::FileMutationPromptTools;
 use crate::prompt::build_extract_prompt;
 use crate::scan;
 use crate::service::MemoryForkToolConfig;
+use crate::service::SessionIdSlot;
 use crate::telemetry::MemoryEvent;
 use crate::telemetry::MemoryTelemetryEmitter;
 use crate::telemetry::NoopEmitter;
@@ -125,7 +126,7 @@ impl Drop for InProgressGuard {
 
 /// Turn-end extraction service.
 pub struct ExtractService {
-    session_id: ArcSwap<String>,
+    session_id: SessionIdSlot,
     memory_dir: PathBuf,
     config: MemoryConfig,
     agent: AgentSlot,
@@ -252,7 +253,10 @@ impl ExtractService {
             telemetry,
             crate::notice::NoticeInbox::default(),
             MemoryForkToolConfig::disabled(),
-            "test-session".to_string(),
+            match SessionId::try_new("test-session") {
+                Ok(id) => id,
+                Err(_) => unreachable!("test session id must be valid"),
+            },
         )
     }
 
@@ -265,11 +269,32 @@ impl ExtractService {
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
         notices: crate::notice::NoticeInbox,
         tool_config: MemoryForkToolConfig,
-        session_id: String,
+        session_id: SessionId,
+    ) -> Self {
+        let session_id = Arc::new(arc_swap::ArcSwap::from_pointee(session_id));
+        Self::with_shared_agent_notices_and_session_id_slot(
+            memory_dir,
+            config,
+            agent,
+            telemetry,
+            notices,
+            tool_config,
+            session_id,
+        )
+    }
+
+    pub(crate) fn with_shared_agent_notices_and_session_id_slot(
+        memory_dir: PathBuf,
+        config: MemoryConfig,
+        agent: AgentSlot,
+        telemetry: Arc<dyn MemoryTelemetryEmitter>,
+        notices: crate::notice::NoticeInbox,
+        tool_config: MemoryForkToolConfig,
+        session_id: SessionIdSlot,
     ) -> Self {
         let (tx, rx) = watch::channel(false);
         Self {
-            session_id: ArcSwap::from_pointee(session_id),
+            session_id,
             memory_dir,
             config,
             agent,
@@ -284,7 +309,7 @@ impl ExtractService {
         }
     }
 
-    pub fn set_session_id(&self, new_id: String) {
+    pub fn set_session_id(&self, new_id: SessionId) {
         self.session_id.store(Arc::new(new_id));
     }
 
@@ -664,7 +689,7 @@ impl ExtractService {
         let request = AgentSpawnRequest {
             prompt,
             description: Some("memory extraction".into()),
-            session_id: (**self.session_id.load()).clone(),
+            session_id: Some(self.session_id.load().as_ref().clone()),
             subagent_type: Some("general-purpose".into()),
             definition: Some(memory_def),
             run_in_background: false,

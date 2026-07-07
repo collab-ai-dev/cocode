@@ -16,6 +16,7 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -26,7 +27,6 @@ use coco_cli::Commands;
 use coco_cli::McpAction;
 use coco_cli::headless::build_runtime_config_for_cli;
 use coco_cli::headless::resolve_main_model;
-use coco_cli::paths::standard_agent_search_paths;
 use coco_cli::resume_resolver;
 use coco_cli::resume_resolver::ResumePlan;
 use coco_cli::sdk_server::QueryEngineRunner;
@@ -84,10 +84,12 @@ async fn async_main() -> Result<()> {
     }
     coco_cli::startup_profile::init();
 
+    let startup_cwd = std::env::current_dir()?;
+
     // Bind the handle for the lifetime of `main` so the non-blocking
     // file appender flushes on drop. `Mode::Skip` (status/doctor/etc.)
     // returns `None` and never installs a global subscriber.
-    let _tracing_handle = tracing_init::install(&cli)?;
+    let _tracing_handle = tracing_init::install(&cli, &startup_cwd)?;
     coco_cli::startup_profile::mark("subscriber_installed");
 
     tracing::info!(
@@ -125,7 +127,7 @@ async fn async_main() -> Result<()> {
     if let Some(cmd) = &cli.command {
         match cmd {
             Commands::Status => {
-                let cwd = std::env::current_dir()?;
+                let cwd = startup_cwd.clone();
                 let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
                 coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
                 let main_model = resolve_main_model(&runtime_config);
@@ -150,27 +152,28 @@ async fn async_main() -> Result<()> {
                     Some(id) => cli_for_resume.resume = Some(id),
                     None => cli_for_resume.continue_session = true,
                 }
-                let cwd = std::env::current_dir()?;
+                let cwd = startup_cwd.clone();
                 let plan =
                     resume_resolver::resolve(&cli_for_resume, &global_config::config_home(), &cwd)?;
                 if plan.is_none() {
                     println!("No sessions to resume.");
                     return Ok(());
                 }
-                return tui_runner::run_tui(&cli_for_resume, plan).await;
+                return tui_runner::run_tui(&cli_for_resume, plan, cwd).await;
             }
             Commands::Config { action } => {
-                return bin_handlers::config::handle_config(action);
+                let cwd = startup_cwd.clone();
+                return bin_handlers::config::handle_config(action, &cwd);
             }
             Commands::Chat { prompt } => {
                 let prompt = prompt.as_deref().unwrap_or("Hello!");
-                return run_chat(&cli, Some(prompt)).await;
+                return run_chat(&cli, Some(prompt), startup_cwd.clone()).await;
             }
             Commands::Doctor => {
                 println!("Running diagnostics...");
                 println!("[ok] Shell: available");
                 println!("[ok] Config: loaded");
-                let cwd = std::env::current_dir()?;
+                let cwd = startup_cwd.clone();
                 let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
                 coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
                 let main_model = resolve_main_model(&runtime_config);
@@ -184,10 +187,12 @@ async fn async_main() -> Result<()> {
                 no_browser,
                 import,
             } => {
+                let cwd = startup_cwd.clone();
                 return coco_cli::provider_login::run_login(
                     provider.clone(),
                     *no_browser,
                     import.clone(),
+                    &cwd,
                 )
                 .await;
             }
@@ -195,7 +200,7 @@ async fn async_main() -> Result<()> {
                 return coco_cli::provider_login::run_logout(provider.clone()).await;
             }
             Commands::Init => {
-                let cwd = std::env::current_dir()?;
+                let cwd = startup_cwd.clone();
                 let coco_dir = cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME);
                 std::fs::create_dir_all(&coco_dir)?;
                 let settings = coco_dir.join("settings.json");
@@ -212,7 +217,12 @@ async fn async_main() -> Result<()> {
             Commands::Review { target } => {
                 let t = target.as_deref().unwrap_or("HEAD");
                 println!("Reviewing: {t}");
-                return run_chat(&cli, Some(&format!("Review the code changes in {t}"))).await;
+                return run_chat(
+                    &cli,
+                    Some(&format!("Review the code changes in {t}")),
+                    startup_cwd.clone(),
+                )
+                .await;
             }
             Commands::Mcp { action } => {
                 match action {
@@ -225,22 +235,27 @@ async fn async_main() -> Result<()> {
                     }
                     McpAction::Remove { name } => println!("Removing MCP server: {name}"),
                     McpAction::Login { name, no_browser } => {
-                        return coco_cli::mcp_cli::run_login(name, *no_browser).await;
+                        let cwd = startup_cwd.clone();
+                        return coco_cli::mcp_cli::run_login(name, *no_browser, &cwd).await;
                     }
                     McpAction::Logout { name } => {
-                        return coco_cli::mcp_cli::run_logout(name).await;
+                        let cwd = startup_cwd.clone();
+                        return coco_cli::mcp_cli::run_logout(name, &cwd).await;
                     }
                 }
                 return Ok(());
             }
             Commands::Plugin { action } => {
-                return bin_handlers::plugin::run_plugin_subcommand(action).await;
+                let cwd = startup_cwd.clone();
+                return bin_handlers::plugin::run_plugin_subcommand(action, &cwd).await;
             }
             Commands::Moa { action } => {
-                return bin_handlers::moa::handle_moa(action);
+                let cwd = startup_cwd.clone();
+                return bin_handlers::moa::handle_moa(action, &cwd);
             }
             Commands::Agents => {
-                return bin_handlers::agents::run_agents_subcommand().await;
+                let cwd = startup_cwd.clone();
+                return bin_handlers::agents::run_agents_subcommand(&cwd).await;
             }
             Commands::AutoMode { subcmd } => {
                 match subcmd.as_deref() {
@@ -343,7 +358,7 @@ async fn async_main() -> Result<()> {
                 return Ok(());
             }
             Commands::Sdk => {
-                return run_sdk_mode(&cli).await;
+                return run_sdk_mode(&cli, startup_cwd.clone()).await;
             }
         }
     }
@@ -359,12 +374,12 @@ async fn async_main() -> Result<()> {
             prompt_len = prompt.len(),
             "running headless chat"
         );
-        run_chat(&cli, Some(prompt)).await
+        run_chat(&cli, Some(prompt), startup_cwd.clone()).await
     } else {
         // Resolve `--resume` / `--continue` / `--fork-session` once
         // and hand off to the TUI runner. `None` keeps the default
         // fresh-session bootstrap.
-        let cwd = std::env::current_dir()?;
+        let cwd = startup_cwd.clone();
         let plan: Option<ResumePlan> =
             resume_resolver::resolve(&cli, &global_config::config_home(), &cwd)?;
         coco_cli::startup_profile::mark("resume_resolved");
@@ -374,17 +389,16 @@ async fn async_main() -> Result<()> {
             resuming = plan.is_some(),
             "launching interactive TUI"
         );
-        tui_runner::run_tui(&cli, plan).await
+        tui_runner::run_tui(&cli, plan, cwd).await
     }
 }
 
 /// Run a single-turn print mode (--print / piped stdout).
-async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
+async fn run_chat(cli: &Cli, prompt: Option<&str>, cwd: PathBuf) -> Result<()> {
     // Resolve `--resume` / `--continue` / `--fork-session` once at
     // the boot edge so headless and TUI share identical semantics.
     // `None` means no resume flag was set; fall through to a fresh
     // session.
-    let cwd = std::env::current_dir()?;
     let plan = resume_resolver::resolve(cli, &global_config::config_home(), &cwd)?;
     if let Some(p) = &plan {
         eprintln!(
@@ -396,6 +410,7 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
     }
     let opts = match plan {
         Some(p) => coco_cli::headless::RunChatOptions {
+            cwd: Some(cwd.clone()),
             prior_messages: p
                 .prior_messages
                 .into_iter()
@@ -405,7 +420,10 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
             stored_mode: p.conversation.mode,
             ..Default::default()
         },
-        None => coco_cli::headless::RunChatOptions::default(),
+        None => coco_cli::headless::RunChatOptions {
+            cwd: Some(cwd.clone()),
+            ..Default::default()
+        },
     };
     let outcome = coco_cli::headless::run_chat_with_options(cli, prompt, opts).await?;
     if let Some(msg) = &outcome.permission_notification {
@@ -436,8 +454,7 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
 }
 
 /// Run in SDK mode: NDJSON-over-stdio JSON-RPC control protocol.
-async fn run_sdk_mode(cli: &Cli) -> Result<()> {
-    let cwd = std::env::current_dir()?;
+async fn run_sdk_mode(cli: &Cli, cwd: PathBuf) -> Result<()> {
     tracing::info!(
         target: "coco_cli::sdk",
         cwd = %cwd.display(),
@@ -494,7 +511,9 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         available_output_styles
             .insert(0, coco_output_styles::DEFAULT_OUTPUT_STYLE_NAME.to_string());
     }
-    let agent_search_paths = standard_agent_search_paths(&global_config::config_home(), &cwd);
+    let agent_search_paths = resources
+        .project_services
+        .agent_search_paths(&global_config::config_home(), &cwd);
 
     let auth_method = if is_real_anthropic {
         let config_dir = global_config::config_home();
@@ -516,6 +535,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     };
 
     let mut bootstrap_builder = CliInitializeBootstrap::new(current_output_style)
+        .with_cwd(cwd.clone())
         .with_command_registry(command_registry.clone())
         .with_available_output_styles(available_output_styles)
         .with_agent_search_paths(agent_search_paths.clone());
@@ -555,7 +575,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         coco_cli::sdk_server::SdkPermissionBridge::new(state.clone()),
     );
 
-    let session_runtime = crate::session_runtime::SessionRuntime::build(
+    let session_handle = crate::session_runtime::SessionHandle::build(
         crate::session_runtime::SessionRuntimeBuildOpts {
             cli,
             runtime_config: Arc::new(runtime_config),
@@ -574,6 +594,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
             permission_bridge: Some(bridge),
             command_registry: command_registry.clone(),
             skill_manager: skill_manager.clone(),
+            project_services: resources.project_services.clone(),
             // Same paths the SDK `initialize.agents` listing reads —
             // per-session AgentDefinitionStore is built from these.
             agent_search_paths: agent_search_paths.clone(),
@@ -586,6 +607,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         },
     )
     .await?;
+    let session_runtime = session_handle.runtime().clone();
 
     // Sandbox hot-reload for the long-lived SDK NDJSON server: settings.json
     // `sandbox.*` edits re-flow into the live SandboxState. Held for the
@@ -626,17 +648,17 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let lsp_handle = coco_cli::session_bootstrap::build_lsp_handle_if_enabled(
         &session_runtime.runtime_config,
         &global_config::config_home(),
-        &cwd,
+        &session_runtime.project_root,
     )
     .await;
-    install_session_late_binds(session_runtime.clone(), &cwd, None, lsp_handle, None).await?;
+    install_session_late_binds(session_handle.clone(), &cwd, None, lsp_handle, None).await?;
     // Unified MCP bootstrap (shared with TUI/headless): registers config-file +
     // plugin MCP servers, attaches the manager + `McpManagerAdapter` handle, and
     // connects + registers tools in the background. Reuses the manager already
     // handed to `SdkServer` (for `mcp/setServers`) so all surfaces share one
     // source of truth.
     coco_cli::session_bootstrap::bootstrap_session_mcp(
-        &session_runtime,
+        &session_handle,
         &cwd,
         Some(mcp_manager),
         /*await_connect*/ false,
@@ -649,7 +671,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // here, so no permission bridge is registered (worker deny-path prompts
     // fail closed); teardown / idle / coordinator re-injection still flow.
     // No-op when AgentTeams is off or this session is itself a teammate.
-    coco_cli::leader_inbox_poller::install_leader(session_runtime.clone(), None).await;
+    coco_cli::leader_inbox_poller::install_leader(session_handle.clone(), None).await;
 
     // SessionStart hooks fire once at session bootstrap; output queues
     // onto the shared sync-hook buffer and surfaces as `hook_*` reminders
@@ -671,10 +693,10 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     });
     let server = server
         .with_file_history(file_history_for_server, global_config::config_home())
-        .with_session_runtime(session_runtime.clone());
+        .with_session_handle(session_handle.clone());
 
     let runner = Arc::new(QueryEngineRunner::new(
-        session_runtime,
+        session_handle,
         cli.max_turns,
         system_prompt,
     ));
@@ -697,7 +719,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         // Persist coordinator mode at exit so a later `--resume` re-derives the
         // role (R2). The SDK leader path previously never wrote it, silently
         // dropping the coordinator role on resume.
-        let session_id = session_runtime.current_session_id().await;
+        let session_id = session_runtime.current_typed_session_id().await;
         coco_cli::coordinator_mode_resume::persist_session_mode(
             &session_runtime.session_manager,
             &session_id,

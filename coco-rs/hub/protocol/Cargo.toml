@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 chrono.workspace = true
+coco-types.workspace = true
 coco-error.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

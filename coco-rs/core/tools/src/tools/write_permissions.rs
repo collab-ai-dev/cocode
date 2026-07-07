@@ -149,7 +149,7 @@ pub(crate) fn check_write_permission_for_paths(
 pub(crate) fn effective_cwd(ctx: &ToolUseContext) -> PathBuf {
     ctx.cwd_override
         .clone()
-        .or_else(|| std::env::current_dir().ok())
+        .or_else(|| ctx.original_cwd.clone())
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 

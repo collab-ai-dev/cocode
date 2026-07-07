@@ -163,7 +163,7 @@ impl TurnRunner for NotImplementedRunner {
 /// state that was previously deep-cloned into the runner on every turn.
 #[derive(Debug, Clone)]
 pub struct TurnHandoff {
-    pub session_id: String,
+    pub session_id: coco_types::SessionId,
     pub cwd: String,
     pub model: String,
     pub history: Arc<Mutex<Vec<std::sync::Arc<coco_messages::Message>>>>,
@@ -221,6 +221,9 @@ pub trait InitializeBootstrap: Send + Sync {
     /// Current fast-mode rate-limit state, if tracked. Returns `None` to
     /// signal "feature not enabled" or "unknown".
     async fn fast_mode_state(&self) -> Option<coco_types::FastModeState>;
+
+    /// Workspace cwd captured before a session/runtime exists.
+    async fn cwd(&self) -> std::path::PathBuf;
 }
 
 // ---------------------------------------------------------------------------
@@ -318,15 +321,15 @@ pub struct SdkServerState {
     /// to `bypassPermissions` are rejected with an explicit error
     /// when `isBypassPermissionsModeAvailable` is false.
     pub bypass_permissions_available: std::sync::atomic::AtomicBool,
-    /// Process-shared `SessionRuntime`. Set by `run_sdk_mode` at
-    /// startup (same Arc threaded into `QueryEngineRunner`). Read by
-    /// `handle_session_start` to call `runtime.start_new_session()`
+    /// Process-shared `SessionHandle`. Set by `run_sdk_mode` at
+    /// startup (same handle threaded into `QueryEngineRunner`). Read by
+    /// `handle_session_start` to call `runtime.retarget_for_new_session()`
     /// when an SDK client cycles `session/archive` → `session/start`,
     /// so the new session sees fresh `FileReadState`,
     /// `SessionMemoryService` paths, file-history sink target, and
     /// cache-break detector baseline. `None` only in tests that don't
     /// wire a runtime.
-    pub session_runtime: RwLock<Option<Arc<crate::session_runtime::SessionRuntime>>>,
+    pub session_runtime: RwLock<Option<crate::session_runtime::SessionHandle>>,
 
     /// Agent definitions pushed via `initialize.agents`
     /// (`z.record(z.string(), AgentDefinitionSchema)`). Stashed here at `initialize` time and
@@ -379,6 +382,20 @@ impl Default for SdkServerState {
 }
 
 impl SdkServerState {
+    pub(super) async fn workspace_cwd(&self) -> std::path::PathBuf {
+        if let Some(session) = self.session.read().await.as_ref() {
+            return std::path::PathBuf::from(&session.cwd);
+        }
+        let runtime = self.session_runtime.read().await.clone();
+        if let Some(runtime) = runtime {
+            return runtime.current_cwd.read().await.clone();
+        }
+        if let Some(bootstrap) = self.initialize_bootstrap.read().await.as_ref() {
+            return bootstrap.cwd().await;
+        }
+        std::path::PathBuf::from(".")
+    }
+
     /// Persist the last MCP-registration report for `server` (v4.2). Read by
     /// `handle_mcp_status` to surface the registered `tool_count` + skipped /
     /// tombstoned tools. Overwritten on every (re)connect.
@@ -598,7 +615,7 @@ impl std::fmt::Debug for SdkServerState {
 /// Handle for an active SDK session.
 #[derive(Debug)]
 pub struct SessionHandle {
-    pub session_id: String,
+    pub session_id: coco_types::SessionId,
     pub cwd: String,
     pub model: String,
     /// Session-scoped permission mode override. When `None`, turns use
@@ -659,7 +676,7 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
-    pub(super) fn new(session_id: String, cwd: String, model: String) -> Self {
+    pub(super) fn new(session_id: coco_types::SessionId, cwd: String, model: String) -> Self {
         Self {
             session_id,
             cwd,

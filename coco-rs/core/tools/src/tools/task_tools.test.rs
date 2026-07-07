@@ -1552,7 +1552,7 @@ async fn test_task_create_emits_snapshot_and_auto_expand() {
 #[tokio::test]
 async fn test_task_create_child_agent_refreshes_without_auto_expand() {
     let mut ctx = ToolUseContext::test_default();
-    ctx.agent_id = Some(coco_types::AgentId::from("agent-child-1"));
+    ctx.agent_id = Some(coco_types::AgentId::try_new("agent-child-1").unwrap());
     let result = <TaskCreateTool as DynTool>::execute(
         &TaskCreateTool,
         json!({"subject": "child item", "description": "x"}),
@@ -1593,7 +1593,7 @@ async fn test_todo_write_child_agent_preserves_plan_tasks_leader_clears() {
     // Child agent writes its internal checklist → V2 snapshot survives,
     // the child's todos land under its own agent key.
     let mut child_ctx = ToolUseContext::test_default();
-    child_ctx.agent_id = Some(coco_types::AgentId::from("agent-child-2"));
+    child_ctx.agent_id = Some(coco_types::AgentId::try_new("agent-child-2").unwrap());
     let todo = <TodoWriteTool as DynTool>::execute(
         &TodoWriteTool,
         json!({"todos": [{
@@ -1754,7 +1754,7 @@ async fn test_task_update_completed_hook_block_returns_failure_patch() {
 async fn test_todo_write_emits_snapshot_keyed_by_agent() {
     use coco_types::AgentId;
     let mut ctx = ToolUseContext::test_default();
-    ctx.agent_id = Some(AgentId::new("subagent-7"));
+    ctx.agent_id = Some(AgentId::try_new("subagent-7").unwrap());
 
     let result = <TodoWriteTool as DynTool>::execute(
         &TodoWriteTool,
@@ -1775,6 +1775,29 @@ async fn test_todo_write_emits_snapshot_keyed_by_agent() {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].content, "item");
     assert_eq!(list[0].active_form, "Doing it");
+}
+
+#[tokio::test]
+async fn test_todo_write_does_not_key_snapshot_by_unsafe_session_id() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.session_id_for_history = Some("bad/session".into());
+
+    let result = <TodoWriteTool as DynTool>::execute(
+        &TodoWriteTool,
+        json!({"todos": [
+            {"content": "item", "status": "pending", "activeForm": "Doing it"}
+        ]}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let patch = result.app_state_patch.expect("patch must be emitted");
+    let mut state = coco_types::ToolAppState::default();
+    patch(&mut state);
+
+    assert!(!state.todos_by_agent.contains_key("bad/session"));
+    assert_eq!(state.todos_by_agent["main-session"][0].content, "item");
 }
 
 /// The TUI auto-detects V2 vs V1 by snapshot content, so a V1 patch
@@ -2041,7 +2064,7 @@ async fn test_task_update_verification_nudge_skipped_when_verify_task_exists() {
 async fn test_task_update_verification_nudge_skipped_in_subagent() {
     use coco_types::AgentId;
     let mut ctx = ToolUseContext::test_default();
-    ctx.agent_id = Some(AgentId::new("subagent-1"));
+    ctx.agent_id = Some(AgentId::try_new("subagent-1").unwrap());
     let mut ids = Vec::new();
     for i in 0..3 {
         let created = <TaskCreateTool as DynTool>::execute(

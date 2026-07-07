@@ -3,6 +3,7 @@
 use coco_messages::AssistantContent;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
+use coco_types::SessionId;
 use coco_types::TokenUsage;
 
 /// Output mode for CLI rendering.
@@ -172,7 +173,7 @@ pub enum SdkMessage {
     SystemInfo { message: String },
     /// Session metadata.
     SessionMeta {
-        session_id: String,
+        session_id: SessionId,
         model: String,
         cwd: String,
     },

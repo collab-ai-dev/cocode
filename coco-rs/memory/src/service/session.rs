@@ -34,17 +34,18 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 
-use arc_swap::ArcSwap;
 use coco_paths::ProjectPaths;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_types::ActiveShellTool;
 use coco_types::ModelRole;
+use coco_types::SessionId;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use super::SessionIdSlot;
 use crate::compact_truncate::truncate_session_memory_for_compact;
 use crate::config::MemoryConfig;
 use crate::prompt::build_session_memory_template;
@@ -121,10 +122,10 @@ pub struct SessionMemoryService {
     /// only on `/clear` (`set_session_id`). `ArcSwap` is the right
     /// primitive for this "rare write, frequent sync read" shape:
     /// reads are a single relaxed atomic load, no lock acquisition,
-    /// no `.await`. The inner `Arc<String>` lets callers cheaply
+    /// no `.await`. The inner `Arc<SessionId>` lets callers cheaply
     /// snapshot a stable view of the id even if a `/clear` lands
     /// mid-call.
-    session_id: ArcSwap<String>,
+    session_id: SessionIdSlot,
     /// Per-project filesystem layout — resolves the canonical
     /// `<projectDir>/<sessionId>/session-memory/summary.md` path.
     project_paths: Arc<ProjectPaths>,
@@ -182,7 +183,7 @@ pub enum SkipReason {
 impl SessionMemoryService {
     pub fn new(
         project_paths: Arc<ProjectPaths>,
-        session_id: String,
+        session_id: SessionId,
         config: MemoryConfig,
         agent: AgentHandleRef,
     ) -> Self {
@@ -200,7 +201,26 @@ impl SessionMemoryService {
     /// so all three services see the same swappable handle.
     pub fn with_shared_agent(
         project_paths: Arc<ProjectPaths>,
-        session_id: String,
+        session_id: SessionId,
+        config: MemoryConfig,
+        agent: crate::service::extract::AgentSlot,
+        telemetry: Arc<dyn MemoryTelemetryEmitter>,
+        active_shell_tool: ActiveShellTool,
+    ) -> Self {
+        let session_id = Arc::new(arc_swap::ArcSwap::from_pointee(session_id));
+        Self::with_shared_agent_and_session_id_slot(
+            project_paths,
+            session_id,
+            config,
+            agent,
+            telemetry,
+            active_shell_tool,
+        )
+    }
+
+    pub(crate) fn with_shared_agent_and_session_id_slot(
+        project_paths: Arc<ProjectPaths>,
+        session_id: SessionIdSlot,
         config: MemoryConfig,
         agent: crate::service::extract::AgentSlot,
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
@@ -208,7 +228,7 @@ impl SessionMemoryService {
     ) -> Self {
         let (tx, rx) = watch::channel(false);
         Self {
-            session_id: ArcSwap::from_pointee(session_id),
+            session_id,
             project_paths,
             config,
             agent,
@@ -263,7 +283,7 @@ impl SessionMemoryService {
     /// to settle so its post-spawn state write lands against the OLD
     /// session id before we mutate. If the wait times out we proceed
     /// — `InProgressGuard::drop` clears the flag eventually regardless.
-    pub async fn set_session_id(&self, new_id: String) {
+    pub async fn set_session_id(&self, new_id: SessionId) {
         let _ = self.wait_for_extraction(Duration::from_secs(5)).await;
         // Hold the state mutex across the cache + session_id mutation
         // so an observer that locks the state can't see a half-reset
@@ -662,7 +682,7 @@ impl SessionMemoryService {
         let request = AgentSpawnRequest {
             prompt,
             description: Some("session memory update".into()),
-            session_id: self.read_session_id(),
+            session_id: Some(self.session_id.load().as_ref().clone()),
             subagent_type: Some("general-purpose".into()),
             definition: Some(memory_def),
             constraints: Some(AgentSpawnConstraints {
@@ -754,7 +774,7 @@ impl SessionMemoryService {
     }
 
     fn read_session_id(&self) -> String {
-        (**self.session_id.load()).clone()
+        self.session_id.load().to_string()
     }
 
     /// Atomically seed the session-memory file with `template` if it

@@ -15,6 +15,13 @@ fn usage(input: i64, output: i64) -> TokenUsage {
     }
 }
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    match coco_types::SessionId::try_new(value) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id should be valid"),
+    }
+}
+
 #[test]
 fn pricing_resolves_for_anthropic() {
     let pricing = get_model_pricing(Some("anthropic"), "claude-sonnet-4-5").unwrap();
@@ -34,7 +41,7 @@ fn unknown_pricing_accumulates_tokens_without_cost() {
     let mut tracker = CostTracker::new();
     tracker.record_usage("unknown-provider", "unknown-model", usage(100, 20), 7);
 
-    let snapshot = tracker.snapshot_at("s1", 123);
+    let snapshot = tracker.snapshot_at(test_session_id("s1"), 123);
     assert_eq!(snapshot.totals.input_tokens, 100);
     assert_eq!(snapshot.totals.output_tokens, 20);
     assert_eq!(snapshot.totals.total_cost_usd, 0.0);
@@ -78,7 +85,7 @@ fn same_model_id_on_different_providers_stays_separate() {
     tracker.record_usage("openai", "shared-model", usage(10, 1), 1);
     tracker.record_usage("anthropic", "shared-model", usage(20, 2), 1);
 
-    let snapshot = tracker.snapshot_at("s1", 123);
+    let snapshot = tracker.snapshot_at(test_session_id("s1"), 123);
     assert_eq!(snapshot.models.len(), 2);
     assert!(
         snapshot
@@ -115,7 +122,7 @@ fn source_records_split_same_provider_model_by_attribution() {
         ),
     );
 
-    let snapshot = tracker.snapshot_at("s1", 123);
+    let snapshot = tracker.snapshot_at(test_session_id("s1"), 123);
     assert_eq!(snapshot.models.len(), 1);
     assert_eq!(snapshot.models[0].input_tokens, 30);
     assert_eq!(snapshot.source_records.len(), 2);
@@ -166,7 +173,7 @@ fn merge_preserves_source_record_counts_duration_cost_and_unpriced() {
     );
 
     left.merge_from(&right);
-    let snapshot = left.snapshot_at("s1", 123);
+    let snapshot = left.snapshot_at(test_session_id("s1"), 123);
 
     let priced = snapshot
         .source_records
@@ -195,7 +202,7 @@ fn merge_preserves_source_record_counts_duration_cost_and_unpriced() {
 #[test]
 fn partially_unpriced_bucket_remains_marked_unpriced() {
     let mut tracker = CostTracker::from_snapshot(coco_types::SessionUsageSnapshot {
-        session_id: "s1".into(),
+        session_id: test_session_id("s1"),
         models: vec![coco_types::SessionModelUsageEntry {
             provider: "anthropic".into(),
             model_id: "claude-sonnet-4-5".into(),
@@ -208,11 +215,11 @@ fn partially_unpriced_bucket_remains_marked_unpriced() {
             priced: false,
             ..Default::default()
         }],
-        ..Default::default()
+        ..coco_types::SessionUsageSnapshot::empty(test_session_id("s1"))
     });
     tracker.record_usage("anthropic", "claude-sonnet-4-5", usage(100, 10), 1);
 
-    let snapshot = tracker.snapshot_at("s1", 123);
+    let snapshot = tracker.snapshot_at(test_session_id("s1"), 123);
     let sonnet = snapshot.models.first().unwrap();
     assert_eq!(sonnet.request_count, 2);
     assert_eq!(sonnet.unpriced_request_count, 1);
@@ -224,7 +231,7 @@ fn partially_unpriced_bucket_remains_marked_unpriced() {
 #[test]
 fn legacy_snapshot_models_rehydrate_as_session_main_source_records() {
     let tracker = CostTracker::from_snapshot(coco_types::SessionUsageSnapshot {
-        session_id: "s1".into(),
+        session_id: test_session_id("s1"),
         models: vec![coco_types::SessionModelUsageEntry {
             provider: "anthropic".into(),
             model_id: "claude-sonnet-4-5".into(),
@@ -234,10 +241,10 @@ fn legacy_snapshot_models_rehydrate_as_session_main_source_records() {
             priced: true,
             ..Default::default()
         }],
-        ..Default::default()
+        ..coco_types::SessionUsageSnapshot::empty(test_session_id("s1"))
     });
 
-    let snapshot = tracker.snapshot_at("s1", 123);
+    let snapshot = tracker.snapshot_at(test_session_id("s1"), 123);
     assert_eq!(snapshot.source_records.len(), 1);
     let entry = &snapshot.source_records[0];
     assert_eq!(entry.group, coco_types::UsageSourceGroup::Session);
@@ -248,18 +255,24 @@ fn legacy_snapshot_models_rehydrate_as_session_main_source_records() {
 #[test]
 fn snapshot_totals_include_web_search_requests_from_loaded_entries() {
     let snapshot = coco_types::SessionUsageSnapshot {
-        session_id: "s1".into(),
+        session_id: test_session_id("s1"),
         models: vec![coco_types::SessionModelUsageEntry {
             provider: "anthropic".into(),
             model_id: "claude-sonnet-4-5".into(),
             web_search_requests: 3,
             ..Default::default()
         }],
-        ..Default::default()
+        ..coco_types::SessionUsageSnapshot::empty(test_session_id("s1"))
     };
     let tracker = CostTracker::from_snapshot(snapshot);
 
-    assert_eq!(tracker.snapshot_at("s1", 123).totals.web_search_requests, 3);
+    assert_eq!(
+        tracker
+            .snapshot_at(test_session_id("s1"), 123)
+            .totals
+            .web_search_requests,
+        3
+    );
 }
 
 #[test]
@@ -276,7 +289,7 @@ fn format_cost_threshold_at_half_dollar() {
 
 #[test]
 fn format_session_cost_empty_reports_no_usage() {
-    let snap = coco_types::SessionUsageSnapshot::default();
+    let snap = coco_types::SessionUsageSnapshot::empty(test_session_id("s1"));
     let out = format_session_cost(&snap);
     assert!(out.contains("No API usage recorded yet"));
 }
@@ -284,7 +297,7 @@ fn format_session_cost_empty_reports_no_usage() {
 #[test]
 fn format_session_cost_renders_per_model_and_total() {
     let snap = coco_types::SessionUsageSnapshot {
-        session_id: "s1".into(),
+        session_id: test_session_id("s1"),
         totals: coco_types::SessionUsageTotals {
             input_tokens: 1_500,
             output_tokens: 500,
@@ -313,7 +326,7 @@ fn format_session_cost_renders_per_model_and_total() {
                 ..Default::default()
             },
         ],
-        ..Default::default()
+        ..coco_types::SessionUsageSnapshot::empty(test_session_id("s1"))
     };
     let out = format_session_cost(&snap);
     // Multi-provider: both buckets present, keyed by (provider, model_id).

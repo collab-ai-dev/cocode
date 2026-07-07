@@ -26,11 +26,15 @@
 //! text contract while still giving `agent/resume` a clean conversation log to
 //! rehydrate from.
 
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use coco_messages::Message;
 use coco_session::{AgentMetadata, TranscriptStore};
 use coco_tool_runtime::{AgentSpawnMetadata, AgentTranscriptStore};
+use uuid::Uuid;
 
 /// Trait impl for the production transcript store. Cloning is
 /// cheap (`Arc<TranscriptStore>` underneath); same instance is
@@ -38,11 +42,12 @@ use coco_tool_runtime::{AgentSpawnMetadata, AgentTranscriptStore};
 /// entry point (reader side).
 pub struct SessionAgentTranscriptStore {
     store: Arc<TranscriptStore>,
+    cwd: PathBuf,
 }
 
 impl SessionAgentTranscriptStore {
-    pub fn new(store: Arc<TranscriptStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<TranscriptStore>, cwd: PathBuf) -> Self {
+        Self { store, cwd }
     }
 }
 
@@ -69,6 +74,7 @@ impl AgentTranscriptStore for SessionAgentTranscriptStore {
         messages: &[Arc<coco_messages::Message>],
     ) -> Result<(), coco_error::BoxedError> {
         let store = self.store.clone();
+        let cwd_path = self.cwd.clone();
         let session_id = session_id.to_string();
         let agent_id = agent_id.to_string();
         // Move an owned snapshot into the blocking thread — the
@@ -76,7 +82,23 @@ impl AgentTranscriptStore for SessionAgentTranscriptStore {
         // bytes happens once inside storage.
         let messages = messages.to_vec();
         tokio::task::spawn_blocking(move || {
-            store.append_agent_messages(&session_id, &agent_id, &messages)
+            let mut seen = HashSet::<Uuid>::new();
+            let refs: Vec<&Message> = messages.iter().map(AsRef::as_ref).collect();
+            let git_branch = coco_git::get_current_branch(&cwd_path)
+                .ok()
+                .flatten()
+                .filter(|branch| !branch.is_empty());
+            let options = coco_session::storage::ChainWriteOptions {
+                cwd: cwd_path.display().to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                is_sidechain: true,
+                agent_id: Some(agent_id.clone()),
+                starting_parent_uuid: None,
+                git_branch,
+            };
+            store
+                .append_agent_message_chain(&session_id, &agent_id, refs, &mut seen, options)
+                .map(|_| ())
         })
         .await
         .map_err(|e| boxed_anyhow(anyhow::anyhow!("spawn_blocking join: {e}")))?

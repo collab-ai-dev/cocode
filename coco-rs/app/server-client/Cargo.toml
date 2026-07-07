@@ -1,0 +1,23 @@
+[package]
+name = "coco-app-server-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "coco_app_server_client"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-app-server.workspace = true
+coco-types.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+coco-app-server.workspace = true
+coco-types.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }

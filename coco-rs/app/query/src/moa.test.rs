@@ -114,21 +114,23 @@ fn user_turn_cache_key_is_turn_scoped_and_ignores_synthetic_context() {
         LlmMessage::user_text(ADVISORY_INSTRUCTION),
     ];
     let no_system_prompt = vec![LlmMessage::user_text("user question")];
+    let turn_1 = coco_types::TurnId::from("turn-1");
+    let turn_2 = coco_types::TurnId::from("turn-2");
 
-    let key = user_turn_cache_key(&endpoint, &base_prompt, "turn-1").expect("cache key");
+    let key = user_turn_cache_key(&endpoint, &base_prompt, &turn_1).expect("cache key");
     assert_eq!(
         key,
-        user_turn_cache_key(&endpoint, &later_iteration_prompt, "turn-1").expect("cache key"),
+        user_turn_cache_key(&endpoint, &later_iteration_prompt, &turn_1).expect("cache key"),
         "user_turn fanout should reuse references within the same user turn",
     );
     assert_eq!(
         key,
-        user_turn_cache_key(&endpoint, &no_system_prompt, "turn-1").expect("cache key"),
+        user_turn_cache_key(&endpoint, &no_system_prompt, &turn_1).expect("cache key"),
         "synthetic reference system prompt must not participate in the cache signature",
     );
     assert_ne!(
         key,
-        user_turn_cache_key(&endpoint, &base_prompt, "turn-2").expect("cache key"),
+        user_turn_cache_key(&endpoint, &base_prompt, &turn_2).expect("cache key"),
         "reference outputs must not be reused across turns",
     );
 }
@@ -145,8 +147,9 @@ fn per_iteration_cache_key_is_disabled() {
         aggregator_temperature: None,
     };
     let prompt = vec![LlmMessage::user_text("prompt")];
+    let turn_id = coco_types::TurnId::from("turn-1");
 
-    assert!(user_turn_cache_key(&endpoint, &prompt, "turn-1").is_none());
+    assert!(user_turn_cache_key(&endpoint, &prompt, &turn_id).is_none());
 }
 
 #[tokio::test]
@@ -172,17 +175,18 @@ async fn moa_events_surface_reference_lifecycle_and_thinking_block() {
         usage: None,
     };
 
-    emit_reference_started(&event_tx, "turn-1", coco_types::ModelRole::Plan, &endpoint);
+    let turn_id = coco_types::TurnId::from("turn-1");
+    emit_reference_started(&event_tx, &turn_id, coco_types::ModelRole::Plan, &endpoint);
     emit_reference_completed(
         &event_tx,
-        "turn-1",
+        &turn_id,
         coco_types::ModelRole::Plan,
         &endpoint,
         &output,
     )
     .await;
-    emit_moa_aggregating(&event_tx, "turn-1", coco_types::ModelRole::Plan, &endpoint).await;
-    emit_reference_thinking_blocks(&event_tx, "turn-1", &[output]).await;
+    emit_moa_aggregating(&event_tx, &turn_id, coco_types::ModelRole::Plan, &endpoint).await;
+    emit_reference_thinking_blocks(&event_tx, &turn_id, &[output]).await;
 
     let started = rx.recv().await.expect("started");
     assert!(matches!(

@@ -16,6 +16,7 @@ use crate::types::TeamAllowedPath;
 use crate::types::TeamFile;
 use crate::types::TeamManager;
 use crate::types::TeamMember;
+use coco_types::SessionId;
 
 #[derive(Debug, Clone)]
 pub struct SpawnMemberRequest {
@@ -44,7 +45,7 @@ pub struct CommitMemberRequest {
     pub agent_id: String,
     pub backend_type: BackendType,
     pub pane_id: Option<String>,
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
 }
 
 #[derive(Debug, Clone)]
@@ -103,11 +104,7 @@ impl TeamRosterStore {
                 team_name: manager.team_name().to_string(),
             });
         }
-        if request.leader_session_id.trim().is_empty() {
-            return Err(
-                "session-team bootstrap requires a non-empty leader session id".to_string(),
-            );
-        }
+        let leader_session_id = request.leader_session_id();
 
         let team_name = request.team_name;
         let task_list_id = crate::types::sanitize_name(&team_name);
@@ -122,7 +119,7 @@ impl TeamRosterStore {
                 let tf = build_session_team_file(LeaderTeamSpec {
                     team_name: team_name.clone(),
                     description: None,
-                    leader_session_id: request.leader_session_id,
+                    leader_session_id,
                     leader_agent_type: request.leader_agent_type,
                     leader_model: request.leader_model,
                     cwd: request.cwd.display().to_string(),
@@ -391,7 +388,7 @@ impl TeamRosterStore {
 struct LeaderTeamSpec {
     team_name: String,
     description: Option<String>,
-    leader_session_id: String,
+    leader_session_id: SessionId,
     leader_agent_type: Option<String>,
     leader_model: Option<String>,
     cwd: String,

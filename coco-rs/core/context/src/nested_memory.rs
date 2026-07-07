@@ -136,7 +136,7 @@ pub fn traverse_for_file(
 
     // Phase 1: managed/user conditional rules — wired in Phase 4 of the
     // optimization plan. Stub now keeps the call shape stable.
-    out.extend(phase1_managed_user_conditional_rules(file));
+    out.extend(phase1_managed_user_conditional_rules(file, cwd));
 
     let (nested_dirs, cwd_level_dirs) = directories_to_process(file, cwd);
 
@@ -294,14 +294,13 @@ fn loaded_entry(path: PathBuf, content: String, source: MemoryFileSource) -> Loa
 /// matches `file`.
 ///
 /// Glob base for managed/user rules is the original CWD.
-fn phase1_managed_user_conditional_rules(file: &Path) -> Vec<LoadedMemoryEntry> {
+fn phase1_managed_user_conditional_rules(file: &Path, cwd: &Path) -> Vec<LoadedMemoryEntry> {
     let mut out: Vec<LoadedMemoryEntry> = Vec::new();
-    let cwd = std::env::current_dir().unwrap_or_default();
 
     // Managed: /etc/coco/rules (best-effort; missing dirs are silent).
     let managed_dir = std::path::PathBuf::from("/etc/coco/rules");
     let managed_conditional = collect_rule_files(&managed_dir, true);
-    for rule in filter_rules_matching(managed_conditional, file, &cwd) {
+    for rule in filter_rules_matching(managed_conditional, file, cwd) {
         out.push(rule_to_entry(rule, MemoryFileSource::Project));
     }
 
@@ -311,7 +310,7 @@ fn phase1_managed_user_conditional_rules(file: &Path) -> Vec<LoadedMemoryEntry> 
             .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
             .join("rules");
         let user_conditional = collect_rule_files(&user_dir, true);
-        for rule in filter_rules_matching(user_conditional, file, &cwd) {
+        for rule in filter_rules_matching(user_conditional, file, cwd) {
             out.push(rule_to_entry(rule, MemoryFileSource::UserGlobal));
         }
     }

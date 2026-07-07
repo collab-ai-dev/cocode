@@ -12,6 +12,7 @@ use coco_types::CoreEvent;
 use coco_types::PermissionDecision;
 use coco_types::PermissionDecisionReason;
 use coco_types::PermissionDenialInfo;
+use coco_types::SessionId;
 use coco_types::SessionState;
 use coco_types::ToolId;
 use coco_types::TuiOnlyEvent;
@@ -69,7 +70,7 @@ pub(crate) struct PermissionController<'a> {
     permission_denials: &'a mut Vec<PermissionDenialInfo>,
     state_tracker: &'a SessionStateTracker,
     permission_bridge: Option<&'a ToolPermissionBridgeRef>,
-    session_id: &'a str,
+    session_id: &'a SessionId,
     cancel: &'a CancellationToken,
     /// Hook registry + orchestration context for firing
     /// `PermissionRequest` hooks before the dialog so hooks can
@@ -93,7 +94,7 @@ impl<'a> PermissionController<'a> {
         permission_denials: &'a mut Vec<PermissionDenialInfo>,
         state_tracker: &'a SessionStateTracker,
         permission_bridge: Option<&'a ToolPermissionBridgeRef>,
-        session_id: &'a str,
+        session_id: &'a SessionId,
         cancel: &'a CancellationToken,
         hooks: Option<&'a Arc<HookRegistry>>,
         orchestration_ctx: Option<&'a OrchestrationContext>,

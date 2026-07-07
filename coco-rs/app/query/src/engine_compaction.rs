@@ -289,7 +289,7 @@ impl QueryEngine {
                     }
                 }
 
-                let cwd = std::env::current_dir().unwrap_or_default();
+                let cwd = self.config.workspace_cwd();
                 let plan_file = self.config_home.as_ref().map(|ch| {
                     let plans_dir = coco_context::resolve_plans_directory(
                         ch,
@@ -297,9 +297,9 @@ impl QueryEngine {
                         self.config.plans_directory.as_deref(),
                     );
                     coco_context::get_plan_file_path(
-                        &self.config.session_id,
+                        self.config.session_id.as_str(),
                         &plans_dir,
-                        self.config.agent_id.as_deref(),
+                        self.config.agent_id_str(),
                     )
                 });
                 let max_files_to_restore =
@@ -827,7 +827,7 @@ impl QueryEngine {
 
         let source = ModelRuntimeSource::Role(coco_types::ModelRole::Main);
         let fallback_min_context_window = self.compact_fallback_min_context_window();
-        let moa_turn_id = uuid::Uuid::new_v4().to_string();
+        let moa_turn_id = coco_types::TurnId::generate();
 
         loop {
             let params = compact_summary_query_params(
@@ -943,7 +943,7 @@ impl QueryEngine {
             .reminder_sources
             .materialize(coco_system_reminder::MaterializeContext {
                 config: &self.config.system_reminder,
-                agent_id: self.config.agent_id.as_deref(),
+                agent_id: self.config.agent_id_str(),
                 user_input: None,
                 mentioned_paths: &[],
                 recent_tools: &[],
@@ -959,7 +959,7 @@ impl QueryEngine {
             preserved_history,
             coco_types::AttachmentKind::DeferredToolsDelta,
         ) {
-            app_state_snapshot.last_announced_tools_for_scope(self.config.agent_id.as_deref())
+            app_state_snapshot.last_announced_tools_for_scope(self.config.agent_id_str())
         } else {
             HashSet::new()
         };
@@ -1032,7 +1032,7 @@ impl QueryEngine {
 
         let state = PostCompactDeltaState {
             current_deferred_tools,
-            agent_id: self.config.agent_id.clone(),
+            agent_id: self.config.agent_id_string(),
             current_agents,
             current_mcp_instructions,
         };
@@ -1095,14 +1095,14 @@ impl QueryEngine {
             self.config.plans_directory.as_deref(),
         );
         let plan_path = coco_context::get_plan_file_path(
-            &self.config.session_id,
+            self.config.session_id.as_str(),
             &plans_dir,
-            self.config.agent_id.as_deref(),
+            self.config.agent_id_str(),
         );
         let plan_content = coco_context::get_plan(
-            &self.config.session_id,
+            self.config.session_id.as_str(),
             &plans_dir,
-            self.config.agent_id.as_deref(),
+            self.config.agent_id_str(),
         );
         coco_compact::create_plan_attachment_if_needed(&plan_path, plan_content.as_deref())
     }
@@ -1162,10 +1162,10 @@ impl QueryEngine {
                     let path = coco_context::get_plan_file_path(
                         sid,
                         &plans_dir,
-                        self.config.agent_id.as_deref(),
+                        self.config.agent_id_str(),
                     );
                     let exists =
-                        coco_context::plan_exists(sid, &plans_dir, self.config.agent_id.as_deref());
+                        coco_context::plan_exists(sid, &plans_dir, self.config.agent_id_str());
                     (path.display().to_string(), exists)
                 }
                 _ => (String::new(), false),
@@ -1319,7 +1319,7 @@ impl QueryEngine {
         // Post-compact attachment assembly: file attachments, plan
         // attachment, plan-mode attachment, async-agent attachments,
         // and in-band skill re-injection.
-        let cwd = std::env::current_dir().unwrap_or_default();
+        let cwd = self.config.workspace_cwd();
         let session_id = self.config.session_id.clone();
         let config_home = self.config_home.clone();
         let project_dir = self.config.project_dir.clone();
@@ -1377,12 +1377,16 @@ impl QueryEngine {
                             let path = coco_context::get_plan_file_path(
                                 sid,
                                 &plans_dir,
-                                agent_id_for_attachments.as_deref(),
+                                agent_id_for_attachments
+                                    .as_ref()
+                                    .map(coco_types::AgentId::as_str),
                             );
                             let exists = coco_context::plan_exists(
                                 sid,
                                 &plans_dir,
-                                agent_id_for_attachments.as_deref(),
+                                agent_id_for_attachments
+                                    .as_ref()
+                                    .map(coco_types::AgentId::as_str),
                             );
                             (path.display().to_string(), exists)
                         }
@@ -1423,9 +1427,11 @@ impl QueryEngine {
                         plans_directory_setting.as_deref(),
                     );
                     coco_context::get_plan_file_path(
-                        &session_id,
+                        session_id.as_str(),
                         &plans_dir,
-                        agent_id_for_attachments.as_deref(),
+                        agent_id_for_attachments
+                            .as_ref()
+                            .map(coco_types::AgentId::as_str),
                     )
                 });
 
@@ -1448,14 +1454,18 @@ impl QueryEngine {
                         plans_directory_setting.as_deref(),
                     );
                     let plan_path = coco_context::get_plan_file_path(
-                        &session_id,
+                        session_id.as_str(),
                         &plans_dir,
-                        agent_id_for_attachments.as_deref(),
+                        agent_id_for_attachments
+                            .as_ref()
+                            .map(coco_types::AgentId::as_str),
                     );
                     let plan_content = coco_context::get_plan(
-                        &session_id,
+                        session_id.as_str(),
                         &plans_dir,
-                        agent_id_for_attachments.as_deref(),
+                        agent_id_for_attachments
+                            .as_ref()
+                            .map(coco_types::AgentId::as_str),
                     );
                     if let Some(att) = coco_compact::create_plan_attachment_if_needed(
                         &plan_path,

@@ -17,7 +17,7 @@ fn state_with_session() -> Arc<SdkServerState> {
     {
         let mut slot = state.session.try_write().unwrap();
         *slot = Some(SessionHandle::new(
-            "sess-1".into(),
+            coco_types::SessionId::try_new("sess-1").unwrap(),
             "/tmp".into(),
             "mock-model".into(),
         ));

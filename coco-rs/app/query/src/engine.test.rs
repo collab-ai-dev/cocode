@@ -1032,7 +1032,7 @@ async fn test_subagent_command_queue_drain_keeps_main_commands_queued() {
         .await;
 
     let config = QueryEngineConfig {
-        agent_id: Some("agent-1".into()),
+        agent_id: Some(coco_types::AgentId::try_new("agent-1").unwrap()),
         ..Default::default()
     };
     let engine = QueryEngine::new(config, client, tools, cancel, None).with_command_queue(queue);
@@ -2234,7 +2234,7 @@ async fn rejected_exit_plan_mode_streaming_completion_is_plan_rejection_not_perm
     let client = crate::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
-        session_id: session_id.into(),
+        session_id: coco_types::SessionId::try_new(session_id).unwrap(),
         permission_mode: PermissionMode::Plan,
         ..Default::default()
     };
@@ -2305,7 +2305,7 @@ async fn exit_plan_mode_observable_input_excludes_disk_plan() {
     registry.register(Arc::new(ExitPlanModeTool));
     let tools = Arc::new(registry);
     let config = QueryEngineConfig {
-        session_id: session_id.into(),
+        session_id: coco_types::SessionId::try_new(session_id).unwrap(),
         permission_mode: PermissionMode::Plan,
         ..Default::default()
     };
@@ -3412,7 +3412,7 @@ async fn test_session_started_emitted_with_bootstrap() {
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig {
         model_id: "test-model".into(),
-        session_id: "session-1".into(),
+        session_id: coco_types::SessionId::try_new("session-1").unwrap(),
         permission_mode: PermissionMode::AcceptEdits,
         ..Default::default()
     };
@@ -3432,7 +3432,7 @@ async fn test_session_started_emitted_with_bootstrap() {
         _ => None,
     });
     let p = started.expect("SessionStarted should be emitted");
-    assert_eq!(p.session_id, "session-1");
+    assert_eq!(p.session_id.as_str(), "session-1");
     assert_eq!(p.model, "test-model");
     assert_eq!(p.provider, "mock");
     assert_eq!(p.cwd, "/tmp");
@@ -3486,7 +3486,7 @@ async fn test_session_result_emitted_with_full_metadata() {
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig {
         model_id: "test-model".into(),
-        session_id: "s1".into(),
+        session_id: coco_types::SessionId::try_new("s1").unwrap(),
         ..Default::default()
     };
     let (result, events) = collect_events_from_run(model, tools, config, None, "hi").await;
@@ -3496,7 +3496,7 @@ async fn test_session_result_emitted_with_full_metadata() {
         _ => None,
     });
     let p = sr_params.expect("SessionResult should be emitted");
-    assert_eq!(p.session_id, "s1");
+    assert_eq!(p.session_id.as_str(), "s1");
     assert_eq!(p.total_turns, result.turns);
     assert_eq!(p.duration_ms, result.duration_ms);
     assert_eq!(p.stop_reason, "end_turn");
@@ -3512,15 +3512,22 @@ async fn test_session_usage_updated_emits_cumulative_snapshot() {
         text: "final".into(),
     });
     let tools = Arc::new(ToolRegistry::new());
+    let session_id = coco_types::SessionId::try_new("s-usage").unwrap();
     let config = QueryEngineConfig {
         model_id: "test-model".into(),
-        session_id: "s-usage".into(),
+        session_id: session_id.clone(),
         ..Default::default()
     };
     let client = crate::test_support::model_runtime_registry(model);
     let tracker = Arc::new(tokio::sync::Mutex::new(coco_messages::CostTracker::new()));
+    let usage_accounting = crate::usage_accounting::UsageAccounting::for_static_session(
+        config.session_id.clone(),
+        tracker.clone(),
+        Arc::new(tokio::sync::Mutex::new(())),
+        coco_types::UsageAttribution::session(coco_types::UsageSource::Main),
+    );
     let engine = QueryEngine::new(config, client, tools, CancellationToken::new(), None)
-        .with_session_usage_tracker(tracker.clone());
+        .with_usage_accounting(usage_accounting);
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let collector = tokio::spawn(async move {
@@ -3543,7 +3550,7 @@ async fn test_session_usage_updated_emits_cumulative_snapshot() {
         _ => None,
     });
     let snapshot = snapshot.expect("SessionUsageUpdated should be emitted");
-    assert_eq!(snapshot.session_id, "s-usage");
+    assert_eq!(snapshot.session_id.as_str(), "s-usage");
     assert_eq!(snapshot.totals.input_tokens, 10);
     assert_eq!(snapshot.totals.output_tokens, 5);
     assert_eq!(snapshot.totals.request_count, 1);
@@ -3551,7 +3558,7 @@ async fn test_session_usage_updated_emits_cumulative_snapshot() {
         tracker
             .lock()
             .await
-            .snapshot("s-usage")
+            .snapshot(session_id)
             .totals
             .request_count,
         1
@@ -4371,12 +4378,15 @@ async fn transcript_records_final_assistant_after_tool_roundtrip() {
     let store = Arc::new(coco_session::TranscriptStore::new(paths));
     let seen = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
     let config = QueryEngineConfig {
-        session_id: session_id.into(),
+        session_id: coco_types::SessionId::try_new(session_id).unwrap(),
         ..Default::default()
     };
 
     let engine = QueryEngine::new(config, client, tools, cancel, None)
-        .with_transcript_store(store.clone(), session_id.into())
+        .with_transcript_store(
+            store.clone(),
+            coco_types::SessionId::try_new(session_id).unwrap(),
+        )
         .with_transcript_dedup(seen);
     let result = engine.run("read /tmp/nonexistent.txt").await.unwrap();
 
@@ -4499,13 +4509,16 @@ async fn stop_hook_blocking_flushes_transcript_before_retry() {
     let store = Arc::new(coco_session::TranscriptStore::new(paths));
     let seen = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
     let config = QueryEngineConfig {
-        session_id: session_id.into(),
+        session_id: coco_types::SessionId::try_new(session_id).unwrap(),
         ..Default::default()
     };
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     let engine = QueryEngine::new(config, client, tools, cancel, Some(Arc::new(hooks)))
-        .with_transcript_store(store.clone(), session_id.into())
+        .with_transcript_store(
+            store.clone(),
+            coco_types::SessionId::try_new(session_id).unwrap(),
+        )
         .with_transcript_dedup(seen);
 
     let err = engine
@@ -5012,7 +5025,7 @@ async fn test_emit_model_fallback_notice_capacity_degrade_template() {
         &Some(tx),
         /*original*/ "claude-opus",
         /*new_model*/ "claude-sonnet",
-        /*session_id*/ "s-1",
+        coco_types::TurnId::from("turn-1"),
         crate::model_runtime::ModelFallbackReason::CapacityDegrade {
             consecutive_errors: 3,
         },
@@ -5021,7 +5034,7 @@ async fn test_emit_model_fallback_notice_capacity_degrade_template() {
     let evt = rx.recv().await.expect("one event emitted");
     match evt {
         CoreEvent::Stream(crate::AgentStreamEvent::TextDelta { delta, turn_id }) => {
-            assert_eq!(turn_id, "s-1");
+            assert_eq!(turn_id, "turn-1");
             assert!(delta.contains("Switched to claude-sonnet"));
             assert!(delta.contains("claude-opus"));
             assert!(
@@ -5042,7 +5055,7 @@ async fn test_emit_model_fallback_notice_probe_recovery_template() {
         &Some(tx),
         /*original*/ "",
         /*new_model*/ "claude-opus",
-        /*session_id*/ "s-2",
+        coco_types::TurnId::from("turn-2"),
         crate::model_runtime::ModelFallbackReason::ProbeRecovery,
     )
     .await;

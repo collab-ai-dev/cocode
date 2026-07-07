@@ -395,8 +395,8 @@ fn current_plan_attachment_uses_agent_scoped_plan_file() {
     let model = Arc::new(CapturingModel::default());
     let config_home = tempfile::tempdir().expect("temp config home");
     let mut engine = new_engine(model, None).with_config_home(config_home.path().to_path_buf());
-    engine.config.session_id = "agent-plan-compact".to_string();
-    engine.config.agent_id = Some("agent-a".to_string());
+    engine.config.session_id = coco_types::SessionId::try_new("agent-plan-compact").unwrap();
+    engine.config.agent_id = Some(coco_types::AgentId::try_new("agent-a").unwrap());
 
     let plans_dir = coco_context::resolve_plans_directory(
         config_home.path(),
@@ -404,17 +404,17 @@ fn current_plan_attachment_uses_agent_scoped_plan_file() {
         engine.config.plans_directory.as_deref(),
     );
     coco_context::write_plan(
-        &engine.config.session_id,
+        engine.config.session_id.as_str(),
         &plans_dir,
         "# Main Plan\n\n- wrong scope",
         /*agent_id*/ None,
     )
     .expect("main plan write succeeds");
     coco_context::write_plan(
-        &engine.config.session_id,
+        engine.config.session_id.as_str(),
         &plans_dir,
         "# Agent Plan\n\n- correct scope",
-        engine.config.agent_id.as_deref(),
+        engine.config.agent_id_str(),
     )
     .expect("agent plan write succeeds");
 
@@ -947,7 +947,7 @@ async fn session_memory_compact_reinjects_plan_mode_full_attachment() {
         .with_config_home(config_home.path().to_path_buf())
         .with_app_state(app_state)
         .with_session_memory_text("## Session Memory\n\n- Important prior context".to_string());
-    engine.config.session_id = "sm-plan-mode-compact".to_string();
+    engine.config.session_id = coco_types::SessionId::try_new("sm-plan-mode-compact").unwrap();
     engine.config.compact.session_memory.enabled = true;
     engine.config.compact.session_memory.min_tokens = 0;
     engine.config.compact.session_memory.min_text_block_messages = 0;
@@ -961,7 +961,7 @@ async fn session_memory_compact_reinjects_plan_mode_full_attachment() {
         engine.config.plans_directory.as_deref(),
     );
     coco_context::write_plan(
-        &engine.config.session_id,
+        engine.config.session_id.as_str(),
         &plans_dir,
         "# Active Plan\n\n- Keep planning",
         /*agent_id*/ None,
@@ -1047,8 +1047,14 @@ async fn compact_summary_uses_cache_safe_fork_with_deny_all_tools() {
 async fn compact_summary_records_usage_into_session_tracker() {
     let model = Arc::new(CapturingModel::default());
     let tracker = Arc::new(tokio::sync::Mutex::new(coco_messages::CostTracker::new()));
+    let usage_accounting = crate::usage_accounting::UsageAccounting::for_static_session(
+        coco_types::SessionId::try_new("compact-usage").unwrap(),
+        tracker.clone(),
+        Arc::new(tokio::sync::Mutex::new(())),
+        coco_types::UsageAttribution::session(coco_types::UsageSource::Main),
+    );
     let engine = new_engine(model, Some(Arc::new(UsageReportingDispatcher)))
-        .with_session_usage_tracker(tracker.clone());
+        .with_usage_accounting(usage_accounting);
     engine.save_cache_safe_params(empty_cache()).await;
 
     engine

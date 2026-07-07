@@ -33,6 +33,7 @@ use coco_types::ActiveShellTool;
 use coco_types::Features;
 use coco_types::PermissionMode;
 use coco_types::PermissionUpdate;
+use coco_types::SessionId;
 use coco_types::ToolFilter;
 use coco_types::ToolOverrides;
 
@@ -44,7 +45,7 @@ use coco_types::ToolOverrides;
 /// only ever **narrow** these sets — never widen.
 #[derive(Debug, Clone)]
 pub struct SubagentInheritance {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub permission_mode: PermissionMode,
     pub features: Option<Arc<Features>>,
     pub tool_overrides: Option<Arc<ToolOverrides>>,
@@ -64,7 +65,10 @@ pub struct SubagentInheritance {
 impl Default for SubagentInheritance {
     fn default() -> Self {
         Self {
-            session_id: "test-session".to_string(),
+            session_id: match SessionId::try_new("test-session") {
+                Ok(id) => id,
+                Err(_) => unreachable!("test session id must be valid"),
+            },
             permission_mode: PermissionMode::Default,
             features: None,
             tool_overrides: None,

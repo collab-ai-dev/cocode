@@ -77,6 +77,21 @@ fn default_timeout_ms(config: &coco_config::ToolConfig) -> u64 {
     config.bash.default_timeout_ms.max(1) as u64
 }
 
+fn bash_input_is_read_only_in_cwd(input: &BashInput, cwd: &str) -> bool {
+    if input.command.is_empty() {
+        return false;
+    }
+    if coco_shell::check_multiple_cwd_changes(&input.command, cwd).is_some() {
+        return false;
+    }
+    // Git sandbox-escape commands (cd+git, git-internal writes) are NOT
+    // read-only — they reach the permission prompt instead of auto-allowing.
+    if coco_shell::has_git_escape_pattern_in_cwd(&input.command, cwd) {
+        return false;
+    }
+    is_read_only_command(&input.command)
+}
+
 /// Long-form tool description shown to the model.
 /// Conditional sections based on runtime config (sandbox config dump,
 /// undercover guidance, per-user git skill references,
@@ -383,21 +398,7 @@ impl Tool for BashTool {
     /// Delegates to `coco_shell::read_only::is_read_only_command` which wraps the
     /// 40+ safe-command allowlist + conditional safety rules for git/sed/find/rg/etc.
     fn is_read_only(&self, input: &BashInput) -> bool {
-        if input.command.is_empty() {
-            return false;
-        }
-        let cwd = std::env::current_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| "/".to_string());
-        if coco_shell::check_multiple_cwd_changes(&input.command, &cwd).is_some() {
-            return false;
-        }
-        // Git sandbox-escape commands (cd+git, git-internal writes) are NOT
-        // read-only — they reach the permission prompt instead of auto-allowing.
-        if coco_shell::has_git_escape_pattern_in_cwd(&input.command, &cwd) {
-            return false;
-        }
-        is_read_only_command(&input.command)
+        bash_input_is_read_only_in_cwd(input, "/")
     }
 
     /// Concurrency-safe iff read-only. Foreground Bash still

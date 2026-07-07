@@ -246,7 +246,7 @@ pub(crate) async fn build_send_elicitation_for_state(
     };
     let Some(runtime) = runtime else { return base };
     let registry = runtime.hook_registry.clone();
-    let factory = runtime.orchestration_ctx_factory();
+    let factory = runtime.runtime().orchestration_ctx_factory();
     // Phase 7: pull the elicitation counter Arc so the wrapper holds
     // an `ElicitationGuard` for each in-flight request — drives
     // `prompt_suggestion::SuppressReason::ElicitationActive`.

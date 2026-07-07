@@ -2,6 +2,22 @@ use std::sync::Arc;
 
 use super::*;
 
+#[test]
+fn hook_context_carries_parent_session_id() {
+    let session_id = coco_types::SessionId::try_new("parent-session").unwrap();
+
+    let ctx = hook_ctx_for_subagent(
+        "/tmp/project",
+        &session_id,
+        Some("agent-1"),
+        Some("general-purpose"),
+    );
+
+    assert_eq!(ctx.session_id.as_str(), "parent-session");
+    assert_eq!(ctx.agent_id.as_deref(), Some("agent-1"));
+    assert_eq!(ctx.agent_type.as_deref(), Some("general-purpose"));
+}
+
 fn assistant_patch_call(patch: &str) -> Arc<coco_messages::Message> {
     Arc::new(coco_messages::create_assistant_message(
         vec![coco_messages::AssistantContent::ToolCall(

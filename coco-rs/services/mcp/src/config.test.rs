@@ -168,3 +168,61 @@ fn test_load_deduplicates_by_name() {
         assert_eq!(stdio.command, "user-server");
     }
 }
+
+#[test]
+fn test_load_with_roots_splits_project_and_local_roots() {
+    use tempfile::TempDir;
+
+    let tmp = TempDir::new().unwrap();
+    let project_root = tmp.path().join("repo");
+    let session_cwd = project_root.join("nested");
+    let config_home = tmp.path().join("config");
+    std::fs::create_dir_all(&session_cwd).unwrap();
+    std::fs::create_dir_all(&config_home).unwrap();
+
+    std::fs::write(
+        project_root.join(".mcp.json"),
+        serde_json::json!({
+            "mcpServers": {
+                "project": {"command": "project-server", "args": []},
+                "shared": {"command": "project-shared", "args": []}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let local_dir = session_cwd.join(format!("{}.local", coco_utils_common::COCO_CONFIG_DIR_NAME));
+    std::fs::create_dir_all(&local_dir).unwrap();
+    std::fs::write(
+        local_dir.join("mcp.json"),
+        serde_json::json!({
+            "mcpServers": {
+                "local": {"command": "local-server", "args": []},
+                "shared": {"command": "local-shared", "args": []}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let configs = McpConfigLoader::load_with_roots(
+        McpConfigRoots {
+            project_root: &project_root,
+            session_cwd: &session_cwd,
+        },
+        &config_home,
+    );
+
+    let by_name: std::collections::HashMap<_, _> = configs
+        .into_iter()
+        .map(|config| (config.name.clone(), config))
+        .collect();
+    assert_eq!(by_name["project"].scope, ConfigScope::Project);
+    assert_eq!(by_name["local"].scope, ConfigScope::Local);
+    assert_eq!(by_name["shared"].scope, ConfigScope::Local);
+    let McpServerConfig::Stdio(stdio) = &by_name["shared"].config else {
+        panic!("expected stdio config");
+    };
+    assert_eq!(stdio.command, "local-shared");
+}

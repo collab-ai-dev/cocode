@@ -15,8 +15,9 @@ use axum::routing::get;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
-use coco_hub_protocol::SCHEMA_VERSION_V1;
-use coco_hub_protocol::SUBPROTOCOL_V1;
+use coco_hub_protocol::SCHEMA_VERSION_V2;
+use coco_hub_protocol::SUBPROTOCOL_V2;
+use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -82,8 +83,8 @@ async fn healthz(State(state): State<AppState>) -> Result<Json<HealthSnapshot>, 
 async fn protocol(State(state): State<AppState>) -> Json<ProtocolResponse> {
     Json(ProtocolResponse {
         mode: state.store.mode(),
-        supported_subprotocols: vec![SUBPROTOCOL_V1],
-        schema_version: SCHEMA_VERSION_V1,
+        supported_subprotocols: vec![SUBPROTOCOL_V2],
+        schema_version: SCHEMA_VERSION_V2,
         read_only: true,
         ingest_supported: false,
         live_supported: false,
@@ -265,7 +266,7 @@ async fn load_session_events(
             .store
             .list_events(EventQuery {
                 instance_id: instance_id.to_string(),
-                session_id: Some(session_id.to_string()),
+                session_id: Some(parse_session_id(session_id.to_string())?),
                 before,
                 limit: 500,
                 filter: EventFilter::default(),
@@ -329,7 +330,7 @@ struct EventListTemplate {
 
 struct SessionView {
     instance_id: String,
-    session_id: String,
+    session_id: SessionId,
     title: String,
     message_count: i32,
     model: String,
@@ -356,7 +357,7 @@ impl From<SessionRow> for SessionView {
 }
 
 struct EventView {
-    seq: i64,
+    session_seq: i64,
     title: String,
     ts: String,
     msg_type: String,
@@ -395,7 +396,7 @@ impl From<EventRow> for EventView {
         ]
         .join(" ");
         Self {
-            seq: event.seq,
+            session_seq: event.session_seq,
             title,
             ts: event.ts_display,
             msg_type: event.msg_type,
@@ -602,6 +603,15 @@ impl PageParams {
     }
 }
 
+fn parse_session_id(session_id: String) -> Result<SessionId, ApiError> {
+    SessionId::try_new(session_id)
+        .map_err(|err| ApiError::bad_request(format!("invalid session id: {err}")))
+}
+
+fn parse_optional_session_id(session_id: Option<String>) -> Result<Option<SessionId>, ApiError> {
+    session_id.map(parse_session_id).transpose()
+}
+
 #[derive(Debug, Deserialize, Clone)]
 struct EventParams {
     kind: Option<String>,
@@ -633,7 +643,7 @@ impl EventParams {
     ) -> Result<EventQuery, ApiError> {
         Ok(EventQuery {
             instance_id,
-            session_id,
+            session_id: parse_optional_session_id(session_id)?,
             before: self.cursor.or(self.before),
             limit: self.limit.unwrap_or(100).clamp(1, 500),
             filter: EventFilter {
@@ -666,7 +676,7 @@ impl PartialEventsParams {
     fn into_event_query(self) -> Result<EventQuery, ApiError> {
         Ok(EventQuery {
             instance_id: self.instance,
-            session_id: Some(self.session),
+            session_id: Some(parse_session_id(self.session)?),
             before: self.cursor.or(self.before),
             limit: self.limit.unwrap_or(100).clamp(1, 500),
             filter: EventFilter {
@@ -701,6 +711,13 @@ impl ApiError {
     fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
             message: message.into(),
         }
     }

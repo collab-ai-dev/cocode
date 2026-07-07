@@ -344,7 +344,7 @@ pub fn check_read_permission_for_path(
 fn effective_cwd(ctx: &coco_tool_runtime::ToolUseContext) -> PathBuf {
     ctx.cwd_override
         .clone()
-        .or_else(|| std::env::current_dir().ok())
+        .or_else(|| ctx.original_cwd.clone())
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 

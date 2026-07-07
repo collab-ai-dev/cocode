@@ -223,24 +223,35 @@ async fn build_suggestion_context_pending_permission_reflects_counter() {
 #[test]
 fn main_agent_wrote_memory_only_counts_markdown_inside_memory_dir() {
     let memory_dir = std::path::Path::new("/m");
+    let cwd = std::path::Path::new("/");
 
     let md_write = vec![assistant_write_call(
         coco_types::ToolName::Write.as_str(),
         "/m/notes.md",
     )];
-    assert!(main_agent_wrote_memory(&md_write, memory_dir, None));
+    assert!(main_agent_wrote_memory(&md_write, memory_dir, cwd, None));
 
     let non_md_write = vec![assistant_write_call(
         coco_types::ToolName::Write.as_str(),
         "/m/notes.txt",
     )];
-    assert!(!main_agent_wrote_memory(&non_md_write, memory_dir, None));
+    assert!(!main_agent_wrote_memory(
+        &non_md_write,
+        memory_dir,
+        cwd,
+        None
+    ));
 
     let outside_write = vec![assistant_write_call(
         coco_types::ToolName::Write.as_str(),
         "/outside/notes.md",
     )];
-    assert!(!main_agent_wrote_memory(&outside_write, memory_dir, None));
+    assert!(!main_agent_wrote_memory(
+        &outside_write,
+        memory_dir,
+        cwd,
+        None
+    ));
 }
 
 #[test]
@@ -250,7 +261,7 @@ fn main_agent_wrote_memory_counts_apply_patch_memory_targets() {
     let cwd = std::env::current_dir().expect("cwd");
 
     assert!(main_agent_wrote_memory(
-        &messages, &cwd, /*since_cursor*/ None,
+        &messages, &cwd, &cwd, /*since_cursor*/ None,
     ));
 }
 
@@ -262,6 +273,7 @@ fn main_agent_wrote_memory_ignores_apply_patch_outside_memory_dir() {
     assert!(!main_agent_wrote_memory(
         &messages,
         std::path::Path::new("/definitely-not-the-cwd"),
+        &std::env::current_dir().expect("cwd"),
         /*since_cursor*/ None,
     ));
 }
@@ -280,6 +292,7 @@ fn main_agent_wrote_memory_respects_since_cursor() {
     assert!(!main_agent_wrote_memory(
         &messages,
         std::path::Path::new("/m"),
+        std::path::Path::new("/"),
         Some(&cursor),
     ));
 }

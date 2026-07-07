@@ -237,7 +237,7 @@ pub async fn generate_tool_use_summary(
 
     let prompt = build_prompt(&input);
     let event_tx = None;
-    let moa_turn_id = uuid::Uuid::new_v4().to_string();
+    let moa_turn_id = coco_types::TurnId::generate();
 
     let result = tokio::time::timeout(TOOL_USE_SUMMARY_TIMEOUT, async {
         loop {

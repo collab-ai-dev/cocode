@@ -1,11 +1,15 @@
+use std::collections::HashMap;
+
 use chrono::DateTime;
 use chrono::Utc;
+use coco_types::AgentId;
+use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
-pub const SUBPROTOCOL_V1: &str = "coco-event-hub.v1";
-pub const SCHEMA_VERSION_V1: u32 = 1;
+pub const SUBPROTOCOL_V2: &str = "coco-event-hub.v2";
+pub const SCHEMA_VERSION_V2: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -21,6 +25,7 @@ pub enum HubFrame {
 #[serde(rename_all = "camelCase")]
 pub struct AnnounceFrame {
     pub instance_id: Uuid,
+    pub live_sessions: Vec<SessionId>,
     pub host: String,
     pub cwd: String,
     pub pid: i64,
@@ -36,7 +41,7 @@ pub struct AnnounceFrame {
 pub struct AnnounceAckFrame {
     pub first_seen: bool,
     pub hub_version: String,
-    pub resume_from: Option<u64>,
+    pub resume_from: HashMap<SessionId, i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -48,7 +53,7 @@ pub struct BatchFrame {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchAckFrame {
-    pub up_to_seq: u64,
+    pub up_to_seq: HashMap<SessionId, i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -62,8 +67,9 @@ pub struct ErrorFrame {
 #[serde(rename_all = "camelCase")]
 pub struct EventEnvelope {
     pub instance_id: Uuid,
-    pub session_id: String,
-    pub seq: u64,
+    pub session_id: SessionId,
+    pub agent_id: Option<AgentId>,
+    pub session_seq: i64,
     pub ts: DateTime<Utc>,
     pub schema_version: u32,
     pub payload: EventPayload,
@@ -98,8 +104,8 @@ pub enum EventPayload {
     },
     EventsDropped {
         count: i64,
-        since_seq: u64,
-        until_seq: u64,
+        since_seq: i64,
+        until_seq: i64,
         reason: String,
     },
     Unknown {

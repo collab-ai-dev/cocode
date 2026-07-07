@@ -370,6 +370,7 @@ async fn in_process_drain_applies_mode_set_against_real_mailbox() {
 /// approving a shutdown via `SendMessageTool` → `respond_to_shutdown`.
 struct RecordingEngine {
     prompts: Arc<tokio::sync::Mutex<Vec<String>>>,
+    session_ids: Arc<tokio::sync::Mutex<Vec<coco_types::SessionId>>>,
     /// Substring that triggers a simulated shutdown approval.
     approve_marker: String,
 }
@@ -379,9 +380,10 @@ impl AgentExecutionEngine for RecordingEngine {
     async fn run_query(
         &self,
         prompt: &str,
-        _config: AgentQueryConfig,
+        config: AgentQueryConfig,
     ) -> crate::Result<AgentQueryResult> {
         self.prompts.lock().await.push(prompt.to_string());
+        self.session_ids.lock().await.push(config.session_id);
         // Simulate the model APPROVING shutdown: the real `SendMessageTool`
         // calls `respond_to_shutdown` → `signal_self_stop`. We run inside the
         // runner's task-local scope (the `run_with_teammate_context` wrap),
@@ -416,7 +418,7 @@ fn in_process_config(prompt: &str) -> InProcessRunnerConfig {
             plan_mode_required: false,
         },
         task_id: "task-1".to_string(),
-        session_id: "session-1".to_string(),
+        session_id: coco_types::SessionId::try_new("session-1").unwrap(),
         prompt: prompt.to_string(),
         model: None,
         system_prompt: None,
@@ -456,8 +458,10 @@ async fn in_process_teammate_runs_initial_prompt_then_exits_on_shutdown() {
     mailbox::send_shutdown_request("worker", "t", TEAM_LEAD_NAME, Some("done")).unwrap();
 
     let prompts = Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+    let session_ids = Arc::new(tokio::sync::Mutex::new(Vec::<coco_types::SessionId>::new()));
     let engine = RecordingEngine {
         prompts: prompts.clone(),
+        session_ids: session_ids.clone(),
         // Approve when the shutdown turn arrives.
         approve_marker: "summary=\"shutdown request\"".to_string(),
     };
@@ -474,6 +478,14 @@ async fn in_process_teammate_runs_initial_prompt_then_exits_on_shutdown() {
         recorded[0].contains(MARKER),
         "the first turn must carry the initial prompt; got: {}",
         recorded[0]
+    );
+    assert_eq!(
+        session_ids
+            .lock()
+            .await
+            .first()
+            .map(coco_types::SessionId::as_str),
+        Some("session-1")
     );
     assert!(
         result.success,
@@ -508,8 +520,10 @@ async fn in_process_teammate_rejecting_shutdown_keeps_working() {
     mailbox::write_to_mailbox("worker", followup, "t").unwrap();
 
     let prompts = Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+    let session_ids = Arc::new(tokio::sync::Mutex::new(Vec::<coco_types::SessionId>::new()));
     let engine = RecordingEngine {
         prompts: prompts.clone(),
+        session_ids,
         // Reject the shutdown (do nothing on "shutdown request"); approve
         // only once the follow-up arrives, so the test terminates.
         approve_marker: FOLLOWUP.to_string(),

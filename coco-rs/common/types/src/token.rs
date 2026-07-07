@@ -74,10 +74,10 @@ pub struct TokenUsage {
 
 /// Persisted and protocol-visible cumulative usage for one session.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionUsageSnapshot {
     pub version: i32,
-    pub session_id: String,
+    pub session_id: crate::SessionId,
     pub updated_at_ms: i64,
     pub totals: SessionUsageTotals,
     /// Provider/model/source records. This is the source of truth for
@@ -94,6 +94,21 @@ pub struct SessionUsageSnapshot {
     /// compaction point. `None` on legacy snapshots / before the first turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact_threshold: Option<i64>,
+}
+
+impl SessionUsageSnapshot {
+    pub fn empty(session_id: crate::SessionId) -> Self {
+        Self {
+            version: 0,
+            session_id,
+            updated_at_ms: 0,
+            totals: SessionUsageTotals::default(),
+            source_records: Vec::new(),
+            models: Vec::new(),
+            unpriced_models: Vec::new(),
+            auto_compact_threshold: None,
+        }
+    }
 }
 
 /// Session-level token and cost totals.

@@ -92,7 +92,7 @@ pub(super) async fn handle_rewind_files(
         // Preview path — get diff stats without touching disk.
         let history = history_arc.read().await;
         let stats = match history
-            .get_diff_stats(&params.user_message_id, &config_home, &session_id)
+            .get_diff_stats(&params.user_message_id, &config_home, session_id.as_str())
             .await
         {
             Ok(s) => s,
@@ -125,7 +125,7 @@ pub(super) async fn handle_rewind_files(
         let stats = {
             let history = history_arc.read().await;
             match history
-                .get_diff_stats(&params.user_message_id, &config_home, &session_id)
+                .get_diff_stats(&params.user_message_id, &config_home, session_id.as_str())
                 .await
             {
                 Ok(s) => s,
@@ -140,7 +140,7 @@ pub(super) async fn handle_rewind_files(
         };
         let history = history_arc.read().await;
         let restored = match history
-            .rewind(&params.user_message_id, &config_home, &session_id)
+            .rewind(&params.user_message_id, &config_home, session_id.as_str())
             .await
         {
             Ok(paths) => paths,

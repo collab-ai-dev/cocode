@@ -116,10 +116,6 @@ fn display_path_prefers_cwd_relative() {
 }
 
 #[test]
-fn display_path_falls_back_to_process_cwd_when_unthreaded() {
-    // The native-scrollback render path leaves `cwd` None; workspace
-    // memory files must still collapse to a relative path via the process
-    // cwd (regression: `/context` showed absolute memory paths).
-    let abs = std::env::current_dir().unwrap().join("AGENTS.md");
-    assert_eq!(display_path(&abs.to_string_lossy(), None), "AGENTS.md");
+fn display_path_without_cwd_keeps_absolute_path() {
+    assert_eq!(display_path("/repo/AGENTS.md", None), "/repo/AGENTS.md");
 }

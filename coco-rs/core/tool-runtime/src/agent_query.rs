@@ -17,6 +17,8 @@
 use std::sync::Arc;
 
 use coco_messages::Message;
+use coco_types::AgentId;
+use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
@@ -34,18 +36,20 @@ pub enum AgentRunKind {
     Test,
 }
 
-/// Stable identity for a child agent run. Both ids are required
-/// non-empty: a child run is always scoped to a concrete parent session
-/// and carries its own minted agent id.
+/// Stable identity for a child agent run.
+///
+/// The parent session id is a path-safe [`SessionId`]: a child run is
+/// always scoped to a concrete parent session and carries its own minted
+/// agent id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRunIdentity {
     /// Parent/main session id. Subagent transcripts and artifacts live
     /// under this session. Required — callers must thread the real
     /// parent session id (tests / embeddings supply a placeholder).
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Child run id, distinct from the session id. Always set by the
-    /// spawn path (`createAgentId` analog) — required non-empty.
-    pub agent_id: String,
+    /// spawn path (`createAgentId` analog) and path-safe.
+    pub agent_id: AgentId,
     /// Runtime category used for logging/storage decisions.
     pub kind: AgentRunKind,
 }
@@ -57,13 +61,22 @@ impl AgentRunIdentity {
         kind: AgentRunKind,
     ) -> Result<Self, String> {
         let session_id = session_id.into();
-        if session_id.trim().is_empty() {
-            return Err("AgentRunIdentity.session_id must be non-empty".to_string());
-        }
+        let session_id = SessionId::try_new(session_id)
+            .map_err(|e| format!("AgentRunIdentity.session_id is invalid: {e}"))?;
+        Self::from_session_id(session_id, agent_id, kind)
+    }
+
+    pub fn from_session_id(
+        session_id: SessionId,
+        agent_id: impl Into<String>,
+        kind: AgentRunKind,
+    ) -> Result<Self, String> {
         let agent_id = agent_id.into();
         if agent_id.trim().is_empty() {
             return Err("AgentRunIdentity.agent_id must be non-empty".to_string());
         }
+        let agent_id = AgentId::try_new(agent_id)
+            .map_err(|e| format!("AgentRunIdentity.agent_id is invalid: {e}"))?;
         Ok(Self {
             session_id,
             agent_id,
@@ -355,8 +368,14 @@ impl Default for AgentQueryConfig {
             // `AgentRunIdentity::new`); this default is only materialized
             // by tests using a bare `..Default::default()`.
             identity: AgentRunIdentity {
-                session_id: "test-session".to_string(),
-                agent_id: "test-agent".to_string(),
+                session_id: match SessionId::try_new("test-session") {
+                    Ok(id) => id,
+                    Err(_) => unreachable!("test session id must be valid"),
+                },
+                agent_id: match AgentId::try_new("test-agent") {
+                    Ok(id) => id,
+                    Err(_) => unreachable!("test agent id must be valid"),
+                },
                 kind: AgentRunKind::Test,
             },
             agent_task_id: None,

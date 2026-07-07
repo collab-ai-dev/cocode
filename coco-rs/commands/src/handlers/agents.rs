@@ -21,6 +21,7 @@
 //!     scripted callers get a flat enumeration they can parse.
 
 use std::path::Path;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use coco_subagent::AgentDefinitionStore;
@@ -35,13 +36,21 @@ use crate::DialogSpec;
 
 /// `CommandHandler` impl for `/agents`. No args → open the TUI
 /// dialog; sub-commands → reuse the existing text renderers.
-pub struct AgentsHandler;
+pub struct AgentsHandler {
+    project_root: PathBuf,
+}
+
+impl AgentsHandler {
+    pub fn new(project_root: PathBuf) -> Self {
+        Self { project_root }
+    }
+}
 
 #[async_trait]
 impl CommandHandler for AgentsHandler {
     async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
         let trimmed = args.trim().to_string();
-        let cwd = std::env::current_dir().unwrap_or_default();
+        let cwd = self.project_root.clone();
         let config_home = coco_config::global_config::config_home();
         let paths = standard_search_paths(&config_home, &cwd);
 

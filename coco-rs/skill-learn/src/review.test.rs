@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use async_trait::async_trait;
 use coco_tool_runtime::{AgentHandle, AgentHandleRef, AgentSpawnRequest, AgentSpawnResponse};
-use coco_types::{ForkLabel, ModelRole};
+use coco_types::{ForkLabel, ModelRole, SessionId};
 
 use super::{AgentSlot, SkillReviewOutcome, SkillReviewService};
 
@@ -48,7 +48,8 @@ async fn review_fork_uses_memory_role_fence_and_label() {
     let slot: AgentSlot = Arc::new(RwLock::new(handle.clone() as AgentHandleRef));
     let svc = SkillReviewService::new(slot, tmp.path());
 
-    let outcome = svc.run("sess-1".into(), Vec::new()).await;
+    let session_id = SessionId::try_new("sess-1").unwrap();
+    let outcome = svc.run(session_id.clone(), Vec::new()).await;
     assert_eq!(outcome, SkillReviewOutcome::Completed { paths_written: 1 });
 
     let req = handle
@@ -60,7 +61,7 @@ async fn review_fork_uses_memory_role_fence_and_label() {
 
     // Routing + fencing invariants.
     assert_eq!(req.fork_label, Some(ForkLabel::SkillReview));
-    assert_eq!(req.session_id, "sess-1");
+    assert_eq!(req.session_id, Some(session_id));
     assert!(
         req.skip_transcript,
         "review fork must not pollute transcript"
@@ -96,7 +97,7 @@ async fn review_fork_surfaces_spawn_failure() {
         Arc::new(coco_tool_runtime::NoOpAgentHandle) as AgentHandleRef
     ));
     let svc = SkillReviewService::new(slot, tmp.path());
-    let outcome = svc.run("s".into(), Vec::new()).await;
+    let outcome = svc.run(SessionId::try_new("s").unwrap(), Vec::new()).await;
     assert!(
         matches!(outcome, SkillReviewOutcome::Failed { .. }),
         "spawn failure must surface as Failed, got {outcome:?}"

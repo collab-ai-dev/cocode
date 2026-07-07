@@ -479,6 +479,7 @@ impl SwarmAgentHandle {
             .team_name
             .as_deref()
             .ok_or("team_name required for teammate")?;
+        let parent_session_id = request.parent_session_id()?;
 
         let runtime_config = self.runtime_config();
         let main_model_id = self
@@ -625,7 +626,7 @@ impl SwarmAgentHandle {
                     system_prompt: config.system_prompt.clone(),
                     system_prompt_mode: crate::pane::SystemPromptMode::Default,
                     worktree_path: None,
-                    parent_session_id: request.session_id.clone(),
+                    parent_session_id: parent_session_id.clone(),
                     permissions: config.allowed_tools.clone(),
                     allow_permission_prompts: config.allow_permission_prompts,
                     // All static knobs read from `request.definition` —
@@ -811,6 +812,7 @@ impl SwarmAgentHandle {
             let teammate_orchestration_ctx = self.hook_registry().map(|_| {
                 crate::agent_handle::spawn::hook_ctx_for_subagent(
                     &self.cwd,
+                    &parent_session_id,
                     Some(&spawn_result.agent_id),
                     request.subagent_type.as_deref(),
                 )
@@ -818,7 +820,7 @@ impl SwarmAgentHandle {
             let runner_config = crate::runner_loop::InProcessRunnerConfig {
                 identity,
                 task_id: teammate_task_id.clone(),
-                session_id: request.session_id.clone(),
+                session_id: parent_session_id.clone(),
                 prompt: request.prompt.clone(),
                 model: config.model.clone(),
                 system_prompt: config.system_prompt.clone(),
@@ -948,12 +950,11 @@ impl AgentHandle for SwarmAgentHandle {
         &self,
         agent_id: &str,
         prompt: &str,
-        session_id: &str,
+        session_id: &coco_types::SessionId,
     ) -> Result<AgentSpawnResponse, String> {
         // Inherent `resume_agent` lives in `resume.rs`; delegate so the
         // trait surface is satisfied without duplicating the body.
-        SwarmAgentHandle::resume_agent(self, agent_id, prompt.to_string(), session_id.to_string())
-            .await
+        SwarmAgentHandle::resume_agent(self, agent_id, prompt.to_string(), session_id.clone()).await
     }
 
     async fn send_message(

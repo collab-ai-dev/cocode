@@ -52,7 +52,7 @@ impl AgentHandle for RecordingHandle {
         &self,
         _agent_id: &str,
         _prompt: &str,
-        _session_id: &str,
+        _session_id: &coco_types::SessionId,
     ) -> Result<AgentSpawnResponse, String> {
         Err("unused".into())
     }

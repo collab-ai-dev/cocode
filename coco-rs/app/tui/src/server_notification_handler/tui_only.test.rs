@@ -38,6 +38,13 @@ fn channel() -> (
     tokio::sync::mpsc::channel(16)
 }
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    match coco_types::SessionId::try_new(value) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id should be valid"),
+    }
+}
+
 #[test]
 fn auto_mode_denied_event_surfaces_reason_toast() {
     let mut state = AppState::new();
@@ -307,7 +314,7 @@ fn open_session_browser_populates_resume_picker() {
         &mut state,
         TuiOnlyEvent::OpenSessionBrowser {
             sessions: vec![SdkSessionSummary {
-                session_id: "s1".to_string(),
+                session_id: test_session_id("s1"),
                 model: "claude-sonnet-4-6".to_string(),
                 cwd: "/repo".to_string(),
                 created_at: "2026-05-23T00:00:00Z".to_string(),

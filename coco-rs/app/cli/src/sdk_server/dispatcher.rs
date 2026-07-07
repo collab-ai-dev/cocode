@@ -190,23 +190,20 @@ impl SdkServer {
         self
     }
 
-    /// Install the process-shared [`SessionRuntime`]. Required so
-    /// `handle_session_start` can call `runtime.start_new_session()`
+    /// Install the process-shared [`SessionHandle`]. Required so
+    /// `handle_session_start` can call `runtime.retarget_for_new_session()`
     /// when an SDK client cycles `session/archive` → `session/start`.
     /// Without this, sequential SDK sessions reuse the prior session's
     /// `FileReadState`, `SessionMemoryService` paths, file-history sink
     /// session id, and cache-break baseline — surfacing as @mention
     /// dedup leakage, memory writes to wrong directory, and false-
     /// positive cache break alerts on the first turn of session 2.
-    pub fn with_session_runtime(
-        self,
-        runtime: Arc<crate::session_runtime::SessionRuntime>,
-    ) -> Self {
-        crate::sdk_server::sdk_hooks::install_runtime_callback(self.state.clone(), &runtime);
+    pub fn with_session_handle(self, session: crate::session_runtime::SessionHandle) -> Self {
+        crate::sdk_server::sdk_hooks::install_runtime_callback(self.state.clone(), &session);
         let Ok(mut slot) = self.state.session_runtime.try_write() else {
-            panic!("with_session_runtime: state was already locked at construction time");
+            panic!("with_session_handle: state was already locked at construction time");
         };
-        *slot = Some(runtime);
+        *slot = Some(session);
         drop(slot);
         self
     }

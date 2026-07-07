@@ -21,26 +21,24 @@ use std::sync::Arc;
 use tracing::warn;
 
 use crate::sdk_server::handlers::SdkServerState;
+use crate::session_runtime::SessionHandle;
 
-pub fn install_runtime_callback(
-    state: Arc<SdkServerState>,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
-) {
+pub fn install_runtime_callback(state: Arc<SdkServerState>, session: &SessionHandle) {
     let callback: coco_hooks::SdkHookCallback = Arc::new(move |request| {
         let state = state.clone();
         Box::pin(async move { route_hook_callback(state, request).await })
     });
-    runtime.hook_registry().set_sdk_hook_callback(callback);
+    session.hook_registry().set_sdk_hook_callback(callback);
 }
 
 pub fn register_initialize_hooks(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &SessionHandle,
     hooks: &std::collections::HashMap<
         coco_types::HookEventType,
         Vec<coco_types::HookCallbackMatcher>,
     >,
 ) -> usize {
-    let registry = runtime.hook_registry();
+    let registry = session.hook_registry();
     let mut count = 0;
     for (event, matchers) in hooks {
         for matcher in matchers {

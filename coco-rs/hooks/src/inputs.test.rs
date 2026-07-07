@@ -5,12 +5,17 @@
 //! regression here, not in production.
 
 use super::*;
+use coco_types::SessionId;
 use serde_json::Value;
 use serde_json::json;
 
+fn test_session_id(value: &str) -> SessionId {
+    SessionId::try_new(value).expect("valid session id")
+}
+
 fn base() -> BaseHookInput {
     BaseHookInput {
-        session_id: "sess".into(),
+        session_id: test_session_id("sess"),
         cwd: "/cwd".into(),
         transcript_path: "/tmp/t.json".into(),
         permission_mode: Some("default".into()),

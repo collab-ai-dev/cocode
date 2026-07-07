@@ -3,15 +3,16 @@
 //! Walks the standard agent dirs and prints a flat list. Discovery
 //! sources: `coco-subagent` catalog (built-ins + per-source markdown loaders).
 
+use std::path::Path;
+
 use anyhow::Result;
 
 use coco_cli::paths::standard_agent_search_paths;
 use coco_config::global_config;
 
-pub async fn run_agents_subcommand() -> Result<()> {
-    let cwd = std::env::current_dir().unwrap_or_default();
+pub async fn run_agents_subcommand(cwd: &Path) -> Result<()> {
     let config_home = global_config::config_home();
-    let paths = standard_agent_search_paths(&config_home, &cwd);
+    let paths = standard_agent_search_paths(&config_home, cwd);
     let mut store = coco_subagent::AgentDefinitionStore::new(
         coco_subagent::BuiltinAgentCatalog::interactive(),
         paths.clone(),
@@ -20,7 +21,7 @@ pub async fn run_agents_subcommand() -> Result<()> {
     // flag drift between project snapshots and local memory dirs.
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
     store.set_snapshot_inspector(Some(
-        coco_memory::agent_memory_snapshot::build_pending_inspector(cwd, home),
+        coco_memory::agent_memory_snapshot::build_pending_inspector(cwd.to_path_buf(), home),
     ));
     store.load();
     let snapshot = store.snapshot();

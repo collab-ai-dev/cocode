@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 
 use coco_types::PermissionMode;
+use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -90,7 +91,7 @@ pub enum ReplOutMessage {
     Result {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        session_id: Option<String>,
+        session_id: Option<SessionId>,
     },
     /// Error message.
     Error { message: String },
@@ -209,7 +210,7 @@ const MAX_OUTBOUND_BUFFER: usize = 1000;
 /// disconnection and drains on reconnect.
 pub struct ReplBridge {
     /// Session identifier.
-    session_id: String,
+    session_id: SessionId,
     /// Current bridge state (atomic for lock-free reads in `send()`).
     state: AtomicU8,
     /// Watch channel for state change notifications.
@@ -226,7 +227,7 @@ pub struct ReplBridge {
 
 impl ReplBridge {
     /// Create a new REPL bridge for the given session.
-    pub fn new(session_id: String) -> Self {
+    pub fn new(session_id: SessionId) -> Self {
         let (incoming_tx, incoming_rx) = mpsc::channel(256);
         let (outgoing_tx, outgoing_rx) = mpsc::channel(256);
         let (state_notify, _) = watch::channel(BridgeState::Idle);
@@ -245,7 +246,7 @@ impl ReplBridge {
 
     /// Get the session identifier.
     pub fn session_id(&self) -> &str {
-        &self.session_id
+        self.session_id.as_str()
     }
 
     /// Get the current bridge state.

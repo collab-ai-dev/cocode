@@ -49,6 +49,10 @@ const CWD: &str = "/tmp/coco-e2e";
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    coco_types::SessionId::try_new(value).unwrap()
+}
+
 fn fresh_store() -> (TempDir, TranscriptStore, PathBuf) {
     let dir = TempDir::new().expect("tempdir");
     let paths = Arc::new(ProjectPaths::new(
@@ -1034,7 +1038,7 @@ fn metadata_side_channels_round_trip() {
         .append_metadata(
             SESSION,
             &MetadataEntry::CustomTitle {
-                session_id: SESSION.to_string(),
+                session_id: test_session_id(SESSION),
                 custom_title: "audit run".to_string(),
             },
         )
@@ -1043,7 +1047,7 @@ fn metadata_side_channels_round_trip() {
         .append_metadata(
             SESSION,
             &MetadataEntry::Tag {
-                session_id: SESSION.to_string(),
+                session_id: test_session_id(SESSION),
                 tag: "bugfix".to_string(),
             },
         )
@@ -1052,7 +1056,7 @@ fn metadata_side_channels_round_trip() {
         .append_metadata(
             SESSION,
             &MetadataEntry::LastPrompt {
-                session_id: SESSION.to_string(),
+                session_id: test_session_id(SESSION),
                 last_prompt: "final question".to_string(),
                 leaf_uuid: None,
                 explicit: false,

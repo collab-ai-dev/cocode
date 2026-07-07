@@ -15,6 +15,13 @@ use crate::state::session::TaskEntryKind;
 use crate::state::session::TaskEntryStatus;
 use crate::transcript::derive::test_helpers;
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    match coco_types::SessionId::try_new(value) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id should be valid"),
+    }
+}
+
 fn running_task(task_id: &str, kind: TaskEntryKind) -> TaskEntry {
     TaskEntry {
         task_id: task_id.into(),
@@ -46,7 +53,7 @@ fn status_bar_view_renders_model_tokens_context_and_messages() {
             ..Default::default()
         },
         auto_compact_threshold: Some(90),
-        ..Default::default()
+        ..coco_types::SessionUsageSnapshot::empty(test_session_id("status-session"))
     });
     state.session.token_usage.input_tokens = 1_500;
     state.session.token_usage.output_tokens = 250;
@@ -115,7 +122,7 @@ fn status_bar_view_keeps_low_context_usage_green_with_low_compact_trigger() {
     state.session.model = "deepseek-v4-pro".into();
     state.session.session_usage = Some(coco_types::SessionUsageSnapshot {
         auto_compact_threshold: Some(17_000),
-        ..Default::default()
+        ..coco_types::SessionUsageSnapshot::empty(test_session_id("status-session"))
     });
     state.session.model_by_role.insert(
         ModelRole::Main,
@@ -436,7 +443,7 @@ fn status_bar_view_renders_subagent_usage_segment_only_when_active() {
             request_count: 1,
             ..Default::default()
         },
-        ..Default::default()
+        ..coco_types::SessionUsageSnapshot::empty(test_session_id("status-session"))
     });
     state.session.subagent_usage = crate::state::session::SubagentUsageTotals {
         input_tokens: 68_100,

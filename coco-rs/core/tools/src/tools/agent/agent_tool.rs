@@ -999,6 +999,9 @@ impl Tool for AgentTool {
         } else {
             Some(effective_subagent_type.clone())
         };
+        let session_id = ctx
+            .checked_session_id_for_history()
+            .map_err(ToolError::execution_failed)?;
         let request = AgentSpawnRequest {
             prompt: prompt.to_string(),
             description: if input.description.is_empty() {
@@ -1016,7 +1019,7 @@ impl Tool for AgentTool {
             run_in_background,
             auto_background_ms,
             enable_summarization,
-            session_id: ctx.session_id_for_history.clone().unwrap_or_default(),
+            session_id,
             isolation: effective_isolation,
             name: requested_name,
             team_name: resolved_team_name.clone(),

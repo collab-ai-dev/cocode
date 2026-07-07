@@ -241,11 +241,18 @@ async fn build_todo_patch(
 /// (passed to `ToolUseContext` at bootstrap). As a last resort (tests without
 /// either), uses a stable literal so list-local operations remain round-trippable.
 fn todo_key(ctx: &ToolUseContext) -> String {
-    ctx.agent_id
-        .as_ref()
-        .map(ToString::to_string)
-        .or_else(|| ctx.session_id_for_history.clone())
-        .unwrap_or_else(|| "main-session".to_string())
+    if let Some(agent_id) = ctx.agent_id.as_ref() {
+        return agent_id.to_string();
+    }
+
+    match ctx.checked_session_id_for_history() {
+        Ok(Some(session_id)) => session_id.to_string(),
+        Ok(None) => "main-session".to_string(),
+        Err(e) => {
+            tracing::warn!("{e}");
+            "main-session".to_string()
+        }
+    }
 }
 
 const TASK_CREATE_DESCRIPTION: &str = "Create a new task in the task list";

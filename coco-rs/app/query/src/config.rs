@@ -14,6 +14,7 @@ use coco_messages::CostTracker;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_types::ActiveShellTool;
+use coco_types::AgentId;
 use coco_types::Features;
 use coco_types::PermissionMode;
 use coco_types::PermissionRule;
@@ -188,7 +189,7 @@ pub struct QueryEngineConfig {
     /// context window is smaller than this value.
     pub fallback_min_context_window: Option<i64>,
     /// Session identifier for hook orchestration context.
-    pub session_id: String,
+    pub session_id: coco_types::SessionId,
     /// Project root directory for hook orchestration context.
     pub project_dir: Option<std::path::PathBuf>,
     /// Optional live permission rules read on every tool-context build.
@@ -240,7 +241,7 @@ pub struct QueryEngineConfig {
     /// the subagent auto-allow targets `{slug}-agent-{id}.md` instead of
     /// the main `{slug}.md`, and so the per-turn plan reminder picks the
     /// SubAgent text variant. `None` = this engine IS the main session.
-    pub agent_id: Option<String>,
+    pub agent_id: Option<AgentId>,
     /// Set when this engine runs AS a swarm teammate (spawned via
     /// `Agent({name:...})` + in-process runner). Lifted to a config flag so
     /// `ToolUseContext.is_teammate` is set correctly without reading
@@ -312,8 +313,8 @@ pub struct QueryEngineConfig {
     pub original_cwd: Option<std::path::PathBuf>,
     /// Mutable session CWD shared across all BashTool invocations.
     /// `cd /tmp` in turn N updates this; turn N+1 reads it as the
-    /// spawn cwd. `None` for tests / SDK paths; BashTool falls back
-    /// to `std::env::current_dir()`.
+    /// spawn cwd. `None` is a legacy/test path without persistent cwd
+    /// state.
     pub session_cwd: Option<Arc<tokio::sync::RwLock<std::path::PathBuf>>>,
     /// Resolved web-fetch runtime configuration (WebFetchTool).
     pub web_fetch_config: WebFetchConfig,
@@ -384,6 +385,16 @@ pub struct QueryEngineConfig {
     pub fork_isolation: Option<std::sync::Arc<crate::fork_context::ForkContextOverrides>>,
 }
 
+impl QueryEngineConfig {
+    pub fn agent_id_str(&self) -> Option<&str> {
+        self.agent_id.as_ref().map(AgentId::as_str)
+    }
+
+    pub fn agent_id_string(&self) -> Option<String> {
+        self.agent_id.as_ref().map(ToString::to_string)
+    }
+}
+
 impl Default for QueryEngineConfig {
     fn default() -> Self {
         Self {
@@ -414,7 +425,10 @@ impl Default for QueryEngineConfig {
             thinking_level: None,
             fast_mode: false,
             fallback_min_context_window: None,
-            session_id: String::new(),
+            session_id: match coco_types::SessionId::try_new("test-session") {
+                Ok(id) => id,
+                Err(_) => unreachable!("default session id must be valid"),
+            },
             project_dir: None,
             live_permission_rules: None,
             live_permission_mode: None,
@@ -462,6 +476,16 @@ impl Default for QueryEngineConfig {
             fork_label: None,
             fork_isolation: None,
         }
+    }
+}
+
+impl QueryEngineConfig {
+    pub fn workspace_cwd(&self) -> std::path::PathBuf {
+        self.cwd_override
+            .clone()
+            .or_else(|| self.project_dir.clone())
+            .or_else(|| self.original_cwd.clone())
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
     }
 }
 

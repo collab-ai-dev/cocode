@@ -185,7 +185,7 @@ impl QueryEngine {
         let drained: Vec<coco_compact::StagedCommitEntry> =
             if let Some(ledger) = &self.staged_ledger {
                 let mut g = ledger.lock().await;
-                g.drain_overflow(self.staged_session_id, |_| uuid::Uuid::new_v4())
+                g.drain_overflow(self.staged_session_id.clone(), |_| uuid::Uuid::new_v4())
             } else {
                 Vec::new()
             };
@@ -199,7 +199,7 @@ impl QueryEngine {
             {
                 for entry in &drained {
                     if let Ok(payload) = serde_json::to_value(entry)
-                        && let Err(e) = store.append_marble_origami_commit(sid, payload)
+                        && let Err(e) = store.append_marble_origami_commit(sid.as_str(), payload)
                     {
                         warn!("failed to persist marble-origami-commit: {e}");
                     }
@@ -210,7 +210,7 @@ impl QueryEngine {
                     let g = ledger.lock().await;
                     if let Some(snap) = g.snapshot.as_ref()
                         && let Ok(payload) = serde_json::to_value(snap)
-                        && let Err(e) = store.append_marble_origami_snapshot(sid, payload)
+                        && let Err(e) = store.append_marble_origami_snapshot(sid.as_str(), payload)
                     {
                         warn!("failed to persist marble-origami-snapshot: {e}");
                     }
@@ -511,7 +511,7 @@ impl QueryEngine {
             history,
             event_tx,
             drain_priority,
-            self.config.agent_id.as_deref(),
+            self.config.agent_id_str(),
         )
         .await;
 
@@ -1091,12 +1091,14 @@ impl QueryEngine {
 
         let (Some(store), Some(sid)) = (
             self.transcript_store.as_ref(),
-            self.transcript_session_id.as_deref(),
+            self.transcript_session_id
+                .as_ref()
+                .map(coco_types::SessionId::as_str),
         ) else {
             return;
         };
 
-        let cwd_path = std::env::current_dir().unwrap_or_default();
+        let cwd_path = self.config.workspace_cwd();
         let cwd = cwd_path.display().to_string();
         // Capture the git branch once per chain and stamp it on every
         // line. Treat a git failure (not in a repo, command missing) as
@@ -1116,7 +1118,7 @@ impl QueryEngine {
         // its parent-uuid chain stays intact. Uses a fresh per-engine dedup so
         // the subagent's full history is persisted even when it shares UUIDs
         // with the main thread (fork-inherited context).
-        if let Some(agent_id) = self.config.agent_id.as_deref() {
+        if let Some(agent_id) = self.config.agent_id_str() {
             let mut seen = self.agent_transcript_dedup.lock().await;
             // Continuity: on the first write for this engine, seed the dedup
             // from the existing per-agent file so a RESUMED run (which reuses
@@ -1181,8 +1183,10 @@ impl QueryEngine {
     ) {
         let (Some(store), Some(sid), Some(agent_id)) = (
             self.transcript_store.as_ref(),
-            self.transcript_session_id.as_deref(),
-            self.config.agent_id.as_deref(),
+            self.transcript_session_id
+                .as_ref()
+                .map(coco_types::SessionId::as_str),
+            self.config.agent_id_str(),
         ) else {
             return;
         };
@@ -1575,6 +1579,7 @@ impl QueryEngine {
         let messages_for_fork = history.to_vec();
         let messages_for_writes_check = history.to_vec();
         let memory_dir = runtime.personal_dir().to_path_buf();
+        let cwd_for_writes_check = self.config.workspace_cwd();
         let last_cursor_for_writes_check = last_cursor.clone();
         let last_cursor_for_fork = last_cursor.clone();
 
@@ -1588,6 +1593,7 @@ impl QueryEngine {
                 main_agent_wrote_memory(
                     &messages_for_writes_check,
                     &memory_dir,
+                    &cwd_for_writes_check,
                     last_cursor_for_writes_check.as_deref(),
                 )
             }),
@@ -1597,7 +1603,7 @@ impl QueryEngine {
         // turn for file-mutation calls and pair each with its
         // matching ToolResult so memory's `classify_written_path` pass
         // can decide whether to emit a `ManualEdit` notice.
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let cwd = self.config.workspace_cwd();
         let recent_tool_writes = extract_recent_tool_writes(history.as_slice(), &cwd);
 
         let ctx = coco_memory::runtime::FinalizeTurnContext {
@@ -2000,6 +2006,7 @@ fn count_tool_calls_since<M: std::borrow::Borrow<coco_messages::Message>>(
 fn main_agent_wrote_memory<M: std::borrow::Borrow<coco_messages::Message>>(
     messages: &[M],
     memory_dir: &std::path::Path,
+    cwd: &std::path::Path,
     since_uuid: Option<&str>,
 ) -> bool {
     use coco_messages::AssistantContent;
@@ -2032,8 +2039,7 @@ fn main_agent_wrote_memory<M: std::borrow::Borrow<coco_messages::Message>>(
             // raw string literals.
             let name = call.tool_name.as_str();
             if name == coco_types::ToolName::ApplyPatch.as_str() {
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
-                if apply_patch_paths_from_input(&call.input, &cwd)
+                if apply_patch_paths_from_input(&call.input, cwd)
                     .iter()
                     .any(|path| coco_memory::path::is_auto_mem_file(path, memory_dir))
                 {
@@ -2060,9 +2066,7 @@ fn main_agent_wrote_memory<M: std::borrow::Borrow<coco_messages::Message>>(
             let absolute = if path.is_absolute() {
                 path.to_path_buf()
             } else {
-                std::env::current_dir()
-                    .map(|cwd| cwd.join(path))
-                    .unwrap_or_else(|_| path.to_path_buf())
+                cwd.join(path)
             };
             if coco_memory::path::is_auto_mem_file(&absolute, memory_dir) {
                 return true;

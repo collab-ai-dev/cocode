@@ -32,6 +32,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -1006,7 +1007,16 @@ pub async fn execute_hook(
     env_vars: &HashMap<String, String>,
     stdin_input: Option<&str>,
 ) -> crate::Result<HookExecutionResult> {
-    execute_hook_inner(handler, env_vars, stdin_input, None).await
+    execute_hook_inner(handler, env_vars, stdin_input, None, None).await
+}
+
+pub(crate) async fn execute_hook_in_cwd(
+    handler: &HookHandler,
+    env_vars: &HashMap<String, String>,
+    stdin_input: Option<&str>,
+    cwd: &Path,
+) -> crate::Result<HookExecutionResult> {
+    execute_hook_inner(handler, env_vars, stdin_input, None, Some(cwd)).await
 }
 
 pub async fn execute_hook_with_async_options(
@@ -1015,7 +1025,24 @@ pub async fn execute_hook_with_async_options(
     stdin_input: Option<&str>,
     async_options: AsyncCommandOptions,
 ) -> crate::Result<HookExecutionResult> {
-    execute_hook_inner(handler, env_vars, stdin_input, Some(async_options)).await
+    execute_hook_inner(handler, env_vars, stdin_input, Some(async_options), None).await
+}
+
+pub(crate) async fn execute_hook_with_async_options_in_cwd(
+    handler: &HookHandler,
+    env_vars: &HashMap<String, String>,
+    stdin_input: Option<&str>,
+    async_options: AsyncCommandOptions,
+    cwd: &Path,
+) -> crate::Result<HookExecutionResult> {
+    execute_hook_inner(
+        handler,
+        env_vars,
+        stdin_input,
+        Some(async_options),
+        Some(cwd),
+    )
+    .await
 }
 
 async fn execute_hook_inner(
@@ -1023,6 +1050,7 @@ async fn execute_hook_inner(
     env_vars: &HashMap<String, String>,
     stdin_input: Option<&str>,
     async_options: Option<AsyncCommandOptions>,
+    cwd: Option<&Path>,
 ) -> crate::Result<HookExecutionResult> {
     match handler {
         HookHandler::Command {
@@ -1037,6 +1065,7 @@ async fn execute_hook_inner(
                 env_vars,
                 stdin_input,
                 async_options,
+                cwd,
             )
             .await
         }
@@ -1165,6 +1194,7 @@ async fn execute_command_hook(
     env_vars: &HashMap<String, String>,
     stdin_input: Option<&str>,
     async_options: Option<AsyncCommandOptions>,
+    cwd: Option<&Path>,
 ) -> crate::Result<HookExecutionResult> {
     let shell_kind = ShellKind::from_field(shell);
     let substituted = substitute_plugin_vars(command, env_vars, shell_kind);
@@ -1184,10 +1214,8 @@ async fn execute_command_hook(
         cmd.stdin(std::process::Stdio::piped());
     }
     apply_windows_hide(&mut cmd);
-    if let Ok(cwd) = std::env::current_dir()
-        && cwd.exists()
-    {
-        cmd.current_dir(&cwd);
+    if let Some(cwd) = cwd.filter(|cwd| cwd.exists()) {
+        cmd.current_dir(cwd);
     }
 
     let timeout = std::time::Duration::from_millis(

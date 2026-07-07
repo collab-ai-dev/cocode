@@ -39,6 +39,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use coco_config::WireDumpLevel;
+use coco_types::TurnId;
 
 pub use sink::FileSink;
 pub use sink::WireRecord;
@@ -128,7 +129,7 @@ impl WireDumpConfig {
             max_body_bytes: self.max_body_bytes,
             redact: self.redact,
             seq,
-            turn_id: ctx.turn_id.to_string(),
+            turn_id: ctx.turn_id,
             provider: ctx.provider.to_string(),
             model: ctx.model.to_string(),
             sink: self.sink.clone(),
@@ -140,7 +141,7 @@ impl WireDumpConfig {
 
 /// Identifying context for one captured call.
 pub struct WireTurnCtx<'a> {
-    pub turn_id: &'a str,
+    pub turn_id: TurnId,
     pub provider: &'a str,
     pub model: &'a str,
 }
@@ -210,7 +211,7 @@ pub struct SessionWireRecorder {
     max_body_bytes: usize,
     redact: bool,
     seq: u64,
-    turn_id: String,
+    turn_id: TurnId,
     provider: String,
     model: String,
     sink: Arc<dyn WireSink>,

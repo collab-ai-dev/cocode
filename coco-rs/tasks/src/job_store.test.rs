@@ -4,6 +4,7 @@
 
 use super::*;
 use coco_session::SessionKind;
+use coco_types::SessionId;
 use coco_types::TaskStatus;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -12,7 +13,7 @@ fn sample_job(id: &str, status: TaskStatus) -> JobState {
     let now = now_ms();
     JobState {
         id: id.to_string(),
-        session_id: format!("session-{id}"),
+        session_id: SessionId::try_new(format!("session-{id}")).expect("valid session id"),
         cwd: PathBuf::from("/work"),
         kind: SessionKind::DaemonWorker,
         created_at: now,
