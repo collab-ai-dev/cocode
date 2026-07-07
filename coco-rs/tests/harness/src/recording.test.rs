@@ -50,6 +50,26 @@ async fn recording_hook_handle_captures_each_callback_in_order() {
     );
 }
 
+#[tokio::test]
+async fn recording_agent_handle_captures_spawn_requests() {
+    let handle = RecordingAgentHandle::default();
+    let response = handle
+        .spawn_agent(AgentSpawnRequest {
+            input: coco_tool_runtime::AgentSpawnInput {
+                prompt: "remember this".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await
+        .expect("spawn response");
+
+    assert_eq!(response.status, AgentSpawnStatus::Completed);
+    let calls = handle.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].input.prompt, "remember this");
+}
+
 #[test]
 #[should_panic(expected = "unexpected call to `frobnicate`")]
 fn unexpected_call_panics_loudly() {

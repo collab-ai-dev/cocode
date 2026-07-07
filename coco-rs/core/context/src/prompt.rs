@@ -46,6 +46,22 @@ pub struct SystemPrompt {
     pub blocks: Vec<SystemPromptBlock>,
 }
 
+/// Flattenable text part derived from [`SystemPromptBlock`]s.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemPromptPart {
+    pub text: String,
+    pub cache_hint: CacheHint,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheHint {
+    #[default]
+    Ephemeral,
+    Stable,
+    Breakpoint,
+}
+
 /// A block within the system prompt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -71,14 +87,35 @@ impl SystemPrompt {
         self.blocks.push(SystemPromptBlock::CacheBreakpoint);
     }
 
+    /// Derive text parts from the block stream.
+    ///
+    /// A [`SystemPromptBlock::CacheBreakpoint`] marks the previous
+    /// non-empty text part. Providers that support prompt-cache markers
+    /// can attach native cache metadata to that part without maintaining
+    /// a second prompt representation.
+    pub fn parts(&self) -> Vec<SystemPromptPart> {
+        let mut parts = Vec::new();
+        for block in &self.blocks {
+            match block {
+                SystemPromptBlock::Text { content } => parts.push(SystemPromptPart {
+                    text: content.clone(),
+                    cache_hint: CacheHint::Ephemeral,
+                }),
+                SystemPromptBlock::CacheBreakpoint => {
+                    if let Some(part) = parts.iter_mut().rev().find(|part| !part.text.is_empty()) {
+                        part.cache_hint = CacheHint::Breakpoint;
+                    }
+                }
+            }
+        }
+        parts
+    }
+
     /// Get the full prompt text (without cache breakpoints).
     pub fn full_text(&self) -> String {
-        self.blocks
+        self.parts()
             .iter()
-            .filter_map(|b| match b {
-                SystemPromptBlock::Text { content } => Some(content.as_str()),
-                SystemPromptBlock::CacheBreakpoint => None,
-            })
+            .map(|part| part.text.as_str())
             .collect::<Vec<_>>()
             .join("\n")
     }

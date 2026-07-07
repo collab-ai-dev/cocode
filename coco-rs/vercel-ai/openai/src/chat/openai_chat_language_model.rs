@@ -76,7 +76,8 @@ impl OpenAIChatLanguageModel {
     ) -> Result<(Value, Vec<Warning>), AISdkError> {
         let mut warnings = Vec::new();
         let (openai_options, raw_provider_options) =
-            extract_openai_options(&options.provider_options);
+            extract_openai_options(&options.provider_options)
+                .map_err(|err| AISdkError::new(err.to_string()).with_cause(Box::new(err)))?;
         let caps = get_capabilities(&self.model_id);
 
         let force_reasoning = openai_options.force_reasoning.unwrap_or(false);

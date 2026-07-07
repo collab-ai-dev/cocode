@@ -32,6 +32,7 @@ pub mod events;
 pub mod facade;
 pub mod metrics;
 pub mod services;
+mod trace_names;
 pub mod traits;
 pub mod types;
 

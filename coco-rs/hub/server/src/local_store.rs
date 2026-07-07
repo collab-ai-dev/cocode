@@ -659,10 +659,17 @@ fn event_row_from_parts(parts: EventRowParts<'_>) -> EventRow {
     let display_mode = display.mode_name().to_string();
     let display_language = display.language;
     let display_text = (!display.text.is_empty()).then_some(display.text);
+    // `SessionCatalog` is the source of truth (see crate docs): its entries are
+    // keyed by already-validated session ids, so re-parsing here cannot fail.
+    #[expect(
+        clippy::expect_used,
+        reason = "SessionCatalog entries carry already-validated session ids"
+    )]
+    let session_id = SessionId::try_new(parts.session_id.to_string())
+        .expect("session metadata must contain a valid session id");
     EventRow {
         instance_id: parts.instance_id.to_string(),
-        session_id: SessionId::try_new(parts.session_id.to_string())
-            .expect("session metadata must contain a valid session id"),
+        session_id,
         event_id: event_id(parts.line_index, parts.block_index),
         session_seq,
         line_index: parts.line_index,

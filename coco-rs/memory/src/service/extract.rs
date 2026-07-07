@@ -32,7 +32,13 @@ use std::time::Instant;
 
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
+use coco_tool_runtime::AgentSpawnExecution;
+use coco_tool_runtime::AgentSpawnInheritance;
+use coco_tool_runtime::AgentSpawnInput;
+use coco_tool_runtime::AgentSpawnPermissions;
 use coco_tool_runtime::AgentSpawnRequest;
+use coco_tool_runtime::AgentSpawnRouting;
+use coco_tool_runtime::AgentSpawnTelemetry;
 use coco_types::ActiveShellTool;
 use coco_types::ModelRole;
 use coco_types::SessionId;
@@ -687,42 +693,47 @@ impl ExtractService {
             ..Default::default()
         });
         let request = AgentSpawnRequest {
-            prompt,
-            description: Some("memory extraction".into()),
-            session_id: Some(self.session_id.load().as_ref().clone()),
-            subagent_type: Some("general-purpose".into()),
-            definition: Some(memory_def),
-            run_in_background: false,
-            auto_background_ms: None,
-            // No worktree/remote isolation. The "fork" behaviour (child
-            // sees the parent's message slice prepended) is driven solely
-            // by `fork_context_messages` below — the old `isolation:
-            // "fork"` string was never a real `AgentIsolation` variant and
-            // matched no spawn-path branch.
-            isolation: None,
-            fork_context_messages: fork_context,
-            constraints: Some(AgentSpawnConstraints {
-                max_turns: Some(self.config.extraction_max_turns),
-                allowed_write_roots: vec![self.memory_dir.clone()],
-            }),
-            // The background agent must not record per-message entries
-            // to the user's transcript — its tool-uses race the main
-            // thread's writer and pollute the JSONL.
-            skip_transcript: true,
-            // Allows Read/Glob/Grep, read-only Bash, and the model's
-            // available edit tool for `.md` files within memory_dir;
-            // denies everything else. The
-            // canUseTool gate runs at tool-runtime step 3.5,
-            // composing with the `allowed_write_roots` fence above
-            // (callback = inner ring; field = outer ring).
-            can_use_tool: Some(crate::can_use_tool::create_auto_mem_handle_with_telemetry(
-                self.memory_dir.clone(),
-                self.telemetry.clone(),
-            )),
-            require_can_use_tool: false,
-            fork_label: Some(coco_types::ForkLabel::ExtractMemories),
-            active_shell_tool: self.active_shell_tool,
-            ..Default::default()
+            input: AgentSpawnInput {
+                prompt,
+                description: Some("memory extraction".into()),
+                subagent_type: Some("general-purpose".into()),
+                definition: Some(memory_def),
+                ..Default::default()
+            },
+            execution: AgentSpawnExecution {
+                // The background agent must not record per-message entries
+                // to the user's transcript — its tool-uses race the main
+                // thread's writer and pollute the JSONL.
+                skip_transcript: true,
+                ..Default::default()
+            },
+            permissions: AgentSpawnPermissions {
+                constraints: Some(AgentSpawnConstraints {
+                    max_turns: Some(self.config.extraction_max_turns),
+                    allowed_write_roots: vec![self.memory_dir.clone()],
+                }),
+                // Allows Read/Glob/Grep, read-only Bash, and the model's
+                // available edit tool for `.md` files within memory_dir;
+                // denies everything else.
+                can_use_tool: Some(crate::can_use_tool::create_auto_mem_handle_with_telemetry(
+                    self.memory_dir.clone(),
+                    self.telemetry.clone(),
+                )),
+                ..Default::default()
+            },
+            inheritance: AgentSpawnInheritance {
+                active_shell_tool: self.active_shell_tool,
+                ..Default::default()
+            },
+            routing: AgentSpawnRouting {
+                session_id: Some((**self.session_id.load()).clone()),
+                fork_context_messages: fork_context,
+                ..Default::default()
+            },
+            telemetry: AgentSpawnTelemetry {
+                fork_label: Some(coco_types::ForkLabel::ExtractMemories),
+                ..Default::default()
+            },
         };
 
         // Clone the inner `Arc<dyn AgentHandle>` while holding the

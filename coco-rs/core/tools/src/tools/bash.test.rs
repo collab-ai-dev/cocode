@@ -144,8 +144,11 @@ fn test_bash_read_only_fast_path() {
 
 #[test]
 fn test_bash_cd_safety_parity() {
-    let cwd = std::env::current_dir().expect("test cwd");
-    let noop_cd_git = json!({"command": format!("cd {} && git diff", cwd.display())});
+    // `is_read_only` classifies against a canonical `/` cwd — it intentionally
+    // does not read the live process cwd (multi-session determinism), so a
+    // no-op `cd` must be expressed relative to that cwd (`cd .`) rather than an
+    // absolute `cd` to the current directory.
+    let noop_cd_git = json!({"command": "cd . && git diff"});
     assert!(<BashTool as DynTool>::is_read_only(&BashTool, &noop_cd_git));
     assert!(<BashTool as DynTool>::is_concurrency_safe(
         &BashTool,

@@ -58,6 +58,20 @@ Stream: `TextDelta`, `ThinkingDelta`, `ToolUseQueued`, `ToolUseStarted`,
 `ToolUseCompleted`.
 (See `docs/coco-rs/event-system-design.md` for full catalog.)
 
+## Tool Input Pipeline
+
+`tool_input_pipeline` is the crate-private orchestration boundary for
+assistant-emitted tool input. It composes four steps in order:
+provider/inference wire state → `ToolCallPart` input, observable
+tool-specific normalization, tool lookup, and
+`coco_tool_runtime::ValidatedInput` construction.
+
+`ValidatedInput` remains the execution boundary: permission checks, hooks'
+updated input re-validation, and tool execution must receive that proof-carrying
+newtype, not a bare `serde_json::Value`. Provider wire parsing stays in
+app/query/services-inference territory; `coco-tool-runtime` should not depend
+on provider wire state or command registries.
+
 ## Steering (Mid-Turn Injection)
 
 Users can type while the LLM is working. In coco-rs the queue is

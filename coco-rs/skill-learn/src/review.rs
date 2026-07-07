@@ -18,7 +18,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
 
-use coco_tool_runtime::{AgentSpawnConstraints, AgentSpawnRequest};
+use coco_tool_runtime::{
+    AgentSpawnConstraints, AgentSpawnExecution, AgentSpawnInput, AgentSpawnPermissions,
+    AgentSpawnRequest, AgentSpawnRouting, AgentSpawnTelemetry,
+};
 use coco_types::messages::Message;
 use coco_types::{AgentDefinition, AgentTypeId, ForkLabel, ModelRole, SessionId};
 
@@ -85,22 +88,36 @@ impl SkillReviewService {
         });
 
         let request = AgentSpawnRequest {
-            prompt,
-            description: Some("skill review".into()),
-            session_id: Some(session_id),
-            subagent_type: Some(coco_types::SubagentType::GeneralPurpose.as_str().into()),
-            definition: Some(def),
-            isolation: None,
-            fork_context_messages: fork_context,
-            constraints: Some(AgentSpawnConstraints {
-                max_turns: Some(DEFAULT_REVIEW_MAX_TURNS),
-                allowed_write_roots: vec![self.agent_root.clone()],
-            }),
-            skip_transcript: true,
-            can_use_tool: Some(create_skill_write_handle(self.agent_root.clone())),
-            // Run the fence even under a hook Allow — skills are executable.
-            require_can_use_tool: true,
-            fork_label: Some(ForkLabel::SkillReview),
+            input: AgentSpawnInput {
+                prompt,
+                description: Some("skill review".into()),
+                subagent_type: Some(coco_types::SubagentType::GeneralPurpose.as_str().into()),
+                definition: Some(def),
+                ..Default::default()
+            },
+            execution: AgentSpawnExecution {
+                skip_transcript: true,
+                ..Default::default()
+            },
+            permissions: AgentSpawnPermissions {
+                constraints: Some(AgentSpawnConstraints {
+                    max_turns: Some(DEFAULT_REVIEW_MAX_TURNS),
+                    allowed_write_roots: vec![self.agent_root.clone()],
+                }),
+                can_use_tool: Some(create_skill_write_handle(self.agent_root.clone())),
+                // Run the fence even under a hook Allow — skills are executable.
+                require_can_use_tool: true,
+                ..Default::default()
+            },
+            routing: AgentSpawnRouting {
+                session_id: Some(session_id),
+                fork_context_messages: fork_context,
+                ..Default::default()
+            },
+            telemetry: AgentSpawnTelemetry {
+                fork_label: Some(ForkLabel::SkillReview),
+                ..Default::default()
+            },
             ..Default::default()
         };
 

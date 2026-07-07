@@ -40,6 +40,40 @@ use crate::engine_helpers::drain_one_progress;
 use crate::engine_helpers::emit_model_fallback_notice;
 use crate::engine_helpers::is_capacity_error_message;
 
+#[test]
+fn tool_input_wire_state_unrecoverable_raw_becomes_json_parse_failed() {
+    let (input, invalid, reason) = super::tool_input_from_wire_state(
+        "Read",
+        &coco_inference::ToolInputWireState::UnrecoverableRaw {
+            raw: "\u{0000}\u{0001}".to_string(),
+            error: "tool input parsed to non-object JSON: string".to_string(),
+        },
+    );
+
+    assert_eq!(input, serde_json::json!("\u{0000}\u{0001}"));
+    assert!(invalid);
+    assert!(matches!(
+        reason,
+        Some(coco_llm_types::ToolInputInvalidReason::JsonParseFailed { raw, error })
+            if raw == "\u{0000}\u{0001}" && error.contains("non-object")
+    ));
+}
+
+#[test]
+fn tool_input_wire_state_raw_string_allowed_preserves_freeform_input() {
+    let raw = "*** Begin Patch\n*** End Patch";
+    let (input, invalid, reason) = super::tool_input_from_wire_state(
+        "apply_patch",
+        &coco_inference::ToolInputWireState::RawStringAllowed {
+            raw: raw.to_string(),
+        },
+    );
+
+    assert_eq!(input, serde_json::json!(raw));
+    assert!(!invalid);
+    assert!(reason.is_none());
+}
+
 #[tokio::test]
 async fn plan_exit_clear_context_replaces_history_with_implementation_message() {
     let app_state = Arc::new(tokio::sync::RwLock::new(ToolAppState {

@@ -116,13 +116,13 @@ closes.
 | `/ide` | Static text stub in `ide_handler` | Full behavior: `detectRunningIDEs`, JetBrains/VS Code auto-connect dialogs, MCP cache invalidation. Rust ships the `coco-bridge` crate but the slash command is not wired to it. P2 — wire when bridge UX is finalized. |
 | `/help` | Hardcoded `CATEGORIES` in `handlers/help.rs` | User-installed skills, plugin contributions, and MCP-bridged tools won't appear in `/help` output. P1 — refactor to iterate the live `CommandRegistry`; needs handler-side registry access (currently `CommandHandler::execute_command(&self, args: &str)` doesn't carry one). |
 | `/color` | `dispatch_color` writes only to live `app_state.agent_color` | Choice should persist in the session transcript so it survives restarts. Currently ephemeral. P3 — wire to settings.json or session metadata. |
-| `/diff` | Async overlay handler renders the uncommitted git diff | Per-turn diffs (file edits the agent made this session) not yet implemented. P3. |
-| `/tasks` (alias `bashes`) | Overlay lists/cancels background tasks | Functional but thinner — live output and per-task detail not yet available. P3. |
+| `/diff` | Plain `/diff` renders the uncommitted git diff; TUI intercepts `/diff session` and `/diff turn <message-id>` to render file-history snapshot diffs | SDK/headless still expose only the git-diff text handler. P3. |
+| `/tasks` (alias `bashes`) | No-arg opens the background-tasks modal; `list`, `detail <id>`, and `cancel <id>` use the live `TaskRuntime` | Full interactive output scrolling remains TUI-side follow-up. P3. |
 | `/mcp` | Async overlay for list/add/remove/enable/disable | Core ops work; interactive wizard UX (xaa IDP, add-server) thinned. P2. |
-| `/hooks` | Async overlay shows hook configs | Read-oriented; interactive editing not yet available. P3. |
-| `/sandbox` (file `sandbox-toggle`) | Sync overlay toggles sandbox mode | Per-platform `isHidden`/description + `exclude "pattern"` arg not yet implemented. P3. |
+| `/hooks` | Async overlay shows hook configs; `/hooks reload` reloads the live registry | Read-oriented; interactive editing not yet available. P3. |
+| `/sandbox` (file `sandbox-toggle`) | Sync handler writes canonical modes and supports `exclusions`, `exclude <pattern>`, `unexclude <pattern>` | Per-platform availability panel text is still thin. P3. |
 | `/doctor` | Async health-check text report | Install-method + auto-updater status not applicable to coco's distribution. Text report is sufficient. P3. |
-| `/status` | Sentinel → `runtime.status_report()` text | coco emits a text status report; interactive settings panel not yet available. P3. |
+| `/status` | Sentinel → live `runtime.status_report()`; TUI opens a read-only status panel, SDK/headless keep text output | Panel jump actions to model/settings/permissions/sandbox surfaces are not implemented. P3. |
 
 ## Interactive-only commands (TUI; no SDK/headless path)
 

@@ -30,6 +30,7 @@ use std::sync::RwLock;
 use tokio::sync::broadcast;
 
 use crate::events::EventConsumer;
+use crate::events::RetrievalAggregateSink;
 use crate::events::RetrievalEvent;
 
 /// Default channel capacity for event broadcast.
@@ -49,6 +50,10 @@ pub struct EventEmitter {
     /// Registered synchronous consumers (for non-async contexts).
     sync_consumers: RwLock<Vec<Arc<RwLock<dyn EventConsumer>>>>,
 
+    /// Optional coarse progress sink for callers that should not subscribe
+    /// to the full retrieval event taxonomy.
+    aggregate_sink: RwLock<Option<Arc<dyn RetrievalAggregateSink>>>,
+
     /// Whether event emission is enabled.
     enabled: RwLock<bool>,
 }
@@ -65,6 +70,7 @@ impl EventEmitter {
         Self {
             sender,
             sync_consumers: RwLock::new(Vec::new()),
+            aggregate_sink: RwLock::new(None),
             enabled: RwLock::new(true),
         }
     }
@@ -112,6 +118,18 @@ impl EventEmitter {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+    }
+
+    /// Install or clear the optional aggregate progress sink.
+    ///
+    /// The sink receives only `started` / `progress` / `completed` /
+    /// `error` aggregate events. Full-fidelity retrieval events remain
+    /// available only through `subscribe` or registered consumers.
+    pub fn set_aggregate_sink(sink: Option<Arc<dyn RetrievalAggregateSink>>) {
+        *Self::global()
+            .aggregate_sink
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = sink;
     }
 
     /// Enable or disable event emission.
@@ -162,6 +180,18 @@ impl EventEmitter {
             if let Ok(mut c) = consumer.write() {
                 c.on_event(&event);
             }
+        }
+
+        let aggregate_sink = self
+            .aggregate_sink
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .cloned();
+        if let Some(sink) = aggregate_sink
+            && let Some(aggregate) = event.to_aggregate_event()
+        {
+            sink.on_aggregate_event(&aggregate);
         }
 
         async_count as i32

@@ -28,18 +28,36 @@
 //!    final wire body, where they take final-write priority over typed
 //!    body construction.
 //!
-//! ## TODO(F9): silent-default on bad shape
-//!
-//! Currently `unwrap_or_default` on bad shape silently drops the
-//! entire typed config (a user typo on one key kills every typed
-//! field). Replace with a tolerant per-field deser + Warning emission.
-
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use vercel_ai_provider::ProviderOptions;
 
 use crate::json::merge_json_value;
+
+/// Result of provider-options extraction.
+pub type ExtractNamespacedResult<T> = Result<ExtractedNamespaced<T>, ExtractNamespacedError>;
+
+/// Typed provider options plus raw extras captured by `#[serde(flatten)]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedNamespaced<T> {
+    pub typed: T,
+    pub extras: BTreeMap<String, Value>,
+}
+
+/// Error returned when a present provider-options namespace cannot be
+/// deserialized into the provider's typed option schema.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "invalid provider options for namespace `{namespace}` at {field_path}: {source}; value={value_summary}"
+)]
+pub struct ExtractNamespacedError {
+    pub namespace: String,
+    pub field_path: String,
+    pub value_summary: String,
+    #[source]
+    pub source: serde_json::Error,
+}
 
 /// Provider-options struct contract. Every per-provider options type
 /// (e.g. `GoogleLanguageModelOptions`, `AnthropicProviderOptions`,
@@ -70,12 +88,12 @@ pub fn extract_namespaced<T>(
     provider_options: Option<&ProviderOptions>,
     canonical_ns: &str,
     custom_ns: &str,
-) -> (T, BTreeMap<String, Value>)
+) -> ExtractNamespacedResult<T>
 where
     T: DeserializeOwned + Default + ExtractExtras,
 {
     let Some(opts) = provider_options else {
-        return (T::default(), BTreeMap::new());
+        return Ok(default_extracted());
     };
 
     let lookup = |ns: &str| -> Value {
@@ -86,23 +104,56 @@ where
     };
 
     let canonical = lookup(canonical_ns);
-    let merged = if custom_ns == canonical_ns {
-        canonical
+    let (namespace, merged) = if custom_ns == canonical_ns {
+        (canonical_ns, canonical)
     } else {
         let custom = lookup(custom_ns);
         // canonical = base, custom = overrides (custom wins on overlap)
-        merge_json_value(&canonical, &custom)
+        let namespace = if custom.is_null() {
+            canonical_ns
+        } else {
+            custom_ns
+        };
+        (namespace, merge_json_value(&canonical, &custom))
     };
 
     if merged.is_null() {
-        return (T::default(), BTreeMap::new());
+        return Ok(default_extracted());
     }
 
-    // TODO(F9): bad-shape silently drops typed config. Replace with
-    // tolerant per-field deser + Warning emission.
-    let mut typed: T = serde_json::from_value(merged).unwrap_or_default();
+    let mut typed: T = serde_path_to_error::deserialize(merged.clone()).map_err(|error| {
+        let field_path = error.path().to_string();
+        let source = error.into_inner();
+        ExtractNamespacedError {
+            namespace: namespace.to_string(),
+            field_path,
+            value_summary: summarize_value(&merged),
+            source,
+        }
+    })?;
     let extras = typed.take_extras();
-    (typed, extras)
+    Ok(ExtractedNamespaced { typed, extras })
+}
+
+fn default_extracted<T>() -> ExtractedNamespaced<T>
+where
+    T: Default,
+{
+    ExtractedNamespaced {
+        typed: T::default(),
+        extras: BTreeMap::new(),
+    }
+}
+
+fn summarize_value(value: &Value) -> String {
+    const MAX_CHARS: usize = 240;
+    let serialized =
+        serde_json::to_string(value).unwrap_or_else(|_| "<unserializable>".to_string());
+    let mut summary: String = serialized.chars().take(MAX_CHARS).collect();
+    if serialized.chars().count() > MAX_CHARS {
+        summary.push_str("...");
+    }
+    summary
 }
 
 #[cfg(test)]

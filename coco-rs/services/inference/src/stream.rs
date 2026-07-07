@@ -8,6 +8,7 @@
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::FinishReason;
 use coco_llm_types::ProviderMetadata;
+use coco_llm_types::ToolInputInvalidReason;
 use coco_llm_types::Usage;
 use coco_types::TokenUsage;
 use std::collections::HashMap;
@@ -66,6 +67,12 @@ pub struct ToolCallSegment {
     /// When `ToolCall(tc)` close arrives, this is overwritten with
     /// `tc.input` (canonical close).
     pub input_json: String,
+    /// Parsed/raw state owned by the coco inference boundary.
+    ///
+    /// `input_json` remains the raw/log/debug fallback, but query
+    /// reconstruction should prefer this state so already-parsed inputs do
+    /// not get reparsed downstream.
+    pub input_state: ToolInputWireState,
     pub provider_executed: Option<bool>,
     pub dynamic: Option<bool>,
     /// `true` once `ToolInputEnd` has arrived.
@@ -86,6 +93,45 @@ pub struct ToolCallSegment {
     /// Structured reason accompanying [`Self::invalid`]; set by the
     /// provider adapter at the wire boundary.
     pub invalid_reason: Option<vercel_ai_provider::ToolInputInvalidReason>,
+}
+
+/// Tool input state after the provider/inference wire boundary has handled
+/// JSON parsing. Kept out of `vercel-ai-provider` DTOs so provider crates
+/// continue to carry only wire strings and metadata.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum ToolInputWireState {
+    #[default]
+    Empty,
+    ParsedJson(serde_json::Value),
+    UnrecoverableRaw {
+        raw: String,
+        error: String,
+    },
+    RawStringAllowed {
+        raw: String,
+    },
+}
+
+impl ToolInputWireState {
+    fn from_tool_call_input(raw: &str, invalid_reason: Option<&ToolInputInvalidReason>) -> Self {
+        if let Some(ToolInputInvalidReason::JsonParseFailed { raw, error }) = invalid_reason {
+            return Self::UnrecoverableRaw {
+                raw: raw.clone(),
+                error: error.clone(),
+            };
+        }
+
+        if raw.trim().is_empty() {
+            return Self::Empty;
+        }
+
+        match vercel_ai_provider_utils::parse_with_repair(raw) {
+            Ok((value, _)) => Self::ParsedJson(value),
+            Err(_) => Self::RawStringAllowed {
+                raw: raw.to_string(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +348,7 @@ impl AssistantTurnSnapshotState {
                         id: id.clone(),
                         tool_name: tool_name.clone(),
                         input_json: String::new(),
+                        input_state: ToolInputWireState::Empty,
                         provider_executed: *provider_executed,
                         dynamic: *dynamic,
                         is_input_complete: false,
@@ -335,6 +382,11 @@ impl AssistantTurnSnapshotState {
                     && let Some(TurnPart::ToolCall(seg)) = self.snapshot.parts.get_mut(idx)
                 {
                     seg.is_input_complete = true;
+                    if !seg.input_json.is_empty() {
+                        seg.input_state = ToolInputWireState::RawStringAllowed {
+                            raw: seg.input_json.clone(),
+                        };
+                    }
                     Self::merge_metadata_first_wins(
                         &mut seg.provider_metadata,
                         provider_metadata.as_ref(),
@@ -347,6 +399,10 @@ impl AssistantTurnSnapshotState {
                 // `LanguageModelV4ToolCall.input` is `String` (stringified
                 // JSON), per `vercel-ai/provider/src/language_model/v4/tool_call.rs:20`.
                 let input_str = tc.input.clone();
+                let input_state = ToolInputWireState::from_tool_call_input(
+                    &input_str,
+                    tc.invalid_reason.as_ref(),
+                );
                 if let Some(&idx) = self.active_tool.get(&tc.tool_call_id)
                     && let Some(TurnPart::ToolCall(seg)) = self.snapshot.parts.get_mut(idx)
                 {
@@ -357,6 +413,7 @@ impl AssistantTurnSnapshotState {
                     if !input_str.is_empty() {
                         seg.input_json = input_str;
                     }
+                    seg.input_state = input_state;
                     // A4: None close MUST NOT overwrite earlier Some.
                     if tc.provider_metadata.is_some() {
                         seg.provider_metadata = tc.provider_metadata.clone();
@@ -384,6 +441,7 @@ impl AssistantTurnSnapshotState {
                             id: tc.tool_call_id.clone(),
                             tool_name: tc.tool_name.clone(),
                             input_json: input_str,
+                            input_state,
                             provider_executed: tc.provider_executed,
                             dynamic: tc.dynamic,
                             is_input_complete: true,
@@ -497,7 +555,13 @@ pub enum StreamEvent {
     /// Tool call input delta (JSON fragment).
     ToolCallDelta { id: String, delta: String },
     /// Tool call input complete.
-    ToolCallEnd { id: String },
+    ToolCallEnd {
+        id: String,
+        input_json: String,
+        input_state: ToolInputWireState,
+        invalid: bool,
+        invalid_reason: Option<ToolInputInvalidReason>,
+    },
     /// Stream finished — final usage and full turn snapshot.
     ///
     /// `snapshot` carries every emitted part with its `provider_metadata`
@@ -633,7 +697,7 @@ pub async fn process_stream_with_config(
                 chars = delta.len(),
                 "stream event"
             ),
-            StreamEvent::ToolCallEnd { id } => debug!(
+            StreamEvent::ToolCallEnd { id, .. } => debug!(
                 event = "tool_call_end",
                 id = %id,
                 "stream event"
@@ -717,7 +781,24 @@ fn stream_event_from_part(
                     "stream event"
                 );
             }
-            Some(StreamEvent::ToolCallEnd { id })
+            None
+        }
+        LanguageModelV4StreamPart::ToolCall(tc) => {
+            if let Some(TurnPart::ToolCall(seg)) =
+                turn_state.snapshot.parts.iter().rev().find(
+                    |part| matches!(part, TurnPart::ToolCall(seg) if seg.id == tc.tool_call_id),
+                )
+            {
+                Some(StreamEvent::ToolCallEnd {
+                    id: seg.id.clone(),
+                    input_json: seg.input_json.clone(),
+                    input_state: seg.input_state.clone(),
+                    invalid: seg.invalid,
+                    invalid_reason: seg.invalid_reason.clone(),
+                })
+            } else {
+                None
+            }
         }
         LanguageModelV4StreamPart::Finish {
             usage,

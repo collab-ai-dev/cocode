@@ -8,6 +8,7 @@
 pub mod compact;
 pub mod conversation;
 pub mod messages;
+pub mod model;
 pub mod normalize;
 pub mod recording;
 pub mod registry;

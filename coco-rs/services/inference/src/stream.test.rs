@@ -105,13 +105,10 @@ async fn synthetic_stream_emits_events_in_content_order() {
     // Expected: ReasoningDelta, ReasoningEnd, TextDelta, ToolCallStart,
     // ToolCallDelta, ToolCallEnd, Finish.
     //
-    // The synthetic stream also emits `Part::ToolCall(tc)` as the
+    // The synthetic stream emits `Part::ToolCall(tc)` as the
     // canonical close after `ToolInputEnd` (matching real Anthropic /
-    // OpenAI Responses / Google streams), but `stream_event_from_part`
-    // doesn't surface a corresponding `StreamEvent` for that variant
-    // — the accumulator updates `snapshot.tool_calls` via the
-    // `LanguageModelV4StreamPart::ToolCall` path instead. So the
-    // observable event count from `process_stream` remains 7.
+    // OpenAI Responses / Google streams). `ToolCallEnd` is surfaced
+    // from that close so consumers receive the parsed input state.
     //
     // `ReasoningEnd` is emitted by `process_stream` as a distinct
     // `StreamEvent::ReasoningEnd`; only `TextStart`/`TextEnd` and
@@ -148,7 +145,13 @@ async fn synthetic_stream_emits_events_in_content_order() {
         &events[4]
     );
     assert!(
-        matches!(&events[5], StreamEvent::ToolCallEnd { id } if id == "call_42"),
+        matches!(&events[5], StreamEvent::ToolCallEnd { id, input_state, .. }
+        if id == "call_42"
+            && matches!(
+                input_state,
+                super::ToolInputWireState::ParsedJson(value)
+                    if value["command"] == "echo hi"
+            )),
         "sixth event should be ToolCallEnd, got {:?}",
         &events[5]
     );
@@ -171,11 +174,95 @@ async fn synthetic_stream_emits_events_in_content_order() {
                     );
                     assert!(tc.is_input_complete);
                     assert_eq!(tc.tool_name, "Bash");
+                    assert!(matches!(
+                        &tc.input_state,
+                        super::ToolInputWireState::ParsedJson(value)
+                            if value["command"] == "echo hi"
+                    ));
                 }
                 other => panic!("third part should be ToolCall, got {other:?}"),
             }
         }
         other => panic!("last event should be Finish, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn tool_call_close_carries_unrecoverable_raw_state() {
+    let reason = vercel_ai_provider::ToolInputInvalidReason::JsonParseFailed {
+        raw: "\u{0000}\u{0001}".to_string(),
+        error: "tool input parsed to non-object JSON: string".to_string(),
+    };
+    let parts: Vec<Result<LanguageModelV4StreamPart, AISdkError>> = vec![
+        Ok(LanguageModelV4StreamPart::ToolInputStart {
+            id: "call_bad".into(),
+            tool_name: "Read".into(),
+            provider_executed: None,
+            dynamic: None,
+            title: None,
+            provider_metadata: None,
+        }),
+        Ok(LanguageModelV4StreamPart::ToolInputDelta {
+            id: "call_bad".into(),
+            delta: "\u{0000}\u{0001}".into(),
+            provider_metadata: None,
+        }),
+        Ok(LanguageModelV4StreamPart::ToolInputEnd {
+            id: "call_bad".into(),
+            provider_metadata: None,
+        }),
+        Ok(LanguageModelV4StreamPart::ToolCall(
+            LanguageModelV4ToolCall::new("call_bad", "Read", "\u{0000}\u{0001}")
+                .with_invalid_reason(reason.clone()),
+        )),
+        Ok(LanguageModelV4StreamPart::Finish {
+            usage: Usage::new(1, 1),
+            finish_reason: FinishReason::new(StopReason::ToolUse),
+            provider_metadata: None,
+        }),
+    ];
+
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(16);
+    tokio::spawn(process_stream(Box::pin(futures::stream::iter(parts)), tx));
+
+    let mut saw_end = false;
+    let mut snapshot = None;
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            StreamEvent::ToolCallEnd {
+                input_state,
+                invalid,
+                invalid_reason,
+                ..
+            } => {
+                saw_end = true;
+                assert!(invalid);
+                assert_eq!(invalid_reason, Some(reason.clone()));
+                assert!(matches!(
+                    input_state,
+                    super::ToolInputWireState::UnrecoverableRaw { raw, error }
+                        if raw == "\u{0000}\u{0001}"
+                            && error.contains("non-object")
+                ));
+            }
+            StreamEvent::Finish { snapshot: snap, .. } => snapshot = Some(snap),
+            _ => {}
+        }
+    }
+
+    assert!(saw_end, "expected ToolCallEnd event");
+    let snap = snapshot.expect("finish snapshot");
+    match &snap.parts[0] {
+        super::TurnPart::ToolCall(tc) => {
+            assert!(tc.invalid);
+            assert_eq!(tc.invalid_reason, Some(reason));
+            assert!(matches!(
+                &tc.input_state,
+                super::ToolInputWireState::UnrecoverableRaw { raw, error }
+                    if raw == "\u{0000}\u{0001}" && error.contains("non-object")
+            ));
+        }
+        other => panic!("expected ToolCall, got {other:?}"),
     }
 }
 

@@ -1,8 +1,14 @@
 //! `AgentTool` — launch a specialized agent for complex, multi-step tasks.
 
 use coco_messages::ToolResult;
+use coco_tool_runtime::AgentSpawnExecution;
+use coco_tool_runtime::AgentSpawnInheritance;
+use coco_tool_runtime::AgentSpawnInput;
+use coco_tool_runtime::AgentSpawnPermissions;
 use coco_tool_runtime::AgentSpawnRequest;
+use coco_tool_runtime::AgentSpawnRouting;
 use coco_tool_runtime::AgentSpawnStatus;
+use coco_tool_runtime::AgentSpawnTelemetry;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::DetachSource;
 use coco_tool_runtime::Tool;
@@ -1003,126 +1009,77 @@ impl Tool for AgentTool {
             .checked_session_id_for_history()
             .map_err(ToolError::execution_failed)?;
         let request = AgentSpawnRequest {
-            prompt: prompt.to_string(),
-            description: if input.description.is_empty() {
-                None
-            } else {
-                Some(input.description.clone())
+            input: AgentSpawnInput {
+                prompt: prompt.to_string(),
+                description: if input.description.is_empty() {
+                    None
+                } else {
+                    Some(input.description.clone())
+                },
+                subagent_type: request_subagent_type,
+                name: requested_name,
+                team_name: resolved_team_name.clone(),
+                definition: resolved_definition.clone(),
+                ..Default::default()
             },
-            subagent_type: request_subagent_type,
-            // `model` / `model_role` are NOT on `AgentSpawnRequest` —
-            // model routing flows from `AgentDefinition` only. See the
-            // field-comment block on `AgentSpawnRequest` for the
-            // rationale. Memory forks use
-            // `AgentSpawnConstraints.forced_model_role` as the
-            // internal-only escape hatch.
-            run_in_background,
-            auto_background_ms,
-            enable_summarization,
-            session_id,
-            isolation: effective_isolation,
-            name: requested_name,
-            team_name: resolved_team_name.clone(),
-            mode: Some(effective_mode),
-            // `cwd` is read from the tool input.
-            // Mutually-exclusive-with-worktree validation runs above.
-            // The previous five "internal-only knobs" (`effort`,
-            // `use_exact_tools`, `mcp_servers`, `disallowed_tools`,
-            // `max_turns`, `initial_prompt`) have been removed from
-            // `AgentSpawnRequest` — they were dead pass-through slots.
-            // The coordinator now reads them directly from
-            // `request.definition` (the resolved AgentDefinition).
-            cwd: requested_cwd,
-            // Read-scope inheritance (`createSubagentContext` parity): the
-            // child runs in an isolated worktree cwd but should still READ the
-            // parent project without prompting, so forward the parent's cwd(s)
-            // + its inherited `additional_dirs` as the child's read working
-            // dirs. Writes/bash stay scoped to the worktree + rules.
-            inherited_read_dirs: {
-                let mut dirs: Vec<String> = ctx
-                    .permission_context
-                    .additional_dirs
-                    .keys()
-                    .cloned()
-                    .collect();
-                for p in [ctx.original_cwd.as_deref(), ctx.cwd_override.as_deref()]
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|p| p.to_str())
-                {
-                    if !dirs.iter().any(|d| d == p) {
-                        dirs.push(p.to_string());
+            execution: AgentSpawnExecution {
+                run_in_background,
+                auto_background_ms,
+                enable_summarization,
+                isolation: effective_isolation,
+                cwd: requested_cwd,
+                spawn_mode,
+                ..Default::default()
+            },
+            permissions: AgentSpawnPermissions {
+                mode: Some(effective_mode),
+                ..Default::default()
+            },
+            inheritance: AgentSpawnInheritance {
+                // Read-scope inheritance (`createSubagentContext` parity).
+                inherited_read_dirs: {
+                    let mut dirs: Vec<String> = ctx
+                        .permission_context
+                        .additional_dirs
+                        .keys()
+                        .cloned()
+                        .collect();
+                    for p in [ctx.original_cwd.as_deref(), ctx.cwd_override.as_deref()]
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|p| p.to_str())
+                    {
+                        if !dirs.iter().any(|d| d == p) {
+                            dirs.push(p.to_string());
+                        }
                     }
-                }
-                dirs
+                    dirs
+                },
+                features: Some(ctx.features.clone()),
+                skill_overrides: Some(ctx.skill_overrides.clone()),
+                tool_overrides: Some(ctx.tool_overrides.clone()),
+                active_shell_tool: ctx.active_shell_tool,
+                use_auto_mode_during_plan: ctx.use_auto_mode_during_plan,
+                parent_tool_filter: Some(ctx.tool_filter.clone()),
             },
-            // Subagent inheritance (Layers 1 + 2 + 4). Forward the
-            // parent context's resolved values so the child can't see
-            // tools gated off at the top level.
-            features: Some(ctx.features.clone()),
-            skill_overrides: Some(ctx.skill_overrides.clone()),
-            tool_overrides: Some(ctx.tool_overrides.clone()),
-            active_shell_tool: ctx.active_shell_tool,
-            use_auto_mode_during_plan: ctx.use_auto_mode_during_plan,
-            log_assistant_responses: ctx.log_assistant_responses,
-            parent_tool_filter: Some(ctx.tool_filter.clone()),
-            // `spawn_mode` carries the parent_snapshot embedded in the
-            // Fork variant (type invariant: Fork without snapshot is
-            // unconstructable). Resume/Fresh don't pin to a snapshot —
-            // they read live RuntimeConfig at spawn time.
-            spawn_mode,
-            // T7: resolve the agent definition once at the AgentTool
-            // boundary so the runner reads `definition.model` and
-            // `definition.model_role` consistently.
-            definition: resolved_definition.clone(),
-            // Memory extraction / auto-dream agents inject their own
-            // constraints + fork_context_messages via dedicated entry
-            // points (`ExtractService` / `DreamService`). The user-
-            // facing AgentTool path leaves them at defaults — the
-            // child inherits the engine's standard caps.
-            constraints: None,
-            fork_context_messages: Vec::new(),
-            // User-driven AgentTool spawns are user-visible work; the
-            // subagent's tool-use entries SHOULD land in the
-            // transcript. Memory-side forks set this true via their
-            // own service.
-            skip_transcript: false,
-            // User-driven AgentTool spawns inherit the parent
-            // permission pipeline (allow / deny rules + tool's own
-            // check_permissions). Memory-side forks override this
-            // via dedicated entry points to install per-policy
-            // canUseTool callbacks.
-            can_use_tool: None,
-            require_can_use_tool: false,
-            fork_label: None,
-            is_non_interactive: ctx.is_non_interactive,
-            // Thread the parent's tool_use_id and invoker agent_id through to
-            // the background task registration so the `<task-notification>`
-            // envelope carries the right routing tags. Without these,
-            // completion notifications were routed to the main thread
-            // regardless of which agent spawned them, and the
-            // `<tool-use-id>` tag was missing.
-            tool_use_id: ctx.tool_use_id.clone(),
-            invoking_agent_id: ctx.agent_id.as_ref().map(|a| a.as_str().to_string()),
-            // The spawned child RUNS one level deeper than this engine
-            // (main loop = 0 ⇒ a top-level spawn runs at depth 1). The
-            // universal subagent deny-list gates the `Agent` tool once
-            // this reaches `coco_subagent::SUBAGENT_DEPTH_LIMIT`.
-            child_query_depth: ctx.query_depth + 1,
-            // Thread the parent turn's abort signal so a foreground subagent
-            // is cancelled when the user interrupts the turn (e.g. ESC),
-            // instead of running to completion detached. See the field doc
-            // on `AgentSpawnRequest`.
-            parent_turn_abort: Some(ctx.abort.turn_signal()),
-            // Model-invoked AgentTool spawns never force a structured-output
-            // contract — only workflow `agent(prompt, {schema})` calls set
-            // this. The AgentTool input schema deliberately doesn't expose it.
-            output_schema: None,
+            routing: AgentSpawnRouting {
+                session_id,
+                child_query_depth: ctx.query_depth + 1,
+                parent_turn_abort: Some(ctx.abort.turn_signal()),
+                ..Default::default()
+            },
+            telemetry: AgentSpawnTelemetry {
+                log_assistant_responses: ctx.log_assistant_responses,
+                is_non_interactive: ctx.is_non_interactive,
+                tool_use_id: ctx.tool_use_id.clone(),
+                invoking_agent_id: ctx.agent_id.as_ref().map(|a| a.as_str().to_string()),
+                ..Default::default()
+            },
         };
 
-        let request_description = request.description.clone();
-        let request_name_for_render = request.name.clone();
-        let request_team_for_render = request.team_name.clone();
+        let request_description = request.input.description.clone();
+        let request_name_for_render = request.input.name.clone();
+        let request_team_for_render = request.input.team_name.clone();
 
         let response =
             ctx.agent

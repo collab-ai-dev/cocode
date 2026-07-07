@@ -118,15 +118,20 @@ impl GoogleGenerativeAILanguageModel {
         &self,
         options: &LanguageModelV4CallOptions,
         provider_options_name: &str,
-    ) -> (
-        GoogleLanguageModelOptions,
-        std::collections::BTreeMap<String, Value>,
-    ) {
+    ) -> Result<
+        (
+            GoogleLanguageModelOptions,
+            std::collections::BTreeMap<String, Value>,
+        ),
+        AISdkError,
+    > {
         extract_namespaced(
             options.provider_options.as_ref(),
             "google",
             provider_options_name,
         )
+        .map(|extracted| (extracted.typed, extracted.extras))
+        .map_err(|err| AISdkError::new(err.to_string()).with_cause(Box::new(err)))
     }
 
     /// Build the request arguments for the Google API.
@@ -143,7 +148,7 @@ impl GoogleGenerativeAILanguageModel {
     ) -> Result<(Value, HashMap<String, String>, Vec<Warning>, String), AISdkError> {
         let provider_options_name = self.provider_options_name();
         let (provider_opts, raw_provider_options) =
-            self.parse_provider_options(options, &provider_options_name);
+            self.parse_provider_options(options, &provider_options_name)?;
         let mut warnings: Vec<Warning> = Vec::new();
 
         // Check if model supports system instructions (Gemma models don't)

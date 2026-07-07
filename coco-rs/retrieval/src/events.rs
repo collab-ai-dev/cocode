@@ -17,12 +17,11 @@
 //! - coco-rs retrieval is a full subsystem (not a thin MCP shim),
 //!   so the architectural decomposition into an isolated event stream is intentional.
 //!
-//! **Future hook**: if a slash command ever needs retrieval progress in the
-//! main agent stream, expose a **single** aggregate
-//! `ServerNotification::RetrievalProgress { phase, percent_done }` variant
-//! that coco-retrieval writes to via an optional `Sender<CoreEvent>` sink,
-//! similar to the `TaskManager::with_event_sink()` pattern. Do NOT bridge
-//! the full `RetrievalEvent` taxonomy.
+//! Aggregate bridge: callers that need coarse retrieval progress can install
+//! `EventEmitter::set_aggregate_sink(...)`. The sink receives only
+//! `started` / `progress` / `completed` / `error` summaries via
+//! `RetrievalAggregateEvent`; it does not subscribe to, re-export, or bridge
+//! the full `RetrievalEvent` taxonomy into `CoreEvent`.
 //!
 //! To subscribe to retrieval events from external code, use
 //! `EventEmitter::subscribe()` which returns an `mpsc::Receiver<RetrievalEvent>`.
@@ -353,6 +352,153 @@ impl RetrievalEvent {
         };
         serde_json::to_string(&wrapper).unwrap_or_else(|_| "{}".to_string())
     }
+
+    /// Convert detailed retrieval events into the optional aggregate
+    /// progress surface. This intentionally covers only lifecycle,
+    /// progress, completion, and error signals.
+    pub fn to_aggregate_event(&self) -> Option<RetrievalAggregateEvent> {
+        match self {
+            RetrievalEvent::SearchStarted {
+                query_id, query, ..
+            } => Some(RetrievalAggregateEvent {
+                operation: "search".to_string(),
+                phase: RetrievalAggregatePhase::Started,
+                id: Some(query_id.clone()),
+                message: query.clone(),
+                progress: None,
+                retryable: None,
+            }),
+            RetrievalEvent::SearchCompleted {
+                query_id,
+                results,
+                total_duration_ms,
+                ..
+            } => Some(RetrievalAggregateEvent {
+                operation: "search".to_string(),
+                phase: RetrievalAggregatePhase::Completed,
+                id: Some(query_id.clone()),
+                message: format!("{} results in {}ms", results.len(), total_duration_ms),
+                progress: Some(1.0),
+                retryable: None,
+            }),
+            RetrievalEvent::SearchError {
+                query_id,
+                error,
+                retryable,
+            } => Some(RetrievalAggregateEvent {
+                operation: "search".to_string(),
+                phase: RetrievalAggregatePhase::Error,
+                id: Some(query_id.clone()),
+                message: error.clone(),
+                progress: None,
+                retryable: Some(*retryable),
+            }),
+            RetrievalEvent::IndexBuildStarted {
+                workspace,
+                estimated_files,
+                ..
+            } => Some(RetrievalAggregateEvent {
+                operation: "index".to_string(),
+                phase: RetrievalAggregatePhase::Started,
+                id: Some(workspace.clone()),
+                message: format!("{estimated_files} estimated files"),
+                progress: Some(0.0),
+                retryable: None,
+            }),
+            RetrievalEvent::IndexPhaseChanged {
+                workspace,
+                progress,
+                description,
+                ..
+            } => Some(RetrievalAggregateEvent {
+                operation: "index".to_string(),
+                phase: RetrievalAggregatePhase::Progress,
+                id: Some(workspace.clone()),
+                message: description.clone(),
+                progress: Some(*progress),
+                retryable: None,
+            }),
+            RetrievalEvent::IndexBuildCompleted {
+                workspace,
+                duration_ms,
+                ..
+            } => Some(RetrievalAggregateEvent {
+                operation: "index".to_string(),
+                phase: RetrievalAggregatePhase::Completed,
+                id: Some(workspace.clone()),
+                message: format!("completed in {duration_ms}ms"),
+                progress: Some(1.0),
+                retryable: None,
+            }),
+            RetrievalEvent::IndexBuildFailed { workspace, error } => {
+                Some(RetrievalAggregateEvent {
+                    operation: "index".to_string(),
+                    phase: RetrievalAggregatePhase::Error,
+                    id: Some(workspace.clone()),
+                    message: error.clone(),
+                    progress: None,
+                    retryable: None,
+                })
+            }
+            RetrievalEvent::RepoMapStarted {
+                request_id,
+                max_tokens,
+                ..
+            } => Some(RetrievalAggregateEvent {
+                operation: "repomap".to_string(),
+                phase: RetrievalAggregatePhase::Started,
+                id: Some(request_id.clone()),
+                message: format!("max {max_tokens} tokens"),
+                progress: Some(0.0),
+                retryable: None,
+            }),
+            RetrievalEvent::PageRankComputed {
+                request_id,
+                top_files,
+                ..
+            } => Some(RetrievalAggregateEvent {
+                operation: "repomap".to_string(),
+                phase: RetrievalAggregatePhase::Progress,
+                id: Some(request_id.clone()),
+                message: format!("{} ranked files", top_files.len()),
+                progress: None,
+                retryable: None,
+            }),
+            RetrievalEvent::RepoMapGenerated {
+                request_id,
+                tokens,
+                files,
+                duration_ms,
+            } => Some(RetrievalAggregateEvent {
+                operation: "repomap".to_string(),
+                phase: RetrievalAggregatePhase::Completed,
+                id: Some(request_id.clone()),
+                message: format!("{files} files, {tokens} tokens in {duration_ms}ms"),
+                progress: Some(1.0),
+                retryable: None,
+            }),
+            RetrievalEvent::SessionStarted { .. }
+            | RetrievalEvent::SessionEnded { .. }
+            | RetrievalEvent::QueryPreprocessed { .. }
+            | RetrievalEvent::QueryRewritten { .. }
+            | RetrievalEvent::Bm25SearchStarted { .. }
+            | RetrievalEvent::Bm25SearchCompleted { .. }
+            | RetrievalEvent::VectorSearchStarted { .. }
+            | RetrievalEvent::VectorSearchCompleted { .. }
+            | RetrievalEvent::SnippetSearchStarted { .. }
+            | RetrievalEvent::SnippetSearchCompleted { .. }
+            | RetrievalEvent::FusionStarted { .. }
+            | RetrievalEvent::FusionCompleted { .. }
+            | RetrievalEvent::RerankingStarted { .. }
+            | RetrievalEvent::RerankingCompleted { .. }
+            | RetrievalEvent::IndexFileProcessed { .. }
+            | RetrievalEvent::WatchStarted { .. }
+            | RetrievalEvent::FileChanged { .. }
+            | RetrievalEvent::IncrementalIndexTriggered { .. }
+            | RetrievalEvent::WatchStopped { .. }
+            | RetrievalEvent::DiagnosticLog { .. } => None,
+        }
+    }
 }
 
 /// Wrapper for adding timestamp to events.
@@ -665,6 +811,37 @@ impl fmt::Display for LogLevel {
             LogLevel::Error => write!(f, "ERROR"),
         }
     }
+}
+
+/// Coarse phase for the optional aggregate event sink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetrievalAggregatePhase {
+    Started,
+    Progress,
+    Completed,
+    Error,
+}
+
+/// Minimal progress surface for consumers that should not subscribe to the
+/// full retrieval event taxonomy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalAggregateEvent {
+    pub operation: String,
+    pub phase: RetrievalAggregatePhase,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+}
+
+/// Consumer trait for the optional aggregate retrieval progress bridge.
+pub trait RetrievalAggregateSink: Send + Sync {
+    fn on_aggregate_event(&self, event: &RetrievalAggregateEvent);
 }
 
 // ============================================================================

@@ -89,7 +89,7 @@ impl<H: Clone> AppServer<H> {
             .registry
             .sessions
             .write()
-            .expect("registry lock poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let old_handle = match sessions.get(old_session_id) {
             Some(SessionSlot::Live(handle)) => handle.clone(),
             _ => {
@@ -112,7 +112,10 @@ impl<H: Clone> AppServer<H> {
             }
         };
 
-        let mut routing = self.routing.write().expect("routing lock poisoned");
+        let mut routing = self
+            .routing
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(actual_session_id) = routing.surface_session(calling_surface).cloned() else {
             return CallingSurfaceNotAttachedSnafu {
                 surface_id: calling_surface.clone(),
@@ -140,6 +143,12 @@ impl<H: Clone> AppServer<H> {
             }),
         );
 
+        // The calling surface was validated against `old_session_id` above,
+        // in this same routing-lock section, so the re-point cannot miss.
+        #[expect(
+            clippy::expect_used,
+            reason = "calling surface validated under the routing lock above"
+        )]
         let routing_outcome = routing
             .replace_calling_surface(calling_surface, new_session_id.clone())
             .expect("calling surface was validated under the routing lock");
@@ -161,7 +170,7 @@ impl<H: Clone> AppServer<H> {
             .registry
             .sessions
             .write()
-            .expect("registry lock poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let close_sender = match sessions.get(session_id) {
             Some(SessionSlot::Closing(closing)) => closing.close.sender.clone(),
             _ => {
@@ -174,7 +183,10 @@ impl<H: Clone> AppServer<H> {
             }
         };
 
-        let mut routing = self.routing.write().expect("routing lock poisoned");
+        let mut routing = self
+            .routing
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let routing_outcome = routing.archive_session(session_id);
         let lifecycle_effects = archive_lifecycle_effects(session_id, &routing_outcome);
         let _ = close_sender.send(true);
@@ -192,7 +204,10 @@ impl<H: Clone> AppServer<H> {
         reply: ServerRequestReply,
     ) -> Result<ResolvedServerRequest, AppServerError> {
         let request_id = RequestId::String(reply.request_id().to_string());
-        let mut routing = self.routing.write().expect("routing lock poisoned");
+        let mut routing = self
+            .routing
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let pending = routing
             .complete_server_request(&request_id, session_id)
             .map_err(AppServerError::from)?;
@@ -208,7 +223,7 @@ impl<H: Clone> AppServer<H> {
     ) {
         self.routing
             .write()
-            .expect("routing lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .connect_with_request_and_lifecycle_senders(
                 connection,
                 sender,
@@ -226,7 +241,7 @@ impl<H: Clone> AppServer<H> {
     ) -> Result<(), AttachError> {
         self.routing
             .write()
-            .expect("routing lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .attach_surface_with_options(connection, surface_id, session_id, options)
     }
 
@@ -240,21 +255,21 @@ impl<H: Clone> AppServer<H> {
     ) -> Result<SubscribeReplay, AttachError> {
         self.routing
             .write()
-            .expect("routing lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .subscribe_with_options(connection, surface_id, session_id, after_seq, options)
     }
 
     pub fn route_envelope(&self, envelope: SessionEnvelope) -> RouteOutcome {
         self.routing
             .write()
-            .expect("routing lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .route_envelope(envelope)
     }
 
     pub fn disconnect(&self, connection: ConnectionKey) -> DisconnectOutcome {
         self.routing
             .write()
-            .expect("routing lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .disconnect(connection)
     }
 
@@ -265,7 +280,7 @@ impl<H: Clone> AppServer<H> {
     ) -> DetachSurfaceOutcome {
         self.routing
             .write()
-            .expect("routing lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .detach_surface_for_connection(connection, surface_id)
     }
 
@@ -274,15 +289,17 @@ impl<H: Clone> AppServer<H> {
             .registry
             .sessions
             .read()
-            .expect("registry lock poisoned");
-        let routing = self.routing.read().expect("routing lock poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let routing = self
+            .routing
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut summaries = sessions
             .iter()
-            .filter_map(|(session_id, slot)| {
-                matches!(slot, SessionSlot::Live(_)).then(|| AppLiveSessionSummary {
-                    session_id: session_id.clone(),
-                    surface_counts: routing.surface_counts_for_session(session_id),
-                })
+            .filter(|&(_, slot)| matches!(slot, SessionSlot::Live(_)))
+            .map(|(session_id, _)| AppLiveSessionSummary {
+                session_id: session_id.clone(),
+                surface_counts: routing.surface_counts_for_session(session_id),
             })
             .collect::<Vec<_>>();
         summaries.sort_by(|a, b| a.session_id.as_str().cmp(b.session_id.as_str()));
@@ -298,7 +315,7 @@ impl<H: Clone> AppServer<H> {
     ) -> Result<ServerRequestRouteOutcome, ServerRequestRouteError> {
         self.routing
             .write()
-            .expect("routing lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .route_server_request(session_id, capability, turn_id, request)
     }
 
@@ -308,7 +325,7 @@ impl<H: Clone> AppServer<H> {
     ) -> Vec<PendingServerRequestReplay> {
         self.routing
             .read()
-            .expect("routing lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pending_server_request_replays_for_surface(surface_id)
     }
 
@@ -318,7 +335,7 @@ impl<H: Clone> AppServer<H> {
     ) -> LifecycleRouteOutcome {
         self.routing
             .write()
-            .expect("routing lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .route_lifecycle_effects(effects)
     }
 }
@@ -1161,7 +1178,7 @@ mod tests {
             .routing()
             .write()
             .expect("routing lock")
-            .route_lifecycle_effects(commit.lifecycle_effects.clone());
+            .route_lifecycle_effects(commit.lifecycle_effects);
         assert_eq!(route_outcome.delivered, 2);
         assert!(route_outcome.disconnected.is_empty());
         let caller_delivery = lifecycle_rx.try_recv().expect("caller lifecycle");
@@ -1254,7 +1271,7 @@ mod tests {
             let mut routing = server.routing().write().expect("routing lock");
             routing.connect(connection, tx);
             routing
-                .attach_surface(connection, caller.clone(), other_session_id.clone())
+                .attach_surface(connection, caller.clone(), other_session_id)
                 .expect("attach wrong session");
         }
 
@@ -1371,10 +1388,10 @@ mod tests {
             .routing()
             .write()
             .expect("routing lock")
-            .route_lifecycle_effects(commit.lifecycle_effects.clone());
+            .route_lifecycle_effects(commit.lifecycle_effects);
         assert_eq!(route_outcome.delivered, 2);
         assert!(route_outcome.disconnected.is_empty());
-        let mut delivered = vec![
+        let mut delivered = [
             lifecycle_rx.try_recv().expect("first lifecycle"),
             lifecycle_rx.try_recv().expect("second lifecycle"),
         ];

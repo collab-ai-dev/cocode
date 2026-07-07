@@ -37,12 +37,14 @@ pub struct MemoryFileInfo {
 
 /// Discover memory files for a working directory.
 ///
-/// Resolves the memory base via [`coco_config::global_config::config_home`].
-/// TODO(parity): honour the `COCO_REMOTE_MEMORY_DIR` override here —
-/// currently only the `coco-memory` crate consumes that env override
-/// through source-aware `MemoryConfig` resolution; the context-layer
-/// discovery path is still hard-coded to `config_home`.
 pub fn get_memory_files(cwd: &Path) -> Vec<MemoryFileInfo> {
+    get_memory_files_with_runtime_paths(cwd, &runtime_paths_from_env())
+}
+
+pub fn get_memory_files_with_runtime_paths(
+    cwd: &Path,
+    paths: &coco_paths::RuntimePaths,
+) -> Vec<MemoryFileInfo> {
     let mut files = Vec::new();
 
     let project_mem_dir = cwd
@@ -53,8 +55,7 @@ pub fn get_memory_files(cwd: &Path) -> Vec<MemoryFileInfo> {
     // Auto-memory and team memory live under the per-project facade —
     // single source of truth for the slug/NFC/hash math. No more
     // hand-rolled sanitize here.
-    let memory_base = coco_config::global_config::config_home();
-    let project_paths = coco_paths::ProjectPaths::new(memory_base.clone(), cwd);
+    let project_paths = paths.project_paths(cwd);
     collect_memory_files(&project_paths.memory_dir(), MemoryType::AutoMem, &mut files);
     collect_memory_files(
         &project_paths.team_memory_dir(),
@@ -65,9 +66,15 @@ pub fn get_memory_files(cwd: &Path) -> Vec<MemoryFileInfo> {
     // User memory: <memory_base>/memory/ (replaces the pre-fix
     // hard-coded `~/.claude/memory/` lookup, which silently
     // diverged from coco-rs's own config home).
-    collect_memory_files(&memory_base.join("memory"), MemoryType::User, &mut files);
+    collect_memory_files(&paths.user_memory_dir(), MemoryType::User, &mut files);
 
     files
+}
+
+fn runtime_paths_from_env() -> coco_paths::RuntimePaths {
+    let config_home = coco_config::global_config::config_home();
+    let memory_base_override = std::env::var_os("COCO_REMOTE_MEMORY_DIR").map(PathBuf::from);
+    coco_paths::RuntimePaths::new(config_home, memory_base_override)
 }
 
 /// Collect `.md` files from a directory into the memory file list.
@@ -99,11 +106,16 @@ fn collect_memory_files(dir: &Path, mem_type: MemoryType, out: &mut Vec<MemoryFi
 ///
 /// Used by the permission system to grant write carve-outs.
 ///
-/// TODO(parity): plumb `memory_base` rather than calling
-/// `config_home()` so `COCO_REMOTE_MEMORY_DIR` overrides apply here too.
 pub fn is_memory_managed_path(path: &Path, cwd: &Path) -> bool {
-    let project_paths =
-        coco_paths::ProjectPaths::new(coco_config::global_config::config_home(), cwd);
+    is_memory_managed_path_with_runtime_paths(path, cwd, &runtime_paths_from_env())
+}
+
+pub fn is_memory_managed_path_with_runtime_paths(
+    path: &Path,
+    cwd: &Path,
+    paths: &coco_paths::RuntimePaths,
+) -> bool {
+    let project_paths = paths.project_paths(cwd);
     let auto_dir = project_paths.memory_dir();
     let project_mem = cwd
         .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
@@ -117,8 +129,15 @@ pub fn is_memory_managed_path(path: &Path, cwd: &Path) -> bool {
 
 /// Determine the memory type for a given path.
 pub fn classify_memory_path(path: &Path, cwd: &Path) -> Option<MemoryType> {
-    let project_paths =
-        coco_paths::ProjectPaths::new(coco_config::global_config::config_home(), cwd);
+    classify_memory_path_with_runtime_paths(path, cwd, &runtime_paths_from_env())
+}
+
+pub fn classify_memory_path_with_runtime_paths(
+    path: &Path,
+    cwd: &Path,
+    paths: &coco_paths::RuntimePaths,
+) -> Option<MemoryType> {
+    let project_paths = paths.project_paths(cwd);
     let auto_dir = project_paths.memory_dir();
     let team_dir = project_paths.team_memory_dir();
     let project_mem = cwd
@@ -138,3 +157,7 @@ pub fn classify_memory_path(path: &Path, cwd: &Path) -> Option<MemoryType> {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "memory.test.rs"]
+mod tests;

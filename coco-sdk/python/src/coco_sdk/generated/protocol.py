@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 # Scalar newtype aliases (transparent Rust newtypes)
 # ---------------------------------------------------------------------------
 
+SessionId = str
 TurnId = str
 
 
@@ -763,14 +764,14 @@ class AgentStreamEventTextDelta(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["text_delta"] = Field(default="text_delta", alias="type")
     delta: str
-    turn_id: str
+    turn_id: TurnId
 
 
 class AgentStreamEventThinkingDelta(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["thinking_delta"] = Field(default="thinking_delta", alias="type")
     delta: str
-    turn_id: str
+    turn_id: TurnId
 
 
 class AgentStreamEventToolUseQueued(BaseModel):
@@ -3010,6 +3011,13 @@ class TuiOnlyEventOpenThemePicker(BaseModel):
     )
 
 
+class TuiOnlyEventOpenBackgroundTasks(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal["open_background_tasks"] = Field(
+        default="open_background_tasks", alias="type"
+    )
+
+
 class TuiOnlyEventOpenSkillsDialog(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal["open_skills_dialog"] = Field(
@@ -3127,6 +3135,7 @@ TuiOnlyEvent = Annotated[
         TuiOnlyEventOpenProviderWizard,
         TuiOnlyEventOpenSettings,
         TuiOnlyEventOpenThemePicker,
+        TuiOnlyEventOpenBackgroundTasks,
         TuiOnlyEventOpenSkillsDialog,
         TuiOnlyEventOpenPluginDialog,
         TuiOnlyEventOpenAgentsDialog,
@@ -3400,7 +3409,7 @@ class CompactionPhaseParams(BaseModel):
 class ContentDeltaParams(BaseModel):
     delta: str
     item_id: str | None = None
-    turn_id: str | None = None
+    turn_id: TurnId | None = None
 
 
 class ContextClearedParams(BaseModel):
@@ -3506,7 +3515,7 @@ class MoaAggregatingParams(BaseModel):
     count: int
     preset: str
     role: ModelRole
-    turn_id: str
+    turn_id: TurnId
 
 
 class MoaReferenceParams(BaseModel):
@@ -3516,7 +3525,7 @@ class MoaReferenceParams(BaseModel):
     preset: str
     provider: str
     role: ModelRole
-    turn_id: str
+    turn_id: TurnId
     failed: bool = False
     text: str | None = None
 
@@ -3581,7 +3590,7 @@ class SessionEndedParams(BaseModel):
 class SessionResultParams(BaseModel):
     duration_api_ms: int
     duration_ms: int
-    session_id: str
+    session_id: SessionId
     stop_reason: str
     total_cost_usd: float
     total_turns: int
@@ -3601,7 +3610,7 @@ class SessionStartedParams(BaseModel):
     model: str
     permission_mode: str
     protocol_version: str
-    session_id: str
+    session_id: SessionId
     version: str
     agents: list[str] = []
     api_key_source: str | None = None
@@ -3618,7 +3627,7 @@ class SessionStartedParams(BaseModel):
 
 
 class SessionUsageSnapshot(BaseModel):
-    session_id: str
+    session_id: SessionId
     totals: SessionUsageTotals
     updated_at_ms: int
     version: int
@@ -3712,25 +3721,25 @@ class WorktreeExitedParams(BaseModel):
 class HistoryMessageAppendedParams(BaseModel):
     message: Message
     agent_id: str | None = None
-    session_id: str = ""
+    session_id: SessionId | None = None
 
 
 class HistoryMessageTruncatedParams(BaseModel):
     keep_count: int
     agent_id: str | None = None
-    session_id: str = ""
+    session_id: SessionId | None = None
 
 
 class HistoryResetForResumeParams(BaseModel):
-    session_id: str
     agent_id: str | None = None
+    session_id: SessionId | None = None
 
 
 class HistoryReplacedParams(BaseModel):
     messages: list[Message]
     agent_id: str | None = None
     reason: HistoryReplaceReason = "hydrate"
-    session_id: str = ""
+    session_id: SessionId | None = None
 
 
 class ItemStartedParams(BaseModel):
@@ -3800,7 +3809,7 @@ class SummarizeFailedParams(BaseModel):
 
 
 class StreamStallDetectedParams(BaseModel):
-    turn_id: str | None = None
+    turn_id: TurnId | None = None
 
 
 class StreamWatchdogWarningParams(BaseModel):
@@ -4076,17 +4085,17 @@ class RewindFilesParams(BaseModel):
 
 
 class SessionArchiveParams(BaseModel):
-    session_id: str
+    session_id: SessionId
 
 
 class SessionReadParams(BaseModel):
-    session_id: str
+    session_id: SessionId
     cursor: str | None = None
     limit: int | None = None
 
 
 class SessionResumeParams(BaseModel):
-    session_id: str
+    session_id: SessionId
 
 
 class SessionStartParams(BaseModel):
@@ -4667,7 +4676,7 @@ class CompletedOutcome(BaseModel):
 
 class ConfigChangeInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     source: ConfigChangeSource
     hook_event_name: Literal["ConfigChange"]
     agent_id: str | None = None
@@ -4750,7 +4759,7 @@ class CwdChangedInput(BaseModel):
     cwd: str
     new_cwd: str
     old_cwd: str
-    session_id: str
+    session_id: SessionId
     hook_event_name: Literal["CwdChanged"]
     agent_id: str | None = None
     agent_type: str | None = None
@@ -4773,7 +4782,7 @@ class ElicitationInput(BaseModel):
     cwd: str
     mcp_server_name: str
     message: str
-    session_id: str
+    session_id: SessionId
     hook_event_name: Literal["Elicitation"]
     agent_id: str | None = None
     agent_type: str | None = None
@@ -4789,7 +4798,7 @@ class ElicitationResultInput(BaseModel):
     action: ElicitationAction
     cwd: str
     mcp_server_name: str
-    session_id: str
+    session_id: SessionId
     hook_event_name: Literal["ElicitationResult"]
     agent_id: str | None = None
     agent_type: str | None = None
@@ -4832,7 +4841,7 @@ class FileChangedInput(BaseModel):
     cwd: str
     event: FileChangeEvent
     file_path: str
-    session_id: str
+    session_id: SessionId
     hook_event_name: Literal["FileChanged"]
     agent_id: str | None = None
     agent_type: str | None = None
@@ -4930,7 +4939,7 @@ class InstructionsLoadedInput(BaseModel):
     file_path: str
     load_reason: InstructionsLoadReason
     memory_type: MemoryType
-    session_id: str
+    session_id: SessionId
     hook_event_name: Literal["InstructionsLoaded"]
     agent_id: str | None = None
     agent_type: str | None = None
@@ -5074,7 +5083,7 @@ class NotificationInput(BaseModel):
     cwd: str
     message: str
     notification_type: str
-    session_id: str
+    session_id: SessionId
     hook_event_name: Literal["Notification"]
     agent_id: str | None = None
     agent_type: str | None = None
@@ -5104,7 +5113,7 @@ class PermissionDenialInfo(BaseModel):
 class PermissionDeniedInput(BaseModel):
     cwd: str
     reason: str
-    session_id: str
+    session_id: SessionId
     tool_input: Any
     tool_name: str
     tool_use_id: str
@@ -5124,7 +5133,7 @@ class PermissionExplanation(BaseModel):
 
 class PermissionRequestInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     tool_input: Any
     tool_name: str
     hook_event_name: Literal["PermissionRequest"]
@@ -5269,7 +5278,7 @@ class PluginReloadResult(BaseModel):
 class PostCompactInput(BaseModel):
     compact_summary: str
     cwd: str
-    session_id: str
+    session_id: SessionId
     trigger: CompactTrigger
     hook_event_name: Literal["PostCompact"]
     agent_id: str | None = None
@@ -5281,7 +5290,7 @@ class PostCompactInput(BaseModel):
 class PostToolUseFailureInput(BaseModel):
     cwd: str
     error: str
-    session_id: str
+    session_id: SessionId
     tool_input: Any
     tool_name: str
     tool_use_id: str
@@ -5295,7 +5304,7 @@ class PostToolUseFailureInput(BaseModel):
 
 class PostToolUseInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     tool_input: Any
     tool_name: str
     tool_response: Any
@@ -5309,7 +5318,7 @@ class PostToolUseInput(BaseModel):
 
 class PreCompactInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     trigger: CompactTrigger
     hook_event_name: Literal["PreCompact"]
     agent_id: str | None = None
@@ -5321,7 +5330,7 @@ class PreCompactInput(BaseModel):
 
 class PreToolUseInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     tool_input: Any
     tool_name: str
     tool_use_id: str
@@ -5468,7 +5477,7 @@ class SdkSessionSummary(BaseModel):
     created_at: str
     cwd: str
     model: str
-    session_id: str
+    session_id: SessionId
     message_count: int = 0
     title: str | None = None
     total_tokens: int = 0
@@ -5484,7 +5493,7 @@ class SdkSlashCommand(BaseModel):
 class SessionEndInput(BaseModel):
     cwd: str
     reason: ExitReason
-    session_id: str
+    session_id: SessionId
     hook_event_name: Literal["SessionEnd"]
     agent_id: str | None = None
     agent_type: str | None = None
@@ -5540,7 +5549,7 @@ class SessionResumeResult(BaseModel):
 
 class SessionStartInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     source: SessionStartSource
     hook_event_name: Literal["SessionStart"]
     agent_id: str | None = None
@@ -5551,7 +5560,7 @@ class SessionStartInput(BaseModel):
 
 
 class SessionStartResult(BaseModel):
-    session_id: str
+    session_id: SessionId
 
 
 class SessionUsageSourceEntry(BaseModel):
@@ -5597,7 +5606,7 @@ class SessionUsageTotals(BaseModel):
 
 class SetupInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     trigger: SetupTrigger
     hook_event_name: Literal["Setup"]
     agent_id: str | None = None
@@ -5666,7 +5675,7 @@ class SourcePart(BaseModel):
 class StopFailureInput(BaseModel):
     cwd: str
     error: str
-    session_id: str
+    session_id: SessionId
     hook_event_name: Literal["StopFailure"]
     agent_id: str | None = None
     agent_type: str | None = None
@@ -5678,7 +5687,7 @@ class StopFailureInput(BaseModel):
 
 class StopInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     stop_hook_active: bool
     hook_event_name: Literal["Stop"]
     agent_id: str | None = None
@@ -5696,7 +5705,7 @@ class SubagentStartInput(BaseModel):
     agent_id: str
     agent_type: str
     cwd: str
-    session_id: str
+    session_id: SessionId
     hook_event_name: Literal["SubagentStart"]
     permission_mode: str | None = None
     transcript_path: str = ""
@@ -5707,7 +5716,7 @@ class SubagentStopInput(BaseModel):
     agent_transcript_path: str
     agent_type: str
     cwd: str
-    session_id: str
+    session_id: SessionId
     stop_hook_active: bool
     hook_event_name: Literal["SubagentStop"]
     last_assistant_message: str | None = None
@@ -5818,7 +5827,7 @@ class TaskActivity(BaseModel):
 
 class TaskCompletedInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     task_id: str
     task_subject: str
     hook_event_name: Literal["TaskCompleted"]
@@ -5833,7 +5842,7 @@ class TaskCompletedInput(BaseModel):
 
 class TaskCreatedInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     task_id: str
     task_subject: str
     hook_event_name: Literal["TaskCreated"]
@@ -5880,7 +5889,7 @@ class TaskUsage(BaseModel):
 
 class TeammateIdleInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     team_name: str
     teammate_name: str
     hook_event_name: Literal["TeammateIdle"]
@@ -5979,7 +5988,7 @@ class ToolTypeBreakdown(BaseModel):
 
 
 class TurnStartResult(BaseModel):
-    turn_id: str
+    turn_id: TurnId
 
 
 class UserMessage(BaseModel):
@@ -5997,7 +6006,7 @@ class UserMessage(BaseModel):
 class UserPromptSubmitInput(BaseModel):
     cwd: str
     prompt: str
-    session_id: str
+    session_id: SessionId
     hook_event_name: Literal["UserPromptSubmit"]
     agent_id: str | None = None
     agent_type: str | None = None
@@ -6023,7 +6032,7 @@ class WorkflowDialogPayload(BaseModel):
 class WorktreeCreateInput(BaseModel):
     cwd: str
     name: str
-    session_id: str
+    session_id: SessionId
     hook_event_name: Literal["WorktreeCreate"]
     agent_id: str | None = None
     agent_type: str | None = None
@@ -6033,7 +6042,7 @@ class WorktreeCreateInput(BaseModel):
 
 class WorktreeRemoveInput(BaseModel):
     cwd: str
-    session_id: str
+    session_id: SessionId
     worktree_path: str
     hook_event_name: Literal["WorktreeRemove"]
     agent_id: str | None = None

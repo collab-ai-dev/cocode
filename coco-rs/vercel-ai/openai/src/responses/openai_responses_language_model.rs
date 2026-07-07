@@ -75,7 +75,8 @@ impl OpenAIResponsesLanguageModel {
     ) -> Result<(Value, Vec<Warning>), AISdkError> {
         let mut warnings = Vec::new();
         let (openai_options, raw_provider_options) =
-            extract_responses_options(&options.provider_options);
+            extract_responses_options(&options.provider_options)
+                .map_err(|err| AISdkError::new(err.to_string()).with_cause(Box::new(err)))?;
         let layout = parse_prompt_layout_namespace(&options.provider_options);
         let caps = get_capabilities(&self.model_id);
 

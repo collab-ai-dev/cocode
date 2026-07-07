@@ -1,8 +1,8 @@
 use super::*;
 use crate::config::MemoryConfig;
-use crate::service::test_support::RecordingHandle;
 use crate::telemetry::AutoDreamFailurePhase;
 use crate::telemetry::AutoDreamSkipReason;
+use coco_test_harness::recording::RecordingAgentHandle as RecordingHandle;
 use coco_tool_runtime::AgentHandle;
 use coco_tool_runtime::AgentSpawnResponse;
 use coco_tool_runtime::AgentSpawnStatus;
@@ -361,7 +361,11 @@ async fn personal_only_background_dream_fires_with_dream_constraints() {
     assert!(matches!(outcome, DreamOutcome::Completed { .. }));
     let calls = handle.calls();
     assert_eq!(calls.len(), 1);
-    let constraints = calls[0].constraints.as_ref().expect("constraints");
+    let constraints = calls[0]
+        .permissions
+        .constraints
+        .as_ref()
+        .expect("constraints");
     // Does NOT set `maxTurns` on the fork — the consolidation agent
     // stops naturally when it has nothing left to merge. The previous
     // `Some(20)` cap silently truncated long consolidations.
@@ -371,17 +375,19 @@ async fn personal_only_background_dream_fires_with_dream_constraints() {
         vec![temp.path().to_path_buf()]
     );
     assert_eq!(
-        calls[0].active_shell_tool,
+        calls[0].inheritance.active_shell_tool,
         coco_types::ActiveShellTool::Disabled
     );
-    assert!(calls[0].prompt.contains("Session logs"));
+    assert!(calls[0].input.prompt.contains("Session logs"));
     assert!(
         calls[0]
+            .input
             .prompt
             .contains("Reconcile memories against CLAUDE.md")
     );
     assert!(
         !calls[0]
+            .input
             .prompt
             .contains("Team memory (`team/` subdirectory)")
     );
@@ -417,6 +423,7 @@ async fn team_memory_guidance_is_included_only_when_team_recall_is_enabled() {
     assert_eq!(calls.len(), 1);
     assert!(
         calls[0]
+            .input
             .prompt
             .contains("Team memory (`team/` subdirectory)")
     );
@@ -459,9 +466,9 @@ async fn spawned_prompt_uses_apply_patch_when_configured() {
     assert!(matches!(outcome, DreamOutcome::Completed { .. }));
     let calls = handle.calls();
     assert_eq!(calls.len(), 1);
-    assert!(calls[0].prompt.contains("apply_patch"));
-    assert!(!calls[0].prompt.contains("Write"));
-    assert!(!calls[0].prompt.contains("Edit"));
+    assert!(calls[0].input.prompt.contains("apply_patch"));
+    assert!(!calls[0].input.prompt.contains("Write"));
+    assert!(!calls[0].input.prompt.contains("Edit"));
 }
 
 #[tokio::test]

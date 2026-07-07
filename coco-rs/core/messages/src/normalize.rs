@@ -201,6 +201,33 @@ pub(crate) mod passes {
     }
 }
 
+macro_rules! declare_normalize_passes {
+    ($($pass:ident),+ $(,)?) => {
+        #[cfg(test)]
+        pub(crate) const NORMALIZE_PASS_ORDER: &[&str] = &[$(stringify!($pass)),+];
+
+        fn normalize_passes_would_mutate(messages: &[&Message]) -> bool {
+            use crate::pipeline::MessagePass;
+            false $(|| passes::$pass.would_mutate(messages))+
+        }
+
+        fn apply_normalize_passes(messages: &mut Vec<Message>) {
+            use crate::pipeline::MessagePass;
+            $(passes::$pass.apply(messages);)+
+        }
+    };
+}
+
+declare_normalize_passes!(
+    OrphanedThinkingOnly,
+    TrailingThinking,
+    WhitespaceOnly,
+    EnsureNonEmptyContent,
+    MergeConsecutiveUsers,
+    MergeAssistantsByRequestId,
+    StripExitPlanModeInjectedFields,
+);
+
 /// Configurable filter knobs for the normalization pipeline.
 ///
 /// Callers pick a preset via the constructors below. Fields are public so
@@ -327,7 +354,7 @@ pub fn filter_by_options(
 ///   - `relocateToolReferenceSiblings` — Tool Reference feature isn't
 ///     ported, no callers can produce the offending pattern today.
 pub fn normalize_messages_for_api(messages: &[std::sync::Arc<Message>]) -> Vec<LlmMessage> {
-    use crate::pipeline::{MessagePass, borrow_refs, run_message_passes};
+    use crate::pipeline::{borrow_refs, run_message_passes};
 
     // Steps 1–5 collapse into one visibility-driven filter.
     //
@@ -393,28 +420,15 @@ pub fn normalize_messages_for_api(messages: &[std::sync::Arc<Message>]) -> Vec<L
     // `filtered.to_vec()` (refcount bumps only); otherwise materializes
     // one `Vec<Message>`, applies the passes in order, then re-wraps.
     //
-    // Order matters: trailing-thinking BEFORE
-    // whitespace; merge-by-id AFTER the content fixups so empty-content
-    // siblings get a placeholder before merge tries to combine them.
+    // Order comes from `declare_normalize_passes!` above. Trailing-thinking
+    // must run BEFORE whitespace; merge-by-id must run AFTER the content
+    // fixups so empty-content siblings get a placeholder before merge tries
+    // to combine them.
     let refs = borrow_refs(&filtered);
-    let needs_mutate = passes::OrphanedThinkingOnly.would_mutate(&refs)
-        || passes::TrailingThinking.would_mutate(&refs)
-        || passes::WhitespaceOnly.would_mutate(&refs)
-        || passes::EnsureNonEmptyContent.would_mutate(&refs)
-        || passes::MergeConsecutiveUsers.would_mutate(&refs)
-        || passes::MergeAssistantsByRequestId.would_mutate(&refs)
-        || passes::StripExitPlanModeInjectedFields.would_mutate(&refs);
+    let needs_mutate = normalize_passes_would_mutate(&refs);
     drop(refs);
 
-    let passed = run_message_passes(&filtered, needs_mutate, |owned| {
-        passes::OrphanedThinkingOnly.apply(owned);
-        passes::TrailingThinking.apply(owned);
-        passes::WhitespaceOnly.apply(owned);
-        passes::EnsureNonEmptyContent.apply(owned);
-        passes::MergeConsecutiveUsers.apply(owned);
-        passes::MergeAssistantsByRequestId.apply(owned);
-        passes::StripExitPlanModeInjectedFields.apply(owned);
-    });
+    let passed = run_message_passes(&filtered, needs_mutate, apply_normalize_passes);
 
     // Step 13b: Extract LlmMessage at the wire-DTO seam. Per-message
     // `LlmMessage::clone` is unavoidable here — the provider call site

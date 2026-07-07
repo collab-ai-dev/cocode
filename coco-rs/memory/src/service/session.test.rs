@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::MemoryConfig;
-use crate::service::test_support::RecordingHandle;
 use coco_paths::ProjectPaths;
+use coco_test_harness::recording::RecordingAgentHandle as RecordingHandle;
 use coco_tool_runtime::AgentHandle;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnResponse;
@@ -102,13 +102,13 @@ async fn fires_at_init_with_template_seeded() {
     assert!(matches!(outcome, SessionMemoryOutcome::Completed { .. }));
     let calls = handle.calls();
     assert_eq!(calls.len(), 1);
-    let constraints = calls[0].constraints.as_ref().unwrap();
+    let constraints = calls[0].permissions.constraints.as_ref().unwrap();
     // `extraction_max_turns.max(5)` — the old `Some(3)` cap silently
     // truncated SM updates for models that prefer one-section-per-turn
     // pacing. Now matches `extraction_max_turns` (default 5).
     assert_eq!(constraints.max_turns, Some(5));
     assert_eq!(
-        calls[0].active_shell_tool,
+        calls[0].inheritance.active_shell_tool,
         coco_types::ActiveShellTool::Disabled
     );
     // Seed file exists on disk with the 9-section template.

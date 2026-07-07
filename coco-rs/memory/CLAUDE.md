@@ -76,8 +76,9 @@ src/
 ## Per-Fork canUseTool Policies (PR 4)
 
 [`can_use_tool`](src/can_use_tool.rs) provides two policy callbacks
-threaded onto every memory-fork's `AgentSpawnRequest.can_use_tool`
-field. The handle runs at `coco_tool_runtime::execution::execute_tool_call`
+threaded onto every memory-fork's
+`AgentSpawnRequest.permissions.can_use_tool` field. The handle runs at
+`coco_tool_runtime::execution::execute_tool_call`
 step 3.5 BEFORE the tool's built-in `check_permissions`, so the
 fork can deny / rewrite per-call without modifying the static
 permission rule pipeline.
@@ -88,9 +89,9 @@ permission rule pipeline.
 | `create_auto_dream_handle(memory_dir)` | `DreamService` | Same as extract, plus allow simple `rm` of absolute `.md` paths under `memory_dir` (no recursive flags, globs, redirects, pipelines, or outside paths). Mirrors CC 2.1.193 auto-dream pruning. |
 | `create_session_mem_handle(memory_path)` | `SessionMemoryService` | Allow `Read`; Allow `Edit` IFF `input.file_path == memory_path` (exact match); Deny everything else |
 
-The fence is **defense-in-depth**: callback (inner ring) + the
-existing `AgentSpawnRequest.constraints.allowed_write_roots` field
-(outer ring) both apply. Either alone would protect; both together
+The fence is **defense-in-depth**: callback (inner ring) +
+`AgentSpawnRequest.permissions.constraints.allowed_write_roots` (outer ring)
+both apply. Either alone would protect; both together
 guard against future field-renaming drift.
 
 

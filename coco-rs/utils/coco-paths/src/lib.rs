@@ -11,7 +11,7 @@
 //! Implements: `sanitizePath`, `simpleHash` (djb2), `getProjectsDir` /
 //! `getProjectDir`, `findProjectDir` (prefix fallback),
 //! `resolveSessionFilePath`, memory base / project / daily-log paths,
-//! and `sanitizeAgentTypeForPath`.
+//! runtime config-home vs memory-base paths, and `sanitizeAgentTypeForPath`.
 //!
 //! The crate is dependency-light on purpose: only `unicode-normalization`
 //! at runtime — no env var reads, no subprocesses, no filesystem walks
@@ -25,6 +25,7 @@ pub mod nfc;
 pub mod project_paths;
 pub mod projects_root;
 pub mod relative;
+pub mod runtime_paths;
 pub mod sanitize;
 pub mod slug;
 
@@ -33,5 +34,6 @@ pub use nfc::normalize_nfc;
 pub use project_paths::ProjectPaths;
 pub use projects_root::{find_project_dir, project_dir, projects_root};
 pub use relative::{normalize_lexical, path_to_posix, relative_posix_path};
+pub use runtime_paths::RuntimePaths;
 pub use sanitize::{MAX_SANITIZED_LENGTH, sanitize_agent_type_for_path, sanitize_path};
 pub use slug::ProjectSlug;

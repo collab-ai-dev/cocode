@@ -151,7 +151,7 @@
               "type": "string"
             },
             "turn_id": {
-              "type": "string"
+              "$ref": "#/$defs/TurnId"
             },
             "type": {
               "const": "text_delta",
@@ -172,7 +172,7 @@
               "type": "string"
             },
             "turn_id": {
-              "type": "string"
+              "$ref": "#/$defs/TurnId"
             },
             "type": {
               "const": "thinking_delta",
@@ -2155,9 +2155,13 @@
           ]
         },
         "turn_id": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnId"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -5155,7 +5159,7 @@
           "$ref": "#/$defs/ModelRole"
         },
         "turn_id": {
-          "type": "string"
+          "$ref": "#/$defs/TurnId"
         }
       },
       "required": [
@@ -5197,7 +5201,7 @@
           "type": "string"
         },
         "turn_id": {
-          "type": "string"
+          "$ref": "#/$defs/TurnId"
         }
       },
       "required": [
@@ -7385,7 +7389,7 @@
           "type": "string"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "title": {
           "type": [
@@ -7544,8 +7548,14 @@
                   "$ref": "#/$defs/Message"
                 },
                 "session_id": {
-                  "default": "",
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -7580,8 +7590,14 @@
                   "type": "integer"
                 },
                 "session_id": {
-                  "default": "",
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -7612,12 +7628,16 @@
                   ]
                 },
                 "session_id": {
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
-              "required": [
-                "session_id"
-              ],
               "type": "object"
             }
           },
@@ -7653,8 +7673,14 @@
                   "default": "hydrate"
                 },
                 "session_id": {
-                  "default": "",
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
@@ -8710,9 +8736,13 @@
             "params": {
               "properties": {
                 "turn_id": {
-                  "type": [
-                    "string",
-                    "null"
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TurnId"
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 }
               },
@@ -9039,7 +9069,7 @@
       "description": "Params for `session/archive`.",
       "properties": {
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         }
       },
       "required": [
@@ -9057,6 +9087,10 @@
         "reason"
       ],
       "type": "object"
+    },
+    "SessionId": {
+      "description": "Branded session identifier.",
+      "type": "string"
     },
     "SessionListResult": {
       "description": "Response to `ClientRequest::SessionList`.",
@@ -9231,7 +9265,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         }
       },
       "required": [
@@ -9332,7 +9366,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "stop_reason": {
           "type": "string"
@@ -9365,7 +9399,7 @@
       "description": "Params for `session/resume`.",
       "properties": {
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         }
       },
       "required": [
@@ -9451,7 +9485,7 @@
       "description": "Response to `ClientRequest::SessionStart`.\nReturned after the server creates an agent session and emits the\n`session/started` notification. Subsequent ClientRequests\n(turn/start, approval/resolve, etc.) operate on this session.",
       "properties": {
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         }
       },
       "required": [
@@ -9536,7 +9570,7 @@
           "type": "string"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "skills": {
           "default": [],
@@ -9614,7 +9648,7 @@
           "type": "array"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "source_records": {
           "description": "Provider/model/source records. This is the source of truth for\ndetailed usage views; `totals` and `models` are rollups.",
@@ -11789,7 +11823,7 @@
           "type": "string"
         },
         "turn_id": {
-          "type": "string"
+          "$ref": "#/$defs/TurnId"
         }
       },
       "required": [
@@ -14140,6 +14174,19 @@
           "type": "object"
         },
         {
+          "description": "Tell the TUI to open the background tasks dialog. Emitted when the\nslash dispatcher resolves `/tasks` with no args.",
+          "properties": {
+            "type": {
+              "const": "open_background_tasks",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Tell the TUI to open the `/skills` read-only overlay. The slash\ndispatcher pre-builds the entry list + per-group subtitles so\nthe TUI doesn't recompute paths or token estimates.\n\nDialog is read-only \u2014 Esc to close; selection has no side effects.",
           "properties": {
             "payload": {
@@ -14462,8 +14509,8 @@
       "description": "Response to `ClientRequest::TurnStart`.\n`turn/start` is a fire-and-forget trigger \u2014 the server accepts the\nrequest, spawns the turn as a detached task, and replies immediately\nwith a handle. Progress is delivered via `turn/started`, streaming\ndeltas, and the terminal `turn/ended` notification.",
       "properties": {
         "turn_id": {
-          "description": "Opaque turn identifier the client can use to correlate notifications\nand issue `turn/interrupt` for cancellation.",
-          "type": "string"
+          "$ref": "#/$defs/TurnId",
+          "description": "Opaque turn identifier the client can use to correlate notifications\nand issue `turn/interrupt` for cancellation."
         }
       },
       "required": [
@@ -14984,7 +15031,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "source": {
           "$ref": "#/$defs/ConfigChangeSource"
@@ -15051,7 +15098,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -15122,7 +15169,7 @@
         },
         "requested_schema": true,
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -15207,7 +15254,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -15282,7 +15329,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -15365,7 +15412,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -15436,7 +15483,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "title": {
           "type": [
@@ -15493,7 +15540,7 @@
           "type": "string"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "tool_input": true,
         "tool_name": {
@@ -15553,7 +15600,7 @@
           "description": "Suggested permission updates from upstream classifiers."
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "tool_input": true,
         "tool_name": {
@@ -15608,7 +15655,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -15669,7 +15716,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "tool_input": true,
         "tool_name": {
@@ -15726,7 +15773,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "tool_input": true,
         "tool_name": {
@@ -15791,7 +15838,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -15841,7 +15888,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "tool_input": true,
         "tool_name": {
@@ -15900,7 +15947,7 @@
           "$ref": "#/$defs/ExitReason"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -15952,7 +15999,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "source": {
           "$ref": "#/$defs/SessionStartSource"
@@ -16012,7 +16059,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -16085,7 +16132,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -16138,7 +16185,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "stop_hook_active": {
           "description": "`true` when the Stop hook is firing recursively (a previous\nStop hook blocked, the loop continued, and Stop is firing\nagain). Hooks should typically pass through to avoid infinite\nloops.",
@@ -16181,7 +16228,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -16231,7 +16278,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "stop_hook_active": {
           "type": "boolean"
@@ -16284,7 +16331,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "task_description": {
           "type": [
@@ -16356,7 +16403,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "task_description": {
           "type": [
@@ -16428,7 +16475,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "team_name": {
           "type": "string"
@@ -16485,7 +16532,7 @@
           "type": "string"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -16535,7 +16582,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
@@ -16582,7 +16629,7 @@
           ]
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "transcript_path": {
           "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",

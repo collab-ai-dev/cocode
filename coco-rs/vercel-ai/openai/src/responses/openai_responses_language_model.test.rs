@@ -46,6 +46,29 @@ fn get_args_basic() {
     assert!(body["input"].is_array());
 }
 
+#[test]
+fn get_args_rejects_malformed_typed_provider_options() {
+    let model = OpenAIResponsesLanguageModel::new("gpt-4o", make_config());
+    let mut po = vercel_ai_provider::ProviderOptions::default();
+    let mut inner = std::collections::HashMap::new();
+    inner.insert("maxToolCalls".to_string(), serde_json::json!({"bad": true}));
+    po.set("openai", inner);
+    let options = LanguageModelV4CallOptions {
+        prompt: vec![vercel_ai_provider::LanguageModelV4Message::user_text(
+            "Hello",
+        )],
+        provider_options: Some(po),
+        ..Default::default()
+    };
+
+    let err = model
+        .get_args(&options)
+        .expect_err("malformed provider options must fail request build");
+    assert!(err.message.contains("invalid provider options"));
+    assert!(err.message.contains("namespace `openai`"));
+    assert!(err.message.contains("maxToolCalls"));
+}
+
 fn provider_options_with_layout(instructions: &str) -> vercel_ai_provider::ProviderOptions {
     let mut po = vercel_ai_provider::ProviderOptions::default();
     let mut inner = std::collections::HashMap::new();

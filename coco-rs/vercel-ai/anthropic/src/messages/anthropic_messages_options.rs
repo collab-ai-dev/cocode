@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use vercel_ai_provider::ProviderOptions;
 use vercel_ai_provider_utils::ExtractExtras;
+use vercel_ai_provider_utils::ExtractNamespacedError;
 use vercel_ai_provider_utils::extract_namespaced;
 
 /// Anthropic-specific thinking configuration.
@@ -289,7 +290,7 @@ impl ExtractExtras for AnthropicProviderOptions {
 pub fn extract_anthropic_options(
     provider_options: &Option<ProviderOptions>,
     provider: &str,
-) -> (AnthropicProviderOptions, BTreeMap<String, Value>) {
+) -> Result<(AnthropicProviderOptions, BTreeMap<String, Value>), ExtractNamespacedError> {
     // Extract custom provider name prefix (e.g., "my-proxy.messages" → "my-proxy")
     let provider_name = match provider.find('.') {
         Some(idx) => &provider[..idx],
@@ -297,6 +298,7 @@ pub fn extract_anthropic_options(
     };
 
     extract_namespaced(provider_options.as_ref(), "anthropic", provider_name)
+        .map(|extracted| (extracted.typed, extracted.extras))
 }
 
 #[cfg(test)]

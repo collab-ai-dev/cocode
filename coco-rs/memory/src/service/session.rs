@@ -37,7 +37,13 @@ use std::time::SystemTime;
 use coco_paths::ProjectPaths;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
+use coco_tool_runtime::AgentSpawnExecution;
+use coco_tool_runtime::AgentSpawnInheritance;
+use coco_tool_runtime::AgentSpawnInput;
+use coco_tool_runtime::AgentSpawnPermissions;
 use coco_tool_runtime::AgentSpawnRequest;
+use coco_tool_runtime::AgentSpawnRouting;
+use coco_tool_runtime::AgentSpawnTelemetry;
 use coco_types::ActiveShellTool;
 use coco_types::ModelRole;
 use coco_types::SessionId;
@@ -680,31 +686,44 @@ impl SessionMemoryService {
             ..Default::default()
         });
         let request = AgentSpawnRequest {
-            prompt,
-            description: Some("session memory update".into()),
-            session_id: Some(self.session_id.load().as_ref().clone()),
-            subagent_type: Some("general-purpose".into()),
-            definition: Some(memory_def),
-            constraints: Some(AgentSpawnConstraints {
-                // Section-by-section edits can legitimately span more
-                // turns than the original `Some(3)` allowed —
-                // tight cap silently truncated SM updates for models
-                // that prefer one-section-per-turn pacing.
-                max_turns: Some(self.config.extraction_max_turns.max(5)),
-                allowed_write_roots: file_path
-                    .parent()
-                    .map(|p| vec![p.to_path_buf()])
-                    .unwrap_or_default(),
-            }),
-            skip_transcript: true,
-            // `canUseTool: createSessionMemCanUseTool(memoryPath)`.
-            can_use_tool: Some(crate::can_use_tool::create_session_mem_handle(
-                file_path.clone(),
-            )),
-            require_can_use_tool: false,
-            fork_label: Some(fork_label),
-            active_shell_tool: self.active_shell_tool,
-            ..Default::default()
+            input: AgentSpawnInput {
+                prompt,
+                description: Some("session memory update".into()),
+                subagent_type: Some("general-purpose".into()),
+                definition: Some(memory_def),
+                ..Default::default()
+            },
+            execution: AgentSpawnExecution {
+                skip_transcript: true,
+                ..Default::default()
+            },
+            permissions: AgentSpawnPermissions {
+                constraints: Some(AgentSpawnConstraints {
+                    // Section-by-section edits can legitimately span more
+                    // turns than the original `Some(3)` allowed.
+                    max_turns: Some(self.config.extraction_max_turns.max(5)),
+                    allowed_write_roots: file_path
+                        .parent()
+                        .map(|p| vec![p.to_path_buf()])
+                        .unwrap_or_default(),
+                }),
+                can_use_tool: Some(crate::can_use_tool::create_session_mem_handle(
+                    file_path.clone(),
+                )),
+                ..Default::default()
+            },
+            inheritance: AgentSpawnInheritance {
+                active_shell_tool: self.active_shell_tool,
+                ..Default::default()
+            },
+            routing: AgentSpawnRouting {
+                session_id: Some(self.session_id.load().as_ref().clone()),
+                ..Default::default()
+            },
+            telemetry: AgentSpawnTelemetry {
+                fork_label: Some(fork_label),
+                ..Default::default()
+            },
         };
 
         tracing::info!(

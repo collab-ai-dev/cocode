@@ -32,13 +32,16 @@ impl<H: Clone> LiveSessionRegistry<H> {
     }
 
     pub fn slot_count(&self) -> usize {
-        self.sessions.read().expect("registry lock poisoned").len()
+        self.sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     pub fn live_count(&self) -> usize {
         self.sessions
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .values()
             .filter(|slot| matches!(slot, SessionSlot::Live(_)))
             .count()
@@ -48,7 +51,7 @@ impl<H: Clone> LiveSessionRegistry<H> {
         match self
             .sessions
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(session_id)
         {
             Some(SessionSlot::Live(handle)) => Some(handle.clone()),
@@ -59,16 +62,18 @@ impl<H: Clone> LiveSessionRegistry<H> {
     pub fn list_live(&self) -> Vec<SessionId> {
         self.sessions
             .read()
-            .expect("registry lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
-            .filter_map(|(session_id, slot)| {
-                matches!(slot, SessionSlot::Live(_)).then(|| session_id.clone())
-            })
+            .filter(|&(_, slot)| matches!(slot, SessionSlot::Live(_)))
+            .map(|(session_id, _)| session_id.clone())
             .collect()
     }
 
     pub fn begin_load(&self, session_id: SessionId) -> Result<LoadStart<H>, RegistryError> {
-        let mut sessions = self.sessions.write().expect("registry lock poisoned");
+        let mut sessions = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match sessions.get(&session_id) {
             Some(SessionSlot::Loading(load)) => {
                 return Ok(LoadStart::Loading(load.completion()));
@@ -94,7 +99,10 @@ impl<H: Clone> LiveSessionRegistry<H> {
         session_id: &SessionId,
         handle: H,
     ) -> Result<(), RegistryError> {
-        let mut sessions = self.sessions.write().expect("registry lock poisoned");
+        let mut sessions = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(SessionSlot::Loading(mut load)) = sessions.remove(session_id) else {
             return SlotConflictSnafu {
                 session_id: session_id.clone(),
@@ -116,7 +124,10 @@ impl<H: Clone> LiveSessionRegistry<H> {
         session_id: &SessionId,
         error: RegistryError,
     ) -> Result<(), RegistryError> {
-        let mut sessions = self.sessions.write().expect("registry lock poisoned");
+        let mut sessions = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(SessionSlot::Loading(load)) = sessions.remove(session_id) else {
             return SlotConflictSnafu {
                 session_id: session_id.clone(),
@@ -132,19 +143,17 @@ impl<H: Clone> LiveSessionRegistry<H> {
     }
 
     pub fn begin_close(&self, session_id: &SessionId) -> Result<CloseStart<H>, RegistryError> {
-        let mut sessions = self.sessions.write().expect("registry lock poisoned");
+        let mut sessions = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match sessions.get_mut(session_id) {
             Some(SessionSlot::Loading(load)) => {
                 let load_completion = load.completion();
-                let mut should_spawn = false;
-                if load.close_after_load.is_none() {
-                    load.close_after_load = Some(CloseState::new());
-                    should_spawn = true;
-                }
+                let should_spawn = load.close_after_load.is_none();
                 let close_completion = load
                     .close_after_load
-                    .as_ref()
-                    .expect("close-after-load state must exist")
+                    .get_or_insert_with(CloseState::new)
                     .completion();
                 Ok(CloseStart::Loading {
                     load_completion,
@@ -181,7 +190,10 @@ impl<H: Clone> LiveSessionRegistry<H> {
         old_session_id: &SessionId,
         new_session_id: SessionId,
     ) -> Result<ReplaceStart<H>, RegistryError> {
-        let mut sessions = self.sessions.write().expect("registry lock poisoned");
+        let mut sessions = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(SessionSlot::Live(old_handle)) = sessions.get(old_session_id) else {
             return OldNotReadySnafu {
                 session_id: old_session_id.clone(),
@@ -211,7 +223,10 @@ impl<H: Clone> LiveSessionRegistry<H> {
         new_session_id: &SessionId,
         new_handle: H,
     ) -> Result<ReplaceCommit<H>, RegistryError> {
-        let mut sessions = self.sessions.write().expect("registry lock poisoned");
+        let mut sessions = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let old_handle = match sessions.get(old_session_id) {
             Some(SessionSlot::Live(handle)) => handle.clone(),
             _ => {
@@ -258,7 +273,10 @@ impl<H: Clone> LiveSessionRegistry<H> {
     }
 
     pub fn complete_close(&self, session_id: &SessionId) -> Result<(), RegistryError> {
-        let mut sessions = self.sessions.write().expect("registry lock poisoned");
+        let mut sessions = self
+            .sessions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(SessionSlot::Closing(closing)) = sessions.get(session_id) else {
             return SlotConflictSnafu {
                 session_id: session_id.clone(),

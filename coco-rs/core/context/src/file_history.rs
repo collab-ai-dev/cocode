@@ -141,6 +141,13 @@ pub struct DiffStats {
     pub deletions: i64,
 }
 
+/// Rendered file-history diff for slash-command display.
+#[derive(Debug, Clone, Default)]
+pub struct RenderedDiff {
+    pub stats: DiffStats,
+    pub unified_diff: String,
+}
+
 /// Resolves the backup directory for a session.
 pub fn backup_dir(config_home: &Path, session_id: &str) -> PathBuf {
     config_home.join("file-history").join(session_id)
@@ -718,6 +725,92 @@ impl FileHistoryState {
         Ok(stats)
     }
 
+    /// Render a unified diff between two file-history checkpoints, or
+    /// from a checkpoint to the live working tree when `to_message_id`
+    /// is `None`.
+    pub async fn render_diff_between(
+        &self,
+        from_message_id: &str,
+        to_message_id: Option<&str>,
+        config_home: &Path,
+        session_id: &str,
+    ) -> Result<RenderedDiff> {
+        let from_snapshot = self
+            .snapshots
+            .iter()
+            .rfind(|s| s.message_id == from_message_id)
+            .ok_or_else(|| crate::ContextError::generic("no snapshot found for from_message_id"))?;
+        let to_snapshot = match to_message_id {
+            Some(id) => Some(
+                self.snapshots
+                    .iter()
+                    .rfind(|s| s.message_id == id)
+                    .ok_or_else(|| {
+                        crate::ContextError::generic("no snapshot found for to_message_id")
+                    })?,
+            ),
+            None => None,
+        };
+
+        self.render_diff_from_snapshots(from_snapshot, to_snapshot, config_home, session_id)
+            .await
+    }
+
+    /// Render a unified diff from the first retained snapshot in this
+    /// session to the live working tree.
+    pub async fn render_session_diff(
+        &self,
+        config_home: &Path,
+        session_id: &str,
+    ) -> Result<RenderedDiff> {
+        let from_snapshot = self
+            .snapshots
+            .first()
+            .ok_or_else(|| crate::ContextError::generic("no file-history snapshots found"))?;
+        self.render_diff_from_snapshots(from_snapshot, None, config_home, session_id)
+            .await
+    }
+
+    async fn render_diff_from_snapshots(
+        &self,
+        from_snapshot: &FileHistorySnapshot,
+        to_snapshot: Option<&FileHistorySnapshot>,
+        config_home: &Path,
+        session_id: &str,
+    ) -> Result<RenderedDiff> {
+        let mut stats = DiffStats::default();
+        let mut unified_diff = String::new();
+        let mut paths: Vec<&PathBuf> = self.tracked_files.iter().collect();
+        paths.sort_unstable();
+
+        for file_path in paths {
+            let Some(from_backup) = backup_name_for_snapshot(self, from_snapshot, file_path) else {
+                continue;
+            };
+            let old_content = read_backup_content(config_home, session_id, &from_backup).await;
+            let new_content = match to_snapshot {
+                Some(snapshot) => {
+                    let Some(to_backup) = backup_name_for_snapshot(self, snapshot, file_path)
+                    else {
+                        continue;
+                    };
+                    read_backup_content(config_home, session_id, &to_backup).await
+                }
+                None => fs::read_to_string(file_path).await.ok(),
+            };
+            if old_content == new_content {
+                continue;
+            }
+            accumulate_diff(&mut stats, file_path, &old_content, &new_content);
+            append_unified_diff_for_file(&mut unified_diff, file_path, &old_content, &new_content);
+        }
+
+        Ok(RenderedDiff {
+            stats,
+            unified_diff,
+        })
+    }
+
     /// Fast boolean check: has any tracked file changed since the given snapshot?
     pub async fn has_any_changes(
         &self,
@@ -789,6 +882,50 @@ impl FileHistoryState {
     pub fn set_file_update_sink(&mut self, sink: Arc<dyn FileUpdateSink>) {
         self.file_update_sink = Some(sink);
     }
+}
+
+fn backup_name_for_snapshot(
+    state: &FileHistoryState,
+    snapshot: &FileHistorySnapshot,
+    file_path: &Path,
+) -> Option<Option<String>> {
+    match snapshot.tracked_file_backups.get(file_path) {
+        Some(backup) => Some(backup.backup_file_name.clone()),
+        None => state.first_version_backup_name(file_path),
+    }
+}
+
+fn append_unified_diff_for_file(
+    out: &mut String,
+    file_path: &Path,
+    old_content: &Option<String>,
+    new_content: &Option<String>,
+) {
+    let old = old_content.as_deref().unwrap_or("");
+    let new = new_content.as_deref().unwrap_or("");
+    let old_label = if old_content.is_some() {
+        format!("a/{}", file_path.display())
+    } else {
+        "/dev/null".to_string()
+    };
+    let new_label = if new_content.is_some() {
+        format!("b/{}", file_path.display())
+    } else {
+        "/dev/null".to_string()
+    };
+    let diff = similar::TextDiff::from_lines(old, new)
+        .unified_diff()
+        .header(&old_label, &new_label)
+        .context_radius(3)
+        .to_string();
+    if diff.trim().is_empty() {
+        return;
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(diff.trim_end());
+    out.push('\n');
 }
 
 /// Apply a snapshot: restore each tracked file from its backup.

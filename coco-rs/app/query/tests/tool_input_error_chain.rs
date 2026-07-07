@@ -175,20 +175,12 @@ async fn full_chain_missing_required_field_surfaces_useful_error() {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 4: Adapter signals JsonParseFailed (raw bytes were
-// unrecoverable). Provider-level `ToolCallPart.invalid_reason` is
-// **not preserved through `synthetic_stream_from_content`** —
-// `LanguageModelV4ToolCall` (wire type) carries only the input
-// string, by design (mirrors `@ai-sdk/provider`). Engine rebuilds
-// the `ToolCallPart` from stream events and runs wire parsing again on
-// the (string) input.
-//
-// Production: this means the **real** path for JsonParseFailed is
-// the Anthropic streaming `content_block_stop` flush, not the
-// non-streaming adapter — and provider adapters carry the wrap
-// inline before emitting. The full-chain test here verifies that
-// the model still receives a useful error in this scenario (the
-// fallback path via `tool.validate_input` after `{}` fallback).
+// Scenario 4: unrecoverable raw input still yields a model-visible error.
+// The production JsonParseFailed path is Anthropic streaming
+// `content_block_stop`, which crosses inference as
+// `ToolInputWireState::UnrecoverableRaw`. This mock path exercises the
+// generic raw-string fallback instead: the model still receives useful
+// schema/runtime feedback when provider mocks emit raw garbage.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]

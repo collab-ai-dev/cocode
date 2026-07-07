@@ -484,9 +484,11 @@ fn test_sandbox_handler() {
     // Empty args lists modes + invocation hint.
     let listing = sandbox_handler("");
     assert!(listing.contains("Sandbox mode"));
-    assert!(listing.contains("none"));
-    assert!(listing.contains("readonly"));
-    assert!(listing.contains("strict"));
+    assert!(listing.contains("read_only"));
+    assert!(listing.contains("workspace_write"));
+    assert!(listing.contains("full_access"));
+    assert!(listing.contains("external_sandbox"));
+    assert!(listing.contains("/sandbox exclusions"));
     // Unknown subcommand surfaces a usage error without writing settings.
     assert!(sandbox_handler("bogus").contains("Unknown sandbox mode"));
 }

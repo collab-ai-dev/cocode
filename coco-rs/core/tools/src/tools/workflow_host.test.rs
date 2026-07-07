@@ -55,6 +55,12 @@ fn workflow_local_concurrency_within_floor_and_ceiling() {
     assert!(width <= super::WORKFLOW_CONCURRENCY_CEILING);
 }
 
+#[test]
+fn local_workflow_runtime_drives_not_send_future() {
+    let runtime = super::LocalWorkflowRuntime::new().expect("local workflow runtime");
+    runtime.block_on(super::LocalOnlyReady::new());
+}
+
 #[tokio::test]
 async fn budget_exhausted_reflects_total_and_spent() {
     use coco_workflow_runtime::WorkflowHost;
@@ -83,17 +89,17 @@ async fn build_request_synthesizes_definition_for_workflow_overrides() {
         )
         .expect("request");
 
-    assert_eq!(request.subagent_type.as_deref(), Some("Explore"));
+    assert_eq!(request.input.subagent_type.as_deref(), Some("Explore"));
     assert_eq!(
-        request.isolation,
+        request.execution.isolation,
         Some(coco_types::AgentIsolation::Worktree)
     );
-    let definition = request.definition.expect("synthetic definition");
+    let definition = request.input.definition.expect("synthetic definition");
     assert_eq!(definition.name, "Explore");
     assert_eq!(definition.model.as_deref(), Some("anthropic/custom-model"));
     assert_eq!(definition.effort, Some(coco_types::ReasoningEffort::High));
     assert_eq!(definition.isolation, coco_types::AgentIsolation::Worktree);
-    assert!(request.parent_turn_abort.is_some());
+    assert!(request.routing.parent_turn_abort.is_some());
 }
 
 #[tokio::test]
@@ -114,7 +120,7 @@ async fn build_request_carries_output_schema_when_schema_present() {
             test_abort(),
         )
         .expect("request");
-    let carried = request.output_schema.expect("output_schema is Some");
+    let carried = request.input.output_schema.expect("output_schema is Some");
     assert_eq!(*carried.as_ref(), schema);
 }
 
@@ -128,7 +134,7 @@ async fn build_request_omits_output_schema_when_absent() {
             test_abort(),
         )
         .expect("request");
-    assert!(request.output_schema.is_none());
+    assert!(request.input.output_schema.is_none());
 }
 
 #[tokio::test]
@@ -492,12 +498,8 @@ fn block_on_local<F, T>(future: F) -> T
 where
     F: std::future::Future<Output = T>,
 {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("rt");
-    let local = tokio::task::LocalSet::new();
-    local.block_on(&runtime, future)
+    let runtime = super::LocalWorkflowRuntime::new().expect("local workflow runtime");
+    runtime.block_on(future)
 }
 
 #[test]

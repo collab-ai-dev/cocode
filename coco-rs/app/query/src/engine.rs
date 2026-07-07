@@ -27,6 +27,7 @@ use coco_llm_types::AssistantContentPart;
 use coco_llm_types::ReasoningPart;
 use coco_llm_types::TextPart;
 use coco_llm_types::ToolCallPart;
+use coco_llm_types::ToolInputInvalidReason;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::RwLock;
@@ -1185,35 +1186,20 @@ pub(crate) fn assistant_content_from_snapshot(
                     warn!(tool_call_id = %tc.id, "tool call did not complete");
                     continue;
                 }
-                // Parse with repair, falling back to `Value::Object({})`
-                // on failure. See streaming-path commentary above —
-                // schema validation reports specific missing
-                // fields rather than a generic "JSON broken", and the
-                // tool_use/tool_result pairing invariant is preserved
-                // because we never drop the call.
-                let parsed_input = crate::tool_input_parse::parse_tool_arguments_or_empty(
-                    &tc.input_json,
+                let parsed =
+                    crate::tool_input_pipeline::from_wire_state(&tc.tool_name, &tc.input_state);
+                let input = crate::tool_input_pipeline::normalize_observable(
                     &tc.tool_name,
-                );
-                let input = crate::tool_input_normalizer::normalize_observable_tool_input(
-                    &tc.tool_name,
-                    parsed_input,
+                    parsed.input,
                     normalizer_ctx,
                 );
-                // Carry the wire-level `invalid` + `invalid_reason`
-                // through reconstruction. Provider adapters set these
-                // when wire parsing detects an unrecoverable JSON parse
-                // (Anthropic streaming `content_block_stop` flush,
-                // etc.); without this carry-through the agent loop's
-                // synthetic `<tool_use_error>` wrap would fall back to
-                // a generic message.
                 let tcp = ToolCallPart {
                     tool_call_id: tc.id.clone(),
                     tool_name: tc.tool_name.clone(),
                     input,
                     provider_executed: tc.provider_executed,
-                    invalid: tc.invalid,
-                    invalid_reason: tc.invalid_reason.clone(),
+                    invalid: tc.invalid || parsed.invalid,
+                    invalid_reason: tc.invalid_reason.clone().or(parsed.invalid_reason),
                     provider_metadata: tc.provider_metadata.clone(),
                 };
                 content_parts.push(AssistantContentPart::ToolCall(tcp.clone()));
@@ -1230,6 +1216,14 @@ pub(crate) fn assistant_content_from_snapshot(
     }
 
     (content_parts, tool_calls)
+}
+
+pub(crate) fn tool_input_from_wire_state(
+    tool_name: &str,
+    input_state: &coco_inference::ToolInputWireState,
+) -> (serde_json::Value, bool, Option<ToolInputInvalidReason>) {
+    let parsed = crate::tool_input_pipeline::from_wire_state(tool_name, input_state);
+    (parsed.input, parsed.invalid, parsed.invalid_reason)
 }
 
 async fn consume_pending_plan_mode_clear_context(

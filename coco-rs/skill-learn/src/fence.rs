@@ -1,7 +1,7 @@
 //! The skill-review write fence.
 //!
 //! [`SkillWriteHandle`] is the `CanUseToolHandle` threaded onto the review
-//! fork's `AgentSpawnRequest.can_use_tool`. It confines the fork to writing
+//! fork's `AgentSpawnRequest.permissions.can_use_tool`. It confines the fork to writing
 //! **under the agent skills root** — the spatial provenance boundary. Because
 //! agent skills live in their own directory, the fence is pure containment: it
 //! does not read target frontmatter (no per-write I/O, no TOCTOU), it just

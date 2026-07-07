@@ -797,6 +797,12 @@ pub(super) fn handle(
             crate::update::show::open_theme_picker(state);
             true
         }
+        TuiOnlyEvent::OpenBackgroundTasks => {
+            state.ui.show_modal(ModalState::BackgroundTasks(
+                crate::state::BackgroundTasksState::default(),
+            ));
+            true
+        }
         TuiOnlyEvent::SlashCommandStatus { name, args, kind } => {
             use coco_types::SlashCommandStatusKind;
             // Render dispatcher statuses inline tool-style (`❯ /cmd args` +

@@ -540,7 +540,7 @@ mod tests {
 
         let first_route = server
             .route_server_request(
-                first_session_id.clone(),
+                first_session_id,
                 SurfaceCapability::Notifications,
                 Some(TurnId::from("turn-first")),
                 test_server_request("first"),
@@ -593,13 +593,13 @@ mod tests {
             SurfaceLifecycleEffect {
                 surface_id: passive.surface_id().clone(),
                 kind: SurfaceLifecycleEffectKind::SessionStarted {
-                    session_id: passive_session_id.clone(),
+                    session_id: passive_session_id,
                 },
             },
             SurfaceLifecycleEffect {
                 surface_id: interactive.surface_id().clone(),
                 kind: SurfaceLifecycleEffectKind::SessionStarted {
-                    session_id: interactive_session_id.clone(),
+                    session_id: interactive_session_id,
                 },
             },
         ]);

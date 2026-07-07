@@ -285,7 +285,7 @@ pub struct AgentQueryConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_prompt: Option<String>,
     /// Resolved agent definition for this query — threaded from
-    /// `AgentSpawnRequest.definition`. The adapter (and downstream
+    /// `AgentSpawnRequest.input.definition`. The adapter (and downstream
     /// engine factory) consult `definition.model` /
     /// `definition.model_role` for spawn-time identity decisions, and
     /// `definition.system_prompt` / `definition.initial_prompt` for

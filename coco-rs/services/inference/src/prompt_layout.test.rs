@@ -43,6 +43,7 @@ fn test_put_take_layout_options_round_trips_namespace_fields() {
         layout_warnings: vec![Warning::other("dropped part")],
         prompt_hash_inputs: Some(PromptHashInputs {
             system_text_hash: 1,
+            system_char_count: 11,
             cache_control_hash: Some(2),
             developer_text_hash: Some(3),
             contextual_user_text_hash: 4,
@@ -109,6 +110,81 @@ fn test_build_layout_anthropic_routes_to_system_blocks_only() {
     assert_eq!(blocks[0].text, "you are coco");
     assert!(blocks[0].cache_control.is_none());
     assert!(layout.system_instruction.is_none());
+}
+
+#[test]
+fn test_build_layout_anthropic_uses_system_parts_and_cache_breakpoints() {
+    let mut opts = ProviderOptions::default();
+    put_system_prompt_parts(
+        &mut opts,
+        &[
+            SystemPromptPart {
+                text: "identity".to_string(),
+                cache_hint: CacheHint::Breakpoint,
+            },
+            SystemPromptPart {
+                text: "environment".to_string(),
+                cache_hint: CacheHint::Ephemeral,
+            },
+        ],
+    );
+    let prompt = vec![
+        LlmMessage::system_with_options("identity\nenvironment", opts),
+        user("hi"),
+    ];
+
+    let layout = build_prompt_layout_from_prompt(&prompt, ProviderApi::Anthropic, None);
+
+    let blocks = layout.system_blocks.expect("system_blocks");
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0].text, "identity");
+    assert_eq!(
+        blocks[0]
+            .cache_control
+            .as_ref()
+            .map(|c| c.type_name.as_str()),
+        Some("ephemeral")
+    );
+    assert_eq!(blocks[1].text, "environment");
+    assert!(blocks[1].cache_control.is_none());
+
+    let hashes = layout.prompt_hash_inputs.expect("hash inputs");
+    assert_eq!(
+        hashes.system_text_hash,
+        djb2_hash("identity\nenvironment".as_bytes())
+    );
+    assert_eq!(
+        hashes.system_char_count,
+        "identity\nenvironment".chars().count() as i64
+    );
+    assert!(hashes.cache_control_hash.is_some());
+}
+
+#[test]
+fn test_build_layout_openai_flattens_system_parts_like_system_text() {
+    let mut opts = ProviderOptions::default();
+    put_system_prompt_parts(
+        &mut opts,
+        &[
+            SystemPromptPart {
+                text: "identity".to_string(),
+                cache_hint: CacheHint::Breakpoint,
+            },
+            SystemPromptPart {
+                text: "environment".to_string(),
+                cache_hint: CacheHint::Ephemeral,
+            },
+        ],
+    );
+    let prompt = vec![LlmMessage::system_with_options("ignored-fallback", opts)];
+
+    let layout = build_prompt_layout_from_prompt(&prompt, ProviderApi::Openai, None);
+
+    assert_eq!(
+        layout.instructions.as_deref(),
+        Some("identity\nenvironment")
+    );
+    assert!(layout.system_blocks.is_none());
 }
 
 #[test]

@@ -14,6 +14,7 @@ use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::call_plan::PreparedToolCall;
 use coco_tool_runtime::call_plan::RunOneRuntime;
 use coco_tool_runtime::call_plan::UnstampedToolCallOutcome;
+use tracing::Instrument;
 use tracing::info;
 use tracing::warn;
 
@@ -116,36 +117,52 @@ impl QueryEngine {
             "turn start (per-round; cycle TurnStarted was emitted by run_internal_with_messages)"
         );
 
-        let attachment_ctx = self.build_base_tool_context().await;
-        self.drain_changed_files(&attachment_ctx, history, event_tx)
-            .await;
+        let (
+            crate::engine_prompt::BuiltPrompt {
+                prompt,
+                prompt_context,
+                messages_snapshot,
+            },
+            crate::engine_prompt::BuiltToolDefinitions {
+                definitions: tool_definitions,
+                materialization: tool_materialization,
+            },
+        ) = async {
+            let attachment_ctx = self.build_base_tool_context().await;
+            self.drain_changed_files(&attachment_ctx, history, event_tx)
+                .await;
 
-        let app_state_snapshot = self
-            .run_turn_reminder_pipeline(crate::engine_turn_reminders::TurnReminderContext {
-                history: &mut *history,
-                plan_reminder: &mut services.plan,
-                orchestrator: &services.reminders,
-                last_user_input_uuid: &mut turn_state.reminder_last_user_input_uuid,
-                total_usage: &acc.total_usage,
-                cost_tracker: &acc.cost_tracker,
-                todo_key: &consts.todo_key,
-                context_window: consts.context_window,
-                effective_window: consts.effective_window,
-                event_tx,
-            })
-            .await;
+            let app_state_snapshot = self
+                .run_turn_reminder_pipeline(crate::engine_turn_reminders::TurnReminderContext {
+                    history: &mut *history,
+                    plan_reminder: &mut services.plan,
+                    orchestrator: &services.reminders,
+                    last_user_input_uuid: &mut turn_state.reminder_last_user_input_uuid,
+                    total_usage: &acc.total_usage,
+                    cost_tracker: &acc.cost_tracker,
+                    todo_key: &consts.todo_key,
+                    context_window: consts.context_window,
+                    effective_window: consts.effective_window,
+                    event_tx,
+                })
+                .await;
 
-        let crate::engine_prompt::BuiltPrompt {
-            prompt,
-            prompt_context,
-            messages_snapshot,
-        } = self.build_prompt(history).await;
-        let crate::engine_prompt::BuiltToolDefinitions {
-            definitions: tool_definitions,
-            materialization: tool_materialization,
-        } = self
-            .build_tool_definitions_with_materialization(&app_state_snapshot)
-            .await;
+            let built_prompt = self.build_prompt(history).await;
+            let built_tool_definitions = self
+                .build_tool_definitions_with_materialization(&app_state_snapshot)
+                .await;
+
+            (built_prompt, built_tool_definitions)
+        }
+        .instrument(tracing::info_span!(
+            crate::trace_names::PROMPT_CONTEXT_LOADING,
+            turn = turn_state.turn,
+            attempt = turn_state.attempt,
+            turn_id = %turn_id,
+            context_window = consts.context_window,
+            effective_window = consts.effective_window,
+        ))
+        .await;
         let tool_defs: Vec<_> = tool_definitions.into_iter().map(|d| d.tool).collect();
 
         let context_management = if active_snapshot.supports_server_side_context_edits {

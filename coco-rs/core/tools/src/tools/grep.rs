@@ -68,6 +68,8 @@ use std::time::Duration;
 use std::time::SystemTime;
 use tokio_util::sync::CancellationToken;
 
+use super::blocking_fs::BlockingFsTask;
+
 use crate::input_types::GrepOutputMode;
 
 /// Default head_limit when unspecified.
@@ -516,20 +518,15 @@ impl Tool for GrepTool {
 
         let cancel = ctx.cancel_token();
         let read_ignore_patterns = ctx.tool_config.file_read_ignore_patterns.clone();
-        let search_future = tokio::task::spawn_blocking(move || {
+        let search_task = BlockingFsTask::spawn("grep search", move || {
             run_grep_search(&params, &cancel, &read_ignore_patterns)
         });
 
-        let result = tokio::time::timeout(Duration::from_secs(timeout_secs), search_future)
+        let result = tokio::time::timeout(Duration::from_secs(timeout_secs), search_task.join())
             .await
             .map_err(|_| ToolError::Timeout {
                 timeout_ms: (timeout_secs * 1000) as i64,
-            })?
-            .map_err(|e| ToolError::ExecutionFailed {
-                message: format!("grep search task failed: {e}"),
-                display_data: None,
-                source: None,
-            })?
+            })??
             .map_err(|e| ToolError::InvalidInput {
                 message: e,
                 error_code: None,

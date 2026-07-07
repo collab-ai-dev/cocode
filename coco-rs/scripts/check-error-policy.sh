@@ -57,6 +57,12 @@ is_tier1_terminal() {
 is_tier2_lib() {
     case "$1" in
         utils/*|vercel-ai/*|bridge|retrieval|voice|tui-ui|tui-markdown|tui-mermaid) return 0 ;;
+        # AppServer transport/protocol boundary libraries: JSON-RPC framing
+        # (TransportFrameError) and client protocol (ClientError) are leaf
+        # thiserror libraries — same boundary pattern as `bridge`. Their
+        # main-trunk consumer `app/server` (tier 3) converts at the boundary,
+        # so wire errors deliberately carry no coco-error StatusCode/retry.
+        app/server-transport|app/server-client) return 0 ;;
         *) return 1 ;;
     esac
 }

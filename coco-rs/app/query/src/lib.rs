@@ -63,11 +63,13 @@ mod tool_call_runner;
 mod tool_context;
 mod tool_input_normalizer;
 mod tool_input_parse;
+mod tool_input_pipeline;
 mod tool_input_validate;
 mod tool_message;
 mod tool_outcome_builder;
 mod tool_runner;
 pub mod tool_use_summary;
+mod trace_names;
 pub mod usage_accounting;
 mod wire_tap_adapter;
 

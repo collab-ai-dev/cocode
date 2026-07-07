@@ -1165,7 +1165,7 @@ fn build_prompt_state_input(
                 names,
                 per_tool,
                 hashes.tools_hash,
-                hashes.contextual_user_char_count,
+                hashes.system_char_count,
             )
         } else {
             let (system_text, system_char_count) = extract_system_text(&params.prompt);
@@ -1215,7 +1215,9 @@ fn build_prompt_state_input(
     PromptStateInput {
         system_hash,
         tools_hash,
-        cache_control_hash: 0, // Provider-specific; tracked via extra_body_hash for now.
+        cache_control_hash: layout_hashes
+            .and_then(|hashes| hashes.cache_control_hash)
+            .unwrap_or(0),
         tool_names,
         per_tool_hashes,
         per_tool_schema_sizes,

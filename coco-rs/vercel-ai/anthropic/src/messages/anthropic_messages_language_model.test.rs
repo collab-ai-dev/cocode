@@ -66,6 +66,29 @@ fn get_args_sets_model_and_max_tokens() {
 }
 
 #[test]
+fn get_args_rejects_malformed_typed_provider_options() {
+    let model = AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config());
+    let mut po = vercel_ai_provider::ProviderOptions::default();
+    let mut inner = HashMap::new();
+    inner.insert(
+        "thinking".to_string(),
+        serde_json::json!({"type": "enabled", "budgetTokens": "bad"}),
+    );
+    po.set("anthropic", inner);
+    let mut options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("Hello"),
+    ]);
+    options.provider_options = Some(po);
+
+    let err = model
+        .get_args(&options, false)
+        .expect_err("malformed provider options must fail request build");
+    assert!(err.message.contains("invalid provider options"));
+    assert!(err.message.contains("namespace `anthropic`"));
+    assert!(err.message.contains("thinking"));
+}
+
+#[test]
 fn layout_system_blocks_override_converter_blocks_and_carry_cache_control() {
     let model = AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config());
     let mut po = vercel_ai_provider::ProviderOptions::default();

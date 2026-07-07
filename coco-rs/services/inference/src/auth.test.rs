@@ -1,5 +1,47 @@
 use super::*;
 
+static AUTH_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct EnvVarGuard {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let prev = std::env::var(key).ok();
+        // SAFETY: Tests using this guard hold `AUTH_ENV_MUTEX`, so process-env
+        // mutation is serialized within this module.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, prev }
+    }
+
+    fn remove(key: &'static str) -> Self {
+        let prev = std::env::var(key).ok();
+        // SAFETY: Tests using this guard hold `AUTH_ENV_MUTEX`, so process-env
+        // mutation is serialized within this module.
+        unsafe { std::env::remove_var(key) };
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(value) => {
+                // SAFETY: Tests using this guard hold `AUTH_ENV_MUTEX`, so
+                // process-env mutation is serialized within this module.
+                unsafe { std::env::set_var(self.key, value) };
+            }
+            None => {
+                // SAFETY: Tests using this guard hold `AUTH_ENV_MUTEX`, so
+                // process-env mutation is serialized within this module.
+                unsafe { std::env::remove_var(self.key) };
+            }
+        }
+    }
+}
+
 fn make_test_tokens() -> OAuthTokens {
     OAuthTokens {
         access_token: "test-token".into(),
@@ -52,18 +94,11 @@ fn test_oauth_tokens_needs_refresh_within_window() {
 
 #[test]
 fn test_resolve_auth_api_key() {
-    // Save and restore env to avoid leaking state.
-    let prev = std::env::var("ANTHROPIC_API_KEY").ok();
-    // SAFETY: Test-only; single-threaded test runner for this test.
-    unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key-123") };
+    let _lock = AUTH_ENV_MUTEX.lock().unwrap();
+    let _guard = EnvVarGuard::set("ANTHROPIC_API_KEY", "test-key-123");
 
     let auth = resolve_auth_from_env();
     assert!(matches!(auth, Some(AuthMethod::ApiKey { ref key }) if key == "test-key-123"));
-
-    match prev {
-        Some(v) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", v) },
-        None => unsafe { std::env::remove_var("ANTHROPIC_API_KEY") },
-    }
 }
 
 #[test]
@@ -126,9 +161,8 @@ fn test_clear_stored_oauth_tokens() {
 
 #[test]
 fn test_resolve_auth_force_env_auth() {
-    let prev = std::env::var("ANTHROPIC_API_KEY").ok();
-    // SAFETY: Test-only.
-    unsafe { std::env::set_var("ANTHROPIC_API_KEY", "bare-key") };
+    let _lock = AUTH_ENV_MUTEX.lock().unwrap();
+    let _guard = EnvVarGuard::set("ANTHROPIC_API_KEY", "bare-key");
 
     let options = AuthResolveOptions {
         force_env_auth: true,
@@ -136,11 +170,6 @@ fn test_resolve_auth_force_env_auth() {
     };
     let auth = resolve_auth(&options);
     assert!(matches!(auth, Some(AuthMethod::ApiKey { ref key }) if key == "bare-key"));
-
-    match prev {
-        Some(v) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", v) },
-        None => unsafe { std::env::remove_var("ANTHROPIC_API_KEY") },
-    }
 }
 
 #[test]
@@ -149,10 +178,8 @@ fn test_resolve_auth_stored_oauth_fallback() {
     let tokens = make_test_tokens();
     save_oauth_tokens(dir.path(), &tokens).unwrap();
 
-    // Clear API key to force OAuth fallback
-    let prev = std::env::var("ANTHROPIC_API_KEY").ok();
-    // SAFETY: Test-only.
-    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+    let _lock = AUTH_ENV_MUTEX.lock().unwrap();
+    let _guard = EnvVarGuard::remove("ANTHROPIC_API_KEY");
 
     let options = AuthResolveOptions {
         config_dir: Some(dir.path().to_path_buf()),
@@ -160,10 +187,6 @@ fn test_resolve_auth_stored_oauth_fallback() {
     };
     let auth = resolve_auth(&options);
     assert!(matches!(auth, Some(AuthMethod::OAuth(ref t)) if t.access_token == "test-token"));
-
-    if let Some(v) = prev {
-        unsafe { std::env::set_var("ANTHROPIC_API_KEY", v) }
-    }
 }
 
 #[test]

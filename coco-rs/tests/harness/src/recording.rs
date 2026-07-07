@@ -16,9 +16,14 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
+use coco_tool_runtime::AgentHandle;
+use coco_tool_runtime::AgentSpawnRequest;
+use coco_tool_runtime::AgentSpawnResponse;
+use coco_tool_runtime::AgentSpawnStatus;
 use coco_tool_runtime::HookHandle;
 use coco_tool_runtime::PostToolUseOutcome;
 use coco_tool_runtime::PreToolUseOutcome;
+use coco_tool_runtime::TeamMessageDispatchResult;
 use serde_json::Value;
 
 /// A cloneable, thread-safe capture buffer. Clones share one backing `Vec`, so
@@ -89,6 +94,81 @@ pub fn unexpected_call(method: &str) -> ! {
     panic!(
         "unexpected call to `{method}` on a test double (it was wired to reject unexpected use)"
     );
+}
+
+/// An [`AgentHandle`] that records every spawn request and returns a canned
+/// response. Other agent operations panic via [`unexpected_call`].
+#[derive(Debug, Clone)]
+pub struct RecordingAgentHandle {
+    pub calls: Recorder<AgentSpawnRequest>,
+    response: AgentSpawnResponse,
+}
+
+impl Default for RecordingAgentHandle {
+    fn default() -> Self {
+        Self {
+            calls: Recorder::default(),
+            response: AgentSpawnResponse {
+                status: AgentSpawnStatus::Completed,
+                agent_id: Some("test".into()),
+                result: Some("ok".into()),
+                total_tool_use_count: 1,
+                duration_ms: 1,
+                ..Default::default()
+            },
+        }
+    }
+}
+
+impl RecordingAgentHandle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_response(response: AgentSpawnResponse) -> Self {
+        Self {
+            calls: Recorder::default(),
+            response,
+        }
+    }
+
+    pub fn calls(&self) -> Vec<AgentSpawnRequest> {
+        self.calls.snapshot()
+    }
+}
+
+#[async_trait]
+impl AgentHandle for RecordingAgentHandle {
+    async fn spawn_agent(&self, request: AgentSpawnRequest) -> Result<AgentSpawnResponse, String> {
+        self.calls.record(request);
+        Ok(self.response.clone())
+    }
+
+    async fn send_message(
+        &self,
+        _to: &str,
+        _content: &str,
+        _summary: Option<&str>,
+    ) -> Result<TeamMessageDispatchResult, String> {
+        unexpected_call("AgentHandle::send_message")
+    }
+
+    async fn resume_agent(
+        &self,
+        _agent_id: &str,
+        _prompt: &str,
+        _session_id: &coco_types::SessionId,
+    ) -> Result<AgentSpawnResponse, String> {
+        unexpected_call("AgentHandle::resume_agent")
+    }
+
+    async fn query_agent_status(&self, _agent_id: &str) -> Result<AgentSpawnResponse, String> {
+        unexpected_call("AgentHandle::query_agent_status")
+    }
+
+    async fn get_agent_output(&self, _agent_id: &str) -> Result<String, String> {
+        unexpected_call("AgentHandle::get_agent_output")
+    }
 }
 
 /// One captured [`HookHandle`] invocation.

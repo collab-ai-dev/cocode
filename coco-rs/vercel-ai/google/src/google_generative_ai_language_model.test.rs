@@ -113,6 +113,31 @@ fn get_args_extra_body_patches_wire_body_verbatim() {
 }
 
 #[test]
+fn get_args_rejects_malformed_typed_provider_options() {
+    use std::collections::HashMap as StdHashMap;
+    use vercel_ai_provider::ProviderOptions;
+    let model = make_model();
+    let mut inner = StdHashMap::new();
+    inner.insert(
+        "thinkingConfig".into(),
+        serde_json::json!({"thinkingBudget": "bad"}),
+    );
+    let mut outer = StdHashMap::new();
+    outer.insert("google".into(), inner);
+    let mut options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("Hi"),
+    ]);
+    options.provider_options = Some(ProviderOptions(outer));
+
+    let err = model
+        .get_args(&options)
+        .expect_err("malformed provider options must fail request build");
+    assert!(err.message.contains("invalid provider options"));
+    assert!(err.message.contains("namespace `google`"));
+    assert!(err.message.contains("thinkingConfig"));
+}
+
+#[test]
 fn layout_system_instruction_overrides_converter_instruction() {
     use std::collections::HashMap as StdHashMap;
     use vercel_ai_provider::ProviderOptions;

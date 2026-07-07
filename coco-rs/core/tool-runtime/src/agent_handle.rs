@@ -87,11 +87,11 @@ pub enum SpawnMode {
     /// into `AgentQueryConfig.system_prompt` verbatim, threads
     /// `parent_messages` through unmodified (the pre-response snapshot
     /// has only complete tool_use/result pairs), and wraps
-    /// `request.prompt` with [`coco_subagent::build_fork_child_message`]
+    /// `request.input.prompt` with [`coco_subagent::build_fork_child_message`]
     /// for `<fork-boilerplate>` recursion-detection.
-    /// Tool-pool inheritance is decided by
-    /// [`AgentSpawnRequest::use_exact_tools`]; fork mode does NOT
-    /// carry its own toggle.
+    /// Tool-pool inheritance is decided by the threaded
+    /// `AgentDefinition::use_exact_tools`; fork mode does NOT carry
+    /// its own toggle.
     Fork {
         /// Parent's already-rendered system prompt — threaded through
         /// verbatim, not re-rendered. `String` (not `Vec<u8>`) because
@@ -136,61 +136,104 @@ pub enum SpawnMode {
     },
 }
 
-/// Request to spawn a subagent.
-/// **Deferred refactor — split into 4 sub-structs**: the type
-/// currently carries 27 fields covering four distinct concerns
-/// (model-visible input, spawn-mode identity, policy/inheritance,
-/// routing/telemetry). The plan is to nest these under
-/// `AgentSpawnInput`/`AgentSpawnIdentity`/`AgentSpawnPolicy`/
-/// `AgentSpawnRouting` so each construction site doesn't navigate a
-/// 27-field flat literal. Deferred because the cascade touches
-/// every `request.X` read across `coordinator/agent_handle/*` and
-/// `memory/service/{extract,dream,session}.rs` (≥ 50 sites), and the
-/// refactor is pure code-quality — best
-/// landed as its own focused PR. Tracked in
-/// `core/tool-runtime/CLAUDE.md` "Deferred refactors".
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentSpawnRequest {
-    /// The task/instruction for the agent.
+    #[serde(default)]
+    pub input: AgentSpawnInput,
+    #[serde(default)]
+    pub execution: AgentSpawnExecution,
+    #[serde(default)]
+    pub permissions: AgentSpawnPermissions,
+    #[serde(default)]
+    pub inheritance: AgentSpawnInheritance,
+    #[serde(default)]
+    pub routing: AgentSpawnRouting,
+    #[serde(default)]
+    pub telemetry: AgentSpawnTelemetry,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentSpawnInput {
     pub prompt: String,
-    /// Short (3-5 word) description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Agent type to use (e.g., "Explore", "Plan", "general-purpose").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_type: Option<String>,
-    // `model` and `model_role` deliberately ABSENT from this struct.
-    // Both are operator-only static configuration:
-    // - Per-agent: `.md` frontmatter `model:` / `model_role:` on
-    // `AgentDefinition` — resolved at spawn time by
-    // `coco_subagent::resolve_subagent_selection` reading from
-    // `request.definition`.
-    // - Internal-fork override: `AgentSpawnConstraints.forced_model_role`
-    // (memory crate uses this to pin `ModelRole::Memory` on
-    // extract / dream / session-memory forks).
-    // The LLM cannot pick either of these — AgentTool's
-    // `input_schema()` doesn't expose them. Catalog-only principle:
-    // static configuration is the source of truth for model routing.
-    // See the root CLAUDE.md "Multi-Provider Boundaries" rule.
-    /// Run in background (fire-and-forget).
+    /// Agent name (for multi-agent teams).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
+    #[serde(skip)]
+    pub definition: Option<Arc<AgentDefinition>>,
+    #[serde(skip)]
+    pub output_schema: Option<Arc<serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentSpawnExecution {
     #[serde(default)]
     pub run_in_background: bool,
-    /// Auto-detach a foreground spawn after N milliseconds. When set
-    /// to `Some(d)` and `run_in_background == false`, the runtime
-    /// fires [`crate::TaskController::signal_detach`] after `d` ms of
-    /// foreground execution; the parent's awaiter unblocks with
-    /// `AsyncLaunched` and the engine keeps running detached.
-    /// `None` = no auto-detach (the default; only explicit user-initiated
-    /// `signal_detach` will background the task).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_background_ms: Option<u64>,
-    /// Whether the spawn should run periodic AgentSummary timers.
-    /// Computed at the AgentTool boundary as `is_coordinator_mode
-    /// || is_fork_subagent_active || ctx.app_state.agent_progress_summaries_enabled`
-    /// so the coordinator (which doesn't see `ctx.app_state`) can
-    /// honour the SDK-level opt-in without re-discovering it.
     #[serde(default)]
     pub enable_summarization: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<coco_types::AgentIsolation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+    #[serde(skip)]
+    pub spawn_mode: SpawnMode,
+    #[serde(default)]
+    pub skip_transcript: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentSpawnPermissions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<coco_types::PermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<AgentSpawnConstraints>,
+    #[serde(skip)]
+    pub can_use_tool: Option<crate::can_use_tool::CanUseToolHandleRef>,
+    #[serde(default)]
+    pub require_can_use_tool: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSpawnInheritance {
+    #[serde(skip)]
+    pub features: Option<Arc<Features>>,
+    #[serde(skip)]
+    pub skill_overrides: Option<Arc<coco_config::SkillOverrideTiers>>,
+    #[serde(skip)]
+    pub tool_overrides: Option<Arc<ToolOverrides>>,
+    #[serde(skip)]
+    pub parent_tool_filter: Option<ToolFilter>,
+    #[serde(skip, default = "default_active_shell_tool")]
+    pub active_shell_tool: ActiveShellTool,
+    #[serde(default = "default_use_auto_mode_during_plan")]
+    pub use_auto_mode_during_plan: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inherited_read_dirs: Vec<String>,
+}
+
+impl Default for AgentSpawnInheritance {
+    fn default() -> Self {
+        Self {
+            features: None,
+            skill_overrides: None,
+            tool_overrides: None,
+            parent_tool_filter: None,
+            active_shell_tool: default_active_shell_tool(),
+            use_auto_mode_during_plan: default_use_auto_mode_during_plan(),
+            inherited_read_dirs: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentSpawnRouting {
     /// Parent session id — used by the background dispatch path to
     /// scope per-agent transcript / metadata persistence
     /// (`<sessions_dir>/<session_id>/subagents/agent-<id>.*`).
@@ -200,212 +243,33 @@ pub struct AgentSpawnRequest {
     /// embeddings) must supply a concrete id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
-    /// Isolation mode. Typed [`coco_types::AgentIsolation`]
-    /// (`Worktree` / `Remote`); the `AgentTool` boundary parses the
-    /// model's wire string and the definition's frontmatter into the enum.
-    /// `None` means no isolation (shares the parent cwd).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub isolation: Option<coco_types::AgentIsolation>,
-    /// Agent name (for multi-agent teams).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Team name (triggers teammate spawn).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team_name: Option<String>,
-    /// Permission mode override (e.g., `PermissionMode::Plan`). Typed —
-    /// the `AgentTool` boundary resolves the effective mode via
-    /// `resolve_subagent_mode` and threads the enum through verbatim;
-    /// serialises to its camelCase wire string for cross-process spawns.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<coco_types::PermissionMode>,
-    /// Working directory override.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<PathBuf>,
-    /// Parent session's read-scope working directories (the parent cwd plus
-    /// its inherited `additional_dirs`), forwarded so a subagent that runs in
-    /// an isolated worktree cwd can still READ the parent project without a
-    /// permission prompt., where the child
-    /// inherits the parent's cwd + `additionalWorkingDirectories`. Read scope
-    /// only — writes / bash still evaluate against the worktree cwd + rules.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub inherited_read_dirs: Vec<String>,
-    /// Query-tracking depth the spawned child will RUN at (= parent's
-    /// `ToolUseContext.query_depth + 1`). Filled at the `AgentTool::execute`
-    /// boundary from `ctx.query_depth + 1`. Threaded in-process so the
-    /// child engine carries its own depth. `AgentTool::execute` rejects
-    /// further spawns once the caller is at
-    /// [`coco_subagent::SUBAGENT_DEPTH_LIMIT`], and the universal
-    /// deny-list also hides `Agent` from any child somehow running beyond
-    /// that depth. Main loop = 0, so a top-level spawn runs at depth 1.
     #[serde(default)]
     pub child_query_depth: i32,
-    // Note: the following fields are NOT on `AgentSpawnRequest`. They
-    // were dead pass-through slots — not in the AgentTool input schema
-    // and no Rust caller ever set them; the
-    // coordinator now reads them directly from `AgentDefinition` via
-    // `request.definition` when building RunnerConfig / QueryConfig.
-    // Single source of truth, no shadowing.
-    // - `effort` → `AgentDefinition.effort`
-    // - `use_exact_tools` → `AgentDefinition.use_exact_tools`
-    // - `mcp_servers` → `AgentDefinition.mcp_servers` (mapped via
-    // `AgentMcpServerSpec::name()`)
-    // - `disallowed_tools` → `AgentDefinition.disallowed_tools`
-    // - `max_turns` → `AgentDefinition.max_turns` (or
-    // `AgentSpawnConstraints.max_turns` when the constraints layer
-    // provides a tighter cap — memory forks set this)
-    // - `initial_prompt` → `AgentDefinition.initial_prompt`
-    /// Parent's resolved feature gates, threaded through so the
-    /// subagent runs with the same Layer 1 set. Skipped at the JSON
-    /// boundary; the parent fills it in-process before handing off.
-    /// Subagents only narrow this — never widen.
-    #[serde(skip)]
-    pub features: Option<Arc<Features>>,
-    /// Parent's resolved `skill_overrides` tiers. Subagents apply the
-    /// same Skill tool gate + listing filters as the parent. Skipped
-    /// at the JSON boundary; falls back to default-empty tiers (every
-    /// skill on) when not threaded.
-    #[serde(skip)]
-    pub skill_overrides: Option<Arc<coco_config::SkillOverrideTiers>>,
-    /// Parent's resolved Layer 2 tool overrides. Same in-process-only
-    /// inheritance as `features`. Falling back to `ToolOverrides::none()`
-    /// would expose tools the active model rejects, so callers must
-    /// thread the parent's value through.
-    #[serde(skip)]
-    pub tool_overrides: Option<Arc<ToolOverrides>>,
-    /// Parent's resolved Layer 4 tool filter. The subagent's own
-    /// allow/deny (from `AgentDefinition`) narrows this further via
-    /// `ToolFilter::narrow_with`, so a child's `allowed_tools` can
-    /// never widen what the parent already restricted. Skipped at the
-    /// JSON boundary for the same reason as the other inheritance
-    /// fields.
-    #[serde(skip)]
-    pub parent_tool_filter: Option<ToolFilter>,
-    /// Parent session's resolved shell tool visibility. Subagents inherit
-    /// this so model/config-level shell disabling stays session-wide.
-    #[serde(skip, default = "default_active_shell_tool")]
-    pub active_shell_tool: ActiveShellTool,
-    /// Parent session's resolved plan-auto setting. Subagents inherit it so
-    /// plan mode does not silently re-enable auto semantics when the parent
-    /// explicitly opted out.
-    #[serde(default = "default_use_auto_mode_during_plan")]
-    pub use_auto_mode_during_plan: bool,
-    /// Settings-level assistant response body logging override inherited from
-    /// the parent session.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub log_assistant_responses: Option<bool>,
-    /// Per-spawn safety constraints (turn cap, write-path whitelist).
-    /// Used by the memory crate's forked extraction / auto-dream
-    /// agents to install a 5-turn cap and memdir-only write fence.
-    /// `None` = no extra constraints beyond the engine's defaults.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub constraints: Option<AgentSpawnConstraints>,
-    /// Parent conversation slice prepended to the child's first turn
-    /// when `isolation == Some("fork")`. Shared via `Arc<Message>`
-    /// — in-process spawns reuse parent allocations; remote transports
-    /// serialize once at the wire boundary.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fork_context_messages: Vec<Arc<Message>>,
-    /// How to construct the child's initial state. Defaults to
-    /// [`SpawnMode::Fresh`]; switched to [`SpawnMode::Fork`] by the
-    /// AgentTool callsite when `coco_subagent::is_fork_subagent_active`
-    /// returns true and `subagent_type` is omitted.
-    /// **Skipped at the JSON boundary** because the runtime form holds
-    /// `Arc<SubagentRuntimeSnapshot>` inside `Fork`, which is
-    /// meaningless across IPC. AgentTool reconstructs the right
-    /// variant on the receiving side from in-process state.
-    #[serde(skip)]
-    pub spawn_mode: SpawnMode,
-    /// Resolved agent definition for this spawn — when the user
-    /// supplies `subagent_type`, `AgentTool::execute` looks the
-    /// definition up in `ToolUseContext.agent_catalog` and threads it
-    /// through here. The runner reads `definition.model` and
-    /// `definition.model_role` via
-    /// [`coco_subagent::resolve_subagent_selection`] so the user's
-    /// `.md` file actually steers spawn-time identity. Skipped at the
-    /// JSON boundary — definitions are resolved per-process and not
-    /// portable across runners. `None` falls back to the
-    /// `subagent_type → ModelRole` mapping alone.
-    #[serde(skip)]
-    pub definition: Option<Arc<AgentDefinition>>,
-    /// Suppress per-message transcript persistence for this spawn.
-    /// Used by extract/auto-dream/session-memory forks so the background
-    /// subagent's tool-uses don't pollute the user's main JSONL transcript
-    /// and don't race the main thread's transcript writer.
-    #[serde(default)]
-    pub skip_transcript: bool,
-
-    /// Per-fork tool-execution gate. When `Some`, threaded onto the
-    /// child engine's `ToolUseContext.can_use_tool` so app/query
-    /// enforces the policy before static permission evaluation.
-    /// Skipped at the JSON boundary — callbacks aren't portable across
-    /// runners.
-    #[serde(skip)]
-    pub can_use_tool: Option<crate::can_use_tool::CanUseToolHandleRef>,
-
-    /// When `true`, hook auto-approve cannot bypass the
-    /// [`Self::can_use_tool`] callback — speculation needs this so
-    /// overlay path-rewrites always run.
-    #[serde(default)]
-    pub require_can_use_tool: bool,
-
-    /// Typed discriminator for telemetry / logs. When set, the engine's
-    /// `query_source_label()` returns this string so log readers can tell
-    /// apart the 9 fork variants without grepping callsites.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fork_label: Option<coco_types::ForkLabel>,
-    /// Whether the parent session is non-interactive/headless. Team
-    /// backend selection uses this to force in-process teammates.
-    #[serde(default)]
-    pub is_non_interactive: bool,
-    /// `tool_use_id` of the `Agent(...)` invocation that produced this
-    /// spawn. Threaded into the background task's `<tool-use-id>` tag
-    /// so the model correlates completion notifications back to the
-    /// original AgentTool call. Filled at the `AgentTool::execute`
-    /// boundary from `ctx.tool_use_id`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_use_id: Option<String>,
-    /// Agent id of the *invoker* — the agent that called `AgentTool`,
-    /// **not** the newly-spawned subagent. Used as the `agent_id`
-    /// filter on the `CommandQueue` so a teammate only receives
-    /// completion notifications for tasks it itself spawned. `None`
-    /// for main-thread spawns. Filled at the `AgentTool::execute`
-    /// boundary from `ctx.agent_id`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub invoking_agent_id: Option<String>,
-    /// Parent turn's abort signal, threaded from the `AgentTool::execute`
-    /// boundary (`ctx.abort.turn_signal()`) for in-process spawns. When the
-    /// parent turn is interrupted (e.g. user ESC) before a **foreground**
-    /// subagent has detached, the child engine is cancelled too — matching
-    /// the shared-abort semantics of the TS implementation (one
-    /// `AbortController` threaded into subagents). Without it the detached
-    /// engine task would run to completion while the parent already recorded
-    /// the `Agent(...)` tool call as interrupted, leaving the subagent panel
-    /// desynced. `None` for cross-process spawns (serde-skipped — the wire
-    /// can't carry a live token) and framework forks, which keep their own
-    /// lifecycle. Background / already-detached agents are exempt: they are
-    /// meant to outlive the turn.
     #[serde(skip)]
     pub parent_turn_abort: Option<crate::cancellation::TurnAbortSignal>,
+}
 
-    /// User-supplied JSON Schema that forces this subagent to emit its
-    /// final answer via the synthetic `StructuredOutput` tool instead of
-    /// free-form text. Set by the workflow host when `agent(prompt, {schema})`
-    /// carries a schema; the spawn driver registers `StructuredOutputTool`
-    /// (compiled from this value) into the child engine's tool registry,
-    /// enables the inline `requires_structured_output` nudge, and surfaces the
-    /// captured tool-call input on [`AgentSpawnResponse::structured_output`].
-    /// `serde_json::Value` is the sanctioned schema-blob passthrough
-    /// exception. Shared via `Arc` so the in-process inheritance path
-    /// reuses the parent allocation. Skipped at the JSON boundary like the
-    /// other in-process-only inheritance fields.
-    #[serde(skip)]
-    pub output_schema: Option<Arc<serde_json::Value>>,
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentSpawnTelemetry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_label: Option<coco_types::ForkLabel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invoking_agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_assistant_responses: Option<bool>,
+    #[serde(default)]
+    pub is_non_interactive: bool,
 }
 
 impl AgentSpawnRequest {
     /// Return the checked parent session id carried by this spawn request.
     pub fn parent_session_id(&self) -> Result<SessionId, String> {
-        self.session_id
+        self.routing
+            .session_id
             .clone()
             .ok_or_else(|| "AgentSpawnRequest.session_id is required".to_string())
     }

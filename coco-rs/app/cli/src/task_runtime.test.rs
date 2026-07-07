@@ -32,6 +32,29 @@ fn rt_with_sink(sink: CapturingSink) -> Arc<TaskRuntime> {
     )
 }
 
+#[cfg(not(windows))]
+struct FailingSandboxPlatform;
+
+#[cfg(not(windows))]
+impl coco_sandbox::SandboxPlatform for FailingSandboxPlatform {
+    fn available(&self) -> bool {
+        true
+    }
+
+    fn wrap_command(
+        &self,
+        _config: &coco_sandbox::SandboxConfig,
+        _command: &str,
+        _session_tag: &str,
+        _extra_writable_binds: &[std::path::PathBuf],
+        _cmd: &mut tokio::process::Command,
+    ) -> coco_sandbox::error::Result<()> {
+        Err(coco_sandbox::SandboxError::apply_error(
+            "forced wrap failure",
+        ))
+    }
+}
+
 async fn insert_background_shell(rt: &TaskRuntime, issuing_agent: Option<&str>) -> String {
     insert_background_shell_with_output(rt, issuing_agent, None).await
 }
@@ -1150,6 +1173,65 @@ async fn shell_spawn_propagates_nonzero_exit_as_failed() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     };
     assert_eq!(final_status, TaskStatus::Failed);
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn shell_spawn_sandbox_wrap_failure_does_not_run_command() {
+    let rt = rt();
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let marker = dir.path().join("should-not-exist");
+    let command = format!("printf ran > {}", marker.display());
+    let settings = coco_sandbox::SandboxSettings::enabled();
+    let config = coco_sandbox::SandboxConfig {
+        enforcement: coco_sandbox::EnforcementLevel::WorkspaceWrite,
+        writable_roots: vec![coco_sandbox::WritableRoot::new(dir.path())],
+        allow_network: true,
+        ..Default::default()
+    };
+    let sandbox_state = Arc::new(coco_sandbox::SandboxState::new(
+        coco_sandbox::EnforcementLevel::WorkspaceWrite,
+        settings,
+        config,
+        Box::new(FailingSandboxPlatform),
+    ));
+
+    let task_id = rt
+        .spawn_shell_task(ShellTaskRequest {
+            command,
+            shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
+            start_mode: coco_tool_runtime::ShellTaskStartMode::Background,
+            timeout_ms: Some(5_000),
+            description: "sandbox fail".into(),
+            tool_use_id: None,
+            issuing_agent: None,
+            progress_tx: None,
+            progress_throttle_ms: 1000,
+            auto_detach_ms: None,
+            kill_on_timeout: true,
+            sandbox_state: Some(sandbox_state),
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+        })
+        .await
+        .expect("shell task should register");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let state = rt.get_task_status(&task_id).await.unwrap();
+        if state.status.is_terminal() {
+            assert_eq!(state.status, TaskStatus::Failed);
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("shell task did not fail within 5s");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    assert!(!marker.exists(), "command must not run after wrap failure");
+    let delta = rt.get_task_output_delta(&task_id, 0).await.unwrap();
+    assert!(delta.content.contains("[sandbox wrap failed:"));
+    assert!(delta.content.contains("forced wrap failure"));
 }
 
 #[cfg(not(windows))]

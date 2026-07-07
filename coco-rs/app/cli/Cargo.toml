@@ -72,6 +72,7 @@ coco-subagent.workspace = true
 coco-tui.workspace = true
 coco-voice.workspace = true
 coco-utils-audio.workspace = true
+coco-utils-string.workspace = true
 coco-keybindings = { workspace = true, features = ["loader"] }
 coco-otel.workspace = true
 coco-model-card.workspace = true

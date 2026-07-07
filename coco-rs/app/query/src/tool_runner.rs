@@ -183,7 +183,7 @@ pub(crate) async fn prepare_committed_tool_call(
     // from ever meeting a raw freeform string.
     let mut validated = tool_call.clone();
     let validated_input =
-        crate::tool_input_validate::validate_tool_call(&mut validated, Some(&tool));
+        crate::tool_input_pipeline::validate_tool_call(&mut validated, Some(&tool));
     let Some(mut validated_input) = validated_input else {
         let message = match validated.invalid_reason {
             Some(coco_llm_types::ToolInputInvalidReason::SchemaViolation { message }) => {
@@ -228,7 +228,7 @@ pub(crate) async fn prepare_committed_tool_call(
         let mut value = validated_input.as_value().clone();
         if strip_internal_underscore_keys(&mut value)
             && let Ok(revalidated) =
-                coco_tool_runtime::ValidatedInput::validate(tool.as_ref(), value)
+                crate::tool_input_pipeline::validate_updated_input(tool.as_ref(), value)
         {
             validated_input = revalidated;
         }

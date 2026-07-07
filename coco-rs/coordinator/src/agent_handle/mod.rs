@@ -464,7 +464,7 @@ impl SwarmAgentHandle {
     }
 
     fn is_teammate_spawn(request: &AgentSpawnRequest) -> bool {
-        request.name.is_some() && request.team_name.is_some()
+        request.input.name.is_some() && request.input.team_name.is_some()
     }
 
     async fn spawn_teammate(
@@ -472,10 +472,12 @@ impl SwarmAgentHandle {
         request: &AgentSpawnRequest,
     ) -> Result<AgentSpawnResponse, String> {
         let requested_name = request
+            .input
             .name
             .as_deref()
             .ok_or("name required for teammate")?;
         let team_name = request
+            .input
             .team_name
             .as_deref()
             .ok_or("team_name required for teammate")?;
@@ -489,12 +491,16 @@ impl SwarmAgentHandle {
         // `resolve_teammate_model` accepts `Option<&str>`; passing `None`
         // makes it use the team config's default model or the
         // role-resolved spec instead.
-        let definition_model = request.definition.as_ref().and_then(|d| d.model.as_deref());
+        let definition_model = request
+            .input
+            .definition
+            .as_ref()
+            .and_then(|d| d.model.as_deref());
         let resolved_model = resolve_teammate_model(
             definition_model,
             &main_model_id,
             &runtime_config.agent_teams,
-            request.subagent_type.as_deref(),
+            request.input.subagent_type.as_deref(),
             |role| {
                 runtime_config
                     .model_roles
@@ -513,6 +519,7 @@ impl SwarmAgentHandle {
         // (frontmatter). Top-level `request.initial_prompt` was a dead
         // slot and is gone.
         let teammate_system_prompt = match request
+            .input
             .definition
             .as_ref()
             .and_then(|d| d.initial_prompt.clone())
@@ -529,18 +536,20 @@ impl SwarmAgentHandle {
             .reserve_member(SpawnMemberRequest {
                 desired_name: requested_name.to_string(),
                 team_name: team_name.to_string(),
-                agent_type: request.subagent_type.clone(),
+                agent_type: request.input.subagent_type.clone(),
                 model: Some(resolved_model.model.clone()),
-                prompt: request.prompt.clone(),
+                prompt: request.input.prompt.clone(),
                 color: None,
-                plan_mode_required: request.mode == Some(coco_types::PermissionMode::Plan),
+                plan_mode_required: request.permissions.mode
+                    == Some(coco_types::PermissionMode::Plan),
                 cwd: request
+                    .execution
                     .cwd
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| self.cwd.clone()),
                 worktree_path: None,
-                mode: request.mode,
+                mode: request.permissions.mode,
             })
             .await?;
         let name = reservation.name.as_str();
@@ -551,15 +560,19 @@ impl SwarmAgentHandle {
             .set_member_color(team_name, &reservation.agent_id, color.as_str().to_string())
             .await?;
 
-        let allowed_tools = teammate_allowed_tools(request.definition.as_deref());
+        let allowed_tools = teammate_allowed_tools(request.input.definition.as_deref());
         let config = SpawnConfig {
             name: name.to_string(),
             team_name: team_name.to_string(),
-            prompt: request.prompt.clone(),
+            prompt: request.input.prompt.clone(),
             color: Some(color.as_str().to_string()),
-            plan_mode_required: request.mode == Some(coco_types::PermissionMode::Plan),
+            plan_mode_required: request.permissions.mode == Some(coco_types::PermissionMode::Plan),
             model: Some(resolved_model.model.clone()),
-            working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
+            working_dir: request
+                .execution
+                .cwd
+                .as_ref()
+                .map(|p| p.display().to_string()),
             system_prompt: teammate_system_prompt,
             allowed_tools,
             allow_permission_prompts: true,
@@ -568,11 +581,12 @@ impl SwarmAgentHandle {
             // `request.effort`). See `agent_handle.rs` comment on
             // `AgentSpawnRequest` for why per-spawn override slot was
             // removed.
-            // All static knobs read through `request.definition` — the
+            // All static knobs read through `request.input.definition` — the
             // previously-dead top-level slots are gone. See
             // `agent_handle.rs` `AgentSpawnRequest` field comment.
-            effort: request.definition.as_ref().and_then(|d| d.effort),
+            effort: request.input.definition.as_ref().and_then(|d| d.effort),
             use_exact_tools: request
+                .input
                 .definition
                 .as_ref()
                 .map(|d| d.use_exact_tools)
@@ -580,6 +594,7 @@ impl SwarmAgentHandle {
             isolation: coco_types::AgentIsolation::None,
             memory_scope: None,
             mcp_servers: request
+                .input
                 .definition
                 .as_ref()
                 .map(|d| {
@@ -590,15 +605,17 @@ impl SwarmAgentHandle {
                 })
                 .unwrap_or_default(),
             disallowed_tools: request
+                .input
                 .definition
                 .as_ref()
                 .map(|d| d.disallowed_tools.clone())
                 .unwrap_or_default(),
             max_turns: request
+                .permissions
                 .constraints
                 .as_ref()
                 .and_then(|c| c.max_turns)
-                .or_else(|| request.definition.as_ref().and_then(|d| d.max_turns)),
+                .or_else(|| request.input.definition.as_ref().and_then(|d| d.max_turns)),
         };
 
         let mut launched_executor: Option<Arc<dyn crate::pane::TeammateExecutor>> = None;
@@ -606,7 +623,7 @@ impl SwarmAgentHandle {
             let executor = registry
                 .select_teammate_executor(
                     runtime_config.agent_teams.teammate_mode,
-                    request.is_non_interactive,
+                    request.telemetry.is_non_interactive,
                 )
                 .await?;
             launched_executor = Some(executor.clone());
@@ -616,8 +633,9 @@ impl SwarmAgentHandle {
                     team_name: team_name.to_string(),
                     color: Some(color),
                     plan_mode_required: config.plan_mode_required,
-                    prompt: request.prompt.clone(),
+                    prompt: request.input.prompt.clone(),
                     cwd: request
+                        .execution
                         .cwd
                         .as_ref()
                         .map(|p| p.display().to_string())
@@ -629,16 +647,18 @@ impl SwarmAgentHandle {
                     parent_session_id: parent_session_id.clone(),
                     permissions: config.allowed_tools.clone(),
                     allow_permission_prompts: config.allow_permission_prompts,
-                    // All static knobs read from `request.definition` —
+                    // All static knobs read from `request.input.definition` —
                     // see `agent_handle.rs` `AgentSpawnRequest` field
                     // comment for why the top-level slots are gone.
-                    effort: request.definition.as_ref().and_then(|d| d.effort),
+                    effort: request.input.definition.as_ref().and_then(|d| d.effort),
                     use_exact_tools: request
+                        .input
                         .definition
                         .as_ref()
                         .map(|d| d.use_exact_tools)
                         .unwrap_or(false),
                     mcp_servers: request
+                        .input
                         .definition
                         .as_ref()
                         .map(|d| {
@@ -649,15 +669,17 @@ impl SwarmAgentHandle {
                         })
                         .unwrap_or_default(),
                     disallowed_tools: request
+                        .input
                         .definition
                         .as_ref()
                         .map(|d| d.disallowed_tools.clone())
                         .unwrap_or_default(),
                     max_turns: request
+                        .permissions
                         .constraints
                         .as_ref()
                         .and_then(|c| c.max_turns)
-                        .or_else(|| request.definition.as_ref().and_then(|d| d.max_turns)),
+                        .or_else(|| request.input.definition.as_ref().and_then(|d| d.max_turns)),
                 })
                 .await;
             (executor.backend_type(), spawn)
@@ -705,7 +727,7 @@ impl SwarmAgentHandle {
                 team_name.to_string(),
                 spawn_backend_type,
                 spawn_result.pane_id.clone(),
-                request.prompt.clone(),
+                request.input.prompt.clone(),
                 task_cancel.clone(),
             ))
             .await;
@@ -814,14 +836,14 @@ impl SwarmAgentHandle {
                     &self.cwd,
                     &parent_session_id,
                     Some(&spawn_result.agent_id),
-                    request.subagent_type.as_deref(),
+                    request.input.subagent_type.as_deref(),
                 )
             });
             let runner_config = crate::runner_loop::InProcessRunnerConfig {
                 identity,
                 task_id: teammate_task_id.clone(),
                 session_id: parent_session_id.clone(),
-                prompt: request.prompt.clone(),
+                prompt: request.input.prompt.clone(),
                 model: config.model.clone(),
                 system_prompt: config.system_prompt.clone(),
                 system_prompt_mode: crate::pane::SystemPromptMode::Default,
@@ -836,20 +858,22 @@ impl SwarmAgentHandle {
                 // than threading the parent's flag, so a future change to grant
                 // teammates bypass is an explicit, reviewable edit.
                 bypass_permissions_available: false,
-                features: request.features.clone(),
-                tool_overrides: request.tool_overrides.clone(),
-                parent_tool_filter: request.parent_tool_filter.clone(),
-                active_shell_tool: request.active_shell_tool,
-                // All static knobs read from `request.definition` —
+                features: request.inheritance.features.clone(),
+                tool_overrides: request.inheritance.tool_overrides.clone(),
+                parent_tool_filter: request.inheritance.parent_tool_filter.clone(),
+                active_shell_tool: request.inheritance.active_shell_tool,
+                // All static knobs read from `request.input.definition` —
                 // see `agent_handle.rs` `AgentSpawnRequest` field
                 // comment for why the top-level slots are gone.
-                effort: request.definition.as_ref().and_then(|d| d.effort),
+                effort: request.input.definition.as_ref().and_then(|d| d.effort),
                 use_exact_tools: request
+                    .input
                     .definition
                     .as_ref()
                     .map(|d| d.use_exact_tools)
                     .unwrap_or(false),
                 mcp_servers: request
+                    .input
                     .definition
                     .as_ref()
                     .map(|d| {
@@ -860,6 +884,7 @@ impl SwarmAgentHandle {
                     })
                     .unwrap_or_default(),
                 disallowed_tools: request
+                    .input
                     .definition
                     .as_ref()
                     .map(|d| d.disallowed_tools.clone())

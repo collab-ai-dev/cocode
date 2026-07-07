@@ -301,10 +301,13 @@ impl RealTuiHarness {
         } = build_engine_resources(&cli, &runtime_config, &cwd)
             .with_context(|| "build_engine_resources")?;
 
-        // SessionManager — sessions_dir mirrors prod (`config home/sessions`).
-        // Tests touch the user's home like the existing coco_cli_deepseek
-        // suite does; it's a known minor cost vs full prod-fidelity.
-        let session_manager = Arc::new(SessionManager::new(coco_cli::paths::sessions_dir()));
+        // SessionManager — memory_base mirrors prod (`config_home` or
+        // COCO_REMOTE_MEMORY_DIR). Tests touch the user's home like the
+        // existing coco_cli_deepseek suite does; it's a known minor cost
+        // vs full prod-fidelity.
+        let session_manager = Arc::new(SessionManager::new(
+            coco_cli::paths::runtime_paths().memory_base().to_path_buf(),
+        ));
         let _ = session_manager.create(&model_id, &cwd);
 
         // Channels — same shape `create_channels` produces. Capacity

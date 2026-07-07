@@ -1178,6 +1178,19 @@
       ]
     },
     {
+      "description": "Tell the TUI to open the background tasks dialog. Emitted when the\nslash dispatcher resolves `/tasks` with no args.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_background_tasks"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
       "description": "Tell the TUI to open the `/skills` read-only overlay. The slash\ndispatcher pre-builds the entry list + per-group subtitles so\nthe TUI doesn't recompute paths or token estimates.\n\nDialog is read-only — Esc to close; selection has no side effects.",
       "type": "object",
       "properties": {
@@ -4796,7 +4809,7 @@
           "type": "string"
         },
         "session_id": {
-          "type": "string"
+          "$ref": "#/$defs/SessionId"
         },
         "title": {
           "type": [
@@ -4822,6 +4835,10 @@
         "cwd",
         "created_at"
       ]
+    },
+    "SessionId": {
+      "description": "Branded session identifier.",
+      "type": "string"
     },
     "SharedV4FileData": {
       "description": "File data as a tagged discriminated union (v4 spec).\n\n- `Data` — raw bytes or base64-encoded string.\n- `Url`  — a URL pointing to the file.\n- `Reference` — a provider reference (`{ [provider]: id }`).\n- `Text` — inline text content.",
