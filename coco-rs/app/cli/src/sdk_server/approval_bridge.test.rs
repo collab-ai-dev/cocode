@@ -29,11 +29,20 @@ async fn make_bridge() -> (
     let (server_end, client_end) = InMemoryTransport::pair(32);
     let server = SdkServer::new(server_end);
     let state = server.state();
-    let handle = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let handle = spawn_app_server_bridge(server);
     let bridge = SdkPermissionBridge::new(state);
     (handle, client_end, bridge)
+}
+
+fn spawn_app_server_bridge(server: SdkServer) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let app_server = Arc::new(coco_app_server::AppServer::<()>::new(
+            /*max_sessions*/ 1, /*channel_capacity*/ 32,
+        ));
+        let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 32);
+        let connection = adapter.connect();
+        let _ = server.run_app_server_connection(connection).await;
+    })
 }
 
 #[tokio::test]

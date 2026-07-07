@@ -13,11 +13,15 @@ workspace = true
 
 [dependencies]
 coco-app-server.workspace = true
+coco-app-server-transport.workspace = true
 coco-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["io-util", "net", "sync"] }
 
 [dev-dependencies]
 coco-app-server.workspace = true
 coco-types.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }

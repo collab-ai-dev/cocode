@@ -11,6 +11,9 @@ Depends on everything — wires registries, builds model runtime registry, start
 | `Commands` | Subcommands: Chat, Config, Resume, Sessions, Status, Doctor, Login, Mcp, Plugin, Daemon, Ps/Logs/Attach/Kill, RemoteControl, Sdk, ReleaseNotes, Upgrade, Agents, AutoMode |
 | `{Config,Mcp,Plugin}Action` | Subcommand action enums |
 | `sdk_server::SdkServer` | NDJSON control server (Commands::Sdk) |
+| `sdk_server::SdkServer::run_app_server_connection` | SDK-server entrypoint for the AppServer bridge; reuses the server's transport, state, and external notification sources while delegating JSON-RPC ownership to `coco-app-server` |
+| `sdk_server::app_server_bridge::AppServerSdkHandler` | Runtime-backed AppServer request handler shared by JSON-RPC SDK and local in-process adapters |
+| `sdk_server::AppServerLocalBridge` | Local AppServer client bridge for TUI/headless cut-over: wires AppServer, LocalClientAdapter, ServerClient, shared handler, and event forwarding |
 | `sdk_server::StdioTransport` | stdin/stdout NDJSON transport |
 | `sdk_server::QueryEngineRunner` | Bridges `QueryEngine` to SDK control messages |
 | `sdk_server::CliInitializeBootstrap` | Session bootstrap from `initialize` control request |
@@ -18,15 +21,81 @@ Depends on everything — wires registries, builds model runtime registry, start
 | `tui_runner::*` | Launches `coco-tui` after bootstrap |
 | `model_factory::*` | Builds `Arc<dyn LanguageModelV4>` from provider/model config |
 | `output::*` | Non-interactive output formatters (text/json/stream-json) |
+| `project_services::ProjectServices` | Project-rooted plugin catalog plus MCP server discovery shared by sessions with the same project root |
 
 ## Startup Flow
 
 1. `Cli::parse()` — clap parses argv (subcommand or default chat)
 2. Fast-path subcommands (Config, Doctor, ReleaseNotes, Sessions, Upgrade) bypass QueryEngine
 3. Interactive/print/SDK paths: load config, build `ModelRuntimeRegistry`, register tools + commands
-4. `Sdk` → `sdk_server` (NDJSON over stdio, `initialize`/`interrupt`/`can_use_tool`/`set_permission_mode`/...)
-5. `--non-interactive` (print mode) → single `QueryEngine::run` + `output::*` formatter
-6. Interactive → `tui_runner::run` (launches `coco-tui`)
+4. `Sdk` → `sdk_server` over the AppServer JSON-RPC bridge (NDJSON over stdio,
+   `initialize`/`interrupt`/`can_use_tool`/`set_permission_mode`/...)
+5. `--non-interactive` (print mode) → local AppServer control bridge +
+   local `turn/start` + `output::*` formatter
+6. Interactive → local AppServer control bridge + `tui_runner::run`
+   (launches `coco-tui`)
+
+`sdk_server::spawn_sdk_outbound_writer` is the single writer for SDK
+notifications, replies, and server requests. The AppServer cut-over bridge
+feeds this writer so stream accumulation and wire-order guarantees stay
+identical to the removed dispatcher loop. While SDK server-request emission
+still uses `SdkServerState::send_server_request`, the AppServer bridge reader
+must route matching legacy `Response`/`Error` messages through
+`SdkServerState::resolve_server_request` before falling back to AppServer
+adapter response handling.
+The SDK handler, dispatcher, and approval-bridge tests run through
+`SdkServer::run_app_server_connection`; the legacy `SdkServer::run` loop has
+been removed, so SDK JSON-RPC ownership lives on the AppServer bridge path.
+`AppServerSdkHandler` also implements the local in-process AppServer request
+handler trait, so TUI/headless cut-over code can reuse the same exhaustive
+`ClientRequest` dispatcher without adding another runtime dispatch table.
+Local AppServer cut-over code must pair that handler with
+`spawn_app_server_local_outbound_forwarder`, which routes handler-emitted
+`CoreEvent`s back through `AppServer::route_envelope` using the current
+session id from `SdkServerState`.
+`AppServerLocalBridge` is the preferred local entrypoint: it owns the local
+`AppServer`, `ServerClient`, shared handler, and outbound forwarder so
+TUI/headless code does not duplicate adapter wiring.
+For the TUI, `start_passive_event_pump` attaches a separate passive local
+surface and continuously forwards bridge-routed `CoreEvent`s into the TUI
+event channel. Keep the interactive surface for server-request ownership; use
+the passive pump for ordinary event delivery.
+Use `install_session_runtime` when TUI/headless have already built a
+`SessionRuntime`; it snapshots the existing session id/cwd/model into the
+shared handler state instead of issuing a fresh `session/start`, and installs a
+`QueryEngineRunner` so local `turn/start` requests have the same engine runner
+as the SDK bridge.
+`turn/start` lifecycle events must use the same `TurnId` returned by the
+synchronous `TurnStartResult`; `AppServerLocalBridge::start_turn_and_wait_for_end`
+depends on that correlation and waits for the matching `TurnEnded` on the local
+interactive surface. `TurnStartParams` carries optional base64 paste images,
+slash metadata attachment text, explicit model selection, and thinking
+overrides so TUI-local turn cut-over preserves prompt-command semantics.
+Both headless and TUI bootstraps now create this bridge, install their
+already-built `SessionRuntime`, and issue a local `keep_alive` request through
+`ServerClient`. TUI normal submits and slash/palette prompt turns now start via
+local AppServer `turn/start`; a passive completion monitor releases the TUI
+`active_turn` slot while `turn/interrupt` handles AppServer-owned cancellation.
+Headless `RunChatOutcome` assembly also starts the turn through local AppServer
+and reconstructs its structured result from the aggregated session result,
+runtime history, and usage snapshot. TUI queued prebuilt-history turns now pass
+a serialized full-history override through local AppServer `turn/start`, so
+permission retries, queued prompts, and prompt-mode bash follow-up turns no
+longer call the engine directly from the TUI runner.
+TUI `/reload-plugins` is the first runtime-control path routed through this
+local AppServer client (`ServerClient::plugin_reload`) while preserving the TUI
+toast and command-palette refresh behavior.
+TUI `/context` also routes through the local client
+(`ServerClient::context_usage`); the bridge refreshes its snapshot from the
+live `SessionRuntime` immediately before dispatch so history-sensitive reports
+see current state.
+TUI permission-mode changes route through
+`ServerClient::set_permission_mode`; the bridge attaches a local interactive
+surface and drains forwarded `PermissionModeChanged` events back into the TUI
+event channel after dispatch.
+TUI teammate current-work interrupt now routes through
+`ServerClient::agent_interrupt_current_work`, keeping that runtime-control
+request on the same local AppServer path as the SDK handler.
 
 ## Runtime Paths
 
@@ -35,6 +104,12 @@ paths. It reads `global_config::config_home()` plus
 `EnvKey::CocoRemoteMemoryDir` and builds `coco_paths::RuntimePaths`.
 Production code should derive transcript/session task-output/memory
 `ProjectPaths` through `crate::paths::project_paths(cwd)`.
+
+Project-scoped plugin catalogs and MCP server discovery go through
+`project_services::ProjectServices`. Session MCP bootstrap asks
+`ProjectServices::mcp_servers(config_home, session_cwd)` so project-rooted
+config/plugin MCP contributions stay tied to the project key while local MCP
+config remains session-cwd scoped.
 
 `config_home` remains the root for user/global artifacts such as logs,
 plugins, settings, output styles, models, task lists, and file-history

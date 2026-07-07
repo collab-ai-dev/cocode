@@ -113,6 +113,8 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub trait TurnRunner: Send + Sync {
     /// Run a single turn.
     /// - `params`: the `turn/start` parameters from the client.
+    /// - `turn_id`: the server-minted id returned by `turn/start`; lifecycle
+    ///   events emitted by the runner must use the same id.
     /// - `handoff`: the narrow subset of `SessionHandle` the runner needs
     /// (id, cwd, model, shared history). Stats and other per-session
     /// state deliberately stay on the server-side slot to avoid an
@@ -127,6 +129,7 @@ pub trait TurnRunner: Send + Sync {
     fn run_turn<'a>(
         &'a self,
         params: coco_types::TurnStartParams,
+        turn_id: coco_types::TurnId,
         handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         cancel: CancellationToken,
@@ -141,6 +144,7 @@ impl TurnRunner for NotImplementedRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
+        _turn_id: coco_types::TurnId,
         _handoff: TurnHandoff,
         _event_tx: mpsc::Sender<CoreEvent>,
         _cancel: CancellationToken,
@@ -148,7 +152,7 @@ impl TurnRunner for NotImplementedRunner {
         Box::pin(async {
             anyhow::bail!(
                 "SdkServer was constructed without a TurnRunner; \
-                 call SdkServer::with_turn_runner() before run()"
+                 call SdkServer::with_turn_runner() before run_app_server_connection()"
             )
         })
     }
@@ -180,6 +184,9 @@ pub struct TurnHandoff {
     /// explicit mode — before this wire-up the SessionHandle field
     /// was dead (no reader).
     pub permission_mode: Option<coco_types::PermissionMode>,
+    /// Session-scoped thinking override set by `control/setThinking`.
+    /// `turn/start.thinking_level` wins when present.
+    pub thinking_level: Option<coco_types::ThinkingLevel>,
 }
 
 // ---------------------------------------------------------------------------
@@ -257,16 +264,16 @@ pub struct SdkServerState {
     /// Keyed by the server-issued `RequestId`.
     /// Populated by [`SdkServerState::send_server_request`] when an
     /// outbound request is written to the transport; drained by the
-    /// dispatcher's `handle_message` when the matching response arrives.
+    /// AppServer bridge reader when the matching response arrives.
     pub pending_server_requests: Mutex<HashMap<RequestId, oneshot::Sender<JsonRpcMessage>>>,
     /// Monotonic counter for issuing unique request IDs for outbound
     /// ServerRequests. Uses negative integers to avoid colliding with
     /// client-issued IDs (which are typically non-negative).
     pub next_server_request_id: AtomicI64,
-    /// Transport handle shared with the dispatcher. Populated by
-    /// `SdkServer::run()` at startup; used by the approval bridge and
-    /// other ServerRequest-emitting code paths. `None` in tests that
-    /// construct `SdkServerState` directly.
+    /// Transport handle shared with the AppServer bridge. Populated before
+    /// startup and refreshed by `SdkServer::run_app_server_connection`; used by
+    /// the approval bridge and other ServerRequest-emitting code paths. `None`
+    /// in tests that construct `SdkServerState` directly.
     pub transport: RwLock<Option<Arc<dyn SdkTransport>>>,
     /// Ordered outbound queue owned by the running dispatcher. When set,
     /// server requests use this queue instead of writing directly to the
@@ -493,10 +500,10 @@ impl SdkServerState {
         // Write the request through the dispatcher's ordered outbound
         // queue. The fallback to `transport.send` that used to live
         // here was removed — it bypassed the single-writer ordering
-        // guarantee for any call made between `SdkServer::new()` and
-        // `SdkServer::run()`. Callers must wait for `run()` to have
-        // populated `outbound_tx`; the only code path that hit the
-        // old fallback was tests, which now wait explicitly.
+        // guarantee for any call made before
+        // `SdkServer::run_app_server_connection()`. Callers must wait for the
+        // AppServer bridge to have populated `outbound_tx`; tests that need
+        // this wait explicitly.
         let req = JsonRpcRequest {
             jsonrpc: coco_types::JSONRPC_VERSION.into(),
             request_id: request_id.clone(),
@@ -708,6 +715,7 @@ impl SessionHandle {
             app_state: Arc::clone(&self.app_state),
             plan_mode_instructions: self.plan_mode_instructions.clone(),
             permission_mode: self.permission_mode,
+            thinking_level: self.thinking_level.clone(),
         }
     }
 }

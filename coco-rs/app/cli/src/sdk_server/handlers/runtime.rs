@@ -106,6 +106,37 @@ pub(super) async fn handle_set_permission_mode(
     // Drop the session write lock before taking app_state's lock to
     // keep lock order consistent (session → app_state never inverted).
     drop(slot);
+    let runtime_arc = {
+        let slot = ctx.state.session_runtime.read().await;
+        slot.as_ref().cloned()
+    };
+    if let Some(runtime) = runtime_arc {
+        let fallback_mode = runtime.current_engine_config().await.permission_mode;
+        runtime
+            .update_engine_config(move |cfg| cfg.permission_mode = params.mode)
+            .await;
+        let live_allow_rules = app_state.read().await.permissions.allow_rules.clone();
+        let config = runtime.current_engine_config().await;
+        let change = crate::live_permission_mode::apply_to_app_state(
+            &app_state,
+            fallback_mode,
+            params.mode,
+            &live_allow_rules,
+            coco_permissions::PlanModeAutoOptions {
+                use_auto_mode_during_plan: config.use_auto_mode_during_plan,
+                auto_mode_available: config.permission_mode_availability.auto,
+            },
+        )
+        .await;
+        crate::live_permission_mode::publish_outbound_if_changed(
+            &ctx.notif_tx,
+            params.mode,
+            crate::live_permission_mode::sdk_bypass_available(&ctx.state),
+            change.changed,
+        )
+        .await;
+        return HandlerResult::ok_empty();
+    }
     // Provenance for the Auto-entry dangerous-rule strip must come from the
     // SAME live base the transition writes — this session's `app_state` (the
     // per-SessionHandle base the engine runs against), NOT the SessionRuntime

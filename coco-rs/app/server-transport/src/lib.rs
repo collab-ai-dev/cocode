@@ -18,6 +18,18 @@ pub const DEFAULT_MAX_NDJSON_FRAME_BYTES: usize = 1024 * 1024;
 pub type NdjsonStdioConnection =
     NdjsonDuplexConnection<BufReader<tokio::io::Stdin>, tokio::io::Stdout>;
 
+#[cfg(unix)]
+pub type NdjsonUnixConnection = NdjsonDuplexConnection<
+    BufReader<tokio::net::unix::OwnedReadHalf>,
+    tokio::net::unix::OwnedWriteHalf,
+>;
+
+#[cfg(unix)]
+pub struct NdjsonUnixListener {
+    listener: tokio::net::UnixListener,
+    max_frame_bytes: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum JsonRpcId {
@@ -252,6 +264,10 @@ where
         self.open
     }
 
+    pub fn split(self) -> (NdjsonFrameReader<R>, NdjsonFrameWriter<W>) {
+        (self.reader, self.writer)
+    }
+
     pub fn into_inner(self) -> (R, W) {
         (self.reader.into_inner(), self.writer.into_inner())
     }
@@ -269,6 +285,80 @@ pub fn ndjson_stdio_connection_with_max_frame_bytes(
         tokio::io::stdout(),
         max_frame_bytes,
     )
+}
+
+#[cfg(unix)]
+pub fn ndjson_unix_connection(stream: tokio::net::UnixStream) -> NdjsonUnixConnection {
+    ndjson_unix_connection_with_max_frame_bytes(stream, DEFAULT_MAX_NDJSON_FRAME_BYTES)
+}
+
+#[cfg(unix)]
+pub fn ndjson_unix_connection_with_max_frame_bytes(
+    stream: tokio::net::UnixStream,
+    max_frame_bytes: usize,
+) -> NdjsonUnixConnection {
+    let (read, write) = stream.into_split();
+    NdjsonDuplexConnection::with_max_frame_bytes(BufReader::new(read), write, max_frame_bytes)
+}
+
+#[cfg(unix)]
+pub async fn connect_ndjson_unix(
+    path: impl AsRef<std::path::Path>,
+) -> Result<NdjsonUnixConnection, TransportFrameError> {
+    let stream = tokio::net::UnixStream::connect(path)
+        .await
+        .map_err(|source| TransportFrameError::Io { source })?;
+    Ok(ndjson_unix_connection(stream))
+}
+
+#[cfg(unix)]
+impl NdjsonUnixListener {
+    pub fn bind(path: impl AsRef<std::path::Path>) -> Result<Self, TransportFrameError> {
+        Self::bind_with_max_frame_bytes(path, DEFAULT_MAX_NDJSON_FRAME_BYTES)
+    }
+
+    pub fn bind_with_max_frame_bytes(
+        path: impl AsRef<std::path::Path>,
+        max_frame_bytes: usize,
+    ) -> Result<Self, TransportFrameError> {
+        let listener = tokio::net::UnixListener::bind(path)
+            .map_err(|source| TransportFrameError::Io { source })?;
+        Ok(Self {
+            listener,
+            max_frame_bytes,
+        })
+    }
+
+    pub async fn accept(&self) -> Result<NdjsonUnixConnection, TransportFrameError> {
+        let (stream, _) = self
+            .listener
+            .accept()
+            .await
+            .map_err(|source| TransportFrameError::Io { source })?;
+        Ok(ndjson_unix_connection_with_max_frame_bytes(
+            stream,
+            self.max_frame_bytes,
+        ))
+    }
+
+    pub fn into_inner(self) -> tokio::net::UnixListener {
+        self.listener
+    }
+}
+
+#[cfg(unix)]
+pub fn bind_ndjson_unix_listener(
+    path: impl AsRef<std::path::Path>,
+) -> Result<NdjsonUnixListener, TransportFrameError> {
+    NdjsonUnixListener::bind(path)
+}
+
+#[cfg(unix)]
+pub fn bind_ndjson_unix_listener_with_max_frame_bytes(
+    path: impl AsRef<std::path::Path>,
+    max_frame_bytes: usize,
+) -> Result<NdjsonUnixListener, TransportFrameError> {
+    NdjsonUnixListener::bind_with_max_frame_bytes(path, max_frame_bytes)
 }
 
 impl JsonRpcRequest {
@@ -700,5 +790,91 @@ mod tests {
                 .await,
             Err(TransportFrameError::Closed)
         ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ndjson_unix_connection_sends_and_receives_frames() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("app-server.sock");
+        let listener = tokio::net::UnixListener::bind(&socket_path).expect("bind unix listener");
+        let server_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept unix stream");
+            ndjson_unix_connection(stream)
+        });
+
+        let mut client = connect_ndjson_unix(&socket_path)
+            .await
+            .expect("connect unix stream");
+        let mut server = server_task.await.expect("server task");
+        let request = JsonRpcFrame::Request(JsonRpcRequest::new(
+            JsonRpcId::String("req-uds".to_string()),
+            "control/keepAlive",
+            Some(json!({})),
+        ));
+        let response = JsonRpcFrame::Success(JsonRpcSuccess::new(
+            JsonRpcId::String("req-uds".to_string()),
+            json!({ "ok": true }),
+        ));
+
+        client
+            .send_frame(&request)
+            .await
+            .expect("client sends request");
+        assert_eq!(
+            server.recv_frame().await.expect("server reads request"),
+            Some(request)
+        );
+
+        server
+            .send_frame(&response)
+            .await
+            .expect("server sends response");
+        assert_eq!(
+            client.recv_frame().await.expect("client reads response"),
+            Some(response)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ndjson_unix_listener_accepts_framed_connections() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("app-server.sock");
+        let listener = bind_ndjson_unix_listener(&socket_path).expect("bind unix listener");
+        let server_task =
+            tokio::spawn(async move { listener.accept().await.expect("accept unix stream") });
+
+        let mut client = connect_ndjson_unix(&socket_path)
+            .await
+            .expect("connect unix stream");
+        let mut server = server_task.await.expect("server task");
+        let request = JsonRpcFrame::Request(JsonRpcRequest::new(
+            JsonRpcId::String("req-listener".to_string()),
+            "control/keepAlive",
+            Some(json!({})),
+        ));
+        let response = JsonRpcFrame::Success(JsonRpcSuccess::new(
+            JsonRpcId::String("req-listener".to_string()),
+            json!({ "ok": true }),
+        ));
+
+        client
+            .send_frame(&request)
+            .await
+            .expect("client sends request");
+        assert_eq!(
+            server.recv_frame().await.expect("server reads request"),
+            Some(request)
+        );
+
+        server
+            .send_frame(&response)
+            .await
+            .expect("server sends response");
+        assert_eq!(
+            client.recv_frame().await.expect("client reads response"),
+            Some(response)
+        );
     }
 }

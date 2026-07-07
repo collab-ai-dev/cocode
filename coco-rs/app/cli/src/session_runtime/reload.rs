@@ -31,9 +31,7 @@ impl SessionRuntime {
         let Some(manager) = self.mcp_manager.read().await.clone() else {
             return 0;
         };
-        let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> =
-            project_services.plugins().iter().collect();
-        let scoped = coco_plugins::mcp_bridge::extract_mcp_servers_from_plugins(&plugin_refs);
+        let scoped = project_services.plugin_mcp_servers();
         let count = scoped.len();
         let new_names: std::collections::HashSet<String> =
             scoped.iter().map(|s| s.name.clone()).collect();

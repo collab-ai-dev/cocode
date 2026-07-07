@@ -20,9 +20,11 @@ construction or transports.
 | `ServerRequestRouteOutcome` | Result of routing one server-initiated request through the AppServer request bridge. |
 | `LocalClientAdapter` | Typed in-process adapter that registers real AppServer connections and channels. |
 | `LocalClientConnection` | One local connection with event, request, and lifecycle receivers. |
+| `LocalClientRequestHandler` | Runtime-supplied bridge for handling typed in-process `ClientRequest`s from local clients. |
 | `LocalClientSubscribeOutcome` | Local subscribe result: attached replay or snapshot-required without attachment. |
 | `JsonRpcAdapter` | Remote adapter foundation that registers real AppServer connections and owns JSON-RPC server-request correlation. |
 | `JsonRpcAdapterConnection` | One remote adapter connection with event, request, lifecycle receivers, and pending JSON-RPC response ids. |
+| `JsonRpcRequestHandler` | Runtime-supplied bridge for handling typed `ClientRequest`s decoded from JSON-RPC requests. |
 | `LiveSessionRegistry` | Slot-state registry for root sessions: `Loading`, `Live`, `Closing`. |
 | `LoadCompletion` / `CloseCompletion` | Cloneable completion signals; owner tasks do the work and update slots. |
 | `ReplaceStart` / `ReplaceCommit` | Registry-side replace reservation and commit results. |
@@ -124,6 +126,10 @@ construction or transports.
   `ConnectionKey`, event sender, request sender, and lifecycle sender through
   AppServer and then attaches/subscribes surfaces through the same routing
   rules as remote adapters.
+- `LocalClientConnection::dispatch_client_request` delegates canonical
+  `ClientRequest`s to a runtime-supplied `LocalClientRequestHandler` with the
+  connection context. This is the local typed request seam for TUI/headless
+  clients; it must not serialize through JSON-RPC.
 - `LocalClientConnection::subscribe_surface` returns `SnapshotRequired` without
   a surface id when the replay cursor cannot attach. Clients must read a
   snapshot and subscribe again; they must not receive a fake surface handle.
@@ -132,13 +138,29 @@ construction or transports.
   other surfaces on the same connection.
 - `JsonRpcAdapter` registers the same event, server-request, and lifecycle
   channels as the local adapter, but keeps wire framing and response
-  correlation in JSON-RPC space. It must not own runtime construction or parse
-  transcripts.
+  correlation in JSON-RPC space. It delegates decoded `ClientRequest`s to a
+  runtime-supplied `JsonRpcRequestHandler`; it must not own runtime
+  construction or parse transcripts.
 - `JsonRpcAdapterConnection::encode_server_request` converts actionable
   `ServerRequestDelivery` payloads into JSON-RPC request frames and records
   the `JsonRpcId -> (SurfaceId, RequestId)` correlation. Responses are matched
-  back to that pending metadata before any future runtime reply bridge consumes
-  them.
+  back to that pending metadata and resolved through AppServer's typed
+  `ServerRequestReply` bridge before runtime code consumes them.
+- `JsonRpcAdapterConnection::run_ndjson_transport` is the remote connection
+  owner loop for caller-supplied NDJSON streams. It dispatches inbound client
+  requests, emits event/server-request/lifecycle frames, and disconnects the
+  AppServer connection on EOF or transport failure.
+- On Unix, `JsonRpcAdapter::accept_unix_connection` accepts one framed Unix
+  socket connection and spawns its JSON-RPC owner task. Higher layers still
+  own listener lifetime, shutdown, and multi-connection supervision.
+- On Unix, `JsonRpcAdapter::run_unix_listener_until_shutdown` owns a local
+  supervised accept loop for a provided `NdjsonUnixListener`: it accepts
+  framed connections, spawns one JSON-RPC owner task per connection, stops
+  accepting on a shutdown signal, and waits for accepted owners to finish.
+- `JsonRpcAdapterConnection::run_frame_channels` is the same remote connection
+  owner loop over caller-supplied JSON-RPC frame channels. Higher layers use it
+  to bridge existing transports into AppServer without moving concrete I/O into
+  this crate.
 - `AppServer::list_live_sessions` is a live-only projection for future
   `session/list` plumbing. It snapshots registry live slots with routing
   surface counts under registry-then-routing lock order; persistent transcript
@@ -159,8 +181,8 @@ construction or transports.
 
 Runtime factory implementation behind `AppServer::spawn_load`, concrete close
 cascade implementation behind `spawn_close`, concrete replace runtime factory
-and old-session close cascade behind `spawn_replace`, JSON-RPC method dispatch
-for session/turn requests, remote connection owner tasks, interactive takeover,
-transport-side server-request replay and typed reply plumbing beyond
-JSON-RPC response-id correlation, and wire mapping for lifecycle effects are
-not implemented here yet.
+and old-session close cascade behind `spawn_replace`, production wiring of
+runtime-backed local/JSON-RPC request handlers into TUI/headless/SDK entry
+points, interactive takeover, named-pipe and WebSocket accept loops, production
+listener lifecycle wiring, and persisted transcript/session-store integration
+are not implemented here yet.

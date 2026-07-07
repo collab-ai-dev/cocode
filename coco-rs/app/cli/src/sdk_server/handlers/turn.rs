@@ -109,13 +109,34 @@ pub(super) async fn handle_turn_start(
         // (cross-session guard).
         let state = ctx.state.clone();
         let turn_id_for_task = turn_id.clone();
+        let inner_tx_for_error = inner_tx.clone();
         let owner_session_id = handoff.session_id.clone();
         let turn_handle = tokio::spawn(async move {
             let run_result = runner
-                .run_turn(params, handoff, inner_tx, cancel_token)
+                .run_turn(
+                    params,
+                    turn_id_for_task.clone(),
+                    handoff,
+                    inner_tx,
+                    cancel_token,
+                )
                 .await;
             if let Err(e) = run_result {
                 warn!(turn_id = %turn_id_for_task, error = %e, "turn runner failed");
+                let _ = inner_tx_for_error
+                    .send(CoreEvent::Protocol(
+                        coco_types::ServerNotification::TurnEnded(
+                            coco_types::TurnEndedParams::failed(
+                                turn_id_for_task.clone(),
+                                /*usage*/ None,
+                                coco_types::ErrorPayload {
+                                    message: e.to_string(),
+                                    code: coco_types::ErrorCode::Unknown,
+                                },
+                            ),
+                        ),
+                    ))
+                    .await;
             }
             // Cross-session guard: only clear if the session in the
             // slot is STILL the session this turn belonged to. If

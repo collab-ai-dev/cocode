@@ -2,8 +2,9 @@
 //!
 //! This module implements the server side of the Phase 2 SDK protocol. It
 //! accepts `JsonRpcMessage` requests from SDK clients (Python SDK, IDE
-//! extensions, etc.) over stdin, dispatches them to coco-rs handlers, and
-//! writes `JsonRpcMessage` responses + CoreEvent notifications to stdout.
+//! extensions, etc.) over stdin, bridges them through the AppServer JSON-RPC
+//! adapter, dispatches typed `ClientRequest`s to coco-rs handlers, and writes
+//! `JsonRpcMessage` responses + CoreEvent notifications to stdout.
 //!
 //! Architecture:
 //! ```text
@@ -19,7 +20,7 @@
 //!            │
 //!            ▼
 //! ┌───────────────────────────────┐
-//! │ SdkServer dispatch loop        │
+//! │ AppServer JSON-RPC bridge      │
 //! │   ClientRequest → handler      │
 //! │   CoreEvent → notification     │
 //! └───────────────────────────────┘
@@ -30,6 +31,7 @@
 //! `coco-types/src/{jsonrpc,client_request,server_request}.rs` for the
 //! wire types.
 
+pub(crate) mod app_server_bridge;
 pub mod approval_bridge;
 pub mod bridge_control;
 pub mod cli_bootstrap;
@@ -43,6 +45,10 @@ pub mod sdk_mcp;
 pub mod sdk_runner;
 pub mod transport;
 
+pub use app_server_bridge::AppServerLocalBridge;
+pub use app_server_bridge::AppServerSdkHandler;
+pub use app_server_bridge::SdkAppServerBridgeError;
+pub use app_server_bridge::spawn_app_server_local_outbound_forwarder;
 pub use approval_bridge::SdkPermissionBridge;
 pub use bridge_control::SdkBridgeControlHandler;
 pub use cli_bootstrap::CliInitializeBootstrap;

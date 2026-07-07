@@ -562,21 +562,11 @@ pub async fn bootstrap_session_mcp(
     // connect is deferred to the background pass below). Project MCP config and
     // plugin contributions are rooted at the ProjectServices key; local config
     // remains session-cwd scoped.
-    let config_servers = coco_mcp::McpConfigLoader::load_with_roots(
-        coco_mcp::McpConfigRoots {
-            project_root: &runtime.project_root,
-            session_cwd: cwd,
-        },
-        &config_home,
-    );
     let project_services = runtime.project_services.clone();
-    let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> =
-        project_services.plugins().iter().collect();
-    let plugin_servers = coco_plugins::mcp_bridge::extract_mcp_servers_from_plugins(&plugin_refs);
+    let mcp_servers = project_services.mcp_servers(&config_home, cwd);
     {
         let mut mgr = manager.lock().await;
-        mgr.register_all(config_servers);
-        mgr.register_all(plugin_servers);
+        mgr.register_all(mcp_servers);
     }
 
     // Build + attach the handle (elicitation hooks for runtime `add_dynamic_server`

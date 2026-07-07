@@ -63,11 +63,10 @@ impl ToolPermissionBridge for SdkPermissionBridge {
             match guard.as_ref() {
                 Some(t) => t.clone(),
                 None => {
-                    return Err(
-                        "SdkPermissionBridge: transport not initialized; SdkServer::run() \
-                         must be running before the bridge is consulted"
-                            .into(),
-                    );
+                    return Err("SdkPermissionBridge: transport not initialized; \
+                         SdkServer::run_app_server_connection() must be running before the bridge \
+                         is consulted"
+                        .into());
                 }
             }
         };

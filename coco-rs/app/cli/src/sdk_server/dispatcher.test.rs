@@ -7,6 +7,8 @@
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcRequest;
 use coco_types::RequestId;
+use coco_types::ServerNotification;
+use coco_types::SessionState;
 use coco_types::error_codes;
 use pretty_assertions::assert_eq;
 
@@ -28,10 +30,19 @@ async fn spawn_server() -> (
 ) {
     let (server_end, client_end) = InMemoryTransport::pair(32);
     let server = SdkServer::new(server_end);
-    let handle = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let handle = spawn_app_server_bridge(server);
     (handle, client_end)
+}
+
+fn spawn_app_server_bridge(server: SdkServer) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let app_server = std::sync::Arc::new(coco_app_server::AppServer::<()>::new(
+            /*max_sessions*/ 1, /*channel_capacity*/ 32,
+        ));
+        let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 32);
+        let connection = adapter.connect();
+        let _ = server.run_app_server_connection(connection).await;
+    })
 }
 
 #[tokio::test]
@@ -122,6 +133,60 @@ async fn multiple_requests_are_processed_in_order() {
 
     drop(client);
     server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn app_server_bridge_entrypoint_dispatches_and_forwards_external_notifications() {
+    #[derive(Debug, Clone)]
+    struct TestHandle;
+
+    let (server_end, client) = InMemoryTransport::pair(32);
+    let (external_tx, external_rx) = tokio::sync::mpsc::channel(8);
+    let sdk_server = SdkServer::new(server_end).with_external_notifications(external_rx);
+    let app_server = std::sync::Arc::new(coco_app_server::AppServer::<TestHandle>::new(1, 8));
+    let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 8);
+    let connection = adapter.connect();
+    let server_task =
+        tokio::spawn(async move { sdk_server.run_app_server_connection(connection).await });
+
+    client
+        .send(req(7, "control/keepAlive", serde_json::json!({})))
+        .await
+        .unwrap();
+    external_tx
+        .send(CoreEvent::Protocol(
+            ServerNotification::SessionStateChanged {
+                state: SessionState::Running,
+            },
+        ))
+        .await
+        .unwrap();
+
+    let mut saw_response = false;
+    let mut saw_notification = false;
+    for _ in 0..2 {
+        match client.recv().await.unwrap().unwrap() {
+            JsonRpcMessage::Response(response) => {
+                assert_eq!(response.request_id, RequestId::Integer(7));
+                assert!(response.result.is_null());
+                saw_response = true;
+            }
+            JsonRpcMessage::Notification(notification) => {
+                assert_eq!(notification.method, "session/stateChanged");
+                saw_notification = true;
+            }
+            other => panic!("unexpected SDK message: {other:?}"),
+        }
+    }
+    assert!(saw_response);
+    assert!(saw_notification);
+
+    drop(external_tx);
+    drop(client);
+    server_task
+        .await
+        .unwrap()
+        .expect("AppServer bridge exits cleanly");
 }
 
 // ----- CoreEvent → JsonRpcNotification translation ----------------------

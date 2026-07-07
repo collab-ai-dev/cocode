@@ -93,12 +93,25 @@ fn session_id_params_reject_unsafe_path_components() {
 fn turn_start_carries_prompt_and_overrides() {
     let req = ClientRequest::TurnStart(TurnStartParams {
         prompt: "hello".into(),
+        history_override: Vec::new(),
+        images: Vec::new(),
+        slash_metadata: Some("<command-name>/test</command-name>".into()),
+        model_selection: Some(crate::ProviderModelSelection {
+            provider: "moa".into(),
+            model_id: "balanced".into(),
+        }),
         permission_mode: Some(crate::PermissionMode::AcceptEdits),
         thinking_level: None,
     });
     let j = serde_json::to_value(&req).unwrap();
     assert_eq!(j["method"], "turn/start");
     assert_eq!(j["params"]["prompt"], "hello");
+    assert_eq!(
+        j["params"]["slash_metadata"],
+        "<command-name>/test</command-name>"
+    );
+    assert_eq!(j["params"]["model_selection"]["provider"], "moa");
+    assert_eq!(j["params"]["model_selection"]["model_id"], "balanced");
     // Wire format matches TS `PermissionModeSchema` (camelCase).
     assert_eq!(j["params"]["permission_mode"], "acceptEdits");
 }
@@ -197,6 +210,10 @@ fn set_permission_mode_carries_mode() {
 fn client_request_roundtrip_preserves_variant() {
     let req = ClientRequest::TurnStart(TurnStartParams {
         prompt: "test".into(),
+        history_override: Vec::new(),
+        images: Vec::new(),
+        slash_metadata: None,
+        model_selection: None,
         permission_mode: None,
         thinking_level: None,
     });
@@ -206,6 +223,26 @@ fn client_request_roundtrip_preserves_variant() {
         ClientRequest::TurnStart(p) => assert_eq!(p.prompt, "test"),
         _ => panic!("expected TurnStart"),
     }
+}
+
+#[test]
+fn turn_start_carries_images() {
+    let req = ClientRequest::TurnStart(TurnStartParams {
+        prompt: "look".into(),
+        history_override: Vec::new(),
+        images: vec![crate::QueuedCommandEditImage {
+            media_type: "image/png".into(),
+            data_base64: "aW1n".into(),
+        }],
+        slash_metadata: None,
+        model_selection: None,
+        permission_mode: None,
+        thinking_level: None,
+    });
+    let j = serde_json::to_value(&req).unwrap();
+    assert_eq!(j["method"], "turn/start");
+    assert_eq!(j["params"]["images"][0]["media_type"], "image/png");
+    assert_eq!(j["params"]["images"][0]["data_base64"], "aW1n");
 }
 
 #[test]

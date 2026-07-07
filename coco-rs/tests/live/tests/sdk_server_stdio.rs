@@ -223,10 +223,15 @@ async fn serve(args: Args) -> Result<()> {
         "[sdk_server_stdio] ready (provider={} model={model_id}); reading NDJSON from stdin",
         args.provider
     );
+    let app_server = Arc::new(coco_app_server::AppServer::<()>::new(
+        /*max_sessions*/ 1, /*channel_capacity*/ 256,
+    ));
+    let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 256);
+    let connection = adapter.connect();
     server
-        .run()
+        .run_app_server_connection(connection)
         .await
-        .map_err(|e| anyhow!("SdkServer.run: {e:?}"))?;
+        .map_err(|e| anyhow!("SdkServer AppServer bridge: {e:?}"))?;
     eprintln!("[sdk_server_stdio] stdin EOF — shutting down cleanly");
     Ok(())
 }
