@@ -1,0 +1,22 @@
+[package]
+name = "coco-app-server-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "coco_app_server_transport"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "rt"] }

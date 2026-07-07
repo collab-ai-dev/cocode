@@ -12,6 +12,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::collections::HashMap;
+
 use chrono::DateTime;
 use chrono::Utc;
 use coco_hub_protocol::AnnounceAckFrame;
@@ -22,8 +24,10 @@ use coco_hub_protocol::ErrorFrame;
 use coco_hub_protocol::EventEnvelope;
 use coco_hub_protocol::EventPayload;
 use coco_hub_protocol::HubFrame;
-use coco_hub_protocol::SCHEMA_VERSION_V1;
-use coco_hub_protocol::SUBPROTOCOL_V1;
+use coco_hub_protocol::SCHEMA_VERSION_V2;
+use coco_hub_protocol::SUBPROTOCOL_V2;
+use coco_types::AgentId;
+use coco_types::SessionId;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -34,6 +38,7 @@ fn fixed_ts() -> DateTime<Utc> {
 fn announce() -> AnnounceFrame {
     AnnounceFrame {
         instance_id: Uuid::nil(),
+        live_sessions: vec![session_id()],
         host: "test-host".to_string(),
         cwd: "/work".to_string(),
         pid: 4242,
@@ -45,13 +50,26 @@ fn announce() -> AnnounceFrame {
     }
 }
 
+fn session_id() -> SessionId {
+    SessionId::try_new("sess-1").expect("valid session id")
+}
+
+fn agent_id() -> AgentId {
+    AgentId::try_new_generated("aagent-0000000000000001").expect("valid generated agent id")
+}
+
+fn cursor_map(seq: i64) -> HashMap<SessionId, i64> {
+    HashMap::from([(session_id(), seq)])
+}
+
 fn envelope(payload: EventPayload) -> EventEnvelope {
     EventEnvelope {
         instance_id: Uuid::nil(),
-        session_id: "sess-1".to_string(),
-        seq: 7,
+        session_id: session_id(),
+        agent_id: Some(agent_id()),
+        session_seq: 7,
         ts: fixed_ts(),
-        schema_version: SCHEMA_VERSION_V1,
+        schema_version: SCHEMA_VERSION_V2,
         payload,
     }
 }
@@ -63,14 +81,16 @@ fn all_hub_frames() -> Vec<HubFrame> {
         HubFrame::AnnounceAck(AnnounceAckFrame {
             first_seen: true,
             hub_version: "0.1.0".to_string(),
-            resume_from: Some(42),
+            resume_from: cursor_map(42),
         }),
         HubFrame::Batch(BatchFrame {
             events: vec![envelope(EventPayload::Protocol {
                 value: json!({"method": "turn/started"}),
             })],
         }),
-        HubFrame::BatchAck(BatchAckFrame { up_to_seq: 9 }),
+        HubFrame::BatchAck(BatchAckFrame {
+            up_to_seq: cursor_map(9),
+        }),
         HubFrame::Error(ErrorFrame {
             code: "rate_limited".to_string(),
             detail: "slow down".to_string(),
@@ -170,6 +190,6 @@ fn snapshot_events_dropped_payload_json() {
 #[test]
 fn wire_constants_guard() {
     // A bump here must be a conscious, reviewed change — not an accident.
-    assert_eq!(SCHEMA_VERSION_V1, 1);
-    assert_eq!(SUBPROTOCOL_V1, "coco-event-hub.v1");
+    assert_eq!(SCHEMA_VERSION_V2, 2);
+    assert_eq!(SUBPROTOCOL_V2, "coco-event-hub.v2");
 }

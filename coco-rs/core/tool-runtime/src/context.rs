@@ -5,6 +5,7 @@ use coco_types::ActiveShellTool;
 use coco_types::AgentId;
 use coco_types::AgentTypeId;
 use coco_types::Features;
+use coco_types::SessionId;
 use coco_types::ThinkingLevel;
 use coco_types::ToolFilter;
 use coco_types::ToolOverrides;
@@ -149,8 +150,8 @@ pub struct ToolUseContext {
     pub original_cwd: Option<std::path::PathBuf>,
     /// Mutable session CWD shared across all BashTool invocations.
     /// `cd /tmp` in turn N updates this; turn N+1 reads it as the
-    /// spawn cwd. `None` ⇒ BashTool uses `std::env::current_dir()`
-    /// (per-call, no persistence — legacy / test path).
+    /// spawn cwd. `None` is a legacy/test path without persistent cwd
+    /// state; callers fall back to `original_cwd` when available.
     pub session_cwd: Option<std::sync::Arc<tokio::sync::RwLock<std::path::PathBuf>>>,
     /// Resolved web-fetch runtime configuration. Consumed by the
     /// `WebFetchTool` for timeout / max-content-length / user-agent.
@@ -614,6 +615,23 @@ impl ToolUseContext {
         self.abort.token()
     }
 
+    /// Return the optional session id used by history-backed tool features.
+    ///
+    /// `None` and the legacy empty string both mean the embedding did not
+    /// install a persisted session id. Non-empty values must already be
+    /// path-safe before tools use them for subagent resume/spawn routing.
+    pub fn checked_session_id_for_history(&self) -> Result<Option<SessionId>, String> {
+        let Some(session_id) = self.session_id_for_history.as_deref() else {
+            return Ok(None);
+        };
+        if session_id.is_empty() {
+            return Ok(None);
+        }
+        SessionId::try_new(session_id.to_string())
+            .map(Some)
+            .map_err(|e| format!("ToolUseContext.session_id_for_history is invalid: {e}"))
+    }
+
     /// Clone the context for use in concurrent tool execution.
     ///
     /// Shares Arc-wrapped state (messages, in_progress IDs, app_state, denial tracking)
@@ -761,20 +779,23 @@ impl ToolUseContext {
         self
     }
 
-    /// Effective shell cwd for analysis and spawn.
-    ///
-    /// Keep this in sync with shell execution semantics: worktree override
-    /// first, then the live shared session cwd, then the process cwd.
-    pub async fn effective_shell_cwd(&self) -> std::path::PathBuf {
+    /// Best available session cwd anchor: worktree override first, then
+    /// the live shared session cwd, then the bootstrap cwd.
+    pub async fn cwd_anchor(&self) -> Option<std::path::PathBuf> {
         if let Some(over) = self.cwd_override.clone() {
-            over
+            Some(over)
         } else if let Some(session_cwd) = &self.session_cwd {
-            session_cwd.read().await.clone()
+            Some(session_cwd.read().await.clone())
         } else {
-            std::env::current_dir()
-                .ok()
-                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            self.original_cwd.clone()
         }
+    }
+
+    /// Effective shell cwd for analysis and spawn.
+    pub async fn effective_shell_cwd(&self) -> std::path::PathBuf {
+        self.cwd_anchor()
+            .await
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
     }
 
     /// All `/<word>` tokens the user typed in the current turn —
@@ -1098,6 +1119,28 @@ mod user_typed_slash_tests {
         ctx.messages = Arc::new(messages);
         ctx.user_message_id = user_msg_id;
         ctx
+    }
+
+    #[test]
+    fn checked_session_id_for_history_validates_non_empty_values() {
+        let mut ctx = ToolUseContext::test_default_inner();
+        assert!(ctx.checked_session_id_for_history().unwrap().is_none());
+
+        ctx.session_id_for_history = Some(String::new());
+        assert!(ctx.checked_session_id_for_history().unwrap().is_none());
+
+        ctx.session_id_for_history = Some("session-1".to_string());
+        assert_eq!(
+            ctx.checked_session_id_for_history()
+                .unwrap()
+                .unwrap()
+                .as_str(),
+            "session-1"
+        );
+
+        ctx.session_id_for_history = Some("bad/session".to_string());
+        let err = ctx.checked_session_id_for_history().unwrap_err();
+        assert!(err.contains("session_id_for_history"), "got: {err}");
     }
 
     #[test]

@@ -86,7 +86,7 @@ fn text_part(text: impl Into<String>) -> ToolResultContentPart {
 
 fn test_orchestration_ctx() -> OrchestrationContext {
     OrchestrationContext {
-        session_id: "session-1".into(),
+        session_id: coco_types::SessionId::try_new("session-1").unwrap(),
         cwd: std::path::PathBuf::from("/tmp"),
         project_dir: None,
         permission_mode: None,

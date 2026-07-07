@@ -95,7 +95,7 @@ impl QueryEngine {
         // (`EnvKey::CocoSimple`) narrows the worker tool list.
         // 2. Otherwise: explicit config override > built-in default +
         // CLAUDE.md discovery.
-        let cwd = std::env::current_dir().unwrap_or_default();
+        let cwd = self.config.workspace_cwd();
         let prompt_context_mode = if coco_subagent::is_coordinator_mode(&self.config.features) {
             let simple_mode = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoSimple);
             coco_context::PromptContextMode::literal(
@@ -173,7 +173,7 @@ impl QueryEngine {
         else {
             return;
         };
-        let latest_epoch = match store.load_entries(session_id) {
+        let latest_epoch = match store.load_entries(session_id.as_str()) {
             Ok(entries) => entries.into_iter().rev().find_map(|entry| match entry {
                 coco_session::storage::Entry::Metadata(
                     coco_session::storage::MetadataEntry::ContextEpoch {
@@ -182,7 +182,7 @@ impl QueryEngine {
                         record,
                     },
                 ) if entry_session_id == *session_id
-                    && agent_id.as_deref() == self.config.agent_id.as_deref() =>
+                    && agent_id.as_deref() == self.config.agent_id_str() =>
                 {
                     Some(record.epoch)
                 }
@@ -208,10 +208,10 @@ impl QueryEngine {
             sources,
         );
         if let Err(e) = store.append_metadata(
-            session_id,
+            session_id.as_str(),
             &coco_session::storage::MetadataEntry::ContextEpoch {
                 session_id: session_id.clone(),
-                agent_id: self.config.agent_id.clone(),
+                agent_id: self.config.agent_id_string(),
                 record,
             },
         ) {
@@ -290,8 +290,8 @@ impl QueryEngine {
                     })
                     .collect();
                 if let Err(e) = store.insert_content_replacement(
-                    session_id,
-                    self.config.agent_id.as_deref(),
+                    session_id.as_str(),
+                    self.config.agent_id_str(),
                     &records,
                 ) {
                     tracing::warn!(
@@ -366,7 +366,7 @@ impl QueryEngine {
             (&self.transcript_store, &self.transcript_session_id)
         {
             return store
-                .session_artifact_dir(session_id)
+                .session_artifact_dir(session_id.as_str())
                 .map(coco_tool_runtime::ToolOutputStore::new);
         }
         None
@@ -803,7 +803,7 @@ impl QueryEngine {
             transcript_path: self
                 .transcript_store
                 .as_ref()
-                .and_then(|store| store.transcript_path(&self.config.session_id)),
+                .and_then(|store| store.transcript_path(self.config.session_id.as_str())),
             hook_handle,
             // Real `AgentHandle` when the CLI / SDK / TUI installed
             // one via `with_agent_handle`; otherwise fall back to

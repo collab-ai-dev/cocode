@@ -59,6 +59,7 @@ use coco_llm_types::UserContentPart;
 use coco_types::ModelRole;
 use coco_types::ModelSpec;
 use coco_types::ProviderModelSelection;
+use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -1352,15 +1353,18 @@ impl ModelRuntimeRegistry {
     ///
     /// No-op for prebuilt registries (no `RuntimeConfig`) and when the id is
     /// unchanged.
-    pub fn update_session_id(self: &Arc<Self>, new_session_id: &str) -> Result<(), InferenceError> {
+    pub fn update_session_id(
+        self: &Arc<Self>,
+        new_session_id: &SessionId,
+    ) -> Result<(), InferenceError> {
         {
             let mut slot = rw_write(&self.header_vars);
-            if slot.session_id == new_session_id {
+            if slot.session_id.as_ref() == Some(new_session_id) {
                 return Ok(());
             }
             let prev = slot.clone();
             *slot = Arc::new(HeaderVars {
-                session_id: new_session_id.to_string(),
+                session_id: Some(new_session_id.clone()),
                 cwd: prev.cwd.clone(),
                 app_version: prev.app_version.clone(),
             });

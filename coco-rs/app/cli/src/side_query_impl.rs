@@ -25,6 +25,7 @@ use coco_types::SideQueryStopReason;
 use coco_types::SideQueryToolUse;
 use coco_types::SideQueryUsage;
 use coco_types::TokenUsage;
+use coco_types::TurnId;
 
 #[derive(Clone)]
 pub struct SideQueryUsageRecorder {
@@ -204,7 +205,7 @@ impl SideQuery for SideQueryAdapter {
         request: SideQueryRequest,
     ) -> Result<SideQueryResponse, coco_error::BoxedError> {
         let source = Self::resolve_source(&request);
-        let moa_turn_id = uuid::Uuid::new_v4().to_string();
+        let moa_turn_id = TurnId::generate();
 
         let started = std::time::Instant::now();
         let (result, runtime_snapshot) = loop {

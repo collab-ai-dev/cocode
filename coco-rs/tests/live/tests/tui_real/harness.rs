@@ -33,6 +33,7 @@ use coco_cli::headless::build_runtime_config_for_cli;
 use coco_cli::session_bootstrap::EngineResources;
 use coco_cli::session_bootstrap::build_engine_resources;
 use coco_cli::session_bootstrap::install_session_late_binds;
+use coco_cli::session_runtime::SessionHandle;
 use coco_cli::session_runtime::SessionRuntime;
 use coco_cli::session_runtime::SessionRuntimeBuildOpts;
 use coco_cli::tui_permission_bridge::PendingApprovals;
@@ -295,6 +296,7 @@ impl RealTuiHarness {
             startup,
             command_registry,
             skill_manager,
+            project_services,
             output_style_manager: _,
         } = build_engine_resources(&cli, &runtime_config, &cwd)
             .with_context(|| "build_engine_resources")?;
@@ -323,7 +325,7 @@ impl RealTuiHarness {
         // Stage 3: per-session subsystems. SessionRuntime owns hook
         // registry (settings.json + plugins), file-history, ToolAppState,
         // session memory, mailbox, etc.
-        let runtime = SessionRuntime::build(SessionRuntimeBuildOpts {
+        let runtime = SessionHandle::build(SessionRuntimeBuildOpts {
             cli: &cli,
             runtime_config: Arc::new(runtime_config),
             cwd: cwd.clone(),
@@ -341,6 +343,7 @@ impl RealTuiHarness {
             permission_bridge: Some(bridge),
             command_registry,
             skill_manager,
+            project_services,
             agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             session_id_override: None,
@@ -375,6 +378,7 @@ impl RealTuiHarness {
         // settings.json hook entries surface as `hook_*` reminders on
         // the first turn.
         runtime.fire_session_start_hooks("startup").await;
+        let runtime = runtime.runtime().clone();
 
         // Spawn the driver. Handles SubmitInput / ApprovalResponse /
         // Interrupt / Shutdown — the subset every real-LLM scenario in

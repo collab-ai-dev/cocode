@@ -579,7 +579,10 @@ pub async fn run_plan_mode_turn_with_events(
         model_id: "scripted-mock".into(),
         permission_mode: params.permission_mode,
         max_turns: params.max_turns,
-        session_id: params.session_id,
+        session_id: match coco_types::SessionId::try_new(params.session_id.clone()) {
+            Ok(id) => id,
+            Err(_) => unreachable!("test session id must be valid"),
+        },
         ..Default::default()
     };
     let main_slot = PrebuiltLanguageModelSlot::new(model, coco_inference::RetryConfig::default())

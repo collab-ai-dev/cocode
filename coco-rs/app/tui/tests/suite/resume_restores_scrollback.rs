@@ -28,6 +28,14 @@ use coco_tui::state::ToolExecution;
 use coco_tui::state::ToolStatus;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
+use coco_types::ServerNotificationIdentity;
+
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    match coco_types::SessionId::try_new(value) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id should be valid"),
+    }
+}
 
 /// JSON-roundtrip the wire payload, then wrap in `CoreEvent::Protocol`.
 /// `CoreEvent` itself is in-process only (no serde derives); the
@@ -72,8 +80,7 @@ fn resume_clears_prior_overlays_then_rebuilds_transcript() {
         &mut state,
         protocol_evt(ServerNotification::MessageAppended {
             message: std::sync::Arc::new(stale_msg),
-            session_id: String::new(),
-            agent_id: None,
+            identity: ServerNotificationIdentity::default(),
         }),
     );
     state.session.tool_executions.push(fake_running_tool());
@@ -88,8 +95,7 @@ fn resume_clears_prior_overlays_then_rebuilds_transcript() {
     handle_core_event(
         &mut state,
         protocol_evt(ServerNotification::SessionResetForResume {
-            session_id: "resumed-001".into(),
-            agent_id: None,
+            identity: ServerNotificationIdentity::new(Some(test_session_id("resumed-001")), None),
         }),
     );
 
@@ -120,14 +126,12 @@ fn resume_clears_prior_overlays_then_rebuilds_transcript() {
         &mut state,
         protocol_evt(ServerNotification::MessageAppended {
             message: std::sync::Arc::new(m1),
-            session_id: String::new(),
-            agent_id: None,
+            identity: ServerNotificationIdentity::default(),
         }),
     );
     let m2_event = roundtrip_notif(ServerNotification::MessageAppended {
         message: std::sync::Arc::new(m2),
-        session_id: String::new(),
-        agent_id: None,
+        identity: ServerNotificationIdentity::default(),
     });
     let ServerNotification::MessageAppended { message, .. } = &m2_event else {
         panic!("expected MessageAppended after roundtrip");
@@ -157,8 +161,7 @@ fn resume_with_no_prior_state_still_sets_conversation_id() {
     handle_core_event(
         &mut state,
         protocol_evt(ServerNotification::SessionResetForResume {
-            session_id: "fresh-resume".into(),
-            agent_id: None,
+            identity: ServerNotificationIdentity::new(Some(test_session_id("fresh-resume")), None),
         }),
     );
 

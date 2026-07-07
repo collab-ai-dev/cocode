@@ -4,6 +4,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 
+use coco_types::SessionId;
+
 /// An analytics event to log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalyticsEvent {
@@ -11,7 +13,7 @@ pub struct AnalyticsEvent {
     pub properties: HashMap<String, serde_json::Value>,
     pub timestamp_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
 }
 
 /// Analytics metadata for safe logging (no code or file paths).
@@ -51,11 +53,11 @@ pub enum EventCategory {
 pub struct AnalyticsLogger {
     events: Vec<AnalyticsEvent>,
     config: TelemetryConfig,
-    session_id: String,
+    session_id: SessionId,
 }
 
 impl AnalyticsLogger {
-    pub fn new(config: TelemetryConfig, session_id: String) -> Self {
+    pub fn new(config: TelemetryConfig, session_id: SessionId) -> Self {
         Self {
             events: Vec::new(),
             config,

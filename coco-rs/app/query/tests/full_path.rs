@@ -381,7 +381,7 @@ async fn test_session_persistence_round_trip() {
         uuid: format!("{sid}-u1"),
         parent_uuid: None,
         logical_parent_uuid: None,
-        session_id: sid.to_string(),
+        session_id: Some(coco_types::SessionId::try_new(sid).expect("valid session id")),
         cwd: cwd.display().to_string(),
         timestamp: "2025-01-15T10:00:00Z".to_string(),
         version: None,

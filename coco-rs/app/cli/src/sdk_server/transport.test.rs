@@ -244,7 +244,7 @@ async fn send_notification_wire_matches_default_path() {
     let cases: Vec<ServerNotification> = vec![
         ServerNotification::AgentMessageDelta(ContentDeltaParams {
             item_id: Some("item-1".into()),
-            turn_id: Some("turn-1".into()),
+            turn_id: Some(coco_types::TurnId::from("turn-1")),
             delta: "hello world".into(),
         }),
         ServerNotification::SessionEnded(SessionEndedParams {

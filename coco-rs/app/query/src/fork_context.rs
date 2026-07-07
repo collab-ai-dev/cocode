@@ -52,7 +52,7 @@ pub struct ForkContextOverrides {
     pub query_source: String,
     /// Per-fork agent id. `None` ⇒ auto-gen via [`auto_agent_id`].
     /// A fresh id is always allocated unless the caller pre-supplies one.
-    pub agent_id: Option<String>,
+    pub agent_id: Option<coco_types::AgentId>,
     /// When `true` (default), the fork engine is built with a *deep clone*
     /// of the parent's `FileReadState` (see
     /// `SessionRuntime::build_engine_from_config_with_persistence`): the
@@ -128,11 +128,15 @@ impl ForkContextOverrides {
     }
 }
 
-/// Auto-generate an agent id for an unowned fork. Format:
-/// `fork-<label>-<uuid>` so log readers can grep both the variant
-/// and the run.
-pub fn auto_agent_id(label: ForkLabel) -> String {
-    format!("fork-{}-{}", label.as_str(), uuid::Uuid::new_v4())
+/// Auto-generate an agent id for an unowned fork. Uses the canonical
+/// generated `AgentId` shape with a `fork-<label>` label so log readers
+/// can grep both the variant and the run.
+pub fn auto_agent_id(label: ForkLabel) -> coco_types::AgentId {
+    let label = format!("fork-{}", label.as_str());
+    match coco_types::AgentId::try_generate(Some(&label)) {
+        Ok(id) => id,
+        Err(_) => unreachable!("ForkLabel must produce a canonical AgentId label"),
+    }
 }
 
 #[cfg(test)]

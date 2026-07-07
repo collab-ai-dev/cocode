@@ -116,6 +116,7 @@ sdk-py-check:
 check-seam:
     bash "{{justfile_directory()}}/scripts/check-vercel-ai-seam.sh"
     bash "{{justfile_directory()}}/scripts/check-tui-ui-seam.sh"
+    bash "{{justfile_directory()}}/scripts/check-session-cwd-discipline.sh"
 
 # Enforce: utils/* and vercel-ai/* are libraries. Their public API may
 # not return `anyhow::Result<…>` — declare a typed `thiserror` enum

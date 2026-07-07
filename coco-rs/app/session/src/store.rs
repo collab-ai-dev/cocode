@@ -26,6 +26,7 @@ use std::sync::Mutex;
 
 use coco_messages::Message;
 use coco_paths::ProjectPaths;
+use coco_types::SessionId;
 use coco_types::SessionUsageSnapshot;
 use serde_json::Value;
 use uuid::Uuid;
@@ -189,7 +190,7 @@ impl<T: TranscriptIo + AgentTranscriptStore + UsageSnapshotStore> SessionStore f
 /// logical handle when `RemoteStore` lands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSession {
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Project root the session was found under (worktree origin for
     /// disk); `None` for the global-scan branch / non-fs backends.
     pub project: Option<PathBuf>,
@@ -441,14 +442,19 @@ impl SessionCatalog for DiskCatalog {
         session_id: &str,
         cwd_hint: Option<&Path>,
     ) -> crate::Result<Option<ResolvedSession>> {
-        Ok(
+        let Some(resolved) =
             crate::storage::resolve_session_file_path(&self.memory_base, session_id, cwd_hint)?
-                .map(|r| ResolvedSession {
-                    session_id: session_id.to_string(),
-                    project: r.project_path,
-                    transcript_path: r.file_path,
-                }),
-        )
+        else {
+            return Ok(None);
+        };
+        let session_id = SessionId::try_new(session_id.to_string()).map_err(|e| {
+            crate::SessionError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+        })?;
+        Ok(Some(ResolvedSession {
+            session_id,
+            project: resolved.project_path,
+            transcript_path: resolved.file_path,
+        }))
     }
 
     fn list_all(&self) -> crate::Result<Vec<TranscriptMetadata>> {
@@ -573,12 +579,18 @@ impl InMemoryStore {
     /// Derive [`TranscriptMetadata`] for one in-memory session, stamping
     /// the tracked timestamps over the content-derived fold (byte size is
     /// always 0 — RAM has none).
-    fn metadata_for(session_id: &str, session: &MemorySession) -> TranscriptMetadata {
-        let mut meta = crate::storage::fold_transcript_metadata(&session.entries, session_id);
+    fn metadata_for(
+        session_id: &str,
+        session: &MemorySession,
+    ) -> crate::Result<TranscriptMetadata> {
+        let session_id = SessionId::try_new(session_id.to_string()).map_err(|e| {
+            crate::SessionError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+        })?;
+        let mut meta = crate::storage::fold_transcript_metadata(&session.entries, &session_id);
         meta.created_at = session.created_at_ms.to_string();
         meta.modified_at = session.modified_at_ms.to_string();
         meta.file_size = 0;
-        meta
+        Ok(meta)
     }
 }
 
@@ -680,7 +692,12 @@ impl TranscriptIo for InMemoryStore {
         self.append_metadata(
             session_id,
             &MetadataEntry::ContentReplacement {
-                session_id: session_id.to_string(),
+                session_id: SessionId::try_new(session_id.to_string()).map_err(|e| {
+                    crate::SessionError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        e,
+                    ))
+                })?,
                 agent_id: agent_id.map(str::to_string),
                 replacements: records.to_vec(),
             },
@@ -734,7 +751,7 @@ impl TranscriptIo for InMemoryStore {
                     session_id: entry_session_id,
                     replacements,
                     ..
-                }) if entry_session_id == session_id => Some(replacements),
+                }) if entry_session_id.as_str() == session_id => Some(replacements),
                 _ => None,
             })
             .flatten()
@@ -779,7 +796,7 @@ impl TranscriptIo for InMemoryStore {
                 path: PathBuf::from(format!("memory://{session_id}")),
             });
         };
-        Ok(Self::metadata_for(session_id, session))
+        Self::metadata_for(session_id, session)
     }
 
     fn list_sessions(&self) -> crate::Result<Vec<TranscriptMetadata>> {
@@ -788,7 +805,7 @@ impl TranscriptIo for InMemoryStore {
             .sessions
             .iter()
             .map(|(id, session)| Self::metadata_for(id, session))
-            .collect();
+            .collect::<crate::Result<Vec<_>>>()?;
         // Newest first by modified_at, mirroring the disk enumerator.
         out.sort_by(|a, b| {
             let a_ms = a.modified_at.parse::<u128>().unwrap_or(0);
@@ -946,7 +963,12 @@ impl SessionCatalog for InMemoryCatalog {
     ) -> crate::Result<Option<ResolvedSession>> {
         if TranscriptIo::exists(&*self.store, session_id) {
             Ok(Some(ResolvedSession {
-                session_id: session_id.to_string(),
+                session_id: SessionId::try_new(session_id.to_string()).map_err(|e| {
+                    crate::SessionError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        e,
+                    ))
+                })?,
                 project: None,
                 transcript_path: PathBuf::from(format!("memory://{session_id}")),
             }))

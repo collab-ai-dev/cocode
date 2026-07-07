@@ -51,6 +51,13 @@ fn chain_opts() -> ChainWriteOptions {
     }
 }
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    match coco_types::SessionId::try_new(value) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id should be valid"),
+    }
+}
+
 /// Append a conversation through the `&dyn SessionStore` boundary (the
 /// object-safe `&[&Message]` form), mirroring the per-turn engine call.
 fn append_chain(store: &dyn SessionStore, sid: &str, messages: &[Message]) -> usize {
@@ -89,9 +96,9 @@ fn test_in_memory_store_round_trips_through_dyn_session_store() {
     // Usage snapshot round-trips.
     let snapshot = coco_types::SessionUsageSnapshot {
         version: 1,
-        session_id: sid.to_string(),
+        session_id: test_session_id(sid),
         updated_at_ms: 42,
-        ..Default::default()
+        ..coco_types::SessionUsageSnapshot::empty(test_session_id(sid))
     };
     store
         .write_usage_snapshot(sid, &snapshot)
@@ -201,7 +208,7 @@ fn test_session_manager_full_lifecycle_on_memory_backend() {
         .append_metadata(
             &id,
             &crate::storage::MetadataEntry::CustomTitle {
-                session_id: id.clone(),
+                session_id: test_session_id(&id),
                 custom_title: "Arithmetic".to_string(),
             },
         )

@@ -1,5 +1,10 @@
 use super::*;
+use coco_types::SessionId;
 use uuid::Uuid;
+
+fn fresh_session_id() -> SessionId {
+    SessionId::generate()
+}
 
 fn fresh_range() -> StagedRange {
     StagedRange {
@@ -13,13 +18,13 @@ fn fresh_range() -> StagedRange {
 
 #[test]
 fn test_ledger_stage_then_commit_produces_entry() {
-    let session = Uuid::new_v4();
+    let session = fresh_session_id();
     let mut ledger = StagedCompactLedger::new();
-    ledger.stage(session, fresh_range());
+    ledger.stage(session.clone(), fresh_range());
     assert_eq!(ledger.snapshot.as_ref().unwrap().staged.len(), 1);
     let summary_uuid = Uuid::new_v4();
     let entry = ledger
-        .commit(session, 0, summary_uuid, "<collapsed/>".into())
+        .commit(session.clone(), 0, summary_uuid, "<collapsed/>".into())
         .expect("commit returns entry");
     assert_eq!(entry.session_id, session);
     assert_eq!(entry.summary_uuid, summary_uuid);
@@ -29,11 +34,11 @@ fn test_ledger_stage_then_commit_produces_entry() {
 
 #[test]
 fn test_ledger_drain_overflow_commits_all() {
-    let session = Uuid::new_v4();
+    let session = fresh_session_id();
     let mut ledger = StagedCompactLedger::new();
-    ledger.stage(session, fresh_range());
-    ledger.stage(session, fresh_range());
-    ledger.stage(session, fresh_range());
+    ledger.stage(session.clone(), fresh_range());
+    ledger.stage(session.clone(), fresh_range());
+    ledger.stage(session.clone(), fresh_range());
     let drained = ledger.drain_overflow(session, |_| Uuid::new_v4());
     assert_eq!(drained.len(), 3);
     assert_eq!(ledger.commits.len(), 3);
@@ -42,9 +47,9 @@ fn test_ledger_drain_overflow_commits_all() {
 
 #[test]
 fn test_ledger_reset_clears_all_state() {
-    let session = Uuid::new_v4();
+    let session = fresh_session_id();
     let mut ledger = StagedCompactLedger::new();
-    ledger.stage(session, fresh_range());
+    ledger.stage(session.clone(), fresh_range());
     ledger.commit(session, 0, Uuid::new_v4(), "x".into());
     assert!(!ledger.is_empty());
     ledger.reset();
@@ -54,7 +59,7 @@ fn test_ledger_reset_clears_all_state() {
 #[test]
 fn test_commit_entry_round_trip_ts_camelcase() {
     let entry = CommitEntry::new(
-        Uuid::nil(),
+        SessionId::try_new("session-1").unwrap(),
         "0000000000000001".into(),
         Uuid::nil(),
         "<collapsed/>".into(),
@@ -73,7 +78,7 @@ fn test_commit_entry_round_trip_ts_camelcase() {
 fn test_snapshot_entry_round_trip_ts_camelcase() {
     let snap = SnapshotEntry {
         type_: SnapshotEntry::TYPE.into(),
-        session_id: Uuid::nil(),
+        session_id: SessionId::try_new("session-1").unwrap(),
         staged: vec![fresh_range()],
         armed: true,
         last_spawn_tokens: 1234,
@@ -109,7 +114,7 @@ fn test_apply_collapses_replaces_range_with_placeholder() {
         user_msg(u3, "last"),
     ];
     let commits = vec![CommitEntry::new(
-        Uuid::nil(),
+        SessionId::try_new("session-1").unwrap(),
         "1".into(),
         summary_uuid,
         "<collapsed>X</collapsed>".into(),
@@ -130,7 +135,7 @@ fn test_apply_collapses_skips_missing_range() {
     let stale = Uuid::new_v4();
     let messages = vec![user_msg(u1, "only")];
     let commits = vec![CommitEntry::new(
-        Uuid::nil(),
+        SessionId::try_new("session-1").unwrap(),
         "1".into(),
         Uuid::new_v4(),
         "<collapsed/>".into(),
@@ -157,7 +162,7 @@ fn test_apply_collapses_handles_multiple_commits() {
     ];
     let commits = vec![
         CommitEntry::new(
-            Uuid::nil(),
+            SessionId::try_new("session-1").unwrap(),
             "1".into(),
             Uuid::new_v4(),
             "<a/>".into(),
@@ -166,7 +171,7 @@ fn test_apply_collapses_handles_multiple_commits() {
             u2,
         ),
         CommitEntry::new(
-            Uuid::nil(),
+            SessionId::try_new("session-1").unwrap(),
             "2".into(),
             Uuid::new_v4(),
             "<b/>".into(),
@@ -182,13 +187,13 @@ fn test_apply_collapses_handles_multiple_commits() {
 
 #[test]
 fn test_collapse_id_monotonic_per_session() {
-    let session = Uuid::new_v4();
+    let session = fresh_session_id();
     let mut ledger = StagedCompactLedger::new();
-    ledger.stage(session, fresh_range());
+    ledger.stage(session.clone(), fresh_range());
     let e1 = ledger
-        .commit(session, 0, Uuid::new_v4(), "x".into())
+        .commit(session.clone(), 0, Uuid::new_v4(), "x".into())
         .unwrap();
-    ledger.stage(session, fresh_range());
+    ledger.stage(session.clone(), fresh_range());
     let e2 = ledger
         .commit(session, 0, Uuid::new_v4(), "x".into())
         .unwrap();

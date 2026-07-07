@@ -1068,7 +1068,10 @@ impl ExitPlanModeTool {
                 .as_ref()
                 .map(|ch| coco_context::resolve_plans_directory(ch, None, None))
         });
-        if ctx.session_id_for_history.is_some() && plans_dir.is_some() {
+        let session_id = ctx
+            .checked_session_id_for_history()
+            .map_err(ToolError::execution_failed)?;
+        if session_id.is_some() && plans_dir.is_some() {
             return Ok(Some(edited_plan));
         }
 
@@ -1094,8 +1097,15 @@ impl ExitPlanModeTool {
             Some(state) => state.read().await.plan_mode_entry_ms,
             None => None,
         };
+        let session_id = match ctx.checked_session_id_for_history() {
+            Ok(session_id) => session_id,
+            Err(e) => {
+                tracing::warn!("{e}");
+                None
+            }
+        };
         coco_context::derive_exit_plan_mode_state(
-            ctx.session_id_for_history.as_deref(),
+            session_id.as_ref().map(coco_types::SessionId::as_str),
             plans_dir.as_deref(),
             agent_id,
             entry_ms,

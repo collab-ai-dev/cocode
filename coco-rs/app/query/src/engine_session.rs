@@ -66,8 +66,10 @@ impl QueryEngine {
             &event_tx_opt,
             coco_types::ServerNotification::MessageAppended {
                 message: user_msg.clone(),
-                session_id: self.config.session_id.clone(),
-                agent_id: self.config.agent_id.clone(),
+                identity: coco_types::ServerNotificationIdentity::new(
+                    Some(self.config.session_id.clone()),
+                    self.config.agent_id_string(),
+                ),
             },
         )
         .await;
@@ -220,7 +222,10 @@ impl QueryEngine {
         let mut history = MessageHistory::new();
         // Stamp F9 envelope so every emit from this engine invocation
         // carries the active session + agent identity.
-        history.set_envelope(self.config.session_id.clone(), self.config.agent_id.clone());
+        history.set_envelope(
+            self.config.session_id.clone(),
+            self.config.agent_id_string(),
+        );
         let (result, accumulated_usage) = self
             .run_session_loop(
                 turn_messages,
@@ -262,7 +267,7 @@ impl QueryEngine {
         // shared `CacheBreakDetector` so a long-running parent session
         // doesn't accumulate stale subagent snapshots that would push
         // out the main thread's entry under the LRU cap.
-        if let Some(agent_id) = self.config.agent_id.as_deref()
+        if let Some(agent_id) = self.config.agent_id_str()
             && let Ok(runtime) = self
                 .model_runtimes
                 .runtime_for_source(self.model_runtime_source.clone())
@@ -562,7 +567,7 @@ impl QueryEngine {
     pub(crate) fn orchestration_ctx(&self) -> OrchestrationContext {
         OrchestrationContext {
             session_id: self.config.session_id.clone(),
-            cwd: std::env::current_dir().unwrap_or_default(),
+            cwd: self.config.workspace_cwd(),
             project_dir: self.config.project_dir.clone(),
             permission_mode: Some(format!("{:?}", self.config.permission_mode)),
             // Main-thread orchestration: no subagent identity. Per-spawn

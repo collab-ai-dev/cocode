@@ -44,6 +44,7 @@ use coco_tool_runtime::AgentSpawnStatus;
 use coco_tool_runtime::ToolRegistry;
 use coco_types::LlmModelSelection;
 use coco_types::PermissionMode;
+use coco_types::SessionId;
 use tokio_util::sync::CancellationToken;
 
 use crate::tui::harness::TuiHarness;
@@ -68,8 +69,14 @@ impl AgentHandle for TestAgentHandle {
         let config = AgentQueryConfig {
             system_prompt: "You are a deterministic test subagent.".to_string(),
             identity: AgentRunIdentity {
-                session_id: "test-session".to_string(),
-                agent_id: "child-agent-1".to_string(),
+                session_id: match SessionId::try_new("test-session") {
+                    Ok(id) => id,
+                    Err(_) => unreachable!("test session id must be valid"),
+                },
+                agent_id: match coco_types::AgentId::try_new("child-agent-1") {
+                    Ok(id) => id,
+                    Err(_) => unreachable!("test agent id must be valid"),
+                },
                 kind: AgentRunKind::Subagent,
             },
             permission_mode: PermissionMode::BypassPermissions,

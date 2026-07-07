@@ -219,13 +219,13 @@ impl CostTracker {
             .saturating_add(other.total_duration_ms);
     }
 
-    pub fn snapshot(&self, session_id: impl Into<String>) -> SessionUsageSnapshot {
+    pub fn snapshot(&self, session_id: coco_types::SessionId) -> SessionUsageSnapshot {
         self.snapshot_at(session_id, timestamp_now_ms())
     }
 
     pub fn snapshot_at(
         &self,
-        session_id: impl Into<String>,
+        session_id: coco_types::SessionId,
         updated_at_ms: i64,
     ) -> SessionUsageSnapshot {
         let mut models: Vec<_> = self.per_model.values().cloned().collect();
@@ -285,7 +285,7 @@ impl CostTracker {
 
         SessionUsageSnapshot {
             version: SESSION_USAGE_SNAPSHOT_VERSION,
-            session_id: session_id.into(),
+            session_id,
             updated_at_ms,
             totals,
             source_records,

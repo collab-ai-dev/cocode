@@ -44,7 +44,7 @@ fn test_mcp_call_projects_server_and_tool() {
 #[test]
 fn test_text_delta_is_not_durable() {
     let event = CoreEvent::Stream(AgentStreamEvent::TextDelta {
-        turn_id: "t".to_string(),
+        turn_id: TurnId::from("t"),
         delta: "hi".to_string(),
     });
     assert_eq!(TraceEvent::from_core_event(&event), None);
@@ -62,12 +62,12 @@ fn test_compaction_started_projects() {
 #[test]
 fn test_turn_started_projects_turn_id() {
     let event = CoreEvent::Protocol(ServerNotification::TurnStarted(TurnStartedParams {
-        turn_id: TurnId("turn-1".to_string()),
+        turn_id: TurnId::from("turn-1"),
     }));
     assert_eq!(
         TraceEvent::from_core_event(&event),
         Some(TraceEvent::TurnStarted {
-            turn_id: "turn-1".to_string(),
+            turn_id: TurnId::from("turn-1"),
         })
     );
 }

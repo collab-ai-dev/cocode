@@ -11,6 +11,7 @@ use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_messages::UserContent;
 use coco_types::PermissionMode;
+use coco_types::SessionId;
 use coco_types::ToolAppState;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -35,6 +36,10 @@ fn history_texts(history: &MessageHistory) -> Vec<String> {
     history.iter().filter_map(|m| text_of(m)).collect()
 }
 
+fn test_session_id() -> SessionId {
+    SessionId::try_new("s1").unwrap()
+}
+
 // ── Mode reconciliation ──────────────────────────────────────────────
 
 #[tokio::test]
@@ -49,7 +54,7 @@ async fn unannounced_plan_exit_via_shift_tab_sets_flags() {
     let tmp = tempdir().unwrap();
     let mut r = PlanModeReminder::new(
         PermissionMode::Default,
-        Some("s1".into()),
+        Some(test_session_id()),
         None,
         Some(tmp.path().to_path_buf()),
         Some(app_state.clone()),
@@ -79,7 +84,7 @@ async fn unannounced_plan_entry_via_shift_tab_clears_stale_exit_flag() {
     let tmp = tempdir().unwrap();
     let mut r = PlanModeReminder::new(
         PermissionMode::Plan,
-        Some("s1".into()),
+        Some(test_session_id()),
         None,
         Some(tmp.path().to_path_buf()),
         Some(app_state.clone()),
@@ -106,7 +111,7 @@ async fn reconcile_auto_to_default_sets_auto_mode_exit_flag() {
     let tmp = tempdir().unwrap();
     let mut r = PlanModeReminder::new(
         PermissionMode::Default,
-        Some("s1".into()),
+        Some(test_session_id()),
         None,
         Some(tmp.path().to_path_buf()),
         Some(app_state.clone()),
@@ -130,7 +135,7 @@ async fn reentering_auto_before_banner_clears_stale_flag() {
     let tmp = tempdir().unwrap();
     let mut r = PlanModeReminder::new(
         PermissionMode::Auto,
-        Some("s1".into()),
+        Some(test_session_id()),
         None,
         Some(tmp.path().to_path_buf()),
         Some(app_state.clone()),
@@ -238,7 +243,7 @@ async fn teammate_polls_approval_and_injects_approved_reminder() {
     let tmp = tempdir().unwrap();
     let mut r = PlanModeReminder::new(
         PermissionMode::Plan,
-        Some("s1".into()),
+        Some(test_session_id()),
         None,
         Some(tmp.path().to_path_buf()),
         Some(app_state.clone()),
@@ -296,7 +301,7 @@ async fn teammate_polls_approval_and_injects_rejected_reminder_with_feedback() {
     let tmp = tempdir().unwrap();
     let mut r = PlanModeReminder::new(
         PermissionMode::Plan,
-        Some("s1".into()),
+        Some(test_session_id()),
         None,
         Some(tmp.path().to_path_buf()),
         Some(app_state.clone()),
@@ -329,7 +334,7 @@ async fn teammate_ignores_unrelated_response_ids() {
     let tmp = tempdir().unwrap();
     let mut r = PlanModeReminder::new(
         PermissionMode::Plan,
-        Some("s1".into()),
+        Some(test_session_id()),
         None,
         Some(tmp.path().to_path_buf()),
         Some(app_state.clone()),
@@ -368,7 +373,7 @@ async fn team_lead_sees_pending_approvals_attachment() {
     let tmp = tempdir().unwrap();
     let mut r = PlanModeReminder::new(
         PermissionMode::Default,
-        Some("leader-session".into()),
+        Some(coco_types::SessionId::try_new("leader-session").unwrap()),
         None,
         Some(tmp.path().to_path_buf()),
         None,
@@ -404,7 +409,7 @@ async fn non_leader_agent_does_not_inject_pending_attachment() {
     let tmp = tempdir().unwrap();
     let mut r = PlanModeReminder::new(
         PermissionMode::Default,
-        Some("s1".into()),
+        Some(test_session_id()),
         None,
         Some(tmp.path().to_path_buf()),
         None,

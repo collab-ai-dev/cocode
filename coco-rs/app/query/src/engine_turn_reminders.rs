@@ -219,16 +219,16 @@ impl QueryEngine {
         // emission path uses, so both paths agree on the filesystem state.
         let (reminder_plan_path, reminder_plan_exists) =
             match (self.config_home.as_deref(), &self.config.session_id) {
-                (Some(ch), sid) if !sid.is_empty() => {
+                (Some(ch), sid) if !sid.as_str().is_empty() => {
                     let plans_dir = coco_context::resolve_plans_directory(
                         ch,
                         self.config.project_dir.as_deref(),
                         self.config.plans_directory.as_deref(),
                     );
                     let path = coco_context::get_plan_file_path(
-                        sid,
+                        sid.as_str(),
                         &plans_dir,
-                        self.config.agent_id.as_deref(),
+                        self.config.agent_id_str(),
                     );
                     let exists = path.exists();
                     (Some(path), exists)
@@ -297,7 +297,7 @@ impl QueryEngine {
         let reminder_deferred_tools_delta = compute_tools_delta(
             &reminder_deferred_tools,
             &reminder_loaded_tools,
-            &app_state_snapshot.last_announced_tools_for_scope(self.config.agent_id.as_deref()),
+            &app_state_snapshot.last_announced_tools_for_scope(self.config.agent_id_str()),
         );
         // Hand the deferred list to post-emit bookkeeping — replaces
         // `announced` with the current deferred set after emission. Moved
@@ -375,7 +375,7 @@ impl QueryEngine {
         // keys used by `FileReadState` (populated by `mention_resolver`
         // and the Read tool). Without this, the AlreadyReadFile silent
         // reminder and nested-memory lookups never hit on @-mentions.
-        let reminder_cwd = std::env::current_dir().unwrap_or_default();
+        let reminder_cwd = self.config.workspace_cwd();
         let reminder_mentioned_paths: Vec<std::path::PathBuf> = reminder_mentions
             .iter()
             .filter(|m| {
@@ -418,7 +418,7 @@ impl QueryEngine {
             .reminder_sources
             .materialize(coco_system_reminder::MaterializeContext {
                 config: reminder_orchestrator.config(),
-                agent_id: self.config.agent_id.as_deref(),
+                agent_id: self.config.agent_id_str(),
                 user_input: reminder_user_input.as_deref(),
                 mentioned_paths: &reminder_mentioned_paths,
                 recent_tools: &reminder_recent_tools,
@@ -531,7 +531,7 @@ impl QueryEngine {
         let reminder_input = TurnReminderInput {
             config: reminder_orchestrator.config(),
             turn_number: reminder_human_turn_number,
-            agent_id: self.config.agent_id.clone(),
+            agent_id: self.config.agent_id_string(),
             user_input: reminder_user_input,
             last_human_turn_uuid: history.iter().rev().find_map(|m| match m.as_ref() {
                 Message::User(u) => Some(u.uuid),
@@ -607,7 +607,7 @@ impl QueryEngine {
                 .map(|name| coco_system_reminder::OutputStyleSnapshot { name: name.clone() }),
             queued_commands: self
                 .command_queue
-                .snapshot_for_reminder(self.config.agent_id.as_deref())
+                .snapshot_for_reminder(self.config.agent_id_str())
                 .await,
             task_statuses: materialized.task_statuses,
             // SkillsSource wins when present; else fall back to
@@ -711,7 +711,7 @@ impl QueryEngine {
                 // then diff against the fresh baseline.
                 if fired_types.contains(&ReminderAttachmentType::DeferredToolsDelta) {
                     guard.set_last_announced_tools_for_scope(
-                        self.config.agent_id.as_deref(),
+                        self.config.agent_id_str(),
                         reminder_deferred_tools_clone.iter().cloned().collect(),
                     );
                 }

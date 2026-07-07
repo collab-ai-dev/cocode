@@ -29,6 +29,7 @@ use coco_types::ActiveShellTool;
 use coco_types::AgentDefinition;
 use coco_types::BackendType;
 use coco_types::Features;
+use coco_types::SessionId;
 use coco_types::SubagentRuntimeSnapshot;
 use coco_types::ToolFilter;
 use coco_types::ToolOverrides;
@@ -195,10 +196,10 @@ pub struct AgentSpawnRequest {
     /// (`<sessions_dir>/<session_id>/subagents/agent-<id>.*`).
     /// Filled at the AgentTool boundary from
     /// `ctx.session_id_for_history`. **Required**: the spawn path builds
-    /// an [`AgentRunIdentity`] from it, which rejects an empty value —
-    /// callers (incl. tests / embeddings) must supply a concrete id.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub session_id: String,
+    /// an [`AgentRunIdentity`] from it, so callers (incl. tests /
+    /// embeddings) must supply a concrete id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
     /// Isolation mode. Typed [`coco_types::AgentIsolation`]
     /// (`Worktree` / `Remote`); the `AgentTool` boundary parses the
     /// model's wire string and the definition's frontmatter into the enum.
@@ -401,6 +402,15 @@ pub struct AgentSpawnRequest {
     pub output_schema: Option<Arc<serde_json::Value>>,
 }
 
+impl AgentSpawnRequest {
+    /// Return the checked parent session id carried by this spawn request.
+    pub fn parent_session_id(&self) -> Result<SessionId, String> {
+        self.session_id
+            .clone()
+            .ok_or_else(|| "AgentSpawnRequest.session_id is required".to_string())
+    }
+}
+
 fn default_active_shell_tool() -> ActiveShellTool {
     ActiveShellTool::Disabled
 }
@@ -499,12 +509,12 @@ pub struct AgentSpawnResponse {
 /// derived deterministically from the session id by the runtime, so this
 /// carries no `requested_name` — the session owns exactly one implicit
 /// team.
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct InitializeSessionTeamRequest {
     /// Deterministic team name, `session-<sessionId[:8]>`.
     pub team_name: String,
     /// The leader session id; the implicit team is keyed to it.
-    pub leader_session_id: String,
+    pub leader_session_id: SessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leader_agent_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -524,6 +534,13 @@ impl std::fmt::Debug for InitializeSessionTeamRequest {
             .field("cwd", &self.cwd)
             .field("task_list_router", &self.task_list_router.is_some())
             .finish()
+    }
+}
+
+impl InitializeSessionTeamRequest {
+    /// Return the checked leader session id for implicit session-team setup.
+    pub fn leader_session_id(&self) -> SessionId {
+        self.leader_session_id.clone()
     }
 }
 
@@ -603,7 +620,7 @@ pub trait AgentHandle: Send + Sync {
         &self,
         _agent_id: &str,
         _prompt: &str,
-        _session_id: &str,
+        _session_id: &SessionId,
     ) -> Result<AgentSpawnResponse, String> {
         Err("AgentHandle::resume_agent not supported in this context".into())
     }

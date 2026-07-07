@@ -214,7 +214,11 @@ pub fn cleanup_team_directories(team_name: &str) -> crate::Result<CleanupOutcome
 pub fn cleanup_session_teams(session_id: &str) -> crate::Result<()> {
     for name in list_team_names() {
         if let Ok(Some(tf)) = read_team_file(&name)
-            && tf.lead_session_id.as_deref() == Some(session_id)
+            && tf
+                .lead_session_id
+                .as_ref()
+                .map(coco_types::SessionId::as_str)
+                == Some(session_id)
         {
             // Best-effort: a pane-kill failure must not block dir cleanup.
             if let Err(e) = kill_orphaned_teammate_panes(&name) {

@@ -40,7 +40,7 @@ use coco_cli::sdk_server::CliInitializeBootstrap;
 use coco_cli::sdk_server::QueryEngineRunner;
 use coco_cli::sdk_server::SdkServer;
 use coco_cli::sdk_server::StdioTransport;
-use coco_cli::session_runtime::SessionRuntime;
+use coco_cli::session_runtime::SessionHandle;
 use coco_cli::session_runtime::SessionRuntimeBuildOpts;
 use coco_commands::CommandRegistry;
 use coco_commands::register_extended_builtins;
@@ -164,7 +164,7 @@ async fn serve(args: Args) -> Result<()> {
         .join("skills")]);
     let skill_manager = Arc::new(skill_manager);
 
-    let session_runtime = SessionRuntime::build(SessionRuntimeBuildOpts {
+    let session_handle = SessionHandle::build(SessionRuntimeBuildOpts {
         cli: &cli,
         runtime_config: Arc::new(runtime_config),
         cwd: cwd.clone(),
@@ -182,6 +182,10 @@ async fn serve(args: Args) -> Result<()> {
         permission_bridge: None,
         command_registry: command_registry.clone(),
         skill_manager,
+        project_services: Arc::new(coco_cli::project_services::ProjectServices::load(
+            &cwd,
+            cwd.clone(),
+        )),
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
@@ -190,14 +194,14 @@ async fn serve(args: Args) -> Result<()> {
     .await
     .with_context(|| format!("build SessionRuntime for {}/{model_id}", args.provider))?;
 
-    session_runtime.fire_session_start_hooks("startup").await;
+    session_handle.fire_session_start_hooks("startup").await;
 
     let bootstrap = Arc::new(
         CliInitializeBootstrap::new("default".to_string()).with_command_registry(command_registry),
     );
 
     let transport = StdioTransport::new();
-    let file_history_for_server = session_runtime.file_history.clone().unwrap_or_else(|| {
+    let file_history_for_server = session_handle.file_history.clone().unwrap_or_else(|| {
         Arc::new(tokio::sync::RwLock::new(
             coco_context::FileHistoryState::new(),
         ))
@@ -206,10 +210,10 @@ async fn serve(args: Args) -> Result<()> {
         .with_session_manager(session_manager)
         .with_initialize_bootstrap(bootstrap)
         .with_file_history(file_history_for_server, std::env::temp_dir())
-        .with_session_runtime(session_runtime.clone());
+        .with_session_handle(session_handle.clone());
 
     let runner = Arc::new(QueryEngineRunner::new(
-        session_runtime.clone(),
+        session_handle,
         cli.max_turns.or(Some(8)),
         Some(system_prompt),
     ));

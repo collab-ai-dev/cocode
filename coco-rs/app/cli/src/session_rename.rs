@@ -19,14 +19,12 @@
 //!   requirements"). When a TUI banner lands, wire the reader and
 //!   add the producer call here in the **same** PR.
 
-use std::sync::Arc;
-
 use coco_types::Capability;
 use coco_types::ModelRole;
 use coco_types::SideQueryToolDef;
 use tracing::warn;
 
-use crate::session_runtime::SessionRuntime;
+use crate::session_runtime::SessionHandle;
 
 const RENAME_GENERATE_NAME_QUERY_SOURCE: &str = "rename_generate_name";
 
@@ -64,10 +62,10 @@ impl AutoRenameError {
 /// output before falling back to a forced `generate_session_name` tool
 /// call.
 pub async fn auto_generate_session_name(
-    runtime: &Arc<SessionRuntime>,
+    session: &SessionHandle,
 ) -> Result<String, AutoRenameError> {
-    let conversation_text = snapshot_conversation_text(runtime).await;
-    generate_session_name_from_text(runtime.side_query(), conversation_text).await
+    let conversation_text = snapshot_conversation_text(session).await;
+    generate_session_name_from_text(session.side_query(), conversation_text).await
 }
 
 /// Generate a session name from already-extracted text. Used by bare
@@ -161,19 +159,16 @@ pub async fn generate_session_name_from_text(
 /// any auto-generation upstream. Errors surface as
 /// `anyhow::Error` so callers can match on
 /// `SessionError::TranscriptNotFound` for a clearer message.
-pub async fn persist_rename(
-    runtime: &Arc<SessionRuntime>,
-    name: String,
-) -> Result<(), anyhow::Error> {
-    let session_id = runtime.current_session_id().await;
-    let manager = runtime.session_manager.clone();
+pub async fn persist_rename(session: &SessionHandle, name: String) -> Result<(), anyhow::Error> {
+    let session_id = session.current_typed_session_id().await;
+    let manager = session.session_manager.clone();
     let name_for_set = name.clone();
-    let session_id_for_set = session_id.clone();
+    let session_id_for_set = session_id.to_string();
     tokio::task::spawn_blocking(move || manager.set_title(&session_id_for_set, &name_for_set))
         .await
         .map_err(anyhow::Error::from)
         .and_then(|inner| inner.map_err(anyhow::Error::from))?;
-    runtime.update_session_registry_name(&name);
+    session.update_session_registry_name(&name);
     Ok(())
 }
 
@@ -181,8 +176,8 @@ pub async fn persist_rename(
 /// Walks the post-compact-boundary slice of the in-memory history,
 /// concatenating text from User / Assistant messages.
 /// Non-text content (tool calls, attachments, etc.) is skipped.
-async fn snapshot_conversation_text(runtime: &Arc<SessionRuntime>) -> String {
-    let history = runtime.history.lock().await;
+async fn snapshot_conversation_text(session: &SessionHandle) -> String {
+    let history = session.history.lock().await;
     coco_session::title_generator::extract_conversation_text(history.as_slice())
 }
 

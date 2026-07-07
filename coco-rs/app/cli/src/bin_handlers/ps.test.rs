@@ -9,11 +9,15 @@ use coco_tasks::job_store::now_ms;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    coco_types::SessionId::try_new(value).unwrap()
+}
+
 fn job(session_id: &str, status: TaskStatus) -> JobState {
     let now = now_ms();
     JobState {
         id: format!("job-{session_id}"),
-        session_id: session_id.to_string(),
+        session_id: test_session_id(session_id),
         cwd: std::path::PathBuf::from("/work"),
         kind: SessionKind::DaemonWorker,
         created_at: now,
@@ -48,9 +52,10 @@ fn live_row_with_terminal_job_is_overridden() {
     let cfg = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
     let session_id = "sid-merge";
+    let typed_session_id = test_session_id(session_id);
 
     // Live self-pid row, status None → would map to Working.
-    let _registry = SessionRegistry::register(cfg.path(), session_id, cwd.path(), None)
+    let _registry = SessionRegistry::register(cfg.path(), &typed_session_id, cwd.path(), None)
         .unwrap()
         .unwrap();
     // Durable terminal record for the same session.
@@ -61,7 +66,7 @@ fn live_row_with_terminal_job_is_overridden() {
     let entries = collect_with_jobs(cfg.path(), /*include_all*/ false);
     let row = entries
         .iter()
-        .find(|e| e.session_id == session_id)
+        .find(|e| e.session_id.as_str() == session_id)
         .expect("self row present");
     assert_eq!(row.state, PsViewState::Failed);
 }
@@ -71,8 +76,9 @@ fn busy_live_row_outranks_terminal_job() {
     let cfg = TempDir::new().unwrap();
     let cwd = TempDir::new().unwrap();
     let session_id = "sid-busy";
+    let typed_session_id = test_session_id(session_id);
 
-    let registry = SessionRegistry::register(cfg.path(), session_id, cwd.path(), None)
+    let registry = SessionRegistry::register(cfg.path(), &typed_session_id, cwd.path(), None)
         .unwrap()
         .unwrap();
     registry.update_session_activity(Some(SessionStatus::Busy), None);
@@ -83,7 +89,7 @@ fn busy_live_row_outranks_terminal_job() {
     let entries = collect_with_jobs(cfg.path(), false);
     let row = entries
         .iter()
-        .find(|e| e.session_id == session_id)
+        .find(|e| e.session_id.as_str() == session_id)
         .expect("self row present");
     // Busy transport status wins over the terminal job record.
     assert_eq!(row.state, PsViewState::Working);
@@ -99,14 +105,14 @@ fn all_surfaces_processless_terminal_jobs() {
 
     let default = collect_with_jobs(cfg.path(), /*include_all*/ false);
     assert!(
-        default.iter().all(|e| e.session_id != "sid-ghost"),
+        default.iter().all(|e| e.session_id.as_str() != "sid-ghost"),
         "process-less terminal job hidden without --all"
     );
 
     let all = collect_with_jobs(cfg.path(), /*include_all*/ true);
     let ghost = all
         .iter()
-        .find(|e| e.session_id == "sid-ghost")
+        .find(|e| e.session_id.as_str() == "sid-ghost")
         .expect("--all surfaces process-less terminal job");
     assert_eq!(ghost.state, PsViewState::Done);
     assert_eq!(ghost.pid, 0);

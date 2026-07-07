@@ -1,5 +1,6 @@
 //! Bridge protocol types.
 
+use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -47,7 +48,10 @@ pub enum BridgeOutMessage {
         message: String,
     },
     /// Status update.
-    Status { model: String, session_id: String },
+    Status {
+        model: String,
+        session_id: SessionId,
+    },
     /// Error message.
     Error { message: String },
     /// Keepalive pong.

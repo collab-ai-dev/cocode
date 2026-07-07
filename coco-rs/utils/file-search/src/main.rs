@@ -10,7 +10,10 @@ use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), coco_file_search::FileSearchError> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    if cli.cwd.is_none() {
+        cli.cwd = Some(std::env::current_dir()?);
+    }
     let reporter = StdioReporter {
         write_output_as_json: cli.json,
         show_indices: cli.compute_indices && std::io::stdout().is_terminal(),

@@ -1,9 +1,14 @@
 use super::{ReviewTrigger, SkillReviewRuntime};
+use coco_types::SessionId;
 
 fn runtime(throttle: i32) -> (SkillReviewRuntime, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let rt = SkillReviewRuntime::with_throttle(tmp.path(), throttle);
     (rt, tmp)
+}
+
+fn session_id() -> SessionId {
+    SessionId::try_new("s").unwrap()
 }
 
 #[tokio::test]
@@ -13,7 +18,7 @@ async fn subagent_turns_are_skipped_and_do_not_count() {
         rt.maybe_review(
             /*turn_delivered*/ true,
             /*is_subagent*/ true,
-            "s",
+            &session_id(),
             Vec::new,
         ),
         ReviewTrigger::Skipped
@@ -24,7 +29,7 @@ async fn subagent_turns_are_skipped_and_do_not_count() {
         rt.maybe_review(
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
-            "s",
+            &session_id(),
             Vec::new,
         ),
         ReviewTrigger::Throttled
@@ -33,7 +38,7 @@ async fn subagent_turns_are_skipped_and_do_not_count() {
         rt.maybe_review(
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
-            "s",
+            &session_id(),
             Vec::new,
         ),
         ReviewTrigger::Spawned
@@ -47,7 +52,7 @@ async fn undelivered_turns_are_skipped() {
         rt.maybe_review(
             /*turn_delivered*/ false,
             /*is_subagent*/ false,
-            "s",
+            &session_id(),
             Vec::new,
         ),
         ReviewTrigger::Skipped
@@ -61,7 +66,7 @@ async fn fires_every_throttle_turns() {
         rt.maybe_review(
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
-            "s",
+            &session_id(),
             Vec::new,
         ),
         ReviewTrigger::Throttled
@@ -70,7 +75,7 @@ async fn fires_every_throttle_turns() {
         rt.maybe_review(
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
-            "s",
+            &session_id(),
             Vec::new,
         ),
         ReviewTrigger::Throttled
@@ -79,7 +84,7 @@ async fn fires_every_throttle_turns() {
         rt.maybe_review(
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
-            "s",
+            &session_id(),
             Vec::new,
         ),
         ReviewTrigger::Spawned
@@ -96,7 +101,7 @@ async fn in_progress_suppresses_then_retries_on_next_eligible_turn() {
         rt.maybe_review(
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
-            "s",
+            &session_id(),
             Vec::new,
         ),
         ReviewTrigger::InProgress
@@ -107,7 +112,7 @@ async fn in_progress_suppresses_then_retries_on_next_eligible_turn() {
         rt.maybe_review(
             /*turn_delivered*/ true,
             /*is_subagent*/ false,
-            "s",
+            &session_id(),
             Vec::new,
         ),
         ReviewTrigger::Spawned

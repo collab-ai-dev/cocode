@@ -52,7 +52,7 @@ pub fn collect_with_jobs(config_home: &Path, include_all: bool) -> Vec<PsEntry> 
         .list()
         .unwrap_or_default()
         .into_iter()
-        .map(|j| (j.session_id.clone(), j))
+        .map(|j| (j.session_id.to_string(), j))
         .collect();
     if jobs.is_empty() {
         return entries;
@@ -62,12 +62,12 @@ pub fn collect_with_jobs(config_home: &Path, include_all: bool) -> Vec<PsEntry> 
     // currently busy/waiting.
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for entry in &mut entries {
-        seen.insert(entry.session_id.clone());
+        seen.insert(entry.session_id.to_string());
         if live_status_wins(entry) {
             continue;
         }
         if let Some(outcome) = jobs
-            .get(&entry.session_id)
+            .get(entry.session_id.as_str())
             .and_then(|j| terminal_outcome(j.status))
         {
             entry.state = match outcome {
@@ -82,23 +82,26 @@ pub fn collect_with_jobs(config_home: &Path, include_all: bool) -> Vec<PsEntry> 
     if include_all {
         let mut extra: Vec<PsEntry> = jobs
             .into_values()
-            .filter(|j| !seen.contains(&j.session_id))
+            .filter(|j| !seen.contains(j.session_id.as_str()))
             .filter_map(|j| terminal_outcome(j.status).map(|o| (j, o)))
-            .map(|(j, outcome)| PsEntry {
-                pid: 0,
-                id: j.session_id.clone(),
-                cwd: j.cwd,
-                kind: j.kind,
-                started_at: j.created_at,
-                session_id: j.session_id,
-                name: j.name,
-                status: None,
-                waiting_for: None,
-                state: match outcome {
-                    TerminalJobOutcome::Done => PsViewState::Done,
-                    TerminalJobOutcome::Failed => PsViewState::Failed,
-                    TerminalJobOutcome::Stopped => PsViewState::Stopped,
-                },
+            .filter_map(|(j, outcome)| {
+                let session_id = j.session_id;
+                Some(PsEntry {
+                    pid: 0,
+                    id: session_id.clone(),
+                    cwd: j.cwd,
+                    kind: j.kind,
+                    started_at: j.created_at,
+                    session_id,
+                    name: j.name,
+                    status: None,
+                    waiting_for: None,
+                    state: match outcome {
+                        TerminalJobOutcome::Done => PsViewState::Done,
+                        TerminalJobOutcome::Failed => PsViewState::Failed,
+                        TerminalJobOutcome::Stopped => PsViewState::Stopped,
+                    },
+                })
             })
             .collect();
         entries.append(&mut extra);

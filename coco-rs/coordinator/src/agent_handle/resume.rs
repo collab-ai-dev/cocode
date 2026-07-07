@@ -11,6 +11,7 @@
 
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnResponse;
+use coco_types::SessionId;
 
 use super::SwarmAgentHandle;
 
@@ -29,8 +30,9 @@ impl SwarmAgentHandle {
         &self,
         original_agent_id: &str,
         prompt: String,
-        session_id: String,
+        parent_session_id: SessionId,
     ) -> Result<AgentSpawnResponse, String> {
+        let session_id = parent_session_id.to_string();
         let Some(store) = self.transcript_store().cloned() else {
             return Err(
                 "Resume requires AgentTranscriptStore: install via SwarmAgentHandle::set_transcript_store at session bootstrap"
@@ -114,7 +116,7 @@ impl SwarmAgentHandle {
             features,
             run_in_background: true,
             cwd: cwd_override,
-            session_id,
+            session_id: Some(parent_session_id.clone()),
             // `Resume` (not `Fork`) — the child engine sees the persisted
             // history as its starting point but builds a fresh system
             // prompt from the agent definition (Fork instead inherits the

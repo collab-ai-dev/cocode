@@ -27,7 +27,7 @@ fn spawn_config(name: &str, team: &str) -> TeammateSpawnConfig {
         system_prompt: None,
         system_prompt_mode: SystemPromptMode::Default,
         worktree_path: None,
-        parent_session_id: "session-x".into(),
+        parent_session_id: coco_types::SessionId::try_new("session-x").unwrap(),
         permissions: Vec::new(),
         allow_permission_prompts: false,
         effort: None,

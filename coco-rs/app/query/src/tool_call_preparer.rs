@@ -25,6 +25,7 @@ use coco_types::CoreEvent;
 use coco_types::ModelRole;
 use coco_types::PermissionDecision;
 use coco_types::PermissionDenialInfo;
+use coco_types::SessionId;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use serde_json::Value;
@@ -70,7 +71,7 @@ pub(crate) struct PendingToolPreparation<'a> {
     pub permission_denials: &'a mut Vec<PermissionDenialInfo>,
     pub state_tracker: &'a SessionStateTracker,
     pub permission_bridge: Option<&'a ToolPermissionBridgeRef>,
-    pub session_id: &'a str,
+    pub session_id: &'a SessionId,
     pub cancel: &'a CancellationToken,
     pub auto_mode_state: Option<&'a Arc<coco_permissions::AutoModeState>>,
     pub denial_tracker: Option<&'a Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,
@@ -594,11 +595,7 @@ async fn resolve_can_use_tool_decision(
     let handle = ctx.can_use_tool.clone()?;
     let cb_ctx = coco_tool_runtime::CanUseToolCallContext {
         tool_use_id: tool_call.tool_call_id.clone(),
-        cwd: ctx
-            .cwd_override
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| std::path::PathBuf::from("/")),
+        cwd: ctx.effective_shell_cwd().await,
         abort: ctx.abort.turn_signal(),
         require_can_use_tool: ctx.require_can_use_tool,
         messages: ctx.messages.clone(),
@@ -886,7 +883,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                 },
             ];
             let event_tx = None;
-            let moa_turn_id = uuid::Uuid::new_v4().to_string();
+            let moa_turn_id = coco_types::TurnId::generate();
             let source = ModelRuntimeSource::Role(ModelRole::Main);
             loop {
                 let params = QueryParams {

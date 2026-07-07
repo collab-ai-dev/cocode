@@ -20,7 +20,7 @@ fn test_config() -> QueryEngineConfig {
     QueryEngineConfig {
         model_id: "claude-test".into(),
         permission_mode: PermissionMode::Default,
-        session_id: "session-abc".into(),
+        session_id: coco_types::SessionId::try_new("session-abc").unwrap(),
         ..Default::default()
     }
 }
@@ -227,7 +227,7 @@ async fn local_denial_tracking_isolated_per_subagent_shared_for_main_session() {
     );
 
     let subagent_config = QueryEngineConfig {
-        agent_id: Some("agent-1".into()),
+        agent_id: Some(coco_types::AgentId::try_new("agent-1").unwrap()),
         ..test_config()
     };
     let subagent_ctx = factory(subagent_config).build(Default::default()).await;
@@ -746,7 +746,7 @@ async fn test_subagent_inherits_parent_deny_via_shared_base() {
     // Subagent config: permission_derivation = Some (read-through derivation),
     // empty config base rules (the bug's original empty maps).
     let subagent_cfg = QueryEngineConfig {
-        agent_id: Some("agent-1".into()),
+        agent_id: Some(coco_types::AgentId::try_new("agent-1").unwrap()),
         permission_derivation: Some(crate::config::PermissionDerivation::default()),
         ..test_config()
     };
@@ -823,7 +823,7 @@ async fn test_subagent_allowed_tools_replace_on_restrict() {
     }
 
     let subagent_cfg = QueryEngineConfig {
-        agent_id: Some("agent-1".into()),
+        agent_id: Some(coco_types::AgentId::try_new("agent-1").unwrap()),
         permission_derivation: Some(crate::config::PermissionDerivation {
             allowed_tools_replace: Some(vec![rule(
                 PermissionRuleSource::Session,

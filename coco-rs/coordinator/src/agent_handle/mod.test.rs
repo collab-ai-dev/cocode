@@ -128,11 +128,21 @@ async fn resume_agent_rejects_user_stopped_metadata() {
     }));
 
     let err = handle
-        .resume_agent("agent-stopped", "continue".into(), "sess-1".into())
+        .resume_agent(
+            "agent-stopped",
+            "continue".into(),
+            coco_types::SessionId::try_new("sess-1").unwrap(),
+        )
         .await
         .expect_err("user-stopped agents must not resume");
 
     assert!(err.contains("stopped by user"), "got: {err}");
+}
+
+#[test]
+fn resume_agent_session_id_boundary_rejects_unsafe_values() {
+    coco_types::SessionId::try_new("bad/session")
+        .expect_err("unsafe session ids must be rejected before resume");
 }
 
 fn test_team_file(team_name: &str) -> TeamFile {
@@ -199,7 +209,7 @@ fn teammate_context(agent_name: &str, team_name: &str) -> crate::identity::Teamm
         team_name: team_name.to_string(),
         color: None,
         plan_mode_required: false,
-        parent_session_id: "parent-session".to_string(),
+        parent_session_id: coco_types::SessionId::try_new("parent-session").unwrap(),
         self_stop_signal: None,
     }
 }
@@ -638,7 +648,7 @@ impl TeamTaskListRouter for TestTaskListRouter {
 fn session_team_request(name: &str) -> InitializeSessionTeamRequest {
     InitializeSessionTeamRequest {
         team_name: name.to_string(),
-        leader_session_id: format!("session-{}", uuid::Uuid::new_v4().simple()),
+        leader_session_id: coco_types::SessionId::generate(),
         leader_agent_type: None,
         leader_model: Some("test-model".to_string()),
         cwd: std::path::PathBuf::from("/tmp"),
@@ -1024,6 +1034,7 @@ async fn test_spawn_subagent_sync_without_engine_fails_cleanly() {
         prompt: "Find files".to_string(),
         description: Some("search".to_string()),
         subagent_type: Some("Explore".to_string()),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
 
@@ -1081,7 +1092,7 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
     let request = AgentSpawnRequest {
         prompt: "do work".into(),
         subagent_type: Some("Explore".into()),
-        session_id: "test-session".into(),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1142,7 +1153,7 @@ async fn test_spawn_subagent_sync_classifier_respects_permission_mode() {
         prompt: "do work".into(),
         subagent_type: Some("general-purpose".into()),
         mode: Some(coco_types::PermissionMode::Default),
-        session_id: "test-session".into(),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1214,7 +1225,7 @@ async fn test_spawn_subagent_sync_drains_stream_events_to_task_registry() {
         .spawn_agent(AgentSpawnRequest {
             prompt: "do work".into(),
             subagent_type: Some("Explore".into()),
-            session_id: "test-session".into(),
+            session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
             ..Default::default()
         })
         .await
@@ -1301,7 +1312,7 @@ async fn test_drain_fills_task_activity_summary_from_tool_input() {
         .spawn_agent(AgentSpawnRequest {
             prompt: "do work".into(),
             subagent_type: Some("Explore".into()),
-            session_id: "test-session".into(),
+            session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
             ..Default::default()
         })
         .await
@@ -1336,6 +1347,7 @@ async fn test_spawn_subagent_worktree_without_manager_fails_cleanly() {
     let request = AgentSpawnRequest {
         prompt: "isolated work".into(),
         isolation: Some(coco_types::AgentIsolation::Worktree),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1491,7 +1503,7 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
     let request = AgentSpawnRequest {
         prompt: "long work".into(),
         subagent_type: Some("general-purpose".into()),
-        session_id: "test-session".into(),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
 
@@ -1679,7 +1691,7 @@ async fn test_spawn_subagent_parent_abort_cancels_foreground() {
     let request = AgentSpawnRequest {
         prompt: "long work".into(),
         subagent_type: Some("general-purpose".into()),
-        session_id: "test-session".into(),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         parent_turn_abort: Some(parent_abort.signal()),
         ..Default::default()
     };
@@ -1760,7 +1772,7 @@ async fn test_spawn_subagent_async() {
     let request = AgentSpawnRequest {
         prompt: "Background work".to_string(),
         run_in_background: true,
-        session_id: "test-session".into(),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
 
@@ -1777,7 +1789,7 @@ async fn test_spawn_subagent_async_without_engine_fails_cleanly() {
     let request = AgentSpawnRequest {
         prompt: "Background work".to_string(),
         run_in_background: true,
-        session_id: "test-session".into(),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1795,6 +1807,7 @@ async fn test_spawn_teammate() {
         prompt: "Help me".to_string(),
         name: Some("researcher".to_string()),
         team_name: Some(team_name.clone()),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
 
@@ -1867,6 +1880,7 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
             prompt: "do work".into(),
             name: Some("worker".into()),
             team_name: Some(team_name.clone()),
+            session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
             ..Default::default()
         })
         .await
@@ -1931,7 +1945,7 @@ async fn test_query_team_agent_without_local_task_reports_not_controllable() {
             agent_id: reservation.agent_id.clone(),
             backend_type: crate::types::BackendType::Tmux,
             pane_id: Some("%1".to_string()),
-            session_id: Some("other-process".to_string()),
+            session_id: Some(coco_types::SessionId::try_new("other-process").unwrap()),
         })
         .await
         .unwrap();
@@ -2006,7 +2020,7 @@ async fn test_spawn_subagent_fresh_threads_definition_system_prompt() {
         prompt: "do work".into(),
         subagent_type: Some("Explore".into()),
         definition: Some(definition),
-        session_id: "test-session".into(),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -2082,7 +2096,7 @@ async fn test_spawn_subagent_threads_definition_allowed_tools() {
         prompt: "do work".into(),
         subagent_type: Some("restricted".into()),
         definition: Some(definition),
-        session_id: "test-session".into(),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -2154,7 +2168,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
             prompt: "do work".into(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(wildcard_def.clone()),
-            session_id: "test-session".into(),
+            session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
             child_query_depth: 1,
             ..Default::default()
         })
@@ -2185,7 +2199,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
             prompt: "do work".into(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(wildcard_def.clone()),
-            session_id: "test-session".into(),
+            session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
             child_query_depth: coco_subagent::SUBAGENT_DEPTH_LIMIT,
             ..Default::default()
         })
@@ -2205,7 +2219,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
             subagent_type: Some("general-purpose".into()),
             definition: Some(wildcard_def),
             mode: Some(coco_types::PermissionMode::Plan),
-            session_id: "test-session".into(),
+            session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
             child_query_depth: coco_subagent::SUBAGENT_DEPTH_LIMIT + 1,
             ..Default::default()
         })
@@ -2273,6 +2287,7 @@ async fn test_spawn_teammate_uses_base_system_prompt_when_no_initial_prompt() {
             prompt: "do work".into(),
             name: Some("worker".into()),
             team_name: Some(team_name.clone()),
+            session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
             ..Default::default()
         })
         .await
@@ -2353,6 +2368,7 @@ async fn test_spawn_teammate_forwards_runner_query_options() {
             prompt: "do work".into(),
             name: Some("worker".into()),
             team_name: Some(team_name.clone()),
+            session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
             definition: Some(def),
             ..Default::default()
         })
@@ -2411,7 +2427,7 @@ async fn test_team_lifecycle_writes_roster_and_spawns_teammate() {
             prompt: "inspect the repo".into(),
             name: Some("researcher".into()),
             team_name: Some(team_name.clone()),
-            session_id: "session-1".into(),
+            session_id: Some(coco_types::SessionId::try_new("session-1").unwrap()),
             ..Default::default()
         })
         .await
@@ -2432,7 +2448,13 @@ async fn test_team_lifecycle_writes_roster_and_spawns_teammate() {
         disk_member.backend_type,
         Some(crate::types::BackendType::InProcess)
     );
-    assert_eq!(disk_member.session_id.as_deref(), None);
+    assert_eq!(
+        disk_member
+            .session_id
+            .as_ref()
+            .map(coco_types::SessionId::as_str),
+        None
+    );
 
     let manager_file = handle
         .team_manager
@@ -2654,7 +2676,7 @@ async fn test_subagent_start_hook_injects_additional_context() {
         .spawn_agent(AgentSpawnRequest {
             prompt: "ORIGINAL PROMPT".into(),
             subagent_type: Some("Explore".into()),
-            session_id: "test-session".into(),
+            session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
             ..Default::default()
         })
         .await
@@ -2728,7 +2750,7 @@ async fn test_subagent_start_hook_no_context_leaves_prompt_unchanged() {
         .spawn_agent(AgentSpawnRequest {
             prompt: "ORIGINAL PROMPT".into(),
             subagent_type: Some("Explore".into()),
-            session_id: "test-session".into(),
+            session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
             ..Default::default()
         })
         .await
@@ -2799,7 +2821,7 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
             parent_messages: parent_messages.clone(),
             resumed_agent_id: "agent-original".into(),
         },
-        session_id: "test-session".into(),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -2916,7 +2938,11 @@ async fn resume_agent_full_wiring_reuses_id_restores_mode_and_replays_history() 
     handle.set_transcript_store(Arc::new(ResumeFixtureStore));
 
     let resp = handle
-        .resume_agent("agent-orig", "keep going".into(), "sess-1".into())
+        .resume_agent(
+            "agent-orig",
+            "keep going".into(),
+            coco_types::SessionId::try_new("sess-1").unwrap(),
+        )
         .await
         .expect("resume dispatch");
     assert_ne!(
@@ -2932,7 +2958,7 @@ async fn resume_agent_full_wiring_reuses_id_restores_mode_and_replays_history() 
     let cfg = engine.cfg.lock().await.clone().expect("config captured");
 
     // (1) id continuity — resumed run reuses the ORIGINAL agent id.
-    assert_eq!(cfg.identity.agent_id, "agent-orig");
+    assert_eq!(cfg.identity.agent_id.as_str(), "agent-orig");
     // (2) permission mode restored from the persisted metadata.
     assert_eq!(cfg.permission_mode, coco_types::PermissionMode::Plan);
     // (3) session features inherited (Some, not the None the old path left).
@@ -3032,7 +3058,7 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
             parent_messages: parent_messages.clone(),
             parent_snapshot,
         },
-        session_id: "test-session".into(),
+        session_id: Some(coco_types::SessionId::try_new("test-session").unwrap()),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();

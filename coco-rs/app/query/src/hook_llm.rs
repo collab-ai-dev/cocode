@@ -248,7 +248,7 @@ impl HookLlmHandle for QueryHookLlm {
 
         let result = async {
             let event_tx = None;
-            let moa_turn_id = uuid::Uuid::new_v4().to_string();
+            let moa_turn_id = coco_types::TurnId::generate();
             let mut prompt_too_long_retried = false;
             loop {
                 let prompt = build_prompt(

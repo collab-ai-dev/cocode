@@ -2,13 +2,19 @@ use super::*;
 
 #[test]
 fn test_create_teammate_context() {
-    let ctx = create_teammate_context("researcher", "my-team", Some("blue".into()), true, "sess-1");
+    let ctx = create_teammate_context(
+        "researcher",
+        "my-team",
+        Some("blue".into()),
+        true,
+        coco_types::SessionId::try_new("sess-1").unwrap(),
+    );
     assert_eq!(ctx.agent_id, "researcher@my-team");
     assert_eq!(ctx.agent_name, "researcher");
     assert_eq!(ctx.team_name, "my-team");
     assert_eq!(ctx.color.as_deref(), Some("blue"));
     assert!(ctx.plan_mode_required);
-    assert_eq!(ctx.parent_session_id, "sess-1");
+    assert_eq!(ctx.parent_session_id.as_str(), "sess-1");
 }
 
 #[tokio::test]
@@ -34,6 +40,93 @@ async fn test_dynamic_context_set_clear() {
 
     clear_dynamic_team_context();
     assert!(get_dynamic_team_context().is_none());
+}
+
+#[tokio::test]
+async fn checked_parent_session_id_prefers_typed_contexts_then_env() {
+    use crate::constants::PARENT_SESSION_ID_ENV_VAR;
+
+    let _env = crate::test_support::lock_env().await;
+    clear_dynamic_team_context();
+
+    struct ClearParentSessionEnv;
+    impl Drop for ClearParentSessionEnv {
+        fn drop(&mut self) {
+            // SAFETY: serialized via the held `ENV_LOCK` guard.
+            unsafe {
+                std::env::remove_var(PARENT_SESSION_ID_ENV_VAR.as_str());
+            }
+        }
+    }
+    let _clear = ClearParentSessionEnv;
+
+    set_dynamic_team_context(DynamicTeamContext {
+        agent_id: "worker@team".into(),
+        agent_name: "worker".into(),
+        team_name: "team".into(),
+        color: None,
+        plan_mode_required: false,
+        parent_session_id: Some(coco_types::SessionId::try_new("dynamic-session").unwrap()),
+    });
+    assert_eq!(
+        checked_parent_session_id().unwrap().map(|s| s.to_string()),
+        Some("dynamic-session".to_string())
+    );
+    assert_eq!(get_parent_session_id().as_deref(), Some("dynamic-session"));
+
+    let task_ctx = create_teammate_context(
+        "tester",
+        "team",
+        None,
+        false,
+        coco_types::SessionId::try_new("task-session").unwrap(),
+    );
+    run_with_teammate_context(task_ctx, async {
+        assert_eq!(
+            checked_parent_session_id().unwrap().map(|s| s.to_string()),
+            Some("task-session".to_string())
+        );
+        assert_eq!(get_parent_session_id().as_deref(), Some("task-session"));
+    })
+    .await;
+
+    clear_dynamic_team_context();
+    // SAFETY: serialized via the held `ENV_LOCK` guard.
+    unsafe {
+        std::env::set_var(PARENT_SESSION_ID_ENV_VAR.as_str(), "env-session");
+    }
+    assert_eq!(
+        checked_parent_session_id().unwrap().map(|s| s.to_string()),
+        Some("env-session".to_string())
+    );
+}
+
+#[tokio::test]
+async fn checked_parent_session_id_rejects_unsafe_env_value() {
+    use crate::constants::PARENT_SESSION_ID_ENV_VAR;
+
+    let _env = crate::test_support::lock_env().await;
+    clear_dynamic_team_context();
+
+    struct ClearParentSessionEnv;
+    impl Drop for ClearParentSessionEnv {
+        fn drop(&mut self) {
+            // SAFETY: serialized via the held `ENV_LOCK` guard.
+            unsafe {
+                std::env::remove_var(PARENT_SESSION_ID_ENV_VAR.as_str());
+            }
+        }
+    }
+    let _clear = ClearParentSessionEnv;
+
+    // SAFETY: serialized via the held `ENV_LOCK` guard.
+    unsafe {
+        std::env::set_var(PARENT_SESSION_ID_ENV_VAR.as_str(), "bad/session");
+    }
+
+    let err = checked_parent_session_id().expect_err("unsafe env session id must be rejected");
+    assert!(err.contains("COCO_PARENT_SESSION_ID"), "got: {err}");
+    assert!(get_parent_session_id().is_none());
 }
 
 #[tokio::test]
@@ -187,7 +280,13 @@ async fn test_consume_inherited_env_identity_caches_then_removes() {
 
 #[tokio::test]
 async fn test_task_local_context() {
-    let ctx = create_teammate_context("tester", "t", None, false, "s");
+    let ctx = create_teammate_context(
+        "tester",
+        "t",
+        None,
+        false,
+        coco_types::SessionId::try_new("s").unwrap(),
+    );
 
     let result = run_with_teammate_context(ctx, async {
         let inner = get_teammate_context().unwrap();

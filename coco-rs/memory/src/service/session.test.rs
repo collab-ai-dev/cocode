@@ -8,6 +8,10 @@ use coco_tool_runtime::AgentSpawnResponse;
 use std::sync::Arc;
 use tempfile::tempdir;
 
+fn sid(value: &str) -> coco_types::SessionId {
+    coco_types::SessionId::try_new(value).unwrap()
+}
+
 /// `AgentHandle` fake whose `spawn_agent` always errors — lets a test
 /// drive `run_fork` into its `Err` branch (e.g. to assert the init
 /// flag flips at gate-pass independent of fork success).
@@ -30,7 +34,7 @@ impl AgentHandle for FailingHandle {
         &self,
         _agent_id: &str,
         _prompt: &str,
-        _session_id: &str,
+        _session_id: &coco_types::SessionId,
     ) -> Result<AgentSpawnResponse, String> {
         Err("unused".into())
     }
@@ -65,7 +69,7 @@ async fn skips_when_disabled() {
     };
     let svc = SessionMemoryService::new(
         pp(temp.path()),
-        "s1".into(),
+        sid("s1"),
         config,
         Arc::new(RecordingHandle::default()),
     );
@@ -78,7 +82,7 @@ async fn skips_below_init_threshold() {
     let temp = tempdir().unwrap();
     let svc = SessionMemoryService::new(
         pp(temp.path()),
-        "s1".into(),
+        sid("s1"),
         cfg(),
         Arc::new(RecordingHandle::default()),
     );
@@ -93,7 +97,7 @@ async fn skips_below_init_threshold() {
 async fn fires_at_init_with_template_seeded() {
     let temp = tempdir().unwrap();
     let handle = Arc::new(RecordingHandle::default());
-    let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle.clone());
+    let svc = SessionMemoryService::new(pp(temp.path()), sid("s1"), cfg(), handle.clone());
     let outcome = svc.maybe_extract(15_000, 5, true, msg_id("u1")).await;
     assert!(matches!(outcome, SessionMemoryOutcome::Completed { .. }));
     let calls = handle.calls();
@@ -129,7 +133,7 @@ async fn fires_at_init_with_template_seeded() {
 async fn update_skips_until_token_growth_satisfies_gate() {
     let temp = tempdir().unwrap();
     let handle = Arc::new(RecordingHandle::default());
-    let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle.clone());
+    let svc = SessionMemoryService::new(pp(temp.path()), sid("s1"), cfg(), handle.clone());
     // Init.
     assert!(matches!(
         svc.maybe_extract(12_000, 5, true, msg_id("u1")).await,
@@ -156,7 +160,7 @@ async fn update_skips_until_token_growth_satisfies_gate() {
 async fn natural_break_fires_when_no_tool_calls_last_turn() {
     let temp = tempdir().unwrap();
     let handle = Arc::new(RecordingHandle::default());
-    let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle.clone());
+    let svc = SessionMemoryService::new(pp(temp.path()), sid("s1"), cfg(), handle.clone());
     let _ = svc.maybe_extract(12_000, 5, true, msg_id("u1")).await;
     // No tool calls last turn; growth satisfies → natural break.
     assert!(matches!(
@@ -174,7 +178,7 @@ async fn cumulative_tool_gate_skips_when_below_threshold() {
     // also fires.
     let temp = tempdir().unwrap();
     let handle = Arc::new(RecordingHandle::default());
-    let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle.clone());
+    let svc = SessionMemoryService::new(pp(temp.path()), sid("s1"), cfg(), handle.clone());
     // Init at threshold.
     let _ = svc.maybe_extract(12_000, 5, true, msg_id("u1")).await;
     assert_eq!(handle.calls().len(), 1);
@@ -196,7 +200,7 @@ async fn init_skips_when_neither_tool_calls_nor_break() {
     // must stay unset (the gate never passed).
     let temp = tempdir().unwrap();
     let handle = Arc::new(RecordingHandle::default());
-    let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle.clone());
+    let svc = SessionMemoryService::new(pp(temp.path()), sid("s1"), cfg(), handle.clone());
     // tokens above init threshold, tool_calls=2 < default 3, last turn HAD tools.
     let outcome = svc.maybe_extract(15_000, 2, true, msg_id("u1")).await;
     assert_eq!(
@@ -221,7 +225,7 @@ async fn init_flips_initialized_at_gate_pass_even_when_fork_fails() {
     // — it transitions to the UPDATE path.
     let temp = tempdir().unwrap();
     let handle = Arc::new(FailingHandle);
-    let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle);
+    let svc = SessionMemoryService::new(pp(temp.path()), sid("s1"), cfg(), handle);
     // Gate passes (tokens above init, tool_calls=5 ≥ 3); fork fails.
     let outcome = svc.maybe_extract(15_000, 5, true, msg_id("u1")).await;
     assert!(
@@ -248,7 +252,7 @@ async fn current_content_returns_none_before_seed() {
     let temp = tempdir().unwrap();
     let svc = SessionMemoryService::new(
         pp(temp.path()),
-        "s1".into(),
+        sid("s1"),
         cfg(),
         Arc::new(RecordingHandle::default()),
     );
@@ -263,7 +267,7 @@ async fn summarized_cursor_only_advances_when_prior_turn_has_no_tool_calls() {
     // downstream summary.
     let temp = tempdir().unwrap();
     let handle = Arc::new(RecordingHandle::default());
-    let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle.clone());
+    let svc = SessionMemoryService::new(pp(temp.path()), sid("s1"), cfg(), handle.clone());
 
     // Init turn used tools — extraction cursor advances, summarized cursor does NOT.
     let _ = svc
@@ -302,7 +306,7 @@ async fn is_empty_true_until_real_content_written() {
     let temp = tempdir().unwrap();
     let svc = SessionMemoryService::new(
         pp(temp.path()),
-        "s1".into(),
+        sid("s1"),
         cfg(),
         Arc::new(RecordingHandle::default()),
     );
@@ -337,7 +341,7 @@ async fn custom_template_override_replaces_seed() {
 
     let svc = SessionMemoryService::new(
         project_paths,
-        "s1".into(),
+        sid("s1"),
         cfg(),
         Arc::new(RecordingHandle::default()),
     );
@@ -360,7 +364,7 @@ async fn set_session_id_repaths_writes_and_wipes_state() {
     // wiped so the next gate starts from a clean baseline.
     let temp = tempdir().unwrap();
     let handle = Arc::new(RecordingHandle::default());
-    let svc = SessionMemoryService::new(pp(temp.path()), "old".into(), cfg(), handle.clone());
+    let svc = SessionMemoryService::new(pp(temp.path()), sid("old"), cfg(), handle.clone());
     // Initial extract under "old" session.
     let _ = svc.maybe_extract(15_000, 5, true, msg_id("u1")).await;
     assert!(svc.file_path().to_string_lossy().contains("/old/"));
@@ -369,7 +373,7 @@ async fn set_session_id_repaths_writes_and_wipes_state() {
         Some("u1")
     );
 
-    svc.set_session_id("new".into()).await;
+    svc.set_session_id(sid("new")).await;
     assert!(svc.file_path().to_string_lossy().contains("/new/"));
     assert!(svc.last_extraction_message_id().await.is_none());
     assert!(svc.current_text().await.is_empty());
@@ -379,7 +383,7 @@ async fn set_session_id_repaths_writes_and_wipes_state() {
 async fn current_text_caches_after_extract_and_clears_on_compact() {
     let temp = tempdir().unwrap();
     let handle = Arc::new(RecordingHandle::default());
-    let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle.clone());
+    let svc = SessionMemoryService::new(pp(temp.path()), sid("s1"), cfg(), handle.clone());
     assert!(svc.current_text().await.is_empty());
     let _ = svc.maybe_extract(15_000, 5, true, msg_id("u1")).await;
     let cached = svc.current_text().await;
@@ -405,7 +409,7 @@ async fn load_from_disk_warms_cache_from_existing_file() {
     let project_paths = pp(temp.path());
     let svc = SessionMemoryService::new(
         project_paths.clone(),
-        "s1".into(),
+        sid("s1"),
         cfg(),
         Arc::new(RecordingHandle::default()),
     );
@@ -422,7 +426,7 @@ async fn last_summarized_message_uuid_accessor_parses_string_cursor() {
     let temp = tempdir().unwrap();
     let svc = SessionMemoryService::new(
         pp(temp.path()),
-        "s1".into(),
+        sid("s1"),
         cfg(),
         Arc::new(RecordingHandle::default()),
     );

@@ -120,7 +120,7 @@ fn seed_transcript(memory_base: &std::path::Path, sid: &str) {
         uuid: format!("{sid}-u1"),
         parent_uuid: None,
         logical_parent_uuid: None,
-        session_id: sid.to_string(),
+        session_id: Some(coco_types::SessionId::try_new(sid).expect("valid session id")),
         cwd: "/test-cwd".to_string(),
         timestamp: "2025-01-15T10:00:00Z".to_string(),
         version: None,

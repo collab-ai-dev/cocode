@@ -12,11 +12,13 @@
 //! session restart; the message text states this explicitly so the
 //! user is not surprised.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use coco_lsp::BUILTIN_SERVERS;
 use coco_lsp::BuiltinServer;
 use coco_lsp::ConfigLevel;
@@ -26,28 +28,65 @@ use coco_lsp::LspServersConfig;
 use coco_lsp::command_exists;
 use tokio::sync::mpsc;
 
+use crate::CommandHandler;
+use crate::CommandResult;
+
 /// Async handler for `/lsp [list|install|enable|disable|add|remove] [server]`.
 pub fn handler(
     args: String,
 ) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
+    handler_with_cwd(args, PathBuf::from("."))
+}
+
+fn handler_with_cwd(
+    args: String,
+    cwd: PathBuf,
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let trimmed = args.trim();
         match trimmed {
-            "" | "list" | "status" => list_servers().await,
+            "" | "list" | "status" => list_servers(&cwd).await,
             other => {
                 let (cmd, rest) = split_first(other);
                 let rest = rest.trim();
                 match cmd {
                     "install" if !rest.is_empty() => install_server(rest).await,
-                    "enable" if !rest.is_empty() => toggle_server(rest, /*enable*/ true).await,
-                    "disable" if !rest.is_empty() => toggle_server(rest, /*enable*/ false).await,
+                    "enable" if !rest.is_empty() => {
+                        toggle_server(rest, /*enable*/ true, &cwd).await
+                    }
+                    "disable" if !rest.is_empty() => {
+                        toggle_server(rest, /*enable*/ false, &cwd).await
+                    }
                     "add" if !rest.is_empty() => add_server_to_config(rest).await,
-                    "remove" if !rest.is_empty() => remove_server_from_config(rest).await,
+                    "remove" if !rest.is_empty() => remove_server_from_config(rest, &cwd).await,
                     _ => Ok(usage_text()),
                 }
             }
         }
     })
+}
+
+pub struct LspHandler {
+    cwd: PathBuf,
+}
+
+impl LspHandler {
+    pub fn new(cwd: PathBuf) -> Self {
+        Self { cwd }
+    }
+}
+
+#[async_trait]
+impl CommandHandler for LspHandler {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
+        Ok(CommandResult::Text(
+            handler_with_cwd(args.to_string(), self.cwd.clone()).await?,
+        ))
+    }
+
+    fn handler_name(&self) -> &str {
+        "lsp"
+    }
 }
 
 fn split_first(s: &str) -> (&str, &str) {
@@ -78,17 +117,15 @@ fn usage_text() -> String {
 /// Resolve user-level and project-level config directories. Matches the
 /// resolution `LspServersConfig::load` uses internally so `add` / `remove`
 /// touch the same file the loader reads.
-fn resolve_dirs() -> (Option<PathBuf>, Option<PathBuf>) {
+fn resolve_dirs(cwd: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
     let user = coco_lsp::find_coco_home();
-    let project = std::env::current_dir()
-        .ok()
-        .map(|p| p.join(coco_utils_common::COCO_CONFIG_DIR_NAME));
+    let project = Some(cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME));
     (Some(user), project)
 }
 
 /// Live status — config from disk × `command_exists` per binary.
-async fn list_servers() -> crate::Result<String> {
-    let (user_dir, project_dir) = resolve_dirs();
+async fn list_servers(cwd: &Path) -> crate::Result<String> {
+    let (user_dir, project_dir) = resolve_dirs(cwd);
     let user = user_dir.as_deref();
     let project = project_dir.as_deref();
     let cfg = LspServersConfig::load(user, project);
@@ -261,8 +298,8 @@ async fn install_server(server_id: &str) -> crate::Result<String> {
 /// Returns `None` when the server is not in any config — the caller
 /// (`enable`/`disable`) then reports "not in config" instead of touching
 /// an arbitrary level.
-fn find_config_dir_with(server_id: &str) -> Option<PathBuf> {
-    let (user, project) = resolve_dirs();
+fn find_config_dir_with(server_id: &str, cwd: &Path) -> Option<PathBuf> {
+    let (user, project) = resolve_dirs(cwd);
     if let Some(ref u) = user {
         let cfg = LspServersConfig::load(Some(u), None);
         if cfg.servers.contains_key(server_id) {
@@ -278,8 +315,8 @@ fn find_config_dir_with(server_id: &str) -> Option<PathBuf> {
     None
 }
 
-async fn toggle_server(server_id: &str, enable: bool) -> crate::Result<String> {
-    let Some(dir) = find_config_dir_with(server_id) else {
+async fn toggle_server(server_id: &str, enable: bool, cwd: &Path) -> crate::Result<String> {
+    let Some(dir) = find_config_dir_with(server_id, cwd) else {
         return Ok(format!(
             "'{server_id}' is not in any lsp_servers.json.\n\
              Use `/lsp add {server_id}` to add it first."
@@ -317,7 +354,7 @@ async fn add_server_to_config(server_id: &str) -> crate::Result<String> {
              Known: rust-analyzer, gopls, pyright, typescript-language-server"
         ));
     }
-    let (user_dir, _) = resolve_dirs();
+    let (user_dir, _) = resolve_dirs(Path::new("."));
     let Some(dir) = user_dir else {
         return Ok("Cannot resolve user config dir".to_string());
     };
@@ -334,8 +371,8 @@ async fn add_server_to_config(server_id: &str) -> crate::Result<String> {
     }
 }
 
-async fn remove_server_from_config(server_id: &str) -> crate::Result<String> {
-    let Some(dir) = find_config_dir_with(server_id) else {
+async fn remove_server_from_config(server_id: &str, cwd: &Path) -> crate::Result<String> {
+    let Some(dir) = find_config_dir_with(server_id, cwd) else {
         return Ok(format!("'{server_id}' is not in any lsp_servers.json"));
     };
     match LspServersConfig::remove_server_from_file(&dir, server_id) {

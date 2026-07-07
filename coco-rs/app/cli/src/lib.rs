@@ -27,6 +27,7 @@ pub mod output;
 pub mod paths;
 pub mod permission_rule_loader;
 pub mod plugin_watch;
+pub mod project_services;
 pub mod provider_login;
 pub mod resume_hint;
 pub mod resume_resolver;

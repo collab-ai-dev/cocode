@@ -39,17 +39,17 @@ use coco_types::CacheSafeParams;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 
-use crate::session_runtime::SessionRuntime;
+use crate::session_runtime::SessionHandle;
 
-/// Backed by `Arc<SessionRuntime>` — captures it once, reuses for
-/// every dispatch. Cheap to construct; cheap to call.
+/// Backed by `SessionHandle` — captures it once, reuses for every dispatch.
+/// Cheap to construct; cheap to call.
 pub struct SessionRuntimeForkDispatcher {
-    runtime: Arc<SessionRuntime>,
+    session: SessionHandle,
 }
 
 impl SessionRuntimeForkDispatcher {
-    pub fn new(runtime: Arc<SessionRuntime>) -> Self {
-        Self { runtime }
+    pub fn new(session: SessionHandle) -> Self {
+        Self { session }
     }
 }
 
@@ -65,7 +65,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // Derive the AgentQueryConfig shape from the cache slot. This
         // keeps the byte-faithful contract documented on `forked_agent`
         // (skip_cache_write, transcript_mode, max_turns: Some(1) by default).
-        let session_id = self.runtime.current_session_id().await;
+        let session_id = self.session.current_typed_session_id().await;
         let mut agent_config =
             coco_query::forked_agent::build_query_config(cache, options, &session_id);
         if let Some(system) = system_prompt_override {
@@ -75,8 +75,8 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // Resolve the parent runtime config. The fork inherits the
         // parent's tool/sandbox/web_*/feature/role configuration so
         // the child engine sees the same world the parent does.
-        let runtime_config = self.runtime.runtime_config.as_ref();
-        let parent_engine_config = self.runtime.current_engine_config().await;
+        let runtime_config = self.session.runtime_config.as_ref();
+        let parent_engine_config = self.session.current_engine_config().await;
 
         // Forks inherit the parent's settings-driven permission rules via the
         // SHARED `ToolAppState.permissions` base (read-through each batch —
@@ -87,7 +87,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         let permission_rule_source_roots =
             crate::permission_rule_loader::permission_rule_source_roots(
                 &runtime_config.settings,
-                &self.runtime.original_cwd,
+                &self.session.original_cwd,
             );
 
         let sidechain_agent_id = (options.transcript_mode == ForkTranscriptMode::Sidechain)
@@ -106,7 +106,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             session_id: session_id.clone(),
             tool_config: runtime_config.tool.clone(),
             sandbox_config: runtime_config.sandbox.clone(),
-            sandbox_state: self.runtime.sandbox_state(),
+            sandbox_state: self.session.sandbox_state(),
             memory_config: runtime_config.memory.clone(),
             shell_config: runtime_config.shell.clone(),
             active_shell_tool: agent_config.active_shell_tool,
@@ -178,7 +178,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // independent token when the caller didn't supply one.
         let cancel = options.overrides.abort.clone().unwrap_or_default();
         let engine = self
-            .runtime
+            .session
             .build_fork_engine_from_config(engine_config, cancel, None)
             .await;
 
@@ -243,7 +243,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             .cloned()
             .collect();
 
-        if let Some(agent_id) = sidechain_agent_id.as_deref() {
+        if let Some(agent_id) = sidechain_agent_id.as_ref().map(coco_types::AgentId::as_str) {
             self.persist_sidechain_transcript(
                 agent_id,
                 options.fork_label.as_str(),
@@ -277,13 +277,10 @@ impl SessionRuntimeForkDispatcher {
         if messages.is_empty() {
             return;
         }
-        let Some(store) = self.runtime.current_agent_transcript_store().await else {
+        let Some(store) = self.session.current_agent_transcript_store().await else {
             return;
         };
-        let session_id = self.runtime.current_session_id().await;
-        if session_id.is_empty() {
-            return;
-        }
+        let session_id = self.session.current_typed_session_id().await;
         let metadata = AgentSpawnMetadata {
             agent_type: fork_label.to_string(),
             worktree_path: None,
@@ -293,7 +290,7 @@ impl SessionRuntimeForkDispatcher {
             isolation: None,
         };
         if let Err(e) = store
-            .write_agent_metadata(&session_id, agent_id, &metadata)
+            .write_agent_metadata(session_id.as_str(), agent_id, &metadata)
             .await
         {
             tracing::debug!(
@@ -303,7 +300,7 @@ impl SessionRuntimeForkDispatcher {
             );
         }
         if let Err(e) = store
-            .append_agent_messages(&session_id, agent_id, messages)
+            .append_agent_messages(session_id.as_str(), agent_id, messages)
             .await
         {
             tracing::debug!(
@@ -316,12 +313,12 @@ impl SessionRuntimeForkDispatcher {
 }
 
 /// Convenience: install a [`SessionRuntimeForkDispatcher`] onto
-/// `runtime` post-`build()`. Idempotent — calling twice replaces
+/// `session` post-`build()`. Idempotent — calling twice replaces
 /// the previous installation.
-pub async fn install(runtime: Arc<SessionRuntime>) {
+pub async fn install(session: SessionHandle) {
     let dispatcher: coco_query::forked_agent::ForkDispatcherRef =
-        Arc::new(SessionRuntimeForkDispatcher::new(runtime.clone()));
-    runtime.attach_fork_dispatcher(dispatcher).await;
+        Arc::new(SessionRuntimeForkDispatcher::new(session.clone()));
+    session.attach_fork_dispatcher(dispatcher).await;
 }
 
 #[cfg(test)]

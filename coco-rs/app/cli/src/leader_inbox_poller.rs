@@ -31,7 +31,6 @@
 //! dedicated consumers).
 
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Duration;
 
 use coco_coordinator::mailbox;
@@ -40,6 +39,7 @@ use coco_query::QueuePriority;
 use coco_query::QueuedCommand;
 use coco_system_reminder::QueueOrigin;
 
+use crate::session_runtime::SessionHandle;
 use crate::session_runtime::SessionRuntime;
 
 /// Inbox poll interval: 1000 ms.
@@ -52,7 +52,8 @@ const TEAM_LEAD_NAME: &str = "team-lead";
 /// caller holds for the session lifetime (drop / abort stops it). No-ops
 /// each tick until the session has an active team (the implicit session
 /// team bootstrapped at startup) and a registered leader approval queue.
-pub fn spawn(runtime: Arc<SessionRuntime>) -> tokio::task::JoinHandle<()> {
+pub fn spawn(session: SessionHandle) -> tokio::task::JoinHandle<()> {
+    let runtime = session.runtime().clone();
     tokio::spawn(async move {
         // tool_use_ids already dispatched to the leader UI — dedup so a
         // failed mark-read on a prior tick doesn't re-prompt the human.
@@ -82,9 +83,10 @@ pub fn spawn(runtime: Arc<SessionRuntime>) -> tokio::task::JoinHandle<()> {
 /// background poll may not fire — the bounded end-of-run drain is a separate
 /// follow-up; this install covers long-running leaders (SDK server, interactive).
 pub async fn install_leader(
-    runtime: Arc<SessionRuntime>,
+    session: SessionHandle,
     bridge: Option<coco_tool_runtime::ToolPermissionBridgeRef>,
 ) {
+    let runtime = session.runtime().clone();
     if !runtime
         .runtime_config
         .features
@@ -106,7 +108,7 @@ pub async fn install_leader(
     if let Some(bridge) = bridge {
         crate::leader_permission::register(bridge).await;
     }
-    spawn(runtime);
+    spawn(session);
 }
 
 /// Create the implicit session team (`session-<id[:8]>`) deterministically
@@ -120,7 +122,7 @@ async fn bootstrap_session_team(
     let Some(handle) = runtime.current_agent_handle().await else {
         return;
     };
-    let session_id = runtime.current_session_id().await;
+    let session_id = runtime.current_typed_session_id().await;
     let team_name = coco_coordinator::session_team::session_team_name(&session_id);
     let leader_model = (!engine_config.model_id.is_empty()).then(|| engine_config.model_id.clone());
     let request = coco_tool_runtime::InitializeSessionTeamRequest {

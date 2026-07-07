@@ -20,7 +20,7 @@ use std::sync::{Arc, PoisonError};
 
 use coco_tool_runtime::{AgentSpawnConstraints, AgentSpawnRequest};
 use coco_types::messages::Message;
-use coco_types::{AgentDefinition, AgentTypeId, ForkLabel, ModelRole};
+use coco_types::{AgentDefinition, AgentTypeId, ForkLabel, ModelRole, SessionId};
 
 use coco_skills::agent_scope::agent_skills_dir;
 
@@ -62,7 +62,7 @@ impl SkillReviewService {
     /// Run one review fork over `fork_context` (the parent's message slice).
     pub async fn run(
         &self,
-        session_id: String,
+        session_id: SessionId,
         fork_context: Vec<Arc<Message>>,
     ) -> SkillReviewOutcome {
         // Ensure the fenced root exists so the fork's first write lands.
@@ -87,7 +87,7 @@ impl SkillReviewService {
         let request = AgentSpawnRequest {
             prompt,
             description: Some("skill review".into()),
-            session_id,
+            session_id: Some(session_id),
             subagent_type: Some(coco_types::SubagentType::GeneralPurpose.as_str().into()),
             definition: Some(def),
             isolation: None,

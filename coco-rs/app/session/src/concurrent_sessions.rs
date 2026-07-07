@@ -18,7 +18,7 @@
 //! ```
 //!
 //! Directory mode `0o700`. Each file contains the serialized
-//! [`SessionRegistration`] record (camelCase JSON on the
+//! [`SessionRegistration`] record (snake_case JSON on the
 //! wire). The dedicated `pids/` subdir means coco's own session JSONL
 //! transcripts under `<memory_base>/projects/<slug>/<sid>.jsonl` —
 //! which can share a parent with `<config_home>/sessions/` in certain
@@ -41,6 +41,7 @@
 //!    "not running" for Windows PIDs.
 
 use coco_config::env::EnvKey;
+use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -92,7 +93,7 @@ pub enum SessionStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRegistration {
     pub pid: u32,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub cwd: PathBuf,
     /// Unix-ms timestamp.
     pub started_at: i64,
@@ -141,7 +142,7 @@ impl SessionRegistry {
     /// chmod) bubble up so the caller can `tracing::warn` and proceed.
     pub fn register(
         config_home: &Path,
-        session_id: &str,
+        session_id: &SessionId,
         cwd: &Path,
         agent_id: Option<&str>,
     ) -> std::io::Result<Option<Self>> {
@@ -156,7 +157,7 @@ impl SessionRegistry {
         let kind = env_session_kind().unwrap_or(SessionKind::Interactive);
         let record = SessionRegistration {
             pid,
-            session_id: session_id.to_string(),
+            session_id: session_id.clone(),
             cwd: cwd.to_path_buf(),
             started_at: now_ms(),
             kind,
@@ -404,12 +405,12 @@ pub enum TerminalJobOutcome {
 pub struct PsEntry {
     pub pid: u32,
     /// Stable id (= `session_id`).
-    pub id: String,
+    pub id: SessionId,
     pub cwd: PathBuf,
     pub kind: SessionKind,
     /// Unix-ms timestamp.
     pub started_at: i64,
-    pub session_id: String,
+    pub session_id: SessionId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

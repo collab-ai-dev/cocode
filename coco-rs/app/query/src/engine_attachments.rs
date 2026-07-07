@@ -112,8 +112,8 @@ impl QueryEngine {
     /// Idempotent across calls within a turn — the trigger Set is
     /// cleared in place, so a second drain at the same site is a no-op.
     /// Safe to call when the Set is empty (early return).
-    /// `ctx.cwd_override` wins over the process cwd when set, matching
-    /// the worktree-isolated subagent contract.
+    /// `ctx.cwd_override` wins over the session cwd anchor when set,
+    /// matching the worktree-isolated subagent contract.
     pub(crate) async fn drain_nested_memory_triggers(&self, ctx: &ToolUseContext) {
         let triggered_paths: Vec<PathBuf> = {
             let mut triggers = ctx.nested_memory_attachment_triggers.write().await;
@@ -124,11 +124,7 @@ impl QueryEngine {
             triggers.drain().map(PathBuf::from).collect()
         };
 
-        let cwd = ctx
-            .cwd_override
-            .clone()
-            .or_else(|| std::env::current_dir().ok());
-        let Some(cwd) = cwd else {
+        let Some(cwd) = ctx.cwd_anchor().await else {
             // No cwd anchor → traversal can't compute the CWD↔file
             // slice. Skip silently; trigger paths are already drained
             // so the next batch starts clean.
@@ -327,11 +323,7 @@ impl QueryEngine {
             return;
         }
 
-        let cwd = ctx
-            .cwd_override
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
+        let cwd = ctx.cwd_anchor().await.unwrap_or_else(|| PathBuf::from("."));
 
         // (1) Nested-dir discovery: each new `project config dir/skills/` dir
         // surfaces a model-visible dynamic_skill attachment listing

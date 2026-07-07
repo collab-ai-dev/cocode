@@ -24,6 +24,8 @@ use coco_messages::create_user_interruption_system_message;
 use coco_types::CoreEvent;
 use coco_types::ProviderModelSelection;
 use coco_types::ServerNotification;
+use coco_types::ServerNotificationIdentity;
+use coco_types::SessionId;
 use coco_types::TokenUsage;
 use tokio::sync::mpsc::Sender;
 
@@ -44,9 +46,9 @@ const HISTORY_SYNC_TARGET: &str = "coco::history_sync";
 ///
 /// Envelope lives on `MessageHistory` (set by the engine builder) so
 /// every helper here picks it up automatically — no per-call threading.
-fn envelope_from(history: &MessageHistory) -> (String, Option<String>) {
-    (
-        history.session_id().to_string(),
+fn identity_from(history: &MessageHistory) -> ServerNotificationIdentity {
+    ServerNotificationIdentity::new(
+        history.session_id().cloned(),
         history.agent_id().map(str::to_string),
     )
 }
@@ -75,7 +77,7 @@ pub async fn history_push_arc_and_emit(
     msg: Arc<Message>,
     event_tx: &Option<Sender<CoreEvent>>,
 ) {
-    let (session_id, agent_id) = envelope_from(history);
+    let identity = identity_from(history);
     let arc = history.push_arc(msg);
     let uuid = arc.uuid().copied();
     let kind = arc.kind();
@@ -91,8 +93,7 @@ pub async fn history_push_arc_and_emit(
         event_tx,
         ServerNotification::MessageAppended {
             message: arc,
-            session_id,
-            agent_id,
+            identity,
         },
     )
     .await;
@@ -111,7 +112,7 @@ pub async fn history_push_assistant_with_usage_and_emit(
     model: ProviderModelSelection,
     event_tx: &Option<Sender<CoreEvent>>,
 ) {
-    let (session_id, agent_id) = envelope_from(history);
+    let identity = identity_from(history);
     let arc = history.push_arc_assistant_with_usage(Arc::new(msg), usage, model);
     let uuid = arc.uuid().copied();
     let kind = arc.kind();
@@ -127,8 +128,7 @@ pub async fn history_push_assistant_with_usage_and_emit(
         event_tx,
         ServerNotification::MessageAppended {
             message: arc,
-            session_id,
-            agent_id,
+            identity,
         },
     )
     .await;
@@ -148,7 +148,7 @@ pub async fn history_clear_and_emit(
     history: &mut MessageHistory,
     event_tx: &Option<Sender<CoreEvent>>,
 ) {
-    let (session_id, agent_id) = envelope_from(history);
+    let identity = identity_from(history);
     let removed = history.len();
     history.clear();
     tracing::info!(
@@ -161,8 +161,7 @@ pub async fn history_clear_and_emit(
         event_tx,
         ServerNotification::MessageTruncated {
             keep_count: 0,
-            session_id,
-            agent_id,
+            identity,
         },
     )
     .await;
@@ -175,7 +174,7 @@ pub async fn history_clear_and_emit(
 /// `conversation_id`).
 pub async fn history_clear_and_emit_session_reset(
     history: &mut MessageHistory,
-    new_session_id: String,
+    new_session_id: SessionId,
     event_tx: &Option<Sender<CoreEvent>>,
 ) {
     let agent_id = history.agent_id().map(str::to_string);
@@ -191,8 +190,7 @@ pub async fn history_clear_and_emit_session_reset(
     let _delivered = emit_protocol(
         event_tx,
         ServerNotification::SessionResetForResume {
-            session_id: new_session_id,
-            agent_id,
+            identity: ServerNotificationIdentity::new(Some(new_session_id), agent_id),
         },
     )
     .await;
@@ -222,7 +220,7 @@ pub async fn history_replace_and_emit(
     event_tx: &Option<Sender<CoreEvent>>,
     reason: coco_types::HistoryReplaceReason,
 ) {
-    let (session_id, agent_id) = envelope_from(history);
+    let identity = identity_from(history);
     let removed = history.len();
     let incoming = new_messages.len();
     history.clear();
@@ -244,8 +242,7 @@ pub async fn history_replace_and_emit(
         event_tx,
         ServerNotification::HistoryReplaced {
             messages: snapshot,
-            session_id,
-            agent_id,
+            identity,
             reason,
         },
     )

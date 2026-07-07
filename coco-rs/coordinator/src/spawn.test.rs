@@ -21,7 +21,7 @@ fn test_build_teammate_command_basic() {
         system_prompt: None,
         system_prompt_mode: crate::pane::SystemPromptMode::Default,
         worktree_path: None,
-        parent_session_id: "session-1".into(),
+        parent_session_id: coco_types::SessionId::try_new("session-1").unwrap(),
         permissions: Vec::new(),
         allow_permission_prompts: false,
         ..Default::default()
@@ -41,6 +41,7 @@ fn test_build_teammate_command_basic() {
     assert!(cmd.contains("COCO_AGENT_ID=researcher@my-team"));
     assert!(cmd.contains("COCO_AGENT_NAME=researcher"));
     assert!(cmd.contains("COCO_TEAM_NAME=my-team"));
+    assert!(cmd.contains("COCO_PARENT_SESSION_ID=session-1"));
     assert!(cmd.contains("COCO_AGENT_COLOR=blue"));
     assert!(!cmd.contains("--plan-mode-required"));
 }
@@ -58,7 +59,7 @@ fn test_build_teammate_command_plan_mode() {
         system_prompt: None,
         system_prompt_mode: crate::pane::SystemPromptMode::Default,
         worktree_path: None,
-        parent_session_id: "sess".into(),
+        parent_session_id: coco_types::SessionId::try_new("sess").unwrap(),
         permissions: Vec::new(),
         allow_permission_prompts: false,
         ..Default::default()
@@ -84,7 +85,7 @@ fn test_build_inherited_env_vars() {
         system_prompt: None,
         system_prompt_mode: crate::pane::SystemPromptMode::Default,
         worktree_path: None,
-        parent_session_id: "s".into(),
+        parent_session_id: coco_types::SessionId::try_new("s").unwrap(),
         permissions: Vec::new(),
         allow_permission_prompts: false,
         ..Default::default()
@@ -102,4 +103,5 @@ fn test_build_inherited_env_vars() {
     assert!(env.contains("COCO_AGENT_ID=worker@t"));
     assert!(env.contains("COCO_AGENT_NAME=worker"));
     assert!(env.contains("COCO_TEAM_NAME=t"));
+    assert!(env.contains("COCO_PARENT_SESSION_ID=s"));
 }

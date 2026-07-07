@@ -23,7 +23,7 @@ use coco_cli::sdk_server::InMemoryTransport;
 use coco_cli::sdk_server::QueryEngineRunner;
 use coco_cli::sdk_server::SdkServer;
 use coco_cli::sdk_server::SdkTransport;
-use coco_cli::session_runtime::SessionRuntime;
+use coco_cli::session_runtime::SessionHandle;
 use coco_cli::session_runtime::SessionRuntimeBuildOpts;
 use coco_commands::CommandRegistry;
 use coco_commands::register_extended_builtins;
@@ -265,7 +265,7 @@ pub async fn build_live_server_with_options(
         .join("skills")]);
     let skill_manager = Arc::new(skill_manager);
 
-    let session_runtime = SessionRuntime::build(SessionRuntimeBuildOpts {
+    let session_handle = SessionHandle::build(SessionRuntimeBuildOpts {
         cli: &cli,
         runtime_config: Arc::new(runtime_config),
         cwd: cwd.clone(),
@@ -283,6 +283,10 @@ pub async fn build_live_server_with_options(
         permission_bridge: None,
         command_registry: command_registry.clone(),
         skill_manager,
+        project_services: Arc::new(coco_cli::project_services::ProjectServices::load(
+            &cwd,
+            cwd.clone(),
+        )),
         // Empty search paths keep tests deterministic — only
         // built-ins land in the catalog, so AgentTool's dynamic
         // prompt is reproducible across runs.
@@ -297,7 +301,7 @@ pub async fn build_live_server_with_options(
     // Mirror `run_sdk_mode`: fire SessionStart hooks once at bootstrap
     // so settings.json hook entries surface as `hook_*` reminders on
     // the first turn.
-    session_runtime.fire_session_start_hooks("startup").await;
+    session_handle.fire_session_start_hooks("startup").await;
 
     let bootstrap = Arc::new(
         CliInitializeBootstrap::new("default".to_string()).with_command_registry(command_registry),
@@ -306,11 +310,11 @@ pub async fn build_live_server_with_options(
     // Wire the in-memory transport pair.
     let (server_end, client_end) = InMemoryTransport::pair(64);
     // Match `run_sdk_mode`'s wiring: install file_history (empty
-    // placeholder when the runtime has none) AND `with_session_runtime`
-    // BEFORE building the runner. Without `with_session_runtime`, the
+    // placeholder when the runtime has none) AND `with_session_handle`
+    // BEFORE building the runner. Without `with_session_handle`, the
     // server's per-turn engine path can't reach the runtime's wired
     // subsystems.
-    let file_history_for_server = session_runtime.file_history.clone().unwrap_or_else(|| {
+    let file_history_for_server = session_handle.file_history.clone().unwrap_or_else(|| {
         Arc::new(tokio::sync::RwLock::new(
             coco_context::FileHistoryState::new(),
         ))
@@ -319,10 +323,11 @@ pub async fn build_live_server_with_options(
         .with_session_manager(session_manager)
         .with_initialize_bootstrap(bootstrap)
         .with_file_history(file_history_for_server, std::env::temp_dir())
-        .with_session_runtime(session_runtime.clone());
+        .with_session_handle(session_handle.clone());
 
+    let session_runtime = session_handle.runtime().clone();
     let runner = Arc::new(QueryEngineRunner::new(
-        session_runtime.clone(),
+        session_handle,
         cli.max_turns.or(Some(8)),
         Some(system_prompt),
     ));

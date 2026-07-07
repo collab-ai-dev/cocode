@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::Entrypoint;
+use crate::SessionId;
 use crate::UserType;
 
 use super::Message;
@@ -15,7 +16,7 @@ pub struct SerializedMessage {
     pub user_type: UserType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<Entrypoint>,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub timestamp: String,
     pub version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -23,3 +24,7 @@ pub struct SerializedMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
 }
+
+#[cfg(test)]
+#[path = "serialized_message.test.rs"]
+mod tests;

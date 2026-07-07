@@ -24,7 +24,6 @@ use coco_session::recovery::ConversationForResume;
 use coco_session::recovery::can_resume_session;
 use coco_session::recovery::fork_conversation;
 use coco_session::recovery::load_conversation_for_resume;
-use uuid::Uuid;
 
 use crate::Cli;
 
@@ -34,12 +33,12 @@ pub struct ResumePlan {
     /// The session id that the upcoming run should write transcript
     /// entries under. For `--resume` / `--continue` this is the
     /// source session id (writes append onto the existing JSONL).
-    /// For `--fork-session` this is a fresh uuid (writes go into a
+    /// For `--fork-session` this is a fresh `SessionId` (writes go into a
     /// new JSONL that begins with a copy of the source).
-    pub session_id: String,
+    pub session_id: coco_types::SessionId,
     /// Source session id we loaded messages from. Same as
     /// `session_id` for resume/continue; different for fork.
-    pub source_session_id: String,
+    pub source_session_id: coco_types::SessionId,
     /// Path to the source transcript JSONL.
     pub source_path: PathBuf,
     /// Path to the destination transcript JSONL (= source for
@@ -81,12 +80,21 @@ pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<Resum
     ));
     let dest_store = TranscriptStore::new(Arc::clone(&dest_paths));
 
-    let (source_session_id, source_path): (String, PathBuf) =
+    let (source_session_id, source_path): (coco_types::SessionId, PathBuf) =
         if let Some(arg) = cli.resume.as_deref() {
-            resolve_source_arg(memory_base, cwd, &dest_store, arg)?
+            let (id, path) = resolve_source_arg(memory_base, cwd, &dest_store, arg)?;
+            (
+                coco_types::SessionId::try_new(id.clone())
+                    .map_err(|e| anyhow::anyhow!("invalid session id '{id}': {e}"))?,
+                path,
+            )
         } else if cli.continue_session {
             match resolve_most_recent_across_projects(memory_base)? {
-                Some(s) => s,
+                Some((id, path)) => (
+                    coco_types::SessionId::try_new(id.clone())
+                        .map_err(|e| anyhow::anyhow!("invalid session id '{id}': {e}"))?,
+                    path,
+                ),
                 None => {
                     // No prior sessions to continue. Treat as a no-op
                     // rather than an error so `coco -c` on a clean
@@ -98,7 +106,11 @@ pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<Resum
         } else if cli.fork_session {
             // Fork without an explicit source: fork the most-recent.
             match resolve_most_recent_across_projects(memory_base)? {
-                Some(s) => s,
+                Some((id, path)) => (
+                    coco_types::SessionId::try_new(id.clone())
+                        .map_err(|e| anyhow::anyhow!("invalid session id '{id}': {e}"))?,
+                    path,
+                ),
                 None => {
                     anyhow::bail!("--fork-session requires an existing session to copy from");
                 }
@@ -119,12 +131,13 @@ pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<Resum
     let prior_messages = conversation.messages.clone();
 
     if cli.fork_session {
-        let dest_id = cli
-            .session_id
-            .clone()
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
-        let dest_path = dest_store.transcript_path(&dest_id);
-        fork_conversation(&source_path, &dest_path, &dest_id).map_err(|e| {
+        let dest_id = match cli.session_id.clone() {
+            Some(raw) => coco_types::SessionId::try_new(raw.clone())
+                .map_err(|e| anyhow::anyhow!("invalid session id '{raw}': {e}"))?,
+            None => coco_types::SessionId::generate(),
+        };
+        let dest_path = dest_store.transcript_path(dest_id.as_str());
+        fork_conversation(&source_path, &dest_path, dest_id.as_str()).map_err(|e| {
             anyhow::anyhow!(
                 "fork copy {} → {} failed: {e}",
                 source_path.display(),
@@ -213,19 +226,17 @@ fn resolve_most_recent_across_projects(memory_base: &Path) -> Result<Option<(Str
         return Ok(None);
     }
     let latest = sessions.remove(0);
-    if latest.session_id.is_empty() {
-        return Ok(None);
-    }
+    let latest_session_id = latest.session_id.into_inner();
     // Resolve back to the on-disk path via the global scan since
     // `list_all_sessions` returned bare metadata.
     let resolved =
-        coco_session::storage::resolve_session_file_path(memory_base, &latest.session_id, None)?;
+        coco_session::storage::resolve_session_file_path(memory_base, &latest_session_id, None)?;
     let Some(resolved) = resolved else {
         // Race: file disappeared between list and resolve. Treat as
         // no recent session rather than erroring.
         return Ok(None);
     };
-    Ok(Some((latest.session_id, resolved.file_path)))
+    Ok(Some((latest_session_id, resolved.file_path)))
 }
 
 #[cfg(test)]

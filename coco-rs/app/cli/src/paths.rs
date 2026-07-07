@@ -12,6 +12,40 @@ use std::sync::Arc;
 use coco_config::global_config;
 use coco_paths::ProjectPaths;
 
+/// Resolved path anchors for one session.
+///
+/// `cwd` is the session's working directory. `project_root` is the future
+/// `ProjectServices` cache key: the git worktree root when available, else
+/// `cwd`. `storage_paths` intentionally preserves the existing transcript /
+/// memory layout anchor, which is still keyed by the session cwd.
+#[derive(Debug, Clone)]
+pub struct SessionWorkspace {
+    pub cwd: PathBuf,
+    pub project_root: PathBuf,
+    pub storage_paths: Arc<ProjectPaths>,
+}
+
+impl SessionWorkspace {
+    pub fn resolve(cwd: impl Into<PathBuf>) -> Self {
+        let cwd = cwd.into();
+        let project_root = resolve_project_root(&cwd);
+        let storage_paths = project_paths(&cwd);
+        Self {
+            cwd,
+            project_root,
+            storage_paths,
+        }
+    }
+}
+
+/// Resolve the project root used by project-scoped services.
+///
+/// This intentionally returns the worktree root, not the canonical shared git
+/// directory root, so linked worktrees can host independent project services.
+pub fn resolve_project_root(cwd: &Path) -> PathBuf {
+    git_root_for(cwd).unwrap_or_else(|| cwd.to_path_buf())
+}
+
 /// `config home/sessions` — legacy flat session directory.
 ///
 /// **DEPRECATED** for new code. The current layout puts session files
@@ -104,6 +138,24 @@ pub fn standard_agent_search_paths(
     config_home: &Path,
     cwd: &Path,
 ) -> coco_subagent::definition_store::AgentSearchPaths {
+    let project_root = resolve_project_root(cwd);
+    standard_agent_search_paths_for_project(config_home, cwd, &project_root)
+}
+
+pub fn standard_agent_search_paths_for_project(
+    config_home: &Path,
+    cwd: &Path,
+    project_root: &Path,
+) -> coco_subagent::definition_store::AgentSearchPaths {
+    let plugins = coco_plugins::load_enabled_plugins(config_home, project_root);
+    standard_agent_search_paths_with_plugins(config_home, cwd, &plugins)
+}
+
+pub fn standard_agent_search_paths_with_plugins(
+    config_home: &Path,
+    cwd: &Path,
+    plugins: &[coco_plugins::loader::LoadedPluginV2],
+) -> coco_subagent::definition_store::AgentSearchPaths {
     let mut project_dirs = vec![
         cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
             .join("agents"),
@@ -140,7 +192,7 @@ pub fn standard_agent_search_paths(
     coco_subagent::definition_store::AgentSearchPaths {
         user_dir: Some(config_home.join("agents")),
         project_dirs,
-        plugin_dirs: plugin_agent_dirs(config_home, cwd),
+        plugin_dirs: plugin_agent_dirs(plugins),
         ..coco_subagent::definition_store::AgentSearchPaths::empty()
     }
 }
@@ -149,11 +201,9 @@ pub fn standard_agent_search_paths(
 /// The discovery (which dirs) lives in `coco_plugins::plugin_agent_dirs`; this
 /// wraps each `(name, dir)` in the subagent loader's `PluginAgentDir`.
 fn plugin_agent_dirs(
-    config_home: &Path,
-    cwd: &Path,
+    plugins: &[coco_plugins::loader::LoadedPluginV2],
 ) -> Vec<coco_subagent::definition_store::PluginAgentDir> {
-    let plugins = coco_plugins::load_enabled_plugins(config_home, cwd);
-    coco_plugins::plugin_agent_dirs(&plugins)
+    coco_plugins::plugin_agent_dirs(plugins)
         .into_iter()
         .map(
             |(plugin_name, dir)| coco_subagent::definition_store::PluginAgentDir {

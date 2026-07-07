@@ -36,7 +36,9 @@ use crate::headless::resolve_additional_dirs;
 use crate::headless::resolve_additional_dirs_display;
 use crate::headless::resolve_main_model;
 use crate::headless::resolve_startup_permission_state;
-use crate::session_runtime::SessionRuntime;
+use crate::project_services::ProjectServices;
+use crate::project_services::project_registry;
+use crate::session_runtime::SessionHandle;
 
 /// Resources produced by [`build_engine_resources`]. Caller threads
 /// these through into [`crate::session_runtime::SessionRuntimeBuildOpts`].
@@ -69,6 +71,7 @@ pub struct EngineResources {
     ///
     /// Stored here so SDK / TUI bootstraps don't each re-build it.
     pub output_style_manager: coco_output_styles::OutputStyleManager,
+    pub project_services: Arc<ProjectServices>,
 }
 
 /// Build the shared engine resources from a resolved `RuntimeConfig`.
@@ -77,7 +80,7 @@ pub struct EngineResources {
 /// snapshots it from a hot-reload publisher, SDK / headless build it
 /// once via [`crate::headless::build_runtime_config_for_cli`].
 /// Build a real LSP handle when `Feature::Lsp` is enabled and the
-/// session has a workspace root + coco-home to load
+/// session has a project root + coco-home to load
 /// `lsp_servers.json` from. Returns `None` otherwise — callers thread
 /// the `None` into [`install_session_late_binds`] so the runtime's LSP
 /// slot stays empty and `LspTool` is hidden from the model.
@@ -122,23 +125,24 @@ pub fn spawn_marketplace_startup(config_home: std::path::PathBuf) {
 pub async fn build_lsp_handle_if_enabled(
     runtime_config: &RuntimeConfig,
     coco_home: &Path,
-    cwd: &Path,
+    project_root: &Path,
 ) -> Option<coco_tool_runtime::LspHandleRef> {
     if !runtime_config.features.enabled(coco_types::Feature::Lsp) {
         return None;
     }
-    let manager = coco_lsp::create_manager(Some(coco_home), Some(cwd.to_path_buf()));
+    let manager = coco_lsp::create_manager(Some(coco_home), Some(project_root.to_path_buf()));
     let adapter = crate::lsp_handle_adapter::LspManagerAdapter::new(manager);
     // Merge plugin-contributed LSP servers before prewarm so they spawn
     // eagerly alongside disk-configured servers.
-    let plugins = coco_plugins::load_enabled_plugins(coco_home, cwd);
-    let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
+    let project_services = project_registry().get_or_load(coco_home, project_root.to_path_buf());
+    let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> =
+        project_services.plugins().iter().collect();
     adapter
         .merge_plugin_servers(coco_plugins::lsp_bridge::extract_lsp_servers_from_plugins(
             &plugin_refs,
         ))
         .await;
-    adapter.prewarm(cwd).await;
+    adapter.prewarm(project_root).await;
     Some(Arc::new(adapter))
 }
 
@@ -162,14 +166,17 @@ pub fn build_engine_resources(
     let tool_count = registry.len();
     let tools = Arc::new(registry);
 
-    // Load the session's plugin set once, then reuse it for output-style,
-    // command, skill, and hook registration.
-    let plugins = load_session_plugins(cwd);
+    // Load the project plugin catalog once, then reuse it for output-style,
+    // command, skill, and hook registration. Skills still discover from the
+    // session cwd below; plugin standing dirs are project-scoped.
+    let project_root = crate::paths::resolve_project_root(cwd);
+    let config_home = global_config::config_home();
+    let project_services = project_registry().get_or_load(&config_home, project_root);
 
     // Resolve the active output style up front: it shapes the system
     // prompt cache prefix and surfaces on the SDK init message + the
     // per-turn reminder generator. Plugin-contributed styles are folded in.
-    let plugin_style_sources = plugin_output_style_sources(&plugins);
+    let plugin_style_sources = project_services.output_style_sources();
     let output_style_manager =
         build_output_style_manager(runtime_config, cwd, &plugin_style_sources);
 
@@ -189,7 +196,7 @@ pub fn build_engine_resources(
     let startup = resolve_startup_permission_state(cli, &runtime_config.settings.merged)?;
 
     let (command_registry, skill_manager) =
-        build_session_command_registry(cli, runtime_config, cwd, &plugins);
+        build_session_command_registry(cli, runtime_config, cwd, project_services.plugins());
     let command_count = command_registry.len();
     let skill_count = skill_manager.len();
 
@@ -235,6 +242,7 @@ pub fn build_engine_resources(
         command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry))),
         skill_manager,
         output_style_manager,
+        project_services,
     })
 }
 
@@ -291,27 +299,6 @@ pub(crate) fn build_session_command_registry(
     );
     registry.set_build_provenance(crate::build_provenance());
     (registry, skill_manager)
-}
-
-/// Load the active plugin set for this session once: marketplace versioned
-/// cache + local `inline` dirs, gated by settings.json `enabled_plugins`.
-/// Shared by the output-style, command, skill, and hook registration paths so
-/// a session loads plugins exactly once.
-pub(crate) fn load_session_plugins(cwd: &Path) -> Vec<coco_plugins::loader::LoadedPluginV2> {
-    coco_plugins::load_enabled_plugins(&global_config::config_home(), cwd)
-}
-
-/// Derive the plugin output-style sources from a loaded plugin set (default
-/// `<plugin>/output-styles/` dir + manifest `output_styles` extras). Fed into
-/// [`build_output_style_manager`] so plugin-contributed styles surface
-/// alongside user / project / managed styles.
-pub(crate) fn plugin_output_style_sources(
-    plugins: &[coco_plugins::loader::LoadedPluginV2],
-) -> Vec<coco_output_styles::PluginOutputStyleSource> {
-    plugins
-        .iter()
-        .map(coco_output_styles::PluginOutputStyleSource::from_loaded_plugin)
-        .collect()
 }
 
 /// Resolve [`coco_skills::SkillLoadGates`] from the resolved `RuntimeConfig`,
@@ -414,12 +401,13 @@ pub(crate) fn resolve_skill_load_gates_with_add_dirs(
 /// `Some(notification_tx.clone())`; SDK/headless pass `None` (they build
 /// their `CoreEvent` channel per-turn after this point).
 pub async fn install_session_late_binds(
-    runtime: Arc<SessionRuntime>,
+    session: SessionHandle,
     cwd: &Path,
     mcp_handle: Option<coco_tool_runtime::McpHandleRef>,
     lsp_handle: Option<coco_tool_runtime::LspHandleRef>,
     event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 ) -> Result<()> {
+    let runtime = session.runtime().clone();
     // Background task runtime — owns the `TaskManager` and per-task
     // disk output; shared with `SwarmAgentHandle` so AgentTool
     // background spawns and the engine's `Task*` tools see one
@@ -429,8 +417,9 @@ pub async fn install_session_late_binds(
     // `<config_home>/projects/<slug>/<session_id>/tasks/`.
     // Captured ONCE here so subsequent `/clear` regenerations don't
     // invalidate paths held by in-flight `DiskTaskOutput` instances.
-    let task_session_id = runtime.current_session_id().await;
-    let task_session_dir = crate::paths::project_paths(cwd).task_outputs_dir(&task_session_id);
+    let task_session_id = runtime.current_typed_session_id().await;
+    let task_session_dir =
+        crate::paths::project_paths(cwd).task_outputs_dir(task_session_id.as_str());
     // Wire the session-scoped `CommandQueue` into the TaskRuntime
     // via the `NotificationSink` trait so terminal lifecycle events
     // (mark_completed / mark_failed / kill_task / bg shell exit)
@@ -460,7 +449,7 @@ pub async fn install_session_late_binds(
     );
     task_runtime.start_memory_pressure_shell_reaper(runtime.shutdown_signal());
     runtime.attach_task_runtime(task_runtime).await;
-    let task_list_id = coco_tasks::resolve_task_list_id(None, None, &task_session_id);
+    let task_list_id = coco_tasks::resolve_task_list_id(None, None, task_session_id.as_str());
     let task_list_root = coco_config::global_config::config_home().join("tasks");
     let task_list_router =
         crate::team_task_list_router::RoutedTaskList::open(task_list_root, task_list_id)?;
@@ -479,9 +468,12 @@ pub async fn install_session_late_binds(
     // writes no subagent JSONL.
     if runtime.persist_session() {
         let agent_transcript_store: Arc<dyn coco_tool_runtime::AgentTranscriptStore> = Arc::new(
-            crate::agent_transcript_persistence::SessionAgentTranscriptStore::new(Arc::new(
-                coco_session::TranscriptStore::new(crate::paths::project_paths(cwd)),
-            )),
+            crate::agent_transcript_persistence::SessionAgentTranscriptStore::new(
+                Arc::new(coco_session::TranscriptStore::new(
+                    crate::paths::project_paths(cwd),
+                )),
+                cwd.to_path_buf(),
+            ),
         );
         runtime
             .attach_agent_transcript_store(agent_transcript_store)
@@ -509,17 +501,17 @@ pub async fn install_session_late_binds(
     // `event_sink` doubles as the subagent `TaskPanelChanged` bridge —
     // same channel the TaskManager sink above feeds.
     crate::agent_handle_factory::install_agent_team(
-        runtime.clone(),
+        session.clone(),
         cwd.display().to_string(),
         event_sink,
     )
     .await?;
 
-    // Post-turn fork dispatcher (`/btw`, `promptSuggestion`). Captures
-    // `Arc<SessionRuntime>` and routes every dispatch through
-    // `build_engine_from_config`, leaving the parent loop untouched.
-    crate::fork_dispatcher::install(runtime.clone()).await;
-    crate::hook_agent_runner::install(runtime).await;
+    // Post-turn fork dispatcher (`/btw`, `promptSuggestion`) and hook-agent
+    // runner install through the session handle boundary, while their current
+    // implementations still route through the underlying runtime.
+    crate::fork_dispatcher::install(session.clone()).await;
+    crate::hook_agent_runner::install(session).await;
 
     // In-prompt skill / slash-command shell routing is wired at the
     // engine-build site (`SessionRuntime::build_engine`): it calls
@@ -550,11 +542,12 @@ pub async fn install_session_late_binds(
 /// headless. No UI: server-initiated elicitations during the connect handshake
 /// are declined.
 pub async fn bootstrap_session_mcp(
-    runtime: &Arc<SessionRuntime>,
+    session: &SessionHandle,
     cwd: &Path,
     existing_manager: Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>,
     await_connect: bool,
 ) {
+    let runtime = session.runtime();
     let config_home = global_config::config_home();
     let manager = existing_manager.unwrap_or_else(|| {
         Arc::new(tokio::sync::Mutex::new(
@@ -566,10 +559,19 @@ pub async fn bootstrap_session_mcp(
     });
 
     // Register config-file + plugin servers (config-map seeding only; the actual
-    // connect is deferred to the background pass below).
-    let config_servers = coco_mcp::McpConfigLoader::load(cwd, &config_home);
-    let plugins = coco_plugins::load_enabled_plugins(&config_home, cwd);
-    let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
+    // connect is deferred to the background pass below). Project MCP config and
+    // plugin contributions are rooted at the ProjectServices key; local config
+    // remains session-cwd scoped.
+    let config_servers = coco_mcp::McpConfigLoader::load_with_roots(
+        coco_mcp::McpConfigRoots {
+            project_root: &runtime.project_root,
+            session_cwd: cwd,
+        },
+        &config_home,
+    );
+    let project_services = runtime.project_services.clone();
+    let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> =
+        project_services.plugins().iter().collect();
     let plugin_servers = coco_plugins::mcp_bridge::extract_mcp_servers_from_plugins(&plugin_refs);
     {
         let mut mgr = manager.lock().await;

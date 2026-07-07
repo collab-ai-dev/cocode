@@ -26,6 +26,7 @@ use coco_tui::state::ToolExecution;
 use coco_tui::state::ToolStatus;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
+use coco_types::ServerNotificationIdentity;
 use tokio::sync::mpsc;
 
 fn protocol_evt(notif: ServerNotification) -> CoreEvent {
@@ -74,8 +75,7 @@ async fn truncate_shrinks_transcript_and_drops_anchored_overlays() {
             &mut state,
             protocol_evt(ServerNotification::MessageAppended {
                 message: std::sync::Arc::new(m),
-                session_id: String::new(),
-                agent_id: None,
+                identity: ServerNotificationIdentity::default(),
             }),
         );
     }
@@ -101,8 +101,7 @@ async fn truncate_shrinks_transcript_and_drops_anchored_overlays() {
     let (tx, mut rx) = mpsc::channel::<CoreEvent>(4);
     tx.send(protocol_evt(ServerNotification::MessageTruncated {
         keep_count: 1,
-        session_id: String::new(),
-        agent_id: None,
+        identity: ServerNotificationIdentity::default(),
     }))
     .await
     .expect("channel accepts the event");
@@ -151,8 +150,7 @@ async fn truncate_to_zero_empties_transcript() {
             &mut state,
             protocol_evt(ServerNotification::MessageAppended {
                 message: std::sync::Arc::new(m),
-                session_id: String::new(),
-                agent_id: None,
+                identity: ServerNotificationIdentity::default(),
             }),
         );
     }
@@ -162,8 +160,7 @@ async fn truncate_to_zero_empties_transcript() {
         &mut state,
         roundtrip(protocol_evt(ServerNotification::MessageTruncated {
             keep_count: 0,
-            session_id: String::new(),
-            agent_id: None,
+            identity: ServerNotificationIdentity::default(),
         })),
     );
 
@@ -181,8 +178,7 @@ async fn truncate_beyond_history_is_a_noop() {
         &mut state,
         protocol_evt(ServerNotification::MessageAppended {
             message: std::sync::Arc::new(m),
-            session_id: String::new(),
-            agent_id: None,
+            identity: ServerNotificationIdentity::default(),
         }),
     );
 
@@ -192,8 +188,7 @@ async fn truncate_beyond_history_is_a_noop() {
         &mut state,
         roundtrip(protocol_evt(ServerNotification::MessageTruncated {
             keep_count: 99,
-            session_id: String::new(),
-            agent_id: None,
+            identity: ServerNotificationIdentity::default(),
         })),
     );
 

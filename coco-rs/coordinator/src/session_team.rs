@@ -18,8 +18,8 @@ pub const SESSION_TEAM_PREFIX: &str = "session";
 /// `session-<sessionId[:8]>`. Short ids (< 8 chars) are used whole. The
 /// 8-char prefix is taken by `char` so a multibyte boundary can never
 /// panic (session ids are ASCII UUIDs, but the slice stays safe).
-pub fn session_team_name(session_id: &str) -> String {
-    let prefix: String = session_id.chars().take(8).collect();
+pub fn session_team_name(session_id: &coco_types::SessionId) -> String {
+    let prefix: String = session_id.as_str().chars().take(8).collect();
     format!("{SESSION_TEAM_PREFIX}-{prefix}")
 }
 

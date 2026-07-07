@@ -1,4 +1,9 @@
 use super::*;
+use coco_types::SessionId;
+
+fn test_session_id(value: &str) -> SessionId {
+    SessionId::try_new(value).expect("valid session id")
+}
 
 #[test]
 fn test_logger_disabled() {
@@ -7,7 +12,7 @@ fn test_logger_disabled() {
             enabled: false,
             ..Default::default()
         },
-        "test".into(),
+        test_session_id("test"),
     );
     logger.log_tool_use("Read", 100, false);
     assert_eq!(logger.pending_count(), 0);
@@ -20,7 +25,7 @@ fn test_logger_enabled() {
             enabled: true,
             ..Default::default()
         },
-        "test-session".into(),
+        test_session_id("test-session"),
     );
     logger.log_tool_use("Bash", 500, false);
     logger.log_permission("Write", "allow", "safe path");

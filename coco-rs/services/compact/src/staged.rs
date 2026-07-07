@@ -17,6 +17,7 @@
 //! ```
 
 use coco_messages::Message;
+use coco_types::SessionId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -46,7 +47,7 @@ pub struct CommitEntry {
     /// `'marble-origami-commit'`.
     #[serde(rename = "type")]
     pub type_: String,
-    pub session_id: Uuid,
+    pub session_id: SessionId,
     /// Per-session monotonic id; 16-char uppercase hex by convention.
     pub collapse_id: String,
     pub summary_uuid: Uuid,
@@ -65,7 +66,7 @@ pub struct SnapshotEntry {
     /// `'marble-origami-snapshot'`.
     #[serde(rename = "type")]
     pub type_: String,
-    pub session_id: Uuid,
+    pub session_id: SessionId,
     pub staged: Vec<StagedRange>,
     /// Whether the spawn trigger is armed.
     pub armed: bool,
@@ -77,7 +78,7 @@ impl CommitEntry {
     pub const TYPE: &'static str = "marble-origami-commit";
 
     pub fn new(
-        session_id: Uuid,
+        session_id: SessionId,
         collapse_id: String,
         summary_uuid: Uuid,
         summary_content: String,
@@ -101,7 +102,7 @@ impl CommitEntry {
 impl SnapshotEntry {
     pub const TYPE: &'static str = "marble-origami-snapshot";
 
-    pub fn empty(session_id: Uuid) -> Self {
+    pub fn empty(session_id: SessionId) -> Self {
         Self {
             type_: Self::TYPE.to_string(),
             session_id,
@@ -137,7 +138,7 @@ impl StagedCompactLedger {
     }
 
     /// Stage a new range (called by the ctx-agent / threshold detector).
-    pub fn stage(&mut self, session_id: Uuid, range: StagedRange) {
+    pub fn stage(&mut self, session_id: SessionId, range: StagedRange) {
         let snap = self
             .snapshot
             .get_or_insert_with(|| SnapshotEntry::empty(session_id));
@@ -148,7 +149,7 @@ impl StagedCompactLedger {
     /// Returns the produced [`CommitEntry`] so callers can persist it.
     pub fn commit(
         &mut self,
-        session_id: Uuid,
+        session_id: SessionId,
         index: usize,
         summary_uuid: Uuid,
         summary_content: String,
@@ -176,7 +177,7 @@ impl StagedCompactLedger {
     /// Returns the newly-committed entries.
     pub fn drain_overflow(
         &mut self,
-        session_id: Uuid,
+        session_id: SessionId,
         mut summary_uuid_for: impl FnMut(&StagedRange) -> Uuid,
     ) -> Vec<CommitEntry> {
         let Some(snap) = self.snapshot.as_mut() else {
@@ -188,7 +189,7 @@ impl StagedCompactLedger {
             let collapse_id = next_collapse_id(&self.commits);
             let summary_uuid = summary_uuid_for(&staged);
             let entry = CommitEntry::new(
-                session_id,
+                session_id.clone(),
                 collapse_id,
                 summary_uuid,
                 placeholder_text(&staged),

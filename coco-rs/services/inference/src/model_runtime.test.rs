@@ -1381,27 +1381,44 @@ fn update_session_id_swaps_header_vars_snapshot() {
             runtime_with_header(coco_config::HeaderValue::templated("${SESSION_ID}")),
             None,
             Arc::new(HeaderVars {
-                session_id: "sess-old".to_string(),
+                session_id: Some(coco_types::SessionId::try_new("sess-old").expect("session id")),
                 cwd: "/work".to_string(),
                 app_version: "1.2.3".to_string(),
             }),
         )
         .expect("registry"),
     );
-    assert_eq!(registry.header_vars_snapshot().session_id, "sess-old");
+    assert_eq!(
+        registry
+            .header_vars_snapshot()
+            .session_id
+            .as_ref()
+            .map(coco_types::SessionId::as_str),
+        Some("sess-old")
+    );
 
     registry
-        .update_session_id("sess-new")
+        .update_session_id(&coco_types::SessionId::try_new("sess-new").expect("session id"))
         .expect("session id refresh");
     let vars = registry.header_vars_snapshot();
-    assert_eq!(vars.session_id, "sess-new");
+    assert_eq!(
+        vars.session_id.as_ref().map(coco_types::SessionId::as_str),
+        Some("sess-new")
+    );
     // Non-session fields are preserved across the swap.
     assert_eq!(vars.cwd, "/work");
     assert_eq!(vars.app_version, "1.2.3");
 
     // Unchanged id is a no-op (and must not error).
     registry
-        .update_session_id("sess-new")
+        .update_session_id(&coco_types::SessionId::try_new("sess-new").expect("session id"))
         .expect("idempotent refresh");
-    assert_eq!(registry.header_vars_snapshot().session_id, "sess-new");
+    assert_eq!(
+        registry
+            .header_vars_snapshot()
+            .session_id
+            .as_ref()
+            .map(coco_types::SessionId::as_str),
+        Some("sess-new")
+    );
 }

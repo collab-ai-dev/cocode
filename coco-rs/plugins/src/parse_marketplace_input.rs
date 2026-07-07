@@ -69,6 +69,17 @@ pub fn parse_marketplace_input<F>(
 where
     F: FnOnce() -> Option<PathBuf>,
 {
+    parse_marketplace_input_in_cwd(input, expand_home, Path::new("."))
+}
+
+pub fn parse_marketplace_input_in_cwd<F>(
+    input: &str,
+    expand_home: F,
+    cwd: &Path,
+) -> Result<Option<MarketplaceSource>, ParseError>
+where
+    F: FnOnce() -> Option<PathBuf>,
+{
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -88,7 +99,7 @@ where
     }
 
     if is_local_path_form(trimmed) {
-        return parse_local_path(trimmed, expand_home).map(Some);
+        return parse_local_path(trimmed, expand_home, cwd).map(Some);
     }
 
     if let Some(src) = parse_github_shorthand(trimmed) {
@@ -250,7 +261,7 @@ fn is_windows_local_form(s: &str) -> bool {
     }
 }
 
-fn parse_local_path<F>(s: &str, expand_home: F) -> Result<MarketplaceSource, ParseError>
+fn parse_local_path<F>(s: &str, expand_home: F, cwd: &Path) -> Result<MarketplaceSource, ParseError>
 where
     F: FnOnce() -> Option<PathBuf>,
 {
@@ -273,18 +284,16 @@ where
     } else {
         PathBuf::from(s)
     };
-    let resolved = absolutize(&resolved);
+    let resolved = absolutize(&resolved, cwd);
 
     classify_local_path(&resolved)
 }
 
-fn absolutize(p: &Path) -> PathBuf {
+fn absolutize(p: &Path, cwd: &Path) -> PathBuf {
     if p.is_absolute() {
         p.to_path_buf()
     } else {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(p))
-            .unwrap_or_else(|_| p.to_path_buf())
+        cwd.join(p)
     }
 }
 

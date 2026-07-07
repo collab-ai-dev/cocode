@@ -237,7 +237,8 @@ async fn goal_terminal_success_clears_active_goal_hook_and_records_status() {
     let mut engine = engine_with_hooks(Some(hooks.clone()));
     let store = Arc::new(coco_session::InMemoryStore::new());
     engine.transcript_store = Some(store.clone());
-    engine.transcript_session_id = Some("goal-success-session".to_string());
+    engine.transcript_session_id =
+        Some(coco_types::SessionId::try_new("goal-success-session").unwrap());
     let terminal_goal_metadata_written = Arc::new(AtomicBool::new(false));
     engine.terminal_goal_metadata_written = Some(terminal_goal_metadata_written.clone());
     let app_state = Arc::new(RwLock::new(ToolAppState {
@@ -299,7 +300,8 @@ async fn goal_terminal_impossible_clears_goal_and_records_failed_status() {
     let mut engine = engine_with_hooks(Some(hooks.clone()));
     let store = Arc::new(coco_session::InMemoryStore::new());
     engine.transcript_store = Some(store.clone());
-    engine.transcript_session_id = Some("goal-impossible-session".to_string());
+    engine.transcript_session_id =
+        Some(coco_types::SessionId::try_new("goal-impossible-session").unwrap());
     let app_state = Arc::new(RwLock::new(ToolAppState {
         active_goal: Some(active_goal("finish migration")),
         ..ToolAppState::default()
@@ -352,7 +354,8 @@ async fn goal_blocked_updates_active_goal_and_records_unmet_status() {
     let mut engine = engine_with_hooks(Some(Arc::new(HookRegistry::new())));
     let store = Arc::new(coco_session::InMemoryStore::new());
     engine.transcript_store = Some(store.clone());
-    engine.transcript_session_id = Some("goal-blocked-session".to_string());
+    engine.transcript_session_id =
+        Some(coco_types::SessionId::try_new("goal-blocked-session").unwrap());
     let app_state = Arc::new(RwLock::new(ToolAppState {
         active_goal: Some(ActiveGoal {
             condition: "finish migration".to_string(),

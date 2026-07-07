@@ -4,13 +4,15 @@
 //! shared `coco_plugins::marketplace::MarketplaceManager`), uninstall,
 //! validate. Scopes and lockfiles are a follow-up.
 
+use std::path::Path;
+use std::path::PathBuf;
+
 use anyhow::Result;
 
 use coco_cli::PluginAction;
 use coco_config::global_config;
 
-pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
-    let cwd = std::env::current_dir().unwrap_or_default();
+pub async fn run_plugin_subcommand(action: &PluginAction, cwd: &Path) -> Result<()> {
     let config_home = global_config::config_home();
 
     match action {
@@ -18,7 +20,7 @@ pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
             // Same enabled set the session bootstrap registers contributions
             // from — marketplace versioned cache + local `inline` dirs, gated by
             // settings.json `enabled_plugins`.
-            let mut plugins = coco_plugins::load_enabled_plugins(&config_home, &cwd);
+            let mut plugins = coco_plugins::load_enabled_plugins(&config_home, cwd);
             if plugins.is_empty() {
                 println!("No plugins installed.");
                 return Ok(());
@@ -43,7 +45,7 @@ pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
             Ok(())
         }
         PluginAction::Install { name } => {
-            let src = std::path::Path::new(name);
+            let src = resolve_cli_path(cwd, name);
             if !src.is_dir() {
                 // Not a local path — try marketplace install. The slash
                 // command (`/plugin install`) shares the same underlying
@@ -58,7 +60,7 @@ pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
             let loader = coco_plugins::loader::PluginLoader::new(config_home.join("plugins"));
             let plugin = loader
                 .load_from_dir(
-                    src,
+                    &src,
                     coco_plugins::loader::PluginLoadSource::SessionDir,
                     None,
                 )
@@ -87,7 +89,7 @@ pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
                     dest.display()
                 );
             }
-            copy_dir_recursive(src, &dest)?;
+            copy_dir_recursive(&src, &dest)?;
             println!("Installed plugin '{plugin_name}' → {}", dest.display());
             Ok(())
         }
@@ -101,7 +103,7 @@ pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
             Ok(())
         }
         PluginAction::Validate { path } => {
-            let path = std::path::Path::new(path);
+            let path = resolve_cli_path(cwd, path);
             // The V2 loader reads the manifest from a directory; accept either a
             // dir or a path to the manifest file itself.
             let dir = if path.is_file() {
@@ -109,7 +111,7 @@ pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
                     .map(std::path::Path::to_path_buf)
                     .unwrap_or_else(|| path.to_path_buf())
             } else {
-                path.to_path_buf()
+                path
             };
             let loader = coco_plugins::loader::PluginLoader::new(config_home.join("plugins"));
             let plugin = loader
@@ -148,6 +150,15 @@ pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+fn resolve_cli_path(cwd: &Path, raw: &str) -> PathBuf {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
     }
 }
 

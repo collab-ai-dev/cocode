@@ -140,6 +140,7 @@ pub use event::ElicitationCompleteParams;
 pub use event::ErrorCode;
 pub use event::ErrorParams;
 pub use event::ErrorPayload;
+pub use event::EventReplayPolicy;
 pub use event::FastModeState;
 pub use event::FileChangeInfo;
 pub use event::FileChangeKind;
@@ -193,7 +194,9 @@ pub use event::RewindDiffStatsPayload;
 pub use event::RewindRowMetadata;
 pub use event::SandboxStateChangedParams;
 pub use event::ServerNotification;
+pub use event::ServerNotificationIdentity;
 pub use event::SessionEndedParams;
+pub use event::SessionEnvelope;
 pub use event::SessionModelUsage;
 pub use event::SessionResultParams;
 pub use event::SessionStartedParams;
@@ -353,6 +356,7 @@ pub use hook::HookScope;
 // ID types
 pub use id::AgentId;
 pub use id::SessionId;
+pub use id::SurfaceId;
 pub use id::TaskId;
 pub use id::TurnId;
 

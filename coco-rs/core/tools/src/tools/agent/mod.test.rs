@@ -1895,9 +1895,10 @@ impl AgentHandle for ResumeRecordingHandle {
         &self,
         agent_id: &str,
         prompt: &str,
-        session_id: &str,
+        session_id: &coco_types::SessionId,
     ) -> Result<AgentSpawnResponse, String> {
-        *self.last_resume.lock().await = Some((agent_id.into(), prompt.into(), session_id.into()));
+        *self.last_resume.lock().await =
+            Some((agent_id.into(), prompt.into(), session_id.to_string()));
         Ok(AgentSpawnResponse {
             status: AgentSpawnStatus::AsyncLaunched,
             agent_id: Some("resumed-task-id-7af2".into()),

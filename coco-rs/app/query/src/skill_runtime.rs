@@ -48,6 +48,7 @@ use coco_types::PermissionRule;
 use coco_types::PermissionRuleSource;
 use coco_types::PermissionUpdate;
 use coco_types::PermissionUpdateDestination;
+use coco_types::SessionId;
 use coco_types::SkillOverrideState;
 
 /// Real skill-runtime implementation.
@@ -77,7 +78,7 @@ pub struct QuerySkillRuntime {
     /// Current session id, substituted for `${CLAUDE_SESSION_ID}` in skill
     /// prompts. Installed at bootstrap via [`Self::with_session_id`]; `None`
     /// leaves the token unexpanded (older behaviour).
-    session_id: Option<String>,
+    session_id: Option<SessionId>,
     /// Shared Bash handle cell for in-prompt shell expansion. `None`
     /// leaves `` !`cmd` `` markers untouched (matches the prior no-shell
     /// behaviour of the inline path).
@@ -139,8 +140,8 @@ impl QuerySkillRuntime {
     }
 
     /// Install the session id used to expand `${CLAUDE_SESSION_ID}`.
-    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
-        self.session_id = Some(session_id.into());
+    pub fn with_session_id(mut self, session_id: SessionId) -> Self {
+        self.session_id = Some(session_id);
         self
     }
 }
@@ -250,7 +251,7 @@ impl SkillHandle for QuerySkillRuntime {
                     args,
                     argument_names: &[],
                     skill_dir,
-                    session_id: self.session_id.as_deref(),
+                    session_id: self.session_id.as_ref().map(SessionId::as_str),
                     base_dir: skill_dir,
                     plugin_root: None,
                     plugin_data_dir: None,
@@ -366,7 +367,7 @@ impl SkillHandle for QuerySkillRuntime {
                 );
                 let config = AgentQueryConfig {
                     system_prompt: String::new(),
-                    identity: coco_tool_runtime::AgentRunIdentity::new(
+                    identity: coco_tool_runtime::AgentRunIdentity::from_session_id(
                         inherit.session_id.clone(),
                         agent_id.clone(),
                         coco_tool_runtime::AgentRunKind::Skill,

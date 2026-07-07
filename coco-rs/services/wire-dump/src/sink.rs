@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use coco_types::TurnId;
 use serde_json::Value;
 use serde_json::json;
 
@@ -22,7 +23,7 @@ use serde_json::json;
 #[derive(Clone, Debug)]
 pub struct WireRecord {
     pub seq: u64,
-    pub turn_id: String,
+    pub turn_id: TurnId,
     pub provider: String,
     pub model: String,
     /// `"stream"` / `"http"` / `"request_only"`.
@@ -94,7 +95,7 @@ impl WireSink for FileSink {
         let base = format!(
             "{seq:04}-{turn}-{provider}",
             seq = record.seq,
-            turn = sanitize(&record.turn_id),
+            turn = sanitize(record.turn_id.as_str()),
             provider = sanitize(&record.provider),
         );
         let ts_ms = SystemTime::now()
@@ -113,7 +114,7 @@ impl WireSink for FileSink {
             let meta = json!({
                 "seq": record.seq,
                 "ts_ms": ts_ms,
-                "turn_id": record.turn_id,
+                "turn_id": record.turn_id.as_str(),
                 "provider": record.provider,
                 "model": record.model,
                 "transport": record.transport,
@@ -134,7 +135,7 @@ impl WireSink for FileSink {
         let index = json!({
             "seq": record.seq,
             "ts_ms": ts_ms,
-            "turn_id": record.turn_id,
+            "turn_id": record.turn_id.as_str(),
             "provider": record.provider,
             "model": record.model,
             "transport": record.transport,

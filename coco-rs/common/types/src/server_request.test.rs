@@ -83,6 +83,19 @@ fn cancel_request_wire_method() {
 }
 
 #[test]
+fn turn_start_result_uses_typed_turn_id_with_string_wire_shape() {
+    let result = TurnStartResult {
+        turn_id: crate::TurnId::from("turn-1"),
+    };
+
+    let j = serde_json::to_value(&result).unwrap();
+
+    assert_eq!(j["turn_id"], "turn-1");
+    let decoded: TurnStartResult = serde_json::from_value(j).unwrap();
+    assert_eq!(decoded.turn_id, crate::TurnId::from("turn-1"));
+}
+
+#[test]
 fn mcp_status_result_roundtrip() {
     let r = McpStatusResult {
         mcp_servers: vec![McpServerStatus {

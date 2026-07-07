@@ -27,6 +27,13 @@ use crate::state::session::SubagentStatus;
 use crate::state::session::TaskEntry;
 use crate::state::session::TaskEntryStatus;
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    match coco_types::SessionId::try_new(value) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id should be valid"),
+    }
+}
+
 #[test]
 fn test_bg_agent_task_started_bridges_into_subagents() {
     // BgAgent TaskStarted (wire `task_type == "local_agent"`) populates
@@ -728,8 +735,10 @@ fn test_session_reset_clears_transcript_adjacent_state() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::SessionResetForResume {
-            session_id: "new-session".to_string(),
-            agent_id: None,
+            identity: coco_types::ServerNotificationIdentity::new(
+                Some(test_session_id("new-session")),
+                None,
+            ),
         }),
     );
 
@@ -797,8 +806,10 @@ fn test_session_reset_preserves_only_persistent_running_subagents() {
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::SessionResetForResume {
-            session_id: "new-session".to_string(),
-            agent_id: None,
+            identity: coco_types::ServerNotificationIdentity::new(
+                Some(test_session_id("new-session")),
+                None,
+            ),
         }),
     );
 
@@ -855,8 +866,7 @@ fn test_history_replaced_clears_tail_but_preserves_session_state() {
         &mut state,
         CoreEvent::Protocol(ServerNotification::HistoryReplaced {
             messages: Vec::new(),
-            session_id: String::new(),
-            agent_id: None,
+            identity: coco_types::ServerNotificationIdentity::default(),
             reason: coco_types::HistoryReplaceReason::Hydrate,
         }),
     );
@@ -972,7 +982,7 @@ fn test_live_status_tokens_start_fresh_and_follow_stream_deltas() {
     handle_core_event(
         &mut state,
         CoreEvent::Stream(AgentStreamEvent::TextDelta {
-            turn_id: "t2".to_string(),
+            turn_id: "t2".into(),
             delta: "abcdefghijkl".to_string(),
         }),
     );
@@ -990,7 +1000,7 @@ fn test_session_usage_updated_replaces_footer_usage() {
         &mut state,
         CoreEvent::Protocol(ServerNotification::SessionUsageUpdated(Box::new(
             coco_types::SessionUsageSnapshot {
-                session_id: "s1".into(),
+                session_id: test_session_id("s1"),
                 totals: coco_types::SessionUsageTotals {
                     input_tokens: 150,
                     output_tokens: 40,
@@ -999,7 +1009,7 @@ fn test_session_usage_updated_replaces_footer_usage() {
                     request_count: 2,
                     ..Default::default()
                 },
-                ..Default::default()
+                ..coco_types::SessionUsageSnapshot::empty(test_session_id("s1"))
             },
         ))),
     );
@@ -1008,7 +1018,13 @@ fn test_session_usage_updated_replaces_footer_usage() {
     assert_eq!(state.session.token_usage.output_tokens, 40);
     assert_eq!(state.session.token_usage.cache_read_tokens, 50);
     assert_eq!(
-        state.session.session_usage.as_ref().unwrap().session_id,
+        state
+            .session
+            .session_usage
+            .as_ref()
+            .unwrap()
+            .session_id
+            .as_str(),
         "s1"
     );
 }
@@ -1018,13 +1034,14 @@ fn test_session_usage_updated_preserves_existing_auto_compact_threshold() {
     let mut state = AppState::new();
     state.session.session_usage = Some(coco_types::SessionUsageSnapshot {
         auto_compact_threshold: Some(170_000),
-        ..Default::default()
+        ..coco_types::SessionUsageSnapshot::empty(test_session_id("s1"))
     });
 
     handle_core_event(
         &mut state,
         CoreEvent::Protocol(ServerNotification::SessionUsageUpdated(Box::new(
             coco_types::SessionUsageSnapshot {
+                session_id: test_session_id("s1"),
                 totals: coco_types::SessionUsageTotals {
                     input_tokens: 150,
                     output_tokens: 40,
@@ -1032,7 +1049,7 @@ fn test_session_usage_updated_preserves_existing_auto_compact_threshold() {
                     ..Default::default()
                 },
                 auto_compact_threshold: None,
-                ..Default::default()
+                ..coco_types::SessionUsageSnapshot::empty(test_session_id("s1"))
             },
         ))),
     );
@@ -1140,7 +1157,7 @@ fn test_model_role_changed_folds_into_session_and_role_map() {
 fn test_model_role_changed_clears_stale_auto_compact_threshold_for_main() {
     let mut state = AppState::new();
     state.session.session_usage = Some(coco_types::SessionUsageSnapshot {
-        session_id: "s1".into(),
+        session_id: test_session_id("s1"),
         totals: coco_types::SessionUsageTotals {
             input_tokens: 30_000,
             output_tokens: 2_000,
@@ -1148,7 +1165,7 @@ fn test_model_role_changed_clears_stale_auto_compact_threshold_for_main() {
             ..Default::default()
         },
         auto_compact_threshold: Some(170_000),
-        ..Default::default()
+        ..coco_types::SessionUsageSnapshot::empty(test_session_id("s1"))
     });
 
     handle_core_event(
@@ -1169,7 +1186,7 @@ fn test_model_role_changed_clears_stale_auto_compact_threshold_for_main() {
         .session_usage
         .as_ref()
         .expect("usage totals should be preserved");
-    assert_eq!(usage.session_id, "s1");
+    assert_eq!(usage.session_id.as_str(), "s1");
     assert_eq!(usage.totals.input_tokens, 30_000);
     assert_eq!(usage.auto_compact_threshold, None);
 }
@@ -1179,7 +1196,7 @@ fn test_model_role_changed_keeps_threshold_for_non_main() {
     let mut state = AppState::new();
     state.session.session_usage = Some(coco_types::SessionUsageSnapshot {
         auto_compact_threshold: Some(170_000),
-        ..Default::default()
+        ..coco_types::SessionUsageSnapshot::empty(test_session_id("s1"))
     });
 
     handle_core_event(

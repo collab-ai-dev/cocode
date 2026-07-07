@@ -229,7 +229,7 @@ fn crossterm_filter_accepts_plain_character_repeat_only() {
 
 fn lossy_text(n: usize) -> CoreEvent {
     CoreEvent::Stream(AgentStreamEvent::TextDelta {
-        turn_id: format!("turn-{n}"),
+        turn_id: format!("turn-{n}").into(),
         delta: "x".to_string(),
     })
 }
@@ -273,7 +273,7 @@ fn deferred_event_buffer_coalesces_stream_deltas() {
         defer_core_event(
             &mut buffer,
             CoreEvent::Stream(AgentStreamEvent::TextDelta {
-                turn_id: "t1".to_string(),
+                turn_id: "t1".into(),
                 delta: "hello ".to_string(),
             }),
         ),
@@ -283,7 +283,7 @@ fn deferred_event_buffer_coalesces_stream_deltas() {
         defer_core_event(
             &mut buffer,
             CoreEvent::Stream(AgentStreamEvent::TextDelta {
-                turn_id: "t1".to_string(),
+                turn_id: "t1".into(),
                 delta: "world".to_string(),
             }),
         ),

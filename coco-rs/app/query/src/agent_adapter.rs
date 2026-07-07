@@ -72,6 +72,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
         config: AgentQueryConfig,
     ) -> Result<AgentQueryResult, coco_error::BoxedError> {
         let identity = config.identity.clone();
+        let session_id = identity.session_id.clone();
         let permission_mode = config.permission_mode;
         let model_selection = config.model_selection.clone();
         let engine_model_id = model_selection.display_model_id().unwrap_or_default();
@@ -106,6 +107,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 &config.inherited_read_dirs,
             ),
         };
+        let typed_agent_id = identity.agent_id.clone();
 
         let engine_config = QueryEngineConfig {
             // A subagent uses its own configured turn cap, or runs
@@ -185,7 +187,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             }),
             fast_mode: false,
             fallback_min_context_window: None,
-            session_id: identity.session_id.clone(),
+            session_id: session_id.clone(),
             project_dir: None,
             // Subagent base rules come from the shared parent `app_state`
             // (read-through, the factory reads it each batch — TS
@@ -204,7 +206,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // Grep / Bash operate inside the override.
             cwd_override: config.cwd_override.clone(),
             plans_directory: None,
-            agent_id: Some(identity.agent_id.clone()),
+            agent_id: Some(typed_agent_id),
             is_teammate: config.is_teammate,
             is_in_process_teammate: config.is_in_process_teammate,
             plan_mode_required: config.plan_mode_required,
@@ -346,17 +348,14 @@ impl AgentQueryEngine for QueryEngineAdapter {
             engine = engine.with_live_transcript(live);
         }
 
-        // Per-round usage + cost: install a fresh `CostTracker` so the child
-        // emits `SessionUsageUpdated` after every model round. The engine's
-        // only token report otherwise rides the single end-of-cycle
-        // `TurnEnded`, and `TurnEnded` carries no cost at all — so without
-        // this the coordinator's spawn drain can't surface live spend (or even
-        // live tokens) on the subagent's activity row. The tracker is private
-        // to this child engine; its snapshot reaches only the spawn drain (the
-        // child's `event_tx`), never the parent session's usage.
-        engine = engine.with_session_usage_tracker(Arc::new(tokio::sync::Mutex::new(
-            coco_messages::CostTracker::new(),
-        )));
+        // Per-round usage + cost: install child-local accounting so the
+        // spawn drain receives `SessionUsageUpdated` after every model
+        // round. The engine's only token report otherwise rides the single
+        // end-of-cycle `TurnEnded`, and `TurnEnded` carries no cost.
+        engine = engine.with_usage_accounting(crate::usage_accounting::UsageAccounting::new(
+            session_id,
+            coco_types::UsageAttribution::session(coco_types::UsageSource::Main),
+        ));
         if matches!(identity.kind, AgentRunKind::Subagent) {
             engine =
                 engine.with_usage_attribution(coco_types::UsageAttribution::agent_tool_subagent(
@@ -364,7 +363,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
                     config
                         .agent_task_id
                         .clone()
-                        .or_else(|| Some(identity.agent_id.clone())),
+                        .or_else(|| Some(identity.agent_id.to_string())),
                 ));
         }
 

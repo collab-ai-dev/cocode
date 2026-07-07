@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use coco_types::ActiveShellTool;
+use coco_types::SessionId;
 use coco_types::ToolOverrides;
 
 pub mod dream;
@@ -16,6 +18,8 @@ pub mod session;
 pub use dream::DreamService;
 pub use extract::ExtractService;
 pub use session::SessionMemoryService;
+
+pub(crate) type SessionIdSlot = Arc<ArcSwap<SessionId>>;
 
 /// Runtime-only tool selection shared by memory fork services.
 #[derive(Clone)]

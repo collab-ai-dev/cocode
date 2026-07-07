@@ -2,15 +2,22 @@ use super::*;
 use crate::SCHEMA_VERSION;
 use crate::TraceEvent;
 use crate::TraceWriter;
+use coco_types::SessionId;
+use coco_types::TurnId;
 use pretty_assertions::assert_eq;
+
+fn test_session_id(value: &str) -> SessionId {
+    SessionId::try_new(value).expect("valid session id")
+}
 
 #[test]
 fn test_write_then_replay_round_trips_and_reduces_status() {
     let dir = tempfile::tempdir().unwrap();
-    let mut writer = TraceWriter::create(dir.path(), "sess-1", 1_700_000_000_000).unwrap();
+    let mut writer =
+        TraceWriter::create(dir.path(), test_session_id("sess-1"), 1_700_000_000_000).unwrap();
     writer
         .record(TraceEvent::TurnStarted {
-            turn_id: "t1".to_string(),
+            turn_id: TurnId::from("t1"),
         })
         .unwrap();
     writer
@@ -35,13 +42,13 @@ fn test_write_then_replay_round_trips_and_reduces_status() {
     writer.record(TraceEvent::ContextCompacted).unwrap();
     writer
         .record(TraceEvent::TurnEnded {
-            turn_id: "t1".to_string(),
+            turn_id: TurnId::from("t1"),
         })
         .unwrap();
     assert_eq!(writer.recorded_count(), 6);
 
     let bundle = replay_bundle(dir.path()).unwrap();
-    assert_eq!(bundle.manifest.session_id, "sess-1");
+    assert_eq!(bundle.manifest.session_id.as_str(), "sess-1");
     assert_eq!(bundle.manifest.schema_version, SCHEMA_VERSION);
     assert_eq!(bundle.manifest.created_unix_ms, 1_700_000_000_000);
     assert_eq!(bundle.events.len(), 6);
@@ -55,12 +62,12 @@ fn test_write_then_replay_round_trips_and_reduces_status() {
 #[test]
 fn test_record_core_drops_non_durable_events() {
     let dir = tempfile::tempdir().unwrap();
-    let mut writer = TraceWriter::create(dir.path(), "s", 0).unwrap();
+    let mut writer = TraceWriter::create(dir.path(), test_session_id("s"), 0).unwrap();
 
     let durable =
         coco_types::CoreEvent::Protocol(coco_types::ServerNotification::CompactionStarted);
     let noise = coco_types::CoreEvent::Stream(coco_types::AgentStreamEvent::TextDelta {
-        turn_id: "t".to_string(),
+        turn_id: coco_types::TurnId::from("t"),
         delta: "x".to_string(),
     });
 

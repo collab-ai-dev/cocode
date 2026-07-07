@@ -12,9 +12,8 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::path::Path;
 
-#[cfg(windows)]
-use std::env;
 #[cfg(windows)]
 use tracing::debug;
 
@@ -24,7 +23,11 @@ use tracing::debug;
 /// the kernel's shebang (`#!`) mechanism, so this function simply returns
 /// the program name unchanged.
 #[cfg(unix)]
-pub fn resolve(program: OsString, _env: &HashMap<String, String>) -> std::io::Result<OsString> {
+pub fn resolve(
+    program: OsString,
+    _env: &HashMap<String, String>,
+    _cwd: Option<&Path>,
+) -> std::io::Result<OsString> {
     Ok(program)
 }
 
@@ -38,16 +41,18 @@ pub fn resolve(program: OsString, _env: &HashMap<String, String>) -> std::io::Re
 /// This enables tools like `npx`, `pnpm`, and `yarn` to work correctly on Windows
 /// without requiring users to specify full paths or extensions in their configuration.
 #[cfg(windows)]
-pub fn resolve(program: OsString, env: &HashMap<String, String>) -> std::io::Result<OsString> {
-    // Get current directory for relative path resolution
-    let cwd = env::current_dir()
-        .map_err(|e| std::io::Error::other(format!("Failed to get current directory: {e}")))?;
-
+pub fn resolve(
+    program: OsString,
+    env: &HashMap<String, String>,
+    cwd: Option<&Path>,
+) -> std::io::Result<OsString> {
     // Extract PATH from environment for search locations
     let search_path = env.get("PATH");
+    let fallback_cwd = Path::new(".");
+    let cwd = cwd.unwrap_or(fallback_cwd);
 
     // Attempt resolution via which crate
-    match which::which_in(&program, search_path, &cwd) {
+    match which::which_in(&program, search_path, cwd) {
         Ok(resolved) => {
             debug!("Resolved {:?} to {:?}", program, resolved);
             Ok(resolved.into_os_string())

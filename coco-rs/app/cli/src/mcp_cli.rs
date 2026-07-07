@@ -3,12 +3,14 @@
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::io::Write;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use coco_mcp::McpConfigLoader;
+use coco_mcp::McpConfigRoots;
 use coco_mcp::McpServerConfig;
 use coco_mcp::ScopedMcpServerConfig;
 use coco_rmcp_client::OAuthCredentialsStoreMode;
@@ -16,10 +18,16 @@ use coco_rmcp_client::OauthLoginHandle;
 use coco_rmcp_client::OauthRedirectUrlSubmitter;
 use tokio::io::AsyncBufReadExt;
 
-pub async fn run_login(name: &str, no_browser: bool) -> Result<()> {
-    let cwd = std::env::current_dir()?;
+pub async fn run_login(name: &str, no_browser: bool, cwd: &Path) -> Result<()> {
     let config_home = coco_config::global_config::config_home();
-    let configs = McpConfigLoader::load(&cwd, &config_home);
+    let project_root = crate::paths::resolve_project_root(cwd);
+    let configs = McpConfigLoader::load_with_roots(
+        McpConfigRoots {
+            project_root: &project_root,
+            session_cwd: cwd,
+        },
+        &config_home,
+    );
     let server = find_server(&configs, name)?;
     let Some(target) = oauth_target(server).await? else {
         println!("{}", no_oauth_message(name, &server.config));
@@ -116,10 +124,16 @@ fn submit_redirect_url(submitter: &OauthRedirectUrlSubmitter, line: &str) -> boo
     submitter.submit(line.trim())
 }
 
-pub async fn run_logout(name: &str) -> Result<()> {
-    let cwd = std::env::current_dir()?;
+pub async fn run_logout(name: &str, cwd: &Path) -> Result<()> {
     let config_home = coco_config::global_config::config_home();
-    let configs = McpConfigLoader::load(&cwd, &config_home);
+    let project_root = crate::paths::resolve_project_root(cwd);
+    let configs = McpConfigLoader::load_with_roots(
+        McpConfigRoots {
+            project_root: &project_root,
+            session_cwd: cwd,
+        },
+        &config_home,
+    );
     let server = find_server(&configs, name)?;
     let Some((url, can_login_again)) = logout_target(&server.config) else {
         println!("\"{name}\" doesn't use OAuth; there are no stored credentials to clear.");

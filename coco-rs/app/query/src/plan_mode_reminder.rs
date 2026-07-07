@@ -30,6 +30,7 @@ use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_messages::wrapping::wrap_in_system_reminder;
 use coco_types::PermissionMode;
+use coco_types::SessionId;
 use coco_types::ToolAppState;
 use std::path::Path;
 use std::path::PathBuf;
@@ -49,7 +50,7 @@ pub struct PlanModeReminder {
     /// Session identifier (reserved for future side-effects that need to
     /// resolve per-session paths).
     #[allow(dead_code)]
-    session_id: Option<String>,
+    session_id: Option<SessionId>,
     /// Optional active agent ID (subagents don't drive the team mailbox).
     #[allow(dead_code)]
     agent_id: Option<String>,
@@ -82,7 +83,7 @@ pub struct PlanModeReminder {
 impl PlanModeReminder {
     pub fn new(
         permission_mode: PermissionMode,
-        session_id: Option<String>,
+        session_id: Option<SessionId>,
         agent_id: Option<String>,
         plans_dir: Option<PathBuf>,
         app_state: Option<Arc<RwLock<ToolAppState>>>,

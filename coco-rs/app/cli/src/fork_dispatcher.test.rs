@@ -11,6 +11,7 @@ use coco_types::ForkLabel;
 use tempfile::TempDir;
 
 use crate::Cli;
+use crate::session_runtime::SessionRuntime;
 use crate::session_runtime::SessionRuntimeBuildOpts;
 
 struct ForkMockModel;
@@ -150,6 +151,10 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
             coco_commands::CommandRegistry::new(),
         ))),
         skill_manager: Arc::new(coco_skills::SkillManager::new()),
+        project_services: Arc::new(crate::project_services::ProjectServices::load(
+            home.path(),
+            home.path(),
+        )),
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
@@ -188,7 +193,7 @@ async fn runtime_fallback_cache_params_use_current_transcript() {
 async fn dispatch_with_parent_history_uses_no_event_message_path() {
     let home = TempDir::new().expect("home tempdir");
     let runtime = build_runtime(&home).await;
-    let dispatcher = SessionRuntimeForkDispatcher::new(runtime);
+    let dispatcher = SessionRuntimeForkDispatcher::new(SessionHandle::new(runtime));
     let cache = CacheSafeParams {
         rendered_system_prompt: "test".into(),
         model_id: "mock-model".into(),
@@ -218,16 +223,17 @@ async fn dispatch_with_parent_history_uses_no_event_message_path() {
 async fn compact_sidechain_transcript_writes_agent_store_only() {
     let home = TempDir::new().expect("home tempdir");
     let runtime = build_runtime(&home).await;
-    let session_id = runtime.current_session_id().await;
+    let session_id = runtime.current_typed_session_id().await;
     let transcript_store = temp_transcript_store(&home);
     let agent_store: Arc<dyn coco_tool_runtime::AgentTranscriptStore> = Arc::new(
         crate::agent_transcript_persistence::SessionAgentTranscriptStore::new(
             transcript_store.clone(),
+            home.path().to_path_buf(),
         ),
     );
     runtime.attach_agent_transcript_store(agent_store).await;
 
-    let dispatcher = SessionRuntimeForkDispatcher::new(runtime);
+    let dispatcher = SessionRuntimeForkDispatcher::new(SessionHandle::new(runtime));
     let cache = CacheSafeParams {
         rendered_system_prompt: "test".into(),
         model_id: "mock-model".into(),
@@ -247,11 +253,15 @@ async fn compact_sidechain_transcript_writes_agent_store_only() {
 
     assert_eq!(result.messages.len(), 1);
     assert!(
-        !transcript_store.transcript_path(&session_id).exists(),
+        !transcript_store
+            .transcript_path(session_id.as_str())
+            .exists(),
         "sidechain fork must not write the main session transcript"
     );
 
-    let subagents_dir = transcript_store.project_paths().subagents_dir(&session_id);
+    let subagents_dir = transcript_store
+        .project_paths()
+        .subagents_dir(session_id.as_str());
     let entries = std::fs::read_dir(&subagents_dir)
         .expect("sidechain transcript directory should exist")
         .collect::<Result<Vec<_>, _>>()

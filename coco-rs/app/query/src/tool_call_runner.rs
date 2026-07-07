@@ -42,6 +42,7 @@ use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
 use coco_types::PermissionDenialInfo;
+use coco_types::SessionId;
 use coco_types::ToolAbortReasonPayload;
 use coco_types::ToolAppState;
 use tokio::sync::RwLock;
@@ -90,7 +91,7 @@ pub(crate) struct ToolCallRunner<'a> {
     pub permission_denials: &'a mut Vec<PermissionDenialInfo>,
     pub state_tracker: &'a SessionStateTracker,
     pub permission_bridge: Option<&'a ToolPermissionBridgeRef>,
-    pub session_id: &'a str,
+    pub session_id: &'a SessionId,
     pub cancel: &'a CancellationToken,
     pub auto_mode_state: Option<&'a Arc<coco_permissions::AutoModeState>>,
     pub denial_tracker: Option<&'a Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,

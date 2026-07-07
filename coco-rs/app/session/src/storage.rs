@@ -9,6 +9,7 @@
 //! during normal operation; compaction rewrites are handled separately.
 
 use coco_paths::ProjectPaths;
+use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -41,6 +42,27 @@ pub use wire::transcript_entries_for_message;
 
 /// Maximum transcript file size we will fully read into memory (50 MB).
 const MAX_TRANSCRIPT_READ_BYTES: u64 = 50 * 1024 * 1024;
+
+fn empty_session_id_as_none<'de, D>(deserializer: D) -> Result<Option<SessionId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(value) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    SessionId::try_new(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
+
+fn checked_session_id(session_id: &str) -> crate::Result<SessionId> {
+    SessionId::try_new(session_id.to_string()).map_err(|e| {
+        crate::SessionError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Entry types
@@ -92,8 +114,12 @@ pub struct TranscriptEntry {
     pub parent_uuid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logical_parent_uuid: Option<String>,
-    #[serde(default)]
-    pub session_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "empty_session_id_as_none"
+    )]
+    pub session_id: Option<SessionId>,
     #[serde(default)]
     pub cwd: String,
     #[serde(default)]
@@ -161,15 +187,15 @@ impl GoalMetadata {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum MetadataEntry {
     CustomTitle {
-        session_id: String,
+        session_id: SessionId,
         custom_title: String,
     },
     Tag {
-        session_id: String,
+        session_id: SessionId,
         tag: String,
     },
     LastPrompt {
-        session_id: String,
+        session_id: SessionId,
         last_prompt: String,
         #[serde(default, alias = "leafUuid", skip_serializing_if = "Option::is_none")]
         leaf_uuid: Option<String>,
@@ -183,7 +209,7 @@ pub enum MetadataEntry {
         summary: String,
     },
     CostSummary {
-        session_id: String,
+        session_id: SessionId,
         total_input_tokens: i64,
         total_output_tokens: i64,
         total_cost_usd: f64,
@@ -225,7 +251,7 @@ pub enum MetadataEntry {
     /// prompt-cache stability survives a restart.
     #[serde(rename = "content-replacement")]
     ContentReplacement {
-        session_id: String,
+        session_id: SessionId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_id: Option<String>,
         replacements: Vec<ContentReplacementRecord>,
@@ -235,7 +261,7 @@ pub enum MetadataEntry {
     /// the rendered baseline prompt or its eager sources change.
     #[serde(rename = "context-epoch")]
     ContextEpoch {
-        session_id: String,
+        session_id: SessionId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_id: Option<String>,
         record: ContextEpochRecord,
@@ -246,7 +272,7 @@ pub enum MetadataEntry {
     /// **not** re-appended to the tail on cleanup; the session picker
     /// still finds it via head-window scanning.
     AiTitle {
-        session_id: String,
+        session_id: SessionId,
         ai_title: String,
     },
 
@@ -260,19 +286,19 @@ pub enum MetadataEntry {
 
     /// Custom name assigned to a swarm agent.
     AgentName {
-        session_id: String,
+        session_id: SessionId,
         agent_name: String,
     },
 
     /// UI color for a swarm agent.
     AgentColor {
-        session_id: String,
+        session_id: SessionId,
         agent_color: String,
     },
 
     /// Agent definition that this session uses.
     AgentSetting {
-        session_id: String,
+        session_id: SessionId,
         agent_setting: String,
     },
 
@@ -304,14 +330,14 @@ pub enum MetadataEntry {
 
     /// Session execution mode: `coordinator` vs `normal`.
     Mode {
-        session_id: String,
+        session_id: SessionId,
         mode: String,
     },
 
     /// Last-wins `/goal` session metadata. `goal: null` clears the live
     /// metadata; `goal.met == true` records the terminal achieved snapshot.
     Goal {
-        session_id: String,
+        session_id: SessionId,
         goal: Option<GoalMetadata>,
     },
 }
@@ -436,9 +462,9 @@ impl Serialize for Entry {
 /// Lightweight metadata extracted from a transcript file without loading
 /// every message. Surfaced by the resume picker (`--resume`).
 /// Snake_case JSON like the rest of the wire envelope.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptMetadata {
-    pub session_id: String,
+    pub session_id: SessionId,
     pub first_prompt: String,
     pub message_count: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -724,11 +750,13 @@ impl TranscriptStore {
             return Ok(());
         }
         let mut seen = HashSet::new();
+        let cwd = std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
+            .filter(|path| !path.is_empty())
+            .unwrap_or_else(|| ".".to_string());
         let options = ChainWriteOptions {
-            cwd: std::env::current_dir()
-                .ok()
-                .map(|cwd| cwd.display().to_string())
-                .unwrap_or_default(),
+            cwd,
             timestamp: chrono::Utc::now().to_rfc3339(),
             is_sidechain: true,
             agent_id: Some(agent_id.to_string()),
@@ -939,7 +967,7 @@ impl TranscriptStore {
             return Ok(());
         }
         let entry = Entry::Metadata(MetadataEntry::ContentReplacement {
-            session_id: session_id.to_string(),
+            session_id: checked_session_id(session_id)?,
             agent_id: agent_id.map(str::to_string),
             replacements: records.to_vec(),
         });
@@ -967,7 +995,7 @@ impl TranscriptStore {
                     session_id: entry_session_id,
                     replacements,
                     ..
-                }) if entry_session_id == session_id => Some(replacements),
+                }) if entry_session_id.as_str() == session_id => Some(replacements),
                 _ => None,
             })
             .flatten()
@@ -1117,6 +1145,7 @@ where
     let mut out: Vec<Entry> = Vec::new();
     let mut source_by_tool_use: std::collections::HashMap<String, Uuid> =
         std::collections::HashMap::new();
+    let typed_session_id = SessionId::try_new(session_id.to_string()).ok();
 
     for msg in messages {
         let Some(uuid) = msg.uuid().copied() else {
@@ -1144,7 +1173,7 @@ where
         let entries = transcript_entries_for_message(
             msg,
             TranscriptEntryOptions {
-                session_id,
+                session_id: typed_session_id.as_ref(),
                 cwd: &options.cwd,
                 timestamp: &options.timestamp,
                 parent_uuid: parent_uuid.as_deref(),
@@ -1271,7 +1300,9 @@ pub fn content_replacements_for_chain(
                 session_id: entry_session_id,
                 agent_id: entry_agent_id,
                 replacements,
-            }) if entry_session_id == session_id && entry_agent_id.as_deref() == agent_id => {
+            }) if entry_session_id.as_str() == session_id
+                && entry_agent_id.as_deref() == agent_id =>
+            {
                 Some(replacements)
             }
             _ => None,
@@ -1705,7 +1736,8 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
     // Content-derived fields come from the shared fold; the fs-stat trio
     // (created/modified/file_size) is layered on top here — those are the
     // disk-specific bits a non-fs backend cannot supply from entries alone.
-    let mut meta = fold_transcript_metadata(&entries, session_id);
+    let typed_session_id = checked_session_id(session_id)?;
+    let mut meta = fold_transcript_metadata(&entries, &typed_session_id);
     meta.created_at = created_at;
     meta.modified_at = modified_at;
     meta.file_size = file_size;
@@ -1718,7 +1750,7 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
 /// for the caller to stamp. Pure: no IO. Shared by the disk head/tail
 /// reader and any non-fs backend ([`crate::store::InMemoryStore`]) that
 /// already holds the entries in memory.
-pub fn fold_transcript_metadata(entries: &[Entry], session_id: &str) -> TranscriptMetadata {
+pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> TranscriptMetadata {
     let mut first_prompt = String::new();
     let mut custom_title: Option<String> = None;
     let mut ai_title: Option<String> = None;
@@ -1818,12 +1850,14 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &str) -> Transcri
                     mode = Some(m.clone());
                 }
                 MetadataEntry::WorktreeState { payload }
-                    if metadata_payload_session_id(payload).as_deref() == Some(session_id) =>
+                    if metadata_payload_session_id(payload).as_deref()
+                        == Some(session_id.as_str()) =>
                 {
                     worktree_state = Some(payload.clone());
                 }
                 MetadataEntry::PrLink { payload }
-                    if metadata_payload_session_id(payload).as_deref() == Some(session_id) =>
+                    if metadata_payload_session_id(payload).as_deref()
+                        == Some(session_id.as_str()) =>
                 {
                     pr_link = Some(payload.clone());
                 }
@@ -1854,7 +1888,7 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &str) -> Transcri
     }
 
     TranscriptMetadata {
-        session_id: session_id.to_string(),
+        session_id: session_id.clone(),
         first_prompt,
         message_count,
         custom_title,

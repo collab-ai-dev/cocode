@@ -762,6 +762,7 @@ async fn a1_handle_stream_open_error_overloaded_records_observation() {
             &mut turn_state,
             &mut history,
             /*event_tx*/ &None,
+            &coco_types::TurnId::from("test-turn"),
         )
         .await;
 
@@ -812,6 +813,7 @@ async fn a1_handle_stream_open_error_unrelated_error_bails() {
             &mut turn_state,
             &mut history,
             /*event_tx*/ &None,
+            &coco_types::TurnId::from("test-turn"),
         )
         .await;
 
@@ -862,6 +864,7 @@ async fn a1_handle_stream_open_error_capacity_string_fallback_still_records() {
             &mut turn_state,
             &mut history,
             /*event_tx*/ &None,
+            &coco_types::TurnId::from("test-turn"),
         )
         .await;
 
@@ -909,6 +912,7 @@ async fn a1_handle_stream_open_error_capacity_without_fallback_bails() {
             &mut turn_state,
             &mut history,
             /*event_tx*/ &None,
+            &coco_types::TurnId::from("test-turn"),
         )
         .await;
 

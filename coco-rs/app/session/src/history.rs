@@ -15,6 +15,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use coco_types::SessionId;
+
 const MAX_HISTORY_ITEMS: usize = 100;
 /// Pastes shorter than this are stored inline; longer ones go to the
 /// content-addressed paste store.
@@ -34,7 +36,7 @@ pub struct HistoryLogEntry {
     pub project: String,
     /// Session ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
 }
 
 /// A pasted content reference (stored inline for small, hash for large).
@@ -73,7 +75,7 @@ pub struct PromptHistory {
     history_path: PathBuf,
     paste_store_dir: PathBuf,
     project: String,
-    session_id: String,
+    session_id: SessionId,
     /// Timestamp of the last `add()` call. Used by
     /// `remove_last_from_history` so an Esc-driven auto-restore can
     /// undo the just-flushed entry.
@@ -85,12 +87,12 @@ pub struct PromptHistory {
 
 impl PromptHistory {
     /// Create a new history manager.
-    pub fn new(config_dir: &Path, project: &str, session_id: &str) -> Self {
+    pub fn new(config_dir: &Path, project: &str, session_id: &SessionId) -> Self {
         Self {
             history_path: config_dir.join("history.jsonl"),
             paste_store_dir: config_dir.join("paste-store"),
             project: project.to_string(),
-            session_id: session_id.to_string(),
+            session_id: session_id.clone(),
             last_added: Mutex::new(None),
             skipped: Mutex::new(HashSet::new()),
         }
@@ -213,12 +215,12 @@ impl PromptHistory {
             }
             // Drop entries removed by `remove_last_from_history`
             // when they have raced past the in-memory buffer.
-            if entry.session_id.as_deref() == Some(&self.session_id)
+            if entry.session_id.as_ref() == Some(&self.session_id)
                 && skipped.contains(&entry.timestamp)
             {
                 continue;
             }
-            if entry.session_id.as_deref() == Some(&self.session_id) {
+            if entry.session_id.as_ref() == Some(&self.session_id) {
                 current_session.push(self.to_history_entry(&entry));
             } else {
                 other_sessions.push(self.to_history_entry(&entry));

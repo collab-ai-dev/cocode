@@ -4,6 +4,43 @@ use serde::Serialize;
 use crate::TokenUsage;
 use crate::wire_tagged::wire_tagged_enum;
 
+fn empty_session_id_as_none<'de, D>(deserializer: D) -> Result<Option<crate::SessionId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(value) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    crate::SessionId::try_new(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerNotificationIdentity {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "empty_session_id_as_none"
+    )]
+    pub session_id: Option<crate::SessionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+}
+
+impl ServerNotificationIdentity {
+    pub fn new(session_id: Option<crate::SessionId>, agent_id: Option<String>) -> Self {
+        Self {
+            session_id,
+            agent_id,
+        }
+    }
+}
+
 /// Three-layer event envelope.
 ///
 /// All consumers (TUI, SDK, CLI, App-Server) receive `CoreEvent` via
@@ -98,6 +135,107 @@ pub enum CoreEvent {
     Tui(TuiOnlyEvent),
 }
 
+/// Replay behavior assigned by the AppServer stamping seam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventReplayPolicy {
+    /// Sequenced, retained, and replayable via `session_seq`.
+    Durable,
+    /// Delivered live only; never assigned `session_seq`.
+    Ephemeral,
+}
+
+impl CoreEvent {
+    pub fn replay_policy(&self) -> EventReplayPolicy {
+        match self {
+            Self::Protocol(_) => EventReplayPolicy::Durable,
+            Self::Stream(_) | Self::Tui(_) => EventReplayPolicy::Ephemeral,
+        }
+    }
+
+    pub fn turn_id(&self) -> Option<crate::TurnId> {
+        match self {
+            Self::Protocol(notification) => notification.turn_id(),
+            Self::Stream(event) => event.turn_id(),
+            Self::Tui(_) => None,
+        }
+    }
+}
+
+/// AppServer routing envelope for one event emitted by a live root session.
+///
+/// `CoreEvent` remains the engine-facing event shape. AppServer stamps this
+/// envelope at the single routing seam that owns the session sink; emitters do
+/// not stamp or persist session identity themselves.
+#[derive(Debug, Clone)]
+pub struct SessionEnvelope {
+    pub session_id: crate::SessionId,
+    /// Optional subagent attribution under the root session.
+    pub agent_id: Option<crate::AgentId>,
+    /// Turn-scoped event id when the payload belongs to one logical turn.
+    pub turn_id: Option<crate::TurnId>,
+    /// Durable per-session sequence. `None` means live-only, non-replayable.
+    pub session_seq: Option<i64>,
+    pub event: CoreEvent,
+}
+
+impl SessionEnvelope {
+    /// Stamp a raw session event with routing metadata.
+    ///
+    /// Durable events call `next_session_seq` exactly once. Ephemeral events
+    /// never call it and are stamped with `session_seq: None`.
+    pub fn stamp(
+        session_id: crate::SessionId,
+        agent_id: Option<crate::AgentId>,
+        event: CoreEvent,
+        next_session_seq: impl FnOnce() -> i64,
+    ) -> Self {
+        let turn_id = event.turn_id();
+        match event.replay_policy() {
+            EventReplayPolicy::Durable => {
+                Self::durable(session_id, agent_id, turn_id, next_session_seq(), event)
+            }
+            EventReplayPolicy::Ephemeral => Self::ephemeral(session_id, agent_id, turn_id, event),
+        }
+    }
+
+    /// Build a durable envelope that participates in replay/ring retention.
+    pub fn durable(
+        session_id: crate::SessionId,
+        agent_id: Option<crate::AgentId>,
+        turn_id: Option<crate::TurnId>,
+        session_seq: i64,
+        event: CoreEvent,
+    ) -> Self {
+        Self {
+            session_id,
+            agent_id,
+            turn_id,
+            session_seq: Some(session_seq),
+            event,
+        }
+    }
+
+    /// Build a live-only envelope for stream/TUI events that must not be replayed.
+    pub fn ephemeral(
+        session_id: crate::SessionId,
+        agent_id: Option<crate::AgentId>,
+        turn_id: Option<crate::TurnId>,
+        event: CoreEvent,
+    ) -> Self {
+        Self {
+            session_id,
+            agent_id,
+            turn_id,
+            session_seq: None,
+            event,
+        }
+    }
+
+    pub fn is_durable(&self) -> bool {
+        self.session_seq.is_some()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AgentStreamEvent — accumulation-layer stream events
 // ---------------------------------------------------------------------------
@@ -115,9 +253,15 @@ pub enum CoreEvent {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentStreamEvent {
     /// Text content delta from assistant response.
-    TextDelta { turn_id: String, delta: String },
+    TextDelta {
+        turn_id: crate::TurnId,
+        delta: String,
+    },
     /// Thinking/reasoning delta from extended thinking.
-    ThinkingDelta { turn_id: String, delta: String },
+    ThinkingDelta {
+        turn_id: crate::TurnId,
+        delta: String,
+    },
     /// Tool use block received from API (input complete). Creates a ThreadItem.
     ToolUseQueued {
         call_id: String,
@@ -156,6 +300,21 @@ pub enum AgentStreamEvent {
     },
 }
 
+impl AgentStreamEvent {
+    pub fn turn_id(&self) -> Option<crate::TurnId> {
+        match self {
+            Self::TextDelta { turn_id, .. } | Self::ThinkingDelta { turn_id, .. } => {
+                Some(turn_id.clone())
+            }
+            Self::ToolUseQueued { .. }
+            | Self::ToolUseStarted { .. }
+            | Self::ToolUseCompleted { .. }
+            | Self::McpToolCallBegin { .. }
+            | Self::McpToolCallEnd { .. } => None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ThreadItem — semantic conversation thread items
 // ---------------------------------------------------------------------------
@@ -169,7 +328,7 @@ pub enum AgentStreamEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadItem {
     pub item_id: String,
-    pub turn_id: String,
+    pub turn_id: crate::TurnId,
     pub details: ThreadItemDetails,
 }
 
@@ -375,10 +534,8 @@ matching `NotificationMethod` discriminant.",
     /// both fields (`#[serde(default)]` keeps the wire forward-compat).
     "history/messageAppended" => MessageAppended {
         message: std::sync::Arc<crate::messages::Message>,
-        #[serde(default)]
-        session_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        agent_id: Option<String>,
+        #[serde(flatten)]
+        identity: ServerNotificationIdentity,
     },
     /// MessageHistory truncated to `keep_count` entries (indices
     /// >= keep_count discarded). Emitted by explicit-rewind and
@@ -386,18 +543,15 @@ matching `NotificationMethod` discriminant.",
     /// without separate private paths.
     "history/messageTruncated" => MessageTruncated {
         keep_count: i64,
-        #[serde(default)]
-        session_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        agent_id: Option<String>,
+        #[serde(flatten)]
+        identity: ServerNotificationIdentity,
     },
     /// Session reset for resume. TUI clears derived transcript view
     /// in preparation for a burst of `MessageAppended` that replays
     /// the loaded JSONL transcript.
     "history/resetForResume" => SessionResetForResume {
-        session_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        agent_id: Option<String>,
+        #[serde(flatten)]
+        identity: ServerNotificationIdentity,
     },
     /// Bulk snapshot for resume hydration. Consumers replace the
     /// derived transcript view wholesale (one cache-rebuild pass)
@@ -409,10 +563,8 @@ matching `NotificationMethod` discriminant.",
     /// bulk replacement (a genuinely different operation).
     "history/replaced" => HistoryReplaced {
         messages: Vec<std::sync::Arc<crate::messages::Message>>,
-        #[serde(default)]
-        session_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        agent_id: Option<String>,
+        #[serde(flatten)]
+        identity: ServerNotificationIdentity,
         #[serde(default)]
         reason: HistoryReplaceReason,
     },
@@ -622,7 +774,7 @@ matching `NotificationMethod` discriminant.",
     /// Stream stall detected.
     "stream/stallDetected" => StreamStallDetected {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        turn_id: Option<String>,
+        turn_id: Option<crate::TurnId>,
     },
     /// Stream watchdog warning.
     "stream/watchdogWarning" => StreamWatchdogWarning { elapsed_secs: f64 },
@@ -665,6 +817,110 @@ matching `NotificationMethod` discriminant.",
     }
 }
 
+impl ServerNotification {
+    pub fn session_id(&self) -> Option<&crate::SessionId> {
+        match self {
+            Self::MessageAppended { identity, .. }
+            | Self::MessageTruncated { identity, .. }
+            | Self::SessionResetForResume { identity }
+            | Self::HistoryReplaced { identity, .. } => identity.session_id.as_ref(),
+            Self::SessionStarted(params) => Some(&params.session_id),
+            Self::SessionResult(params) => Some(&params.session_id),
+            Self::SessionUsageUpdated(snapshot) => Some(&snapshot.session_id),
+            _ => None,
+        }
+    }
+
+    pub fn agent_id(&self) -> Option<&str> {
+        match self {
+            Self::MessageAppended { identity, .. }
+            | Self::MessageTruncated { identity, .. }
+            | Self::SessionResetForResume { identity }
+            | Self::HistoryReplaced { identity, .. } => identity.agent_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn turn_id(&self) -> Option<crate::TurnId> {
+        match self {
+            Self::TurnStarted(params) => Some(params.turn_id.clone()),
+            Self::TurnEnded(params) => Some(params.turn_id.clone()),
+            Self::ItemStarted { item }
+            | Self::ItemUpdated { item }
+            | Self::ItemCompleted { item } => Some(item.turn_id.clone()),
+            Self::AgentMessageDelta(params) | Self::ReasoningDelta(params) => {
+                params.turn_id.clone()
+            }
+            Self::MoaReferenceStarted(params) | Self::MoaReferenceCompleted(params) => {
+                Some(params.turn_id.clone())
+            }
+            Self::MoaAggregating(params) => Some(params.turn_id.clone()),
+            Self::StreamStallDetected { turn_id } => turn_id.clone(),
+            Self::SessionStarted(_)
+            | Self::SessionResult(_)
+            | Self::SessionEnded(_)
+            | Self::SessionUsageUpdated(_)
+            | Self::MessageAppended { .. }
+            | Self::MessageTruncated { .. }
+            | Self::SessionResetForResume { .. }
+            | Self::HistoryReplaced { .. }
+            | Self::ReasoningMetadataAttached(_)
+            | Self::ActiveGoalChanged(_)
+            | Self::McpStartupStatus(_)
+            | Self::McpStartupComplete(_)
+            | Self::LspPrewarmComplete(_)
+            | Self::ContextCompacted(_)
+            | Self::ContextUsageWarning(_)
+            | Self::CompactionStarted
+            | Self::CompactionPhase(_)
+            | Self::CompactionFailed(_)
+            | Self::ContextCleared(_)
+            | Self::TaskStarted(_)
+            | Self::TaskCompleted(_)
+            | Self::TaskProgress(_)
+            | Self::TaskPanelChanged(_)
+            | Self::PlanApprovalRequested(_)
+            | Self::AgentsKilled(_)
+            | Self::ModelFallbackStarted(_)
+            | Self::ModelFallbackCompleted
+            | Self::FastModeChanged { .. }
+            | Self::ModelRoleChanged(_)
+            | Self::PermissionModeChanged(_)
+            | Self::PromptSuggestion { .. }
+            | Self::Error(_)
+            | Self::RateLimit(_)
+            | Self::KeepAlive { .. }
+            | Self::IdeSelectionChanged(_)
+            | Self::IdeDiagnosticsUpdated(_)
+            | Self::QueueStateChanged { .. }
+            | Self::CommandQueued { .. }
+            | Self::CommandDequeued { .. }
+            | Self::RewindCompleted(_)
+            | Self::RewindFailed { .. }
+            | Self::CostWarning(_)
+            | Self::SandboxStateChanged(_)
+            | Self::SandboxViolationsDetected { .. }
+            | Self::AgentsRegistered { .. }
+            | Self::HookStarted(_)
+            | Self::HookProgress(_)
+            | Self::HookResponse(_)
+            | Self::WorktreeEntered(_)
+            | Self::WorktreeExited(_)
+            | Self::SummarizeCompleted(_)
+            | Self::SummarizeFailed { .. }
+            | Self::StreamWatchdogWarning { .. }
+            | Self::StreamRequestEnd { .. }
+            | Self::SessionStateChanged { .. }
+            | Self::LocalCommandOutput(_)
+            | Self::FilesPersisted(_)
+            | Self::ElicitationComplete(_)
+            | Self::ToolUseSummary(_)
+            | Self::ToolProgress(_)
+            | Self::PluginsChanged { .. } => None,
+        }
+    }
+}
+
 // Compile-time regression guard: keep `ServerNotification` from growing
 // unbounded. The enum's size is the size of the largest variant; every
 // `CoreEvent` pays this cost (inlined in mpsc channel buffers). If a new
@@ -686,7 +942,7 @@ const _: () = assert!(
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartedParams {
-    pub session_id: String,
+    pub session_id: crate::SessionId,
     /// Local extension: protocol version negotiation.
     pub protocol_version: String,
     pub cwd: String,
@@ -753,7 +1009,7 @@ pub struct PluginInit {
 /// Matches TS `SDKResultMessageSchema` (coreSchemas.ts:1407-1451).
 /// TS has two subtype variants (success/error) unified here with `is_error` flag.
 pub struct SessionResultParams {
-    pub session_id: String,
+    pub session_id: crate::SessionId,
     pub total_turns: i32,
     pub duration_ms: i64,
     pub duration_api_ms: i64,
@@ -1230,7 +1486,7 @@ pub struct ContentDeltaParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<String>,
+    pub turn_id: Option<crate::TurnId>,
     pub delta: String,
 }
 
@@ -1558,7 +1814,7 @@ pub struct ModelRoleChangedParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoaReferenceParams {
-    pub turn_id: String,
+    pub turn_id: crate::TurnId,
     pub role: crate::ModelRole,
     pub preset: String,
     pub index: i32,
@@ -1575,7 +1831,7 @@ pub struct MoaReferenceParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MoaAggregatingParams {
-    pub turn_id: String,
+    pub turn_id: crate::TurnId,
     pub role: crate::ModelRole,
     pub preset: String,
     pub count: i32,

@@ -153,10 +153,7 @@ pub fn check_dangerous_removal(command: &str, cwd: &str) -> Option<String> {
 /// then runs git. Used by `BashTool::is_read_only` so such commands are NOT
 /// auto-classified read-only.
 pub fn has_git_escape_pattern(command: &str) -> bool {
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "/".to_string());
-    has_git_escape_pattern_in_cwd(command, &cwd)
+    has_git_escape_pattern_in_cwd(command, "/")
 }
 
 /// Cwd-aware variant used by the permission gate.

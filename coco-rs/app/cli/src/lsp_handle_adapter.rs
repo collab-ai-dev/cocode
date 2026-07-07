@@ -22,6 +22,8 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use crate::project_services::project_registry;
+
 /// Adapter that wraps a shared `Arc<LspServerManager>` and implements
 /// [`LspHandle`].
 ///
@@ -103,11 +105,12 @@ impl LspManagerAdapter {
     /// servers (dropped by the disk reload) are re-merged.
     pub async fn reload_and_prewarm(&self, project_root: &Path) {
         self.manager.reload_config().await;
-        let plugins = coco_plugins::load_enabled_plugins(
+        let project_services = project_registry().reload(
             &coco_config::global_config::config_home(),
-            project_root,
+            project_root.to_path_buf(),
         );
-        let refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
+        let refs: Vec<&coco_plugins::loader::LoadedPluginV2> =
+            project_services.plugins().iter().collect();
         self.merge_plugin_servers(coco_plugins::lsp_bridge::extract_lsp_servers_from_plugins(
             &refs,
         ))

@@ -1110,6 +1110,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-app-server"
+version = "0.1.1"
+dependencies = [
+ "chrono",
+ "coco-app-server-transport",
+ "coco-error",
+ "coco-types",
+ "serde_json",
+ "snafu",
+ "tokio",
+]
+
+[[package]]
+name = "coco-app-server-client"
+version = "0.1.1"
+dependencies = [
+ "coco-app-server",
+ "coco-types",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "coco-app-server-transport"
+version = "0.1.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "coco-apply-patch"
 version = "0.1.1"
 dependencies = [
@@ -1576,8 +1609,13 @@ dependencies = [
 name = "coco-hub-connector"
 version = "0.1.1"
 dependencies = [
+ "chrono",
  "coco-error",
  "coco-hub-protocol",
+ "coco-types",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -1586,6 +1624,7 @@ version = "0.1.1"
 dependencies = [
  "chrono",
  "coco-error",
+ "coco-types",
  "insta",
  "pretty_assertions",
  "serde",
@@ -2919,6 +2958,7 @@ version = "0.1.1"
 dependencies = [
  "coco-config",
  "coco-secret-redact",
+ "coco-types",
  "pretty_assertions",
  "serde_json",
  "tempfile",

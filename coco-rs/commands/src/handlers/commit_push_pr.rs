@@ -24,31 +24,27 @@ use crate::PromptPart;
 const PROMPT_TEMPLATE: &str = include_str!("../prompts/commit_push_pr.txt");
 
 pub struct CommitPushPrHandler {
-    /// Override cwd for tests; production uses `std::env::current_dir`.
-    cwd: Option<PathBuf>,
+    cwd: PathBuf,
 }
 
 impl CommitPushPrHandler {
-    pub const fn new() -> Self {
-        Self { cwd: None }
+    pub fn new(cwd: PathBuf) -> Self {
+        Self { cwd }
     }
 
     #[cfg(test)]
     pub fn with_cwd(path: PathBuf) -> Self {
-        Self { cwd: Some(path) }
+        Self { cwd: path }
     }
 
     fn resolved_cwd(&self) -> PathBuf {
-        self.cwd
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."))
+        self.cwd.clone()
     }
 }
 
 impl Default for CommitPushPrHandler {
     fn default() -> Self {
-        Self::new()
+        Self::new(PathBuf::from("."))
     }
 }
 

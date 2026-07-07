@@ -135,6 +135,7 @@ impl App {
     pub fn new(
         command_tx: mpsc::Sender<UserCommand>,
         notification_rx: mpsc::Receiver<CoreEvent>,
+        cwd: PathBuf,
     ) -> io::Result<Self> {
         crate::i18n::init();
         let tui = Tui::new()?;
@@ -147,7 +148,6 @@ impl App {
             state.ui.terminal_size = size;
         }
         apply_terminal_compatibility_status(&mut state, &tui);
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let index = create_shared_index(cwd.clone());
         // Pre-warm the file index so the first `@` keystroke gets results
         // without waiting for the initial git ls-files / ripgrep walk.
@@ -196,8 +196,8 @@ impl App {
         tui: Tui,
         command_tx: mpsc::Sender<UserCommand>,
         notification_rx: mpsc::Receiver<CoreEvent>,
+        cwd: PathBuf,
     ) -> Self {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let index = create_shared_index(cwd);
         let (file_tx, file_rx) = create_file_search_channel();
         let (path_tx, path_rx) = create_path_completion_channel();

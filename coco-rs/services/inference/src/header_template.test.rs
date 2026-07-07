@@ -1,5 +1,10 @@
 use super::*;
+use coco_types::SessionId;
 use pretty_assertions::assert_eq;
+
+fn test_session_id(value: &str) -> SessionId {
+    SessionId::try_new(value).expect("valid session id")
+}
 
 fn per_build() -> PerBuildVars {
     PerBuildVars {
@@ -13,7 +18,7 @@ fn per_build() -> PerBuildVars {
 
 fn vars() -> HeaderVars {
     HeaderVars {
-        session_id: "sess-abc-123".to_string(),
+        session_id: Some(test_session_id("sess-abc-123")),
         cwd: "/work/proj".to_string(),
         app_version: "9.9.9".to_string(),
     }

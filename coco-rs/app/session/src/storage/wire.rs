@@ -1,6 +1,7 @@
 use super::TranscriptEntry;
 use super::TranscriptUsage;
 use super::entry_kind;
+use coco_types::SessionId;
 use coco_types::ToolId;
 use serde_json::json;
 use sha2::Digest;
@@ -11,7 +12,7 @@ use uuid::Uuid;
 /// Context shared by transcript entries generated for one message.
 #[derive(Debug, Clone, Copy)]
 pub struct TranscriptEntryOptions<'a> {
-    pub session_id: &'a str,
+    pub session_id: Option<&'a SessionId>,
     pub cwd: &'a str,
     pub timestamp: &'a str,
     pub parent_uuid: Option<&'a str>,
@@ -93,7 +94,7 @@ pub fn transcript_entries_for_message(
             .logical_parent_uuid
             .filter(|_| options.parent_uuid.is_none())
             .map(str::to_string),
-        session_id: options.session_id.to_string(),
+        session_id: options.session_id.cloned(),
         cwd: options.cwd.to_string(),
         timestamp: options.timestamp.to_string(),
         version: Some(env!("CARGO_PKG_VERSION").to_string()),

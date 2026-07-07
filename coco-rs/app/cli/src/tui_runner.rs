@@ -67,9 +67,7 @@ use crate::Cli;
 /// the prior session left off. Pre-populating the transcript dedup set
 /// prevents the per-turn append from re-writing already-persisted
 /// messages.
-pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
-    let cwd = std::env::current_dir()?;
-
+pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>, cwd: PathBuf) -> Result<()> {
     // One-shot consume the inherited `COCO_*` identity env (team name, agent
     // id/name/color, plan-mode). CC reads its `CLAUDE_INTERNAL_ASSISTANT_*`
     // analog once at module load and `delete`s it so a teammate's own children
@@ -274,7 +272,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // CompactionObserverRegistry, HookRegistry, history Mutex, etc.).
     // Both runners (TUI + SDK) share this construction; the per-turn
     // engine assembly below routes through `runtime.build_engine()`.
-    let runtime = crate::session_runtime::SessionRuntime::build(
+    let session_handle = crate::session_runtime::SessionHandle::build(
         crate::session_runtime::SessionRuntimeBuildOpts {
             cli,
             runtime_config: Arc::new(runtime_config),
@@ -293,14 +291,14 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             permission_bridge: Some(session_permission_bridge),
             command_registry: command_registry.clone(),
             skill_manager: skill_manager.clone(),
+            project_services: resources.project_services.clone(),
             // Load `config home/agents` + `project config dir/agents` and surface
             // them in AgentTool's per-turn dynamic prompt listing.
             // Worktree fallback is applied inside
             // `standard_agent_search_paths`.
-            agent_search_paths: coco_cli::paths::standard_agent_search_paths(
-                &coco_config::global_config::config_home(),
-                &cwd,
-            ),
+            agent_search_paths: resources
+                .project_services
+                .agent_search_paths(&coco_config::global_config::config_home(), &cwd),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             session_id_override: None,
             // Interactive TUI: file-history checkpointing defaults ON.
@@ -308,6 +306,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         },
     )
     .await?;
+    let runtime = session_handle.runtime().clone();
 
     // Post-build late-binds shared with SDK: task runtime, agent
     // transcript persistence, agent-team wiring, fork dispatcher.
@@ -317,11 +316,11 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     let lsp_handle = coco_cli::session_bootstrap::build_lsp_handle_if_enabled(
         &runtime.runtime_config,
         &coco_config::global_config::config_home(),
-        &cwd,
+        &runtime.project_root,
     )
     .await;
     install_session_late_binds(
-        runtime.clone(),
+        session_handle.clone(),
         &cwd,
         None,
         lsp_handle,
@@ -332,7 +331,10 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // manager/handle, and connect in the background. The TUI now grows its own
     // `McpConnectionManager` (was SDK-only) — `None` builds a fresh one.
     coco_cli::session_bootstrap::bootstrap_session_mcp(
-        &runtime, &cwd, None, /*await_connect*/ false,
+        &session_handle,
+        &cwd,
+        None,
+        /*await_connect*/ false,
     )
     .await;
     coco_cli::startup_profile::mark("session_late_binds");
@@ -423,7 +425,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // `_skill_watcher_guard` until TUI shutdown (drop = clean stop),
     // exactly like the plugin watcher above.
     let _skill_watcher_guard = coco_cli::skill_watch::spawn(
-        runtime.clone(),
+        session_handle.clone(),
         notification_tx.clone(),
         cwd.clone(),
         coco_config::global_config::config_home(),
@@ -432,7 +434,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // Cron tick driver — fires scheduled tasks (project config dir/scheduled_tasks.json +
     // session tasks) into the command queue. TUI-only: headless/SDK have no
     // queue-drain pump. Self-terminates on session shutdown; held as a guard.
-    let _cron_tick_guard = coco_cli::cron_tick::spawn(runtime.clone());
+    let _cron_tick_guard = coco_cli::cron_tick::spawn(session_handle.clone());
 
     // Team-memory server sync. Pulls server team memory at session start,
     // then debounce-pushes local edits. Fire-and-forget on the interactive
@@ -466,7 +468,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
                 // surface even while the leader is idle.
                 // Shared with the headless/SDK leader paths.
                 coco_cli::leader_inbox_poller::install_leader(
-                    runtime.clone(),
+                    session_handle.clone(),
                     Some(tui_permission_bridge.clone()),
                 )
                 .await;
@@ -531,7 +533,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             is_fork = plan.is_fork,
             "resume: hydrating session",
         );
-        hydrate_resume_plan(&plan, &runtime, &notification_tx).await;
+        hydrate_resume_plan(&plan, &session_handle, &notification_tx).await;
         // Reconcile coordinator mode to the resumed session. This flips
         // `COCO_COORDINATOR_MODE` *before*
         // the coordinator badge (below) and the first per-turn system
@@ -570,7 +572,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     }
 
     // Create TUI app
-    let mut app = App::new(command_tx, notification_rx)
+    let mut app = App::new(command_tx, notification_rx, cwd.clone())
         .map_err(|e| anyhow::anyhow!("Failed to create TUI: {e}"))?;
     app.state_mut()
         .ui
@@ -586,7 +588,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // re-snapshotted per session, matching codex cross-session behaviour.
     {
         let project = cwd.to_string_lossy();
-        let session_id = runtime.current_session_id().await;
+        let session_id = runtime.current_typed_session_id().await;
         let texts = coco_session::PromptHistory::new(&runtime.config_home, &project, &session_id)
             .get_history()
             .into_iter()
@@ -789,12 +791,12 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         .map(coco_config_reload::RuntimeReloader::publisher);
     let runtime_for_resume_hint = runtime.clone();
 
-    // Spawn agent driver — owns the SessionRuntime + transports.
+    // Spawn agent driver — owns the session handle + transports.
     let flag_settings_path = cli.settings.as_deref().map(std::path::PathBuf::from);
     let driver_handle = tokio::spawn(run_agent_driver(
         command_rx,
         notification_tx,
-        runtime,
+        session_handle.clone(),
         pending_approvals,
         runtime_publisher,
         cwd.clone(),
@@ -820,7 +822,10 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // Capture the session id BEFORE dropping the App — the TUI's Drop
     // restores the terminal but moves the AppState out of reach.
     let state_session_id = app.state().session.session_id.clone();
-    let runtime_session_id = runtime_for_resume_hint.current_session_id().await;
+    let runtime_session_id = runtime_for_resume_hint
+        .current_typed_session_id()
+        .await
+        .to_string();
     let session_id = state_session_id.or({
         if runtime_session_id.is_empty() {
             None
@@ -924,7 +929,7 @@ fn spawn_config_reload_error_toasts(
 async fn run_agent_driver(
     mut command_rx: mpsc::Receiver<UserCommand>,
     event_tx: mpsc::Sender<CoreEvent>,
-    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    session: crate::session_runtime::SessionHandle,
     pending_approvals: coco_cli::tui_permission_bridge::PendingApprovals,
     runtime_publisher: Option<Arc<coco_config::RuntimePublisher>>,
     cwd: std::path::PathBuf,
@@ -935,6 +940,7 @@ async fn run_agent_driver(
     // for leader / standalone sessions.
     teammate_turn_done_tx: Option<mpsc::Sender<String>>,
 ) {
+    let runtime = session.runtime().clone();
     runtime.install_side_query_event_tx(event_tx.clone()).await;
     // Per-session one-shot gate: title gen runs at most once per
     // session id, never the process. After `/resume` or `/clear` the
@@ -970,7 +976,7 @@ async fn run_agent_driver(
             Some(turn_id) = turn_done_rx.recv() => {
                 if drain_completed_turn(&active_turn, turn_id).await {
                     process_idle_command_queue(
-                        &runtime,
+                        &session,
                         &event_tx,
                         &active_turn,
                         &mut pending_editor_requests,
@@ -983,7 +989,7 @@ async fn run_agent_driver(
             }
             _ = runtime.command_queue().wait_for_change() => {
                 process_idle_command_queue(
-                    &runtime,
+                    &session,
                     &event_tx,
                     &active_turn,
                     &mut pending_editor_requests,
@@ -995,7 +1001,7 @@ async fn run_agent_driver(
             }
         };
         // Re-read each turn so `/clear` regen picks up the new id.
-        let session_id = runtime.current_session_id().await;
+        let session_id = runtime.current_typed_session_id().await;
         match command {
             UserCommand::SubmitInput {
                 user_message_id,
@@ -1015,10 +1021,10 @@ async fn run_agent_driver(
                 let mut slash_thinking_level = None;
                 let mut slash_model_runtime_source = None;
                 if let Some((name, args)) = parse_slash_command(&effective_content) {
-                    let outcome = dispatch_slash_command(name, args, &runtime, &event_tx).await;
+                    let outcome = dispatch_slash_command(name, args, &session, &event_tx).await;
                     match handle_slash_outcome(
                         outcome,
-                        &runtime,
+                        &session,
                         &event_tx,
                         &active_turn,
                         &mut pending_editor_requests,
@@ -1054,7 +1060,7 @@ async fn run_agent_driver(
                 let turn_abort_signal = turn_abort.signal();
                 let turn_id = uuid::Uuid::new_v4();
 
-                let runtime_t = runtime.clone();
+                let session_t = session.clone();
                 let event_tx_t = event_tx.clone();
                 let title_gen_attempted_t = title_gen_attempted.clone();
                 let session_id_t = session_id.clone();
@@ -1079,7 +1085,7 @@ async fn run_agent_driver(
                         slash_thinking_level,
                         slash_model_runtime_source,
                         images,
-                        runtime_t,
+                        session_t,
                         event_tx_t,
                         title_gen_attempted_t,
                         session_id_t,
@@ -1101,26 +1107,16 @@ async fn run_agent_driver(
             } => {
                 drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                 let event_tx_t = event_tx.clone();
-                let runtime_t = runtime.clone();
+                let session_t = session.clone();
                 let active_turn_t = active_turn.clone();
                 let turn_done_tx_t = turn_done_tx.clone();
-                // Run from the process's current dir — shell prompt
-                // commands inherit the same cwd the agent is using.
-                // `runtime_config.paths.project_dir` is the explicit
-                // project root when configured, but is optional, so
-                // we fall back to `current_dir()` (always defined).
-                let cwd = runtime
-                    .runtime_config
-                    .paths
-                    .project_dir
-                    .clone()
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                let cwd = runtime.current_engine_config().await.workspace_cwd();
                 tokio::spawn(async move {
                     run_prompt_mode_bash(
                         &cwd,
                         user_message_id,
                         command,
-                        runtime_t,
+                        session_t,
                         event_tx_t,
                         active_turn_t,
                         turn_done_tx_t,
@@ -1136,7 +1132,7 @@ async fn run_agent_driver(
                 // after `/resume` or `/clear` carry the new session tag.
                 let config_home = runtime.config_home.clone();
                 let project = cwd.to_string_lossy().to_string();
-                let session_id = runtime.current_session_id().await;
+                let session_id = runtime.current_typed_session_id().await;
                 tokio::task::spawn_blocking(move || {
                     let history =
                         coco_session::PromptHistory::new(&config_home, &project, &session_id);
@@ -1157,7 +1153,7 @@ async fn run_agent_driver(
             }
 
             UserCommand::OpenPlanEditor => {
-                let path = runtime_session_plan_file_path(&runtime).await;
+                let path = runtime_session_plan_file_path(&session).await;
                 prepare_external_editor_request(
                     &mut pending_editor_requests,
                     PendingEditorRequest::Plan { path },
@@ -1216,7 +1212,7 @@ async fn run_agent_driver(
                         run_prompt_editor(initial_content, event_tx.clone()).await;
                     }
                     PendingEditorRequest::Agent { path } => {
-                        run_open_agent_file(runtime.clone(), path, event_tx.clone()).await;
+                        run_open_agent_file(session.clone(), path, event_tx.clone()).await;
                     }
                 }
             }
@@ -1235,10 +1231,10 @@ async fn run_agent_driver(
                 model_id,
                 effort,
             } => {
-                let runtime_t = runtime.clone();
+                let session_t = session.clone();
                 let event_tx_t = event_tx.clone();
                 tokio::spawn(async move {
-                    apply_role_in_memory(runtime_t, role, provider, model_id, effort, event_tx_t)
+                    apply_role_in_memory(session_t, role, provider, model_id, effort, event_tx_t)
                         .await;
                 });
             }
@@ -1249,10 +1245,10 @@ async fn run_agent_driver(
                 // callback for up to 5 min). On success `dispatch_provider_login`
                 // emits the transcript message + `ProviderStatusesRefreshed`, so
                 // the `/model` picker's `NotLoggedIn` gate clears live.
-                let runtime_t = runtime.clone();
+                let session_t = session.clone();
                 let event_tx_t = event_tx.clone();
                 tokio::spawn(async move {
-                    dispatch_provider_login(&provider, &runtime_t, &event_tx_t).await;
+                    dispatch_provider_login(&provider, &session_t, &event_tx_t).await;
                 });
             }
 
@@ -1261,10 +1257,10 @@ async fn run_agent_driver(
                 // effort in-memory and emits `ModelRoleChanged` so the
                 // TUI mirror stays consistent across status bar +
                 // picker. No file write — see `apply_role_in_memory`.
-                let runtime_t = runtime.clone();
+                let session_t = session.clone();
                 let event_tx_t = event_tx.clone();
                 tokio::spawn(async move {
-                    apply_main_effort_in_memory(runtime_t, level, event_tx_t).await;
+                    apply_main_effort_in_memory(session_t, level, event_tx_t).await;
                 });
             }
 
@@ -1297,10 +1293,10 @@ async fn run_agent_driver(
                 // user-message UUID so file-history / rewind keys
                 // line up.
                 let args_str = args.unwrap_or_default();
-                let outcome = dispatch_slash_command(&name, &args_str, &runtime, &event_tx).await;
+                let outcome = dispatch_slash_command(&name, &args_str, &session, &event_tx).await;
                 match handle_slash_outcome(
                     outcome,
-                    &runtime,
+                    &session,
                     &event_tx,
                     &active_turn,
                     &mut pending_editor_requests,
@@ -1325,7 +1321,7 @@ async fn run_agent_driver(
                                 thinking_level,
                                 model_runtime_source,
                             },
-                            &runtime,
+                            &session,
                             &event_tx,
                             &active_turn,
                             &title_gen_attempted,
@@ -1340,10 +1336,10 @@ async fn run_agent_driver(
             UserCommand::ExecuteSlashCommand { name, args } => {
                 let refresh_plugin_dialog = name.as_str() == "plugin";
                 let outcome =
-                    dispatch_slash_command(name.as_str(), &args, &runtime, &event_tx).await;
+                    dispatch_slash_command(name.as_str(), &args, &session, &event_tx).await;
                 match handle_slash_outcome(
                     outcome,
-                    &runtime,
+                    &session,
                     &event_tx,
                     &active_turn,
                     &mut pending_editor_requests,
@@ -1374,7 +1370,7 @@ async fn run_agent_driver(
                                 thinking_level,
                                 model_runtime_source,
                             },
-                            &runtime,
+                            &session,
                             &event_tx,
                             &active_turn,
                             &title_gen_attempted,
@@ -1385,7 +1381,7 @@ async fn run_agent_driver(
                     }
                 }
                 if refresh_plugin_dialog {
-                    refresh_plugin_dialog_payload(&runtime, &event_tx).await;
+                    refresh_plugin_dialog_payload(&session, &event_tx).await;
                 }
             }
 
@@ -1407,12 +1403,12 @@ async fn run_agent_driver(
                             &runtime.config_home,
                             &session_id,
                             &event_tx,
-                            &runtime,
+                            &session,
                         )
                         .await;
                     }
                     coco_tui::command::RewindMode::AutoRestore => {
-                        handle_auto_truncate(&message_id, &event_tx, &runtime).await;
+                        handle_auto_truncate(&message_id, &event_tx, &session).await;
                     }
                 }
             }
@@ -1454,7 +1450,7 @@ async fn run_agent_driver(
                     let fh = fh.read().await;
                     let stats = if fh.can_restore(&message_id) {
                         match fh
-                            .get_diff_stats(&message_id, &runtime.config_home, &session_id)
+                            .get_diff_stats(&message_id, &runtime.config_home, session_id.as_str())
                             .await
                         {
                             Ok(stats) => Some(diff_stats_to_payload(stats)),
@@ -1490,7 +1486,7 @@ async fn run_agent_driver(
                                     message_id,
                                     next,
                                     &runtime.config_home,
-                                    &session_id,
+                                    session_id.as_str(),
                                 )
                                 .await
                             {
@@ -1561,7 +1557,7 @@ async fn run_agent_driver(
                 // time we reach here only rare I/O races land in the
                 // error arm. Toast the failure and move on — the
                 // wizard is already closed.
-                match prepare_agent_create(&runtime, &name, &description, source).await {
+                match prepare_agent_create(&session, &name, &description, source).await {
                     Ok(path) => {
                         prepare_external_editor_request(
                             &mut pending_editor_requests,
@@ -1588,7 +1584,7 @@ async fn run_agent_driver(
             }
 
             UserCommand::DeleteAgentFile { path } => {
-                let runtime_t = runtime.clone();
+                let session_t = session.clone();
                 let event_tx_t = event_tx.clone();
                 let path_display = path.display().to_string();
                 tokio::spawn(async move {
@@ -1603,8 +1599,8 @@ async fn run_agent_driver(
                     }
                     // After delete, rebuild the payload and re-push so
                     // the dialog refreshes without the deleted row.
-                    runtime_t.reload_agent_catalog().await;
-                    refresh_agents_dialog(&runtime_t, &event_tx_t).await;
+                    session_t.reload_agent_catalog().await;
+                    refresh_agents_dialog(&session_t, &event_tx_t).await;
                 });
             }
 
@@ -1786,11 +1782,11 @@ async fn run_agent_driver(
                     has_instructions = custom_instructions.is_some(),
                     "TUI: manual /compact"
                 );
-                run_manual_compact(&runtime, &event_tx, custom_instructions, &active_turn).await;
+                run_manual_compact(&session, &event_tx, custom_instructions, &active_turn).await;
             }
 
             UserCommand::SetPermissionMode { mode } => {
-                let cur_session_id = runtime.current_session_id().await;
+                let cur_session_id = runtime.current_typed_session_id().await;
                 let cfg = runtime.current_engine_config().await;
                 if mode == coco_types::PermissionMode::BypassPermissions
                     && !cfg.permission_mode_availability.bypass_permissions
@@ -1803,7 +1799,7 @@ async fn run_agent_driver(
                     continue;
                 }
                 let change = coco_cli::live_permission_mode::apply_to_runtime(
-                    &runtime,
+                    &session,
                     mode,
                     &event_tx,
                     cfg.permission_mode_availability.bypass_permissions,
@@ -2034,8 +2030,8 @@ async fn run_agent_driver(
                 // engine config + persist to the chosen settings file
                 // (User / Project / Local), then re-emit the editor payload
                 // so the open overlay refreshes from disk.
-                apply_and_persist_permission_update(&runtime, &update).await;
-                refresh_permissions_editor(&runtime, &event_tx).await;
+                apply_and_persist_permission_update(&session, &update).await;
+                refresh_permissions_editor(&session, &event_tx).await;
             }
 
             UserCommand::Shutdown { reason } => {
@@ -2129,7 +2125,7 @@ async fn run_agent_driver(
                         .await;
                     h.to_vec()
                 };
-                spawn_history_turn(messages, &runtime, &event_tx, &active_turn, &turn_done_tx)
+                spawn_history_turn(messages, &session, &event_tx, &active_turn, &turn_done_tx)
                     .await;
             }
 
@@ -2149,7 +2145,7 @@ async fn run_agent_driver(
 
             UserCommand::WriteSkillOverrides { patch } => {
                 handle_write_skill_overrides(
-                    &runtime,
+                    &session,
                     &event_tx,
                     patch,
                     runtime_publisher.as_ref(),
@@ -2174,14 +2170,15 @@ async fn run_agent_driver(
         debug!("skipping memory extraction drain after explicit TUI shutdown");
     } else {
         drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
-        drain_pending_memory_extraction(&runtime).await;
+        drain_pending_memory_extraction(&session).await;
     }
     // Re-append metadata one more time at process-exit so the tail window
     // of the final transcript JSONL definitely carries the user's
     // title/tag/agent-name. Best-effort — IO errors here are logged but
     // don't propagate out of the driver.
     {
-        let session_id = runtime.current_session_id().await;
+        let session_id = runtime.current_typed_session_id().await;
+        let session_id_string = session_id.to_string();
         let mgr = Arc::clone(&runtime.session_manager);
         // Snapshot the session's coordinator-mode state at the exit
         // checkpoint so `--resume` re-derives it via
@@ -2200,9 +2197,9 @@ async fn run_agent_driver(
                 }
             });
         if let Err(e) = tokio::task::spawn_blocking(move || {
-            let _ = mgr.re_append_session_metadata(&session_id);
+            let _ = mgr.re_append_session_metadata(&session_id_string);
             if let Some(mode) = mode {
-                let _ = mgr.save_mode(&session_id, mode);
+                let _ = mgr.save_mode(&session_id_string, mode);
             }
         })
         .await
@@ -2216,7 +2213,8 @@ async fn run_agent_driver(
 
 /// Wait for scheduled turn-end extraction/session-memory work before
 /// shutdown. Silently no-ops when auto-memory is inactive.
-async fn drain_pending_memory_extraction(runtime: &Arc<crate::session_runtime::SessionRuntime>) {
+async fn drain_pending_memory_extraction(session: &crate::session_runtime::SessionHandle) {
+    let runtime = session.runtime();
     let Some(memory_runtime) = runtime.memory_runtime() else {
         return;
     };
@@ -2387,10 +2385,13 @@ fn create_slash_metadata_message(metadata: &str) -> coco_messages::Message {
 
 async fn hydrate_resume_plan(
     plan: &ResumePlan,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    runtime.start_new_session(plan.session_id.clone()).await;
+    let runtime = session.runtime();
+    runtime
+        .retarget_for_loaded_session(plan.session_id.clone())
+        .await;
     {
         let mut history = runtime.history.lock().await;
         history.clear();
@@ -2417,7 +2418,7 @@ async fn hydrate_resume_plan(
     };
     if let Some(todos) = restored_v1_todos.clone() {
         runtime
-            .seed_todo_list_snapshot(plan.session_id.clone(), todos)
+            .seed_todo_list_snapshot(plan.session_id.to_string(), todos)
             .await;
     }
     let cfg = runtime.current_engine_config().await;
@@ -2444,8 +2445,10 @@ async fn hydrate_resume_plan(
     let _ = event_tx
         .send(CoreEvent::Protocol(
             coco_types::ServerNotification::SessionResetForResume {
-                session_id: plan.session_id.clone(),
-                agent_id: None,
+                identity: coco_types::ServerNotificationIdentity::new(
+                    Some(plan.session_id.clone()),
+                    None,
+                ),
             },
         ))
         .await;
@@ -2458,8 +2461,10 @@ async fn hydrate_resume_plan(
                     .cloned()
                     .map(std::sync::Arc::new)
                     .collect(),
-                session_id: plan.session_id.clone(),
-                agent_id: None,
+                identity: coco_types::ServerNotificationIdentity::new(
+                    Some(plan.session_id.clone()),
+                    None,
+                ),
                 reason: coco_types::HistoryReplaceReason::Hydrate,
             },
         ))
@@ -2467,7 +2472,7 @@ async fn hydrate_resume_plan(
     if let Some(todos) = restored_v1_todos {
         let mut todos_by_agent = HashMap::new();
         if !todos.is_empty() {
-            todos_by_agent.insert(plan.session_id.clone(), todos);
+            todos_by_agent.insert(plan.session_id.to_string(), todos);
         }
         let _ = event_tx
             .send(CoreEvent::Protocol(
@@ -2546,9 +2551,10 @@ fn latest_todo_write_todos(messages: &[Message]) -> Option<Vec<coco_types::TodoR
 
 async fn dispatch_resume(
     args: &str,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
+    let runtime = session.runtime();
     let target = args.trim();
     if target.is_empty() {
         let manager = Arc::clone(&runtime.session_manager);
@@ -2575,7 +2581,10 @@ async fn dispatch_resume(
                 return SlashOutcome::Handled;
             }
         };
-        let sessions = sessions.into_iter().map(session_to_sdk_summary).collect();
+        let sessions = sessions
+            .into_iter()
+            .filter_map(session_to_sdk_summary)
+            .collect();
         let _ = event_tx
             .send(CoreEvent::Tui(TuiOnlyEvent::OpenSessionBrowser {
                 sessions,
@@ -2584,7 +2593,7 @@ async fn dispatch_resume(
         return SlashOutcome::Handled;
     }
 
-    match load_resume_plan_for_target(runtime, target).await {
+    match load_resume_plan_for_target(session, target).await {
         Ok(plan) => {
             tracing::info!(
                 target: "coco_cli::resume",
@@ -2596,7 +2605,7 @@ async fn dispatch_resume(
             runtime
                 .fire_session_end_hooks(coco_hooks::orchestration::ExitReason::Resume)
                 .await;
-            hydrate_resume_plan(&plan, runtime, event_tx).await;
+            hydrate_resume_plan(&plan, session, event_tx).await;
             runtime.fire_session_start_hooks("resume").await;
             // Reconcile coordinator mode to the resumed session. Runs at a
             // turn boundary, so the env flip is
@@ -2630,12 +2639,13 @@ async fn dispatch_resume(
 /// [`hydrate_resume_plan`]). The original session is left untouched on disk.
 async fn dispatch_branch(
     args: &str,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
+    let runtime = session.runtime();
     let custom_title = args.trim().to_string();
-    let source_id = runtime.current_session_id().await;
-    if source_id.is_empty() {
+    let source_id = runtime.current_typed_session_id().await;
+    if source_id.as_str().is_empty() {
         emit_slash_text(event_tx, "branch", "", "No active session to branch from.").await;
         return SlashOutcome::Handled;
     }
@@ -2643,23 +2653,22 @@ async fn dispatch_branch(
     let plan = tokio::task::spawn_blocking(move || -> anyhow::Result<ResumePlan> {
         let store =
             coco_session::TranscriptStore::new(coco_cli::paths::project_paths(&working_dir));
-        let source_path = store.transcript_path(&source_id);
+        let source_path = store.transcript_path(source_id.as_str());
         if !coco_session::recovery::can_resume_session(&source_path) {
             anyhow::bail!(
                 "nothing to branch yet — send a message first so there's a conversation to fork"
             );
         }
-        let dest_id = uuid::Uuid::new_v4().to_string();
-        let dest_path = store.transcript_path(&dest_id);
-        coco_session::recovery::fork_conversation(&source_path, &dest_path, &dest_id).map_err(
-            |e| {
+        let dest_id = coco_types::SessionId::generate();
+        let dest_path = store.transcript_path(dest_id.as_str());
+        coco_session::recovery::fork_conversation(&source_path, &dest_path, dest_id.as_str())
+            .map_err(|e| {
                 anyhow::anyhow!(
                     "fork copy {} → {} failed: {e}",
                     source_path.display(),
                     dest_path.display()
                 )
-            },
-        )?;
+            })?;
         let conversation = coco_session::recovery::load_conversation_for_resume(&dest_path)?;
         let prior_messages = conversation.messages.clone();
         Ok(ResumePlan {
@@ -2675,8 +2684,8 @@ async fn dispatch_branch(
     .await;
     match plan {
         Ok(Ok(plan)) => {
-            let new_id = plan.session_id.clone();
-            let source_id = plan.source_session_id.clone();
+            let new_id = plan.session_id.to_string();
+            let source_id = plan.source_session_id.to_string();
             // Derive the fork title: explicit arg, else the first user prompt
             // (truncated), suffixed " (Branch)" — branch.ts. Done
             // BEFORE hydrate moves `plan`.
@@ -2688,7 +2697,7 @@ async fn dispatch_branch(
             runtime
                 .fire_session_end_hooks(coco_hooks::orchestration::ExitReason::Resume)
                 .await;
-            hydrate_resume_plan(&plan, runtime, event_tx).await;
+            hydrate_resume_plan(&plan, session, event_tx).await;
             runtime.fire_session_start_hooks("resume").await;
             // Reconcile coordinator mode onto the fork, same as /resume — the
             // fork inherits the source's persisted mode. Runs at a turn
@@ -2702,7 +2711,7 @@ async fn dispatch_branch(
             // The fork is now the live session, so persist_rename titles IT.
             if let Some(base) = base_title {
                 let title = format!("{base} (Branch)");
-                if let Err(e) = coco_cli::session_rename::persist_rename(runtime, title).await {
+                if let Err(e) = coco_cli::session_rename::persist_rename(session, title).await {
                     warn!(error = %e, "failed to set /branch fork title");
                 }
             }
@@ -2744,19 +2753,16 @@ fn first_user_prompt_title(messages: &[coco_messages::Message]) -> Option<String
 }
 
 async fn load_resume_plan_for_target(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     target: &str,
 ) -> anyhow::Result<ResumePlan> {
+    let runtime = session.runtime();
     let manager = Arc::clone(&runtime.session_manager);
     let target = target.to_string();
-    // Project root for THIS runtime — canonicalised through
-    // `find_canonical_git_root` to match how `coco_paths::ProjectPaths`
-    // computes the project slug. Resume targets whose
-    // canonical-project-root differs from this are cross-project: we
-    // refuse rather than mid-flight re-point the runtime's
-    // `transcript_store` Arc, which is wired into many other Arcs.
-    let runtime_project_root = coco_git::find_canonical_git_root(&runtime.original_cwd)
-        .unwrap_or_else(|| runtime.original_cwd.clone());
+    // Project root for THIS runtime. Resume targets whose project root differs
+    // from this are cross-project: refuse rather than mid-flight re-point the
+    // runtime's transcript store and project-scoped services.
+    let runtime_project_root = runtime.project_root.clone();
     tokio::task::spawn_blocking(move || {
         let session = match manager.resume(&target) {
             Ok(session) => session,
@@ -2764,8 +2770,7 @@ async fn load_resume_plan_for_target(
                 resolve_resume_target_by_title(&manager, &target, &runtime_project_root, &id_err)?
             }
         };
-        let session_project_root = coco_git::find_canonical_git_root(&session.working_dir)
-            .unwrap_or_else(|| session.working_dir.clone());
+        let session_project_root = coco_cli::paths::resolve_project_root(&session.working_dir);
         if session_project_root != runtime_project_root {
             anyhow::bail!(
                 "session {} lives under project {} but this runtime is at {} — \
@@ -2788,7 +2793,8 @@ async fn load_resume_plan_for_target(
         }
         let conversation = coco_session::recovery::load_conversation_for_resume(&transcript_path)?;
         let prior_messages = conversation.messages.clone();
-        let session_id = session.id;
+        let session_id = coco_types::SessionId::try_new(session.id.clone())
+            .map_err(|e| anyhow::anyhow!("invalid session id '{}': {e}", session.id))?;
         Ok(ResumePlan {
             session_id: session_id.clone(),
             source_session_id: session_id,
@@ -2846,13 +2852,23 @@ fn resolve_resume_target_by_title(
 }
 
 fn same_project(session_cwd: &std::path::Path, runtime_root: &std::path::Path) -> bool {
-    coco_git::find_canonical_git_root(session_cwd).unwrap_or_else(|| session_cwd.to_path_buf())
-        == runtime_root
+    coco_cli::paths::resolve_project_root(session_cwd) == runtime_root
 }
 
-fn session_to_sdk_summary(session: coco_session::Session) -> coco_types::SdkSessionSummary {
-    coco_types::SdkSessionSummary {
-        session_id: session.id,
+fn session_to_sdk_summary(session: coco_session::Session) -> Option<coco_types::SdkSessionSummary> {
+    let session_id = match coco_types::SessionId::try_new(session.id.clone()) {
+        Ok(id) => id,
+        Err(err) => {
+            warn!(
+                session_id = %session.id,
+                error = %err,
+                "skipping session with invalid id in resume browser"
+            );
+            return None;
+        }
+    };
+    Some(coco_types::SdkSessionSummary {
+        session_id,
         model: session.model,
         cwd: session.working_dir.to_string_lossy().into_owned(),
         created_at: session.created_at,
@@ -2860,7 +2876,7 @@ fn session_to_sdk_summary(session: coco_session::Session) -> coco_types::SdkSess
         title: session.title,
         message_count: session.message_count,
         total_tokens: session.total_tokens,
-    }
+    })
 }
 
 fn session_plans_dir(
@@ -2875,16 +2891,17 @@ fn session_plan_file_path(
     config_home: &std::path::Path,
     project_dir: Option<&std::path::Path>,
     plans_directory_setting: Option<&str>,
-    session_id: &str,
+    session_id: &coco_types::SessionId,
 ) -> std::path::PathBuf {
     let plans_dir = session_plans_dir(config_home, project_dir, plans_directory_setting);
-    coco_context::get_plan_file_path(session_id, &plans_dir, /*agent_id*/ None)
+    coco_context::get_plan_file_path(session_id.as_str(), &plans_dir, /*agent_id*/ None)
 }
 
 async fn runtime_session_plan_file_path(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
 ) -> std::path::PathBuf {
-    let session_id = runtime.current_session_id().await;
+    let runtime = session.runtime();
+    let session_id = runtime.current_typed_session_id().await;
     session_plan_file_path(
         &runtime.config_home,
         runtime.runtime_config.paths.project_dir.as_deref(),
@@ -3089,11 +3106,12 @@ struct SlashEnginePrompt {
 /// arms in `run_agent_loop` no longer triple-duplicate the same match.
 async fn handle_slash_outcome(
     outcome: SlashOutcome,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
 ) -> SlashFollowup {
+    let runtime = session.runtime();
     match outcome {
         SlashOutcome::Handled => SlashFollowup::Done,
         SlashOutcome::NotFound => SlashFollowup::NotFound,
@@ -3109,29 +3127,29 @@ async fn handle_slash_outcome(
             model_runtime_source,
         },
         SlashOutcome::RunForkSkill { name, args } => {
-            run_fork_skill(runtime, event_tx, &name, &args, active_turn).await;
+            run_fork_skill(session, event_tx, &name, &args, active_turn).await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerCompact {
             custom_instructions,
         } => {
-            run_manual_compact(runtime, event_tx, custom_instructions, active_turn).await;
+            run_manual_compact(session, event_tx, custom_instructions, active_turn).await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerClear => {
-            run_clear_conversation(runtime, active_turn, event_tx).await;
+            run_clear_conversation(session, active_turn, event_tx).await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerDream => {
-            run_dream_consolidation(runtime).await;
+            run_dream_consolidation(session).await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerSummary => {
-            run_session_memory_force(runtime).await;
+            run_session_memory_force(session).await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerBtw { request } => {
-            run_side_question(runtime, event_tx, request).await;
+            run_side_question(session, event_tx, request).await;
             SlashFollowup::Done
         }
         SlashOutcome::ShowCost => {
@@ -3147,17 +3165,17 @@ async fn handle_slash_outcome(
             emit_slash_text(event_tx, "status", "", &text).await;
             SlashFollowup::Done
         }
-        SlashOutcome::TriggerGoal { request } => run_goal_command(runtime, event_tx, request).await,
+        SlashOutcome::TriggerGoal { request } => run_goal_command(session, event_tx, request).await,
         SlashOutcome::TriggerRename { request } => {
-            run_session_rename(runtime, event_tx, request).await;
+            run_session_rename(session, event_tx, request).await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerTag { tag } => {
-            run_session_tag(runtime, event_tx, &tag).await;
+            run_session_tag(session, event_tx, &tag).await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerAddDir { path } => {
-            run_add_working_dir(runtime, &path).await;
+            run_add_working_dir(session, &path).await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerOpenPlanEditor { path } => {
@@ -3170,18 +3188,18 @@ async fn handle_slash_outcome(
             SlashFollowup::Done
         }
         SlashOutcome::TriggerReloadPlugins => {
-            run_reload_plugins(runtime, event_tx).await;
+            run_reload_plugins(session, event_tx).await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerReloadHooks => {
-            run_reload_hooks(runtime, event_tx).await;
+            run_reload_hooks(session, event_tx).await;
             SlashFollowup::Done
         }
     }
 }
 
 async fn process_idle_command_queue(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
@@ -3193,7 +3211,7 @@ async fn process_idle_command_queue(
     }
 
     drain_queued_slash_commands(
-        runtime,
+        session,
         event_tx,
         active_turn,
         pending_editor_requests,
@@ -3203,18 +3221,19 @@ async fn process_idle_command_queue(
     .await;
 
     if active_turn.lock().await.is_none() {
-        spawn_command_queue_turn(runtime, event_tx, active_turn, turn_done_tx).await;
+        spawn_command_queue_turn(session, event_tx, active_turn, turn_done_tx).await;
     }
 }
 
 async fn drain_queued_slash_commands(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
+    let runtime = session.runtime();
     while let Some(cmd) = runtime
         .command_queue()
         .dequeue_first_matching(|c| c.is_slash_command && c.agent_id.is_none())
@@ -3234,7 +3253,7 @@ async fn drain_queued_slash_commands(
         let Some((name, args)) = parse_slash_command(&cmd.prompt) else {
             continue;
         };
-        let outcome = dispatch_slash_command(name, args, runtime, event_tx).await;
+        let outcome = dispatch_slash_command(name, args, session, event_tx).await;
         match outcome {
             SlashOutcome::Handled => {}
             SlashOutcome::NotFound => {
@@ -3246,7 +3265,7 @@ async fn drain_queued_slash_commands(
                 thinking_level,
                 model_runtime_source,
             } => {
-                let session_id = runtime.current_session_id().await;
+                let session_id = runtime.current_typed_session_id().await;
                 spawn_slash_run_engine_turn(
                     SlashEnginePrompt {
                         content,
@@ -3254,7 +3273,7 @@ async fn drain_queued_slash_commands(
                         thinking_level,
                         model_runtime_source,
                     },
-                    runtime,
+                    session,
                     event_tx,
                     active_turn,
                     title_gen_attempted,
@@ -3265,24 +3284,24 @@ async fn drain_queued_slash_commands(
                 break;
             }
             SlashOutcome::RunForkSkill { name, args } => {
-                run_fork_skill(runtime, event_tx, &name, &args, active_turn).await;
+                run_fork_skill(session, event_tx, &name, &args, active_turn).await;
             }
             SlashOutcome::TriggerCompact {
                 custom_instructions,
             } => {
-                run_manual_compact_inner(runtime, event_tx, custom_instructions).await;
+                run_manual_compact_inner(session, event_tx, custom_instructions).await;
             }
             SlashOutcome::TriggerClear => {
-                run_clear_conversation(runtime, active_turn, event_tx).await;
+                run_clear_conversation(session, active_turn, event_tx).await;
             }
             SlashOutcome::TriggerDream => {
-                run_dream_consolidation(runtime).await;
+                run_dream_consolidation(session).await;
             }
             SlashOutcome::TriggerSummary => {
-                run_session_memory_force(runtime).await;
+                run_session_memory_force(session).await;
             }
             SlashOutcome::TriggerBtw { request } => {
-                run_side_question(runtime, event_tx, request).await;
+                run_side_question(session, event_tx, request).await;
             }
             SlashOutcome::ShowCost => {
                 let snapshot = runtime.session_usage_snapshot().await;
@@ -3299,9 +3318,9 @@ async fn drain_queued_slash_commands(
                     metadata,
                     thinking_level,
                     model_runtime_source,
-                } = run_goal_command(runtime, event_tx, request).await
+                } = run_goal_command(session, event_tx, request).await
                 {
-                    let session_id = runtime.current_session_id().await;
+                    let session_id = runtime.current_typed_session_id().await;
                     spawn_slash_run_engine_turn(
                         SlashEnginePrompt {
                             content,
@@ -3309,7 +3328,7 @@ async fn drain_queued_slash_commands(
                             thinking_level,
                             model_runtime_source,
                         },
-                        runtime,
+                        session,
                         event_tx,
                         active_turn,
                         title_gen_attempted,
@@ -3321,13 +3340,13 @@ async fn drain_queued_slash_commands(
                 }
             }
             SlashOutcome::TriggerRename { request } => {
-                run_session_rename(runtime, event_tx, request).await;
+                run_session_rename(session, event_tx, request).await;
             }
             SlashOutcome::TriggerTag { tag } => {
-                run_session_tag(runtime, event_tx, &tag).await;
+                run_session_tag(session, event_tx, &tag).await;
             }
             SlashOutcome::TriggerAddDir { path } => {
-                run_add_working_dir(runtime, &path).await;
+                run_add_working_dir(session, &path).await;
             }
             SlashOutcome::TriggerOpenPlanEditor { path } => {
                 prepare_external_editor_request(
@@ -3338,21 +3357,22 @@ async fn drain_queued_slash_commands(
                 .await;
             }
             SlashOutcome::TriggerReloadPlugins => {
-                run_reload_plugins(runtime, event_tx).await;
+                run_reload_plugins(session, event_tx).await;
             }
             SlashOutcome::TriggerReloadHooks => {
-                run_reload_hooks(runtime, event_tx).await;
+                run_reload_hooks(session, event_tx).await;
             }
         }
     }
 }
 
 async fn spawn_command_queue_turn(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
+    let runtime = session.runtime();
     let Some(first) = runtime
         .command_queue()
         .dequeue_first_matching(|c| !c.is_slash_command && c.agent_id.is_none())
@@ -3401,12 +3421,12 @@ async fn spawn_command_queue_turn(
         }))
         .await;
 
-    spawn_history_turn(messages, runtime, event_tx, active_turn, turn_done_tx).await;
+    spawn_history_turn(messages, session, event_tx, active_turn, turn_done_tx).await;
 }
 
 async fn spawn_history_turn(
     messages: Vec<std::sync::Arc<coco_messages::Message>>,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
@@ -3414,7 +3434,7 @@ async fn spawn_history_turn(
     let turn_abort = TurnAbortController::new();
     let turn_abort_signal = turn_abort.signal();
     let turn_id = uuid::Uuid::new_v4();
-    let runtime_t = runtime.clone();
+    let session_t = session.clone();
     let event_tx_t = event_tx.clone();
     let turn_done_tx_t = turn_done_tx.clone();
     let task = tokio::spawn(async move {
@@ -3422,7 +3442,7 @@ async fn spawn_history_turn(
             turn_id,
             tx: turn_done_tx_t,
         };
-        process_queued_history_turn(messages, runtime_t, event_tx_t, turn_abort_signal).await;
+        process_queued_history_turn(messages, session_t, event_tx_t, turn_abort_signal).await;
     });
     *active_turn.lock().await = Some(ActiveTurn {
         id: turn_id,
@@ -3433,10 +3453,11 @@ async fn spawn_history_turn(
 
 async fn process_queued_history_turn(
     messages: Vec<std::sync::Arc<coco_messages::Message>>,
-    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    session: crate::session_runtime::SessionHandle,
     event_tx: mpsc::Sender<CoreEvent>,
     turn_abort: TurnAbortSignal,
 ) {
+    let runtime = session.runtime().clone();
     let cycle_turn_id = coco_types::TurnId::generate();
     let engine = runtime
         .build_engine_with_turn_abort(turn_abort.clone())
@@ -3492,21 +3513,21 @@ async fn process_queued_history_turn(
 /// `ActiveTurn` from a peer task without a TOCTOU window.
 async fn spawn_slash_run_engine_turn(
     prompt: SlashEnginePrompt,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
-    session_id: &str,
+    session_id: &coco_types::SessionId,
 ) {
     let turn_abort = TurnAbortController::new();
     let turn_abort_signal = turn_abort.signal();
     let turn_id = uuid::Uuid::new_v4();
-    let runtime_t = runtime.clone();
+    let session_t = session.clone();
     let event_tx_t = event_tx.clone();
     let title_gen_attempted_t = title_gen_attempted.clone();
     let turn_done_tx_t = turn_done_tx.clone();
-    let session_id_t = session_id.to_string();
+    let session_id_t = session_id.clone();
     let synth_id = uuid::Uuid::new_v4().to_string();
     let SlashEnginePrompt {
         content,
@@ -3526,7 +3547,7 @@ async fn spawn_slash_run_engine_turn(
             thinking_level,
             model_runtime_source,
             Vec::new(),
-            runtime_t,
+            session_t,
             event_tx_t,
             title_gen_attempted_t,
             session_id_t,
@@ -3562,21 +3583,22 @@ fn record_slash_skill_invocation(
 async fn dispatch_slash_command(
     name: &str,
     args: &str,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
+    let runtime = session.runtime();
     // Runtime-state-aware commands intercepted before registry lookup:
     // their behavior depends on per-session state (session_id, plan
     // file, app_state) that the static registry can't carry.
     if matches!(name, "plan" | "planning") {
-        return dispatch_plan(args, runtime, event_tx).await;
+        return dispatch_plan(args, session, event_tx).await;
     }
     // `/permissions` (no arg) / `/permissions list` — open the tabbed
     // rule-editor overlay. The subcommand
     // forms (`allow` / `deny` / `reset`) keep their session-mutation
     // behavior below for power users + SDK parity.
     if name == "permissions" && matches!(args.trim(), "" | "list") {
-        let payload = build_permissions_editor_payload(runtime).await;
+        let payload = build_permissions_editor_payload(session).await;
         let _ = event_tx
             .send(CoreEvent::Tui(TuiOnlyEvent::OpenPermissionsEditor {
                 payload,
@@ -3588,7 +3610,7 @@ async fn dispatch_slash_command(
     // mutate the live `ToolAppState.permissions` base. Intercept the
     // mutating subcommands so they actually take effect.
     if name == "permissions"
-        && let Some(outcome) = dispatch_permissions_mutation(args, runtime, event_tx).await
+        && let Some(outcome) = dispatch_permissions_mutation(args, session, event_tx).await
     {
         return outcome;
     }
@@ -3597,7 +3619,7 @@ async fn dispatch_slash_command(
     // intercept owns the teammate guard + state write. Falls through
     // to the registry (handler lists colors) when args are empty.
     if name == "color"
-        && let Some(outcome) = dispatch_color(args, runtime, event_tx).await
+        && let Some(outcome) = dispatch_color(args, session, event_tx).await
     {
         return outcome;
     }
@@ -3616,7 +3638,7 @@ async fn dispatch_slash_command(
         return SlashOutcome::TriggerClear;
     }
     if name == "context" {
-        return dispatch_context(runtime, event_tx).await;
+        return dispatch_context(session, event_tx).await;
     }
     // `/config` (alias `/settings`) with no args opens the interactive settings
     // panel, reusing the same overlay as the `Ctrl+,` keybind. `config <key>
@@ -3635,7 +3657,7 @@ async fn dispatch_slash_command(
                 .await;
             return SlashOutcome::Handled;
         }
-        return dispatch_add_dir(args, runtime, event_tx).await;
+        return dispatch_add_dir(args, session, event_tx).await;
     }
     // `/export` (no arg) opens the Markdown/JSON/Text format picker;
     // `/export <format>` renders the live conversation history in that format
@@ -3649,16 +3671,16 @@ async fn dispatch_slash_command(
                 .await;
             return SlashOutcome::Handled;
         }
-        return run_export(args, runtime, event_tx).await;
+        return run_export(args, session, event_tx).await;
     }
     // `/branch` (alias `/fork`) forks the conversation at this point into a new
     // session and switches to it live. The sync registry handler only echoes
     // text — the real fork needs runtime + session-store access.
     if matches!(name, "branch" | "fork") {
-        return dispatch_branch(args, runtime, event_tx).await;
+        return dispatch_branch(args, session, event_tx).await;
     }
     if name == "resume" {
-        return dispatch_resume(args, runtime, event_tx).await;
+        return dispatch_resume(args, session, event_tx).await;
     }
     // `/copy [N]` — the picker + arg-parsing + lookback logic lives in
     // the TUI (only it owns the transcript view); the dispatcher just
@@ -3685,10 +3707,10 @@ async fn dispatch_slash_command(
                 .await;
             return SlashOutcome::Handled;
         }
-        return dispatch_provider_login(args, runtime, event_tx).await;
+        return dispatch_provider_login(args, session, event_tx).await;
     }
     if name == "logout" {
-        return dispatch_provider_logout(args, runtime, event_tx).await;
+        return dispatch_provider_logout(args, session, event_tx).await;
     }
     if name == "model" && !args.trim().is_empty() {
         let available_models = runtime
@@ -4091,7 +4113,7 @@ async fn dispatch_slash_command(
                         .await;
                 }
                 DialogSpec::PluginPicker => {
-                    refresh_plugin_dialog_payload(runtime, event_tx).await;
+                    refresh_plugin_dialog_payload(session, event_tx).await;
                 }
                 DialogSpec::McpbConfig { .. } | DialogSpec::Confirm { .. } => {
                     let dialog_kind = match spec {
@@ -4152,9 +4174,10 @@ fn plan_command_query_after_flip(args: &str) -> Option<&str> {
 /// description and show the plan.
 async fn dispatch_plan(
     args: &str,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
+    let runtime = session.runtime();
     let args = args.trim();
 
     // Plan mode opted out via `features.plan_mode = false`: don't flip into
@@ -4176,7 +4199,7 @@ async fn dispatch_plan(
         return SlashOutcome::Handled;
     }
 
-    let session_id = runtime.current_session_id().await;
+    let session_id = runtime.current_typed_session_id().await;
     let project_dir = runtime.runtime_config.paths.project_dir.as_deref();
     let plans_directory_setting = runtime
         .runtime_config
@@ -4202,7 +4225,7 @@ async fn dispatch_plan(
     if !was_in_plan {
         let cfg = runtime.current_engine_config().await;
         let change = coco_cli::live_permission_mode::apply_to_runtime(
-            runtime,
+            session,
             coco_types::PermissionMode::Plan,
             event_tx,
             cfg.permission_mode_availability.bypass_permissions,
@@ -4218,10 +4241,11 @@ async fn dispatch_plan(
 
     // Path to the (resolved) session plan file — used by every arm.
     let plan_path =
-        coco_context::get_plan_file_path(&session_id, &plans_dir, /*agent_id*/ None);
+        coco_context::get_plan_file_path(session_id.as_str(), &plans_dir, /*agent_id*/ None);
 
     if args.is_empty() {
-        let content = coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None);
+        let content =
+            coco_context::get_plan(session_id.as_str(), &plans_dir, /*agent_id*/ None);
         let body = match content {
             Some(body) if !body.trim().is_empty() => format!(
                 "## Current Plan\n\n*{}*\n\n{}\n\nRun `/plan open` to edit in $EDITOR.",
@@ -4263,7 +4287,8 @@ async fn dispatch_plan(
     // Returns `RunEngine { content: <description> }`.
     // - Already in plan mode → ignore the description, just show the plan.
     if was_in_plan {
-        let content = coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None);
+        let content =
+            coco_context::get_plan(session_id.as_str(), &plans_dir, /*agent_id*/ None);
         let text = match content {
             Some(body) if !body.trim().is_empty() => format!(
                 "Already in plan mode.\n\n## Current Plan\n\n*{}*\n\n{}\n\n\
@@ -4444,7 +4469,7 @@ async fn drain_completed_turn(slot: &Arc<Mutex<Option<ActiveTurn>>>, turn_id: uu
 /// through here so typed `/compact` and palette `/compact` behave
 /// identically.
 async fn run_manual_compact(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     custom_instructions: Option<String>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
@@ -4453,7 +4478,7 @@ async fn run_manual_compact(
     // `runtime.history` and runs an LLM call that races with the
     // in-flight engine.
     drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
-    run_manual_compact_inner(runtime, event_tx, custom_instructions).await;
+    run_manual_compact_inner(session, event_tx, custom_instructions).await;
 }
 
 /// Run a user-typed fork-mode skill (`/<name>` with `context: fork`) as a
@@ -4464,12 +4489,13 @@ async fn run_manual_compact(
 /// Drains the in-flight turn first (the subagent runs LLM calls / mutates
 /// shared state) — same contract as `run_manual_compact`.
 async fn run_fork_skill(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     name: &str,
     args: &str,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
 ) {
+    let runtime = session.runtime();
     drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
 
     let body = match runtime.invoke_skill_fork(name, args).await {
@@ -4498,10 +4524,11 @@ async fn run_fork_skill(
 }
 
 async fn run_manual_compact_inner(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     custom_instructions: Option<String>,
 ) -> coco_compact::CompactOutcome {
+    let runtime = session.runtime();
     let compact_cancel = CancellationToken::new();
     let engine = runtime.build_engine(compact_cancel).await;
     let mut history = coco_messages::MessageHistory::new();
@@ -4523,9 +4550,11 @@ async fn run_manual_compact_inner(
     // observe it. Re-append explicitly so /compact behaves the same
     // way reactive compact does (the forwarder hook in
     // `process_submit_turn` covers reactive).
-    let session_id = runtime.current_session_id().await;
+    let session_id = runtime.current_typed_session_id().await;
+    let session_id_string = session_id.to_string();
     let mgr = Arc::clone(&runtime.session_manager);
-    let _ = tokio::task::spawn_blocking(move || mgr.re_append_session_metadata(&session_id)).await;
+    let _ = tokio::task::spawn_blocking(move || mgr.re_append_session_metadata(&session_id_string))
+        .await;
     outcome
 }
 
@@ -4536,19 +4565,19 @@ async fn run_manual_compact_inner(
 /// `/clear` rotates session_id → emit
 /// `SessionResetForResume { session_id: new }`.
 async fn run_clear_conversation(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
+    let runtime = session.runtime();
     drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
     if let Err(e) = runtime.clear_conversation().await {
         warn!(error = %e, "/clear failed");
         return;
     }
-    let new_session_id = runtime.current_session_id().await;
+    let new_session_id = runtime.current_typed_session_id().await;
     let notif = ServerNotification::SessionResetForResume {
-        session_id: new_session_id,
-        agent_id: None,
+        identity: coco_types::ServerNotificationIdentity::new(Some(new_session_id), None),
     };
     let _ = event_tx.send(CoreEvent::Protocol(notif)).await;
     if let Some(messages) = runtime.pre_clear_rewind_messages().await {
@@ -4566,7 +4595,8 @@ async fn run_clear_conversation(
 /// Uses [`coco_memory::DreamService::force`] so the time / session /
 /// scan-throttle gates are bypassed; the PID + mtime CAS lock is still
 /// acquired so this can't race with an in-flight auto-dream.
-async fn run_dream_consolidation(runtime: &Arc<crate::session_runtime::SessionRuntime>) {
+async fn run_dream_consolidation(session: &crate::session_runtime::SessionHandle) {
+    let runtime = session.runtime();
     let Some(memory_runtime) = runtime.memory_runtime().cloned() else {
         info!("/dream: no MemoryRuntime (Feature::AutoMemory off); skipping");
         return;
@@ -4585,7 +4615,8 @@ async fn run_dream_consolidation(runtime: &Arc<crate::session_runtime::SessionRu
 /// Force a 9-section session-memory update. Mirrors the SDK runner's
 /// `/summary` short-circuit (`sdk_runner.rs:213`). Silently no-ops when
 /// the runtime has no `MemoryRuntime`.
-async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionRuntime>) {
+async fn run_session_memory_force(session: &crate::session_runtime::SessionHandle) {
+    let runtime = session.runtime();
     let Some(memory_runtime) = runtime.memory_runtime().cloned() else {
         info!("/summary: no MemoryRuntime; skipping");
         return;
@@ -4617,10 +4648,11 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
 /// the `/btw` fallback path. Degrades only when the fork dispatcher is not
 /// installed.
 async fn run_side_question(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     request: coco_commands::handlers::btw::BtwRequest,
 ) {
+    let runtime = session.runtime();
     let cache = match runtime.last_cache_safe_params().await {
         Some(cache) => cache,
         None => runtime.fallback_cache_safe_params().await,
@@ -4648,9 +4680,10 @@ async fn run_side_question(
 /// default filename is generated. (Clipboard export lives in `/copy`.)
 async fn run_export(
     args: &str,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
+    let runtime = session.runtime();
     use crate::conversation_export::ExportFormat;
     let arg = args.trim();
     // A bare format keyword comes from the modal → timestamped default name;
@@ -4691,7 +4724,7 @@ async fn run_export(
 /// `CustomTitle` + `AgentName` and patches the PID registry), and
 /// surfaces a single system-line confirmation.
 async fn run_session_rename(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     request: coco_commands::ParsedRename,
 ) {
@@ -4715,7 +4748,7 @@ async fn run_session_rename(
     // against `messages_after_compact_boundary`.
     let name = match request {
         coco_commands::ParsedRename::Explicit(n) => n,
-        coco_commands::ParsedRename::Auto => match auto_generate_session_name(runtime).await {
+        coco_commands::ParsedRename::Auto => match auto_generate_session_name(session).await {
             Ok(n) => n,
             Err(err) => {
                 emit_slash_text(event_tx, "rename", "", err.user_message()).await;
@@ -4724,7 +4757,7 @@ async fn run_session_rename(
         },
     };
 
-    let text = match persist_rename(runtime, name.clone()).await {
+    let text = match persist_rename(session, name.clone()).await {
         Ok(_) => format!("Session renamed to: {name}"),
         Err(e) => match e.downcast_ref::<coco_session::SessionError>() {
             Some(coco_session::SessionError::TranscriptNotFound { .. }) => {
@@ -4747,17 +4780,18 @@ async fn run_session_rename(
 /// autocomplete popup and command palette stop pointing at stale names
 /// from removed plugins.
 async fn run_reload_plugins(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let runtime = session.runtime();
+    let cwd = runtime.current_cwd.read().await.clone();
     let count = runtime.reload_plugins(&cwd).await;
     // Chain the agent-catalog + hook reloads so `/reload-plugins` also
     // picks up newly enabled/disabled plugin agents and hooks, not just
     // commands + skills. MCP/LSP re-register is deferred (needs the MCP
     // connection manager threaded into SessionRuntime).
     runtime.reload_agent_catalog().await;
-    runtime.reload_lsp_servers(&cwd).await;
+    runtime.reload_lsp_servers().await;
     let hook_note = match runtime.reload_hooks().await {
         Ok(n) => format!(" · {n} hook(s)"),
         Err(e) => format!(" · hook reload failed: {e}"),
@@ -4776,9 +4810,10 @@ async fn run_reload_plugins(
 /// `/hooks reload` runner — rebuild the live `HookRegistry` from the
 /// latest `RuntimeConfig` snapshot.
 async fn run_reload_hooks(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
+    let runtime = session.runtime();
     let body = match runtime.reload_hooks().await {
         Ok(count) => format!("Reloaded — {count} hook(s) registered from current settings."),
         Err(e) => format!("Hook reload failed: {e}"),
@@ -4787,10 +4822,11 @@ async fn run_reload_hooks(
 }
 
 async fn run_goal_command(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     request: coco_commands::GoalCommandRequest,
 ) -> SlashFollowup {
+    let runtime = session.runtime();
     let is_status = matches!(request, coco_commands::GoalCommandRequest::Status);
     let args = goal_command::goal_display_args(&request).to_string();
     let gate = goal_command::GoalGate {
@@ -4817,7 +4853,7 @@ async fn run_goal_command(
         goal_command::GoalOutcome::Text(text) => {
             if is_status {
                 let (title, body) =
-                    build_goal_status_modal(runtime, &history_snapshot, tokens_at_start, text)
+                    build_goal_status_modal(session, &history_snapshot, tokens_at_start, text)
                         .await;
                 let _ = event_tx
                     .send(CoreEvent::Tui(TuiOnlyEvent::OpenGoalStatus { title, body }))
@@ -4828,8 +4864,8 @@ async fn run_goal_command(
             SlashFollowup::Done
         }
         goal_command::GoalOutcome::StatusThenText { status, text } => {
-            append_goal_status_and_slash_text(runtime, event_tx, status, &args, &text).await;
-            emit_active_goal_snapshot(runtime, event_tx).await;
+            append_goal_status_and_slash_text(session, event_tx, status, &args, &text).await;
+            emit_active_goal_snapshot(session, event_tx).await;
             SlashFollowup::Done
         }
         goal_command::GoalOutcome::SetAndRun {
@@ -4837,8 +4873,8 @@ async fn run_goal_command(
             text,
             kickoff,
         } => {
-            append_goal_status(runtime, event_tx, status).await;
-            emit_active_goal_snapshot(runtime, event_tx).await;
+            append_goal_status(session, event_tx, status).await;
+            emit_active_goal_snapshot(session, event_tx).await;
             emit_slash_text(event_tx, "goal", &args, &text).await;
             SlashFollowup::RunEngine {
                 content: kickoff,
@@ -4851,11 +4887,12 @@ async fn run_goal_command(
 }
 
 async fn build_goal_status_modal(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     history: &[std::sync::Arc<coco_messages::Message>],
     current_output_tokens: i64,
     fallback_text: String,
 ) -> (String, String) {
+    let runtime = session.runtime();
     if let Some(goal) = runtime.app_state.read().await.active_goal.clone() {
         return (
             "Goal active".to_string(),
@@ -4962,10 +4999,11 @@ fn format_goal_duration_ms(ms: i64) -> String {
 }
 
 async fn append_goal_status(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     payload: coco_types::GoalStatusPayload,
 ) {
+    let runtime = session.runtime();
     let message = goal_status_message(payload);
     let mut history = runtime.history.lock().await;
     let event_tx_opt = Some(event_tx.clone());
@@ -4973,12 +5011,13 @@ async fn append_goal_status(
 }
 
 async fn append_goal_status_and_slash_text(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     payload: coco_types::GoalStatusPayload,
     args: &str,
     text: &str,
 ) {
+    let runtime = session.runtime();
     let mut messages = vec![goal_status_message(payload)];
     messages.extend(coco_messages::build_slash_command_messages(
         "goal", args, text, /*is_sensitive*/ false,
@@ -5001,9 +5040,10 @@ fn goal_status_message(payload: coco_types::GoalStatusPayload) -> coco_messages:
 }
 
 async fn emit_active_goal_snapshot(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
+    let runtime = session.runtime();
     let goal = runtime.app_state.read().await.active_goal.clone();
     let _ = event_tx
         .send(CoreEvent::Protocol(
@@ -5035,9 +5075,10 @@ fn workspace_trust_rejected_from_env(value: Option<&str>) -> bool {
 /// persisted to settings.json.
 async fn dispatch_add_dir(
     args: &str,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
+    let runtime = session.runtime();
     let raw_path = args.trim();
     let current_cwd = runtime.current_cwd.read().await.clone();
     let candidate = if Path::new(raw_path).is_absolute() {
@@ -5088,7 +5129,7 @@ async fn dispatch_add_dir(
         return SlashOutcome::Handled;
     }
 
-    run_add_working_dir(runtime, absolute.to_string_lossy().as_ref()).await;
+    run_add_working_dir(session, absolute.to_string_lossy().as_ref()).await;
     emit_slash_text(
         event_tx,
         "add-dir",
@@ -5143,7 +5184,8 @@ fn add_dir_already_message(
 
 /// Push the absolute path onto the live `ToolAppState.permissions.additional_dirs`
 /// map.
-async fn run_add_working_dir(runtime: &Arc<crate::session_runtime::SessionRuntime>, path: &str) {
+async fn run_add_working_dir(session: &crate::session_runtime::SessionHandle, path: &str) {
+    let runtime = session.runtime();
     let path_owned = path.to_string();
     runtime
         .app_state
@@ -5163,14 +5205,15 @@ async fn run_add_working_dir(runtime: &Arc<crate::session_runtime::SessionRuntim
 /// `/tag <name>` runner — toggles the tag via `SessionManager`. Reports
 /// "added" or "removed" so the user knows the new state.
 async fn run_session_tag(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     tag: &str,
 ) {
-    let session_id = runtime.current_session_id().await;
+    let runtime = session.runtime();
+    let session_id = runtime.current_typed_session_id().await;
     let manager = runtime.session_manager.clone();
     let tag_owned = tag.to_string();
-    let session_id_owned = session_id.clone();
+    let session_id_owned = session_id.to_string();
     let result =
         tokio::task::spawn_blocking(move || manager.toggle_tag(&session_id_owned, &tag_owned))
             .await
@@ -5199,9 +5242,10 @@ async fn run_session_tag(
 /// "Available colors: …" listing.
 async fn dispatch_color(
     args: &str,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> Option<SlashOutcome> {
+    let runtime = session.runtime();
     use coco_coordinator::identity::is_teammate;
     use coco_types::AgentColorName;
 
@@ -5266,9 +5310,10 @@ async fn dispatch_color(
 
 async fn dispatch_permissions_mutation(
     args: &str,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> Option<SlashOutcome> {
+    let runtime = session.runtime();
     use coco_types::PermissionBehavior;
     use coco_types::PermissionRule;
     use coco_types::PermissionRuleSource;
@@ -5390,9 +5435,10 @@ async fn emit_slash_text(event_tx: &mpsc::Sender<CoreEvent>, name: &str, args: &
 }
 
 async fn dispatch_context(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
+    let runtime = session.runtime();
     match runtime.analyze_main_context().await {
         Ok(report) => {
             let _ = event_tx
@@ -5431,9 +5477,10 @@ fn slash_provider_arg(args: &str) -> Option<String> {
 /// Only `provider_statuses` is auth-dependent — the model catalog and role
 /// map derive from static config and are left untouched.
 async fn emit_provider_statuses_refresh(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
+    let runtime = session.runtime();
     let statuses = build_provider_statuses(&runtime.runtime_config)
         .into_iter()
         .map(|(provider, status)| coco_types::ProviderStatusInfo {
@@ -5451,9 +5498,10 @@ async fn emit_provider_statuses_refresh(
 
 async fn dispatch_provider_login(
     args: &str,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
+    let runtime = session.runtime();
     let provider = slash_provider_arg(args);
     let tx = event_tx.clone();
     let url_sink: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(move |url| {
@@ -5463,17 +5511,18 @@ async fn dispatch_provider_login(
             text: format!("Opening your browser to sign in. If it doesn't open, visit:\n{url}"),
         }));
     });
-    match coco_cli::provider_login::run_login_session(provider, url_sink).await {
+    let cwd = runtime.current_cwd.read().await.clone();
+    match coco_cli::provider_login::run_login_session(provider, &cwd, url_sink).await {
         Ok(msg) => {
             emit_slash_text(event_tx, "login", args, &msg).await;
-            emit_provider_statuses_refresh(runtime, event_tx).await;
+            emit_provider_statuses_refresh(session, event_tx).await;
             // Best-effort: discover the provider's live model list so
             // subscription-only models surface in `/model` without a restart.
             let instance =
                 coco_cli::provider_login::instance_name(slash_provider_arg(args).as_deref());
             let base = model_catalog_infos(&runtime.runtime_config);
             coco_cli::openai_model_refresh::spawn_after_login(
-                runtime.clone(),
+                session.clone(),
                 instance,
                 event_tx.clone(),
                 base,
@@ -5498,14 +5547,14 @@ async fn dispatch_provider_login(
 /// `AuthService` (best-effort server-side revocation included).
 async fn dispatch_provider_logout(
     args: &str,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
     let provider = slash_provider_arg(args);
     match coco_cli::provider_login::run_logout_session(provider).await {
         Ok(msg) => {
             emit_slash_text(event_tx, "logout", args, &msg).await;
-            emit_provider_statuses_refresh(runtime, event_tx).await;
+            emit_provider_statuses_refresh(session, event_tx).await;
         }
         Err(e) => {
             emit_slash_status(
@@ -5548,17 +5597,19 @@ async fn process_submit_turn(
     slash_thinking_level: Option<coco_types::ThinkingLevel>,
     slash_model_runtime_source: Option<coco_inference::ModelRuntimeSource>,
     images: Vec<coco_tui::ImageData>,
-    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    session: crate::session_runtime::SessionHandle,
     event_tx: mpsc::Sender<CoreEvent>,
     title_gen_attempted: Arc<RwLock<std::collections::HashSet<String>>>,
-    session_id: String,
+    session_id: coco_types::SessionId,
     turn_abort: TurnAbortSignal,
 ) {
+    let runtime = session.runtime().clone();
+    let session_id_string = session_id.to_string();
     // Resolve @-mentions through the shared cross-path helper (produces
     // both file-attachment system-reminders and changed-file notifications).
     // The same pipeline feeds headless and SDK paths via
     // `coco_cli::at_mention_turn::resolve_turn_inputs`.
-    let cwd = std::env::current_dir().unwrap_or_default();
+    let cwd = runtime.current_cwd.read().await.clone();
     let user_uuid =
         uuid::Uuid::parse_str(&user_message_id).unwrap_or_else(|_| uuid::Uuid::new_v4());
     let inputs = coco_cli::at_mention_turn::resolve_turn_inputs(
@@ -5699,7 +5750,7 @@ async fn process_submit_turn(
     // the event in the forwarder catches every variant without
     // per-path hooks.
     let session_manager_for_forward = Arc::clone(&runtime.session_manager);
-    let session_id_for_forward = session_id.clone();
+    let session_id_for_forward = session_id_string.clone();
     let forward_handle = tokio::spawn(async move {
         while let Some(ev) = core_event_rx.recv().await {
             if matches!(
@@ -5784,7 +5835,7 @@ async fn process_submit_turn(
             .await;
     }
 
-    maybe_spawn_auto_title(&runtime, &title_gen_attempted, &session_id).await;
+    maybe_spawn_auto_title(&session, &title_gen_attempted, &session_id).await;
 }
 
 fn abort_reason_from_engine_stop(stop_reason: Option<&str>) -> TurnAbortReason {
@@ -5799,22 +5850,26 @@ fn abort_reason_from_engine_stop(stop_reason: Option<&str>) -> TurnAbortReason {
 /// attempted for this session id, no Fast spec, plan not exited,
 /// plan empty) fails.
 async fn maybe_spawn_auto_title(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
-    session_id: &str,
+    session_id: &coco_types::SessionId,
 ) {
+    let runtime = session.runtime();
     let plan_exited = runtime.app_state.read().await.has_exited_plan_mode;
     let plans_dir = coco_context::resolve_plans_directory(
         &runtime.config_home,
         /*project_dir*/ None,
         /*setting*/ None,
     );
-    let plan_text = coco_context::get_plan(session_id, &plans_dir, /*agent_id*/ None);
+    let plan_text = coco_context::get_plan(session_id.as_str(), &plans_dir, /*agent_id*/ None);
     let plan_non_empty = plan_text
         .as_deref()
         .map(|t| !t.trim().is_empty())
         .unwrap_or(false);
-    let already_attempted = title_gen_attempted.read().await.contains(session_id);
+    let already_attempted = title_gen_attempted
+        .read()
+        .await
+        .contains(session_id.as_str());
     if !should_trigger_title_gen(
         runtime.auto_title_enabled,
         already_attempted,
@@ -5831,7 +5886,7 @@ async fn maybe_spawn_auto_title(
         .write()
         .await
         .insert(session_id.to_string());
-    spawn_auto_title_task(runtime.clone(), text);
+    spawn_auto_title_task(session.clone(), text);
 }
 
 /// Synchronous TUI-cancel cleanup.
@@ -5843,8 +5898,9 @@ async fn maybe_spawn_auto_title(
 async fn handle_auto_truncate(
     message_id: &str,
     event_tx: &mpsc::Sender<CoreEvent>,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
 ) {
+    let runtime = session.runtime();
     let mut h = runtime.history.lock().await;
     let Some(idx) = h.as_slice().iter().position(|m| match m.as_ref() {
         coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
@@ -5882,8 +5938,7 @@ async fn handle_auto_truncate(
     let _ = event_tx
         .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
             keep_count: idx as i64,
-            session_id: String::new(),
-            agent_id: None,
+            identity: coco_types::ServerNotificationIdentity::default(),
         }))
         .await;
 }
@@ -5903,10 +5958,11 @@ async fn handle_rewind(
     rewound_turn: i32,
     file_history: &Option<Arc<RwLock<FileHistoryState>>>,
     config_home: &std::path::Path,
-    session_id: &str,
+    session_id: &coco_types::SessionId,
     event_tx: &mpsc::Sender<CoreEvent>,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
 ) {
+    let runtime = session.runtime();
     use coco_tui::state::RestoreType;
 
     let mut files_changed = 0i32;
@@ -5928,7 +5984,7 @@ async fn handle_rewind(
         restore_type,
         RestoreType::SummarizeFrom { .. } | RestoreType::SummarizeUpTo { .. }
     ) {
-        handle_summarize_rewind(restore_type, message_id, runtime, event_tx).await;
+        handle_summarize_rewind(restore_type, message_id, session, event_tx).await;
         return;
     }
 
@@ -5940,7 +5996,10 @@ async fn handle_rewind(
         && let Some(fh) = file_history
     {
         let fh = fh.read().await;
-        match fh.rewind(message_id, config_home, session_id).await {
+        match fh
+            .rewind(message_id, config_home, session_id.as_str())
+            .await
+        {
             Ok(changed) => {
                 files_changed = changed.len() as i32;
                 info!(files_changed, message_id, "File history rewind completed");
@@ -6043,8 +6102,7 @@ async fn handle_rewind(
             let _ = event_tx
                 .send(CoreEvent::Protocol(ServerNotification::HistoryReplaced {
                     messages: messages.into_iter().map(Arc::new).collect(),
-                    session_id: String::new(),
-                    agent_id: None,
+                    identity: coco_types::ServerNotificationIdentity::default(),
                     reason: coco_types::HistoryReplaceReason::Rewind,
                 }))
                 .await;
@@ -6052,8 +6110,7 @@ async fn handle_rewind(
         let _ = event_tx
             .send(CoreEvent::Protocol(ServerNotification::MessageTruncated {
                 keep_count,
-                session_id: String::new(),
-                agent_id: None,
+                identity: coco_types::ServerNotificationIdentity::default(),
             }))
             .await;
     }
@@ -6077,9 +6134,10 @@ async fn handle_rewind(
 async fn handle_summarize_rewind(
     restore_type: &coco_tui::state::RestoreType,
     message_id: &str,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
+    let runtime = session.runtime();
     use coco_messages::PartialCompactDirection;
     use coco_tui::state::RestoreType;
 
@@ -6188,12 +6246,13 @@ fn should_trigger_title_gen(
 
 /// Spawn a detached tokio task that auto-names the session from the approved
 /// plan text via the same generator used by bare `/rename`.
-fn spawn_auto_title_task(runtime: Arc<crate::session_runtime::SessionRuntime>, plan_text: String) {
+fn spawn_auto_title_task(session: crate::session_runtime::SessionHandle, plan_text: String) {
     tokio::spawn(async move {
-        let session_id = runtime.current_session_id().await;
-        if runtime
+        let session_id = session.current_typed_session_id().await;
+        let session_id_string = session_id.to_string();
+        if session
             .session_manager
-            .load(&session_id)
+            .load(&session_id_string)
             .map(|session| session.title.is_some())
             .unwrap_or(false)
         {
@@ -6202,22 +6261,24 @@ fn spawn_auto_title_task(runtime: Arc<crate::session_runtime::SessionRuntime>, p
 
         let plan_head = plan_text.chars().take(1_000).collect::<String>();
         let Ok(name) = coco_cli::session_rename::generate_session_name_from_text(
-            runtime.side_query(),
+            session.side_query(),
             plan_head,
         )
         .await
         else {
             return;
         };
-        if runtime
+        let session_id = session.current_typed_session_id().await;
+        let session_id_string = session_id.to_string();
+        if session
             .session_manager
-            .load(&runtime.current_session_id().await)
+            .load(&session_id_string)
             .map(|session| session.title.is_some())
             .unwrap_or(false)
         {
             return;
         }
-        let _ = coco_cli::session_rename::persist_rename(&runtime, name).await;
+        let _ = coco_cli::session_rename::persist_rename(&session, name).await;
     });
 }
 
@@ -6244,13 +6305,14 @@ fn spawn_auto_title_task(runtime: Arc<crate::session_runtime::SessionRuntime>, p
 /// - Emit `SkillOverridesSaved` so the TUI renders the localized
 /// toast.
 async fn handle_write_skill_overrides(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     patch: serde_json::Value,
     runtime_publisher: Option<&Arc<coco_config::RuntimePublisher>>,
     cwd: &std::path::Path,
     flag_settings: Option<&std::path::Path>,
 ) {
+    let runtime = session.runtime();
     let result = match runtime_publisher {
         Some(publisher) => {
             let catalogs = coco_config::CatalogPaths::default();
@@ -6343,22 +6405,21 @@ fn image_data_to_queued(images: &[coco_tui::ImageData]) -> Vec<QueuedImage> {
 }
 
 async fn refresh_plugin_dialog_payload(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    let payload = build_plugin_dialog_payload(runtime).await;
+    let payload = build_plugin_dialog_payload(session).await;
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::OpenPluginDialog { payload }))
         .await;
 }
 
 async fn build_plugin_dialog_payload(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
 ) -> coco_types::PluginDialogPayload {
+    let runtime = session.runtime();
     let cfg = runtime.current_engine_config().await;
-    let project_dir = cfg
-        .project_dir
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let project_dir = cfg.workspace_cwd();
     let config_home = runtime.config_home.clone();
     let plugins = coco_plugins::load_all_installed_plugins(&config_home, &project_dir);
     let policy = coco_plugins::security::EnterprisePolicy::from_managed_settings();
@@ -6630,11 +6691,12 @@ async fn run_prompt_mode_bash(
     cwd: &std::path::Path,
     user_message_id: String,
     command: String,
-    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    session: crate::session_runtime::SessionHandle,
     event_tx: mpsc::Sender<CoreEvent>,
     active_turn: Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: mpsc::Sender<uuid::Uuid>,
 ) {
+    let runtime = session.runtime();
     const MAX_OUTPUT_BYTES: usize = 8 * 1024;
     const MAX_OUTPUT_LINES: usize = 200;
 
@@ -6664,7 +6726,7 @@ async fn run_prompt_mode_bash(
         }
     };
 
-    let should_respond = should_prompt_mode_bash_respond(&runtime) && !command_failed_to_run;
+    let should_respond = should_prompt_mode_bash_respond(runtime) && !command_failed_to_run;
 
     // Push the local command into engine MessageHistory so the chat transcript
     // (TUI + SDK consumers + JSONL) records the bash invocation via the
@@ -6703,7 +6765,7 @@ async fn run_prompt_mode_bash(
             let h = runtime.history.lock().await;
             h.to_vec()
         };
-        spawn_history_turn(messages, &runtime, &event_tx, &active_turn, &turn_done_tx).await;
+        spawn_history_turn(messages, &session, &event_tx, &active_turn, &turn_done_tx).await;
     }
 }
 
@@ -6863,11 +6925,12 @@ impl CreateAgentError {
 /// 4. Refuses to overwrite an existing file.
 /// The caller then hands off to the standard editor flow.
 async fn prepare_agent_create(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     name: &str,
     description: &str,
     source: coco_types::AgentSource,
 ) -> Result<std::path::PathBuf, CreateAgentError> {
+    let runtime = session.runtime();
     // Snapshot the catalog ONCE — the colour picker reads it, and
     // the post-write reload supersedes it on its own. Repeated
     // `agent_catalog_snapshot().await` calls add lock churn for no
@@ -6877,10 +6940,9 @@ async fn prepare_agent_create(
 
     let name_owned = name.to_string();
     let description_owned = description.to_string();
+    let cwd = runtime.current_engine_config().await.workspace_cwd();
     let blocking =
         tokio::task::spawn_blocking(move || -> Result<std::path::PathBuf, CreateAgentError> {
-            let cwd =
-                std::env::current_dir().map_err(|err| CreateAgentError::Io(err.to_string()))?;
             let config_home = coco_config::global_config::config_home();
             let dir = coco_subagent::resolve_writable_agent_dir(source, &config_home, &cwd)
                 .ok_or(CreateAgentError::NonWritableSource(source))?;
@@ -6952,7 +7014,7 @@ fn yaml_single_quote(s: &str) -> String {
 /// saving doesn't churn the catalog. Falls back to reload on any
 /// mtime-read error so a missing-stat doesn't strand the dialog.
 async fn run_open_agent_file(
-    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    session: crate::session_runtime::SessionHandle,
     path: std::path::PathBuf,
     event_tx: mpsc::Sender<CoreEvent>,
 ) {
@@ -6976,15 +7038,15 @@ async fn run_open_agent_file(
                     %path_display,
                     "agent editor exited with no file changes; skipping reload"
                 );
-                refresh_agents_dialog(&runtime, &event_tx).await;
+                refresh_agents_dialog(&session, &event_tx).await;
                 return;
             }
             // Reload + republish the dialog payload so the user sees
             // their edits immediately. Live registry refresh + dialog
             // refresh both go through the existing wire so observers
             // (subagent dispatch, dialog renderer) stay coherent.
-            runtime.reload_agent_catalog().await;
-            refresh_agents_dialog(&runtime, &event_tx).await;
+            session.reload_agent_catalog().await;
+            refresh_agents_dialog(&session, &event_tx).await;
         }
         Ok(Err(error)) => {
             tracing::warn!(
@@ -7018,9 +7080,10 @@ fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
 /// (`OpenAgentEditor` exit, `DeleteAgentFile`) so the dialog refreshes
 /// in place rather than waiting for the user to re-issue `/agents`.
 async fn refresh_agents_dialog(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
+    let runtime = session.runtime();
     let snapshot = runtime.agent_catalog_snapshot().await;
 
     let active_source: std::collections::BTreeMap<String, coco_types::AgentSource> = snapshot
@@ -7058,11 +7121,12 @@ async fn refresh_agents_dialog(
 /// (user / project / local / flag / policy) plus additional directories,
 /// projecting them into the wire payload the TUI partitions into tabs.
 async fn build_permissions_editor_payload(
-    _runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
 ) -> coco_types::PermissionsEditorPayload {
+    let runtime = session.runtime();
     use coco_permissions::permissions_store::PermissionStore;
 
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cwd = runtime.current_engine_config().await.workspace_cwd();
     let store = coco_permissions::SettingsPermissionStore::new(cwd.clone());
 
     // Reading several small JSON files — push onto the blocking pool so a
@@ -7104,10 +7168,10 @@ async fn build_permissions_editor_payload(
 /// Re-emit `OpenPermissionsEditor` with a fresh snapshot so the open
 /// overlay refreshes in place after a persisted edit.
 async fn refresh_permissions_editor(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    let payload = build_permissions_editor_payload(runtime).await;
+    let payload = build_permissions_editor_payload(session).await;
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::OpenPermissionsEditor {
             payload,
@@ -7123,9 +7187,10 @@ async fn refresh_permissions_editor(
 /// into the live base (via `apply_permission_updates_to_live`) AND persists
 /// persistable destinations to disk.
 async fn apply_and_persist_permission_update(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     update: &coco_types::PermissionUpdate,
 ) {
+    let runtime = session.runtime();
     runtime
         .apply_permission_updates_everywhere(std::slice::from_ref(update))
         .await;
@@ -7537,13 +7602,14 @@ fn provider_display_label(provider: &str) -> String {
 /// take effect on next session restart — see
 /// [`SessionRuntime::client_for_role`] doc-comment.
 async fn apply_role_in_memory(
-    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    session: crate::session_runtime::SessionHandle,
     role: coco_types::ModelRole,
     provider: String,
     model_id: String,
     effort: Option<coco_types::ReasoningEffort>,
     event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
 ) {
+    let runtime = session.runtime();
     let moa_endpoint = if provider == "moa" {
         runtime
             .runtime_config
@@ -7714,10 +7780,11 @@ fn build_remote_model_change_reminder(
 /// cycle). Reuses [`apply_role_in_memory`]'s end (event emission) so
 /// the TUI mirror updates through the same `ModelRoleChanged` path.
 async fn apply_main_effort_in_memory(
-    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    session: crate::session_runtime::SessionHandle,
     level: String,
     event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
 ) {
+    let runtime = session.runtime();
     let effort = match level.parse::<coco_types::ReasoningEffort>() {
         Ok(e) => Some(e),
         Err(err) => {

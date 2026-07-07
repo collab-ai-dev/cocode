@@ -527,16 +527,21 @@ async fn wizard_advance(state: &mut AppState, command_tx: &mpsc::Sender<UserComm
 }
 
 async fn wizard_finalize(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    let cwd = std::env::current_dir().unwrap_or_default();
+    let cwd = state
+        .session
+        .working_dir
+        .as_deref()
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
     let config_home = coco_config::global_config::config_home();
     wizard_finalize_with(state, command_tx, &cwd, &config_home).await;
 }
 
 /// Pure-paths variant of [`wizard_finalize`] used by both the live
-/// dispatch (which reads `std::env::current_dir()` /
-/// `config_home()`) and unit tests (which pass `tempfile::TempDir`
-/// paths). Keeping the global-env lookup in the thin wrapper above
-/// means the testable surface never touches process state.
+/// dispatch (which reads `config_home()`) and unit tests (which pass
+/// `tempfile::TempDir` paths). Keeping the global-env lookup in the thin
+/// wrapper above means the testable surface never touches process state.
 async fn wizard_finalize_with(
     state: &mut AppState,
     command_tx: &mpsc::Sender<UserCommand>,

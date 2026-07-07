@@ -4,6 +4,8 @@ use coco_error::StackError;
 use coco_error::StatusCode;
 use coco_hub_protocol::AnnounceFrame;
 use coco_hub_protocol::BatchFrame;
+use coco_types::SessionId;
+use coco_types::TurnId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -51,7 +53,7 @@ pub struct InstanceRow {
 #[serde(rename_all = "camelCase")]
 pub struct SessionRow {
     pub instance_id: String,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub started_at: i64,
     pub ended_at: Option<i64>,
     pub model: Option<String>,
@@ -72,9 +74,9 @@ pub struct SessionRow {
 #[serde(rename_all = "camelCase")]
 pub struct EventRow {
     pub instance_id: String,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub event_id: String,
-    pub seq: i64,
+    pub session_seq: i64,
     pub line_index: i64,
     pub block_index: Option<i64>,
     pub ts: i64,
@@ -82,7 +84,7 @@ pub struct EventRow {
     pub received_at: i64,
     pub schema_version: u32,
     pub kind: String,
-    pub turn_id: Option<String>,
+    pub turn_id: Option<TurnId>,
     pub agent_id: Option<String>,
     pub item_id: Option<String>,
     pub tool_name: Option<String>,
@@ -152,7 +154,7 @@ pub struct EventFilter {
 #[serde(rename_all = "camelCase")]
 pub struct EventQuery {
     pub instance_id: String,
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
     pub before: Option<Cursor>,
     pub limit: usize,
     pub filter: EventFilter,
@@ -200,7 +202,7 @@ pub struct SearchHit {
 #[serde(rename_all = "camelCase")]
 pub struct AgentEdge {
     pub instance_id: String,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub parent_agent_id: String,
     pub child_agent_id: String,
     pub agent_type: Option<String>,
@@ -363,7 +365,7 @@ pub trait EventStore: Send + Sync + 'static {
         &self,
         instance_id: &str,
         session_id: &str,
-        seq: i64,
+        session_seq: i64,
     ) -> Result<Option<EventRow>, EventStoreError>;
     async fn search(&self, query: SearchQuery) -> Result<Page<SearchHit>, EventStoreError>;
     async fn list_agent_edges(

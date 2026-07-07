@@ -10,7 +10,7 @@
 //! The factory closure inside [`coco_query::QueryEngineAdapter`] is
 //! the trickiest piece — it needs to spawn a fresh `QueryEngine` per
 //! subagent call, route the call's model selection to the right
-//! `ModelRuntimeSource`, and thread it back through `SessionRuntime`'s
+//! `ModelRuntimeSource`, and thread it back through `SessionHandle`'s
 //! standard wiring (compaction observers, mailbox, hooks, etc.). This
 //! module owns the closure construction so `app/cli/main.rs` doesn't
 //! grow a 50-line lambda.
@@ -39,7 +39,7 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use crate::session_runtime::SessionRuntime;
+use crate::session_runtime::SessionHandle;
 
 /// Stale agent-worktree GC threshold — crash-leaked `agent-*` worktrees
 /// older than this are swept at session start (30-day retention).
@@ -74,19 +74,19 @@ fn resolve_agent_runtime_source(
     }
 }
 
-/// Assemble the production [`SwarmAgentHandle`] for `runtime`.
+/// Assemble the production [`SwarmAgentHandle`] for `session`.
 ///
 /// Requires the TaskRuntime-backed registry to already be attached;
 /// absence is not a supported production LocalAgent configuration.
 ///
 /// **Late-bind contract**: this fn must run *after*
-/// `SessionRuntime::build` has returned the `Arc`, because the
-/// `QueryEngineAdapter` factory captures `Arc<SessionRuntime>` to
+/// `SessionRuntime::build` has returned the handle, because the
+/// `QueryEngineAdapter` factory captures `SessionHandle` to
 /// drive per-spawn engine assembly. Calling it from inside `build()`
 /// would force a cycle (`Arc::new_cyclic` works, but the resulting
 /// closure-vs-Arc dance is far less readable than two-phase init).
 pub async fn build_agent_team_wiring(
-    runtime: Arc<SessionRuntime>,
+    session: SessionHandle,
     cwd: String,
     panel_event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 ) -> Result<AgentTeamWiring> {
@@ -98,11 +98,11 @@ pub async fn build_agent_team_wiring(
     // removed in the post-D cleanup pass.
     let runner = Arc::new(InProcessAgentRunner::new(
         cwd.clone(),
-        runtime.runtime_config.agent_teams.max_agents,
+        session.runtime_config.agent_teams.max_agents,
     ));
     let team_manager = Arc::new(RwLock::new(None::<TeamManager>));
 
-    let task_rt = runtime
+    let task_rt = session
         .current_task_runtime()
         .await
         .context("TaskRuntime must be attached before AgentTeam wiring")?;
@@ -110,7 +110,7 @@ pub async fn build_agent_team_wiring(
         runner.clone(),
         team_manager,
         cwd.clone(),
-        runtime.runtime_config.clone(),
+        session.runtime_config.clone(),
         task_rt as coco_tool_runtime::AgentTaskRegistryRef,
     );
     // Bridge subagent `TaskPanelChanged` snapshots to the surface (TUI).
@@ -191,26 +191,26 @@ pub async fn build_agent_team_wiring(
         }
     }
 
-    if let Some(task_list) = runtime.current_task_list().await {
+    if let Some(task_list) = session.current_task_list().await {
         handle.set_task_list(task_list);
     }
 
     // Per-agent transcript store for `SwarmAgentHandle::resume_agent`.
     // The same Arc is shared across spawns so concurrent bg agents read/write
     // through one store; absent only in minimal test embeddings.
-    if let Some(transcript_store) = runtime.current_agent_transcript_store().await {
+    if let Some(transcript_store) = session.current_agent_transcript_store().await {
         handle.set_transcript_store(transcript_store);
     }
 
-    // Wire the per-spawn engine factory. Captures `Arc<SessionRuntime>`
+    // Wire the per-spawn engine factory. Captures `SessionHandle`
     // and resolves a fresh role-aware engine on each call. The
     // factory is async (`QueryEngineFactory` returns a boxed future)
     // so it can call `build_engine_from_config` + `client_for_role`
     // directly without blocking the runtime.
     let factory: QueryEngineFactory = {
-        let runtime_for_factory = runtime.clone();
+        let session_for_factory = session.clone();
         Arc::new(move |mut engine_config, role, cancel| {
-            let runtime = runtime_for_factory.clone();
+            let session = session_for_factory.clone();
             Box::pin(async move {
                 // ── Gap A fix — inherit parent's resolved RuntimeConfig ──
                 //
@@ -225,25 +225,28 @@ pub async fn build_agent_team_wiring(
                 // Overwrite those fields here from the live RuntimeConfig
                 // so subagent engines compact at the user's tuned
                 // thresholds, honour the user's sandbox mode, etc.
-                engine_config.compact = runtime.runtime_config.compact.clone();
-                engine_config.system_reminder = runtime
+                engine_config.compact = session.runtime_config.compact.clone();
+                engine_config.system_reminder = session
                     .runtime_config
                     .settings
                     .merged
                     .system_reminder
                     .clone();
-                engine_config.tool_config = runtime.runtime_config.tool.clone();
-                engine_config.sandbox_config = runtime.runtime_config.sandbox.clone();
-                engine_config.memory_config = runtime.runtime_config.memory.clone();
-                engine_config.shell_config = runtime.runtime_config.shell.clone();
-                engine_config.web_fetch_config = runtime.runtime_config.web_fetch.clone();
-                engine_config.web_search_config = runtime.runtime_config.web_search.clone();
+                engine_config.tool_config = session.runtime_config.tool.clone();
+                engine_config.sandbox_config = session.runtime_config.sandbox.clone();
+                engine_config.memory_config = session.runtime_config.memory.clone();
+                engine_config.shell_config = session.runtime_config.shell.clone();
+                engine_config.web_fetch_config = session.runtime_config.web_fetch.clone();
+                engine_config.web_search_config = session.runtime_config.web_search.clone();
                 engine_config.plan_mode_settings =
-                    runtime.runtime_config.settings.merged.plan_mode.clone();
+                    session.runtime_config.settings.merged.plan_mode.clone();
                 if engine_config.wire_dump.is_none()
                     && let Some(parent_wire_dump) =
-                        runtime.current_engine_config().await.wire_dump.as_ref()
-                    && let Some(agent_id) = engine_config.agent_id.as_deref()
+                        session.current_engine_config().await.wire_dump.as_ref()
+                    && let Some(agent_id) = engine_config
+                        .agent_id
+                        .as_ref()
+                        .map(coco_types::AgentId::as_str)
                 {
                     engine_config.wire_dump = parent_wire_dump.for_subagent(agent_id);
                 }
@@ -255,7 +258,7 @@ pub async fn build_agent_team_wiring(
                 // installs all the same observers / mailbox / hooks
                 // the top-level engine gets so subagent execution
                 // stays observable.
-                let engine = runtime
+                let engine = session
                     .build_engine_from_config(
                         engine_config,
                         cancel.unwrap_or_else(tokio_util::sync::CancellationToken::new),
@@ -274,7 +277,7 @@ pub async fn build_agent_team_wiring(
     handle.set_execution_engine(adapter.clone());
     // Live catalog so `resume_agent` can re-resolve the AgentDefinition from
     // the persisted `meta.agent_type` (restores system prompt / tools / model).
-    handle.set_agent_catalog(runtime.agent_catalog_handle());
+    handle.set_agent_catalog(session.agent_catalog_handle());
 
     // ── Skill runtime ──
     //
@@ -284,14 +287,14 @@ pub async fn build_agent_team_wiring(
     // Without this install the engine carries `NoOpSkillHandle` and every
     // model `SkillTool` call fails with "no skill runtime installed".
     let skill_handle: SkillHandleRef = Arc::new(
-        coco_query::skill_runtime::QuerySkillRuntime::new(runtime.skill_manager())
+        coco_query::skill_runtime::QuerySkillRuntime::new(session.skill_manager())
             .with_agent_engine(adapter.clone())
-            .with_session_id(runtime.current_session_id().await)
+            .with_session_id(session.current_typed_session_id().await)
             .with_loop_context(coco_query::skill_runtime::LoopSkillContext {
-                project_root: runtime.original_cwd.clone(),
-                cwd: runtime.current_cwd.clone(),
-                config: runtime.runtime_config.loop_config.clone(),
-                remote_schedule_enabled: runtime
+                project_root: session.project_root.clone(),
+                cwd: session.current_cwd.clone(),
+                config: session.runtime_config.loop_config.clone(),
+                remote_schedule_enabled: session
                     .runtime_config
                     .features
                     .enabled(coco_types::Feature::AgentTriggersRemote),
@@ -299,7 +302,7 @@ pub async fn build_agent_team_wiring(
             // Share the per-turn Bash handle so in-prompt `` !`cmd` ``
             // markers in model-invoked / fork-mode skills run through the
             // same permission-checked route as slash-command handlers.
-            .with_bash_handle_cell(runtime.skill_bash_cell()),
+            .with_bash_handle_cell(session.skill_bash_cell()),
     );
     // Coordinator side: lets `preload_frontmatter_skills` resolve agent
     // `skills: [..]` frontmatter via `read_skill_body`.
@@ -322,7 +325,7 @@ pub async fn build_agent_team_wiring(
         adapter,
         panel_event_sink,
     ));
-    let main_snapshot = runtime
+    let main_snapshot = session
         .model_runtimes()
         .snapshot_for_role(ModelRole::Main)
         .context("Main model runtime snapshot must be available for teammate compaction")?;
@@ -332,7 +335,7 @@ pub async fn build_agent_team_wiring(
     let auto_compact_threshold = coco_compact::auto_compact_threshold(
         i64::from(main_model_info.context_window),
         i64::from(main_model_info.max_output_tokens),
-        &runtime.runtime_config.compact.auto,
+        &session.runtime_config.compact.auto,
     );
     handle.set_teammate_auto_compact_threshold(auto_compact_threshold);
 
@@ -340,21 +343,21 @@ pub async fn build_agent_team_wiring(
     // runner-loop composes this with `TEAMMATE_PROMPT_ADDENDUM` so
     // teammates inherit the same CLAUDE.md + env-context + memory
     // blocks the leader uses.
-    if let Some(base_prompt) = runtime.current_engine_config().await.system_prompt.clone() {
+    if let Some(base_prompt) = session.current_engine_config().await.system_prompt.clone() {
         handle.set_teammate_base_system_prompt(base_prompt).await;
     }
 
     // Wire the hook registry so SubagentStart / SubagentStop hooks fire
     // around subagent execution.
-    handle.set_hook_registry(runtime.hook_registry.clone());
+    handle.set_hook_registry(session.hook_registry.clone());
 
     // Wire the MCP handle so per-agent inline `mcpServers: [{name: config}]`
     // entries get registered as dynamic servers at spawn and torn down
     // at SubagentStop. String-ref entries don't need this wire — they
     // reuse the parent's pre-existing connection.
-    if let Some(mcp) = runtime.current_mcp_handle().await {
+    if let Some(mcp) = session.current_mcp_handle().await {
         handle.set_mcp_handle(mcp.clone());
-        install_coco_guide_context_builder(&mut handle, runtime.clone(), mcp).await;
+        install_coco_guide_context_builder(&mut handle, session.clone(), mcp).await;
     }
 
     // Auto-sync per-agent project snapshots into local memory dirs at
@@ -362,7 +365,7 @@ pub async fn build_agent_team_wiring(
     // here — there is no interactive prompt at bootstrap and forcing
     // manual approval would leave newer team baselines silently
     // unconsumed.
-    sync_agent_memory_snapshots(&runtime, &cwd).await;
+    sync_agent_memory_snapshots(&session, &cwd).await;
 
     Ok(AgentTeamWiring {
         agent_handle: Arc::new(handle),
@@ -381,12 +384,12 @@ pub async fn build_agent_team_wiring(
 /// (no MCP wired) leaves the static prompt.
 async fn install_coco_guide_context_builder(
     handle: &mut coco_coordinator::agent_handle::SwarmAgentHandle,
-    runtime: Arc<SessionRuntime>,
+    session: SessionHandle,
     mcp_handle: coco_tool_runtime::McpHandleRef,
 ) {
     use std::sync::Arc as StdArc;
 
-    let runtime_for_builder = runtime;
+    let session_for_builder = session;
     let mcp_for_builder = mcp_handle;
     let builder: coco_coordinator::agent_handle::CocoGuideContextBuilder = StdArc::new(move || {
         // The closure must be sync to fit the trait, but the
@@ -394,11 +397,11 @@ async fn install_coco_guide_context_builder(
         // Use `block_in_place` + the current Tokio handle to bridge.
         // Spawn time is rare (one coco-guide spawn per user
         // request), so the block-in-place cost is negligible.
-        let runtime_inner = runtime_for_builder.clone();
+        let session_inner = session_for_builder.clone();
         let mcp_inner = mcp_for_builder.clone();
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
-                let cmd_reg = runtime_inner.current_command_registry().await;
+                let cmd_reg = session_inner.current_command_registry().await;
                 // Slash commands: split prompt-type into custom (non-plugin)
                 // and plugin-sourced.
                 let mut custom_commands: Vec<coco_subagent::GuideCommandEntry> = Vec::new();
@@ -422,7 +425,7 @@ async fn install_coco_guide_context_builder(
                 }
 
                 // Active non-built-in agents.
-                let catalog = runtime_inner.current_agent_catalog().await;
+                let catalog = session_inner.current_agent_catalog().await;
                 let custom_agents: Vec<coco_subagent::GuideAgentEntry> = catalog
                     .active()
                     .filter(|def| {
@@ -440,7 +443,7 @@ async fn install_coco_guide_context_builder(
                 // Empty string when serialisation fails (rare; serde never
                 // panics on the well-typed Settings struct).
                 let settings_json =
-                    serde_json::to_string_pretty(&runtime_inner.runtime_config.settings.merged)
+                    serde_json::to_string_pretty(&session_inner.runtime_config.settings.merged)
                         .unwrap_or_default();
 
                 coco_subagent::CocoGuideDynamicContext {
@@ -461,7 +464,7 @@ async fn install_coco_guide_context_builder(
 /// `SnapshotAction` for each (User / Project / Local) scope. Errors
 /// are logged + swallowed — a snapshot sync failure must not gate
 /// session startup.
-async fn sync_agent_memory_snapshots(_runtime: &Arc<SessionRuntime>, cwd: &str) {
+async fn sync_agent_memory_snapshots(_session: &SessionHandle, cwd: &str) {
     let cwd_path = std::path::PathBuf::from(cwd);
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
     let snapshots_root = cwd_path
@@ -523,14 +526,14 @@ async fn sync_agent_memory_snapshots(_runtime: &Arc<SessionRuntime>, cwd: &str) 
 }
 
 /// Convenience for one-shot bootstrap: build the wiring and attach it
-/// to the runtime.
+/// to the session runtime.
 pub async fn install_agent_team(
-    runtime: Arc<SessionRuntime>,
+    session: SessionHandle,
     cwd: String,
     panel_event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 ) -> anyhow::Result<()> {
-    let wiring = build_agent_team_wiring(runtime.clone(), cwd, panel_event_sink).await?;
-    runtime.attach_agent_handle(wiring.agent_handle).await;
-    runtime.attach_skill_handle(wiring.skill_handle).await;
+    let wiring = build_agent_team_wiring(session.clone(), cwd, panel_event_sink).await?;
+    session.attach_agent_handle(wiring.agent_handle).await;
+    session.attach_skill_handle(wiring.skill_handle).await;
     Ok(())
 }

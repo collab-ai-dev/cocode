@@ -167,15 +167,11 @@ impl Tool for LspTool {
         // operations that don't carry a position.
         //
         // Worktree-isolated subagents pass `cwd_override` so a
-        // relative `filePath` resolves against the worktree, not the
-        // process cwd. Falls back to `env::current_dir()` for normal
-        // sessions. This is the single source of truth for both
-        // path resolution and the gitignore-filter anchor.
-        let cwd_buf: PathBuf = ctx
-            .cwd_override
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
+        // relative `filePath` resolves against the worktree. Normal
+        // sessions use the session cwd anchor. This is the single
+        // source of truth for both path resolution and the
+        // gitignore-filter anchor.
+        let cwd_buf: PathBuf = ctx.cwd_anchor().await.unwrap_or_else(|| PathBuf::from("."));
 
         let raw_path = PathBuf::from(&input.file_path);
         let resolved_path = if raw_path.is_absolute() {

@@ -1,8 +1,8 @@
 //! `config/read` + `config/value/write` handlers.
 //!
 //! Both walk the coco settings layers rooted at the active session's
-//! cwd (or the process cwd when no session is active) and read/write
-//! JSON settings files via the blocking thread pool.
+//! cwd (or the installed runtime's cwd when no session is active) and
+//! read/write JSON settings files via the blocking thread pool.
 
 use tracing::info;
 
@@ -13,20 +13,14 @@ use super::HandlerResult;
 /// per-source breakdown keyed by source name.
 ///
 /// Delegates to [`coco_config::settings::load_settings`] with the
-/// session's cwd (if a session is active) or the CLI's cwd as the
+/// session's cwd (if a session is active) or the runtime cwd as the
 /// project root. Returns the JSON-serialized merged view and a
 /// per-source map suitable for clients that want to display or
 /// override specific layers.
 pub(super) async fn handle_config_read(ctx: &HandlerContext) -> HandlerResult {
-    // Resolve cwd — prefer active session's cwd, fall back to
-    // process cwd. Project/local settings live under cwd, so this
-    // matters for clients that have multiple repos open.
-    let cwd = {
-        let slot = ctx.state.session.read().await;
-        slot.as_ref()
-            .map(|s| std::path::PathBuf::from(&s.cwd))
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-    };
+    // Project/local settings live under cwd, so this matters for clients
+    // that have multiple repos open.
+    let cwd = ctx.state.workspace_cwd().await;
 
     // `load_settings` reads up to 6 layered JSON files synchronously; run
     // it on the blocking pool so frequent `config/read` polls don't stall
@@ -98,12 +92,7 @@ pub(super) async fn handle_config_write(
     ctx: &HandlerContext,
 ) -> HandlerResult {
     let scope = params.scope.as_deref().unwrap_or("user");
-    let cwd = {
-        let slot = ctx.state.session.read().await;
-        slot.as_ref()
-            .map(|s| std::path::PathBuf::from(&s.cwd))
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-    };
+    let cwd = ctx.state.workspace_cwd().await;
 
     let target_path = match scope {
         "user" => coco_config::global_config::user_settings_path(),

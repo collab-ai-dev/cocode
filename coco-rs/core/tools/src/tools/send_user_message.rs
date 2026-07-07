@@ -161,7 +161,7 @@ impl Tool for SendUserMessageTool {
         let resolve_root = ctx
             .cwd_override
             .clone()
-            .or_else(|| std::env::current_dir().ok())
+            .or_else(|| ctx.original_cwd.clone())
             .unwrap_or_default();
         for raw in &input.attachments {
             let path = if std::path::Path::new(raw).is_absolute() {
@@ -213,14 +213,9 @@ impl Tool for SendUserMessageTool {
         }
 
         // Resolve attachments. Relative paths resolve against the
-        // context cwd override (worktree-isolated subagents) before
-        // falling back to the process cwd, so a teammate inside a
-        // worktree sees its own files rather than the host process's.
-        let resolve_root = ctx
-            .cwd_override
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_default();
+        // context cwd anchor, so a teammate inside a worktree sees its
+        // own files rather than the host process's.
+        let resolve_root = ctx.cwd_anchor().await.unwrap_or_default();
 
         let mut resolved_attachments: Vec<SendUserMessageAttachment> = Vec::new();
         for path_str in &input.attachments {

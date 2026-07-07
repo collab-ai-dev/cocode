@@ -9,6 +9,10 @@ use std::sync::Arc;
 /// `SessionManager` global scan can locate them.
 const TEST_CWD: &str = "/test-cwd";
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    coco_types::SessionId::try_new(value).unwrap()
+}
+
 fn project_paths(memory_base: &Path) -> Arc<coco_paths::ProjectPaths> {
     Arc::new(coco_paths::ProjectPaths::new(
         memory_base.to_path_buf(),
@@ -24,7 +28,7 @@ fn seed_transcript(memory_base: &Path, sid: &str) -> Arc<coco_paths::ProjectPath
         uuid: format!("{sid}-u1"),
         parent_uuid: None,
         logical_parent_uuid: None,
-        session_id: sid.to_string(),
+        session_id: Some(test_session_id(sid)),
         cwd: TEST_CWD.to_string(),
         timestamp: "2025-01-15T10:00:00Z".to_string(),
         version: Some("1.0.0".to_string()),
@@ -311,24 +315,25 @@ fn re_append_session_metadata_preserves_ts_metadata_slots() {
     let paths = seed_transcript(dir.path(), "sess-meta");
     let store = TranscriptStore::new(paths.clone());
     let sid = "sess-meta".to_string();
+    let typed_sid = test_session_id(&sid);
     let entries = [
         crate::storage::MetadataEntry::LastPrompt {
-            session_id: sid.clone(),
+            session_id: typed_sid.clone(),
             last_prompt: "fix failing tests".to_string(),
             leaf_uuid: None,
             explicit: false,
             rewound: false,
         },
         crate::storage::MetadataEntry::AgentColor {
-            session_id: sid.clone(),
+            session_id: typed_sid.clone(),
             agent_color: "blue".to_string(),
         },
         crate::storage::MetadataEntry::AgentSetting {
-            session_id: sid.clone(),
+            session_id: typed_sid.clone(),
             agent_setting: "reviewer".to_string(),
         },
         crate::storage::MetadataEntry::Mode {
-            session_id: sid.clone(),
+            session_id: typed_sid,
             mode: "coordinator".to_string(),
         },
         crate::storage::MetadataEntry::WorktreeState {

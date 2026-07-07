@@ -5,6 +5,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use coco_types::SessionId;
+
 /// SDK query options.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -80,7 +82,7 @@ pub struct SdkSessionResult {
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
     pub total_cost_usd: f64,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub model: String,
 }
 

@@ -58,6 +58,22 @@ async fn add_dir_success_message_matches_upstream_wording() {
     )));
 }
 
+#[tokio::test]
+async fn env_uses_registered_cwd() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cwd = tmp.path().join("project");
+    std::fs::create_dir_all(&cwd).expect("create cwd");
+    let mut registry = CommandRegistry::new();
+    register_extended_builtins_with_cwd(&mut registry, cwd.clone());
+
+    let output = registry
+        .execute(names::ENV, "")
+        .await
+        .expect("env command should run");
+
+    assert!(output.contains(&format!("cwd:     {}", cwd.display())));
+}
+
 #[test]
 fn test_extended_builtins_no_overlap_with_base() {
     let mut base_registry = CommandRegistry::new();
@@ -442,7 +458,7 @@ async fn test_skills_handler() {
     // (`list` exercises the text path; the no-arg path opens the TUI
     // dialog which is covered by skills.test.rs.)
     use crate::CommandHandler;
-    let output = crate::handlers::skills::SkillsHandler
+    let output = crate::handlers::skills::SkillsHandler::new(std::path::PathBuf::from("."))
         .execute_command("list")
         .await
         .unwrap();

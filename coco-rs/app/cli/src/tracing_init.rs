@@ -45,12 +45,12 @@ use crate::Commands;
 /// Install the global tracing subscriber. Returns `Ok(None)` for short
 /// subcommands that exit before any heavy work — they get
 /// [`Mode::Skip`] so their stdout stays clean.
-pub fn install(cli: &Cli) -> Result<Option<SubscriberHandle>> {
+pub fn install(cli: &Cli, cwd: &Path) -> Result<Option<SubscriberHandle>> {
     let mode = detect_mode(cli);
     let settings = if matches!(mode, Mode::Skip) {
         None
     } else {
-        Some(load_settings_for_logging(cli)?)
+        Some(load_settings_for_logging(cli, cwd)?)
     };
     let opts =
         subscriber_opts_from_cli_with_sources(cli, settings.as_ref(), &LogEnv::from_process());
@@ -152,10 +152,9 @@ fn subscriber_opts_from_cli_with_sources(
     }
 }
 
-fn load_settings_for_logging(cli: &Cli) -> Result<Settings> {
-    let cwd = std::env::current_dir()?;
+fn load_settings_for_logging(cli: &Cli, cwd: &Path) -> Result<Settings> {
     let flag_settings = cli.settings.as_deref().map(Path::new);
-    Ok(coco_config::settings::load_settings(&cwd, flag_settings)?.merged)
+    Ok(coco_config::settings::load_settings(cwd, flag_settings)?.merged)
 }
 
 #[derive(Debug, Default)]

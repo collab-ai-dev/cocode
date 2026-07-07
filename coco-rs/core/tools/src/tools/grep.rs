@@ -419,13 +419,9 @@ impl Tool for GrepTool {
         }
 
         // Resolve the working directory. Worktree-isolated agents set
-        // `ctx.cwd_override`; otherwise we fall back to the process CWD.
+        // `ctx.cwd_override`; otherwise use the session cwd anchor.
         // Relative `path` arguments are resolved against this base.
-        let cwd = ctx
-            .cwd_override
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("/"));
+        let cwd = ctx.cwd_anchor().await.unwrap_or_else(|| PathBuf::from("/"));
 
         let search_path = match input.path.as_deref() {
             Some(p) => {

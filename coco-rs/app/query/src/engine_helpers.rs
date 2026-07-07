@@ -138,7 +138,7 @@ pub(crate) async fn emit_model_fallback_notice(
     event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
     original: &str,
     new_model: &str,
-    session_id: &str,
+    turn_id: coco_types::TurnId,
     reason: ModelFallbackReason,
 ) {
     let notice = match reason {
@@ -156,7 +156,7 @@ pub(crate) async fn emit_model_fallback_notice(
     let _ = emit_stream(
         event_tx,
         AgentStreamEvent::TextDelta {
-            turn_id: session_id.to_string(),
+            turn_id,
             delta: notice,
         },
     )

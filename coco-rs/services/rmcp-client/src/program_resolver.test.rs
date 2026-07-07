@@ -60,7 +60,7 @@ async fn test_resolved_program_executes_successfully() -> Result<()> {
     let program = OsString::from(&env.program_name);
 
     // Apply platform-specific resolution
-    let resolved = resolve(program, &env.mcp_env)?;
+    let resolved = resolve(program, &env.mcp_env, Some(env.cwd()))?;
 
     // Verify resolved path executes successfully
     let mut cmd = Command::new(resolved);
@@ -77,7 +77,7 @@ async fn test_resolved_program_executes_successfully() -> Result<()> {
 // Test fixture for creating temporary executables in a controlled environment.
 struct TestExecutableEnv {
     // Held to prevent the temporary directory from being deleted.
-    _temp_dir: TempDir,
+    temp_dir: TempDir,
     program_name: String,
     mcp_env: HashMap<String, String>,
 }
@@ -101,10 +101,14 @@ impl TestExecutableEnv {
         let mcp_env = create_env_for_mcp_server(Some(extra_env), &[]);
 
         Ok(Self {
-            _temp_dir: temp_dir,
+            temp_dir,
             program_name: Self::TEST_PROGRAM.to_string(),
             mcp_env,
         })
+    }
+
+    fn cwd(&self) -> &Path {
+        self.temp_dir.path()
     }
 
     /// Creates a simple, platform-specific executable script.

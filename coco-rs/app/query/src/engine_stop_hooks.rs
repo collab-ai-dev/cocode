@@ -475,15 +475,10 @@ impl QueryEngine {
     }
 
     async fn current_session_output_tokens(&self) -> i64 {
-        let Some(tracker) = &self.session_usage_tracker else {
+        let Some(accounting) = &self.usage_accounting else {
             return 0;
         };
-        tracker
-            .lock()
-            .await
-            .snapshot(self.transcript_session_id.clone().unwrap_or_default())
-            .totals
-            .output_tokens
+        accounting.snapshot().await.totals.output_tokens
     }
 
     pub(crate) async fn persist_goal_metadata(&self, goal: Option<coco_session::GoalMetadata>) {
@@ -502,18 +497,18 @@ impl QueryEngine {
             session_id: session_id.clone(),
             goal,
         };
-        let session_id_for_write = session_id.clone();
+        let session_id_for_write = session_id.to_string();
         match tokio::task::spawn_blocking(move || {
-            store.append_metadata(&session_id_for_write, &entry)
+            store.append_metadata(session_id_for_write.as_str(), &entry)
         })
         .await
         {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
-                warn!(error = %e, session_id, "failed to persist goal metadata");
+                warn!(error = %e, session_id = %session_id, "failed to persist goal metadata");
             }
             Err(e) => {
-                warn!(error = %e, session_id, "goal metadata write task failed");
+                warn!(error = %e, session_id = %session_id, "goal metadata write task failed");
             }
         }
     }

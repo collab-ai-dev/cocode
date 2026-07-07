@@ -1,4 +1,5 @@
 use coco_messages::ToolResult;
+use coco_types::SessionId;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use serde_json::Value;
@@ -104,6 +105,34 @@ fn agent_shell_runtime_carriers_default_disabled() {
         AgentSpawnRequest::default().active_shell_tool,
         coco_types::ActiveShellTool::Disabled
     );
+}
+
+#[test]
+fn agent_spawn_request_session_id_is_typed_and_required() {
+    let err = AgentSpawnRequest::default()
+        .parent_session_id()
+        .expect_err("missing session id should fail at accessor");
+    assert!(err.contains("session_id is required"), "got: {err}");
+
+    let req: AgentSpawnRequest = serde_json::from_value(json!({
+        "prompt": "p",
+        "session_id": "session-abc"
+    }))
+    .expect("valid session id should deserialize");
+    assert_eq!(
+        req.parent_session_id().unwrap(),
+        SessionId::try_new("session-abc").unwrap()
+    );
+}
+
+#[test]
+fn agent_spawn_request_rejects_unsafe_session_id_at_serde_boundary() {
+    let err = serde_json::from_value::<AgentSpawnRequest>(json!({
+        "prompt": "p",
+        "session_id": "bad/session"
+    }))
+    .expect_err("unsafe session id should be rejected");
+    assert!(err.to_string().contains("path separator"), "got: {err}");
 }
 
 /// T3: `is_mcp` must return true for tools that advertise McpToolInfo

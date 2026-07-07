@@ -5,6 +5,7 @@ use std::io::Write;
 use std::path::Path;
 
 use coco_types::CoreEvent;
+use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,7 +26,7 @@ pub const EVENTS_FILE: &str = "trace.jsonl";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceManifest {
     pub schema_version: u32,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub created_unix_ms: i64,
 }
 
@@ -50,7 +51,7 @@ impl TraceWriter {
     /// immediately and opening `trace.jsonl` for append.
     pub fn create(
         dir: impl AsRef<Path>,
-        session_id: impl Into<String>,
+        session_id: impl Into<SessionId>,
         created_unix_ms: i64,
     ) -> Result<Self> {
         let dir = dir.as_ref();

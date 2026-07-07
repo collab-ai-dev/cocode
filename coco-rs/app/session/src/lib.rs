@@ -52,6 +52,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+fn checked_session_id(id: &str) -> Result<coco_types::SessionId> {
+    coco_types::SessionId::try_new(id.to_string())
+        .map_err(|e| SessionError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))
+}
+
 /// Crate-local Result alias. Default error type is `SessionError` but the
 /// generic stays open so `Result::ok` / 2-arg `Result<T, E>` callsites
 /// still resolve against `std::result::Result`.
@@ -94,7 +99,7 @@ impl Session {
         let working_dir = meta.cwd.as_deref().map(PathBuf::from).unwrap_or_default();
         let title = meta.custom_title.clone().or(meta.ai_title.clone());
         Session {
-            id: meta.session_id,
+            id: meta.session_id.into_inner(),
             created_at: meta.created_at,
             updated_at: Some(meta.modified_at),
             // model is filled by a deeper scan if needed; the lite
@@ -197,10 +202,11 @@ impl SessionManager {
     pub fn set_title(&self, id: &str, title: &str) -> crate::Result<Session> {
         let mut session = self.load(id)?;
         let store = self.store_for(&session.working_dir);
+        let typed_id = checked_session_id(id)?;
         store.append_metadata(
             id,
             &storage::MetadataEntry::CustomTitle {
-                session_id: id.to_string(),
+                session_id: typed_id.clone(),
                 custom_title: title.to_string(),
             },
         )?;
@@ -210,7 +216,7 @@ impl SessionManager {
         store.append_metadata(
             id,
             &storage::MetadataEntry::AgentName {
-                session_id: id.to_string(),
+                session_id: typed_id,
                 agent_name: title.to_string(),
             },
         )?;
@@ -232,10 +238,11 @@ impl SessionManager {
         let mut session = self.load(id)?;
         let store = self.store_for(&session.working_dir);
         let meta = store.read_metadata(id)?;
+        let typed_id = checked_session_id(id)?;
         store.append_metadata(
             id,
             &storage::MetadataEntry::AiTitle {
-                session_id: id.to_string(),
+                session_id: typed_id,
                 ai_title: title.to_string(),
             },
         )?;
@@ -268,7 +275,7 @@ impl SessionManager {
         store.append_metadata(
             id,
             &storage::MetadataEntry::Tag {
-                session_id: id.to_string(),
+                session_id: checked_session_id(id)?,
                 tag: session.tags.join(","),
             },
         )?;
@@ -328,7 +335,7 @@ impl SessionManager {
         store.append_metadata(
             id,
             &storage::MetadataEntry::Mode {
-                session_id: id.to_string(),
+                session_id: checked_session_id(id)?,
                 mode: mode.to_string(),
             },
         )
@@ -361,6 +368,7 @@ impl SessionManager {
         };
         let working_dir = meta.cwd.as_deref().map(PathBuf::from).unwrap_or_default();
         let store = self.store_for(&working_dir);
+        let typed_id = checked_session_id(id)?;
 
         if let Some(last_prompt) = meta
             .last_prompt
@@ -371,7 +379,7 @@ impl SessionManager {
             store.append_metadata(
                 id,
                 &storage::MetadataEntry::LastPrompt {
-                    session_id: id.to_string(),
+                    session_id: typed_id.clone(),
                     last_prompt: last_prompt.to_string(),
                     leaf_uuid: None,
                     explicit: false,
@@ -388,7 +396,7 @@ impl SessionManager {
             store.append_metadata(
                 id,
                 &storage::MetadataEntry::CustomTitle {
-                    session_id: id.to_string(),
+                    session_id: typed_id.clone(),
                     custom_title: title.to_string(),
                 },
             )?;
@@ -397,7 +405,7 @@ impl SessionManager {
             store.append_metadata(
                 id,
                 &storage::MetadataEntry::Tag {
-                    session_id: id.to_string(),
+                    session_id: typed_id.clone(),
                     tag: tag.to_string(),
                 },
             )?;
@@ -411,7 +419,7 @@ impl SessionManager {
             store.append_metadata(
                 id,
                 &storage::MetadataEntry::AgentName {
-                    session_id: id.to_string(),
+                    session_id: typed_id.clone(),
                     agent_name: name.to_string(),
                 },
             )?;
@@ -425,7 +433,7 @@ impl SessionManager {
             store.append_metadata(
                 id,
                 &storage::MetadataEntry::AgentColor {
-                    session_id: id.to_string(),
+                    session_id: typed_id.clone(),
                     agent_color: color.to_string(),
                 },
             )?;
@@ -439,7 +447,7 @@ impl SessionManager {
             store.append_metadata(
                 id,
                 &storage::MetadataEntry::AgentSetting {
-                    session_id: id.to_string(),
+                    session_id: typed_id.clone(),
                     agent_setting: setting.to_string(),
                 },
             )?;
@@ -453,7 +461,7 @@ impl SessionManager {
             store.append_metadata(
                 id,
                 &storage::MetadataEntry::Mode {
-                    session_id: id.to_string(),
+                    session_id: typed_id.clone(),
                     mode: mode.to_string(),
                 },
             )?;

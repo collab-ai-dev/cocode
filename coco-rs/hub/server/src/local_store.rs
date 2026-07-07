@@ -5,13 +5,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::DateTime;
 use chrono::Utc;
-use coco_hub_protocol::SCHEMA_VERSION_V1;
+use coco_hub_protocol::SCHEMA_VERSION_V2;
 use coco_session::DiskCatalog;
 use coco_session::Entry;
 use coco_session::MetadataEntry;
 use coco_session::SessionCatalog;
 use coco_session::TranscriptEntry;
 use coco_session::TranscriptMetadata;
+use coco_types::SessionId;
 use coco_types::ToolName;
 use tokio::task;
 
@@ -143,10 +144,11 @@ impl LocalSessionJsonStore {
     }
 
     fn list_events_from_jsonl(&self, query: EventQuery) -> Result<Page<EventRow>, EventStoreError> {
-        let Some(session_id) = query.session_id.as_deref() else {
+        let Some(session_id) = query.session_id.as_ref() else {
             return Ok(Page::new(Vec::new()));
         };
-        let Some(meta) = self.session_meta_for_instance(&query.instance_id, session_id)? else {
+        let Some(meta) = self.session_meta_for_instance(&query.instance_id, session_id.as_str())?
+        else {
             return Ok(Page::new(Vec::new()));
         };
         let mut rows = self.event_rows_from_meta(&query.instance_id, &meta)?;
@@ -184,8 +186,10 @@ impl LocalSessionJsonStore {
                 None => self.all_sessions_from_jsonl(&instance.instance_id)?,
             };
             for session in sessions {
-                let Some(meta) =
-                    self.session_meta_for_instance(&instance.instance_id, &session.session_id)?
+                let Some(meta) = self.session_meta_for_instance(
+                    &instance.instance_id,
+                    session.session_id.as_str(),
+                )?
                 else {
                     continue;
                 };
@@ -195,7 +199,10 @@ impl LocalSessionJsonStore {
             }
         }
 
-        rows.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.seq.cmp(&a.seq)));
+        rows.sort_by(|a, b| {
+            b.ts.cmp(&a.ts)
+                .then_with(|| b.session_seq.cmp(&a.session_seq))
+        });
         let hits = rows
             .into_iter()
             .map(|event| SearchHit { event })
@@ -267,7 +274,7 @@ impl LocalSessionJsonStore {
             return Ok(None);
         }
         Ok(self.catalog.list_all()?.into_iter().find(|meta| {
-            meta.session_id == session_id
+            meta.session_id.as_str() == session_id
                 && self
                     .instance_id_for_meta(meta)
                     .is_ok_and(|derived| derived == instance_id)
@@ -297,7 +304,7 @@ impl LocalSessionJsonStore {
         let entries = self.load_entries(meta)?;
         Ok(event_rows_from_entries(
             instance_id,
-            &meta.session_id,
+            meta.session_id.as_str(),
             &entries,
         ))
     }
@@ -305,14 +312,14 @@ impl LocalSessionJsonStore {
     fn load_entries(&self, meta: &TranscriptMetadata) -> Result<Vec<Entry>, EventStoreError> {
         let cwd = meta.cwd.as_deref().unwrap_or_default();
         let store = self.catalog.store_for(Path::new(cwd));
-        let mut entries = store.load_entries(&meta.session_id)?;
+        let mut entries = store.load_entries(meta.session_id.as_str())?;
         // Subagent messages now live in per-agent files (`<sid>/subagents/…`),
         // not interleaved in the main transcript. Append them so the projection
         // still surfaces subagent activity (attributed via each entry's
         // `agent_id`) and folds subagent tokens back into session stats.
         // Appending keeps a continuous `line_index`, so event seqs stay
         // collision-free.
-        entries.extend(store.load_agent_transcript_entries(&meta.session_id)?);
+        entries.extend(store.load_agent_transcript_entries(meta.session_id.as_str())?);
         Ok(entries)
     }
 
@@ -322,7 +329,7 @@ impl LocalSessionJsonStore {
                 .as_str()
                 .to_string());
         }
-        if let Some(resolved) = self.catalog.resolve(&meta.session_id, None)?
+        if let Some(resolved) = self.catalog.resolve(meta.session_id.as_str(), None)?
             && let Some(project_dir) = resolved.transcript_path.parent()
             && let Some(name) = project_dir.file_name().and_then(|name| name.to_str())
         {
@@ -411,20 +418,26 @@ impl EventStore for LocalSessionJsonStore {
         &self,
         instance_id: &str,
         session_id: &str,
-        seq: i64,
+        session_seq: i64,
     ) -> Result<Option<EventRow>, EventStoreError> {
         let mut before = None;
         loop {
             let page = self
                 .list_events(EventQuery {
                     instance_id: instance_id.to_string(),
-                    session_id: Some(session_id.to_string()),
+                    session_id: Some(SessionId::try_new(session_id.to_string()).map_err(
+                        |err| EventStoreError::InvalidQuery(format!("invalid session id: {err}")),
+                    )?),
                     before,
                     limit: MAX_LIMIT,
                     filter: EventFilter::default(),
                 })
                 .await?;
-            if let Some(event) = page.items.into_iter().find(|event| event.seq == seq) {
+            if let Some(event) = page
+                .items
+                .into_iter()
+                .find(|event| event.session_seq == session_seq)
+            {
                 return Ok(Some(event));
             }
             let Some(next_cursor) = page.next_cursor else {
@@ -636,7 +649,7 @@ struct EventRowParts<'a> {
 }
 
 fn event_row_from_parts(parts: EventRowParts<'_>) -> EventRow {
-    let seq = event_seq(parts.line_index, parts.block_index);
+    let session_seq = event_session_seq(parts.line_index, parts.block_index);
     let display = DisplaySource::from_block(
         &parts.analysis.msg_type,
         parts.analysis.tool_name.as_deref(),
@@ -648,15 +661,16 @@ fn event_row_from_parts(parts: EventRowParts<'_>) -> EventRow {
     let display_text = (!display.text.is_empty()).then_some(display.text);
     EventRow {
         instance_id: parts.instance_id.to_string(),
-        session_id: parts.session_id.to_string(),
+        session_id: SessionId::try_new(parts.session_id.to_string())
+            .expect("session metadata must contain a valid session id"),
         event_id: event_id(parts.line_index, parts.block_index),
-        seq,
+        session_seq,
         line_index: parts.line_index,
         block_index: parts.block_index,
         ts: parts.ts,
         ts_display: parts.ts_display,
         received_at: parts.ts,
-        schema_version: SCHEMA_VERSION_V1,
+        schema_version: SCHEMA_VERSION_V2,
         kind: parts.kind.to_string(),
         turn_id: None,
         agent_id: parts.agent_id,
@@ -712,7 +726,7 @@ struct TranscriptStats {
 fn transcript_stats_from_entries(entries: &[Entry]) -> TranscriptStats {
     let mut stats = TranscriptStats::default();
     for (index, entry) in entries.iter().enumerate() {
-        stats.last_seq = event_seq(index as i64, None);
+        stats.last_seq = event_session_seq(index as i64, None);
         let Entry::Transcript(entry) = entry else {
             continue;
         };
@@ -978,7 +992,7 @@ fn event_id(line_index: i64, block_index: Option<i64>) -> String {
     }
 }
 
-fn event_seq(line_index: i64, block_index: Option<i64>) -> i64 {
+fn event_session_seq(line_index: i64, block_index: Option<i64>) -> i64 {
     let line = line_index.max(0);
     if line > i64::MAX >> 32 {
         return i64::MAX;

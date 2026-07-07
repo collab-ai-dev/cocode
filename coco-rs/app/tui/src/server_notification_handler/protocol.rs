@@ -54,7 +54,7 @@ pub(super) fn handle(
     match notif {
         // === Session lifecycle ===
         ServerNotification::SessionStarted(p) => {
-            state.session.session_id = Some(p.session_id);
+            state.session.session_id = Some(p.session_id.into_inner());
             state.session.output_style = p.output_style;
             state.session.session_usage = None;
             state.session.token_usage = crate::state::session::TokenUsage::default();
@@ -1160,10 +1160,10 @@ pub(super) fn handle(
             );
             true
         }
-        ServerNotification::SessionResetForResume { session_id, .. } => {
+        notification @ ServerNotification::SessionResetForResume { .. } => {
             tracing::info!(
                 target: "coco_tui::history",
-                new_session_id = %session_id,
+                new_session_id = ?notification.session_id(),
                 cells_cleared = state.session.transcript.len(),
                 tool_widgets_cleared = state.session.tool_executions.len(),
                 tool_summaries_cleared = state.session.tool_group_summaries.len(),
@@ -1200,7 +1200,9 @@ pub(super) fn handle(
             state.session.transcript.on_session_reset();
             // Conversation id rotates on resume so prompt-cache keys
             // do not collide with the prior run's break points.
-            state.session.conversation_id = Some(session_id);
+            if let Some(session_id) = notification.session_id().cloned() {
+                state.session.conversation_id = Some(session_id.into_inner());
+            }
             true
         }
         ServerNotification::ReasoningMetadataAttached(p) => {

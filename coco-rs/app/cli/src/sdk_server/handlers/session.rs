@@ -244,12 +244,16 @@ pub(super) async fn handle_session_start(
         }
     }
 
-    let session_id = format!("session-{}", uuid::Uuid::new_v4());
-    let cwd = params.cwd.clone().unwrap_or_else(|| {
-        std::env::current_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    });
+    let session_id = coco_types::SessionId::generate();
+    let cwd = match params.cwd.clone() {
+        Some(cwd) => cwd,
+        None => ctx
+            .state
+            .workspace_cwd()
+            .await
+            .to_string_lossy()
+            .into_owned(),
+    };
     let model = params
         .model
         .clone()
@@ -274,7 +278,7 @@ pub(super) async fn handle_session_start(
     };
     if let Some(manager) = manager_arc {
         let record = coco_session::Session {
-            id: session_id.clone(),
+            id: session_id.to_string(),
             created_at: coco_session::timestamp_now(),
             updated_at: None,
             model: model.clone(),
@@ -360,16 +364,16 @@ pub(super) async fn handle_session_start(
     // disk path, file-history sink session id, or cache-break detector
     // baseline into the new session.
     //
-    // `runtime.start_new_session` also retargets the runtime-owned
+    // `runtime.retarget_for_new_session` also retargets the runtime-owned
     // `TranscriptFileHistorySink` (when file-checkpointing is enabled)
-    // via its shared `Arc<RwLock<String>>` session_id, so file-history
+    // via its shared typed session-id mirror, so file-history
     // snapshots written from the engine land in the new session's jsonl.
     let runtime_arc = {
         let slot = ctx.state.session_runtime.read().await;
         slot.as_ref().cloned()
     };
     if let Some(runtime) = runtime_arc {
-        runtime.start_new_session(session_id.clone()).await;
+        runtime.retarget_for_new_session(session_id.clone()).await;
     }
 
     HandlerResult::ok(SessionStartResult { session_id })
@@ -397,7 +401,7 @@ pub(super) async fn forward_turn_events(
     mut rx: mpsc::Receiver<CoreEvent>,
     tx: mpsc::Sender<OutboundMessage>,
     state: Arc<SdkServerState>,
-    owner_session_id: String,
+    owner_session_id: coco_types::SessionId,
 ) {
     use coco_types::ServerNotification;
     while let Some(event) = rx.recv().await {
@@ -426,18 +430,18 @@ pub(super) async fn forward_turn_events(
 ///   still winding down; we must not contaminate the successor session)
 async fn accumulate_session_result(
     state: &SdkServerState,
-    owner_session_id: &str,
+    owner_session_id: &coco_types::SessionId,
     params: &coco_types::SessionResultParams,
 ) {
     let mut slot = state.session.write().await;
     let Some(session) = slot.as_mut() else {
         return;
     };
-    if session.session_id != owner_session_id {
+    if session.session_id != *owner_session_id {
         // Cross-session guard: the slot now holds a different session.
         // This turn's stats belong to a dead session — drop them.
         debug!(
-            owner = owner_session_id,
+            owner = %owner_session_id,
             current = %session.session_id,
             "accumulate_session_result: session mismatch, dropping stats"
         );
@@ -531,7 +535,7 @@ pub(super) async fn handle_session_archive(
                 data: None,
             };
         };
-        if session.session_id != params.session_id {
+        if session.session_id.as_str() != params.session_id.as_str() {
             return HandlerResult::Err {
                 code: coco_types::error_codes::INVALID_REQUEST,
                 message: format!(
@@ -621,7 +625,7 @@ pub(super) async fn handle_session_archive(
         manager_slot.as_ref().map(Arc::clone)
     };
     if let Some(manager) = manager_arc {
-        let target_id = params.session_id.clone();
+        let target_id = params.session_id.as_str().to_string();
         let delete_result = tokio::task::spawn_blocking(move || manager.delete(&target_id)).await;
         match delete_result {
             Ok(Ok(())) => {}
@@ -689,9 +693,9 @@ fn build_aggregated_session_result(session: &SessionHandle) -> coco_types::Sessi
 
 /// Convert a `coco_session::Session` record to the wire-format
 /// summary used by list/read/resume results.
-fn session_to_summary(s: &coco_session::Session) -> coco_types::SdkSessionSummary {
-    coco_types::SdkSessionSummary {
-        session_id: s.id.clone(),
+fn session_to_summary(s: &coco_session::Session) -> Result<coco_types::SdkSessionSummary, String> {
+    Ok(coco_types::SdkSessionSummary {
+        session_id: coco_types::SessionId::try_new(s.id.clone()).map_err(|e| e.to_string())?,
         model: s.model.clone(),
         cwd: s.working_dir.to_string_lossy().into_owned(),
         created_at: s.created_at.clone(),
@@ -699,7 +703,7 @@ fn session_to_summary(s: &coco_session::Session) -> coco_types::SdkSessionSummar
         title: s.title.clone(),
         message_count: s.message_count,
         total_tokens: s.total_tokens,
-    }
+    })
 }
 
 /// `session/list` — enumerate persisted sessions, newest first.
@@ -727,7 +731,20 @@ pub(super) async fn handle_session_list(ctx: &HandlerContext) -> HandlerResult {
     let list_result = tokio::task::spawn_blocking(move || manager.list()).await;
     match list_result {
         Ok(Ok(sessions)) => {
-            let summaries = sessions.iter().map(session_to_summary).collect::<Vec<_>>();
+            let summaries = match sessions
+                .iter()
+                .map(session_to_summary)
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(summaries) => summaries,
+                Err(e) => {
+                    return HandlerResult::Err {
+                        code: coco_types::error_codes::INTERNAL_ERROR,
+                        message: format!("session/list returned invalid session id: {e}"),
+                        data: None,
+                    };
+                }
+            };
             info!(count = summaries.len(), "SdkServer: session/list");
             HandlerResult::ok(coco_types::SessionListResult {
                 sessions: summaries,
@@ -772,13 +789,23 @@ pub(super) async fn handle_session_read(
             }
         }
     };
-    let session_id = params.session_id.clone();
+    let session_id = params.session_id.as_str().to_string();
     let load_result = tokio::task::spawn_blocking(move || manager.load(&session_id)).await;
     match load_result {
         Ok(Ok(session)) => {
             info!(session_id = %params.session_id, "SdkServer: session/read");
+            let summary = match session_to_summary(&session) {
+                Ok(summary) => summary,
+                Err(e) => {
+                    return HandlerResult::Err {
+                        code: coco_types::error_codes::INTERNAL_ERROR,
+                        message: format!("session/read returned invalid session id: {e}"),
+                        data: None,
+                    };
+                }
+            };
             HandlerResult::ok(coco_types::SessionReadResult {
-                session: session_to_summary(&session),
+                session: summary,
                 messages: Vec::new(),
                 next_cursor: None,
                 has_more: false,
@@ -831,7 +858,7 @@ pub(super) async fn handle_session_resume(
     // Release the manager read lock before acquiring the session write lock
     // to avoid potential lock-ordering complications in future refactors.
     drop(manager_slot);
-    let target_id = params.session_id.clone();
+    let target_id = params.session_id.as_str().to_string();
     let resume_result = tokio::task::spawn_blocking(move || manager_arc.resume(&target_id)).await;
     let session = match resume_result {
         Ok(Ok(s)) => s,
@@ -846,6 +873,16 @@ pub(super) async fn handle_session_resume(
             return HandlerResult::Err {
                 code: coco_types::error_codes::INTERNAL_ERROR,
                 message: format!("session/resume task panicked: {join_err}"),
+                data: None,
+            };
+        }
+    };
+    let session_id = match coco_types::SessionId::try_new(session.id.clone()) {
+        Ok(id) => id,
+        Err(e) => {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: format!("session/resume: invalid persisted session id: {e}"),
                 data: None,
             };
         }
@@ -913,7 +950,7 @@ pub(super) async fn handle_session_resume(
         token.cancel();
     }
     let mut handle = SessionHandle::new(
-        session.id.clone(),
+        session_id.clone(),
         session.working_dir.to_string_lossy().into_owned(),
         session.model.clone(),
     );
@@ -931,7 +968,9 @@ pub(super) async fn handle_session_resume(
                 .fire_session_end_hooks(coco_hooks::orchestration::ExitReason::Resume)
                 .await;
         }
-        runtime.start_new_session(session.id.clone()).await;
+        runtime
+            .retarget_for_loaded_session(session_id.clone())
+            .await;
         if let Some(conversation) = &conversation {
             {
                 let mut h = runtime.history.lock().await;
@@ -952,7 +991,7 @@ pub(super) async fn handle_session_resume(
             // resume goes through the AgentTool spawn API. agent_id =
             // None matches the load filter for main-thread records.
             runtime
-                .seed_tool_result_replacement_state(&conversation.messages, &session.id, None)
+                .seed_tool_result_replacement_state(&conversation.messages, &session_id, None)
                 .await;
             let cfg = runtime.current_engine_config().await;
             let messages = conversation
@@ -989,7 +1028,15 @@ pub(super) async fn handle_session_resume(
             .unwrap_or(0),
         "SdkServer: session/resume"
     );
-    HandlerResult::ok(coco_types::SessionResumeResult {
-        session: session_to_summary(&session),
-    })
+    let summary = match session_to_summary(&session) {
+        Ok(summary) => summary,
+        Err(e) => {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INTERNAL_ERROR,
+                message: format!("session/resume returned invalid session id: {e}"),
+                data: None,
+            };
+        }
+    };
+    HandlerResult::ok(coco_types::SessionResumeResult { session: summary })
 }

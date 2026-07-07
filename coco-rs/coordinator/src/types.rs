@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use coco_types::ModelInheritance;
 use coco_types::PermissionMode;
+use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
@@ -167,7 +168,7 @@ pub struct TeamMember {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
+    pub session_id: Option<SessionId>,
     /// Topic subscriptions for inter-agent messaging.
     #[serde(default)]
     pub subscriptions: Vec<String>,
@@ -204,7 +205,7 @@ pub struct TeamFile {
     pub created_at: i64,
     pub lead_agent_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lead_session_id: Option<String>,
+    pub lead_session_id: Option<SessionId>,
     /// Pane IDs currently hidden from UI.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_pane_ids: Vec<String>,

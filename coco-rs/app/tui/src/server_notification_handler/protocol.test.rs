@@ -28,6 +28,13 @@ use crate::transcript::derive::test_helpers;
 
 // ── Helpers ─────────────────────────────────────────────────────
 
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    match coco_types::SessionId::try_new(value) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id should be valid"),
+    }
+}
+
 fn user_cancel() -> TurnAbortReason {
     TurnAbortReason::UserCancel
 }
@@ -85,7 +92,7 @@ fn channel() -> (
 
 fn session_started(provider: &str) -> ServerNotification {
     ServerNotification::SessionStarted(SessionStartedParams {
-        session_id: "s1".into(),
+        session_id: test_session_id("s1"),
         protocol_version: "1.0".into(),
         cwd: "/tmp".into(),
         model: "model-a".into(),
@@ -185,8 +192,7 @@ fn history_replaced_clears_pre_clear_rewind_snapshot() {
         &mut state,
         ServerNotification::HistoryReplaced {
             messages: Vec::new(),
-            session_id: String::new(),
-            agent_id: None,
+            identity: coco_types::ServerNotificationIdentity::default(),
             reason: coco_types::HistoryReplaceReason::Hydrate,
         },
         &tx,
@@ -206,7 +212,9 @@ fn state_with_usage() -> AppState {
         cache_read_tokens: 698_752,
         cache_creation_tokens: 0,
     };
-    state.session.session_usage = Some(coco_types::SessionUsageSnapshot::default());
+    state.session.session_usage = Some(coco_types::SessionUsageSnapshot::empty(test_session_id(
+        "s1",
+    )));
     state
 }
 
@@ -221,8 +229,10 @@ fn session_reset_for_resume_zeroes_cumulative_usage() {
     super::handle(
         &mut state,
         ServerNotification::SessionResetForResume {
-            session_id: "s2".into(),
-            agent_id: None,
+            identity: coco_types::ServerNotificationIdentity::new(
+                Some(test_session_id("s2")),
+                None,
+            ),
         },
         &tx,
     );
@@ -245,8 +255,7 @@ fn history_replaced_preserves_cumulative_usage() {
         &mut state,
         ServerNotification::HistoryReplaced {
             messages: Vec::new(),
-            session_id: String::new(),
-            agent_id: None,
+            identity: coco_types::ServerNotificationIdentity::default(),
             reason: coco_types::HistoryReplaceReason::Hydrate,
         },
         &tx,
@@ -309,8 +318,7 @@ fn message_appended_projects_user_interruption_for_tool_use() {
         &mut state,
         ServerNotification::MessageAppended {
             message: std::sync::Arc::new(message),
-            session_id: String::new(),
-            agent_id: None,
+            identity: coco_types::ServerNotificationIdentity::default(),
         },
         &tx,
     );
@@ -1086,8 +1094,7 @@ fn test_subagent_usage_survives_compact_history_replace_and_resets_on_session_bo
         &mut state,
         ServerNotification::HistoryReplaced {
             messages: Vec::new(),
-            session_id: String::new(),
-            agent_id: None,
+            identity: coco_types::ServerNotificationIdentity::default(),
             reason: coco_types::HistoryReplaceReason::Compact,
         },
         &tx,
@@ -1097,8 +1104,10 @@ fn test_subagent_usage_survives_compact_history_replace_and_resets_on_session_bo
     super::handle(
         &mut state,
         ServerNotification::SessionResetForResume {
-            session_id: "next".into(),
-            agent_id: None,
+            identity: coco_types::ServerNotificationIdentity::new(
+                Some(test_session_id("next")),
+                None,
+            ),
         },
         &tx,
     );
@@ -1122,8 +1131,7 @@ fn test_compact_history_replace_keeps_cumulative_counts_and_adds_one_assistant()
                 uuid::Uuid::new_v4(),
                 "This session is being continued…",
             )],
-            session_id: String::new(),
-            agent_id: None,
+            identity: coco_types::ServerNotificationIdentity::default(),
             reason: coco_types::HistoryReplaceReason::Compact,
         },
         &tx,

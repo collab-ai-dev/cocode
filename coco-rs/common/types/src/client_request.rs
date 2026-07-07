@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use crate::HookEventType;
 use crate::PermissionMode;
 use crate::PermissionUpdate;
+use crate::SessionId;
 use crate::ThinkingLevel;
 use crate::wire_tagged::wire_tagged_enum;
 
@@ -227,14 +228,14 @@ pub struct SessionStartParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResumeParams {
-    pub session_id: String,
+    pub session_id: SessionId,
 }
 
 /// Params for `session/read`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReadParams {
-    pub session_id: String,
+    pub session_id: SessionId,
     /// Optional pagination cursor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
@@ -246,7 +247,7 @@ pub struct SessionReadParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionArchiveParams {
-    pub session_id: String,
+    pub session_id: SessionId,
 }
 
 /// Params for `turn/start`.

@@ -320,12 +320,15 @@ pub(super) fn handle(
         TuiOnlyEvent::OpenSessionBrowser { sessions } => {
             let saved_sessions = sessions
                 .into_iter()
-                .map(|session| SavedSession {
-                    id: session.session_id.clone(),
-                    label: session.title.unwrap_or_else(|| session.session_id.clone()),
-                    message_count: session.message_count,
-                    created_at: session.created_at,
-                    model: Some(session.model),
+                .map(|session| {
+                    let session_id = session.session_id.into_inner();
+                    SavedSession {
+                        id: session_id.clone(),
+                        label: session.title.unwrap_or_else(|| session_id.clone()),
+                        message_count: session.message_count,
+                        created_at: session.created_at,
+                        model: Some(session.model),
+                    }
                 })
                 .collect::<Vec<_>>();
             let picker_sessions = saved_sessions

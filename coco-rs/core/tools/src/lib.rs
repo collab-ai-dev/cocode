@@ -322,7 +322,7 @@ pub(crate) fn check_write_root_fence(
     let fence_cwd = ctx
         .cwd_override
         .clone()
-        .or_else(|| std::env::current_dir().ok())
+        .or_else(|| ctx.original_cwd.clone())
         .unwrap_or_else(|| std::path::PathBuf::from("/"));
     let fence_cwd = fence_cwd.to_string_lossy();
     let internal_ctx = coco_permissions::filesystem::InternalPathContext {
@@ -346,10 +346,10 @@ pub(crate) fn check_write_root_fence(
         path.to_path_buf()
     } else if let Some(cwd) = ctx.cwd_override.as_ref() {
         cwd.join(path)
+    } else if let Some(cwd) = ctx.original_cwd.as_ref() {
+        cwd.join(path)
     } else {
-        std::env::current_dir()
-            .map(|c| c.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
+        path.to_path_buf()
     };
     let normalized = normalize_lexical(&absolute);
     let allowed = ctx.allowed_write_roots.iter().any(|root| {
@@ -430,7 +430,7 @@ fn is_team_memory_path(ctx: &coco_tool_runtime::ToolUseContext, path: &std::path
     let project_root = ctx
         .cwd_override
         .clone()
-        .or_else(|| std::env::current_dir().ok());
+        .or_else(|| ctx.original_cwd.clone());
     if let Some(root) = project_root {
         // The config home is derived from `CocoConfigDir` env or
         // defaulted by the bootstrap layer. We don't have direct access
@@ -491,15 +491,12 @@ pub(crate) async fn track_nested_memory_attachment(
 ///
 /// Both are deferred to the app/query post-batch drain so concurrent
 /// safe-tool execution can share one activation pass. Cwd resolution
-/// falls back to `ctx.cwd_override` (worktree-isolated subagents)
-/// then the process cwd; if neither is available, the call is a no-op
+/// uses the session cwd anchor; if unavailable, the call is a no-op
 /// (no path-relative gitignore matching possible).
 pub(crate) async fn track_skill_triggers(ctx: &coco_tool_runtime::ToolUseContext, path: &Path) {
-    let cwd = ctx
-        .cwd_override
-        .clone()
-        .or_else(|| std::env::current_dir().ok());
-    let Some(cwd) = cwd else { return };
+    let Some(cwd) = ctx.cwd_anchor().await else {
+        return;
+    };
 
     // (2) Conditional activation runs against the **raw** file path
     // (uses the input path as-is). Canonicalization is wrong here —
@@ -532,15 +529,20 @@ pub(crate) async fn track_skill_triggers(ctx: &coco_tool_runtime::ToolUseContext
 /// NotebookEditTool, BashTool before file modifications.
 /// Silently no-ops if file history is not configured on the context.
 pub(crate) async fn track_file_edit(ctx: &coco_tool_runtime::ToolUseContext, path: &Path) {
-    if let (Some(fh), Some(config_home), Some(sid)) = (
-        &ctx.file_history,
-        &ctx.config_home,
-        &ctx.session_id_for_history,
-    ) {
+    let sid = match ctx.checked_session_id_for_history() {
+        Ok(Some(sid)) => sid,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!("{e}");
+            return;
+        }
+    };
+
+    if let (Some(fh), Some(config_home)) = (&ctx.file_history, &ctx.config_home) {
         // Use user_message_id (the originating user message UUID), NOT tool_use_id.
         if let Some(msg_id) = &ctx.user_message_id {
             let mut fh = fh.write().await;
-            if let Err(e) = fh.track_edit(path, msg_id, config_home, sid).await {
+            if let Err(e) = fh.track_edit(path, msg_id, config_home, sid.as_str()).await {
                 tracing::warn!("file history track_edit failed: {e}");
             }
         }

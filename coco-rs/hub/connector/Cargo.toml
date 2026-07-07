@@ -12,5 +12,10 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+chrono.workspace = true
 coco-error.workspace = true
 coco-hub-protocol.workspace = true
+coco-types.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

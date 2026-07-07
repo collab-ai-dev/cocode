@@ -4,6 +4,7 @@
 //! the agent and IDE extensions, plus a server that accepts connections
 //! and routes messages.
 
+use coco_types::SessionId;
 use coco_types::ToolName;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,7 +53,7 @@ pub enum IdeBridgeMessage {
     },
     /// Status update from the agent to the IDE.
     StatusUpdate {
-        session_id: String,
+        session_id: SessionId,
         state: SessionState,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
@@ -233,7 +234,7 @@ pub struct IdeBridgeServer {
     /// Connected clients.
     clients: Arc<Mutex<Vec<IdeClient>>>,
     /// Recent activities per session (bounded ring buffer).
-    activities: Arc<Mutex<HashMap<String, Vec<SessionActivity>>>>,
+    activities: Arc<Mutex<HashMap<SessionId, Vec<SessionActivity>>>>,
     /// Whether the server is running.
     running: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -421,13 +422,13 @@ impl IdeBridgeServer {
     /// Send a status update to connected IDEs.
     pub fn send_status(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         state: SessionState,
         model: Option<&str>,
         activity: Option<SessionActivity>,
     ) -> crate::Result<()> {
         self.broadcast(IdeBridgeMessage::StatusUpdate {
-            session_id: session_id.to_string(),
+            session_id: session_id.clone(),
             state,
             model: model.map(String::from),
             activity,
@@ -439,14 +440,14 @@ impl IdeBridgeServer {
     /// Bounded to `MAX_ACTIVITIES` entries per session.
     pub async fn record_activity(
         &self,
-        session_id: &str,
+        session_id: &SessionId,
         activity: SessionActivity,
     ) -> crate::Result<()> {
         // Record in bounded buffer
         {
             let mut activities = self.activities.lock().await;
             let entries = activities
-                .entry(session_id.to_string())
+                .entry(session_id.clone())
                 .or_insert_with(Vec::new);
             entries.push(activity.clone());
             if entries.len() > MAX_ACTIVITIES {
@@ -459,7 +460,7 @@ impl IdeBridgeServer {
     }
 
     /// Get recent activities for a session.
-    pub async fn recent_activities(&self, session_id: &str) -> Vec<SessionActivity> {
+    pub async fn recent_activities(&self, session_id: &SessionId) -> Vec<SessionActivity> {
         let activities = self.activities.lock().await;
         activities
             .get(session_id)

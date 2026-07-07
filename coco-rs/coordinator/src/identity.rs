@@ -13,6 +13,7 @@ use std::sync::atomic::Ordering;
 
 use coco_config::EnvKey;
 use coco_config::env;
+use coco_types::SessionId;
 use coco_types::TaskStateBase;
 
 use crate::constants::AGENT_ID_ENV_VAR;
@@ -38,7 +39,7 @@ pub struct TeammateContextData {
     pub team_name: String,
     pub color: Option<String>,
     pub plan_mode_required: bool,
-    pub parent_session_id: String,
+    pub parent_session_id: SessionId,
     /// In-process teammate's own stop flag (the runner-loop's
     /// `config.cancelled`). When the model approves its own shutdown,
     /// [`signal_self_stop`] flips this so the runner loop breaks on its
@@ -100,7 +101,7 @@ pub struct DynamicTeamContext {
     pub team_name: String,
     pub color: Option<String>,
     pub plan_mode_required: bool,
-    pub parent_session_id: Option<String>,
+    pub parent_session_id: Option<SessionId>,
 }
 
 /// Set the dynamic team context.
@@ -244,15 +245,28 @@ pub fn get_team_name() -> Option<String> {
     inherited_env_string(TEAM_NAME_ENV_VAR, |c| c.team_name.as_ref())
 }
 
-/// Get the parent session ID.
+/// Get the parent session ID as a legacy string boundary.
 pub fn get_parent_session_id() -> Option<String> {
+    checked_parent_session_id()
+        .ok()
+        .flatten()
+        .map(|session_id| session_id.to_string())
+}
+
+/// Get the parent session ID with path-component validation.
+pub fn checked_parent_session_id() -> Result<Option<SessionId>, String> {
     if let Some(ctx) = get_teammate_context() {
-        return Some(ctx.parent_session_id);
+        return Ok(Some(ctx.parent_session_id));
     }
     if let Some(ctx) = get_dynamic_team_context() {
-        return ctx.parent_session_id;
+        return Ok(ctx.parent_session_id);
     }
-    env::env_opt(PARENT_SESSION_ID_ENV_VAR)
+    let Some(session_id) = env::env_opt(PARENT_SESSION_ID_ENV_VAR) else {
+        return Ok(None);
+    };
+    SessionId::try_new(session_id)
+        .map(Some)
+        .map_err(|e| format!("{} is invalid: {e}", PARENT_SESSION_ID_ENV_VAR.as_str()))
 }
 
 /// Check if currently running as a teammate (not leader).
@@ -345,7 +359,7 @@ pub fn create_teammate_context(
     team_name: &str,
     color: Option<String>,
     plan_mode_required: bool,
-    parent_session_id: &str,
+    parent_session_id: SessionId,
 ) -> TeammateContextData {
     TeammateContextData {
         agent_id: format!("{agent_name}@{team_name}"),
@@ -353,7 +367,7 @@ pub fn create_teammate_context(
         team_name: team_name.to_string(),
         color,
         plan_mode_required,
-        parent_session_id: parent_session_id.to_string(),
+        parent_session_id,
         // Spawn-time context carries no runner cancel flag — the runner
         // loop wires its own when it scopes the per-turn context.
         self_stop_signal: None,

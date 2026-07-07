@@ -179,7 +179,8 @@ async fn test_inline_skill_substitutes_skill_dir_and_session_id() {
 
     let mgr = SkillManager::new();
     mgr.register(skill);
-    let rt = QuerySkillRuntime::new(Arc::new(mgr)).with_session_id("sess-123");
+    let rt = QuerySkillRuntime::new(Arc::new(mgr))
+        .with_session_id(coco_types::SessionId::try_new("sess-123").unwrap());
 
     let result = rt
         .invoke_skill(

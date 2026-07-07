@@ -1,12 +1,13 @@
 //! `coco config <action>` — get/set/list/reset for user settings.
 
+use std::path::Path;
+
 use anyhow::Result;
 use coco_cli::ConfigAction;
 use coco_config::global_config;
 
-pub fn handle_config(action: &ConfigAction) -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let settings = coco_config::settings::load_settings(&cwd, None)?;
+pub fn handle_config(action: &ConfigAction, cwd: &Path) -> Result<()> {
+    let settings = coco_config::settings::load_settings(cwd, None)?;
     let json = serde_json::to_value(&settings.merged)?;
 
     match action {

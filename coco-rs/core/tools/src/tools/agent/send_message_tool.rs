@@ -342,11 +342,10 @@ impl Tool for SendMessageTool {
             // transcript on disk. An empty session id makes the lookup
             // path malformed and surfaces a confusing inner error; reject
             // upfront with a clear message instead.
-            let Some(session_id) = ctx
-                .session_id_for_history
-                .as_deref()
-                .filter(|s| !s.is_empty())
-            else {
+            let session_id = ctx
+                .checked_session_id_for_history()
+                .map_err(ToolError::execution_failed)?;
+            let Some(session_id) = session_id else {
                 return Ok(send_message_result(SendMessageOutput::Direct {
                     success: false,
                     message: format!(
@@ -359,7 +358,7 @@ impl Tool for SendMessageTool {
                     routing: Some("resume".to_string()),
                 }));
             };
-            let resume = match ctx.agent.resume_agent(to, &content, session_id).await {
+            let resume = match ctx.agent.resume_agent(to, &content, &session_id).await {
                 Ok(resume) => resume,
                 Err(e) => {
                     return Ok(send_message_result(SendMessageOutput::Direct {

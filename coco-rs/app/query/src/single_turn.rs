@@ -33,7 +33,7 @@ pub async fn single_turn_query(
 ) -> Result<SingleTurnResult, coco_error::BoxedError> {
     let start = std::time::Instant::now();
     let event_tx = None;
-    let moa_turn_id = uuid::Uuid::new_v4().to_string();
+    let moa_turn_id = coco_types::TurnId::generate();
 
     let prompt: LlmPrompt = vec![
         coco_llm_types::LlmMessage::system(system_prompt),

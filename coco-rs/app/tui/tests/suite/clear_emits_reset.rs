@@ -27,10 +27,18 @@ use coco_tui::state::ToolExecution;
 use coco_tui::state::ToolStatus;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
+use coco_types::ServerNotificationIdentity;
 use tokio::sync::mpsc;
 
 fn protocol_evt(notif: ServerNotification) -> CoreEvent {
     CoreEvent::Protocol(notif)
+}
+
+fn test_session_id(value: &str) -> coco_types::SessionId {
+    match coco_types::SessionId::try_new(value) {
+        Ok(id) => id,
+        Err(_) => unreachable!("test session id should be valid"),
+    }
 }
 
 /// JSON-roundtrip a `Protocol(ServerNotification)` event.
@@ -71,8 +79,7 @@ async fn clear_full_emits_session_reset_and_wipes_state() {
             &mut state,
             protocol_evt(ServerNotification::MessageAppended {
                 message: std::sync::Arc::new(m),
-                session_id: String::new(),
-                agent_id: None,
+                identity: ServerNotificationIdentity::default(),
             }),
         );
     }
@@ -85,19 +92,24 @@ async fn clear_full_emits_session_reset_and_wipes_state() {
     // the session id and clears the engine history.
     let (tx, mut rx) = mpsc::channel::<CoreEvent>(4);
     tx.send(protocol_evt(ServerNotification::SessionResetForResume {
-        session_id: "post-clear-session".into(),
-        agent_id: None,
+        identity: ServerNotificationIdentity::new(
+            Some(test_session_id("post-clear-session")),
+            None,
+        ),
     }))
     .await
     .expect("channel accepts the event");
 
     let observed = rx.recv().await.expect("SDK observer receives event");
-    let CoreEvent::Protocol(ServerNotification::SessionResetForResume { session_id, .. }) =
+    let CoreEvent::Protocol(notification @ ServerNotification::SessionResetForResume { .. }) =
         &observed
     else {
         panic!("expected Protocol(SessionResetForResume), got {observed:?}");
     };
-    assert_eq!(session_id, "post-clear-session");
+    assert_eq!(
+        notification.session_id().map(coco_types::SessionId::as_str),
+        Some("post-clear-session")
+    );
 
     handle_core_event(&mut state, roundtrip(observed));
 

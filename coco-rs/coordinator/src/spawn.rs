@@ -5,6 +5,7 @@ use coco_config::env;
 
 use crate::constants::AGENT_ID_ENV_VAR;
 use crate::constants::AGENT_NAME_ENV_VAR;
+use crate::constants::PARENT_SESSION_ID_ENV_VAR;
 use crate::constants::PLAN_MODE_REQUIRED_ENV_VAR;
 use crate::constants::TEAM_NAME_ENV_VAR;
 use crate::constants::TEAMMATE_COLOR_ENV_VAR;
@@ -58,11 +59,10 @@ pub fn build_teammate_command(config: &TeammateSpawnConfig) -> String {
 /// Build env vars to inherit into teammate processes.
 ///
 /// Three categories:
-/// 1. **Worker identity** — agent_id / agent_name / team_name / color /
-///    plan-mode flag. Identity is also passed as CLI flags (so the
-///    child can boot without env), but env duplication keeps tools
-///    that read `COCO_*` directly (e.g. `crate::identity::*`)
-///    coherent without depending on the CLI parser.
+/// 1. **Worker identity** — agent_id / agent_name / team_name /
+///    parent_session_id / color / plan-mode flag. Identity rides env only:
+///    the CLI has no matching flags, and `crate::identity::*` resolves the
+///    inherited `COCO_*` values on teammate startup.
 /// 2. **Runtime config** — `ANTHROPIC_BASE_URL`, `COCO_CONFIG_DIR`,
 ///    `COCO_REMOTE`, `COCO_REMOTE_MEMORY_DIR`, plus the Feature gate.
 /// 3. **Third-party (non-COCO) passthroughs** — AWS / Google credentials,
@@ -76,6 +76,10 @@ pub fn build_inherited_env_vars(config: &TeammateSpawnConfig) -> String {
     vars.push(format!("{AGENT_ID_ENV_VAR}={agent_id}"));
     vars.push(format!("{AGENT_NAME_ENV_VAR}={}", config.name));
     vars.push(format!("{TEAM_NAME_ENV_VAR}={}", config.team_name));
+    vars.push(format!(
+        "{PARENT_SESSION_ID_ENV_VAR}={}",
+        config.parent_session_id
+    ));
     if let Some(color) = &config.color {
         vars.push(format!("{TEAMMATE_COLOR_ENV_VAR}={}", color.as_str()));
     }

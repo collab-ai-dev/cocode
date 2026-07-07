@@ -20,7 +20,6 @@ use coco_context::FileHistoryState;
 use coco_hooks::HookRegistry;
 use coco_inference::ModelRuntimeRegistry;
 use coco_inference::ModelRuntimeSource;
-use coco_messages::CostTracker;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::TurnAbortSignal;
@@ -136,18 +135,16 @@ impl QueryEngine {
             post_compact_skills: Arc::new(std::sync::RwLock::new(Vec::new())),
             session_start_hook_side_effect_sink: None,
             staged_ledger: None,
-            staged_session_id: uuid::Uuid::new_v4(),
+            staged_session_id: coco_types::SessionId::generate(),
             recently_mentioned_paths: Arc::new(tokio::sync::RwLock::new(
                 std::collections::VecDeque::new(),
             )),
             pending_reactive_context_management: Arc::new(tokio::sync::Mutex::new(None)),
             pending_just_compacted: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             transcript_store: None,
-            session_usage_tracker: None,
             usage_attribution: coco_types::UsageAttribution::session(coco_types::UsageSource::Main),
             usage_accounting: None,
             usage_source_override: None,
-            session_usage_write_lock: None,
             transcript_session_id: None,
             transcript_dedup: None,
             agent_transcript_dedup: tokio::sync::Mutex::new(std::collections::HashSet::new()),
@@ -249,7 +246,7 @@ impl QueryEngine {
             coco_inference::ModelRuntime::notify_active_compaction(
                 runtime,
                 query_source,
-                self.config.agent_id.as_deref(),
+                self.config.agent_id_str(),
             )
             .await;
         }
@@ -263,7 +260,7 @@ impl QueryEngine {
             coco_inference::ModelRuntime::notify_active_cache_deletion(
                 runtime,
                 query_source,
-                self.config.agent_id.as_deref(),
+                self.config.agent_id_str(),
             )
             .await;
         }
@@ -276,22 +273,10 @@ impl QueryEngine {
     pub fn with_transcript_store(
         mut self,
         store: Arc<dyn coco_session::SessionStore>,
-        session_id: String,
+        session_id: impl Into<coco_types::SessionId>,
     ) -> Self {
         self.transcript_store = Some(store);
-        self.transcript_session_id = Some(session_id);
-        self
-    }
-
-    pub fn with_session_usage_tracker(
-        mut self,
-        tracker: Arc<tokio::sync::Mutex<CostTracker>>,
-    ) -> Self {
-        self.session_usage_tracker = Some(tracker);
-        if self.session_usage_write_lock.is_none() {
-            self.session_usage_write_lock = Some(Arc::new(tokio::sync::Mutex::new(())));
-        }
-        self.refresh_legacy_usage_accounting();
+        self.transcript_session_id = Some(session_id.into());
         self
     }
 
@@ -304,18 +289,10 @@ impl QueryEngine {
         self
     }
 
-    pub fn with_session_usage_write_lock(mut self, lock: Arc<tokio::sync::Mutex<()>>) -> Self {
-        self.session_usage_write_lock = Some(lock);
-        self.refresh_legacy_usage_accounting();
-        self
-    }
-
     pub fn with_usage_accounting(
         mut self,
         accounting: crate::usage_accounting::UsageAccounting,
     ) -> Self {
-        self.session_usage_tracker = Some(accounting.tracker());
-        self.session_usage_write_lock = Some(accounting.write_lock());
         self.usage_accounting = Some(accounting);
         self
     }
@@ -355,89 +332,7 @@ impl QueryEngine {
                     event_tx: event_tx.as_ref(),
                 })
                 .await;
-            return;
         }
-
-        let Some(tracker) = &self.session_usage_tracker else {
-            return;
-        };
-        let _write_guard = match &self.session_usage_write_lock {
-            Some(lock) => Some(lock.lock().await),
-            None => None,
-        };
-        let snapshot = {
-            let mut guard = tracker.lock().await;
-            guard.record_usage_attributed(
-                provider,
-                model_id,
-                usage,
-                duration_ms,
-                self.usage_attribution_for(source),
-            );
-            let mut snap = guard.snapshot(&self.config.session_id);
-            snap.auto_compact_threshold = auto_compact_threshold;
-            snap
-        };
-        let _ = crate::emit::emit_protocol(
-            event_tx,
-            crate::ServerNotification::SessionUsageUpdated(Box::new(snapshot.clone())),
-        )
-        .await;
-        if let Some(store) = &self.transcript_store {
-            let store = Arc::clone(store);
-            let session_id = self.config.session_id.clone();
-            let snapshot = snapshot.clone();
-            match tokio::task::spawn_blocking(move || {
-                store.write_usage_snapshot(&session_id, &snapshot)
-            })
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    tracing::warn!(
-                        error = %e,
-                        session_id = %self.config.session_id,
-                        "failed to write session usage snapshot"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        session_id = %self.config.session_id,
-                        "usage snapshot write task failed"
-                    );
-                }
-            }
-        }
-    }
-
-    fn usage_attribution_for(
-        &self,
-        source: coco_types::UsageSource,
-    ) -> coco_types::UsageAttribution {
-        let mut attribution = self.usage_attribution.clone();
-        attribution.source = source;
-        attribution
-    }
-
-    fn refresh_legacy_usage_accounting(&mut self) {
-        if self.usage_accounting.is_some() {
-            return;
-        }
-        let (Some(tracker), Some(write_lock)) = (
-            self.session_usage_tracker.clone(),
-            self.session_usage_write_lock.clone(),
-        ) else {
-            return;
-        };
-        self.usage_accounting = Some(
-            crate::usage_accounting::UsageAccounting::for_static_session(
-                self.config.session_id.clone(),
-                tracker,
-                write_lock,
-                self.usage_attribution.clone(),
-            ),
-        );
     }
 
     pub fn with_tool_result_replacement_state(
@@ -475,7 +370,7 @@ impl QueryEngine {
     pub fn with_staged_ledger(
         mut self,
         ledger: Arc<tokio::sync::Mutex<coco_compact::StagedCompactLedger>>,
-        session_id: uuid::Uuid,
+        session_id: coco_types::SessionId,
     ) -> Self {
         self.staged_ledger = Some(ledger);
         self.staged_session_id = session_id;

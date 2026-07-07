@@ -34,12 +34,14 @@
 
 use std::fmt;
 
+use coco_types::SessionId;
+
 /// Session-scoped variable values, constructed once per session in the app
 /// layer and shared (`Arc`) by every `ModelRuntimeRegistry` for that session.
 #[derive(Debug, Clone, Default)]
 pub struct HeaderVars {
     /// `${SESSION_ID}` — current session id.
-    pub session_id: String,
+    pub session_id: Option<SessionId>,
     /// `${CWD}` — session working directory.
     pub cwd: String,
     /// `${APP_VERSION}` — coco binary version (`CARGO_PKG_VERSION`).
@@ -163,9 +165,9 @@ fn resolve(name: &str, vars: Option<&HeaderVars>, per_build: &PerBuildVars) -> O
         "OS" => std::env::consts::OS.to_string(),
         "ARCH" => std::env::consts::ARCH.to_string(),
         // Session-scoped — empty when no session context threaded in.
-        "SESSION_ID" => session_var(vars, name, |v| &v.session_id),
-        "CWD" => session_var(vars, name, |v| &v.cwd),
-        "APP_VERSION" => session_var(vars, name, |v| &v.app_version),
+        "SESSION_ID" => session_var(vars, name, |v| v.session_id.as_ref().map(SessionId::as_str)),
+        "CWD" => session_var(vars, name, |v| Some(v.cwd.as_str())),
+        "APP_VERSION" => session_var(vars, name, |v| Some(v.app_version.as_str())),
         _ => return None,
     };
     Some(value)
@@ -176,10 +178,10 @@ fn resolve(name: &str, vars: Option<&HeaderVars>, per_build: &PerBuildVars) -> O
 fn session_var(
     vars: Option<&HeaderVars>,
     name: &str,
-    pick: impl Fn(&HeaderVars) -> &str,
+    pick: impl Fn(&HeaderVars) -> Option<&str>,
 ) -> String {
     match vars {
-        Some(v) => pick(v).to_string(),
+        Some(v) => pick(v).unwrap_or_default().to_string(),
         None => {
             tracing::debug!(
                 variable = name,

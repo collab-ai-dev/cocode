@@ -12,6 +12,7 @@
 //! a flat enumeration they can parse.
 
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -42,13 +43,21 @@ const PLACEHOLDER_BYTES_PER_TOKEN: i64 = 4;
 
 /// `CommandHandler` impl for `/skills`. No args → open the TUI
 /// dialog; `list` / `show` / `paths` → reuse the text path.
-pub struct SkillsHandler;
+pub struct SkillsHandler {
+    project_root: PathBuf,
+}
+
+impl SkillsHandler {
+    pub fn new(project_root: PathBuf) -> Self {
+        Self { project_root }
+    }
+}
 
 #[async_trait]
 impl CommandHandler for SkillsHandler {
     async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
         let trimmed = args.trim().to_string();
-        let cwd = std::env::current_dir().unwrap_or_default();
+        let cwd = self.project_root.clone();
         let config_home = coco_config::global_config::config_home();
 
         // Discovery is sync (`std::fs`) — keep the TUI event loop

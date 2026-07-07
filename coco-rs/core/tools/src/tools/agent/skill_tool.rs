@@ -169,8 +169,15 @@ impl Tool for SkillTool {
         // rather than `AgentHandle` — skills are a different runtime
         // concept. Forward parent's Layer 1 + 2 so a fork-mode skill
         // subagent inherits the same gate set; inline expansion ignores it.
+        let session_id = ctx
+            .checked_session_id_for_history()
+            .map_err(ToolError::execution_failed)?
+            .unwrap_or_else(|| match coco_types::SessionId::try_new("test-session") {
+                Ok(id) => id,
+                Err(_) => unreachable!("test session id must be valid"),
+            });
         let inherit = coco_tool_runtime::SubagentInheritance {
-            session_id: ctx.session_id_for_history.clone().unwrap_or_default(),
+            session_id,
             permission_mode: ctx.permission_context.mode,
             features: Some(ctx.features.clone()),
             tool_overrides: Some(ctx.tool_overrides.clone()),

@@ -20,7 +20,7 @@ fn host() -> WorkflowRunHost {
         task_id: "wtest".to_string(),
         main_handle: tokio::runtime::Handle::current(),
         spawn_ctx: WorkflowSpawnContext {
-            session_id: "session".to_string(),
+            session_id: Some(coco_types::SessionId::try_new("session").unwrap()),
             invoking_agent_id: Some("parent-agent".to_string()),
             tool_use_id: Some("toolu_1".to_string()),
             features: Arc::new(coco_types::Features::with_defaults()),
@@ -460,7 +460,7 @@ fn cyclic_host_with_cwd(cwd: std::path::PathBuf) -> Arc<WorkflowRunHost> {
         task_id: "wtest".to_string(),
         main_handle: tokio::runtime::Handle::current(),
         spawn_ctx: WorkflowSpawnContext {
-            session_id: "session".to_string(),
+            session_id: Some(coco_types::SessionId::try_new("session").unwrap()),
             invoking_agent_id: None,
             tool_use_id: None,
             features: Arc::new(coco_types::Features::with_defaults()),

@@ -11,7 +11,6 @@ use coco_context::FileHistoryState;
 use coco_hooks::HookRegistry;
 use coco_inference::ModelRuntimeRegistry;
 use coco_inference::ModelRuntimeSource;
-use coco_messages::CostTracker;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
@@ -347,7 +346,7 @@ pub struct QueryEngine {
     /// Persistent session id used as the `sessionId` for any
     /// staged-collapse commit/snapshot entries. Lazily set when
     /// staged_ledger is installed.
-    pub(crate) staged_session_id: uuid::Uuid,
+    pub(crate) staged_session_id: coco_types::SessionId,
     /// Most-recently @mentioned absolute file paths, capped at
     /// `MENTION_PRIORITY_CAPACITY`. `try_full_compact` reads this set
     /// to boost mentioned files in the post-compact restoration list
@@ -376,10 +375,6 @@ pub struct QueryEngine {
     /// persistence (in-memory ledger only). Caller wires this via
     /// `with_transcript_store`.
     pub(crate) transcript_store: Option<Arc<dyn coco_session::SessionStore>>,
-    /// Shared session-level usage tracker. QueryEngine is rebuilt per
-    /// user message, so the runtime owns this and wires it into every
-    /// engine instance.
-    pub(crate) session_usage_tracker: Option<Arc<tokio::sync::Mutex<CostTracker>>>,
     /// Base attribution for LLM usage emitted by this engine. Main
     /// session engines default to `Session`; AgentTool children set
     /// this to `AgentToolSubagent` with their task id.
@@ -388,13 +383,10 @@ pub struct QueryEngine {
     pub(crate) usage_accounting: Option<crate::usage_accounting::UsageAccounting>,
     /// Force all calls through one fine-grained source bucket.
     pub(crate) usage_source_override: Option<coco_types::UsageSource>,
-    /// Serializes update/snapshot/write for session usage so concurrent
-    /// engines cannot overwrite a newer snapshot with an older one.
-    pub(crate) session_usage_write_lock: Option<Arc<tokio::sync::Mutex<()>>>,
-    /// Session id (string form) used for transcript path resolution.
+    /// Session id used for transcript path resolution.
     /// Distinct from `staged_session_id` because TranscriptStore keys
     /// off the session id string used by the rest of the system.
-    pub(crate) transcript_session_id: Option<String>,
+    pub(crate) transcript_session_id: Option<coco_types::SessionId>,
     /// Dedup set of message UUIDs already written to the transcript
     /// JSONL during this session. Lives on `SessionRuntime` and is
     /// cloned into every per-turn engine via `with_transcript_dedup`
@@ -766,9 +758,8 @@ impl QueryEngine {
 
             let api_start = std::time::Instant::now();
             let event_turn_id = cycle_turn_id
-                .as_ref()
-                .map(coco_types::TurnId::as_str)
-                .unwrap_or(turn_id.as_str());
+                .clone()
+                .unwrap_or_else(|| coco_types::TurnId::from(turn_id.as_str()));
             let opened_stream = match self
                 .open_turn_stream(
                     &active_snapshot,
@@ -778,7 +769,7 @@ impl QueryEngine {
                     &mut *history,
                     &event_tx,
                     &turn_id,
-                    event_turn_id,
+                    &event_turn_id,
                 )
                 .await
             {
@@ -803,7 +794,7 @@ impl QueryEngine {
                     &tool_materialization,
                     &mut streaming_model_index,
                     state_tracker,
-                    &turn_id,
+                    &event_turn_id,
                     &consts,
                     &services,
                     &mut acc,
@@ -855,6 +846,7 @@ impl QueryEngine {
                             &event_tx,
                             &mut streaming_handle,
                             &turn_id,
+                            &event_turn_id,
                         )
                         .await
                     {
@@ -883,6 +875,7 @@ impl QueryEngine {
                         &event_tx,
                         &mut streaming_handle,
                         &turn_id,
+                        &event_turn_id,
                     )
                     .await
                 {

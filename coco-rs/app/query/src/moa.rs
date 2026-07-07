@@ -20,6 +20,7 @@ use coco_types::MoaReferenceParams;
 use coco_types::ModelRole;
 use coco_types::ProviderModelSelection;
 use coco_types::ServerNotification;
+use coco_types::TurnId;
 use futures::future::join_all;
 use lru::LruCache;
 use once_cell::sync::Lazy;
@@ -58,7 +59,7 @@ pub(crate) async fn maybe_attach_moa_guidance(
     source: &ModelRuntimeSource,
     params: &QueryParams,
     event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-    turn_id: &str,
+    turn_id: &TurnId,
 ) -> QueryParams {
     let Some(endpoint) = model_runtimes.moa_endpoint_for_source(source) else {
         return params.clone();
@@ -89,7 +90,7 @@ pub(crate) async fn maybe_attach_moa_guidance_for_query_once(
     source: &ModelRuntimeSource,
     params: &QueryParams,
     event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-    turn_id: &str,
+    turn_id: &TurnId,
     usage_recorder: MoaReferenceUsageRecorder<'_>,
 ) -> QueryParams {
     let Some(endpoint) = model_runtimes.moa_endpoint_for_source(source) else {
@@ -113,7 +114,7 @@ pub async fn prepare_moa_query_once_params_no_usage(
     model_runtimes: &Arc<ModelRuntimeRegistry>,
     source: &ModelRuntimeSource,
     params: &QueryParams,
-    turn_id: &str,
+    turn_id: &TurnId,
 ) -> QueryParams {
     let event_tx = None;
     maybe_attach_moa_guidance_for_query_once(
@@ -131,7 +132,7 @@ pub async fn prepare_moa_query_once_params_with_usage_accounting(
     model_runtimes: &Arc<ModelRuntimeRegistry>,
     source: &ModelRuntimeSource,
     params: &QueryParams,
-    turn_id: &str,
+    turn_id: &TurnId,
     usage_accounting: Option<&UsageAccounting>,
 ) -> QueryParams {
     let event_tx = None;
@@ -155,7 +156,7 @@ async fn run_references(
     endpoint: &MoaEndpointSpec,
     params: &QueryParams,
     event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-    turn_id: &str,
+    turn_id: &TurnId,
     role: ModelRole,
 ) -> Vec<ReferenceOutput> {
     let count = endpoint.reference_models.len();
@@ -296,7 +297,7 @@ fn role_for_source(source: &ModelRuntimeSource) -> ModelRole {
 
 fn emit_reference_started(
     event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-    turn_id: &str,
+    turn_id: &TurnId,
     role: ModelRole,
     endpoint: &MoaEndpointSpec,
 ) {
@@ -307,7 +308,7 @@ fn emit_reference_started(
     for (idx, spec) in endpoint.reference_models.iter().enumerate() {
         let _ = tx.try_send(CoreEvent::Protocol(
             ServerNotification::MoaReferenceStarted(MoaReferenceParams {
-                turn_id: turn_id.to_string(),
+                turn_id: turn_id.clone(),
                 role,
                 preset: endpoint.preset_name.clone(),
                 index: (idx + 1) as i32,
@@ -323,7 +324,7 @@ fn emit_reference_started(
 
 async fn emit_reference_completed(
     event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-    turn_id: &str,
+    turn_id: &TurnId,
     role: ModelRole,
     endpoint: &MoaEndpointSpec,
     output: &ReferenceOutput,
@@ -339,7 +340,7 @@ async fn emit_reference_completed(
     let _ = tx
         .send(CoreEvent::Protocol(
             ServerNotification::MoaReferenceCompleted(MoaReferenceParams {
-                turn_id: turn_id.to_string(),
+                turn_id: turn_id.clone(),
                 role,
                 preset: endpoint.preset_name.clone(),
                 index: (output.index + 1) as i32,
@@ -355,7 +356,7 @@ async fn emit_reference_completed(
 
 async fn emit_moa_aggregating(
     event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-    turn_id: &str,
+    turn_id: &TurnId,
     role: ModelRole,
     endpoint: &MoaEndpointSpec,
 ) {
@@ -365,7 +366,7 @@ async fn emit_moa_aggregating(
     let _ = tx
         .send(CoreEvent::Protocol(ServerNotification::MoaAggregating(
             MoaAggregatingParams {
-                turn_id: turn_id.to_string(),
+                turn_id: turn_id.clone(),
                 role,
                 preset: endpoint.preset_name.clone(),
                 count: endpoint.reference_models.len() as i32,
@@ -376,7 +377,7 @@ async fn emit_moa_aggregating(
 
 async fn emit_reference_thinking_blocks(
     event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-    turn_id: &str,
+    turn_id: &TurnId,
     outputs: &[ReferenceOutput],
 ) {
     let Some(tx) = event_tx.as_ref() else {
@@ -398,7 +399,7 @@ async fn emit_reference_thinking_blocks(
         );
         let _ = tx
             .send(CoreEvent::Stream(AgentStreamEvent::ThinkingDelta {
-                turn_id: turn_id.to_string(),
+                turn_id: turn_id.clone(),
                 delta: block,
             }))
             .await;
@@ -445,7 +446,7 @@ fn store_reference_cache(key: String, outputs: &[ReferenceOutput]) {
 fn user_turn_cache_key(
     endpoint: &MoaEndpointSpec,
     prompt: &LlmPrompt,
-    turn_id: &str,
+    turn_id: &TurnId,
 ) -> Option<String> {
     if endpoint.fanout != MoaFanout::UserTurn {
         return None;
@@ -476,7 +477,9 @@ fn user_turn_cache_key(
         .join(",");
     Some(format!(
         "{}\u{0}{}\u{0}{}\u{0}{signature_hash:x}",
-        turn_id, endpoint.preset_name, labels
+        turn_id.as_str(),
+        endpoint.preset_name,
+        labels
     ))
 }
 

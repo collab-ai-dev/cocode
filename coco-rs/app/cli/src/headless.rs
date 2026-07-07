@@ -279,7 +279,7 @@ pub fn resolve_main_model(runtime_config: &coco_config::RuntimeConfig) -> Resolv
 /// Headless and SDK paths share this helper so a future addition (e.g.,
 /// project-tree ancestor walk) lands in one place. `plugin_sources` are the
 /// plugin-contributed output-style directories (see
-/// [`crate::session_bootstrap::plugin_output_style_sources`]).
+/// [`crate::project_services::ProjectServices::output_style_sources`]).
 pub fn build_output_style_manager(
     runtime_config: &coco_config::RuntimeConfig,
     cwd: &Path,
@@ -582,9 +582,9 @@ pub struct RunChatOutcome {
     /// continue the conversation in-process.
     pub final_messages: Vec<std::sync::Arc<coco_messages::Message>>,
     /// Working directory the engine actually used. Reflects the
-    /// effective resolution: `--cwd <flag>` then `RunChatOptions::cwd`
-    /// then `std::env::current_dir()`. Useful for tests asserting the
-    /// flag-precedence rule.
+    /// effective resolution: `--cwd <flag>` then `RunChatOptions::cwd`.
+    /// The convenience [`run_chat`] wrapper fills `RunChatOptions::cwd`
+    /// from the process cwd when no `--cwd` flag is present.
     pub effective_cwd: PathBuf,
     /// Additional directories declared via `--add-dir` (resolved to
     /// absolute paths). Threaded onto every tool's permission context
@@ -604,13 +604,13 @@ pub struct ToolFilterSummary {
     pub disallowed: Vec<String>,
 }
 
-/// Options for [`run_chat_with_options`]. All fields default to the
-/// same behavior as `run_chat`.
+/// Options for [`run_chat_with_options`]. Use [`run_chat`] when the
+/// convenience process-cwd default is desired.
 #[derive(Default)]
 pub struct RunChatOptions {
-    /// Override the working directory for this run. When `None`, the
-    /// process-global `std::env::current_dir()` is used. Pass an
-    /// explicit path to keep parallel tests / embeddings isolated.
+    /// Working directory for this run. Required unless the CLI carries
+    /// `--cwd`; pass an explicit path to keep parallel tests / embeddings
+    /// isolated.
     pub cwd: Option<PathBuf>,
     /// Cancellation token threaded into the engine. When the token is
     /// cancelled mid-run, the engine returns a `cancelled = true`
@@ -624,9 +624,9 @@ pub struct RunChatOptions {
     /// Override the engine's session id. Used by `--resume` /
     /// `--continue` / `--fork-session` so the resumed run writes
     /// transcript entries under the source (or fork) session id
-    /// instead of a fresh per-process uuid. `None` keeps the
-    /// engine's default empty-session-id behavior.
-    pub session_id_override: Option<String>,
+    /// instead of a freshly generated `SessionId`. `None` lets
+    /// print mode use `--session-id` or mint a fresh id.
+    pub session_id_override: Option<coco_types::SessionId>,
     /// Stored coordinator/normal mode of the resumed session, used to
     /// reconcile coordinator mode. `None` = no
     /// resume / no stored mode.
@@ -636,14 +636,26 @@ pub struct RunChatOptions {
 /// Drive one headless agent run with default options. See
 /// [`run_chat_with_options`] for cwd / cancellation / session-continuation.
 pub async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<RunChatOutcome> {
-    run_chat_with_options(cli, prompt, RunChatOptions::default()).await
+    let cwd = if cli.cwd.is_some() {
+        None
+    } else {
+        Some(std::env::current_dir()?)
+    };
+    run_chat_with_options(
+        cli,
+        prompt,
+        RunChatOptions {
+            cwd,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// Drive one headless agent run with explicit options.
 /// Equivalent to `coco -p "<prompt>"` with the same flag plumbing the
 /// binary uses, plus three test-friendly knobs:
-/// - `opts.cwd` — override `std::env::current_dir()` so parallel
-/// embeddings / tests stay isolated.
+/// - `opts.cwd` — explicit cwd used when `--cwd` is not set.
 /// - `opts.cancel` — thread an external [`CancellationToken`] for
 /// mid-run cancellation.
 /// - `opts.prior_messages` — seed the conversation with a previous
@@ -662,22 +674,26 @@ pub async fn run_chat_with_options(
 ) -> Result<RunChatOutcome> {
     let prompt = prompt.unwrap_or("Hello!");
     // Cwd precedence: explicit user `--cwd` flag > `RunChatOptions::cwd`
-    // (test/embedder injection) > `std::env::current_dir()`.
+    // (test/embedder injection). `run_chat` supplies the process-cwd
+    // convenience default before calling this function.
     let cwd: PathBuf = if let Some(flag) = cli.cwd.as_deref() {
         std::path::Path::new(flag).to_path_buf()
     } else if let Some(p) = opts.cwd {
         p
     } else {
-        std::env::current_dir()?
+        anyhow::bail!("run_chat_with_options requires RunChatOptions::cwd when --cwd is not set")
     };
     // Resolve the session id before any local no-model-turn exits. A
     // print-mode local command should still leave a resumable transcript, and
     // `--session-id` is the automation-facing way to address that session.
-    let session_id = opts
-        .session_id_override
-        .clone()
-        .or_else(|| cli.session_id.clone())
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_id = if let Some(session_id) = opts.session_id_override.clone() {
+        session_id
+    } else if let Some(session_id_string) = cli.session_id.clone() {
+        coco_types::SessionId::try_new(session_id_string.clone())
+            .map_err(|e| anyhow::anyhow!("invalid session id '{session_id_string}': {e}"))?
+    } else {
+        coco_types::SessionId::generate()
+    };
     if let Some(goal_args) = parse_headless_goal_slash(prompt) {
         match coco_commands::parse_goal_command_args(goal_args) {
             Err(text) => {
@@ -743,16 +759,18 @@ pub async fn run_chat_with_options(
     }
     let settings = &runtime_config.settings;
 
-    // Load the plugin set once and reuse for output styles + command/skill
+    // Load the project plugin set once and reuse for output styles + command/skill
     // registration. Resolve the active output style here — fed into the system
     // prompt builder + threaded onto `SessionBootstrap` for the per-turn
     // reminder generator. Plugin-contributed styles are folded in alongside
     // user / project / managed dirs.
-    let plugins = crate::session_bootstrap::load_session_plugins(&cwd);
+    let project_root = crate::paths::resolve_project_root(&cwd);
+    let project_services = crate::project_services::project_registry()
+        .get_or_load(&coco_config::global_config::config_home(), project_root);
     // Startup marketplace maintenance (seed/reconcile/delist) on the headless
     // surface too; background + non-fatal, mirroring the TUI.
     crate::session_bootstrap::spawn_marketplace_startup(coco_config::global_config::config_home());
-    let plugin_style_sources = crate::session_bootstrap::plugin_output_style_sources(&plugins);
+    let plugin_style_sources = project_services.output_style_sources();
     let output_style_manager =
         build_output_style_manager(&runtime_config, &cwd, &plugin_style_sources);
     let active_output_style = output_style_manager.active().cloned();
@@ -767,7 +785,7 @@ pub async fn run_chat_with_options(
         Arc::new(runtime_config.clone()),
         Some(crate::provider_login::shared_resolver()),
         Arc::new(coco_inference::HeaderVars {
-            session_id: session_id.clone(),
+            session_id: Some(session_id.clone()),
             cwd: cwd.display().to_string(),
             app_version: env!("CARGO_PKG_VERSION").to_string(),
         }),
@@ -829,9 +847,9 @@ pub async fn run_chat_with_options(
             cli,
             &runtime_config,
             &cwd,
-            &plugins,
+            project_services.plugins(),
         );
-    let runtime = crate::session_runtime::SessionRuntime::build(
+    let session_handle = crate::session_runtime::SessionHandle::build(
         crate::session_runtime::SessionRuntimeBuildOpts {
             cli,
             runtime_config: Arc::new(runtime_config.clone()),
@@ -853,7 +871,8 @@ pub async fn run_chat_with_options(
             permission_bridge: None,
             command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry))),
             skill_manager,
-            agent_search_paths: crate::paths::standard_agent_search_paths(&config_home, &cwd),
+            project_services: project_services.clone(),
+            agent_search_paths: project_services.agent_search_paths(&config_home, &cwd),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             // Resume / continue / fork: key every runtime subsystem off the
             // resumed id, else task dirs + agent transcripts orphan. Resolved
@@ -865,6 +884,7 @@ pub async fn run_chat_with_options(
         },
     )
     .await?;
+    let runtime = session_handle.runtime().clone();
 
     // Sandbox hot-reload: re-flow settings.json `sandbox.*` edits into the live
     // SandboxState on the headless/print path too (same path as the TUI covers
@@ -892,7 +912,7 @@ pub async fn run_chat_with_options(
     // task-dir / worktree-discovery failure must NOT kill a print run that
     // never spawns anything — degrade to NoOp handles instead.
     if let Err(e) = crate::session_bootstrap::install_session_late_binds(
-        runtime.clone(),
+        session_handle.clone(),
         &cwd,
         None,
         None,
@@ -906,7 +926,10 @@ pub async fn run_chat_with_options(
     // single-turn, so await the connect batch — MCP tools must be registered
     // before the first (only) turn.
     crate::session_bootstrap::bootstrap_session_mcp(
-        &runtime, &cwd, None, /*await_connect*/ true,
+        &session_handle,
+        &cwd,
+        None,
+        /*await_connect*/ true,
     )
     .await;
 
@@ -915,9 +938,9 @@ pub async fn run_chat_with_options(
     // orphaned tasks. No human UI ⇒ no permission bridge. Covers long-running
     // headless (stream-json input); a single-shot `-p` leader exits before the
     // 1 s poll fires — that bounded end-of-run drain is a documented follow-up.
-    crate::leader_inbox_poller::install_leader(runtime.clone(), None).await;
+    crate::leader_inbox_poller::install_leader(session_handle.clone(), None).await;
 
-    let session_id = runtime.current_session_id().await;
+    let session_id = runtime.current_typed_session_id().await;
     let session_start_source = if opts.session_id_override.is_some() {
         "resume"
     } else {
@@ -1210,7 +1233,7 @@ pub async fn run_chat_with_options(
     // Persist coordinator mode at end-of-run so a later `--resume` re-derives
     // the role.
     {
-        let session_id = runtime.current_session_id().await;
+        let session_id = runtime.current_typed_session_id().await;
         crate::coordinator_mode_resume::persist_session_mode(
             &runtime.session_manager,
             &session_id,
@@ -1281,7 +1304,7 @@ fn append_headless_goal_status(
 async fn headless_local_goal_text_outcome(
     cli: &Cli,
     cwd: &Path,
-    session_id: &str,
+    session_id: &coco_types::SessionId,
     args: &str,
     response_text: String,
     prior_messages: Vec<std::sync::Arc<coco_messages::Message>>,
@@ -1351,7 +1374,7 @@ fn headless_text_outcome(
 async fn persist_headless_local_transcript_messages(
     cli: &Cli,
     cwd: &Path,
-    session_id: &str,
+    session_id: &coco_types::SessionId,
     prior_messages: &[std::sync::Arc<coco_messages::Message>],
     local_messages: &[std::sync::Arc<coco_messages::Message>],
 ) {
@@ -1383,8 +1406,10 @@ async fn persist_headless_local_transcript_messages(
     };
     let message_refs: Vec<&coco_messages::Message> =
         local_messages.iter().map(AsRef::as_ref).collect();
-    if let Err(e) = store.append_message_chain(session_id, message_refs, &mut seen, options) {
-        tracing::warn!(error = %e, session_id, "failed to persist headless local transcript messages");
+    if let Err(e) =
+        store.append_message_chain(session_id.as_str(), message_refs, &mut seen, options)
+    {
+        tracing::warn!(error = %e, session_id = %session_id, "failed to persist headless local transcript messages");
     }
 }
 
@@ -1547,6 +1572,25 @@ mod tests {
         assert_eq!(parse_headless_goal_slash("goal finish"), None);
         assert_eq!(parse_headless_goal_slash("/goalx finish"), None);
         assert_eq!(parse_headless_goal_slash("/loop 5m /goal done"), None);
+    }
+
+    #[test]
+    fn run_chat_with_options_requires_explicit_cwd_without_cli_cwd() {
+        let cli = Cli::parse_from(["coco", "--print"]);
+
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let err = rt
+            .block_on(run_chat_with_options(
+                &cli,
+                Some("/goal"),
+                RunChatOptions::default(),
+            ))
+            .expect_err("run_chat_with_options should require explicit cwd");
+
+        assert!(
+            err.to_string().contains("requires RunChatOptions::cwd"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

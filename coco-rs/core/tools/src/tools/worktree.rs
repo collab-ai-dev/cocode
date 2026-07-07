@@ -2,7 +2,7 @@
 //!
 //! Worktree tools let the model (usually an agent) work in an isolated
 //! git worktree — create a branch, modify files there, and tear it
-//! down. The process CWD (and `session_cwd`) restoration is handled here.
+//! down. The session CWD restoration is handled here.
 //!
 //! coco-rs does not memoize: `app/query::build_prompt` re-runs
 //! `coco_context::discover_memory_files(cwd)` every turn from the live
@@ -21,7 +21,6 @@ use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use std::path::PathBuf;
 
 /// Model-facing tool prompt. The path / brand details are adapted to coco-rs
 /// (worktrees live under `../worktrees/`, isolation is git-only) — see this
@@ -200,11 +199,7 @@ impl Tool for EnterWorktreeTool {
         }
 
         let branch = format!("{}{slug}", coco_types::AGENT_WORKTREE_BRANCH_PREFIX);
-        let current_cwd = if let Some(session_cwd) = &ctx.session_cwd {
-            session_cwd.read().await.clone()
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        };
+        let current_cwd = ctx.effective_shell_cwd().await;
         let worktree_path = current_cwd.join("..").join("worktrees").join(&slug);
         let worktree_path_string = worktree_path.to_string_lossy().to_string();
 

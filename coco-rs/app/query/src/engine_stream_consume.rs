@@ -193,7 +193,7 @@ impl QueryEngine {
         tool_materialization: &coco_tool_runtime::ToolMaterialization,
         streaming_model_index: &mut usize,
         state_tracker: &SessionStateTracker,
-        turn_id: &str,
+        event_turn_id: &coco_types::TurnId,
         _consts: &LoopConstants,
         services: &LoopServices,
         acc: &mut LoopAccumulator,
@@ -259,7 +259,7 @@ impl QueryEngine {
                     let _ = crate::emit::emit_stream(
                         event_tx,
                         crate::AgentStreamEvent::TextDelta {
-                            turn_id: turn_id.to_string(),
+                            turn_id: event_turn_id.clone(),
                             delta: text,
                         },
                     )
@@ -270,7 +270,7 @@ impl QueryEngine {
                     let _ = crate::emit::emit_stream(
                         event_tx,
                         crate::AgentStreamEvent::ThinkingDelta {
-                            turn_id: turn_id.to_string(),
+                            turn_id: event_turn_id.clone(),
                             delta: text,
                         },
                     )
@@ -522,7 +522,7 @@ impl QueryEngine {
                     // carries only the `.unified` projection.
                     tracing::debug!(
                         turn = turn_state.turn,
-                        turn_id = %turn_id,
+                        turn_id = %event_turn_id,
                         stop_reason = %stop_reason,
                         tokens_in = usage.input_tokens.total,
                         tokens_out = usage.output_tokens.total,
@@ -563,7 +563,7 @@ impl QueryEngine {
                         || !tool_order.is_empty();
                     warn!(
                         turn = turn_state.turn,
-                        turn_id = %turn_id,
+                        turn_id = %event_turn_id,
                         error = %message,
                         text_chars = response_text.len(),
                         tool_call_count = tool_order.len(),
