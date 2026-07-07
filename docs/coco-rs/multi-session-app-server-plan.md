@@ -1573,13 +1573,120 @@ Implementation progress as of 2026-07-07:
   server-request, and lifecycle channels, then attaches/subscribes surfaces
   through the same AppServer routing rules future transports will use. It also
   exposes a connection-scoped surface detach path, so passive/local clients can
-  drop one surface without closing the connection or archiving the session.
+  drop one surface without closing the connection or archiving the session. The
+  local adapter now also exposes a typed `LocalClientRequestHandler` seam:
+  `LocalClientConnection` dispatches canonical `ClientRequest`s with the
+  connection context directly to a runtime-supplied handler, giving
+  TUI/headless clients the same request vocabulary as JSON-RPC without wire
+  serialization.
   `JsonRpcAdapter` now exists as the remote adapter foundation: it registers
   real AppServer connections with the same event, server-request, and lifecycle
   channels, converts `ServerRequestDelivery` payloads into JSON-RPC request
-  frames, and owns `JsonRpcId -> (SurfaceId, RequestId)` response correlation
-  for server-initiated requests. It deliberately does not dispatch
-  runtime-backed `session/*` / `turn/*` methods yet.
+  frames, and owns `JsonRpcId -> (SurfaceId, RequestId, ServerRequest)`
+  response correlation for server-initiated requests. It now decodes inbound
+  JSON-RPC requests into typed `ClientRequest`s and dispatches them through a
+  runtime-supplied `JsonRpcRequestHandler`, resolves JSON-RPC server-request
+  responses through AppServer's typed `ServerRequestReply` bridge, maps
+  AppServer event/lifecycle deliveries to JSON-RPC notifications, and provides
+  an NDJSON connection-owner loop that multiplexes inbound frames with outbound
+  event/server-request/lifecycle channels and disconnects the AppServer
+  connection on transport EOF/failure. On Unix, the adapter can now accept one
+  framed Unix socket connection and spawn that JSON-RPC owner task, while
+  also providing a supervised accept loop for caller-provided
+  `NdjsonUnixListener`s that spawns one owner per accepted connection and stops
+  accepting on a shutdown signal. Production listener lifecycle wiring still
+  belongs to higher layers.
+  It also exposes the same owner loop over caller-supplied JSON-RPC frame
+  channels, giving existing transports a cut-over path without moving their
+  concrete I/O into `coco-app-server`.
+  `coco-cli` now exposes
+  `AppServerSdkHandler`, a runtime-backed request-handler bridge over the
+  existing exhaustive SDK handler dispatcher. It now implements both
+  `JsonRpcRequestHandler` and `LocalClientRequestHandler`, so remote SDK and
+  future local TUI/headless AppServer clients can invoke concrete `session/*` /
+  `turn/*` semantics through the same dispatcher without adding another runtime
+  dispatch table or taking a dependency on runtime internals. The same bridge
+  now has a local outbound forwarder that consumes handler-emitted `CoreEvent`s,
+  stamps them with the current session identity from `SdkServerState`, and
+  routes them through `AppServer::route_envelope` so local AppServer surfaces
+  can receive runtime events without SDK JSON-RPC serialization.
+  `AppServerLocalBridge` now packages that local wiring as the concrete
+  TUI/headless entrypoint foundation: it owns the local `AppServer`,
+  `LocalClientAdapter`/`ServerClient`, shared runtime-backed handler, and event
+  forwarder. It can also install an already-built `SessionRuntime` snapshot
+  into the shared handler state, so TUI/headless cut-over code can adopt the
+  local AppServer client path without minting a second session id. Installing a
+  runtime snapshot now also installs a `QueryEngineRunner` into the shared
+  handler state, giving future local `turn/start` requests the same engine
+  runner used by the SDK bridge. `turn/start` now carries optional base64 paste
+  images, slash metadata attachment text, turn-scoped model selection, and
+  thinking overrides; the runner applies those fields before building the
+  per-turn engine and emits `TurnStarted` / `TurnEnded` with the same
+  `TurnId` returned by the synchronous `TurnStartResult`, which lets
+  `AppServerLocalBridge::start_turn_and_wait_for_end` correlate the matching
+  terminal event on its local interactive surface. The SDK/AppServer runner's
+  event forwarding now also preserves the TUI runner's context-compaction
+  metadata reappend behavior. Its tests cover local typed request dispatch,
+  existing-session snapshot installation, surface event delivery, passive event
+  pumping, and waiting for matching turn completion. The TUI and headless
+  bootstraps now instantiate
+  this bridge, install their already-built `SessionRuntime`, and issue a local
+  `keep_alive` through `ServerClient`. TUI normal submits and slash/palette
+  prompt turns now start through local AppServer `turn/start`; the TUI keeps a
+  passive completion monitor to release `active_turn`, while `Interrupt` and
+  preemptive drains call local AppServer `turn/interrupt` for server-owned
+  turns. Headless `RunChatOutcome` assembly now also starts the model turn
+  through local AppServer and reconstructs its structured result from the
+  aggregated session result, runtime history, and usage snapshot. TUI queued
+  prebuilt-history turns now pass a serialized full-history override through
+  local AppServer `turn/start`, so permission retries, queued prompts, and
+  prompt-mode bash follow-up turns no longer call the engine directly from the
+  TUI runner. TUI `/reload-plugins` now routes through this local AppServer
+  client via `ServerClient::plugin_reload`, preserving the TUI toast and
+  command-palette refresh while moving one runtime-control request off direct
+  runtime calls. TUI `/context` now routes through `ServerClient::context_usage`
+  as well; the bridge refreshes its installed runtime snapshot before dispatch
+  so the handler sees current transcript history and app state. TUI
+  permission-mode changes now route through
+  `ServerClient::set_permission_mode`; the bridge attaches a local interactive
+  surface and drains forwarded `PermissionModeChanged` events back into the TUI
+  event channel after dispatch. TUI teammate current-work interrupt now routes
+  through `ServerClient::agent_interrupt_current_work`, keeping that
+  runtime-control request on the same local AppServer handler path as the SDK.
+  `coco-cli` also
+  has a tested compatibility bridge between
+  the legacy `coco_types::JsonRpcMessage` SDK envelope and the new
+  `coco-app-server-transport::JsonRpcFrame`, preserving string/integer ids and
+  rejecting null ids that the legacy SDK envelope cannot represent. A tested
+  SDK transport bridge now drives `JsonRpcAdapterConnection::run_frame_channels`
+  over the existing `SdkTransport` trait, installs the same `SdkServerState`
+  outbound queue used by the removed dispatcher loop, and feeds adapter replies plus
+  handler-emitted notifications through the existing single-writer SDK
+  serializer. That bridge now also installs SDK MCP route plumbing and can
+  forward external `CoreEvent` notification receivers through the same ordered
+  writer, preserving the previous non-request setup. This
+  lets legacy SDK I/O cut over to AppServer dispatch without duplicating
+  JSON-RPC, MCP routing, external notification forwarding, or
+  stream-accumulation semantics. `SdkServer::run_app_server_connection` now
+  exposes that bridge at the SDK-server entrypoint, reusing the server's
+  installed transport, `SdkServerState`, and external notification sources
+  while delegating JSON-RPC ownership to `coco-app-server`. The production
+  SDK stdio path in `run_sdk_mode` now creates an `AppServer` /
+  `JsonRpcAdapter` connection and enters that bridge after the existing SDK
+  bootstrap has installed the runtime-backed state, permission bridges,
+  session handle, MCP manager, and file-history state. Because SDK
+  server-request emission still flows through the legacy
+  `SdkServerState::send_server_request` pending map, the bridge reader first
+  routes inbound legacy `Response`/`Error` messages through
+  `SdkServerState::resolve_server_request`; unmatched responses still continue
+  into AppServer adapter response handling for adapter-owned server requests.
+  The SDK handler, dispatcher, and approval-bridge tests now run through
+  `SdkServer::run_app_server_connection`, so the existing session, turn,
+  config, MCP, approval, user-input, server-request, routing, and permission
+  bridge coverage exercises the production bridge path instead of the legacy
+  dispatcher loop. The legacy `SdkServer::run` loop and its request/reply
+  builders have now been removed; SDK JSON-RPC ownership lives on the
+  AppServer bridge path.
   AppServer now also exposes a live-session summary projection that combines
   registry live slots with routing surface counts, covering the live half of
   the `session/list` surface-count contract while leaving persisted transcript
@@ -1595,29 +1702,69 @@ Implementation progress as of 2026-07-07:
   the shared connection event, server-request, and lifecycle receivers by
   `SurfaceId` so reading one handle does not consume another handle's delivery;
   this is the in-process foundation for the future per-handle stream/request
-  API. It also exposes a client-side live-session list projection with current
-  surface counts, covering the live half of §14 `list_sessions` while persisted
-  transcript metadata remains pending. `coco-app-server-transport` now exists
-  as the pure wire-format foundation for remote transports: it owns JSON-RPC
-  frame/id/error response serde, preserves arbitrary JSON params/result/data,
-  and deliberately has no dependency on `coco-app-server`. It also provides the
+  API. It now also exposes typed local request helpers for session, turn,
+  approval/user-input/elicitation resolution, initialize,
+  config/runtime-control, MCP, plugin-reload, and context-usage operations.
+  Those helpers dispatch canonical `ClientRequest`s through a caller-supplied
+  `LocalClientRequestHandler` and decode existing
+  `coco-types` result DTOs, establishing the local TUI/headless request seam
+  before a concrete runtime-backed handler is wired into the entrypoints. It
+  also exposes a client-side live-session list projection with current surface
+  counts, covering the live half of §14 `list_sessions` while persisted
+  transcript metadata remains pending. The client crate now also has a
+  transport-agnostic `RemoteJsonRpcClient` foundation for future SDK UDS/WS
+  transports: it mints JSON-RPC request ids, records pending response
+  correlations, resolves success/error frames to the waiting RPC, delivers
+  notifications through a remote event channel, decodes known
+  `session/event`/`session/lifecycle` notifications into typed surface
+  deliveries, surfaces server-initiated JSON-RPC requests as events, provides
+  success/error replies for those requests, and implements the §14
+  dual-channel disconnect rule by resolving pending RPCs with `Disconnected`,
+  emitting a terminal
+  `RemoteJsonRpcEvent::Disconnected`, and invalidating subsequent calls with
+  `ClientInvalid`. It also has the first client-side NDJSON connection owner
+  loop for caller-owned streams, multiplexing outbound RPC frames with inbound
+  responses/notifications/server requests and performing the same disconnect
+  invalidation on EOF or transport failure. `RemoteEventDemux` now provides the
+  first typed remote event/request demux foundation over that mixed event
+  receiver, with synchronous and async accessors that buffer per-surface
+  event/lifecycle deliveries separately from server-initiated requests and raw
+  notifications. `RemoteSurfaceStream` now provides the first public borrowed
+  per-surface facade over that demux for event/lifecycle reads.
+  `RemoteConnectOptions` now names remote outbound/event channel capacities for
+  generic NDJSON and Unix dialing. `RemoteJsonRpcClient` now also exposes typed
+  session, turn, approval/user-input/elicitation resolution, initialize,
+  config/runtime-control, MCP, plugin-reload, and context-usage helpers as thin
+  wrappers over canonical `ClientRequest` variants and existing `coco-types`
+  result DTOs. On Unix,
+  `RemoteJsonRpcClient::connect_unix` now dials a local NDJSON Unix socket and
+  returns the same client, connection owner, and mixed event receiver as the
+  generic caller-owned NDJSON constructor.
+  `coco-app-server-transport` now exists as the pure wire-format foundation for
+  remote transports: it owns JSON-RPC frame/id/error response serde, preserves
+  arbitrary JSON params/result/data, and deliberately has no dependency on
+  `coco-app-server`. It also provides the
   first NDJSON per-record codec with LF/CRLF decode, trailing-newline encode,
   and max-frame rejection, plus generic async NDJSON reader/writer primitives
   over caller-owned streams. It now also has a generic NDJSON duplex connection
   wrapper that tracks local open/closed state and clean EOF without owning
-  accept loops or AppServer cleanup, plus a process stdin/stdout constructor
-  for the same framing layer. Connection-owner tasks, UDS/named-pipe,
-  WebSocket framing, slow-consumer backpressure, full adapter-side close
-  cleanup, and adapter integration are still pending. This establishes the §14
-  two-level handle boundary before remote transports or runtime-backed
-  start/resume operations land. The
-  crate is intentionally not wired to `SessionRuntime`, TUI, SDK, or Hub yet;
+  accept loops or AppServer cleanup, a split operation for adapter-owned
+  concurrent read/write loops, plus process stdin/stdout, Unix-domain stream
+  constructors, and a Unix listener wrapper that accepts framed connections for
+  caller-owned accept loops. Windows named-pipe, WebSocket framing, supervised
+  accept loops, and transport-level slow-consumer policy are still pending.
+  This establishes the §14 two-level handle boundary before remote
+  transports or runtime-backed start/resume operations land. The
+  crate is intentionally not wired to `SessionRuntime`, TUI, or Hub yet, and
+  the SDK wiring still uses the existing runtime-backed SDK handler state;
   concrete runtime factory wiring behind `spawn_load`, concrete close cascade
   implementation behind `spawn_close`, concrete replace runtime factory and
-  old-session close cascade behind `spawn_replace`, remote transport adapters,
-  JSON-RPC method dispatch, transport-side server-request replay and typed
-  reply plumbing beyond JSON-RPC response-id correlation, and wire mapping for
-  lifecycle effects remain pending Phase A work.
+  old-session close cascade behind `spawn_replace`, production wiring of the
+  remaining TUI/headless runtime-control paths and turn execution through
+  `AppServerLocalBridge`, concrete remote client stream adapters, production
+  UDS listener lifecycle wiring,
+  WebSocket/named-pipe accept loops, and TUI/Hub
+  cut-over remain pending follow-up work.
 - The staged compact ledger and `QueryEngine.staged_session_id` now use
   `SessionId` instead of `Uuid`.
 - `QueryEngine.transcript_session_id` now stores `SessionId`; the
@@ -1763,8 +1910,8 @@ Implementation progress as of 2026-07-07:
   manager construction, plugin-contributed LSP merge, and LSP reload/prewarm
   now also use the resolved project root rather than the session's current cwd.
 - MCP config loading now has an explicit roots split: project-scoped files
-  (`.mcp.json` and `.coco/mcp.json`) and plugin-contributed MCP servers can be
-  loaded against the resolved project root, while `.coco.local/mcp.json` remains
+  (`.mcp.json` and `.cocode/mcp.json`) and plugin-contributed MCP servers can be
+  loaded against the resolved project root, while `.cocode.local/mcp.json` remains
   session-cwd scoped. Session MCP bootstrap uses that split, preserving local
   override priority while preparing the project catalog for `ProjectServices`.
   Shell `coco mcp login/logout` now receives cwd from the CLI boundary and
@@ -1787,7 +1934,10 @@ Implementation progress as of 2026-07-07:
   plugin/LSP/MCP/hook reload paths force-refresh the entry so live reload still
   sees newly enabled, disabled, installed, or removed plugins. Idle eviction,
   attached-session ref-counting, and the full project/local settings split are
-  still pending.
+  still pending. `ProjectServices` now also exposes the combined MCP server
+  list for a session cwd, so session MCP bootstrap consumes project-rooted
+  config/plugin MCP contributions through the project-service boundary instead
+  of assembling them in `session_bootstrap`.
 - `UsageAccounting` now owns its mutable session id as `SessionId`; it no
   longer shares the runtime identity lock. It exposes lifecycle-level
   retarget methods for loading an existing session's usage or starting a
@@ -2078,10 +2228,10 @@ Implementation progress as of 2026-07-07:
   plan paths, compact/exit metadata re-append, tag toggles, and auto-title
   checks now snapshot the current runtime identity as `SessionId` before
   converting at legacy history/path/session-manager boundaries.
-- TUI submit and queued slash-engine turns now carry `SessionId` through the
-  runner task boundary into `process_submit_turn`; file-history, compact
-  metadata, and auto-title state convert only at their existing string-keyed
-  APIs.
+- TUI submit, queued slash-engine turns, and queued prebuilt-history turns now
+  carry `SessionId` through the local AppServer turn boundary; file-history,
+  compact metadata, and auto-title state convert only at their existing
+  string-keyed APIs.
 - `tui_runner.rs` no longer calls the legacy string session-id getter; UI hints
   and protocol notifications derive their string payloads from typed runtime
   snapshots at the boundary.

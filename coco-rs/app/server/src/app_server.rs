@@ -214,6 +214,21 @@ impl<H: Clone> AppServer<H> {
         Ok(ResolvedServerRequest { pending, reply })
     }
 
+    pub fn resolve_server_request_by_id(
+        &self,
+        request_id: &RequestId,
+        reply: ServerRequestReply,
+    ) -> Result<ResolvedServerRequest, AppServerError> {
+        let mut routing = self
+            .routing
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pending = routing
+            .complete_server_request_by_id(request_id)
+            .map_err(AppServerError::from)?;
+        Ok(ResolvedServerRequest { pending, reply })
+    }
+
     pub fn connect_with_request_and_lifecycle_senders(
         &self,
         connection: ConnectionKey,
@@ -582,6 +597,15 @@ pub enum ServerRequestReply {
     Approval(ApprovalResolveParams),
     UserInput(UserInputResolveParams),
     Elicitation(ElicitationResolveParams),
+    McpRouteMessage {
+        request_id: String,
+        result: serde_json::Value,
+    },
+    HookCallback {
+        request_id: String,
+        result: serde_json::Value,
+    },
+    Error(ServerRequestErrorReply),
 }
 
 impl ServerRequestReply {
@@ -590,8 +614,19 @@ impl ServerRequestReply {
             Self::Approval(params) => &params.request_id,
             Self::UserInput(params) => &params.request_id,
             Self::Elicitation(params) => &params.request_id,
+            Self::McpRouteMessage { request_id, .. }
+            | Self::HookCallback { request_id, .. }
+            | Self::Error(ServerRequestErrorReply { request_id, .. }) => request_id,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerRequestErrorReply {
+    pub request_id: String,
+    pub code: i32,
+    pub message: String,
+    pub data: Option<serde_json::Value>,
 }
 
 #[stack_trace_debug]

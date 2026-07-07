@@ -1,8 +1,8 @@
 //! Project-scoped service/catalog preparation.
 //!
 //! This is the first narrow slice of the future `ProjectServices` container:
-//! a per-project plugin catalog snapshot plus the registry that shares it
-//! across sessions in the same process.
+//! a per-project plugin catalog snapshot, project-rooted MCP discovery, and
+//! the registry that shares them across sessions in the same process.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -145,6 +145,26 @@ impl ProjectServices {
     ) -> coco_subagent::definition_store::AgentSearchPaths {
         self.catalog.agent_search_paths(config_home, cwd)
     }
+
+    pub fn mcp_servers(
+        &self,
+        config_home: &Path,
+        session_cwd: &Path,
+    ) -> Vec<coco_mcp::ScopedMcpServerConfig> {
+        let mut servers = coco_mcp::McpConfigLoader::load_with_roots(
+            coco_mcp::McpConfigRoots {
+                project_root: self.project_root(),
+                session_cwd,
+            },
+            config_home,
+        );
+        servers.extend(self.plugin_mcp_servers());
+        servers
+    }
+
+    pub fn plugin_mcp_servers(&self) -> Vec<coco_mcp::ScopedMcpServerConfig> {
+        self.catalog.plugin_mcp_servers()
+    }
 }
 
 #[cfg(test)]
@@ -204,6 +224,50 @@ mod tests {
         assert!(Arc::ptr_eq(&second, &third));
         assert_eq!(registry.len(), 1);
     }
+
+    #[test]
+    fn mcp_servers_use_project_root_and_session_cwd() {
+        let temp = tempdir().unwrap();
+        let config_home = temp.path().join("home");
+        let project_root = temp.path().join("repo");
+        let session_cwd = project_root.join("nested");
+        std::fs::create_dir_all(&config_home).unwrap();
+        std::fs::create_dir_all(project_root.join(".coco")).unwrap();
+        let local_dir =
+            session_cwd.join(format!("{}.local", coco_utils_common::COCO_CONFIG_DIR_NAME));
+        std::fs::create_dir_all(&local_dir).unwrap();
+        std::fs::write(
+            project_root.join(".mcp.json"),
+            serde_json::json!({
+                "mcpServers": {
+                    "project": {"command": "project-cmd", "args": []}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            local_dir.join("mcp.json"),
+            serde_json::json!({
+                "mcpServers": {
+                    "local": {"command": "local-cmd", "args": []}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let services = ProjectServices::load(&config_home, project_root.clone());
+        assert_eq!(services.project_root(), project_root.as_path());
+
+        let servers = services.mcp_servers(&config_home, &session_cwd);
+        let by_name: HashMap<_, _> = servers
+            .into_iter()
+            .map(|server| (server.name.clone(), server))
+            .collect();
+
+        assert_eq!(by_name["project"].scope, coco_mcp::ConfigScope::Project);
+        assert_eq!(by_name["local"].scope, coco_mcp::ConfigScope::Local);
+    }
 }
 
 /// Project-scoped plugin catalog loaded against a resolved project root.
@@ -244,5 +308,10 @@ impl ProjectCatalogSnapshot {
         cwd: &Path,
     ) -> coco_subagent::definition_store::AgentSearchPaths {
         crate::paths::standard_agent_search_paths_with_plugins(config_home, cwd, &self.plugins)
+    }
+
+    pub fn plugin_mcp_servers(&self) -> Vec<coco_mcp::ScopedMcpServerConfig> {
+        let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = self.plugins.iter().collect();
+        coco_plugins::mcp_bridge::extract_mcp_servers_from_plugins(&plugin_refs)
     }
 }

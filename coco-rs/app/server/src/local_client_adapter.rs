@@ -1,5 +1,8 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
+use coco_types::ClientRequest;
 use coco_types::SessionEnvelope;
 use coco_types::SessionId;
 use coco_types::SurfaceId;
@@ -17,6 +20,34 @@ use crate::SurfaceDelivery;
 use crate::SurfaceLifecycleDelivery;
 
 const DEFAULT_LOCAL_CHANNEL_CAPACITY: usize = 128;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalClientRequestContext {
+    connection: ConnectionKey,
+}
+
+impl LocalClientRequestContext {
+    pub fn new(connection: ConnectionKey) -> Self {
+        Self { connection }
+    }
+
+    pub fn connection_key(&self) -> ConnectionKey {
+        self.connection
+    }
+}
+
+pub type LocalClientDispatchError = crate::JsonRpcDispatchError;
+
+pub type LocalClientRequestFuture =
+    Pin<Box<dyn Future<Output = Result<serde_json::Value, LocalClientDispatchError>> + Send>>;
+
+pub trait LocalClientRequestHandler: Send + Sync + 'static {
+    fn handle_local_client_request(
+        &self,
+        context: LocalClientRequestContext,
+        request: ClientRequest,
+    ) -> LocalClientRequestFuture;
+}
 
 /// Typed in-process adapter used by local clients.
 ///
@@ -84,6 +115,19 @@ pub struct LocalClientConnection<H> {
 impl<H: Clone> LocalClientConnection<H> {
     pub fn connection_key(&self) -> ConnectionKey {
         self.connection
+    }
+
+    pub async fn dispatch_client_request<Handler>(
+        &self,
+        handler: &Handler,
+        request: ClientRequest,
+    ) -> Result<serde_json::Value, LocalClientDispatchError>
+    where
+        Handler: LocalClientRequestHandler,
+    {
+        handler
+            .handle_local_client_request(LocalClientRequestContext::new(self.connection), request)
+            .await
     }
 
     pub fn attach_surface(
@@ -180,7 +224,9 @@ pub struct LocalClientSubscription {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::Mutex;
 
+    use coco_types::ClientRequest;
     use coco_types::CoreEvent;
     use coco_types::ServerNotification;
     use coco_types::ServerRequest;
@@ -226,6 +272,72 @@ mod tests {
             choices: Vec::new(),
             default: None,
         })
+    }
+
+    #[derive(Default)]
+    struct RecordingRequestHandler {
+        calls: Arc<Mutex<Vec<(ConnectionKey, ClientRequest)>>>,
+        error: Option<LocalClientDispatchError>,
+    }
+
+    impl LocalClientRequestHandler for RecordingRequestHandler {
+        fn handle_local_client_request(
+            &self,
+            context: LocalClientRequestContext,
+            request: ClientRequest,
+        ) -> LocalClientRequestFuture {
+            let calls = Arc::clone(&self.calls);
+            let error = self.error.clone();
+            Box::pin(async move {
+                calls
+                    .lock()
+                    .expect("calls lock")
+                    .push((context.connection_key(), request));
+                match error {
+                    Some(error) => Err(error),
+                    None => Ok(serde_json::json!({ "ok": true })),
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn local_adapter_dispatches_client_requests_to_handler() {
+        let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
+        let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
+        let connection = adapter.connect();
+        let handler = RecordingRequestHandler::default();
+
+        let result = connection
+            .dispatch_client_request(&handler, ClientRequest::KeepAlive)
+            .await
+            .expect("dispatch succeeds");
+
+        assert_eq!(result, serde_json::json!({ "ok": true }));
+        let calls = handler.calls.lock().expect("calls lock");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, connection.connection_key());
+        assert!(matches!(calls[0].1, ClientRequest::KeepAlive));
+    }
+
+    #[tokio::test]
+    async fn local_adapter_propagates_client_request_errors() {
+        let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
+        let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
+        let connection = adapter.connect();
+        let handler = RecordingRequestHandler {
+            error: Some(LocalClientDispatchError::invalid_params(
+                "bad local request",
+            )),
+            ..RecordingRequestHandler::default()
+        };
+
+        let error = connection
+            .dispatch_client_request(&handler, ClientRequest::KeepAlive)
+            .await
+            .expect_err("dispatch fails");
+
+        assert_eq!(error.message, "bad local request");
     }
 
     #[test]

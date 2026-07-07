@@ -42,14 +42,11 @@ use coco_query::QueuedImage;
 use coco_query::ServerNotification;
 use coco_system_reminder::QueueOrigin;
 use coco_tool_runtime::TaskHandle;
-use coco_tool_runtime::TurnAbortController;
-use coco_tool_runtime::TurnAbortSignal;
 use coco_tui::App;
 use coco_tui::UserCommand;
 use coco_tui::app::create_channels;
 use coco_types::SlashCommandStatusKind;
 use coco_types::TuiOnlyEvent;
-use coco_types::TurnAbortReason;
 use tokio_util::sync::CancellationToken;
 
 use coco_cli::goal_command;
@@ -339,6 +336,20 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>, cwd: PathBuf) -
     )
     .await;
     coco_cli::startup_profile::mark("session_late_binds");
+
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(session_handle.clone())
+        .await;
+    let bridge_session_id = runtime.current_typed_session_id().await;
+    local_app_server_bridge.ensure_interactive_surface(bridge_session_id.clone())?;
+    local_app_server_bridge.start_passive_event_pump(bridge_session_id, notification_tx.clone())?;
+    local_app_server_bridge
+        .client()
+        .keep_alive(local_app_server_bridge.handler())
+        .await?;
 
     // Install the SessionRuntime weak-ref on the permission bridge so
     // `Notification` hooks fire when the user is asked to approve a
@@ -798,6 +809,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>, cwd: PathBuf) -
         command_rx,
         notification_tx,
         session_handle.clone(),
+        local_app_server_bridge,
         pending_approvals,
         runtime_publisher,
         cwd.clone(),
@@ -931,6 +943,7 @@ async fn run_agent_driver(
     mut command_rx: mpsc::Receiver<UserCommand>,
     event_tx: mpsc::Sender<CoreEvent>,
     session: crate::session_runtime::SessionHandle,
+    mut local_app_server_bridge: coco_cli::sdk_server::AppServerLocalBridge,
     pending_approvals: coco_cli::tui_permission_bridge::PendingApprovals,
     runtime_publisher: Option<Arc<coco_config::RuntimePublisher>>,
     cwd: std::path::PathBuf,
@@ -954,13 +967,10 @@ async fn run_agent_driver(
         Arc::new(RwLock::new(std::collections::HashSet::new()));
     info!("Agent driver started");
 
-    // Active-turn tracker. SubmitInput spawns the engine work into a
-    // dedicated task and stores its `JoinHandle` + `TurnAbortController`
-    // here; the dispatch loop continues to `recv()` so interrupting
-    // commands (`Interrupt`, `Compact`, `Rewind`, `Shutdown`) reach
-    // their arms without waiting for the engine to finish. Rust needs
-    // an explicit `tokio::spawn` to free the recv loop for concurrent
-    // keyboard events.
+    // Active-turn tracker. AppServer-owned turns keep a completion monitor task
+    // plus an interrupt client here; the dispatch loop continues to `recv()` so
+    // interrupting commands (`Interrupt`, `Compact`, `Rewind`, `Shutdown`)
+    // reach their arms without waiting for the engine to finish.
     let active_turn: Arc<Mutex<Option<ActiveTurn>>> = Arc::new(Mutex::new(None));
     let mut pending_editor_requests: HashMap<String, PendingEditorRequest> = HashMap::new();
     let mut explicit_shutdown = false;
@@ -979,6 +989,7 @@ async fn run_agent_driver(
                     process_idle_command_queue(
                         &session,
                         &event_tx,
+                        &mut local_app_server_bridge,
                         &active_turn,
                         &mut pending_editor_requests,
                         &title_gen_attempted,
@@ -992,6 +1003,7 @@ async fn run_agent_driver(
                 process_idle_command_queue(
                     &session,
                     &event_tx,
+                    &mut local_app_server_bridge,
                     &active_turn,
                     &mut pending_editor_requests,
                     &title_gen_attempted,
@@ -1022,13 +1034,21 @@ async fn run_agent_driver(
                 let mut slash_thinking_level = None;
                 let mut slash_model_runtime_source = None;
                 if let Some((name, args)) = parse_slash_command(&effective_content) {
-                    let outcome = dispatch_slash_command(name, args, &session, &event_tx).await;
+                    let outcome = dispatch_slash_command(
+                        name,
+                        args,
+                        &session,
+                        &event_tx,
+                        &local_app_server_bridge,
+                    )
+                    .await;
                     match handle_slash_outcome(
                         outcome,
                         &session,
                         &event_tx,
                         &active_turn,
                         &mut pending_editor_requests,
+                        &local_app_server_bridge,
                     )
                     .await
                     {
@@ -1057,12 +1077,49 @@ async fn run_agent_driver(
                 // semantics (a new submit aborts the previous turn).
                 drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
 
-                let turn_abort = TurnAbortController::new();
-                let turn_abort_signal = turn_abort.signal();
                 let turn_id = uuid::Uuid::new_v4();
-
+                local_app_server_bridge
+                    .install_session_runtime(session.clone())
+                    .await;
+                if let Err(error) = local_app_server_bridge
+                    .start_passive_event_pump(session_id.clone(), event_tx.clone())
+                {
+                    tracing::warn!(%error, "TUI SubmitInput could not refresh local AppServer event pump");
+                }
+                let mut monitor_client = local_app_server_bridge.connect_local_client();
+                let passive_surface = match monitor_client.subscribe_session(
+                    session_id.clone(),
+                    Some(0),
+                    coco_app_server::AttachSurfaceOptions::default(),
+                ) {
+                    Ok(surface) => surface,
+                    Err(error) => {
+                        tracing::warn!(%error, "TUI SubmitInput could not attach AppServer completion monitor");
+                        continue;
+                    }
+                };
+                let params = coco_types::TurnStartParams {
+                    prompt: effective_content,
+                    history_override: Vec::new(),
+                    images: image_data_to_turn_start(&images),
+                    slash_metadata,
+                    model_selection: model_runtime_source_to_turn_start_selection(
+                        slash_model_runtime_source,
+                    ),
+                    permission_mode: None,
+                    thinking_level: slash_thinking_level,
+                };
+                let started = match local_app_server_bridge
+                    .start_turn(session_id.clone(), params)
+                    .await
+                {
+                    Ok(started) => started,
+                    Err(error) => {
+                        tracing::warn!(%error, "TUI SubmitInput AppServer turn/start failed");
+                        continue;
+                    }
+                };
                 let session_t = session.clone();
-                let event_tx_t = event_tx.clone();
                 let title_gen_attempted_t = title_gen_attempted.clone();
                 let session_id_t = session_id.clone();
                 let turn_done_tx_t = turn_done_tx.clone();
@@ -1072,6 +1129,7 @@ async fn run_agent_driver(
                     id: user_message_id.clone(),
                     tx: tx.clone(),
                 });
+                let protocol_turn_id = started.turn_id.clone();
 
                 let task = tokio::spawn(async move {
                     let _done = TurnDoneGuard {
@@ -1079,26 +1137,33 @@ async fn run_agent_driver(
                         tx: turn_done_tx_t,
                     };
                     let _pump_done = pump_done;
-                    process_submit_turn(
-                        user_message_id,
-                        effective_content,
-                        slash_metadata,
-                        slash_thinking_level,
-                        slash_model_runtime_source,
-                        images,
-                        session_t,
-                        event_tx_t,
-                        title_gen_attempted_t,
-                        session_id_t,
-                        turn_abort_signal,
-                    )
-                    .await;
+                    while let Some(envelope) =
+                        monitor_client.next_passive_event(&passive_surface).await
+                    {
+                        if let CoreEvent::Protocol(ServerNotification::TurnEnded(ended)) =
+                            envelope.event
+                            && ended.turn_id == protocol_turn_id
+                        {
+                            maybe_spawn_auto_title(
+                                &session_t,
+                                &title_gen_attempted_t,
+                                &session_id_t,
+                            )
+                            .await;
+                            break;
+                        }
+                    }
                 });
+                let interrupt_client = local_app_server_bridge.connect_local_client();
+                let handler = local_app_server_bridge.handler().clone();
 
                 *active_turn.lock().await = Some(ActiveTurn {
                     id: turn_id,
                     task,
-                    abort: turn_abort,
+                    cancel: ActiveTurnCancel {
+                        client: interrupt_client,
+                        handler,
+                    },
                 });
             }
 
@@ -1294,13 +1359,21 @@ async fn run_agent_driver(
                 // user-message UUID so file-history / rewind keys
                 // line up.
                 let args_str = args.unwrap_or_default();
-                let outcome = dispatch_slash_command(&name, &args_str, &session, &event_tx).await;
+                let outcome = dispatch_slash_command(
+                    &name,
+                    &args_str,
+                    &session,
+                    &event_tx,
+                    &local_app_server_bridge,
+                )
+                .await;
                 match handle_slash_outcome(
                     outcome,
                     &session,
                     &event_tx,
                     &active_turn,
                     &mut pending_editor_requests,
+                    &local_app_server_bridge,
                 )
                 .await
                 {
@@ -1324,6 +1397,7 @@ async fn run_agent_driver(
                             },
                             &session,
                             &event_tx,
+                            &mut local_app_server_bridge,
                             &active_turn,
                             &title_gen_attempted,
                             &turn_done_tx,
@@ -1336,14 +1410,21 @@ async fn run_agent_driver(
 
             UserCommand::ExecuteSlashCommand { name, args } => {
                 let refresh_plugin_dialog = name.as_str() == "plugin";
-                let outcome =
-                    dispatch_slash_command(name.as_str(), &args, &session, &event_tx).await;
+                let outcome = dispatch_slash_command(
+                    name.as_str(),
+                    &args,
+                    &session,
+                    &event_tx,
+                    &local_app_server_bridge,
+                )
+                .await;
                 match handle_slash_outcome(
                     outcome,
                     &session,
                     &event_tx,
                     &active_turn,
                     &mut pending_editor_requests,
+                    &local_app_server_bridge,
                 )
                 .await
                 {
@@ -1373,6 +1454,7 @@ async fn run_agent_driver(
                             },
                             &session,
                             &event_tx,
+                            &mut local_app_server_bridge,
                             &active_turn,
                             &title_gen_attempted,
                             &turn_done_tx,
@@ -1510,31 +1592,39 @@ async fn run_agent_driver(
                 }
             }
 
-            UserCommand::Interrupt(reason) => {
-                // Mid-turn cancel: abort the active turn with a structured
-                // reason. The spawned turn task observes the controller's
-                // token at the next `.await` point inside
-                // `engine.run_with_messages` (LLM streaming, tool
-                // execution, hook orchestration all check the parent
-                // CancellationToken) and exits cleanly. The task slot
-                // stays Some until the task naturally completes — the
-                // next SubmitInput (or driver shutdown) drains it.
+            UserCommand::Interrupt(_reason) => {
+                // Mid-turn cancel now flows through the same AppServer
+                // `turn/interrupt` request the SDK uses. The task slot stays
+                // Some until the turn naturally emits its terminal event; the
+                // next SubmitInput or driver shutdown drains it if needed.
                 if let Some(state) = active_turn.lock().await.as_ref() {
-                    state.abort.abort(reason);
-                    info!("Interrupt: cancelled active turn");
+                    let ActiveTurnCancel { client, handler } = &state.cancel;
+                    match client.turn_interrupt(handler).await {
+                        Ok(()) => info!("Interrupt: cancelled AppServer active turn"),
+                        Err(error) => {
+                            tracing::warn!(%error, "Interrupt: AppServer turn/interrupt failed")
+                        }
+                    }
                 }
             }
 
             UserCommand::InterruptAgentCurrentWork { agent_id } => {
-                match runtime.interrupt_agent_current_work(&agent_id).await {
-                    Ok(true) => {
-                        info!(%agent_id, "Interrupt: cancelled teammate current turn");
-                    }
-                    Ok(false) => {
-                        info!(%agent_id, "Interrupt: teammate had no active turn to cancel");
-                    }
+                local_app_server_bridge
+                    .install_session_runtime(session.clone())
+                    .await;
+                match local_app_server_bridge
+                    .client()
+                    .agent_interrupt_current_work(
+                        local_app_server_bridge.handler(),
+                        coco_types::AgentInterruptCurrentWorkParams {
+                            agent_id: agent_id.clone(),
+                        },
+                    )
+                    .await
+                {
+                    Ok(()) => info!(%agent_id, "Interrupt: cancelled teammate current turn"),
                     Err(error) => {
-                        tracing::warn!(%agent_id, %error, "Interrupt: teammate current turn failed");
+                        tracing::warn!(%agent_id, %error, "Interrupt: teammate current turn failed")
                     }
                 }
             }
@@ -1799,16 +1889,50 @@ async fn run_agent_driver(
                     );
                     continue;
                 }
-                let change = coco_cli::live_permission_mode::apply_to_runtime(
-                    &session,
-                    mode,
-                    &event_tx,
-                    cfg.permission_mode_availability.bypass_permissions,
-                )
-                .await;
+                local_app_server_bridge
+                    .install_session_runtime(session.clone())
+                    .await;
+                let bridge_session_id = runtime.current_typed_session_id().await;
+                if let Err(error) =
+                    local_app_server_bridge.ensure_interactive_surface(bridge_session_id.clone())
+                {
+                    warn!(
+                        session_id = %cur_session_id,
+                        error = %error,
+                        "TUI SetPermissionMode could not attach local AppServer surface"
+                    );
+                    continue;
+                }
+                if let Err(error) = local_app_server_bridge
+                    .start_passive_event_pump(bridge_session_id, event_tx.clone())
+                {
+                    warn!(
+                        session_id = %cur_session_id,
+                        error = %error,
+                        "TUI SetPermissionMode could not attach local AppServer event pump"
+                    );
+                    continue;
+                }
+                let previous = cfg.permission_mode;
+                if let Err(error) = local_app_server_bridge
+                    .client()
+                    .set_permission_mode(
+                        local_app_server_bridge.handler(),
+                        coco_types::SetPermissionModeParams { mode },
+                    )
+                    .await
+                {
+                    warn!(
+                        session_id = %cur_session_id,
+                        requested = ?mode,
+                        error = %error,
+                        "TUI SetPermissionMode via AppServerLocalBridge failed"
+                    );
+                    continue;
+                }
                 info!(
                     session_id = %cur_session_id,
-                    from = ?change.previous,
+                    from = ?previous,
                     to = ?mode,
                     "TUI SetPermissionMode propagated to engine_config + app_state",
                 );
@@ -3111,6 +3235,7 @@ async fn handle_slash_outcome(
     event_tx: &mpsc::Sender<CoreEvent>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
+    local_app_server_bridge: &coco_cli::sdk_server::AppServerLocalBridge,
 ) -> SlashFollowup {
     let runtime = session.runtime();
     match outcome {
@@ -3194,7 +3319,7 @@ async fn handle_slash_outcome(
             SlashFollowup::Done
         }
         SlashOutcome::TriggerReloadPlugins => {
-            run_reload_plugins(session, event_tx).await;
+            run_reload_plugins(session, event_tx, local_app_server_bridge).await;
             SlashFollowup::Done
         }
         SlashOutcome::TriggerReloadHooks => {
@@ -3207,6 +3332,7 @@ async fn handle_slash_outcome(
 async fn process_idle_command_queue(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
+    local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
@@ -3219,6 +3345,7 @@ async fn process_idle_command_queue(
     drain_queued_slash_commands(
         session,
         event_tx,
+        local_app_server_bridge,
         active_turn,
         pending_editor_requests,
         title_gen_attempted,
@@ -3234,6 +3361,7 @@ async fn process_idle_command_queue(
 async fn drain_queued_slash_commands(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
+    local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
@@ -3259,7 +3387,8 @@ async fn drain_queued_slash_commands(
         let Some((name, args)) = parse_slash_command(&cmd.prompt) else {
             continue;
         };
-        let outcome = dispatch_slash_command(name, args, session, event_tx).await;
+        let outcome =
+            dispatch_slash_command(name, args, session, event_tx, local_app_server_bridge).await;
         match outcome {
             SlashOutcome::Handled => {}
             SlashOutcome::NotFound => {
@@ -3281,6 +3410,7 @@ async fn drain_queued_slash_commands(
                     },
                     session,
                     event_tx,
+                    local_app_server_bridge,
                     active_turn,
                     title_gen_attempted,
                     turn_done_tx,
@@ -3341,6 +3471,7 @@ async fn drain_queued_slash_commands(
                         },
                         session,
                         event_tx,
+                        local_app_server_bridge,
                         active_turn,
                         title_gen_attempted,
                         turn_done_tx,
@@ -3368,7 +3499,7 @@ async fn drain_queued_slash_commands(
                 .await;
             }
             SlashOutcome::TriggerReloadPlugins => {
-                run_reload_plugins(session, event_tx).await;
+                run_reload_plugins(session, event_tx, local_app_server_bridge).await;
             }
             SlashOutcome::TriggerReloadHooks => {
                 run_reload_hooks(session, event_tx).await;
@@ -3442,76 +3573,89 @@ async fn spawn_history_turn(
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
-    let turn_abort = TurnAbortController::new();
-    let turn_abort_signal = turn_abort.signal();
+    let session_id = session.runtime().current_typed_session_id().await;
+    let history_override = match messages
+        .iter()
+        .map(|message| serde_json::to_value(message.as_ref()))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(history_override) => history_override,
+        Err(error) => {
+            tracing::warn!(%error, "history turn AppServer serialization failed");
+            return;
+        }
+    };
+
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(session.clone())
+        .await;
+    if let Err(error) =
+        local_app_server_bridge.start_passive_event_pump(session_id.clone(), event_tx.clone())
+    {
+        tracing::warn!(%error, "history turn could not attach AppServer event pump");
+    }
+    let mut monitor_client = local_app_server_bridge.connect_local_client();
+    let passive_surface = match monitor_client.subscribe_session(
+        session_id.clone(),
+        Some(0),
+        coco_app_server::AttachSurfaceOptions::default(),
+    ) {
+        Ok(surface) => surface,
+        Err(error) => {
+            tracing::warn!(%error, "history turn could not attach AppServer completion monitor");
+            return;
+        }
+    };
+    let params = coco_types::TurnStartParams {
+        prompt: String::new(),
+        history_override,
+        images: Vec::new(),
+        slash_metadata: None,
+        model_selection: None,
+        permission_mode: None,
+        thinking_level: None,
+    };
+    let started = match local_app_server_bridge
+        .start_turn(session_id.clone(), params)
+        .await
+    {
+        Ok(started) => started,
+        Err(error) => {
+            tracing::warn!(%error, "history turn AppServer turn/start failed");
+            return;
+        }
+    };
+
     let turn_id = uuid::Uuid::new_v4();
-    let session_t = session.clone();
-    let event_tx_t = event_tx.clone();
     let turn_done_tx_t = turn_done_tx.clone();
+    let protocol_turn_id = started.turn_id.clone();
+    let interrupt_client = local_app_server_bridge.connect_local_client();
+    let handler = local_app_server_bridge.handler().clone();
     let task = tokio::spawn(async move {
+        let _bridge = local_app_server_bridge;
         let _done = TurnDoneGuard {
             turn_id,
             tx: turn_done_tx_t,
         };
-        process_queued_history_turn(messages, session_t, event_tx_t, turn_abort_signal).await;
+        while let Some(envelope) = monitor_client.next_passive_event(&passive_surface).await {
+            if let CoreEvent::Protocol(ServerNotification::TurnEnded(ended)) = envelope.event
+                && ended.turn_id == protocol_turn_id
+            {
+                break;
+            }
+        }
     });
     *active_turn.lock().await = Some(ActiveTurn {
         id: turn_id,
         task,
-        abort: turn_abort,
+        cancel: ActiveTurnCancel {
+            client: interrupt_client,
+            handler,
+        },
     });
-}
-
-async fn process_queued_history_turn(
-    messages: Vec<std::sync::Arc<coco_messages::Message>>,
-    session: crate::session_runtime::SessionHandle,
-    event_tx: mpsc::Sender<CoreEvent>,
-    turn_abort: TurnAbortSignal,
-) {
-    let runtime = session.runtime().clone();
-    let cycle_turn_id = coco_types::TurnId::generate();
-    let engine = runtime
-        .build_engine_with_turn_abort(turn_abort.clone())
-        .await;
-    let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
-    let event_tx_clone = event_tx.clone();
-    let forward_handle = tokio::spawn(async move {
-        while let Some(ev) = core_event_rx.recv().await {
-            let _ = event_tx_clone.send(ev).await;
-        }
-    });
-
-    let engine_observed_cancel;
-    let mut engine_stop_reason: Option<String> = None;
-    match engine
-        .run_with_messages(messages, core_event_tx, cycle_turn_id.clone())
-        .await
-    {
-        Ok(result) => {
-            engine_observed_cancel = result.cancelled;
-            engine_stop_reason = result.stop_reason.clone();
-            let mut h = runtime.history.lock().await;
-            *h = result.final_history;
-        }
-        Err(_) => {
-            engine_observed_cancel = false;
-        }
-    }
-    let _ = forward_handle.await;
-    if engine_observed_cancel || turn_abort.reason().is_some() {
-        let reason = turn_abort
-            .reason()
-            .unwrap_or_else(|| abort_reason_from_engine_stop(engine_stop_reason.as_deref()));
-        let _ = event_tx
-            .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
-                coco_types::TurnEndedParams::interrupted(
-                    cycle_turn_id,
-                    /*usage*/ None,
-                    reason,
-                ),
-            )))
-            .await;
-    }
 }
 
 /// Spawn the per-turn engine task for a slash command that expanded
@@ -3522,54 +3666,91 @@ async fn process_queued_history_turn(
 /// The active-turn slot is installed inline (locking `active_turn`)
 /// before this returns — callers can immediately start observing
 /// `ActiveTurn` from a peer task without a TOCTOU window.
+#[allow(clippy::too_many_arguments)]
 async fn spawn_slash_run_engine_turn(
     prompt: SlashEnginePrompt,
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
+    local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
     session_id: &coco_types::SessionId,
 ) {
-    let turn_abort = TurnAbortController::new();
-    let turn_abort_signal = turn_abort.signal();
-    let turn_id = uuid::Uuid::new_v4();
-    let session_t = session.clone();
-    let event_tx_t = event_tx.clone();
-    let title_gen_attempted_t = title_gen_attempted.clone();
-    let turn_done_tx_t = turn_done_tx.clone();
-    let session_id_t = session_id.clone();
-    let synth_id = uuid::Uuid::new_v4().to_string();
     let SlashEnginePrompt {
         content,
         metadata,
         thinking_level,
         model_runtime_source,
     } = prompt;
+    local_app_server_bridge
+        .install_session_runtime(session.clone())
+        .await;
+    if let Err(error) =
+        local_app_server_bridge.start_passive_event_pump(session_id.clone(), event_tx.clone())
+    {
+        tracing::warn!(%error, "slash RunEngine could not refresh local AppServer event pump");
+    }
+    let mut monitor_client = local_app_server_bridge.connect_local_client();
+    let passive_surface = match monitor_client.subscribe_session(
+        session_id.clone(),
+        Some(0),
+        coco_app_server::AttachSurfaceOptions::default(),
+    ) {
+        Ok(surface) => surface,
+        Err(error) => {
+            tracing::warn!(%error, "slash RunEngine could not attach AppServer completion monitor");
+            return;
+        }
+    };
+    let params = coco_types::TurnStartParams {
+        prompt: content,
+        history_override: Vec::new(),
+        images: Vec::new(),
+        slash_metadata: metadata,
+        model_selection: model_runtime_source_to_turn_start_selection(model_runtime_source),
+        permission_mode: None,
+        thinking_level,
+    };
+    let started = match local_app_server_bridge
+        .start_turn(session_id.clone(), params)
+        .await
+    {
+        Ok(started) => started,
+        Err(error) => {
+            tracing::warn!(%error, "slash RunEngine AppServer turn/start failed");
+            return;
+        }
+    };
+    let turn_id = uuid::Uuid::new_v4();
+    let session_t = session.clone();
+    let title_gen_attempted_t = title_gen_attempted.clone();
+    let turn_done_tx_t = turn_done_tx.clone();
+    let session_id_t = session_id.clone();
+    let protocol_turn_id = started.turn_id.clone();
     let task = tokio::spawn(async move {
         let _done = TurnDoneGuard {
             turn_id,
             tx: turn_done_tx_t,
         };
-        process_submit_turn(
-            synth_id,
-            content,
-            metadata,
-            thinking_level,
-            model_runtime_source,
-            Vec::new(),
-            session_t,
-            event_tx_t,
-            title_gen_attempted_t,
-            session_id_t,
-            turn_abort_signal,
-        )
-        .await;
+        while let Some(envelope) = monitor_client.next_passive_event(&passive_surface).await {
+            if let CoreEvent::Protocol(ServerNotification::TurnEnded(ended)) = envelope.event
+                && ended.turn_id == protocol_turn_id
+            {
+                maybe_spawn_auto_title(&session_t, &title_gen_attempted_t, &session_id_t).await;
+                break;
+            }
+        }
     });
+    let interrupt_client = local_app_server_bridge.connect_local_client();
+    let handler = local_app_server_bridge.handler().clone();
     *active_turn.lock().await = Some(ActiveTurn {
         id: turn_id,
         task,
-        abort: turn_abort,
+        cancel: ActiveTurnCancel {
+            client: interrupt_client,
+            handler,
+        },
     });
 }
 
@@ -3596,6 +3777,7 @@ async fn dispatch_slash_command(
     args: &str,
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
+    local_app_server_bridge: &coco_cli::sdk_server::AppServerLocalBridge,
 ) -> SlashOutcome {
     let runtime = session.runtime();
     // Runtime-state-aware commands intercepted before registry lookup:
@@ -3649,7 +3831,7 @@ async fn dispatch_slash_command(
         return SlashOutcome::TriggerClear;
     }
     if name == "context" {
-        return dispatch_context(session, event_tx).await;
+        return dispatch_context(session, event_tx, local_app_server_bridge).await;
     }
     // `/config` (alias `/settings`) with no args opens the interactive settings
     // panel, reusing the same overlay as the `Ctrl+,` keybind. `config <key>
@@ -4589,17 +4771,21 @@ async fn dispatch_plan(
 struct ActiveTurn {
     id: uuid::Uuid,
     task: tokio::task::JoinHandle<()>,
-    /// Turn-scoped abort controller. The controller owns both the plain
-    /// cancellation token consumed by `QueryEngine` and the structured
-    /// reason consumed by the runner after the engine returns.
-    abort: TurnAbortController,
+    cancel: ActiveTurnCancel,
+}
+
+struct ActiveTurnCancel {
+    /// AppServer-owned turn: cancellation flows through the same
+    /// `turn/interrupt` request the SDK uses.
+    client: coco_app_server_client::ServerClient<()>,
+    handler: coco_cli::sdk_server::AppServerSdkHandler,
 }
 
 /// Always-fires completion signaller for spawned turn tasks.
 /// The main `select!` loop in `run_agent_driver` blocks on
 /// `turn_done_rx.recv()` to drain a completed turn from `active_turn`.
 /// Sending `turn_id` as the last statement of the spawned task only
-/// covers the happy path: a panic inside `process_submit_turn` unwinds
+/// covers the happy path: a panic inside a spawned turn body unwinds
 /// before reaching the send, so the `active_turn` slot stays occupied
 /// with a corpse `JoinHandle` until the next user command forces
 /// `drain_active_turn()` to collect it.
@@ -4678,15 +4864,15 @@ enum PendingEditorRequest {
 /// turn (Clear / Compact / Rewind / Shutdown / next SubmitInput).
 /// `AbortAfter` is reserved for explicit process shutdown so a stuck
 /// tool or stream cannot leave the terminal sitting on the exit hint.
-/// Always records `SystemPreempt` as the reason — these callers are
-/// running cleanup work, not honouring a user "stop this turn"
-/// request. `UserCommand::Interrupt` records `UserCancel`; the
-/// controller is first-writer-wins, so a subsequent `SystemPreempt`
-/// write here is silently ignored.
+/// Cancellation now goes through AppServer `turn/interrupt`; the server-side
+/// runner owns the terminal `TurnEnded` emission and reason mapping.
 async fn drain_active_turn(slot: &Arc<Mutex<Option<ActiveTurn>>>, mode: ActiveTurnDrain) {
     let state = { slot.lock().await.take() };
     if let Some(s) = state {
-        s.abort.abort(TurnAbortReason::SystemPreempt);
+        let ActiveTurnCancel { client, handler } = &s.cancel;
+        if let Err(error) = client.turn_interrupt(handler).await {
+            tracing::warn!(%error, "drain_active_turn: AppServer turn/interrupt failed");
+        }
         match mode {
             ActiveTurnDrain::Wait => {
                 let _ = s.task.await;
@@ -4810,10 +4996,10 @@ async fn run_manual_compact_inner(
     }
     // G8: the manual-compact path emits `ContextCompacted` via the
     // engine, but `run_manual_compact` is invoked from outside
-    // `process_submit_turn` — there's no forwarder in scope to
+    // the turn event forwarder — there's no forwarder in scope to
     // observe it. Re-append explicitly so /compact behaves the same
     // way reactive compact does (the forwarder hook in
-    // `process_submit_turn` covers reactive).
+    // the normal turn path covers reactive).
     let session_id = runtime.current_typed_session_id().await;
     let session_id_string = session_id.to_string();
     let mgr = Arc::clone(&runtime.session_manager);
@@ -5046,21 +5232,30 @@ async fn run_session_rename(
 async fn run_reload_plugins(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
+    local_app_server_bridge: &coco_cli::sdk_server::AppServerLocalBridge,
 ) {
     let runtime = session.runtime();
-    let cwd = runtime.current_cwd.read().await.clone();
-    let count = runtime.reload_plugins(&cwd).await;
-    // Chain the agent-catalog + hook reloads so `/reload-plugins` also
-    // picks up newly enabled/disabled plugin agents and hooks, not just
-    // commands + skills. MCP/LSP re-register is deferred (needs the MCP
-    // connection manager threaded into SessionRuntime).
-    runtime.reload_agent_catalog().await;
-    runtime.reload_lsp_servers().await;
-    let hook_note = match runtime.reload_hooks().await {
-        Ok(n) => format!(" · {n} hook(s)"),
-        Err(e) => format!(" · hook reload failed: {e}"),
+    let result = match local_app_server_bridge
+        .client()
+        .plugin_reload(local_app_server_bridge.handler())
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            let body = format!("Plugin reload failed: {error}");
+            emit_slash_text(event_tx, "reload-plugins", "", &body).await;
+            return;
+        }
     };
-    let body = format!("Reloaded — {count} commands{hook_note}; agents + LSP refreshed.");
+    let hook_note = if result.error_count == 0 {
+        String::new()
+    } else {
+        format!(" · {} reload error(s)", result.error_count)
+    };
+    let body = format!(
+        "Reloaded — {} commands{hook_note}; agents + LSP refreshed.",
+        result.commands.len()
+    );
     emit_slash_text(event_tx, "reload-plugins", "", &body).await;
 
     let snapshot = runtime.current_command_registry().await.snapshot_for_ui();
@@ -5701,14 +5896,19 @@ async fn emit_slash_text(event_tx: &mpsc::Sender<CoreEvent>, name: &str, args: &
 async fn dispatch_context(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
+    local_app_server_bridge: &coco_cli::sdk_server::AppServerLocalBridge,
 ) -> SlashOutcome {
-    let runtime = session.runtime();
-    match runtime.analyze_main_context().await {
-        Ok(report) => {
+    local_app_server_bridge
+        .install_session_runtime(session.clone())
+        .await;
+    match local_app_server_bridge
+        .client()
+        .context_usage(local_app_server_bridge.handler())
+        .await
+    {
+        Ok(result) => {
             let _ = event_tx
-                .send(CoreEvent::Tui(TuiOnlyEvent::OpenContextUsage {
-                    result: report.to_wire(),
-                }))
+                .send(CoreEvent::Tui(TuiOnlyEvent::OpenContextUsage { result }))
                 .await;
         }
         Err(e) => {
@@ -5851,262 +6051,6 @@ async fn emit_slash_status(
             kind,
         }))
         .await;
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn process_submit_turn(
-    user_message_id: String,
-    content: String,
-    slash_metadata: Option<String>,
-    slash_thinking_level: Option<coco_types::ThinkingLevel>,
-    slash_model_runtime_source: Option<coco_inference::ModelRuntimeSource>,
-    images: Vec<coco_tui::ImageData>,
-    session: crate::session_runtime::SessionHandle,
-    event_tx: mpsc::Sender<CoreEvent>,
-    title_gen_attempted: Arc<RwLock<std::collections::HashSet<String>>>,
-    session_id: coco_types::SessionId,
-    turn_abort: TurnAbortSignal,
-) {
-    let runtime = session.runtime().clone();
-    let session_id_string = session_id.to_string();
-    // Resolve @-mentions through the shared cross-path helper (produces
-    // both file-attachment system-reminders and changed-file notifications).
-    // The same pipeline feeds headless and SDK paths via
-    // `coco_cli::at_mention_turn::resolve_turn_inputs`.
-    let cwd = runtime.current_cwd.read().await.clone();
-    let user_uuid =
-        uuid::Uuid::parse_str(&user_message_id).unwrap_or_else(|_| uuid::Uuid::new_v4());
-    let inputs = coco_cli::at_mention_turn::resolve_turn_inputs(
-        &content,
-        &images,
-        &cwd,
-        user_uuid,
-        &runtime.file_read_state,
-    )
-    .await;
-
-    // Generate the per-cycle TurnId up front. The runner owns the
-    // lifecycle id so every emission on this cycle — pre-engine
-    // bail, engine-emitted, and late-cancel — pairs against the
-    // same TurnStarted.
-    let cycle_turn_id = coco_types::TurnId::generate();
-
-    // Fire UserPromptSubmit hooks BEFORE building the engine. Output
-    // queues onto the shared sync-hook buffer so the next turn surfaces
-    // `hook_*` reminders; a blocking_error suppresses the turn and
-    // surfaces a TurnEnded(Failed); prevent_continuation keeps the
-    // prompt but skips the engine.
-    let prompt_hook_result = runtime.fire_user_prompt_submit_hooks(&content).await;
-    if let Some(blocking) = &prompt_hook_result.blocking_error {
-        let warning = format!(
-            "UserPromptSubmit hook blocked the turn: {}\n\nOriginal prompt: {content}",
-            blocking.blocking_error,
-        );
-        // Pre-engine bail: emit a self-contained TurnStarted +
-        // TurnEnded pair so consumers see a complete cycle envelope.
-        // `HookBlocked` is the typed signal that this is a policy
-        // decision, not a runtime / config / provider error — lets
-        // dashboards filter "real failures" from "hook said no".
-        let _ = event_tx
-            .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
-                coco_types::TurnStartedParams {
-                    turn_id: cycle_turn_id.clone(),
-                },
-            )))
-            .await;
-        let _ = event_tx
-            .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
-                coco_types::TurnEndedParams::failed(
-                    cycle_turn_id.clone(),
-                    /*usage*/ None,
-                    coco_types::ErrorPayload {
-                        message: warning,
-                        code: coco_types::ErrorCode::HookBlocked,
-                    },
-                ),
-            )))
-            .await;
-        return;
-    }
-    if prompt_hook_result.prevent_continuation {
-        let stop_msg = prompt_hook_result
-            .stop_reason
-            .clone()
-            .map(|r| format!("Operation stopped by hook: {r}"))
-            .unwrap_or_else(|| "Operation stopped by hook".to_string());
-        // Persist the prompt + system warning via history_push_and_emit
-        // so the TUI transcript view picks them up — no LLM call follows
-        // this branch, so a silent h.push would leave the user without
-        // any visual record of their prompt.
-        {
-            let mut h = runtime.history.lock().await;
-            let event_tx_opt = Some(event_tx.clone());
-            coco_query::history_sync::history_push_and_emit(
-                &mut h,
-                coco_messages::create_user_message(&content),
-                &event_tx_opt,
-            )
-            .await;
-            coco_query::history_sync::history_push_and_emit(
-                &mut h,
-                coco_messages::create_user_message(&stop_msg),
-                &event_tx_opt,
-            )
-            .await;
-        }
-        return;
-    }
-
-    let new_turn_messages = coco_cli::at_mention_turn::build_messages_for_turn(&inputs);
-
-    // Persist user message immediately so engine errors don't lose it.
-    // history_push_and_emit fires MessageAppended for each new turn
-    // message so the TUI transcript view surfaces them via the standard
-    // round-trip (replaces the legacy TUI-local optimistic add_message).
-    // `h.to_vec()` returns `Vec<Arc<Message>>` via cheap atomic
-    // refcount bumps — engine sees the same Arcs `MessageHistory`
-    // holds, no deep clone of message bodies (was `(**a).clone()` →
-    // `Arc::new` re-wrap, which deep-cloned every history entry per
-    // turn just to immediately re-Arc it).
-    let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
-        let mut h = runtime.history.lock().await;
-        let event_tx_opt = Some(event_tx.clone());
-        if let Some(metadata) = slash_metadata.as_deref() {
-            coco_query::history_sync::history_push_and_emit(
-                &mut h,
-                create_slash_metadata_message(metadata),
-                &event_tx_opt,
-            )
-            .await;
-        }
-        for m in new_turn_messages.iter().cloned() {
-            coco_query::history_sync::history_push_and_emit(&mut h, m, &event_tx_opt).await;
-        }
-        h.to_vec()
-    };
-
-    let engine = runtime
-        .build_engine_with_turn_abort_configured(turn_abort.clone(), |cfg| {
-            if let Some(thinking_level) = slash_thinking_level {
-                cfg.thinking_level = Some(thinking_level);
-            }
-        })
-        .await;
-    let engine = if let Some(source) = slash_model_runtime_source {
-        engine.with_model_runtime_source(source)
-    } else {
-        engine
-    };
-
-    // Mention priority for post-compact restoration.
-    if !inputs.mentioned_paths.is_empty() {
-        engine
-            .note_mentioned_paths(inputs.mentioned_paths.clone())
-            .await;
-    }
-
-    let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
-    let event_tx_clone = event_tx.clone();
-    // Capture refs into the forwarder so it can fire a metadata
-    // re-append whenever a compaction completes mid-turn (G8). The
-    // engine emits a single `ContextCompacted` event from all three
-    // compact sites (manual / reactive / microcompact), so observing
-    // the event in the forwarder catches every variant without
-    // per-path hooks.
-    let session_manager_for_forward = Arc::clone(&runtime.session_manager);
-    let session_id_for_forward = session_id_string.clone();
-    let forward_handle = tokio::spawn(async move {
-        while let Some(ev) = core_event_rx.recv().await {
-            if matches!(
-                ev,
-                CoreEvent::Protocol(ServerNotification::ContextCompacted(_))
-            ) {
-                let mgr = Arc::clone(&session_manager_for_forward);
-                let sid = session_id_for_forward.clone();
-                // Run synchronously in a blocking task — the JSONL
-                // append is bounded I/O, not async-aware, and we want
-                // the entry to land before subsequent post-compact
-                // messages push it out of the tail window again.
-                let _ = tokio::task::spawn_blocking(move || {
-                    let _ = mgr.re_append_session_metadata(&sid);
-                })
-                .await;
-            }
-            let _ = event_tx_clone.send(ev).await;
-        }
-    });
-
-    // Track whether the engine returned with cancel observed. Engine
-    // no longer wire-emits `Interrupted` — the runner is the sole
-    // emitter because only it knows whether the cancel was UserCancel
-    // (Esc / Ctrl+C) or SystemPreempt (Clear / Compact / Rewind /
-    // Shutdown). `result.cancelled` only tells us "engine saw cancel";
-    // the runner's `TurnAbortSignal` is the authoritative source
-    // for *why*.
-    let engine_observed_cancel;
-    let mut engine_stop_reason: Option<String> = None;
-    match engine
-        .run_with_messages(messages, core_event_tx, cycle_turn_id.clone())
-        .await
-    {
-        Ok(result) => {
-            engine_observed_cancel = result.cancelled;
-            engine_stop_reason = result.stop_reason.clone();
-            let mut h = runtime.history.lock().await;
-            *h = result.final_history;
-        }
-        Err(e) => {
-            engine_observed_cancel = false;
-            // User message stays in `runtime.history` from the
-            // pre-engine push above. The engine_session error path
-            // emits `TurnEnded(Failed)` only when cancel was NOT the
-            // cause; on cancel-induced Err, we fall through to the
-            // runner's Interrupted emit below. Either way, no double
-            // emit.
-            tracing::warn!(
-                error = %e,
-                cycle_turn_id = %cycle_turn_id,
-                "tui_runner: engine returned Err"
-            );
-        }
-    }
-
-    let _ = forward_handle.await;
-
-    // Sole Interrupted emit site for this runner. Fires when either:
-    // - the engine observed cancel mid-loop and returned `Ok(cancelled=true)`
-    // (clean cancel path), or
-    // - the user-cancel raced the engine and arrived after Ok return
-    // (late-cancel path).
-    // The reason comes from `turn_abort.reason()` — `UserCommand::Interrupt`
-    // sets `UserCancel`; `drain_active_turn` sets `SystemPreempt`. When
-    // the engine cancelled but the signal somehow stayed unset
-    // (defensive — every cancel path writes first), default to
-    // `UserCancel` so auto-restore at least fires on the conservative
-    // "user wanted out" interpretation.
-    let abort_reason_emit = turn_abort.reason();
-    if engine_observed_cancel || abort_reason_emit.is_some() {
-        let reason = abort_reason_emit
-            .unwrap_or_else(|| abort_reason_from_engine_stop(engine_stop_reason.as_deref()));
-        let _ = event_tx
-            .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
-                coco_types::TurnEndedParams::interrupted(
-                    cycle_turn_id.clone(),
-                    /*usage*/ None,
-                    reason,
-                ),
-            )))
-            .await;
-    }
-
-    maybe_spawn_auto_title(&session, &title_gen_attempted, &session_id).await;
-}
-
-fn abort_reason_from_engine_stop(stop_reason: Option<&str>) -> TurnAbortReason {
-    match stop_reason {
-        Some("permission_abort") => TurnAbortReason::PermissionAbort,
-        _ => TurnAbortReason::UserCancel,
-    }
 }
 
 /// One-shot, fire-and-forget title generation. Returns immediately
@@ -6666,6 +6610,27 @@ fn image_data_to_queued(images: &[coco_tui::ImageData]) -> Vec<QueuedImage> {
             data_base64: base64::engine::general_purpose::STANDARD.encode(&img.bytes),
         })
         .collect()
+}
+
+fn image_data_to_turn_start(
+    images: &[coco_tui::ImageData],
+) -> Vec<coco_types::QueuedCommandEditImage> {
+    image_data_to_queued(images)
+        .into_iter()
+        .map(|image| coco_types::QueuedCommandEditImage {
+            media_type: image.media_type,
+            data_base64: image.data_base64,
+        })
+        .collect()
+}
+
+fn model_runtime_source_to_turn_start_selection(
+    source: Option<coco_inference::ModelRuntimeSource>,
+) -> Option<coco_types::ProviderModelSelection> {
+    match source {
+        Some(coco_inference::ModelRuntimeSource::Explicit(selection)) => Some(selection),
+        Some(coco_inference::ModelRuntimeSource::Role(_)) | None => None,
+    }
 }
 
 async fn refresh_plugin_dialog_payload(

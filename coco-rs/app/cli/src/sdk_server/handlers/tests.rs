@@ -1,10 +1,11 @@
 //! Handler-level tests for the SDK server.
 //!
 //! These tests exercise per-method handler behavior by driving the
-//! `SdkServer` dispatch loop over an `InMemoryTransport` and asserting
-//! against the resulting wire messages. Tests for dispatcher routing
-//! itself (unknown method, parse failure, exit-on-EOF) live in the
-//! sibling `dispatcher.test.rs`.
+//! SDK server over an `InMemoryTransport` and asserting against the resulting
+//! wire messages. Shared helpers use the AppServer JSON-RPC bridge path so
+//! handler coverage follows the production SDK dispatch path. Tests for
+//! dispatcher routing itself (unknown method, parse failure, exit-on-EOF) live
+//! in the sibling `dispatcher.test.rs`.
 
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -56,9 +57,7 @@ fn req(id: i64, method: &str, params: serde_json::Value) -> JsonRpcMessage {
 async fn spawn_server() -> (tokio::task::JoinHandle<()>, Arc<InMemoryTransport>) {
     let (server_end, client_end) = InMemoryTransport::pair(32);
     let server = SdkServer::new(server_end);
-    let handle = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let handle = spawn_app_server_bridge(server);
     (handle, client_end)
 }
 
@@ -70,9 +69,7 @@ async fn spawn_server_with_state() -> (
     let (server_end, client_end) = InMemoryTransport::pair(32);
     let server = SdkServer::new(server_end);
     let state = server.state();
-    let handle = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let handle = spawn_app_server_bridge(server);
     (handle, client_end, state)
 }
 
@@ -81,10 +78,19 @@ async fn spawn_server_with_runner(
 ) -> (tokio::task::JoinHandle<()>, Arc<InMemoryTransport>) {
     let (server_end, client_end) = InMemoryTransport::pair(32);
     let server = SdkServer::new(server_end).with_turn_runner(runner);
-    let handle = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let handle = spawn_app_server_bridge(server);
     (handle, client_end)
+}
+
+fn spawn_app_server_bridge(server: SdkServer) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let app_server = Arc::new(coco_app_server::AppServer::<()>::new(
+            /*max_sessions*/ 1, /*channel_capacity*/ 32,
+        ));
+        let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 32);
+        let connection = adapter.connect();
+        let _ = server.run_app_server_connection(connection).await;
+    })
 }
 
 async fn start_session(client: &InMemoryTransport) -> String {
@@ -174,9 +180,7 @@ async fn spawn_server_with_session_manager() -> (
     let (server_end, client_end) = InMemoryTransport::pair(32);
     let server = SdkServer::new(server_end).with_session_manager(manager);
     let state = server.state();
-    let handle = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let handle = spawn_app_server_bridge(server);
     (handle, client_end, state, tmp)
 }
 
@@ -192,6 +196,7 @@ impl TurnRunner for ScriptedRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
+        turn_id: coco_types::TurnId,
         _handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         _cancel: CancellationToken,
@@ -201,7 +206,7 @@ impl TurnRunner for ScriptedRunner {
             event_tx
                 .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
                     TurnStartedParams {
-                        turn_id: coco_types::TurnId::from("scripted"),
+                        turn_id: turn_id.clone(),
                     },
                 )))
                 .await
@@ -209,7 +214,7 @@ impl TurnRunner for ScriptedRunner {
             event_tx
                 .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
                     TurnEndedParams::completed(
-                        coco_types::TurnId::from("scripted"),
+                        turn_id,
                         Some(coco_types::TokenUsage::default()),
                         Some(coco_messages::StopReason::EndTurn),
                     ),
@@ -232,6 +237,7 @@ impl TurnRunner for BlockingRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
+        _turn_id: coco_types::TurnId,
         _handoff: TurnHandoff,
         _event_tx: mpsc::Sender<CoreEvent>,
         cancel: CancellationToken,
@@ -261,6 +267,7 @@ impl TurnRunner for StatsEmittingRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
+        _turn_id: coco_types::TurnId,
         _handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         _cancel: CancellationToken,
@@ -370,9 +377,7 @@ async fn initialize_with_bootstrap_returns_real_commands() {
             .with_command_registry(Arc::new(tokio::sync::RwLock::new(Arc::new(registry)))),
     );
     let server = SdkServer::new(server_end).with_initialize_bootstrap(bootstrap);
-    let server_task = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let server_task = spawn_app_server_bridge(server);
 
     client_end
         .send(req(1, "initialize", serde_json::json!({})))
@@ -454,9 +459,7 @@ async fn initialize_fast_mode_state_some_serializes_to_wire() {
         let bootstrap: Arc<dyn crate::sdk_server::InitializeBootstrap> =
             Arc::new(MockFastModeBootstrap { state });
         let server = SdkServer::new(server_end).with_initialize_bootstrap(bootstrap);
-        let server_task = tokio::spawn(async move {
-            let _ = server.run().await;
-        });
+        let server_task = spawn_app_server_bridge(server);
 
         client_end
             .send(req(1, "initialize", serde_json::json!({})))
@@ -689,6 +692,7 @@ async fn turn_start_returns_turn_id_and_forwards_notifications() {
 
     let mut turn_start_reply: Option<coco_types::JsonRpcResponse> = None;
     let mut notif_methods: Vec<String> = Vec::new();
+    let mut notif_turn_ids: Vec<String> = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while tokio::time::Instant::now() < deadline
         && (turn_start_reply.is_none() || notif_methods.len() < 2)
@@ -698,6 +702,9 @@ async fn turn_start_returns_turn_id_and_forwards_notifications() {
                 turn_start_reply = Some(r);
             }
             Ok(Ok(Some(JsonRpcMessage::Notification(n)))) => {
+                if let Some(turn_id) = n.params["turn_id"].as_str() {
+                    notif_turn_ids.push(turn_id.to_string());
+                }
                 notif_methods.push(n.method);
             }
             _ => continue,
@@ -710,6 +717,10 @@ async fn turn_start_returns_turn_id_and_forwards_notifications() {
     assert_eq!(
         notif_methods,
         vec!["turn/started".to_string(), "turn/ended".to_string()]
+    );
+    assert_eq!(
+        notif_turn_ids,
+        vec![turn_id.to_string(), turn_id.to_string()]
     );
 
     tokio::time::timeout(Duration::from_secs(1), completed.notified())
@@ -1697,9 +1708,7 @@ async fn session_archive_emits_aggregated_session_result() {
         let (server_end, client_end) = InMemoryTransport::pair(32);
         let server = SdkServer::new(server_end).with_turn_runner(runner);
         let state = server.state();
-        let handle = tokio::spawn(async move {
-            let _ = server.run().await;
-        });
+        let handle = spawn_app_server_bridge(server);
         (handle, client_end, state)
     };
 
@@ -1785,6 +1794,7 @@ impl TurnRunner for LateEventOnCancelRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
+        turn_id: coco_types::TurnId,
         _handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         cancel: CancellationToken,
@@ -1799,7 +1809,7 @@ impl TurnRunner for LateEventOnCancelRunner {
             let _ = event_tx
                 .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
                     TurnEndedParams::failed(
-                        coco_types::TurnId::from("scripted"),
+                        turn_id,
                         Some(coco_types::TokenUsage::default()),
                         coco_types::ErrorPayload {
                             message: "cancelled mid-turn".into(),
@@ -1829,9 +1839,7 @@ async fn session_archive_flushes_late_events_before_aggregate() {
     let (server_task, client) = {
         let (server_end, client_end) = InMemoryTransport::pair(32);
         let server = SdkServer::new(server_end).with_turn_runner(runner);
-        let handle = tokio::spawn(async move {
-            let _ = server.run().await;
-        });
+        let handle = spawn_app_server_bridge(server);
         (handle, client_end)
     };
 
@@ -1910,9 +1918,7 @@ async fn send_server_request_roundtrips_success() {
     let server = SdkServer::new(server_end);
     let state = server.state();
     let transport = server.transport();
-    let server_task = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let server_task = spawn_app_server_bridge(server);
 
     let state_for_req = state.clone();
     let transport_for_req = transport.clone();
@@ -1969,9 +1975,7 @@ async fn send_server_request_returns_error_on_error_reply() {
     let server = SdkServer::new(server_end);
     let state = server.state();
     let transport = server.transport();
-    let server_task = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let server_task = spawn_app_server_bridge(server);
 
     let state_for_req = state.clone();
     let transport_for_req = transport.clone();
@@ -2022,9 +2026,7 @@ async fn send_server_request_unique_ids() {
     let server = SdkServer::new(server_end);
     let state = server.state();
     let transport = server.transport();
-    let server_task = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let server_task = spawn_app_server_bridge(server);
 
     let state_a = state.clone();
     let transport_a = transport.clone();
@@ -2103,6 +2105,7 @@ impl TurnRunner for HistoryRecordingRunner {
     fn run_turn<'a>(
         &'a self,
         params: coco_types::TurnStartParams,
+        _turn_id: coco_types::TurnId,
         handoff: TurnHandoff,
         _event_tx: mpsc::Sender<CoreEvent>,
         _cancel: CancellationToken,
@@ -2206,9 +2209,7 @@ async fn session_archive_is_atomic_under_concurrent_forwarder_updates() {
         let (server_end, client_end) = InMemoryTransport::pair(32);
         let server = SdkServer::new(server_end).with_turn_runner(runner);
         let state = server.state();
-        let handle = tokio::spawn(async move {
-            let _ = server.run().await;
-        });
+        let handle = spawn_app_server_bridge(server);
         (handle, client_end, state)
     };
 
@@ -2278,6 +2279,7 @@ impl TurnRunner for ErrorRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
+        _turn_id: coco_types::TurnId,
         handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         _cancel: CancellationToken,
@@ -2334,6 +2336,7 @@ impl TurnRunner for SlowRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
+        _turn_id: coco_types::TurnId,
         handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         cancel: CancellationToken,
@@ -2410,9 +2413,7 @@ async fn turn_cleanup_does_not_corrupt_successor_session_cancel_state() {
         let (server_end, client_end) = InMemoryTransport::pair(32);
         let server = SdkServer::new(server_end).with_turn_runner(runner);
         let state = server.state();
-        let handle = tokio::spawn(async move {
-            let _ = server.run().await;
-        });
+        let handle = spawn_app_server_bridge(server);
         (handle, client_end, state)
     };
 
@@ -2503,9 +2504,7 @@ async fn forwarder_does_not_contaminate_successor_session_stats() {
         let (server_end, client_end) = InMemoryTransport::pair(32);
         let server = SdkServer::new(server_end).with_turn_runner(runner);
         let state = server.state();
-        let handle = tokio::spawn(async move {
-            let _ = server.run().await;
-        });
+        let handle = spawn_app_server_bridge(server);
         (handle, client_end, state)
     };
 
@@ -2591,9 +2590,7 @@ async fn send_server_request_cleans_up_pending_on_receiver_drop() {
     let server = SdkServer::new(server_end);
     let state = server.state();
     let transport = server.transport();
-    let server_task = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let server_task = spawn_app_server_bridge(server);
 
     let state_for_send = state.clone();
     let transport_for_send = transport.clone();
@@ -2654,9 +2651,7 @@ async fn engine_error_is_recorded_in_session_stats() {
         let (server_end, client_end) = InMemoryTransport::pair(32);
         let server = SdkServer::new(server_end).with_turn_runner(runner);
         let state = server.state();
-        let handle = tokio::spawn(async move {
-            let _ = server.run().await;
-        });
+        let handle = spawn_app_server_bridge(server);
         (handle, client_end, state)
     };
 
@@ -3706,9 +3701,7 @@ async fn spawn_server_with_mcp_manager() -> (
     let (server_end, client_end) = InMemoryTransport::pair(32);
     let server = SdkServer::new(server_end).with_mcp_manager(manager);
     let state = server.state();
-    let handle = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let handle = spawn_app_server_bridge(server);
     (handle, client_end, state, tmp)
 }
 
@@ -4102,9 +4095,7 @@ async fn rewind_files_errors_on_unknown_message_id() {
     let tmp_config = TempSessionsDir::new(); // reuse temp helper for a tmpdir
     let (server_end, client_end) = InMemoryTransport::pair(32);
     let server = SdkServer::new(server_end).with_file_history(history, tmp_config.path.clone());
-    let server_task = tokio::spawn(async move {
-        let _ = server.run().await;
-    });
+    let server_task = spawn_app_server_bridge(server);
 
     start_session(&client_end).await;
 

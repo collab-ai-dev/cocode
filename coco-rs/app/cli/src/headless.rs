@@ -618,8 +618,8 @@ pub struct RunChatOptions {
     pub cancel: Option<CancellationToken>,
     /// Pre-built message history to seed the conversation. Empty =
     /// start a fresh conversation (the default `run_chat` behavior).
-    /// Non-empty = continue from the prior turns; the engine drives
-    /// `run_with_messages(prior + user_prompt)` instead of `run`.
+    /// Non-empty = continue from the prior turns; the local AppServer
+    /// turn is seeded with the prior history before `turn/start`.
     pub prior_messages: Vec<std::sync::Arc<coco_messages::Message>>,
     /// Override the engine's session id. Used by `--resume` /
     /// `--continue` / `--fork-session` so the resumed run writes
@@ -940,6 +940,17 @@ pub async fn run_chat_with_options(
     // 1 s poll fires — that bounded end-of-run drain is a documented follow-up.
     crate::leader_inbox_poller::install_leader(session_handle.clone(), None).await;
 
+    let mut local_app_server_bridge = crate::sdk_server::AppServerLocalBridge::new(Arc::new(
+        crate::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(session_handle.clone())
+        .await;
+    local_app_server_bridge
+        .client()
+        .keep_alive(local_app_server_bridge.handler())
+        .await?;
+
     let session_id = runtime.current_typed_session_id().await;
     let session_start_source = if opts.session_id_override.is_some() {
         "resume"
@@ -1056,8 +1067,10 @@ pub async fn run_chat_with_options(
         session_additional_dirs,
         permission_rule_source_roots,
     );
+    runtime
+        .update_engine_config(|cfg| *cfg = config.clone())
+        .await;
 
-    let engine = runtime.build_engine_from_config(config, cancel, None).await;
     let mut effective_prompt = prompt.to_string();
     let mut prefix_messages: Vec<std::sync::Arc<coco_messages::Message>> = Vec::new();
     let prior_messages = opts.prior_messages;
@@ -1183,48 +1196,76 @@ pub async fn run_chat_with_options(
         }
     }
 
-    // Resolve `@`-mentions in the prompt to file-content system-reminder
-    // messages. Both branches below share one expansion pipeline so
-    // headless behaves like TUI / SDK.
-    let inputs = crate::at_mention_turn::resolve_turn_inputs_text_only(
-        &effective_prompt,
-        &cwd,
-        &runtime.file_read_state,
-    )
-    .await;
-    let new_turn_messages = crate::at_mention_turn::build_messages_for_turn(&inputs);
-    let messages: Vec<std::sync::Arc<coco_messages::Message>> =
-        if prior_messages.is_empty() && prefix_messages.is_empty() {
-            new_turn_messages
-                .into_iter()
-                .map(std::sync::Arc::new)
-                .collect()
-        } else {
-            let mut combined = prior_messages;
-            combined.extend(prefix_messages);
-            combined.extend(new_turn_messages.into_iter().map(std::sync::Arc::new));
-            combined
-        };
-    if !inputs.mentioned_paths.is_empty() {
-        engine
-            .note_mentioned_paths(inputs.mentioned_paths.clone())
-            .await;
+    {
+        let mut history = runtime.history.lock().await;
+        history.clear();
+        for message in prior_messages.iter().chain(prefix_messages.iter()) {
+            history.push_arc(message.clone());
+        }
     }
+    local_app_server_bridge
+        .install_session_runtime(session_handle.clone())
+        .await;
 
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(64);
-    // Drain events to /dev/null — callers wanting events should drop
-    // down to `coco_query::QueryEngine::run_with_events` directly.
-    let drainer = tokio::spawn(async move { while event_rx.recv().await.is_some() {} });
-    let result = engine
-        .run_with_messages(messages, event_tx, coco_types::TurnId::generate())
+    let cancel_monitor = {
+        let cancel = cancel.clone();
+        let client = local_app_server_bridge.connect_local_client();
+        let handler = local_app_server_bridge.handler().clone();
+        tokio::spawn(async move {
+            cancel.cancelled().await;
+            let _ = client.turn_interrupt(&handler).await;
+        })
+    };
+
+    let completion = local_app_server_bridge
+        .start_turn_and_wait_for_end(
+            session_id.clone(),
+            coco_types::TurnStartParams {
+                prompt: effective_prompt,
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: Some(permission_mode),
+                thinking_level: config.thinking_level.clone(),
+            },
+        )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    drainer.abort();
+    cancel_monitor.abort();
+
+    let session_result = {
+        let mut result = local_app_server_bridge.current_session_result().await;
+        for _ in 0..20 {
+            if result.as_ref().is_some_and(|params| params.total_turns > 0) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            result = local_app_server_bridge.current_session_result().await;
+        }
+        result.unwrap_or_else(|| coco_types::SessionResultParams {
+            session_id: session_id.clone(),
+            total_turns: 1,
+            duration_ms: 0,
+            duration_api_ms: 0,
+            is_error: false,
+            stop_reason: "end_turn".to_string(),
+            total_cost_usd: 0.0,
+            usage: completion.ended.usage.unwrap_or_default(),
+            model_usage: std::collections::HashMap::new(),
+            permission_denials: Vec::new(),
+            result: None,
+            errors: Vec::new(),
+            structured_output: None,
+            fast_mode_state: None,
+            num_api_calls: None,
+        })
+    };
 
     // Wait for scheduled turn-end extraction/session-memory work before
     // returning so partial writes aren't dropped on process exit. Auto-dream
     // remains fire-and-forget like TS.
-    if let Some(memory_runtime) = engine.memory_runtime() {
+    if let Some(memory_runtime) = runtime.memory_runtime() {
         let _ = memory_runtime
             .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
             .await;
@@ -1243,27 +1284,56 @@ pub async fn run_chat_with_options(
 
     let additional_dirs = resolve_additional_dirs(cli, &cwd);
     let tool_filter_summary = summarize_tool_filter(cli);
+    let usage_snapshot = runtime.session_usage_snapshot().await;
+    let cost_tracker = CostTracker::from_snapshot(usage_snapshot);
+    let final_messages = runtime.history.lock().await.to_vec();
+    let response_text = session_result.result.clone().unwrap_or_else(|| {
+        final_messages
+            .iter()
+            .rev()
+            .find_map(|message| match message.as_ref() {
+                coco_messages::Message::Assistant(assistant) => match &assistant.message {
+                    coco_messages::LlmMessage::Assistant { content, .. } => {
+                        content.iter().find_map(|part| match part {
+                            coco_messages::AssistantContent::Text(text) => Some(text.text.clone()),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap_or_default()
+    });
+    let budget_exhausted = matches!(
+        completion.ended.outcome,
+        coco_types::TurnOutcome::BudgetExhausted(_)
+    );
+    let cancelled = matches!(
+        completion.ended.outcome,
+        coco_types::TurnOutcome::Interrupted(_)
+    );
 
     Ok(RunChatOutcome {
         effective_cwd: cwd.clone(),
         additional_dirs,
         tool_filter_summary,
-        response_text: result.response_text,
-        turns: result.turns,
-        total_usage: result.total_usage,
-        cost_tracker: result.cost_tracker,
+        response_text,
+        turns: session_result.total_turns,
+        total_usage: session_result.usage,
+        cost_tracker,
         model_id,
         provider_api,
         permission_mode,
         bypass_permissions_available,
         permission_notification: startup.notification,
-        duration_ms: result.duration_ms,
-        duration_api_ms: result.duration_api_ms,
-        budget_exhausted: result.budget_exhausted,
-        cancelled: result.cancelled,
-        last_continue_reason: result.last_continue_reason,
+        duration_ms: session_result.duration_ms,
+        duration_api_ms: session_result.duration_api_ms,
+        budget_exhausted,
+        cancelled,
+        last_continue_reason: None,
         installed_fallback_count,
-        final_messages: result.final_messages,
+        final_messages,
     })
 }
 

@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use crate::HookEventType;
 use crate::PermissionMode;
 use crate::PermissionUpdate;
+use crate::ProviderModelSelection;
+use crate::QueuedCommandEditImage;
 use crate::SessionId;
 use crate::ThinkingLevel;
 use crate::wire_tagged::wire_tagged_enum;
@@ -255,6 +257,23 @@ pub struct SessionArchiveParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnStartParams {
     pub prompt: String,
+    /// Optional full-history override for local compatibility turns that have
+    /// already assembled transcript messages outside a plain prompt. Each item
+    /// is a serialized `coco_messages::Message`; kept as JSON here to avoid a
+    /// reverse dependency from `coco-types` to `coco-messages`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history_override: Vec<serde_json::Value>,
+    /// Optional clipboard/paste images to include on the user message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<QueuedCommandEditImage>,
+    /// Optional slash-command metadata to prepend as a model-visible
+    /// attachment before the user prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slash_metadata: Option<String>,
+    /// Optional explicit turn-scoped model selection. When absent, the session
+    /// model remains authoritative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_selection: Option<ProviderModelSelection>,
     /// Optional turn-scoped permission mode override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<PermissionMode>,

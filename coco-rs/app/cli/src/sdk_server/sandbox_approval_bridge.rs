@@ -45,8 +45,8 @@ pub const SANDBOX_PATH_ACCESS_TOOL_NAME: &str = "SandboxPathAccess";
 /// SDK-backed sandbox approval bridge.
 ///
 /// Construction is cheap — just an `Arc<SdkServerState>` clone. The
-/// SDK transport must be initialised (`SdkServer::run`) before the
-/// first sandbox deny lands; otherwise we surface
+/// SDK transport must be initialised (`SdkServer::run_app_server_connection`)
+/// before the first sandbox deny lands; otherwise we surface
 /// `SandboxApprovalDecision::Rejected` so the underlying deny error
 /// stands. Fail-closed by construction.
 pub struct SdkSandboxApprovalBridge {

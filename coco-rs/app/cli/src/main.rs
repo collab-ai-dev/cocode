@@ -709,14 +709,22 @@ async fn run_sdk_mode(cli: &Cli, cwd: PathBuf) -> Result<()> {
         target: "coco_cli::sdk",
         permission_mode = ?permission_mode,
         bypass_available = bypass_permissions_available,
-        "sdk server entering dispatch loop"
+        "sdk server entering AppServer bridge dispatch loop"
     );
-    let dispatch_result = server.run().await;
+    let app_server = Arc::new(coco_app_server::AppServer::<()>::new(
+        /*max_sessions*/ 1, /*channel_capacity*/ 256,
+    ));
+    let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 256);
+    let connection = adapter.connect();
+    let dispatch_result = server
+        .run_app_server_connection(connection)
+        .await
+        .map(|_| ());
 
     // Wait for any in-flight auto-memory extraction to complete before
     // we exit so partial writes aren't dropped on process shutdown. Done
-    // after `server.run()` so the dispatch loop has already stopped
-    // accepting new turns.
+    // after the SDK AppServer bridge exits so the dispatch loop has
+    // already stopped accepting new turns.
     let session_runtime_guard = state.session_runtime.read().await;
     if let Some(session_runtime) = session_runtime_guard.as_ref() {
         // Persist coordinator mode at exit so a later `--resume` re-derives the

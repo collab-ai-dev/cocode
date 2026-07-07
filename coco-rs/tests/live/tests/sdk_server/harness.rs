@@ -338,7 +338,12 @@ pub async fn build_live_server_with_options(
     let server_arc = Arc::new(server);
     let server_for_task = server_arc.clone();
     let server_task = tokio::spawn(async move {
-        let _ = server_for_task.run().await;
+        let app_server = Arc::new(coco_app_server::AppServer::<()>::new(
+            /*max_sessions*/ 1, /*channel_capacity*/ 64,
+        ));
+        let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 64);
+        let connection = adapter.connect();
+        let _ = server_for_task.run_app_server_connection(connection).await;
     });
 
     Ok(LiveSdkServer {

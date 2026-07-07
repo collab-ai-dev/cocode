@@ -106,9 +106,9 @@ pub struct SessionRuntimeBuildOpts<'a> {
     /// and uses interactive approval prompts instead.
     pub permission_bridge: Option<ToolPermissionBridgeRef>,
     /// Slash-command registry — populated once at startup via
-    /// `coco_commands::build_command_registry`. Both the typed
-    /// `/foo` path (`process_submit_turn`) and the command-palette
-    /// path (`UserCommand::ExecuteSkill`) dispatch through this.
+    /// `coco_commands::build_command_registry`. Both typed `/foo`
+    /// dispatch and command-palette execution snapshot this registry
+    /// before sending model-bound follow-ups through AppServer turn/start.
     /// Wrapped in `RwLock` so `/reload-plugins` can rebuild and swap
     /// without restarting the session — consumers snapshot the inner
     /// `Arc<CommandRegistry>` once per dispatch via

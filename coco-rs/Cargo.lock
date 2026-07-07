@@ -1117,8 +1117,10 @@ dependencies = [
  "coco-app-server-transport",
  "coco-error",
  "coco-types",
+ "serde",
  "serde_json",
  "snafu",
+ "tempfile",
  "tokio",
 ]
 
@@ -1127,7 +1129,11 @@ name = "coco-app-server-client"
 version = "0.1.1"
 dependencies = [
  "coco-app-server",
+ "coco-app-server-transport",
  "coco-types",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -1138,6 +1144,7 @@ version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -1225,6 +1232,9 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "coco-app-server",
+ "coco-app-server-client",
+ "coco-app-server-transport",
  "coco-bridge",
  "coco-commands",
  "coco-compact",
@@ -2501,6 +2511,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "coco-app-server",
  "coco-cli",
  "coco-commands",
  "coco-config",

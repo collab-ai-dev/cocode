@@ -209,6 +209,7 @@ mod goal_tests {
 }
 
 use super::ActiveTurn;
+use super::ActiveTurnCancel;
 use super::ActiveTurnDrain;
 use super::PermissionsMutation;
 use super::SentinelTrigger;
@@ -236,7 +237,6 @@ use coco_config::RoleSlots;
 use coco_config::RuntimeOverrides;
 use coco_config::Settings;
 use coco_config::SettingsWithSource;
-use coco_tool_runtime::TurnAbortController;
 use coco_tui::SystemPushKind;
 use coco_types::CommandArgumentKind;
 use coco_types::CommandBase;
@@ -246,7 +246,6 @@ use coco_types::CommandType;
 use coco_types::LocalCommandData;
 use coco_types::ModelRole;
 use coco_types::ProviderModelSelection;
-use coco_types::TurnAbortReason;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -313,12 +312,16 @@ async fn shutdown_drain_aborts_stuck_active_turn_after_timeout() {
         let _guard = DropFlag(dropped_for_task);
         std::future::pending::<()>().await;
     });
-    let abort = TurnAbortController::new();
-    let signal = abort.signal();
+    let bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
     let slot = Arc::new(Mutex::new(Some(ActiveTurn {
         id: uuid::Uuid::new_v4(),
         task,
-        abort,
+        cancel: ActiveTurnCancel {
+            client: bridge.connect_local_client(),
+            handler: bridge.handler().clone(),
+        },
     })));
 
     drain_active_turn(
@@ -329,7 +332,6 @@ async fn shutdown_drain_aborts_stuck_active_turn_after_timeout() {
 
     assert!(slot.lock().await.is_none());
     assert!(dropped.load(Ordering::SeqCst));
-    assert_eq!(signal.reason(), Some(TurnAbortReason::SystemPreempt));
 }
 
 #[test]
@@ -611,10 +613,17 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
     let (turn_done_tx, mut turn_done_rx) = tokio::sync::mpsc::channel(4);
     let mut pending_editor_requests = std::collections::HashMap::new();
     let title_gen_attempted = Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new()));
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
 
     process_idle_command_queue(
         &runtime,
         &event_tx,
+        &mut local_app_server_bridge,
         &active_turn,
         &mut pending_editor_requests,
         &title_gen_attempted,
@@ -636,6 +645,13 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
         .expect("queued follow-up turn should finish")
         .expect("turn_done channel should stay open");
     assert!(drain_completed_turn(&active_turn, completed_turn).await);
+    let history = runtime.runtime().history.lock().await;
+    assert_eq!(
+        history.last_assistant_text().as_deref(),
+        Some("queued turn complete"),
+        "queued prompt should complete through the local AppServer turn path"
+    );
+    drop(history);
 
     let mut saw_dequeued = false;
     let mut saw_queue_empty = false;
@@ -662,6 +678,43 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
 }
 
 #[tokio::test]
+async fn local_app_server_turn_writes_back_runtime_history() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let session_id = runtime.runtime().current_typed_session_id().await;
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    let completion = local_app_server_bridge
+        .start_turn_and_wait_for_end(
+            session_id,
+            coco_types::TurnStartParams {
+                prompt: "write back runtime history".into(),
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+            },
+        )
+        .await
+        .expect("local AppServer turn completes");
+
+    assert_eq!(completion.ended.turn_id, completion.started.turn_id);
+    let history = runtime.runtime().history.lock().await;
+    assert_eq!(
+        history.last_assistant_text().as_deref(),
+        Some("queued turn complete")
+    );
+}
+
+#[tokio::test]
 async fn model_slash_arg_rejects_unavailable_model() {
     let mut registry = coco_commands::CommandRegistry::new();
     coco_commands::register_extended_builtins(&mut registry);
@@ -676,8 +729,15 @@ async fn model_slash_arg_rejects_unavailable_model() {
     )
     .await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
 
-    let outcome = dispatch_slash_command("model", "gpt5", &runtime, &tx).await;
+    let outcome =
+        dispatch_slash_command("model", "gpt5", &runtime, &tx, &local_app_server_bridge).await;
 
     assert!(matches!(outcome, super::SlashOutcome::Handled));
     let event = rx.recv().await.expect("slash result event");
@@ -729,8 +789,15 @@ async fn inactive_slash_command_emits_session_hint_without_running_handler() {
     let home = TempDir::new().expect("tempdir");
     let runtime = build_runtime_with_registry(&home, registry).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
 
-    let outcome = dispatch_slash_command("blocked", "arg", &runtime, &tx).await;
+    let outcome =
+        dispatch_slash_command("blocked", "arg", &runtime, &tx, &local_app_server_bridge).await;
 
     assert!(matches!(outcome, super::SlashOutcome::Handled));
     let event = rx.recv().await.expect("slash result event");

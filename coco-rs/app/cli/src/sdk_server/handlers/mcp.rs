@@ -277,8 +277,8 @@ async fn bridge_elicitation_to_sdk_client(
     server_name: &str,
     elicitation: impl serde::Serialize,
 ) -> std::result::Result<coco_mcp::ElicitationResponse, coco_mcp::RmcpClientError> {
-    // Grab the cached transport handle — must be present (dispatcher
-    // publishes it at `SdkServer::run` startup).
+    // Grab the cached transport handle — must be present (the AppServer bridge
+    // publishes it at `SdkServer::run_app_server_connection` startup).
     let transport = {
         let guard = state.transport.read().await;
         match guard.as_ref() {

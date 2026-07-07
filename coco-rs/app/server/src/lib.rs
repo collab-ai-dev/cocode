@@ -38,14 +38,24 @@ pub use app_server::AppReplaceStart;
 pub use app_server::AppServer;
 pub use app_server::AppServerError;
 pub use app_server::ResolvedServerRequest;
+pub use app_server::ServerRequestErrorReply;
 pub use app_server::ServerRequestReply;
 pub use json_rpc_adapter::JsonRpcAdapter;
 pub use json_rpc_adapter::JsonRpcAdapterConnection;
 pub use json_rpc_adapter::JsonRpcAdapterError;
+pub use json_rpc_adapter::JsonRpcConnectionOwnerError;
+pub use json_rpc_adapter::JsonRpcDispatchError;
+pub use json_rpc_adapter::JsonRpcRequestContext;
+pub use json_rpc_adapter::JsonRpcRequestFuture;
+pub use json_rpc_adapter::JsonRpcRequestHandler;
 pub use json_rpc_adapter::JsonRpcServerRequestResponse;
 pub use json_rpc_adapter::PendingJsonRpcServerRequest;
 pub use local_client_adapter::LocalClientAdapter;
 pub use local_client_adapter::LocalClientConnection;
+pub use local_client_adapter::LocalClientDispatchError;
+pub use local_client_adapter::LocalClientRequestContext;
+pub use local_client_adapter::LocalClientRequestFuture;
+pub use local_client_adapter::LocalClientRequestHandler;
 pub use local_client_adapter::LocalClientSubscribeOutcome;
 pub use local_client_adapter::LocalClientSubscription;
 pub use local_client_adapter::LocalClientSurface;
@@ -766,6 +776,16 @@ impl RoutingState {
                 actual_session_id: session_id.clone(),
             });
         }
+        self.remove_pending_server_request(request_id)
+            .ok_or_else(|| CompleteServerRequestError::NotFound {
+                request_id: request_id.clone(),
+            })
+    }
+
+    pub fn complete_server_request_by_id(
+        &mut self,
+        request_id: &RequestId,
+    ) -> Result<PendingServerRequest, CompleteServerRequestError> {
         self.remove_pending_server_request(request_id)
             .ok_or_else(|| CompleteServerRequestError::NotFound {
                 request_id: request_id.clone(),
