@@ -8,9 +8,12 @@ send `announce` / `batch` frames, and validate `announce_ack` / `batch_ack`
 responses. `HubConnectorWorker` adds the reusable background egress loop:
 bounded producer channel, bounded pending event ring, durable-envelope
 filtering, max-event and serialized-byte batching, jittered reconnect/backoff,
-and shutdown flushing.
+shutdown flushing, and durable `events_dropped` markers when the producer
+channel overflows.
 It must not depend on the hub server or web UI.
 
-Still future work: durable `events_dropped` markers for backlog shedding. That
-needs a sequence-safe marker policy across producer-channel overflow and the
-AppServer-owned stamper.
+Drop marker policy: `try_enqueue` records full-queue drops only for durable
+`SessionEnvelope`s that already have a `session_seq`; ephemeral drops remain
+live-only. The worker emits one `events_dropped` marker per session range before
+the next higher same-session event or during shutdown flush, so Hub cursors can
+advance across locally shed events.

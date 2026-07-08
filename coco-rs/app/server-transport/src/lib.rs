@@ -6,11 +6,17 @@
 
 use serde::Deserialize;
 use serde::Serialize;
+#[cfg(unix)]
+use std::path::PathBuf;
 use tokio::io::AsyncBufRead;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
+#[cfg(windows)]
+use tokio::io::ReadHalf;
+#[cfg(windows)]
+use tokio::io::WriteHalf;
 
 pub const JSONRPC_VERSION: &str = "2.0";
 pub const DEFAULT_MAX_NDJSON_FRAME_BYTES: usize = 1024 * 1024;
@@ -24,9 +30,29 @@ pub type NdjsonUnixConnection = NdjsonDuplexConnection<
     tokio::net::unix::OwnedWriteHalf,
 >;
 
+#[cfg(windows)]
+pub type NdjsonNamedPipeClientConnection = NdjsonDuplexConnection<
+    BufReader<ReadHalf<tokio::net::windows::named_pipe::NamedPipeClient>>,
+    WriteHalf<tokio::net::windows::named_pipe::NamedPipeClient>,
+>;
+
+#[cfg(windows)]
+pub type NdjsonNamedPipeServerConnection = NdjsonDuplexConnection<
+    BufReader<ReadHalf<tokio::net::windows::named_pipe::NamedPipeServer>>,
+    WriteHalf<tokio::net::windows::named_pipe::NamedPipeServer>,
+>;
+
 #[cfg(unix)]
 pub struct NdjsonUnixListener {
-    listener: tokio::net::UnixListener,
+    listener: Option<tokio::net::UnixListener>,
+    max_frame_bytes: usize,
+    socket_path: Option<PathBuf>,
+}
+
+#[cfg(windows)]
+pub struct NdjsonNamedPipeListener {
+    pipe_name: String,
+    server: Option<tokio::net::windows::named_pipe::NamedPipeServer>,
     max_frame_bytes: usize,
 }
 
@@ -311,6 +337,48 @@ pub async fn connect_ndjson_unix(
     Ok(ndjson_unix_connection(stream))
 }
 
+#[cfg(windows)]
+pub fn ndjson_named_pipe_client_connection(
+    stream: tokio::net::windows::named_pipe::NamedPipeClient,
+) -> NdjsonNamedPipeClientConnection {
+    ndjson_named_pipe_client_connection_with_max_frame_bytes(stream, DEFAULT_MAX_NDJSON_FRAME_BYTES)
+}
+
+#[cfg(windows)]
+pub fn ndjson_named_pipe_client_connection_with_max_frame_bytes(
+    stream: tokio::net::windows::named_pipe::NamedPipeClient,
+    max_frame_bytes: usize,
+) -> NdjsonNamedPipeClientConnection {
+    let (read, write) = tokio::io::split(stream);
+    NdjsonDuplexConnection::with_max_frame_bytes(BufReader::new(read), write, max_frame_bytes)
+}
+
+#[cfg(windows)]
+pub fn ndjson_named_pipe_server_connection(
+    stream: tokio::net::windows::named_pipe::NamedPipeServer,
+) -> NdjsonNamedPipeServerConnection {
+    ndjson_named_pipe_server_connection_with_max_frame_bytes(stream, DEFAULT_MAX_NDJSON_FRAME_BYTES)
+}
+
+#[cfg(windows)]
+pub fn ndjson_named_pipe_server_connection_with_max_frame_bytes(
+    stream: tokio::net::windows::named_pipe::NamedPipeServer,
+    max_frame_bytes: usize,
+) -> NdjsonNamedPipeServerConnection {
+    let (read, write) = tokio::io::split(stream);
+    NdjsonDuplexConnection::with_max_frame_bytes(BufReader::new(read), write, max_frame_bytes)
+}
+
+#[cfg(windows)]
+pub fn connect_ndjson_named_pipe(
+    pipe_name: impl AsRef<str>,
+) -> Result<NdjsonNamedPipeClientConnection, TransportFrameError> {
+    let stream = tokio::net::windows::named_pipe::ClientOptions::new()
+        .open(pipe_name.as_ref())
+        .map_err(|source| TransportFrameError::Io { source })?;
+    Ok(ndjson_named_pipe_client_connection(stream))
+}
+
 #[cfg(unix)]
 impl NdjsonUnixListener {
     pub fn bind(path: impl AsRef<std::path::Path>) -> Result<Self, TransportFrameError> {
@@ -321,17 +389,21 @@ impl NdjsonUnixListener {
         path: impl AsRef<std::path::Path>,
         max_frame_bytes: usize,
     ) -> Result<Self, TransportFrameError> {
-        let listener = tokio::net::UnixListener::bind(path)
+        let path = path.as_ref().to_path_buf();
+        let listener = tokio::net::UnixListener::bind(&path)
             .map_err(|source| TransportFrameError::Io { source })?;
         Ok(Self {
-            listener,
+            listener: Some(listener),
             max_frame_bytes,
+            socket_path: Some(path),
         })
     }
 
     pub async fn accept(&self) -> Result<NdjsonUnixConnection, TransportFrameError> {
-        let (stream, _) = self
-            .listener
+        let Some(listener) = self.listener.as_ref() else {
+            return Err(TransportFrameError::Closed);
+        };
+        let (stream, _) = listener
             .accept()
             .await
             .map_err(|source| TransportFrameError::Io { source })?;
@@ -341,9 +413,76 @@ impl NdjsonUnixListener {
         ))
     }
 
-    pub fn into_inner(self) -> tokio::net::UnixListener {
+    pub fn into_inner(mut self) -> tokio::net::UnixListener {
+        self.socket_path = None;
         self.listener
+            .take()
+            .expect("listener is present before into_inner")
     }
+}
+
+#[cfg(unix)]
+impl Drop for NdjsonUnixListener {
+    fn drop(&mut self) {
+        drop(self.listener.take());
+        let Some(path) = self.socket_path.take() else {
+            return;
+        };
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            return;
+        };
+        if std::os::unix::fs::FileTypeExt::is_socket(&metadata.file_type()) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+#[cfg(windows)]
+impl NdjsonNamedPipeListener {
+    pub fn bind(pipe_name: impl AsRef<str>) -> Result<Self, TransportFrameError> {
+        Self::bind_with_max_frame_bytes(pipe_name, DEFAULT_MAX_NDJSON_FRAME_BYTES)
+    }
+
+    pub fn bind_with_max_frame_bytes(
+        pipe_name: impl AsRef<str>,
+        max_frame_bytes: usize,
+    ) -> Result<Self, TransportFrameError> {
+        let pipe_name = pipe_name.as_ref().to_string();
+        let server = create_named_pipe_server(&pipe_name)?;
+        Ok(Self {
+            pipe_name,
+            server: Some(server),
+            max_frame_bytes,
+        })
+    }
+
+    pub async fn accept(&mut self) -> Result<NdjsonNamedPipeServerConnection, TransportFrameError> {
+        let Some(server) = self.server.take() else {
+            return Err(TransportFrameError::Closed);
+        };
+        server
+            .connect()
+            .await
+            .map_err(|source| TransportFrameError::Io { source })?;
+        self.server = Some(create_named_pipe_server(&self.pipe_name)?);
+        Ok(ndjson_named_pipe_server_connection_with_max_frame_bytes(
+            server,
+            self.max_frame_bytes,
+        ))
+    }
+
+    pub fn into_inner(mut self) -> Option<tokio::net::windows::named_pipe::NamedPipeServer> {
+        self.server.take()
+    }
+}
+
+#[cfg(windows)]
+fn create_named_pipe_server(
+    pipe_name: &str,
+) -> Result<tokio::net::windows::named_pipe::NamedPipeServer, TransportFrameError> {
+    tokio::net::windows::named_pipe::ServerOptions::new()
+        .create(pipe_name)
+        .map_err(|source| TransportFrameError::Io { source })
 }
 
 #[cfg(unix)]
@@ -359,6 +498,21 @@ pub fn bind_ndjson_unix_listener_with_max_frame_bytes(
     max_frame_bytes: usize,
 ) -> Result<NdjsonUnixListener, TransportFrameError> {
     NdjsonUnixListener::bind_with_max_frame_bytes(path, max_frame_bytes)
+}
+
+#[cfg(windows)]
+pub fn bind_ndjson_named_pipe_listener(
+    pipe_name: impl AsRef<str>,
+) -> Result<NdjsonNamedPipeListener, TransportFrameError> {
+    NdjsonNamedPipeListener::bind(pipe_name)
+}
+
+#[cfg(windows)]
+pub fn bind_ndjson_named_pipe_listener_with_max_frame_bytes(
+    pipe_name: impl AsRef<str>,
+    max_frame_bytes: usize,
+) -> Result<NdjsonNamedPipeListener, TransportFrameError> {
+    NdjsonNamedPipeListener::bind_with_max_frame_bytes(pipe_name, max_frame_bytes)
 }
 
 impl JsonRpcRequest {
@@ -876,5 +1030,37 @@ mod tests {
             client.recv_frame().await.expect("client reads response"),
             Some(response)
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ndjson_unix_listener_removes_socket_path_on_drop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("app-server.sock");
+        {
+            let _listener = bind_ndjson_unix_listener(&socket_path).expect("bind unix listener");
+            assert!(socket_path.exists());
+        }
+
+        assert!(
+            !socket_path.exists(),
+            "dropping the listener should remove its socket file"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ndjson_unix_listener_into_inner_transfers_socket_cleanup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let socket_path = dir.path().join("app-server.sock");
+        let listener = bind_ndjson_unix_listener(&socket_path).expect("bind unix listener");
+        let inner = listener.into_inner();
+        drop(inner);
+
+        assert!(
+            socket_path.exists(),
+            "into_inner hands socket lifecycle to the caller"
+        );
+        std::fs::remove_file(&socket_path).expect("cleanup socket");
     }
 }

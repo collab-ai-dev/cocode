@@ -1,4 +1,7 @@
+use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -8,7 +11,9 @@ use coco_hub_protocol::AnnounceFrame;
 use coco_hub_protocol::BatchAckFrame;
 use coco_hub_protocol::BatchFrame;
 use coco_hub_protocol::EventEnvelope;
+use coco_hub_protocol::EventPayload;
 use coco_types::SessionEnvelope;
+use coco_types::SessionId;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -38,6 +43,7 @@ pub struct HubConnectorWorkerConfig {
 pub struct HubConnectorWorkerStats {
     pub shipped_events: i64,
     pub skipped_ephemeral_events: i64,
+    pub dropped_durable_events: i64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -61,6 +67,7 @@ pub enum HubConnectorQueueError {
 #[derive(Debug, Clone)]
 pub struct HubConnectorSender {
     tx: mpsc::Sender<SessionEnvelope>,
+    dropped: Arc<Mutex<DroppedEventRanges>>,
 }
 
 impl HubConnectorSender {
@@ -73,7 +80,10 @@ impl HubConnectorSender {
 
     pub fn try_enqueue(&self, envelope: SessionEnvelope) -> Result<(), HubConnectorQueueError> {
         self.tx.try_send(envelope).map_err(|err| match err {
-            mpsc::error::TrySendError::Full(_) => HubConnectorQueueError::Full,
+            mpsc::error::TrySendError::Full(envelope) => {
+                record_dropped_envelope(&self.dropped, &envelope);
+                HubConnectorQueueError::Full
+            }
             mpsc::error::TrySendError::Closed(_) => HubConnectorQueueError::Closed,
         })
     }
@@ -90,9 +100,10 @@ impl HubConnectorWorker {
         validate_config(&config)?;
         let (tx, rx) = mpsc::channel(config.channel_capacity);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let join = tokio::spawn(run_worker(config, rx, shutdown_rx));
+        let dropped = Arc::new(Mutex::new(DroppedEventRanges::default()));
+        let join = tokio::spawn(run_worker(config, rx, shutdown_rx, Arc::clone(&dropped)));
         Ok(Self {
-            sender: HubConnectorSender { tx },
+            sender: HubConnectorSender { tx, dropped },
             shutdown_tx,
             join,
         })
@@ -158,6 +169,7 @@ async fn run_worker(
     config: HubConnectorWorkerConfig,
     mut rx: mpsc::Receiver<SessionEnvelope>,
     mut shutdown_rx: oneshot::Receiver<()>,
+    dropped: Arc<Mutex<DroppedEventRanges>>,
 ) -> Result<HubConnectorWorkerStats, HubConnectorWorkerError> {
     let mut pending = VecDeque::with_capacity(config.pending_capacity);
     let mut stats = HubConnectorWorkerStats::default();
@@ -168,8 +180,12 @@ async fn run_worker(
     let mut shutting_down = false;
 
     loop {
+        if pending.is_empty() && rx.is_empty() {
+            push_all_dropped_markers(&config, &dropped, &mut pending, &mut stats);
+        }
         if shutting_down {
-            drain_ready(&config, &mut rx, &mut pending, &mut stats)?;
+            drain_ready(&config, &mut rx, &mut pending, &mut stats, &dropped)?;
+            push_all_dropped_markers(&config, &dropped, &mut pending, &mut stats);
             if pending.is_empty() {
                 return Ok(stats);
             }
@@ -205,7 +221,7 @@ async fn run_worker(
                     shutting_down = true;
                     continue;
                 };
-                push_envelope(&config, &mut pending, &mut stats, envelope)?;
+                push_envelope(&config, &mut pending, &mut stats, &dropped, envelope)?;
             }
             _ = flush_tick.tick(), if !pending.is_empty() => {
                 deliver_or_backoff(
@@ -226,10 +242,11 @@ fn drain_ready(
     rx: &mut mpsc::Receiver<SessionEnvelope>,
     pending: &mut VecDeque<EventEnvelope>,
     stats: &mut HubConnectorWorkerStats,
+    dropped: &Arc<Mutex<DroppedEventRanges>>,
 ) -> Result<(), HubConnectorWorkerError> {
     while pending.len() < config.pending_capacity {
         match rx.try_recv() {
-            Ok(envelope) => push_envelope(config, pending, stats, envelope)?,
+            Ok(envelope) => push_envelope(config, pending, stats, dropped, envelope)?,
             Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
                 break;
             }
@@ -242,16 +259,126 @@ fn push_envelope(
     config: &HubConnectorWorkerConfig,
     pending: &mut VecDeque<EventEnvelope>,
     stats: &mut HubConnectorWorkerStats,
+    dropped: &Arc<Mutex<DroppedEventRanges>>,
     envelope: SessionEnvelope,
 ) -> Result<(), HubConnectorWorkerError> {
     if let Some(event) =
         event_envelope_from_session_envelope(config.announce.instance_id, Utc::now(), envelope)?
     {
+        push_dropped_marker_before(config, dropped, pending, stats, &event);
         pending.push_back(event);
     } else {
         stats.skipped_ephemeral_events += 1;
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct DroppedEventRange {
+    count: i64,
+    since_seq: i64,
+    until_seq: i64,
+}
+
+#[derive(Debug, Default)]
+struct DroppedEventRanges {
+    by_session: HashMap<SessionId, DroppedEventRange>,
+}
+
+fn record_dropped_envelope(dropped: &Arc<Mutex<DroppedEventRanges>>, envelope: &SessionEnvelope) {
+    let Some(session_seq) = envelope.session_seq else {
+        return;
+    };
+    let mut dropped = dropped
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    dropped
+        .by_session
+        .entry(envelope.session_id.clone())
+        .and_modify(|range| {
+            range.count = range.count.saturating_add(1);
+            range.since_seq = range.since_seq.min(session_seq);
+            range.until_seq = range.until_seq.max(session_seq);
+        })
+        .or_insert(DroppedEventRange {
+            count: 1,
+            since_seq: session_seq,
+            until_seq: session_seq,
+        });
+}
+
+fn push_dropped_marker_before(
+    config: &HubConnectorWorkerConfig,
+    dropped: &Arc<Mutex<DroppedEventRanges>>,
+    pending: &mut VecDeque<EventEnvelope>,
+    stats: &mut HubConnectorWorkerStats,
+    next_event: &EventEnvelope,
+) {
+    let marker = {
+        let mut dropped = dropped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(range) = dropped.by_session.get(&next_event.session_id) else {
+            return;
+        };
+        if range.until_seq >= next_event.session_seq {
+            return;
+        }
+        dropped.by_session.remove(&next_event.session_id)
+    };
+    if let Some(marker) = marker {
+        push_dropped_marker(
+            config,
+            pending,
+            stats,
+            next_event.session_id.clone(),
+            marker,
+        );
+    }
+}
+
+fn push_all_dropped_markers(
+    config: &HubConnectorWorkerConfig,
+    dropped: &Arc<Mutex<DroppedEventRanges>>,
+    pending: &mut VecDeque<EventEnvelope>,
+    stats: &mut HubConnectorWorkerStats,
+) {
+    if pending.len() >= config.pending_capacity {
+        return;
+    }
+    let ranges = {
+        let mut dropped = dropped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut dropped.by_session)
+    };
+    for (session_id, range) in ranges {
+        push_dropped_marker(config, pending, stats, session_id, range);
+    }
+}
+
+fn push_dropped_marker(
+    config: &HubConnectorWorkerConfig,
+    pending: &mut VecDeque<EventEnvelope>,
+    stats: &mut HubConnectorWorkerStats,
+    session_id: SessionId,
+    range: DroppedEventRange,
+) {
+    stats.dropped_durable_events = stats.dropped_durable_events.saturating_add(range.count);
+    pending.push_back(EventEnvelope {
+        instance_id: config.announce.instance_id,
+        session_id,
+        agent_id: None,
+        session_seq: range.until_seq,
+        ts: Utc::now(),
+        schema_version: coco_hub_protocol::SCHEMA_VERSION_V2,
+        payload: EventPayload::EventsDropped {
+            count: range.count,
+            since_seq: range.since_seq,
+            until_seq: range.until_seq,
+            reason: "hub_connector_backlog_full".to_string(),
+        },
+    });
 }
 
 async fn deliver_or_backoff(

@@ -22,6 +22,7 @@ Depends on everything — wires registries, builds model runtime registry, start
 | `model_factory::*` | Builds `Arc<dyn LanguageModelV4>` from provider/model config |
 | `output::*` | Non-interactive output formatters (text/json/stream-json) |
 | `project_services::ProjectServices` | Project-rooted plugin catalog plus command, skill, hook, MCP, and LSP discovery shared by sessions with the same project root |
+| `session_runtime::SessionRuntimeFactory` | Owned construction seam for building `SessionHandle`s from cloneable startup inputs and a target session id. |
 
 ## Startup Flow
 
@@ -62,10 +63,54 @@ empty `()` handles. Installed runtime snapshots carry the current app/cli
 paths must call `SessionHandle::snapshot_current()` before re-installing. Close
 cascade logic remains retarget-safe until Phase B removes fused runtime
 in-place retargeting. Local `session/resume` uses `AppServer::spawn_replace`
-when the previous live session has an interactive local surface, and falls back
-to close-then-register when no replace caller surface exists. Re-installing a
-runtime-backed handle for an already-live local session refreshes the registry
-handle without changing surface routing.
+when the previous live session has an interactive local surface, and uses
+`AppServer::spawn_replace_detached` plus a fresh requester surface when no
+replace caller surface exists. Re-installing a runtime-backed handle for an
+already-live local session refreshes the registry handle without changing
+surface routing.
+AppServer close for local/SDK bridge handles now performs the bridge-owned
+cascade before archiving surfaces: if the closing session still matches the
+SDK active-session slot, it cancels the active turn, waits boundedly for the
+turn runner and forwarder to drain, clears the slot, then fires runtime
+SessionEnd hooks and cancels the runtime shutdown signal for matching
+runtime-backed handles. The retarget guard still skips fused-runtime shutdown
+when the runtime's current session id no longer matches the registry snapshot.
+SDK JSON-RPC mode also uses `LocalAppSessionHandle` in the AppServer registry.
+`session/start`, `session/resume`, and `session/archive` dispatched through
+`SdkServer::run_app_server_connection` apply the same lifecycle registration
+and close path as local requests after the existing SDK handler succeeds.
+Successful JSON-RPC start/resume also attaches an interactive surface to the
+request connection and returns that `SurfaceId` on the result DTO; remote
+clients may still fall back to lifecycle activation when reading older streams.
+When `RuntimeConfig.server.unix_socket_path` is set (settings
+`server.unix_socket_path` or `COCO_SERVER_UNIX_SOCKET_PATH`), SDK mode also
+binds an NDJSON Unix-domain socket sidecar on the same `AppServer` and shared
+handler before entering stdio dispatch. Bind failures are startup failures; the
+listener is stopped with a bounded shutdown when stdio dispatch exits.
+When `RuntimeConfig.server.websocket_bind` is set (settings
+`server.websocket_bind` or `COCO_SERVER_WEBSOCKET_BIND`), SDK mode also binds
+an opt-in WebSocket sidecar on the same bridge. No TCP/WebSocket listener is
+opened by default.
+On Windows, when `RuntimeConfig.server.named_pipe_name` is set (settings
+`server.named_pipe_name` or `COCO_SERVER_NAMED_PIPE`), SDK mode also binds an
+opt-in NDJSON named-pipe sidecar on the same bridge. No named pipe is opened by
+default.
+JSON-RPC `session/subscribe` is handled directly by the AppServer bridge: it
+attaches a passive surface to the request connection, returns the passive
+`SurfaceId` plus replayed envelopes, and rejects missing/stale cursors with
+the snapshot-required marker.
+AppServer-routed `session/list`, `session/read`, and `session/turns/list` layer
+live AppServer state over the persisted `SessionManager` response, so a started
+session is visible before its transcript has been written. Persisted data
+remains canonical when available. The composition lives in the CLI bridge's
+local session-data view, which reads the installed `SessionManager` directly
+instead of routing these read-only methods through the legacy SDK session-data
+handlers. `coco-app-server` stays independent of `coco-session` until the final
+runtime/session-store facade lands, but owns the shared pure cursor,
+pagination, and turn-span projection helpers used by both the local bridge and
+legacy SDK session-data handlers.
+`session/turns/list` derives turn spans from transcript message order until
+persisted transcript entries carry durable turn ids.
 When constructed with a `HubConnectorSender`, the local outbound forwarder
 clones each AppServer-stamped `SessionEnvelope` to the Hub connector queue
 after routing it locally. Startup-owned Hub worker construction/configuration
@@ -86,9 +131,32 @@ the passive pump for ordinary event delivery.
 Use `install_session_runtime` when TUI/headless have already built a
 `SessionRuntime`; it snapshots the existing session id/cwd/model into the
 shared handler state instead of issuing a fresh `session/start`, installs the
-runtime's `SessionManager` so local `session/list` / `session/read` see
-persisted transcripts, and installs a `QueryEngineRunner` so local
+runtime's `SessionManager` so local `session/list`, `session/read`, and
+`session/turns/list` see persisted transcripts, and installs a `QueryEngineRunner` so local
 `turn/start` requests have the same engine runner as the SDK bridge.
+TUI, headless, and SDK bootstraps now construct their initial runtime through
+`SessionRuntimeFactory`; the factory owns the cloneable build inputs and can
+build explicit-id handles. TUI/headless startup reserve the fresh/resume target
+id before runtime construction and SDK startup reserves a fresh startup id;
+all three load that initial runtime through an AppServer `spawn_load` owner
+task. Resume/fork therefore no longer creates a throwaway startup identity
+first. SDK `session/start` closes the startup placeholder slot before
+registering the client-started session. The shared `session/resume` handler
+skips loaded-session retargeting when the installed runtime already has that
+id.
+The local bridge has runtime-backed `spawn_replace` /
+`spawn_replace_detached` helpers that return the constructed runtime handle to
+callers. The TUI driver now has a swappable current-session owner: each command
+loop iteration reads the current `SessionHandle`, and `/resume` / `/branch`
+construct a fresh runtime through `SessionRuntimeFactory`, seed the loaded
+transcript state, commit the AppServer replacement, and install the returned
+handle into both the TUI owner and local bridge. SDK `session/resume` uses the
+same factory-backed replacement ordering in production: the AppServer bridge
+loads the persisted session, builds the target runtime inside the AppServer
+load/replace owner task, replays resume hydration plus SDK late binds, and
+swaps `SdkServerState.session_runtime` to the returned handle before the next
+turn. TUI long-lived side tasks still need to follow the swappable owner instead
+of holding startup-only runtime handles.
 Local `session/start` and `session/resume` register the session in the local
 `AppServer` registry; resume first closes any previous local live slot for the
 single-session bridge so the resumed session can load without leaking registry
@@ -100,11 +168,13 @@ depends on that correlation and waits for the matching `TurnEnded` on the local
 interactive surface. `TurnStartParams` carries optional base64 paste images,
 slash metadata attachment text, explicit model selection, and thinking
 overrides so TUI-local turn cut-over preserves prompt-command semantics.
-Both headless and TUI bootstraps now create this bridge, install their
-already-built `SessionRuntime`, and issue a local `keep_alive` request through
-`ServerClient`. TUI normal submits and slash/palette prompt turns now start via
-local AppServer `turn/start`; a passive completion monitor releases the TUI
-`active_turn` slot while `turn/interrupt` handles AppServer-owned cancellation.
+Both headless and TUI bootstraps now create this bridge before initial runtime
+construction, load that runtime through the local `spawn_load` owner task,
+install it into the shared handler state, and issue a local `keep_alive`
+request through `ServerClient`. TUI normal submits and slash/palette prompt
+turns now start via local AppServer `turn/start`; a passive completion monitor
+releases the TUI `active_turn` slot while `turn/interrupt` handles
+AppServer-owned cancellation.
 Headless `RunChatOutcome` assembly also starts the turn through local AppServer
 and reconstructs its structured result from the aggregated session result,
 runtime history, and usage snapshot. TUI queued prebuilt-history turns now pass

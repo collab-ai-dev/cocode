@@ -8,6 +8,7 @@ mod app_server;
 mod json_rpc_adapter;
 mod local_client_adapter;
 mod registry;
+mod session_data;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -67,6 +68,14 @@ pub use registry::LoadStart;
 pub use registry::RegistryError;
 pub use registry::ReplaceCommit;
 pub use registry::ReplaceStart;
+pub use session_data::SessionDataProjectionError;
+pub use session_data::SessionPage;
+pub use session_data::TranscriptTurnEntry;
+pub use session_data::derive_session_turn_summaries;
+pub use session_data::page_session_items;
+pub use session_data::parse_session_data_cursor;
+pub use session_data::parse_session_data_limit;
+pub use session_data::session_data_page;
 
 static NEXT_CONNECTION_KEY: AtomicI64 = AtomicI64::new(1);
 static NEXT_SERVER_REQUEST_ID: AtomicI64 = AtomicI64::new(1);

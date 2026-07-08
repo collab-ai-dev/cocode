@@ -1,16 +1,15 @@
 # coco-app-server-transport
 
 Pure transport/wire-format layer for AppServer. This crate is currently a
-Phase A foundation slice: it owns JSON-RPC frame types and serde behavior, but
-does not yet implement WebSocket, connection acceptance, backpressure, or
-adapter-side close cleanup. The current NDJSON support includes per-record
+Phase A foundation slice: it owns JSON-RPC frame types and serde behavior. The
+current NDJSON support includes per-record
 helpers, generic async reader/writer primitives, a generic duplex connection
-wrapper, process stdio binding, and Unix-domain stream binding. The duplex
-wrapper can be split into independent reader/writer halves for adapter-owned
-connection tasks. The Unix binding includes a listener wrapper that accepts
-framed connections while still leaving accept-loop supervision to the caller.
-This crate still does not own async connection tasks or AppServer adapter
-lifecycle.
+wrapper, process stdio binding, Unix-domain stream binding, and Windows
+named-pipe binding. The duplex wrapper can be split into independent
+reader/writer halves for adapter-owned connection tasks. The Unix and
+named-pipe bindings include listener wrappers that accept framed connections
+while still leaving accept-loop supervision to the caller. This crate still
+does not own async connection tasks or AppServer adapter lifecycle.
 
 ## Invariants
 
@@ -37,12 +36,18 @@ lifecycle.
 - On Unix, `connect_ndjson_unix`, `ndjson_unix_connection`, and
   `bind_ndjson_unix_listener` bind `tokio::net::UnixStream` / `UnixListener`
   values to the same duplex framing layer. The listener accepts one framed
-  connection at a time for caller-owned accept loops; it does not supervise
-  reconnect/cleanup.
+  connection at a time for caller-owned accept loops. A wrapped listener owns
+  the socket file path and removes it on drop; `into_inner` transfers that
+  lifecycle responsibility to the caller.
+- On Windows, `connect_ndjson_named_pipe`,
+  `ndjson_named_pipe_client_connection`, and `bind_ndjson_named_pipe_listener`
+  bind `tokio::net::windows::named_pipe` client/server handles to the same
+  duplex framing layer. The listener accepts one framed named-pipe connection
+  at a time for caller-owned accept loops.
 
 ## Pending
 
-Windows named-pipe transport, WebSocket framing, supervised accept loops, and
-transport-level slow-consumer policy remain pending follow-up work. AppServer
-adapter integration and close cleanup for NDJSON streams live in
-`coco-app-server`.
+AppServer adapter integration, WebSocket ownership, bounded outbound
+slow-consumer disconnects, and connection close cleanup live in
+`coco-app-server`; production process-level listener supervision still belongs
+to the higher layer that owns shutdown.

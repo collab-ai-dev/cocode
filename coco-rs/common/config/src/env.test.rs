@@ -31,6 +31,18 @@ fn test_env_key_as_str() {
         "COCO_MCP_TOOL_IDLE_TIMEOUT_MS"
     );
     assert_eq!(EnvKey::CocoLoopPersistent.as_str(), "COCO_LOOP_PERSISTENT");
+    assert_eq!(
+        EnvKey::CocoServerUnixSocketPath.as_str(),
+        "COCO_SERVER_UNIX_SOCKET_PATH"
+    );
+    assert_eq!(
+        EnvKey::CocoServerWebSocketBind.as_str(),
+        "COCO_SERVER_WEBSOCKET_BIND"
+    );
+    assert_eq!(
+        EnvKey::CocoServerNamedPipe.as_str(),
+        "COCO_SERVER_NAMED_PIPE"
+    );
     assert_eq!(EnvKey::OtelLogUserPrompts.as_str(), "OTEL_LOG_USER_PROMPTS");
     assert_eq!(
         EnvKey::OtelLogAssistantResponses.as_str(),

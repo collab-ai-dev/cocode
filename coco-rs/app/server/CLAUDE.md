@@ -28,6 +28,7 @@ construction or transports.
 | `LiveSessionRegistry` | Slot-state registry for root sessions: `Loading`, `Live`, `Closing`. |
 | `LoadCompletion` / `CloseCompletion` | Cloneable completion signals; owner tasks do the work and update slots. |
 | `ReplaceStart` / `ReplaceCommit` | Registry-side replace reservation and commit results. |
+| `SessionDataProjectionError` / `SessionPage` / `TranscriptTurnEntry` | Pure cursor, pagination, and turn-span projection helpers for session-data reads. |
 | `ConnectionKey` | Private in-process transport key. Never serialize or persist it. |
 | `RoutingState` | Single-lock state for connection/surface indexes and per-session durable rings. |
 | `SurfaceAttachment` | Server-owned attachment metadata: role, capabilities, notification prefs, delivery cursor, state. |
@@ -61,14 +62,21 @@ construction or transports.
   slot. Load failure completes the close signal immediately; load success moves
   directly into `Closing` and the single close owner task runs the supplied
   cascade.
-- `AppServer::spawn_replace` is the replace owner-task entry point. It reserves
-  the replacement as `Loading`, runs the construction future, commits the
-  registry+routing swap on success, then runs the supplied old-session close
-  cascade and archive completion. Construction failure removes only the
-  replacement slot and leaves old live.
+- `AppServer::spawn_replace` is the surface-aware replace owner-task entry
+  point. It reserves the replacement as `Loading`, runs the construction
+  future, commits the registry+routing swap on success, then runs the supplied
+  old-session close cascade and archive completion. Construction failure
+  removes only the replacement slot and leaves old live.
+- `AppServer::spawn_replace_detached` is the same owner-task lifecycle without
+  caller-surface routing. Use it only when the caller will attach a fresh
+  surface after the replacement commits.
 - Owner tasks route lifecycle effects through `route_lifecycle_effects` after
   commit locks are released: replace emits started/replaced before the old close
   cascade, and close/archive emits ended after archive commit.
+- On Unix, `JsonRpcAdapter::bind_and_run_unix_listener_until_shutdown` binds
+  an NDJSON Unix socket listener, runs the supervised accept loop, and relies on
+  the transport listener wrapper to remove the socket path when shutdown drops
+  the listener.
 - `Loading`, `Live`, and `Closing` all count toward `max_sessions`; `get` and
   `list_live` expose only `Live` handles.
 - `Closing` keeps the session handle for the close supervisor but
@@ -150,21 +158,51 @@ construction or transports.
   owner loop for caller-supplied NDJSON streams. It dispatches inbound client
   requests, emits event/server-request/lifecycle frames, and disconnects the
   AppServer connection on EOF or transport failure.
+- `JsonRpcAdapterConnection::run_websocket_transport` is the equivalent owner
+  loop for an already-accepted `tokio_tungstenite::WebSocketStream`. It maps
+  text/binary WebSocket messages to `JsonRpcFrame`s, emits JSON-RPC responses
+  and notifications as text messages, ignores ping/pong frames, and disconnects
+  the AppServer connection on close or transport failure.
 - On Unix, `JsonRpcAdapter::accept_unix_connection` accepts one framed Unix
-  socket connection and spawns its JSON-RPC owner task. Higher layers still
-  own listener lifetime, shutdown, and multi-connection supervision.
+  socket connection from a caller-owned listener and spawns its JSON-RPC owner
+  task.
 - On Unix, `JsonRpcAdapter::run_unix_listener_until_shutdown` owns a local
   supervised accept loop for a provided `NdjsonUnixListener`: it accepts
   framed connections, spawns one JSON-RPC owner task per connection, stops
   accepting on a shutdown signal, and waits for accepted owners to finish.
+- On Unix, `JsonRpcAdapter::bind_and_run_unix_listener_until_shutdown` also
+  owns binding and socket-file cleanup for the same supervisor. Higher layers
+  still own process startup/configuration and shutdown signal selection.
+- On Windows, `JsonRpcAdapter::run_named_pipe_listener_until_shutdown` owns
+  the equivalent supervised accept loop for a provided
+  `NdjsonNamedPipeListener`; `bind_and_run_named_pipe_listener_until_shutdown`
+  binds the named pipe and runs that supervisor.
+- `JsonRpcAdapter::run_websocket_listener_until_shutdown` owns the equivalent
+  supervised accept loop for a caller-bound TCP listener: it accepts WebSocket
+  handshakes, spawns one JSON-RPC owner task per connection, stops accepting on
+  a shutdown signal, and waits for accepted owners to finish.
 - `JsonRpcAdapterConnection::run_frame_channels` is the same remote connection
   owner loop over caller-supplied JSON-RPC frame channels. Higher layers use it
   to bridge existing transports into AppServer without moving concrete I/O into
   this crate.
+- JSON-RPC remote owner loops apply a bounded outbound write/send timeout.
+  NDJSON and WebSocket transports fail the owner with
+  `JsonRpcConnectionOwnerError::TransportSlowConsumer`; frame-channel bridges
+  fail with `JsonRpcAdapterError::SlowConsumer`. The owner disconnects the
+  AppServer connection before returning the slow-consumer error.
+- `JsonRpcAdapterConnection::app_server` exposes the owning `Arc<AppServer<_>>`
+  to higher-layer bridge code that must keep lifecycle registration on the same
+  registry/routing instance as the JSON-RPC connection.
 - `AppServer::list_live_sessions` is a live-only projection for future
   `session/list` plumbing. It snapshots registry live slots with routing
   surface counts under registry-then-routing lock order; persistent transcript
   summaries still belong to the future runtime/session-store bridge.
+- `parse_session_data_cursor`, `parse_session_data_limit`,
+  `session_data_page`, `page_session_items`, and
+  `derive_session_turn_summaries` are pure projection helpers for
+  `session/read` / `session/turns/list`. They do not read transcripts or depend
+  on `coco-session`; higher layers adapt their storage records into
+  `TranscriptTurnEntry`.
 - Keep pending-request indexes in sync by request, session, surface, and turn.
   Surface detach, connection close, turn transition, replace, and archive must
   cancel the precise affected request ids.
@@ -179,21 +217,38 @@ construction or transports.
 
 ## Pending
 
-Concrete runtime factory implementation behind `AppServer::spawn_load`,
-concrete close cascade implementation behind `spawn_close`, concrete replace
-runtime factory and old-session close cascade behind `spawn_replace`,
-interactive takeover, named-pipe and WebSocket accept loops, production
-listener lifecycle wiring, and broader persisted transcript/session-store
-integration are not implemented here yet. The CLI local bridge now registers
-`LocalAppSessionHandle` snapshots through `AppServer::spawn_load`, uses
-`AppServer::spawn_replace` for local resume when the old live session has an
-interactive caller surface, falls back to close-then-register when no replace
-caller exists, archives through `spawn_close`, and installs the runtime
+Concrete runtime factory implementation behind every `AppServer::spawn_load`
+caller, concrete close cascade implementation behind `spawn_close`, concrete
+replace runtime factory and old-session close cascade behind `spawn_replace`,
+interactive takeover, production listener lifecycle wiring beyond the SDK
+sidecars, and broader persisted transcript/session-store
+integration are not implemented here yet. The CLI bridge now constructs the
+initial TUI/headless/SDK runtime through `AppServer::spawn_load`, registers
+remaining `LocalAppSessionHandle` snapshots through `spawn_load`, exposes
+runtime-backed replace helpers that construct replacement handles inside
+`spawn_replace` / `spawn_replace_detached` and return those handles to callers,
+closes the startup placeholder slot
+when SDK `session/start` registers the client-started session, uses
+runtime-backed `AppServer::spawn_replace` / `spawn_replace_detached` for TUI
+`/resume` and `/branch` runtime construction, uses the same runtime-backed
+replacement ordering for production SDK `session/resume`, archives through
+`spawn_close`, and installs the runtime
 `SessionManager` so local
 `session/list` / `session/read` can read persisted transcripts. The local
 handle snapshots can carry the fused app/cli `SessionHandle`, but their close
 cascade remains retarget-safe and does not tear down the fused runtime until
-Phase B removes in-place runtime retargeting. Re-installing a runtime-backed
-handle for an already-live local session refreshes the registry handle without
-changing surface routing; this is lifecycle and local-handler wiring, not the
-final runtime factory or broad server-client pagination bridge.
+Phase B removes in-place runtime retargeting. Runtime-backed handles are now
+also the preferred live data source for unpersisted local
+`session/list` / `session/read` / `session/turns/list` fallback results, with
+the SDK singleton session slot retained only for snapshot/SDK-only handles.
+Re-installing a runtime-backed handle for an already-live local session
+refreshes the registry handle without changing surface routing; this is
+lifecycle and local-handler wiring, not the final runtime factory or broad
+server-client pagination bridge. Persisted/live session-data composition is
+centralized in the CLI bridge's local session-data view for now; this crate
+still does not depend on `coco-session`, but it now owns the pure cursor,
+pagination, and turn-span projection helpers shared by the local bridge and
+legacy SDK session-data handlers. That bridge view reads the installed
+`SessionManager` directly for local AppServer `session/list`, `session/read`,
+and `session/turns/list` instead of bouncing those read-only methods through
+the legacy SDK session-data handlers.

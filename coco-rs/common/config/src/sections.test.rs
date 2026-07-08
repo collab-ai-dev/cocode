@@ -31,6 +31,111 @@ fn test_agent_teams_config_defaults_to_main_model_role() {
 }
 
 #[test]
+fn test_server_config_resolves_unix_socket_path_from_settings() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            unix_socket_path: Some("/tmp/coco-settings.sock".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let config = ServerConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(
+        config.unix_socket_path.as_deref(),
+        Some("/tmp/coco-settings.sock")
+    );
+}
+
+#[test]
+fn test_server_config_env_overrides_settings_unix_socket_path() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            unix_socket_path: Some("/tmp/coco-settings.sock".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoServerUnixSocketPath, "/tmp/coco-env.sock")]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(
+        config.unix_socket_path.as_deref(),
+        Some("/tmp/coco-env.sock")
+    );
+}
+
+#[test]
+fn test_server_config_resolves_websocket_bind_from_settings() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            websocket_bind: Some("127.0.0.1:7777".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let config = ServerConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.websocket_bind.as_deref(), Some("127.0.0.1:7777"));
+}
+
+#[test]
+fn test_server_config_env_overrides_settings_websocket_bind() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            websocket_bind: Some("127.0.0.1:7777".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoServerWebSocketBind, "127.0.0.1:8888")]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(config.websocket_bind.as_deref(), Some("127.0.0.1:8888"));
+}
+
+#[test]
+fn test_server_config_resolves_named_pipe_name_from_settings() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            named_pipe_name: Some(r"\\.\pipe\coco-sdk".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let config = ServerConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(
+        config.named_pipe_name.as_deref(),
+        Some(r"\\.\pipe\coco-sdk")
+    );
+}
+
+#[test]
+fn test_server_config_env_overrides_settings_named_pipe_name() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            named_pipe_name: Some(r"\\.\pipe\coco-settings".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoServerNamedPipe, r"\\.\pipe\coco-env")]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(
+        config.named_pipe_name.as_deref(),
+        Some(r"\\.\pipe\coco-env")
+    );
+}
+
+#[test]
 fn test_teammate_mode_accepts_iterm2() {
     let mode: TeammateMode = serde_json::from_str("\"iterm2\"").unwrap();
     assert_eq!(mode, TeammateMode::Iterm2);

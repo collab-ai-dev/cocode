@@ -483,11 +483,26 @@ pub enum RegistryError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("session load failed: {message}"))]
+    LoadFailed {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("registry completion signal dropped"))]
     SignalDropped {
         #[snafu(implicit)]
         location: Location,
     },
+}
+
+impl RegistryError {
+    pub fn load_failed(message: impl Into<String>) -> Self {
+        LoadFailedSnafu {
+            message: message.into(),
+        }
+        .build()
+    }
 }
 
 impl ErrorExt for RegistryError {
@@ -498,6 +513,7 @@ impl ErrorExt for RegistryError {
             Self::OldNotReady { .. } => StatusCode::InvalidArguments,
             Self::NewSlotOccupied { .. } => StatusCode::InvalidArguments,
             Self::SlotConflict { .. } => StatusCode::InvalidArguments,
+            Self::LoadFailed { .. } => StatusCode::Internal,
             Self::SignalDropped { .. } => StatusCode::Internal,
         }
     }

@@ -21,6 +21,33 @@ fn test_parse_settings_accepts_jsonc_comments_and_trailing_commas() {
 }
 
 #[test]
+fn test_parse_settings_accepts_server_unix_socket_path() {
+    let settings = parse_settings(
+        r#"{
+            "server": {
+                "unix_socket_path": "/tmp/coco-sdk.sock",
+                "websocket_bind": "127.0.0.1:7777",
+                "named_pipe_name": "\\\\.\\pipe\\coco-sdk"
+            }
+        }"#,
+    )
+    .expect("parse server settings");
+
+    assert_eq!(
+        settings.server.unix_socket_path.as_deref(),
+        Some("/tmp/coco-sdk.sock")
+    );
+    assert_eq!(
+        settings.server.websocket_bind.as_deref(),
+        Some("127.0.0.1:7777")
+    );
+    assert_eq!(
+        settings.server.named_pipe_name.as_deref(),
+        Some(r"\\.\pipe\coco-sdk")
+    );
+}
+
+#[test]
 fn test_parse_settings_rejects_top_level_model() {
     let err = parse_settings(r#"{ "model": "openai/gpt-5-5" }"#)
         .expect_err("top-level model is not supported");

@@ -69,6 +69,43 @@ impl TeammateMode {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
+pub struct PartialServerSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unix_socket_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket_bind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub named_pipe_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServerConfig {
+    pub unix_socket_path: Option<String>,
+    pub websocket_bind: Option<String>,
+    pub named_pipe_name: Option<String>,
+}
+
+impl ServerConfig {
+    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
+        Self {
+            unix_socket_path: env
+                .get_string(EnvKey::CocoServerUnixSocketPath)
+                .or_else(|| settings.server.unix_socket_path.clone())
+                .filter(|path| !path.trim().is_empty()),
+            websocket_bind: env
+                .get_string(EnvKey::CocoServerWebSocketBind)
+                .or_else(|| settings.server.websocket_bind.clone())
+                .filter(|addr| !addr.trim().is_empty()),
+            named_pipe_name: env
+                .get_string(EnvKey::CocoServerNamedPipe)
+                .or_else(|| settings.server.named_pipe_name.clone())
+                .filter(|name| !name.trim().is_empty()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PartialAgentTeamsSettings {
     pub teammate_mode: Option<TeammateMode>,
     pub default_model_role: Option<ModelRole>,

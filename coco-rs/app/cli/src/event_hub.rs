@@ -58,6 +58,7 @@ impl RuntimeEventHubConnector {
             Ok(stats) => tracing::info!(
                 shipped_events = stats.shipped_events,
                 skipped_ephemeral_events = stats.skipped_ephemeral_events,
+                dropped_durable_events = stats.dropped_durable_events,
                 "event hub connector flushed"
             ),
             Err(error) => tracing::warn!(%error, "event hub connector shutdown flush failed"),

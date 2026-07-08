@@ -1117,11 +1117,13 @@ dependencies = [
  "coco-app-server-transport",
  "coco-error",
  "coco-types",
+ "futures",
  "serde",
  "serde_json",
  "snafu",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
@@ -1131,11 +1133,13 @@ dependencies = [
  "coco-app-server",
  "coco-app-server-transport",
  "coco-types",
+ "futures",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

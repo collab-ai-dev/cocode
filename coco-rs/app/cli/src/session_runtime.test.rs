@@ -21,7 +21,8 @@ use coco_types::ThinkingLevel;
 use tempfile::TempDir;
 
 use super::SessionRuntime;
-use super::SessionRuntimeBuildOpts;
+use super::SessionRuntimeFactory;
+use super::SessionRuntimeFactoryOpts;
 use super::resolve_model_selection_from_runtime_config;
 use super::thinking_level_for_effort_from;
 use crate::Cli;
@@ -78,8 +79,8 @@ async fn try_build_runtime_with_main(
     let model_id = crate::headless::resolve_main_model(&runtime_config).model_id;
     let cli = Cli::try_parse_from(["coco"]).expect("parse default cli");
 
-    SessionRuntime::build(SessionRuntimeBuildOpts {
-        cli: &cli,
+    let factory = SessionRuntimeFactory::new(SessionRuntimeFactoryOpts {
+        cli: Arc::new(cli),
         runtime_config: Arc::new(runtime_config),
         cwd: home.path().to_path_buf(),
         model_id,
@@ -104,10 +105,12 @@ async fn try_build_runtime_with_main(
         )),
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
-        session_id_override,
         is_non_interactive: false,
-    })
-    .await
+    });
+    factory
+        .build(session_id_override)
+        .await
+        .map(|handle| handle.runtime().clone())
 }
 
 #[tokio::test]
@@ -125,6 +128,22 @@ async fn build_uses_typed_session_id_override() {
     .expect("build should accept typed session id override");
 
     assert_eq!(runtime.current_typed_session_id().await, session_id);
+}
+
+#[tokio::test]
+async fn factory_fresh_builds_create_distinct_runtime_identities() {
+    let home = TempDir::new().expect("home tempdir");
+    let first = try_build_runtime_with_main(&home, "anthropic", "claude-opus-4-7", None)
+        .await
+        .expect("build first runtime");
+    let second = try_build_runtime_with_main(&home, "anthropic", "claude-opus-4-7", None)
+        .await
+        .expect("build second runtime");
+
+    assert_ne!(
+        first.current_typed_session_id().await,
+        second.current_typed_session_id().await
+    );
 }
 
 #[tokio::test]

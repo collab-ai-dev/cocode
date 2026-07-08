@@ -55,6 +55,8 @@ use coco_cli::session_bootstrap::install_session_late_binds;
 
 use crate::Cli;
 
+type SharedSessionHandle = Arc<RwLock<crate::session_runtime::SessionHandle>>;
+
 /// Run the interactive TUI mode.
 /// Spawns agent_driver as background task, runs TUI in foreground.
 /// `resume_plan`: resolved by the binary entry from
@@ -274,9 +276,28 @@ pub async fn run_tui(
     // CompactionObserverRegistry, HookRegistry, history Mutex, etc.).
     // Both runners (TUI + SDK) share this construction; the per-turn
     // engine assembly below routes through `runtime.build_engine()`.
-    let session_handle = crate::session_runtime::SessionHandle::build(
-        crate::session_runtime::SessionRuntimeBuildOpts {
-            cli,
+    let initial_session_id = resume_plan
+        .as_ref()
+        .map(|plan| plan.session_id.clone())
+        .unwrap_or_else(coco_types::SessionId::generate);
+    let event_hub_connector = coco_cli::event_hub::RuntimeEventHubConnector::spawn_for_session(
+        &runtime_config,
+        initial_session_id.clone(),
+        &cwd,
+    );
+    let mut local_app_server_bridge = if let Some(connector) = &event_hub_connector {
+        coco_cli::sdk_server::AppServerLocalBridge::with_hub_connector_sender(
+            Arc::new(coco_cli::sdk_server::SdkServerState::default()),
+            connector.sender(),
+        )
+    } else {
+        coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+            coco_cli::sdk_server::SdkServerState::default(),
+        ))
+    };
+    let runtime_factory = crate::session_runtime::SessionRuntimeFactory::new(
+        crate::session_runtime::SessionRuntimeFactoryOpts {
+            cli: Arc::new(cli.clone()),
             runtime_config: Arc::new(runtime_config),
             cwd: cwd.clone(),
             model_id: model_id.clone(),
@@ -303,12 +324,20 @@ pub async fn run_tui(
                 .project_services
                 .agent_search_paths(&coco_config::global_config::config_home(), &cwd),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
-            session_id_override: None,
             // Interactive TUI: file-history checkpointing defaults ON.
             is_non_interactive: false,
         },
-    )
-    .await?;
+    );
+    let session_handle = local_app_server_bridge
+        .load_session_runtime(initial_session_id.clone(), {
+            let runtime_factory = runtime_factory.clone();
+            async move {
+                runtime_factory
+                    .build_with_session_id(initial_session_id)
+                    .await
+            }
+        })
+        .await?;
     let runtime = session_handle.runtime().clone();
 
     // Post-build late-binds shared with SDK: task runtime, agent
@@ -344,21 +373,6 @@ pub async fn run_tui(
     coco_cli::startup_profile::mark("session_late_binds");
 
     let bridge_session_id = runtime.current_typed_session_id().await;
-    let event_hub_connector = coco_cli::event_hub::RuntimeEventHubConnector::spawn_for_session(
-        &runtime.runtime_config,
-        bridge_session_id.clone(),
-        &cwd,
-    );
-    let mut local_app_server_bridge = if let Some(connector) = &event_hub_connector {
-        coco_cli::sdk_server::AppServerLocalBridge::with_hub_connector_sender(
-            Arc::new(coco_cli::sdk_server::SdkServerState::default()),
-            connector.sender(),
-        )
-    } else {
-        coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
-            coco_cli::sdk_server::SdkServerState::default(),
-        ))
-    };
     local_app_server_bridge
         .install_session_runtime(session_handle.clone())
         .await;
@@ -543,12 +557,11 @@ pub async fn run_tui(
     );
 
     // Honor `--resume` / `--continue` / `--fork-session`. The binary
-    // entry has already loaded the source transcript; here we repoint
-    // every session-id-keyed subsystem at the resume target and seed
-    // the in-memory history so the first user prompt sees the prior
-    // chain. Pre-populating the transcript dedup set with the loaded
-    // uuids prevents `record_transcript_tail` from re-appending
-    // entries that are already on disk.
+    // entry has already loaded the source transcript; route the switch through
+    // the local AppServer so startup resume and in-session `/resume` share the
+    // same lifecycle registration, surface replacement, and runtime handler
+    // boundary.
+    let current_session = Arc::new(RwLock::new(session_handle.clone()));
     let startup_session_start_source = if resume_plan.is_some() {
         "resume"
     } else {
@@ -563,7 +576,18 @@ pub async fn run_tui(
             is_fork = plan.is_fork,
             "resume: hydrating session",
         );
-        hydrate_resume_plan(&plan, &session_handle, &notification_tx).await;
+        apply_resume_plan_through_app_server(
+            &plan,
+            &session_handle,
+            &current_session,
+            &notification_tx,
+            &mut local_app_server_bridge,
+            &runtime_factory,
+            &process_runtime,
+            &cwd,
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("startup resume via AppServer failed: {err}"))?;
         // Reconcile coordinator mode to the resumed session. This flips
         // `COCO_COORDINATOR_MODE` *before*
         // the coordinator badge (below) and the first per-turn system
@@ -826,10 +850,12 @@ pub async fn run_tui(
     let driver_handle = tokio::spawn(run_agent_driver(
         command_rx,
         notification_tx,
-        session_handle.clone(),
+        current_session,
         local_app_server_bridge,
         pending_approvals,
         runtime_publisher,
+        runtime_factory,
+        process_runtime.clone(),
         cwd.clone(),
         flag_settings_path,
         teammate_turn_done_tx,
@@ -963,10 +989,12 @@ fn spawn_config_reload_error_toasts(
 async fn run_agent_driver(
     mut command_rx: mpsc::Receiver<UserCommand>,
     event_tx: mpsc::Sender<CoreEvent>,
-    session: crate::session_runtime::SessionHandle,
+    current_session: SharedSessionHandle,
     mut local_app_server_bridge: coco_cli::sdk_server::AppServerLocalBridge,
     pending_approvals: coco_cli::tui_permission_bridge::PendingApprovals,
     runtime_publisher: Option<Arc<coco_config::RuntimePublisher>>,
+    runtime_factory: crate::session_runtime::SessionRuntimeFactory,
+    process_runtime: Arc<ProcessRuntime>,
     cwd: std::path::PathBuf,
     flag_settings: Option<std::path::PathBuf>,
     // Cross-process teammate inbox pump (gap 1) completion handshake. When
@@ -975,8 +1003,13 @@ async fn run_agent_driver(
     // for leader / standalone sessions.
     teammate_turn_done_tx: Option<mpsc::Sender<String>>,
 ) {
-    let runtime = session.runtime().clone();
-    runtime.install_side_query_event_tx(event_tx.clone()).await;
+    {
+        let session = current_session.read().await.clone();
+        session
+            .runtime()
+            .install_side_query_event_tx(event_tx.clone())
+            .await;
+    }
     // Per-session one-shot gate: title gen runs at most once per
     // session id, never the process. After `/resume` or `/clear` the
     // session id changes; the new id is not in the set, so the gate
@@ -1007,34 +1040,49 @@ async fn run_agent_driver(
             }
             Some(turn_id) = turn_done_rx.recv() => {
                 if drain_completed_turn(&active_turn, turn_id).await {
+                    let session = current_session.read().await.clone();
                     process_idle_command_queue(
                         &session,
+                        &current_session,
                         &event_tx,
                         &mut local_app_server_bridge,
                         &active_turn,
                         &mut pending_editor_requests,
                         &title_gen_attempted,
                         &turn_done_tx,
+                        &runtime_factory,
+                        &process_runtime,
+                        &cwd,
                     )
                     .await;
                 }
                 continue;
             }
-            _ = runtime.command_queue().wait_for_change() => {
+            _ = {
+                let runtime = current_session.read().await.runtime().clone();
+                async move { runtime.command_queue().wait_for_change().await }
+            } => {
+                let session = current_session.read().await.clone();
                 process_idle_command_queue(
                     &session,
+                    &current_session,
                     &event_tx,
                     &mut local_app_server_bridge,
                     &active_turn,
                     &mut pending_editor_requests,
                     &title_gen_attempted,
                     &turn_done_tx,
+                    &runtime_factory,
+                    &process_runtime,
+                    &cwd,
                 )
                 .await;
                 continue;
             }
         };
         // Re-read each turn so `/clear` regen picks up the new id.
+        let session = current_session.read().await.clone();
+        let runtime = session.runtime().clone();
         let session_id = runtime.current_typed_session_id().await;
         match command {
             UserCommand::SubmitInput {
@@ -1059,8 +1107,12 @@ async fn run_agent_driver(
                         name,
                         args,
                         &session,
+                        &current_session,
                         &event_tx,
                         &mut local_app_server_bridge,
+                        &runtime_factory,
+                        &process_runtime,
+                        &cwd,
                     )
                     .await;
                     match handle_slash_outcome(
@@ -1384,8 +1436,12 @@ async fn run_agent_driver(
                     &name,
                     &args_str,
                     &session,
+                    &current_session,
                     &event_tx,
                     &mut local_app_server_bridge,
+                    &runtime_factory,
+                    &process_runtime,
+                    &cwd,
                 )
                 .await;
                 match handle_slash_outcome(
@@ -1435,8 +1491,12 @@ async fn run_agent_driver(
                     name.as_str(),
                     &args,
                     &session,
+                    &current_session,
                     &event_tx,
                     &mut local_app_server_bridge,
+                    &runtime_factory,
+                    &process_runtime,
+                    &cwd,
                 )
                 .await;
                 match handle_slash_outcome(
@@ -2337,6 +2397,7 @@ async fn run_agent_driver(
         debug!("skipping memory extraction drain after explicit TUI shutdown");
     } else {
         drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
+        let session = current_session.read().await.clone();
         drain_pending_memory_extraction(&session).await;
     }
     // Re-append metadata one more time at process-exit so the tail window
@@ -2344,6 +2405,8 @@ async fn run_agent_driver(
     // title/tag/agent-name. Best-effort — IO errors here are logged but
     // don't propagate out of the driver.
     {
+        let session = current_session.read().await.clone();
+        let runtime = session.runtime();
         let session_id = runtime.current_typed_session_id().await;
         let session_id_string = session_id.to_string();
         let mgr = Arc::clone(&runtime.session_manager);
@@ -2374,6 +2437,8 @@ async fn run_agent_driver(
             warn!(error = %e, "shutdown re-append task join failed");
         }
     }
+    let session = current_session.read().await.clone();
+    let runtime = session.runtime();
     runtime.flush_session_usage_snapshot().await;
     info!("Agent driver stopped");
 }
@@ -2549,47 +2614,6 @@ fn create_slash_metadata_message(metadata: &str) -> coco_messages::Message {
     coco_messages::Message::Attachment(attachment)
 }
 
-async fn hydrate_resume_plan(
-    plan: &ResumePlan,
-    session: &crate::session_runtime::SessionHandle,
-    event_tx: &mpsc::Sender<CoreEvent>,
-) {
-    let runtime = session.runtime();
-    runtime
-        .retarget_for_loaded_session(plan.session_id.clone())
-        .await;
-    {
-        let mut history = runtime.history.lock().await;
-        history.clear();
-        for message in plan.prior_messages.iter().cloned() {
-            history.push(message);
-        }
-    }
-    runtime
-        .seed_transcript_dedup(plan.prior_messages.iter().filter_map(|m| m.uuid().copied()))
-        .await;
-    // Main-thread TUI session — agent_id is None. Subagent transcripts
-    // are handled by the AgentTool spawn path, not by `/resume`.
-    runtime
-        .seed_tool_result_replacement_state(&plan.prior_messages, &plan.session_id, None)
-        .await;
-    let restored_v1_todos = if runtime
-        .runtime_config
-        .features
-        .enabled(coco_types::Feature::TaskV2)
-    {
-        None
-    } else {
-        latest_todo_write_todos(&plan.prior_messages)
-    };
-    if let Some(todos) = restored_v1_todos.clone() {
-        runtime
-            .seed_todo_list_snapshot(plan.session_id.to_string(), todos)
-            .await;
-    }
-    emit_resume_plan_ui_state(plan, runtime, event_tx, restored_v1_todos).await;
-}
-
 async fn emit_resume_plan_ui_state(
     plan: &ResumePlan,
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
@@ -2750,8 +2774,12 @@ fn latest_todo_write_todos(messages: &[Message]) -> Option<Vec<coco_types::TodoR
 async fn dispatch_resume(
     args: &str,
     session: &crate::session_runtime::SessionHandle,
+    current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
+    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
+    process_runtime: &Arc<ProcessRuntime>,
+    cwd: &std::path::Path,
 ) -> SlashOutcome {
     let runtime = session.runtime();
     let target = args.trim();
@@ -2806,8 +2834,12 @@ async fn dispatch_resume(
                 "resume",
                 args,
                 session,
+                current_session,
                 event_tx,
                 local_app_server_bridge,
+                runtime_factory,
+                process_runtime,
+                cwd,
             )
             .await
             {
@@ -2842,23 +2874,26 @@ async fn switch_to_resume_plan_through_app_server(
     command_name: &str,
     args: &str,
     session: &crate::session_runtime::SessionHandle,
+    current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
+    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
+    process_runtime: &Arc<ProcessRuntime>,
+    cwd: &std::path::Path,
 ) -> bool {
-    local_app_server_bridge
-        .install_session_runtime(session.clone())
-        .await;
-    match local_app_server_bridge
-        .client()
-        .session_resume(
-            local_app_server_bridge.handler(),
-            coco_types::SessionResumeParams {
-                session_id: plan.session_id.clone(),
-            },
-        )
-        .await
+    match apply_resume_plan_through_app_server(
+        plan,
+        session,
+        current_session,
+        event_tx,
+        local_app_server_bridge,
+        runtime_factory,
+        process_runtime,
+        cwd,
+    )
+    .await
     {
-        Ok(_) => {}
+        Ok(()) => true,
         Err(err) => {
             emit_slash_text(
                 event_tx,
@@ -2867,36 +2902,176 @@ async fn switch_to_resume_plan_through_app_server(
                 &format!("Failed to resume session: {err}"),
             )
             .await;
-            return false;
+            false
         }
     }
+}
+
+async fn apply_resume_plan_through_app_server(
+    plan: &ResumePlan,
+    session: &crate::session_runtime::SessionHandle,
+    current_session: &SharedSessionHandle,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
+    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
+    process_runtime: &Arc<ProcessRuntime>,
+    cwd: &std::path::Path,
+) -> anyhow::Result<()> {
+    let old_session_id = session.runtime().current_typed_session_id().await;
+    if old_session_id == plan.session_id {
+        local_app_server_bridge
+            .install_session_runtime(session.clone())
+            .await;
+        hydrate_runtime_for_resume_plan(session, &plan.session_id, &plan.prior_messages).await;
+        local_app_server_bridge.ensure_interactive_surface(plan.session_id.clone())?;
+        local_app_server_bridge
+            .start_passive_event_pump(plan.session_id.clone(), event_tx.clone())?;
+        emit_resume_plan_ui_state_for_runtime(plan, session, event_tx).await;
+        return Ok(());
+    }
+
     local_app_server_bridge
-        .install_session_runtime(session.snapshot_current())
+        .install_session_runtime(session.clone())
         .await;
-    if let Err(err) = local_app_server_bridge.ensure_interactive_surface(plan.session_id.clone()) {
-        emit_slash_text(
-            event_tx,
-            command_name,
-            args,
-            &format!("Failed to attach resumed session: {err}"),
+
+    let make_runtime_factory = || {
+        let runtime_factory = runtime_factory.clone();
+        let process_runtime = Arc::clone(process_runtime);
+        let cwd = cwd.to_path_buf();
+        let event_tx = event_tx.clone();
+        let session_id = plan.session_id.clone();
+        let prior_messages = plan.prior_messages.clone();
+        async move {
+            build_runtime_for_resume_plan(
+                runtime_factory,
+                session_id,
+                prior_messages,
+                process_runtime,
+                cwd,
+                event_tx,
+            )
+            .await
+        }
+    };
+
+    let replacement = local_app_server_bridge
+        .replace_session_runtime(
+            old_session_id.clone(),
+            plan.session_id.clone(),
+            make_runtime_factory(),
         )
+        .await?;
+    let new_session = match replacement {
+        Some((session, _surface_id)) => session,
+        None => {
+            local_app_server_bridge
+                .replace_detached_session_runtime(
+                    old_session_id,
+                    plan.session_id.clone(),
+                    make_runtime_factory(),
+                )
+                .await?
+        }
+    };
+
+    local_app_server_bridge
+        .install_session_runtime(new_session.clone())
         .await;
-        return false;
-    }
-    if let Err(err) =
-        local_app_server_bridge.start_passive_event_pump(plan.session_id.clone(), event_tx.clone())
     {
-        emit_slash_text(
-            event_tx,
-            command_name,
-            args,
-            &format!("Failed to subscribe to resumed session events: {err}"),
-        )
-        .await;
-        return false;
+        let mut current = current_session.write().await;
+        *current = new_session.clone();
     }
-    emit_resume_plan_ui_state_for_runtime(plan, session, event_tx).await;
-    true
+    local_app_server_bridge.ensure_interactive_surface(plan.session_id.clone())?;
+    local_app_server_bridge.start_passive_event_pump(plan.session_id.clone(), event_tx.clone())?;
+    emit_resume_plan_ui_state_for_runtime(plan, &new_session, event_tx).await;
+    Ok(())
+}
+
+async fn build_runtime_for_resume_plan(
+    runtime_factory: crate::session_runtime::SessionRuntimeFactory,
+    session_id: coco_types::SessionId,
+    prior_messages: Vec<coco_messages::Message>,
+    process_runtime: Arc<ProcessRuntime>,
+    cwd: std::path::PathBuf,
+    event_tx: mpsc::Sender<CoreEvent>,
+) -> anyhow::Result<crate::session_runtime::SessionHandle> {
+    let session = runtime_factory
+        .build_with_session_id(session_id.clone())
+        .await?;
+    let runtime = session.runtime().clone();
+    runtime.install_side_query_event_tx(event_tx.clone()).await;
+    hydrate_runtime_for_resume_plan(&session, &session_id, &prior_messages).await;
+
+    let lsp_handle = coco_cli::session_bootstrap::build_lsp_handle_if_enabled(
+        process_runtime,
+        &runtime.runtime_config,
+        &coco_config::global_config::config_home(),
+        &runtime.project_root,
+    )
+    .await;
+    install_session_late_binds(
+        session.clone(),
+        &cwd,
+        None,
+        lsp_handle,
+        Some(event_tx.clone()),
+    )
+    .await?;
+    coco_cli::session_bootstrap::bootstrap_session_mcp(
+        &session, &cwd, None, /*await_connect*/ false,
+    )
+    .await;
+    coco_cli::leader_inbox_poller::install_leader(session.clone(), None).await;
+
+    runtime.fire_session_start_hooks("resume").await;
+    Ok(session)
+}
+
+async fn hydrate_runtime_for_resume_plan(
+    session: &crate::session_runtime::SessionHandle,
+    session_id: &coco_types::SessionId,
+    prior_messages: &[coco_messages::Message],
+) {
+    let runtime = session.runtime();
+    {
+        let mut history = runtime.history.lock().await;
+        history.clear();
+        for message in prior_messages.iter().cloned() {
+            history.push(message);
+        }
+    }
+    runtime
+        .seed_transcript_dedup(prior_messages.iter().filter_map(|m| m.uuid().copied()))
+        .await;
+    runtime
+        .seed_tool_result_replacement_state(prior_messages, session_id, None)
+        .await;
+
+    if prior_messages.is_empty() {
+        return;
+    }
+    let cfg = runtime.current_engine_config().await;
+    let messages = prior_messages
+        .iter()
+        .cloned()
+        .map(Arc::new)
+        .collect::<Vec<_>>();
+    let goal = goal_command::restore_goal_from_history(
+        &messages,
+        &runtime.app_state,
+        &runtime.hook_registry(),
+        runtime.session_usage_snapshot().await.totals.output_tokens,
+        goal_command::GoalGate {
+            hooks_restricted: cfg.disable_all_hooks || cfg.allow_managed_hooks_only,
+            trust_rejected: false,
+        },
+    )
+    .await;
+    runtime
+        .persist_goal_metadata(goal.as_ref().map(|goal| {
+            coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
+        }))
+        .await;
 }
 
 /// `/branch` (alias `/fork`) — fork the current conversation at this point
@@ -2908,8 +3083,12 @@ async fn switch_to_resume_plan_through_app_server(
 async fn dispatch_branch(
     args: &str,
     session: &crate::session_runtime::SessionHandle,
+    current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
+    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
+    process_runtime: &Arc<ProcessRuntime>,
+    cwd: &std::path::Path,
 ) -> SlashOutcome {
     let runtime = session.runtime();
     let custom_title = args.trim().to_string();
@@ -2970,8 +3149,12 @@ async fn dispatch_branch(
                 "branch",
                 args,
                 session,
+                current_session,
                 event_tx,
                 local_app_server_bridge,
+                runtime_factory,
+                process_runtime,
+                cwd,
             )
             .await
             {
@@ -3480,12 +3663,16 @@ async fn handle_slash_outcome(
 
 async fn process_idle_command_queue(
     session: &crate::session_runtime::SessionHandle,
+    current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
+    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
+    process_runtime: &Arc<ProcessRuntime>,
+    cwd: &std::path::Path,
 ) {
     if active_turn.lock().await.is_some() {
         return;
@@ -3493,12 +3680,16 @@ async fn process_idle_command_queue(
 
     drain_queued_slash_commands(
         session,
+        current_session,
         event_tx,
         local_app_server_bridge,
         active_turn,
         pending_editor_requests,
         title_gen_attempted,
         turn_done_tx,
+        runtime_factory,
+        process_runtime,
+        cwd,
     )
     .await;
 
@@ -3509,12 +3700,16 @@ async fn process_idle_command_queue(
 
 async fn drain_queued_slash_commands(
     session: &crate::session_runtime::SessionHandle,
+    current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     pending_editor_requests: &mut HashMap<String, PendingEditorRequest>,
     title_gen_attempted: &Arc<RwLock<std::collections::HashSet<String>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
+    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
+    process_runtime: &Arc<ProcessRuntime>,
+    cwd: &std::path::Path,
 ) {
     let runtime = session.runtime();
     while let Some(cmd) = runtime
@@ -3536,8 +3731,18 @@ async fn drain_queued_slash_commands(
         let Some((name, args)) = parse_slash_command(&cmd.prompt) else {
             continue;
         };
-        let outcome =
-            dispatch_slash_command(name, args, session, event_tx, local_app_server_bridge).await;
+        let outcome = dispatch_slash_command(
+            name,
+            args,
+            session,
+            current_session,
+            event_tx,
+            local_app_server_bridge,
+            runtime_factory,
+            process_runtime,
+            cwd,
+        )
+        .await;
         match outcome {
             SlashOutcome::Handled => {}
             SlashOutcome::NotFound => {
@@ -3947,8 +4152,12 @@ async fn dispatch_slash_command(
     name: &str,
     args: &str,
     session: &crate::session_runtime::SessionHandle,
+    current_session: &SharedSessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
+    runtime_factory: &crate::session_runtime::SessionRuntimeFactory,
+    process_runtime: &Arc<ProcessRuntime>,
+    cwd: &std::path::Path,
 ) -> SlashOutcome {
     let runtime = session.runtime();
     // Runtime-state-aware commands intercepted before registry lookup:
@@ -4042,10 +4251,30 @@ async fn dispatch_slash_command(
     // session and switches to it live. The sync registry handler only echoes
     // text — the real fork needs runtime + session-store access.
     if matches!(name, "branch" | "fork") {
-        return dispatch_branch(args, session, event_tx, local_app_server_bridge).await;
+        return dispatch_branch(
+            args,
+            session,
+            current_session,
+            event_tx,
+            local_app_server_bridge,
+            runtime_factory,
+            process_runtime,
+            cwd,
+        )
+        .await;
     }
     if name == "resume" {
-        return dispatch_resume(args, session, event_tx, local_app_server_bridge).await;
+        return dispatch_resume(
+            args,
+            session,
+            current_session,
+            event_tx,
+            local_app_server_bridge,
+            runtime_factory,
+            process_runtime,
+            cwd,
+        )
+        .await;
     }
     // `/copy [N]` — the picker + arg-parsing + lookback logic lives in
     // the TUI (only it owns the transcript view); the dispatcher just

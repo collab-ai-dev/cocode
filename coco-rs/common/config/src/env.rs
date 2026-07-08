@@ -50,6 +50,15 @@ pub enum EnvKey {
     /// WebSocket endpoint for Event Hub connector egress.
     /// Accepted schemes are `ws://` and `wss://`.
     CocoEventHubUrl,
+    /// Unix-domain socket path for the SDK AppServer NDJSON listener.
+    /// Unix-only; ignored by non-SDK entrypoints and unsupported on Windows.
+    CocoServerUnixSocketPath,
+    /// TCP bind address for the SDK AppServer WebSocket listener.
+    /// Opt-in only; ignored by non-SDK entrypoints.
+    CocoServerWebSocketBind,
+    /// Windows named-pipe path for the SDK AppServer NDJSON listener.
+    /// Opt-in only; ignored by non-SDK entrypoints and unsupported on Unix.
+    CocoServerNamedPipe,
     /// SessionKind override for the concurrent-sessions PID registry.
     /// Accepted values: `bg`, `daemon`, `daemon-worker`. Anything else
     /// (or unset) means the session registers as `interactive`.
@@ -353,6 +362,9 @@ impl EnvKey {
             Self::CocoAuthCredentialStore => "COCO_AUTH_CREDENTIAL_STORE",
             Self::CocoEntrypoint => "COCO_ENTRYPOINT",
             Self::CocoEventHubUrl => "COCO_EVENT_HUB_URL",
+            Self::CocoServerUnixSocketPath => "COCO_SERVER_UNIX_SOCKET_PATH",
+            Self::CocoServerWebSocketBind => "COCO_SERVER_WEBSOCKET_BIND",
+            Self::CocoServerNamedPipe => "COCO_SERVER_NAMED_PIPE",
             Self::CocoSessionKind => "COCO_SESSION_KIND",
             Self::CocoBashAutoBackgroundOnTimeout => "COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT",
             Self::CocoBashMaintainProjectWorkingDir => "COCO_BASH_MAINTAIN_PROJECT_WORKING_DIR",

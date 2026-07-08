@@ -44,6 +44,7 @@ use crate::sections::MemoryActivation;
 use crate::sections::MemoryConfig;
 use crate::sections::MemoryDisabledReason;
 use crate::sections::PathConfig;
+use crate::sections::ServerConfig;
 use crate::sections::ShellConfig;
 use crate::sections::ToolConfig;
 use crate::sections::VoiceConfig;
@@ -93,6 +94,8 @@ pub struct RuntimeConfig {
     pub voice: VoiceConfig,
     /// Event Hub connector egress settings. `url == None` disables egress.
     pub event_hub: EventHubConfig,
+    /// AppServer listener settings used by SDK/local-server entrypoints.
+    pub server: ServerConfig,
     pub paths: PathConfig,
     /// Resolved compaction parameters (auto threshold, micro keep-recent,
     /// api-native gate, session-memory budgets, experimental flags). Single
@@ -379,6 +382,7 @@ pub fn build_runtime_config_with(
         lsp: LspConfig::resolve(merged, &env),
         voice: VoiceConfig::resolve(merged, &env),
         event_hub: EventHubConfig::resolve(merged, &env, &overrides)?,
+        server: ServerConfig::resolve(merged, &env),
         paths: PathConfig::resolve(merged),
         compact: CompactConfig::resolve(merged, &env),
         agent_teams: AgentTeamsConfig::resolve(merged)?,

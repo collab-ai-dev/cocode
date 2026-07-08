@@ -40,14 +40,16 @@ Bidirectional control protocol — client-initiated requests.\n\n\
 Each variant carries a unique `method` string used on the wire. \
 The method is the discriminator; params are the variant-specific payload.\n\n\
 See `event-system-design.md` §5.1 for the base variants and §5.4 for \
-gap additions. 43 total.",
+gap additions. 45 total.",
     variants = {
-        // === Session lifecycle (10) ===
+        // === Session lifecycle (11) ===
         "initialize" => Initialize(InitializeParams),
         "session/start" => SessionStart(Box<SessionStartParams>),
         "session/resume" => SessionResume(SessionResumeParams),
         "session/list" => SessionList,
         "session/read" => SessionRead(SessionReadParams),
+        "session/turns/list" => SessionTurnsList(SessionTurnsListParams),
+        "session/subscribe" => SessionSubscribe(SessionSubscribeParams),
         "session/archive" => SessionArchive(SessionArchiveParams),
         "session/rename" => SessionRename(SessionRenameParams),
         "session/toggleTag" => SessionToggleTag(SessionToggleTagParams),
@@ -263,6 +265,28 @@ pub struct SessionReadParams {
     pub cursor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<i32>,
+}
+
+/// Params for `session/turns/list`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTurnsListParams {
+    pub session_id: SessionId,
+    /// Optional pagination cursor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i32>,
+}
+
+/// Params for passive `session/subscribe`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSubscribeParams {
+    pub session_id: SessionId,
+    /// Last durable envelope sequence the client already has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_seq: Option<i64>,
 }
 
 /// Params for `session/archive`.

@@ -36,7 +36,9 @@ async fn spawn_server() -> (
 
 fn spawn_app_server_bridge(server: SdkServer) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let app_server = std::sync::Arc::new(coco_app_server::AppServer::<()>::new(
+        let app_server = std::sync::Arc::new(coco_app_server::AppServer::<
+            crate::sdk_server::LocalAppSessionHandle,
+        >::new(
             /*max_sessions*/ 1, /*channel_capacity*/ 32,
         ));
         let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 32);
@@ -137,13 +139,12 @@ async fn multiple_requests_are_processed_in_order() {
 
 #[tokio::test]
 async fn app_server_bridge_entrypoint_dispatches_and_forwards_external_notifications() {
-    #[derive(Debug, Clone)]
-    struct TestHandle;
-
     let (server_end, client) = InMemoryTransport::pair(32);
     let (external_tx, external_rx) = tokio::sync::mpsc::channel(8);
     let sdk_server = SdkServer::new(server_end).with_external_notifications(external_rx);
-    let app_server = std::sync::Arc::new(coco_app_server::AppServer::<TestHandle>::new(1, 8));
+    let app_server = std::sync::Arc::new(coco_app_server::AppServer::<
+        crate::sdk_server::LocalAppSessionHandle,
+    >::new(1, 8));
     let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 8);
     let connection = adapter.connect();
     let server_task =

@@ -29,6 +29,7 @@ use crate::sections::PartialLspSettings;
 use crate::sections::PartialMcpRuntimeSettings;
 use crate::sections::PartialMemorySettings;
 use crate::sections::PartialPathSettings;
+use crate::sections::PartialServerSettings;
 use crate::sections::PartialShellSettings;
 use crate::sections::PartialToolSettings;
 use crate::sections::PartialVoiceSettings;
@@ -102,6 +103,10 @@ pub struct Settings {
     /// Optional Event Hub websocket endpoint. `None` disables connector egress.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_hub_url: Option<String>,
+    /// AppServer listener settings. The SDK entrypoint can expose an optional
+    /// Unix-domain socket alongside stdio for local clients.
+    #[serde(default)]
+    pub server: PartialServerSettings,
 
     // === Runtime components ===
     #[serde(default)]
