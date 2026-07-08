@@ -109,6 +109,79 @@ fn worker_config(url: String) -> HubConnectorWorkerConfig {
     }
 }
 
+#[test]
+fn try_enqueue_full_records_durable_drop_before_next_same_session_event() {
+    let (tx, _rx) = tokio_mpsc::channel(1);
+    let dropped = Arc::new(std::sync::Mutex::new(DroppedEventRanges::default()));
+    let sender = HubConnectorSender {
+        tx,
+        dropped: Arc::clone(&dropped),
+    };
+    let session_id = session_id();
+
+    sender
+        .try_enqueue(durable_envelope(session_id.clone(), 1))
+        .expect("first envelope fits");
+    let error = sender
+        .try_enqueue(durable_envelope(session_id.clone(), 2))
+        .expect_err("second envelope records full queue");
+    assert!(matches!(error, HubConnectorQueueError::Full));
+
+    let config = worker_config("ws://127.0.0.1:1/v1/connect".to_string());
+    let mut pending = VecDeque::new();
+    let mut stats = HubConnectorWorkerStats::default();
+    push_envelope(
+        &config,
+        &mut pending,
+        &mut stats,
+        &dropped,
+        durable_envelope(session_id.clone(), 3),
+    )
+    .expect("push next event");
+
+    assert_eq!(stats.dropped_durable_events, 1);
+    assert_eq!(pending.len(), 2);
+    let marker = pending.pop_front().expect("drop marker");
+    assert_eq!(marker.session_id, session_id);
+    assert_eq!(marker.session_seq, 2);
+    assert!(matches!(
+        marker.payload,
+        coco_hub_protocol::EventPayload::EventsDropped {
+            count: 1,
+            since_seq: 2,
+            until_seq: 2,
+            ref reason,
+        } if reason == "hub_connector_backlog_full"
+    ));
+    let next = pending.pop_front().expect("next event");
+    assert_eq!(next.session_seq, 3);
+}
+
+#[test]
+fn dropped_marker_flushes_after_older_ready_envelopes() {
+    let (tx, mut rx) = tokio_mpsc::channel(2);
+    let dropped = Arc::new(std::sync::Mutex::new(DroppedEventRanges::default()));
+    let config = worker_config("ws://127.0.0.1:1/v1/connect".to_string());
+    let session_id = session_id();
+    tx.try_send(durable_envelope(session_id.clone(), 1))
+        .expect("queue older event");
+    record_dropped_envelope(&dropped, &durable_envelope(session_id.clone(), 2));
+
+    let mut pending = VecDeque::new();
+    let mut stats = HubConnectorWorkerStats::default();
+    drain_ready(&config, &mut rx, &mut pending, &mut stats, &dropped).expect("drain older event");
+    push_all_dropped_markers(&config, &dropped, &mut pending, &mut stats);
+
+    assert_eq!(stats.dropped_durable_events, 1);
+    assert_eq!(pending.len(), 2);
+    assert_eq!(pending[0].session_seq, 1);
+    assert_eq!(pending[1].session_seq, 2);
+    assert!(matches!(
+        pending[1].payload,
+        coco_hub_protocol::EventPayload::EventsDropped { .. }
+    ));
+}
+
 async fn spawn_collecting_hub_server() -> (String, tokio_mpsc::Receiver<BatchFrame>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

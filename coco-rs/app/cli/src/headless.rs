@@ -833,9 +833,9 @@ pub async fn run_chat_with_options(
             &cwd,
             &project_services,
         );
-    let session_handle = crate::session_runtime::SessionHandle::build(
-        crate::session_runtime::SessionRuntimeBuildOpts {
-            cli,
+    let runtime_factory = crate::session_runtime::SessionRuntimeFactory::new(
+        crate::session_runtime::SessionRuntimeFactoryOpts {
+            cli: Arc::new(cli.clone()),
             runtime_config: Arc::new(runtime_config.clone()),
             cwd: cwd.clone(),
             model_id: model_id.clone(),
@@ -859,16 +859,35 @@ pub async fn run_chat_with_options(
             project_services: project_services.clone(),
             agent_search_paths: project_services.agent_search_paths(&config_home, &cwd),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
-            // Resume / continue / fork: key every runtime subsystem off the
-            // resumed id, else task dirs + agent transcripts orphan. Resolved
-            // above (override or freshly minted) and shared with the registry's
-            // header-template vars.
-            session_id_override: Some(session_id.clone()),
             // Headless / print: file-history checkpointing defaults OFF.
             is_non_interactive: true,
         },
-    )
-    .await?;
+    );
+    let event_hub_connector = crate::event_hub::RuntimeEventHubConnector::spawn_for_session(
+        &runtime_config,
+        session_id.clone(),
+        &cwd,
+    );
+    let mut local_app_server_bridge = if let Some(connector) = &event_hub_connector {
+        crate::sdk_server::AppServerLocalBridge::with_hub_connector_sender(
+            Arc::new(crate::sdk_server::SdkServerState::default()),
+            connector.sender(),
+        )
+    } else {
+        crate::sdk_server::AppServerLocalBridge::new(Arc::new(
+            crate::sdk_server::SdkServerState::default(),
+        ))
+    };
+    // Resume / continue / fork: key every runtime subsystem off the resumed id,
+    // else task dirs + agent transcripts orphan. Resolved above (override or
+    // freshly minted) and shared with the registry's header-template vars.
+    let session_handle = local_app_server_bridge
+        .load_session_runtime(session_id.clone(), {
+            let runtime_factory = runtime_factory.clone();
+            let session_id = session_id.clone();
+            async move { runtime_factory.build_with_session_id(session_id).await }
+        })
+        .await?;
     let runtime = session_handle.runtime().clone();
 
     // Sandbox hot-reload: re-flow settings.json `sandbox.*` edits into the live
@@ -925,21 +944,6 @@ pub async fn run_chat_with_options(
     // 1 s poll fires — that bounded end-of-run drain is a documented follow-up.
     crate::leader_inbox_poller::install_leader(session_handle.clone(), None).await;
 
-    let event_hub_connector = crate::event_hub::RuntimeEventHubConnector::spawn_for_session(
-        &runtime_config,
-        session_id.clone(),
-        &cwd,
-    );
-    let mut local_app_server_bridge = if let Some(connector) = &event_hub_connector {
-        crate::sdk_server::AppServerLocalBridge::with_hub_connector_sender(
-            Arc::new(crate::sdk_server::SdkServerState::default()),
-            connector.sender(),
-        )
-    } else {
-        crate::sdk_server::AppServerLocalBridge::new(Arc::new(
-            crate::sdk_server::SdkServerState::default(),
-        ))
-    };
     local_app_server_bridge
         .install_session_runtime(session_handle.clone())
         .await;

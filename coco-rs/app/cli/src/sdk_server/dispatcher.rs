@@ -254,12 +254,12 @@ impl SdkServer {
     /// This preserves the SDK transport, shared `SdkServerState`, MCP route
     /// setup, external notification forwarding, and single-writer serializer,
     /// while delegating JSON-RPC request ownership to `coco-app-server`.
-    pub async fn run_app_server_connection<H>(
+    pub async fn run_app_server_connection(
         &self,
-        connection: coco_app_server::JsonRpcAdapterConnection<H>,
+        connection: coco_app_server::JsonRpcAdapterConnection<
+            crate::sdk_server::LocalAppSessionHandle,
+        >,
     ) -> Result<coco_app_server::DisconnectOutcome, crate::sdk_server::SdkAppServerBridgeError>
-    where
-        H: Clone + Send + Sync + 'static,
     {
         info!("SdkServer starting AppServer bridge dispatch loop");
         let external_notifications = {

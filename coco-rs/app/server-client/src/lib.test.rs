@@ -3,6 +3,10 @@ use std::sync::Mutex;
 
 use coco_app_server::AppServer;
 use coco_app_server::ConnectionKey;
+use coco_app_server::JsonRpcAdapter;
+use coco_app_server::JsonRpcRequestContext;
+use coco_app_server::JsonRpcRequestFuture;
+use coco_app_server::JsonRpcRequestHandler;
 use coco_app_server::LocalClientAdapter;
 use coco_app_server::LocalClientDispatchError;
 use coco_app_server::LocalClientRequestContext;
@@ -88,6 +92,88 @@ impl LocalClientRequestHandler for RecordingLocalRequestHandler {
                 None => Ok(result),
             }
         })
+    }
+}
+
+struct RecordingClientRequestHandler {
+    calls: Arc<Mutex<Vec<ClientRequest>>>,
+    result: serde_json::Value,
+    error: Option<LocalClientDispatchError>,
+}
+
+impl RecordingClientRequestHandler {
+    fn ok(result: serde_json::Value) -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            result,
+            error: None,
+        }
+    }
+
+    fn error(error: LocalClientDispatchError) -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            result: serde_json::Value::Null,
+            error: Some(error),
+        }
+    }
+}
+
+impl LocalClientRequestHandler for RecordingClientRequestHandler {
+    fn handle_local_client_request(
+        &self,
+        _context: LocalClientRequestContext,
+        request: ClientRequest,
+    ) -> LocalClientRequestFuture {
+        let calls = Arc::clone(&self.calls);
+        let result = self.result.clone();
+        let error = self.error.clone();
+        Box::pin(async move {
+            calls.lock().expect("calls lock").push(request);
+            match error {
+                Some(error) => Err(error),
+                None => Ok(result),
+            }
+        })
+    }
+}
+
+struct RecordingJsonRpcRequestHandler {
+    calls: Arc<Mutex<Vec<String>>>,
+}
+
+impl RecordingJsonRpcRequestHandler {
+    fn new(calls: Arc<Mutex<Vec<String>>>) -> Self {
+        Self { calls }
+    }
+}
+
+impl JsonRpcRequestHandler for RecordingJsonRpcRequestHandler {
+    fn handle_json_rpc_request(
+        &self,
+        _context: JsonRpcRequestContext,
+        request: ClientRequest,
+    ) -> JsonRpcRequestFuture {
+        let calls = Arc::clone(&self.calls);
+        Box::pin(async move {
+            calls
+                .lock()
+                .expect("json rpc calls lock")
+                .push(request.method().as_str().to_string());
+            Ok(serde_json::json!({ "ok": true }))
+        })
+    }
+}
+
+fn minimal_turn_params(prompt: &str) -> TurnStartParams {
+    TurnStartParams {
+        prompt: prompt.to_string(),
+        history_override: Vec::new(),
+        images: Vec::new(),
+        slash_metadata: None,
+        model_selection: None,
+        permission_mode: None,
+        thinking_level: None,
     }
 }
 
@@ -185,6 +271,151 @@ async fn local_server_client_typed_methods_dispatch_and_decode_results() {
     let calls = background_handler.calls.lock().expect("calls lock");
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].1, "control/backgroundAllTasks");
+}
+
+#[tokio::test]
+async fn local_session_handle_helpers_dispatch_session_requests() {
+    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
+    let session_id = test_session_id("sess-local-handle");
+    server
+        .registry()
+        .begin_load(session_id.clone())
+        .expect("reserve session");
+    server
+        .registry()
+        .complete_load_success(&session_id, TestHandle("handle"))
+        .expect("session live");
+    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
+    let client = ServerClient::connect_local(&adapter);
+    let interactive = client
+        .attach_interactive_session(session_id.clone(), AttachSurfaceOptions::default())
+        .expect("attach interactive");
+    let passive = client
+        .subscribe_session(session_id.clone(), Some(0), AttachSurfaceOptions::default())
+        .expect("subscribe passive");
+
+    let query_handler = RecordingClientRequestHandler::ok(serde_json::json!({
+        "turn_id": "turn-local-handle"
+    }));
+    let query = client
+        .query_session(&query_handler, &interactive, minimal_turn_params("hello"))
+        .await
+        .expect("query succeeds");
+    assert_eq!(query.turn_id, TurnId::from("turn-local-handle"));
+    {
+        let calls = query_handler.calls.lock().expect("calls lock");
+        let ClientRequest::TurnStart(params) = &calls[0] else {
+            panic!("expected turn/start request");
+        };
+        assert_eq!(params.prompt, "hello");
+    }
+
+    let interrupt_handler = RecordingClientRequestHandler::ok(serde_json::Value::Null);
+    client
+        .interrupt_session(&interrupt_handler, &interactive)
+        .await
+        .expect("interrupt succeeds");
+    assert!(matches!(
+        &interrupt_handler.calls.lock().expect("calls lock")[0],
+        ClientRequest::TurnInterrupt
+    ));
+
+    let read_handler = RecordingClientRequestHandler::ok(serde_json::json!({
+        "session": {
+            "session_id": session_id,
+            "model": "gpt-test",
+            "cwd": "/tmp",
+            "created_at": "2026-07-08T00:00:00Z",
+            "message_count": 0,
+            "total_tokens": 0
+        },
+        "messages": [],
+        "has_more": false
+    }));
+    let read = client
+        .read_passive_session(&read_handler, &passive, Some("4".to_string()), Some(2))
+        .await
+        .expect("read succeeds");
+    assert_eq!(
+        read.session.session_id,
+        test_session_id("sess-local-handle")
+    );
+    {
+        let calls = read_handler.calls.lock().expect("calls lock");
+        let ClientRequest::SessionRead(params) = &calls[0] else {
+            panic!("expected session/read request");
+        };
+        assert_eq!(params.session_id, test_session_id("sess-local-handle"));
+        assert_eq!(params.cursor.as_deref(), Some("4"));
+        assert_eq!(params.limit, Some(2));
+    }
+
+    let turns_handler = RecordingClientRequestHandler::ok(serde_json::json!({
+        "session": {
+            "session_id": session_id,
+            "model": "gpt-test",
+            "cwd": "/tmp",
+            "created_at": "2026-07-08T00:00:00Z",
+            "message_count": 2,
+            "total_tokens": 0
+        },
+        "turns": [{
+            "index": 1,
+            "start_cursor": "2",
+            "message_count": 2
+        }],
+        "has_more": false
+    }));
+    let turns = client
+        .list_passive_session_turns(&turns_handler, &passive, Some("1".to_string()), Some(1))
+        .await
+        .expect("turn list succeeds");
+    assert_eq!(turns.turns[0].start_cursor, "2");
+    {
+        let calls = turns_handler.calls.lock().expect("calls lock");
+        let ClientRequest::SessionTurnsList(params) = &calls[0] else {
+            panic!("expected session/turns/list request");
+        };
+        assert_eq!(params.session_id, test_session_id("sess-local-handle"));
+        assert_eq!(params.cursor.as_deref(), Some("1"));
+        assert_eq!(params.limit, Some(1));
+    }
+}
+
+#[tokio::test]
+async fn local_close_session_returns_handle_on_failure() {
+    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
+    let session_id = test_session_id("sess-close-failure");
+    server
+        .registry()
+        .begin_load(session_id.clone())
+        .expect("reserve session");
+    server
+        .registry()
+        .complete_load_success(&session_id, TestHandle("handle"))
+        .expect("session live");
+    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
+    let client = ServerClient::connect_local(&adapter);
+    let interactive = client
+        .attach_interactive_session(session_id.clone(), AttachSurfaceOptions::default())
+        .expect("attach interactive");
+    let handler = RecordingClientRequestHandler::error(LocalClientDispatchError::invalid_params(
+        "archive failed",
+    ));
+
+    let Err((returned, ClientError::Server { message, .. })) =
+        client.close_session(&handler, interactive).await
+    else {
+        panic!("expected close failure");
+    };
+
+    assert_eq!(returned.session_id(), &session_id);
+    assert_eq!(message, "archive failed");
+    let calls = handler.calls.lock().expect("calls lock");
+    let ClientRequest::SessionArchive(params) = &calls[0] else {
+        panic!("expected session/archive request");
+    };
+    assert_eq!(params.session_id, session_id);
 }
 
 #[tokio::test]
@@ -364,6 +595,65 @@ async fn remote_json_rpc_client_typed_methods_encode_and_decode_results() {
         "ready"
     );
 
+    let turns_client = client.clone();
+    let turns_session_id = session_id.clone();
+    let turns_task = tokio::spawn(async move {
+        turns_client
+            .session_turns_list(SessionTurnsListParams {
+                session_id: turns_session_id,
+                cursor: Some("1".to_string()),
+                limit: Some(2),
+            })
+            .await
+    });
+    let JsonRpcFrame::Request(turns_request) = outbound_rx
+        .recv()
+        .await
+        .expect("outbound session/turns/list")
+    else {
+        panic!("expected request frame");
+    };
+    assert_eq!(turns_request.method, "session/turns/list");
+    assert_eq!(
+        turns_request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("cursor"))
+            .and_then(serde_json::Value::as_str),
+        Some("1")
+    );
+    incoming
+        .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
+            turns_request.id,
+            serde_json::json!({
+                "session": {
+                    "session_id": session_id,
+                    "model": "gpt-test",
+                    "cwd": "/tmp",
+                    "created_at": "2026-07-08T00:00:00Z",
+                    "message_count": 2,
+                    "total_tokens": 0
+                },
+                "turns": [{
+                    "index": 1,
+                    "start_cursor": "2",
+                    "message_count": 2
+                }],
+                "has_more": false
+            }),
+        )))
+        .await
+        .expect("handle session/turns/list response");
+    assert_eq!(
+        turns_task
+            .await
+            .expect("turns task")
+            .expect("turns list succeeds")
+            .turns[0]
+            .start_cursor,
+        "2"
+    );
+
     let task_detail_client = client.clone();
     let task_detail_task = tokio::spawn(async move {
         task_detail_client
@@ -451,12 +741,173 @@ async fn remote_json_rpc_client_routes_server_error_to_pending_request() {
         .await
         .expect("handle error");
 
+    let Err(ClientError::InvalidParams { message, .. }) = request_task.await.expect("request task")
+    else {
+        panic!("expected invalid params error");
+    };
+    assert_eq!(message, "bad params");
+}
+
+#[tokio::test]
+async fn remote_json_rpc_client_maps_standard_server_error_codes() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, _events) = RemoteJsonRpcClient::new(outbound_tx);
+
+    let method_task = {
+        let client = client.clone();
+        tokio::spawn(async move { client.request("missing/method", None).await })
+    };
+    let JsonRpcFrame::Request(method_request) = outbound_rx.recv().await.expect("method request")
+    else {
+        panic!("expected request frame");
+    };
+    incoming
+        .handle_frame(JsonRpcFrame::Error(JsonRpcErrorResponse::new(
+            method_request.id,
+            JsonRpcErrorObject::new(
+                coco_types::error_codes::METHOD_NOT_FOUND,
+                "missing method",
+                Some(serde_json::json!({ "method": "missing/method" })),
+            ),
+        )))
+        .await
+        .expect("handle method error");
+    let Err(ClientError::MethodNotFound { message, data }) =
+        method_task.await.expect("method task")
+    else {
+        panic!("expected method not found error");
+    };
+    assert_eq!(message, "missing method");
+    assert_eq!(
+        data.and_then(|data| data.get("method").cloned()),
+        Some(serde_json::json!("missing/method"))
+    );
+
+    let internal_task = tokio::spawn(async move { client.request("boom", None).await });
+    let JsonRpcFrame::Request(internal_request) =
+        outbound_rx.recv().await.expect("internal request")
+    else {
+        panic!("expected request frame");
+    };
+    incoming
+        .handle_frame(JsonRpcFrame::Error(JsonRpcErrorResponse::new(
+            internal_request.id,
+            JsonRpcErrorObject::new(
+                coco_types::error_codes::INTERNAL_ERROR,
+                "server exploded",
+                None,
+            ),
+        )))
+        .await
+        .expect("handle internal error");
+    assert!(matches!(
+        internal_task.await.expect("internal task"),
+        Err(ClientError::InternalServerError { message, data: None })
+            if message == "server exploded"
+    ));
+}
+
+#[tokio::test]
+async fn remote_json_rpc_client_maps_surface_limit_error_kind() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, _events) = RemoteJsonRpcClient::new(outbound_tx);
+
+    let request_task = tokio::spawn(async move { client.request("session/attach", None).await });
+    let JsonRpcFrame::Request(request) = outbound_rx.recv().await.expect("outbound request") else {
+        panic!("expected request frame");
+    };
+    incoming
+        .handle_frame(JsonRpcFrame::Error(JsonRpcErrorResponse::new(
+            request.id,
+            JsonRpcErrorObject::new(
+                coco_types::error_codes::INVALID_REQUEST,
+                "surface limit reached",
+                Some(serde_json::json!({
+                    "kind": "surface_limit",
+                    "max": 8,
+                })),
+            ),
+        )))
+        .await
+        .expect("handle error");
+
+    let Err(ClientError::SurfaceLimit { message, data }) =
+        request_task.await.expect("request task")
+    else {
+        panic!("expected surface limit error");
+    };
+    assert_eq!(message, "surface limit reached");
+    assert_eq!(
+        data.and_then(|data| data.get("max").cloned()),
+        Some(serde_json::json!(8))
+    );
+}
+
+#[tokio::test]
+async fn remote_json_rpc_client_preserves_unknown_domain_error_kind() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, _events) = RemoteJsonRpcClient::new(outbound_tx);
+
+    let request_task = tokio::spawn(async move { client.request("session/attach", None).await });
+    let JsonRpcFrame::Request(request) = outbound_rx.recv().await.expect("outbound request") else {
+        panic!("expected request frame");
+    };
+    incoming
+        .handle_frame(JsonRpcFrame::Error(JsonRpcErrorResponse::new(
+            request.id,
+            JsonRpcErrorObject::new(
+                coco_types::error_codes::INVALID_REQUEST,
+                "unknown domain failure",
+                Some(serde_json::json!({
+                    "kind": "future_domain_error",
+                    "retry_after_ms": 25,
+                })),
+            ),
+        )))
+        .await
+        .expect("handle error");
+
+    let Err(ClientError::Domain {
+        code,
+        kind,
+        message,
+        data,
+    }) = request_task.await.expect("request task")
+    else {
+        panic!("expected domain error");
+    };
+    assert_eq!(code, coco_types::error_codes::INVALID_REQUEST);
+    assert_eq!(kind, "future_domain_error");
+    assert_eq!(message, "unknown domain failure");
+    assert_eq!(
+        data.and_then(|data| data.get("retry_after_ms").cloned()),
+        Some(serde_json::json!(25))
+    );
+}
+
+#[tokio::test]
+async fn remote_json_rpc_client_preserves_unknown_server_error_code() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, _events) = RemoteJsonRpcClient::new(outbound_tx);
+
+    let request_task = tokio::spawn(async move { client.request("custom/error", None).await });
+    let JsonRpcFrame::Request(request) = outbound_rx.recv().await.expect("outbound request") else {
+        panic!("expected request frame");
+    };
+    incoming
+        .handle_frame(JsonRpcFrame::Error(JsonRpcErrorResponse::new(
+            request.id,
+            JsonRpcErrorObject::new(-32042, "custom failure", None),
+        )))
+        .await
+        .expect("handle error");
+
     let Err(ClientError::Server { code, message, .. }) = request_task.await.expect("request task")
     else {
-        panic!("expected server error");
+        panic!("expected generic server error");
     };
-    assert_eq!(code, -32602);
-    assert_eq!(message, "bad params");
+    assert_eq!(code, -32042);
+    assert_eq!(message, "custom failure");
 }
 
 #[tokio::test]
@@ -689,6 +1140,67 @@ async fn remote_ndjson_connection_drives_request_response_and_disconnect() {
     ));
 }
 
+#[tokio::test]
+async fn remote_json_rpc_client_connects_over_websocket() {
+    let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
+    let adapter = JsonRpcAdapter::with_channel_capacity(Arc::clone(&server), 8);
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind websocket listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let handler = Arc::new(RecordingJsonRpcRequestHandler::new(Arc::clone(&calls)));
+    let server_task = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept websocket tcp");
+        let websocket = tokio_tungstenite::accept_async(stream)
+            .await
+            .expect("accept websocket");
+        adapter
+            .connect()
+            .run_websocket_transport(websocket, handler)
+            .await
+            .expect("websocket owner exits")
+    });
+
+    let (client, connection, mut events) = RemoteJsonRpcClient::connect_websocket_with_options(
+        &format!("ws://{addr}"),
+        RemoteConnectOptions {
+            outbound_channel_capacity: 8,
+            event_channel_capacity: 8,
+        },
+    )
+    .await
+    .expect("connect websocket");
+    let connection_task = tokio::spawn(connection.run());
+    let request_client = client.clone();
+    let request_task =
+        tokio::spawn(async move { request_client.request("control/keepAlive", None).await });
+
+    assert_eq!(
+        request_task
+            .await
+            .expect("request task")
+            .expect("request success"),
+        serde_json::json!({ "ok": true })
+    );
+    assert_eq!(
+        calls.lock().expect("json rpc calls lock").as_slice(),
+        ["control/keepAlive"]
+    );
+
+    drop(client);
+    connection_task
+        .await
+        .expect("connection task")
+        .expect("connection exits cleanly");
+    let outcome = server_task.await.expect("server task");
+    assert!(outcome.detached_surfaces.is_empty());
+    assert!(matches!(
+        events.recv().await.expect("disconnect event"),
+        RemoteJsonRpcEvent::Disconnected
+    ));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn remote_json_rpc_client_connects_over_unix_socket() {
@@ -884,6 +1396,391 @@ fn remote_surface_stream_reads_events_and_lifecycle_for_one_surface() {
     );
 }
 
+#[test]
+fn remote_session_handles_read_surface_events_through_demux() {
+    let (outbound_tx, _outbound_rx) = mpsc::channel(8);
+    let (client, _incoming, _events) = RemoteJsonRpcClient::new(outbound_tx);
+    let (events_tx, events_rx) = mpsc::channel(8);
+    let mut demux = RemoteEventDemux::new(events_rx);
+    let session = test_session_id("sess-remote-handle");
+    let surface = SurfaceId::from("surface-remote-handle");
+    let remote_session = client.session_handle(session.clone(), surface.clone());
+
+    events_tx
+        .try_send(RemoteJsonRpcEvent::SurfaceDelivery(Box::new(
+            SurfaceDelivery {
+                surface_id: surface.clone(),
+                envelope: durable_envelope(session.clone(), 1),
+            },
+        )))
+        .expect("send remote session event");
+
+    assert_eq!(remote_session.session_id(), &session);
+    assert_eq!(remote_session.surface_id(), &surface);
+    assert_eq!(
+        remote_session
+            .try_next_event(&mut demux)
+            .expect("remote session event")
+            .session_id,
+        session
+    );
+}
+
+#[tokio::test]
+async fn remote_session_start_handle_uses_result_surface_id() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, events) = RemoteJsonRpcClient::new(outbound_tx);
+    let mut demux = RemoteEventDemux::new(events);
+    let start_client = client.clone();
+    let start_task = tokio::spawn(async move {
+        start_client
+            .session_start_handle(&mut demux, SessionStartParams::default())
+            .await
+    });
+
+    let JsonRpcFrame::Request(start_request) = outbound_rx.recv().await.expect("start request")
+    else {
+        panic!("expected start request");
+    };
+    assert_eq!(start_request.method, "session/start");
+    let session_id = test_session_id("sess-remote-start-handle");
+    incoming
+        .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
+            start_request.id,
+            serde_json::json!({
+                "session_id": session_id,
+                "surface_id": "surface-remote-start-handle",
+            }),
+        )))
+        .await
+        .expect("handle start response");
+
+    let remote_session = start_task.await.expect("start task").expect("start handle");
+    assert_eq!(remote_session.session_id(), &session_id);
+    assert_eq!(
+        remote_session.surface_id(),
+        &SurfaceId::from("surface-remote-start-handle")
+    );
+}
+
+#[tokio::test]
+async fn remote_session_resume_handle_accepts_replaced_lifecycle() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, events) = RemoteJsonRpcClient::new(outbound_tx);
+    let mut demux = RemoteEventDemux::new(events);
+    let resume_client = client.clone();
+    let resume_task = tokio::spawn(async move {
+        resume_client
+            .session_resume_handle(
+                &mut demux,
+                SessionResumeParams {
+                    session_id: test_session_id("sess-remote-resume-handle"),
+                },
+            )
+            .await
+    });
+
+    let JsonRpcFrame::Request(resume_request) = outbound_rx.recv().await.expect("resume request")
+    else {
+        panic!("expected resume request");
+    };
+    assert_eq!(resume_request.method, "session/resume");
+    let session_id = test_session_id("sess-remote-resume-handle");
+    incoming
+        .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
+            resume_request.id,
+            serde_json::json!({
+                "session": {
+                    "session_id": session_id,
+                    "model": "gpt-test",
+                    "cwd": "/tmp",
+                    "created_at": "2026-07-08T00:00:00Z",
+                    "message_count": 0,
+                    "total_tokens": 0
+                }
+            }),
+        )))
+        .await
+        .expect("handle resume response");
+    incoming
+        .handle_frame(JsonRpcFrame::Notification(JsonRpcNotification::new(
+            "session/lifecycle",
+            Some(serde_json::json!({
+                "surface_id": "surface-remote-resume-handle",
+                "effect": {
+                    "type": "session_replaced",
+                    "old_session_id": "sess-remote-old",
+                    "new_session_id": session_id,
+                },
+            })),
+        )))
+        .await
+        .expect("handle resume lifecycle");
+
+    let remote_session = resume_task
+        .await
+        .expect("resume task")
+        .expect("resume handle");
+    assert_eq!(remote_session.session_id(), &session_id);
+    assert_eq!(
+        remote_session.surface_id(),
+        &SurfaceId::from("surface-remote-resume-handle")
+    );
+}
+
+#[tokio::test]
+async fn remote_session_handle_forwards_query_interrupt_and_close() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, _events) = RemoteJsonRpcClient::new(outbound_tx);
+    let session_id = test_session_id("sess-remote-query");
+    let remote_session =
+        client.session_handle(session_id.clone(), SurfaceId::from("surface-remote-query"));
+
+    let query_session = remote_session.clone();
+    let query_task = tokio::spawn(async move {
+        query_session
+            .query(TurnStartParams {
+                prompt: "hello".to_string(),
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+            })
+            .await
+    });
+    let JsonRpcFrame::Request(query_request) = outbound_rx.recv().await.expect("query request")
+    else {
+        panic!("expected query request");
+    };
+    assert_eq!(query_request.method, "turn/start");
+    incoming
+        .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
+            query_request.id,
+            serde_json::json!({ "turn_id": "turn-remote" }),
+        )))
+        .await
+        .expect("handle query response");
+    assert_eq!(
+        query_task
+            .await
+            .expect("query task")
+            .expect("query succeeds")
+            .turn_id,
+        TurnId::from("turn-remote")
+    );
+
+    let interrupt_session = remote_session.clone();
+    let interrupt_task = tokio::spawn(async move { interrupt_session.interrupt().await });
+    let JsonRpcFrame::Request(interrupt_request) =
+        outbound_rx.recv().await.expect("interrupt request")
+    else {
+        panic!("expected interrupt request");
+    };
+    assert_eq!(interrupt_request.method, "turn/interrupt");
+    incoming
+        .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
+            interrupt_request.id,
+            serde_json::Value::Null,
+        )))
+        .await
+        .expect("handle interrupt response");
+    interrupt_task
+        .await
+        .expect("interrupt task")
+        .expect("interrupt succeeds");
+
+    let close_task = tokio::spawn(async move { remote_session.close().await });
+    let JsonRpcFrame::Request(close_request) = outbound_rx.recv().await.expect("close request")
+    else {
+        panic!("expected close request");
+    };
+    assert_eq!(close_request.method, "session/archive");
+    assert_eq!(
+        close_request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("session_id")),
+        Some(&serde_json::json!(session_id))
+    );
+    incoming
+        .handle_frame(JsonRpcFrame::Error(JsonRpcErrorResponse::new(
+            close_request.id,
+            JsonRpcErrorObject::new(-32603, "archive failed", None),
+        )))
+        .await
+        .expect("handle close error");
+    let Err((returned, ClientError::InternalServerError { message, .. })) =
+        close_task.await.expect("close task")
+    else {
+        panic!("expected close failure to return handle");
+    };
+    assert_eq!(returned.session_id(), &test_session_id("sess-remote-query"));
+    assert_eq!(message, "archive failed");
+}
+
+#[tokio::test]
+async fn remote_passive_handle_reads_session_snapshot() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, _events) = RemoteJsonRpcClient::new(outbound_tx);
+    let session_id = test_session_id("sess-remote-passive");
+    let passive = client.passive_session_handle(
+        session_id.clone(),
+        SurfaceId::from("surface-remote-passive"),
+    );
+
+    let read_task =
+        tokio::spawn(async move { passive.read(Some("12".to_string()), Some(5)).await });
+    let JsonRpcFrame::Request(read_request) = outbound_rx.recv().await.expect("read request")
+    else {
+        panic!("expected read request");
+    };
+    assert_eq!(read_request.method, "session/read");
+    assert_eq!(
+        read_request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("session_id")),
+        Some(&serde_json::json!(session_id))
+    );
+    assert_eq!(
+        read_request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("cursor")),
+        Some(&serde_json::json!("12"))
+    );
+    incoming
+        .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
+            read_request.id,
+            serde_json::json!({
+                "session": {
+                    "session_id": session_id,
+                    "model": "gpt-test",
+                    "cwd": "/tmp",
+                    "created_at": "2026-07-08T00:00:00Z",
+                    "message_count": 0,
+                    "total_tokens": 0
+                },
+                "messages": [],
+                "has_more": false
+            }),
+        )))
+        .await
+        .expect("handle read response");
+
+    let snapshot = read_task.await.expect("read task").expect("read succeeds");
+    assert_eq!(
+        snapshot.session.session_id,
+        test_session_id("sess-remote-passive")
+    );
+    assert!(!snapshot.has_more);
+}
+
+#[tokio::test]
+async fn remote_subscribe_session_returns_passive_handle_with_replay() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, _events) = RemoteJsonRpcClient::new(outbound_tx);
+    let session_id = test_session_id("sess-remote-subscribe");
+
+    let subscribe_client = client.clone();
+    let subscribe_session_id = session_id.clone();
+    let subscribe_task = tokio::spawn(async move {
+        subscribe_client
+            .subscribe_session(subscribe_session_id, Some(6))
+            .await
+    });
+    let JsonRpcFrame::Request(subscribe_request) =
+        outbound_rx.recv().await.expect("subscribe request")
+    else {
+        panic!("expected subscribe request");
+    };
+    assert_eq!(subscribe_request.method, "session/subscribe");
+    assert_eq!(
+        subscribe_request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("session_id")),
+        Some(&serde_json::json!(session_id))
+    );
+    assert_eq!(
+        subscribe_request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("after_seq")),
+        Some(&serde_json::json!(6))
+    );
+    incoming
+        .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
+            subscribe_request.id,
+            serde_json::to_value(coco_types::SessionSubscribeResult {
+                session_id: session_id.clone(),
+                surface_id: SurfaceId::from("surface-remote-subscribe"),
+                replayed: vec![coco_types::SessionSubscribeEnvelope {
+                    session_id: session_id.clone(),
+                    agent_id: None,
+                    turn_id: None,
+                    session_seq: Some(7),
+                    event: serde_json::json!({
+                        "layer": "protocol",
+                        "payload": ServerNotification::SessionStateChanged {
+                            state: SessionState::Running,
+                        },
+                    }),
+                }],
+            })
+            .expect("encode subscribe result"),
+        )))
+        .await
+        .expect("handle subscribe response");
+
+    let passive = subscribe_task
+        .await
+        .expect("subscribe task")
+        .expect("subscribe succeeds");
+    assert_eq!(passive.session_id(), &session_id);
+    assert_eq!(
+        passive.surface_id(),
+        &SurfaceId::from("surface-remote-subscribe")
+    );
+    assert_eq!(passive.replayed().len(), 1);
+    assert_eq!(passive.replayed()[0].session_seq, Some(7));
+}
+
+#[tokio::test]
+async fn remote_subscribe_session_maps_snapshot_required_error() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, _events) = RemoteJsonRpcClient::new(outbound_tx);
+
+    let subscribe_task = tokio::spawn(async move {
+        client
+            .subscribe_session(test_session_id("sess-remote-subscribe-missing"), None)
+            .await
+    });
+    let JsonRpcFrame::Request(subscribe_request) =
+        outbound_rx.recv().await.expect("subscribe request")
+    else {
+        panic!("expected subscribe request");
+    };
+    incoming
+        .handle_frame(JsonRpcFrame::Error(JsonRpcErrorResponse::new(
+            subscribe_request.id,
+            JsonRpcErrorObject::new(
+                coco_types::error_codes::INVALID_REQUEST,
+                "snapshot required",
+                Some(serde_json::json!({ "kind": "snapshot_required" })),
+            ),
+        )))
+        .await
+        .expect("handle subscribe error");
+
+    assert!(matches!(
+        subscribe_task.await.expect("subscribe task"),
+        Err(ClientError::SnapshotRequired)
+    ));
+}
+
 #[tokio::test]
 async fn remote_event_demux_async_methods_wait_and_buffer_mixed_events() {
     let (events_tx, events_rx) = mpsc::channel(8);
@@ -944,6 +1841,56 @@ async fn remote_event_demux_async_methods_wait_and_buffer_mixed_events() {
     assert_eq!(notification.method, "custom/notice");
     assert!(demux.next_surface_event(&first).await.is_none());
     assert!(demux.is_disconnected());
+}
+
+#[tokio::test]
+async fn remote_owned_surface_stream_reads_surface_and_retains_demux() {
+    let (events_tx, events_rx) = mpsc::channel(8);
+    let first = SurfaceId::from("surface-owned-first");
+    let second = SurfaceId::from("surface-owned-second");
+    let first_session = test_session_id("sess-owned-first");
+    let second_session = test_session_id("sess-owned-second");
+
+    events_tx
+        .send(RemoteJsonRpcEvent::SurfaceDelivery(Box::new(
+            SurfaceDelivery {
+                surface_id: second.clone(),
+                envelope: durable_envelope(second_session.clone(), 2),
+            },
+        )))
+        .await
+        .expect("send second event");
+    events_tx
+        .send(RemoteJsonRpcEvent::ServerRequest(JsonRpcRequest::new(
+            JsonRpcId::String("server-req-owned".to_string()),
+            "input/requestUserInput",
+            Some(serde_json::json!({ "prompt": "continue?" })),
+        )))
+        .await
+        .expect("send server request");
+    events_tx
+        .send(RemoteJsonRpcEvent::SurfaceDelivery(Box::new(
+            SurfaceDelivery {
+                surface_id: first.clone(),
+                envelope: durable_envelope(first_session.clone(), 1),
+            },
+        )))
+        .await
+        .expect("send first event");
+
+    let mut stream = RemoteEventDemux::new(events_rx).into_surface_stream(first.clone());
+    assert_eq!(stream.surface_id(), &first);
+
+    let first_event = stream.next_event().await.expect("first event");
+    assert_eq!(first_event.session_id, first_session);
+
+    let demux = stream.demux_mut();
+    let server_request = demux.try_next_server_request().expect("server request");
+    assert_eq!(server_request.method, "input/requestUserInput");
+    let second_event = demux
+        .try_next_surface_event(&second)
+        .expect("second event remains buffered");
+    assert_eq!(second_event.session_id, second_session);
 }
 
 #[test]

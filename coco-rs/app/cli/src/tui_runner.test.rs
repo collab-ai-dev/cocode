@@ -214,6 +214,7 @@ use super::ActiveTurnDrain;
 use super::PermissionsMutation;
 use super::SentinelTrigger;
 use super::add_dir_already_message;
+use super::apply_resume_plan_through_app_server;
 use super::background_all_tasks_through_app_server;
 use super::build_remote_model_change_reminder;
 use super::build_system_message_from_push_kind;
@@ -224,6 +225,7 @@ use super::drain_active_turn;
 use super::drain_completed_turn;
 use super::format_slash_command_metadata;
 use super::handle_rewind;
+use super::load_resume_plan_for_target;
 use super::parse_editor_command;
 use super::parse_permissions_mutation;
 use super::parse_slash_command;
@@ -580,6 +582,77 @@ async fn build_runtime_with_registry_and_settings(
     .expect("build runtime")
 }
 
+async fn test_resume_context(
+    runtime: &crate::session_runtime::SessionHandle,
+) -> (
+    super::SharedSessionHandle,
+    crate::session_runtime::SessionRuntimeFactory,
+    Arc<coco_cli::process_runtime::ProcessRuntime>,
+    std::path::PathBuf,
+) {
+    let rt = runtime.runtime();
+    let config = rt.current_engine_config().await;
+    let cli = coco_cli::Cli::try_parse_from(["coco"]).expect("parse cli");
+    let process_runtime = rt.process_runtime.clone();
+    let cwd = rt.original_cwd.clone();
+    let factory = crate::session_runtime::SessionRuntimeFactory::new(
+        crate::session_runtime::SessionRuntimeFactoryOpts {
+            cli: Arc::new(cli),
+            runtime_config: Arc::clone(&rt.runtime_config),
+            cwd: cwd.clone(),
+            model_id: config.model_id,
+            system_prompt: config.system_prompt.unwrap_or_default(),
+            permission_mode_availability: config.permission_mode_availability,
+            permission_mode: config.permission_mode,
+            model_runtimes: Some(coco_query::test_support::model_runtime_registry(Arc::new(
+                QueuedTurnMockModel,
+            ))),
+            tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
+            session_manager: Arc::clone(&rt.session_manager),
+            fast_model_spec: rt.fast_model_spec.clone(),
+            permission_bridge: None,
+            command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
+                coco_commands::CommandRegistry::new(),
+            ))),
+            skill_manager: Arc::new(coco_skills::SkillManager::new()),
+            project_services: Arc::clone(&rt.project_services),
+            process_runtime: Arc::clone(&process_runtime),
+            agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+            builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
+            is_non_interactive: false,
+        },
+    );
+    (
+        Arc::new(tokio::sync::RwLock::new(runtime.clone())),
+        factory,
+        process_runtime,
+        cwd,
+    )
+}
+
+async fn dispatch_slash_command_for_test(
+    name: &str,
+    args: &str,
+    runtime: &crate::session_runtime::SessionHandle,
+    event_tx: &tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+    local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
+) -> super::SlashOutcome {
+    let (current_session, runtime_factory, process_runtime, cwd) =
+        test_resume_context(runtime).await;
+    super::dispatch_slash_command(
+        name,
+        args,
+        runtime,
+        &current_session,
+        event_tx,
+        local_app_server_bridge,
+        &runtime_factory,
+        &process_runtime,
+        &cwd,
+    )
+    .await
+}
+
 async fn seed_runtime_session_transcript(runtime: &crate::session_runtime::SessionHandle) {
     let rt = runtime.runtime();
     let session_id = rt.current_typed_session_id().await;
@@ -680,15 +753,21 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
     local_app_server_bridge
         .install_session_runtime(runtime.clone())
         .await;
+    let (current_session, runtime_factory, process_runtime, cwd) =
+        test_resume_context(&runtime).await;
 
     process_idle_command_queue(
         &runtime,
+        &current_session,
         &event_tx,
         &mut local_app_server_bridge,
         &active_turn,
         &mut pending_editor_requests,
         &title_gen_attempted,
         &turn_done_tx,
+        &runtime_factory,
+        &process_runtime,
+        &cwd,
     )
     .await;
 
@@ -838,6 +917,131 @@ async fn local_app_server_bridge_uses_runtime_session_manager_for_session_read()
 }
 
 #[tokio::test]
+async fn local_app_server_bridge_reads_live_runtime_handle_history() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let session_id = runtime.runtime().current_typed_session_id().await;
+    let local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    {
+        let mut history = runtime.runtime().history.lock().await;
+        history.push(coco_messages::create_user_message("live runtime only"));
+    }
+
+    let read = local_app_server_bridge
+        .client()
+        .session_read(
+            local_app_server_bridge.handler(),
+            coco_types::SessionReadParams {
+                session_id: session_id.clone(),
+                cursor: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect("local live session/read succeeds");
+
+    assert_eq!(read.session.session_id, session_id);
+    assert_eq!(read.messages.len(), 1);
+    assert_eq!(
+        read.messages[0]["message"]["content"][0]["text"],
+        "live runtime only"
+    );
+    assert!(!read.has_more);
+}
+
+#[tokio::test]
+async fn startup_resume_plan_uses_local_app_server_session_resume() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let old_session_id = runtime.runtime().current_typed_session_id().await;
+    let target_session_id =
+        coco_types::SessionId::try_new("sess-tui-startup-resume-target").expect("valid session id");
+    let rt = runtime.runtime();
+    seed_session_transcript_for_cwd(
+        rt.session_manager.memory_base(),
+        &rt.original_cwd,
+        &target_session_id,
+    );
+    let project_store =
+        coco_session::TranscriptStore::new(coco_cli::paths::project_paths(&rt.original_cwd));
+    append_seed_transcript(&project_store, &rt.original_cwd, &target_session_id);
+    let plan = load_resume_plan_for_target(&runtime, target_session_id.as_str())
+        .await
+        .expect("load resume plan");
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+    local_app_server_bridge
+        .ensure_interactive_surface(old_session_id)
+        .expect("attach old surface");
+    let (current_session, runtime_factory, process_runtime, cwd) =
+        test_resume_context(&runtime).await;
+
+    apply_resume_plan_through_app_server(
+        &plan,
+        &runtime,
+        &current_session,
+        &tx,
+        &mut local_app_server_bridge,
+        &runtime_factory,
+        &process_runtime,
+        &cwd,
+    )
+    .await
+    .expect("startup resume through AppServer");
+
+    assert_eq!(
+        current_session
+            .read()
+            .await
+            .runtime()
+            .current_typed_session_id()
+            .await,
+        target_session_id
+    );
+    let live = local_app_server_bridge.app_server().list_live_sessions();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].session_id, target_session_id);
+
+    let mut saw_reset = false;
+    let mut saw_history = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            coco_types::CoreEvent::Protocol(
+                coco_types::ServerNotification::SessionResetForResume { identity },
+            ) if identity.session_id.as_ref() == Some(&target_session_id) => {
+                saw_reset = true;
+            }
+            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::HistoryReplaced {
+                identity,
+                ..
+            }) if identity.session_id.as_ref() == Some(&target_session_id) => {
+                saw_history = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_reset, "startup resume should emit TUI reset event");
+    assert!(
+        saw_history,
+        "startup resume should emit TUI history replacement"
+    );
+}
+
+#[tokio::test]
 async fn resume_slash_uses_local_app_server_session_resume() {
     let home = TempDir::new().unwrap();
     let registry = coco_commands::CommandRegistry::new();
@@ -865,13 +1069,19 @@ async fn resume_slash_uses_local_app_server_session_resume() {
     local_app_server_bridge
         .ensure_interactive_surface(old_session_id)
         .expect("attach old surface");
+    let (current_session, runtime_factory, process_runtime, cwd) =
+        test_resume_context(&runtime).await;
 
     let outcome = dispatch_slash_command(
         "resume",
         target_session_id.as_str(),
         &runtime,
+        &current_session,
         &tx,
         &mut local_app_server_bridge,
+        &runtime_factory,
+        &process_runtime,
+        &cwd,
     )
     .await;
 
@@ -884,7 +1094,12 @@ async fn resume_slash_uses_local_app_server_session_resume() {
         events
     };
     assert_eq!(
-        runtime.runtime().current_typed_session_id().await,
+        current_session
+            .read()
+            .await
+            .runtime()
+            .current_typed_session_id()
+            .await,
         target_session_id,
         "resume events: {events:?}"
     );
@@ -932,23 +1147,30 @@ async fn branch_slash_switches_to_fork_through_local_app_server() {
     local_app_server_bridge
         .ensure_interactive_surface(old_session_id.clone())
         .expect("attach old surface");
+    let (current_session, runtime_factory, process_runtime, cwd) =
+        test_resume_context(&runtime).await;
 
     let outcome = dispatch_slash_command(
         "branch",
         "test fork",
         &runtime,
+        &current_session,
         &tx,
         &mut local_app_server_bridge,
+        &runtime_factory,
+        &process_runtime,
+        &cwd,
     )
     .await;
 
     assert!(matches!(outcome, super::SlashOutcome::Handled));
-    let new_session_id = runtime.runtime().current_typed_session_id().await;
+    let new_session = current_session.read().await.clone();
+    let new_session_id = new_session.runtime().current_typed_session_id().await;
     assert_ne!(new_session_id, old_session_id);
     let live = local_app_server_bridge.app_server().list_live_sessions();
     assert_eq!(live.len(), 1);
     assert_eq!(live[0].session_id, new_session_id);
-    let forked_session = runtime
+    let forked_session = new_session
         .runtime()
         .session_manager
         .load(new_session_id.as_str())
@@ -1156,9 +1378,15 @@ async fn tasks_list_and_detail_slashes_use_local_app_server_task_observability()
         .install_session_runtime(runtime.clone())
         .await;
 
-    let list_outcome =
-        dispatch_slash_command("tasks", "list", &runtime, &tx, &mut local_app_server_bridge).await;
-    let detail_outcome = dispatch_slash_command(
+    let list_outcome = dispatch_slash_command_for_test(
+        "tasks",
+        "list",
+        &runtime,
+        &tx,
+        &mut local_app_server_bridge,
+    )
+    .await;
+    let detail_outcome = dispatch_slash_command_for_test(
         "tasks",
         &format!("detail {task_id}"),
         &runtime,
@@ -1277,7 +1505,7 @@ async fn tasks_cancel_slash_uses_local_app_server_stop_task() {
         .install_session_runtime(runtime.clone())
         .await;
 
-    let outcome = dispatch_slash_command(
+    let outcome = dispatch_slash_command_for_test(
         "tasks",
         &format!("cancel {task_id}"),
         &runtime,
@@ -1465,8 +1693,14 @@ async fn model_slash_arg_rejects_unavailable_model() {
         .install_session_runtime(runtime.clone())
         .await;
 
-    let outcome =
-        dispatch_slash_command("model", "gpt5", &runtime, &tx, &mut local_app_server_bridge).await;
+    let outcome = dispatch_slash_command_for_test(
+        "model",
+        "gpt5",
+        &runtime,
+        &tx,
+        &mut local_app_server_bridge,
+    )
+    .await;
 
     assert!(matches!(outcome, super::SlashOutcome::Handled));
     let event = rx.recv().await.expect("slash result event");
@@ -1525,7 +1759,7 @@ async fn inactive_slash_command_emits_session_hint_without_running_handler() {
         .install_session_runtime(runtime.clone())
         .await;
 
-    let outcome = dispatch_slash_command(
+    let outcome = dispatch_slash_command_for_test(
         "blocked",
         "arg",
         &runtime,

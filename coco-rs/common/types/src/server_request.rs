@@ -610,6 +610,67 @@ pub struct SessionReadResult {
     pub has_more: bool,
 }
 
+/// One transcript turn span returned by `session/turns/list`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SdkSessionTurnSummary {
+    /// Numeric ordinal among derived transcript turns, starting at 0.
+    pub index: i32,
+    /// Cursor into `session/read` for the first message in this turn span.
+    pub start_cursor: String,
+    /// Number of transcript messages in this turn span.
+    pub message_count: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+}
+
+/// Response to `ClientRequest::SessionTurnsList`.
+///
+/// Turns are derived from transcript message order: a user message starts a
+/// turn span, and following entries belong to that turn until the next user
+/// message. Cursors are numeric offsets into the derived turn list.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTurnsListResult {
+    pub session: SdkSessionSummary,
+    #[serde(default)]
+    pub turns: Vec<SdkSessionTurnSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+/// Response to passive `ClientRequest::SessionSubscribe`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSubscribeResult {
+    pub session_id: crate::SessionId,
+    pub surface_id: crate::SurfaceId,
+    #[serde(default)]
+    pub replayed: Vec<SessionSubscribeEnvelope>,
+}
+
+/// Wire replay envelope returned by `session/subscribe`.
+///
+/// This mirrors `session/event` notification params without requiring the
+/// in-process `SessionEnvelope`/`CoreEvent` routing types to become serde wire
+/// DTOs.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSubscribeEnvelope {
+    pub session_id: crate::SessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<crate::TurnId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_seq: Option<i64>,
+    pub event: serde_json::Value,
+}
+
 /// Response to `ClientRequest::SessionResume`.
 /// Returned after the server loads a previously-persisted session
 /// from disk and installs it as the active session. The SDK client
@@ -618,6 +679,8 @@ pub struct SessionReadResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResumeResult {
     pub session: SdkSessionSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_id: Option<crate::SurfaceId>,
 }
 
 /// Response to `ClientRequest::SessionStart`.
@@ -628,6 +691,8 @@ pub struct SessionResumeResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartResult {
     pub session_id: crate::SessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_id: Option<crate::SurfaceId>,
 }
 
 /// Response to `ClientRequest::TurnStart`.

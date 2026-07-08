@@ -57,6 +57,14 @@ fn client_request_method_accessor_matches_serde_tag() {
             "session/status",
         ),
         (
+            ClientRequest::SessionSubscribe(SessionSubscribeParams {
+                session_id: crate::SessionId::try_new("session-1").unwrap(),
+                after_seq: Some(7),
+            }),
+            ClientRequestMethod::SessionSubscribe,
+            "session/subscribe",
+        ),
+        (
             ClientRequest::TaskList,
             ClientRequestMethod::TaskList,
             "task/list",
@@ -106,6 +114,17 @@ fn session_id_params_stay_string_shaped_on_wire() {
     let j = serde_json::to_value(&req).unwrap();
     assert_eq!(j["method"], "session/read");
     assert_eq!(j["params"]["session_id"], "session-1");
+
+    let req = ClientRequest::SessionTurnsList(SessionTurnsListParams {
+        session_id: crate::SessionId::try_new("session-1").unwrap(),
+        cursor: Some("2".to_string()),
+        limit: Some(10),
+    });
+    let j = serde_json::to_value(&req).unwrap();
+    assert_eq!(j["method"], "session/turns/list");
+    assert_eq!(j["params"]["session_id"], "session-1");
+    assert_eq!(j["params"]["cursor"], "2");
+    assert_eq!(j["params"]["limit"], 10);
 
     let back: ClientRequest = serde_json::from_value(json!({
         "method": "session/archive",

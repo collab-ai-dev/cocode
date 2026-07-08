@@ -9,6 +9,7 @@ Layered config resolution: settings files, model/provider selection, effort/thin
 - `GlobalConfig` (~/.coco.json), `SessionSettings`
 - `ModelInfo`, `ModelRoles`, `ModelAlias`, `RuntimeConfig`, `RuntimeOverrides`
 - `EventHubConfig` (`event_hub_url` + `COCO_EVENT_HUB_URL` + CLI override; `ws://`/`wss://` only)
+- `ServerConfig` (`server.unix_socket_path` + `COCO_SERVER_UNIX_SOCKET_PATH`, `server.websocket_bind` + `COCO_SERVER_WEBSOCKET_BIND`, `server.named_pipe_name` + `COCO_SERVER_NAMED_PIPE`; consumed by SDK AppServer sidecar listener startup)
 - `ProviderConfig`, `ProviderInfo`
 - `EnvOnlyConfig` (env-only overrides: Bedrock/Vertex/Foundry routing, model overrides, limits)
 - `FastModeState` + `CooldownReason`

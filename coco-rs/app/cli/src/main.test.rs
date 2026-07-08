@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 use coco_cli::headless::build_system_prompt_for_model;
 use coco_config::CatalogPaths;
@@ -72,4 +74,69 @@ fn build_system_prompt_falls_back_when_model_has_no_instructions() {
 
     assert!(prompt.starts_with(&coco_config::default_base_instructions()));
     assert!(prompt.contains("<env>"));
+}
+
+#[cfg(unix)]
+#[test]
+fn sdk_unix_socket_path_reads_runtime_server_config() {
+    let home = TempDir::new().unwrap();
+    let mut runtime = runtime_for_model("openai/gpt-5-4", &home);
+    runtime.server.unix_socket_path = Some(" /tmp/coco-sdk.sock ".to_string());
+
+    assert_eq!(
+        super::sdk_unix_socket_path(&runtime),
+        Some(PathBuf::from("/tmp/coco-sdk.sock"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sdk_unix_socket_path_ignores_empty_runtime_server_config() {
+    let home = TempDir::new().unwrap();
+    let mut runtime = runtime_for_model("openai/gpt-5-4", &home);
+    runtime.server.unix_socket_path = Some("   ".to_string());
+
+    assert_eq!(super::sdk_unix_socket_path(&runtime), None);
+}
+
+#[test]
+fn sdk_websocket_bind_reads_runtime_server_config() {
+    let home = TempDir::new().unwrap();
+    let mut runtime = runtime_for_model("openai/gpt-5-4", &home);
+    runtime.server.websocket_bind = Some(" 127.0.0.1:7777 ".to_string());
+
+    assert_eq!(
+        super::sdk_websocket_bind(&runtime).as_deref(),
+        Some("127.0.0.1:7777")
+    );
+}
+
+#[test]
+fn sdk_websocket_bind_ignores_empty_runtime_server_config() {
+    let home = TempDir::new().unwrap();
+    let mut runtime = runtime_for_model("openai/gpt-5-4", &home);
+    runtime.server.websocket_bind = Some("   ".to_string());
+
+    assert_eq!(super::sdk_websocket_bind(&runtime), None);
+}
+
+#[test]
+fn sdk_named_pipe_name_reads_runtime_server_config() {
+    let home = TempDir::new().unwrap();
+    let mut runtime = runtime_for_model("openai/gpt-5-4", &home);
+    runtime.server.named_pipe_name = Some(r"  \\.\pipe\coco-sdk  ".to_string());
+
+    assert_eq!(
+        super::sdk_named_pipe_name(&runtime).as_deref(),
+        Some(r"\\.\pipe\coco-sdk")
+    );
+}
+
+#[test]
+fn sdk_named_pipe_name_ignores_empty_runtime_server_config() {
+    let home = TempDir::new().unwrap();
+    let mut runtime = runtime_for_model("openai/gpt-5-4", &home);
+    runtime.server.named_pipe_name = Some("   ".to_string());
+
+    assert_eq!(super::sdk_named_pipe_name(&runtime), None);
 }

@@ -507,6 +507,58 @@ where
             completion: new_completion,
         })
     }
+
+    pub fn spawn_replace_detached<F, Close, CloseFut>(
+        self: &Arc<Self>,
+        old_session_id: SessionId,
+        new_session_id: SessionId,
+        factory: F,
+        close_old: Close,
+    ) -> Result<AppReplaceStart<H>, AppServerError>
+    where
+        F: Future<Output = Result<H, RegistryError>> + Send + 'static,
+        Close: FnOnce(H) -> CloseFut + Send + 'static,
+        CloseFut: Future<Output = ()> + Send + 'static,
+    {
+        let ReplaceStart::Reserved { new_completion, .. } = self
+            .registry
+            .begin_replace(&old_session_id, new_session_id.clone())
+            .context(RegistrySnafu)?;
+        let server = Arc::clone(self);
+        tokio::spawn(async move {
+            match factory.await {
+                Ok(new_handle) => {
+                    match server.registry.complete_replace_success(
+                        &old_session_id,
+                        &new_session_id,
+                        new_handle,
+                    ) {
+                        Ok(commit) => {
+                            close_old(commit.old_handle).await;
+                            if let Ok(archive_commit) =
+                                server.complete_close_and_archive_surfaces(&old_session_id)
+                            {
+                                server.route_lifecycle_effects(archive_commit.lifecycle_effects);
+                            }
+                        }
+                        Err(error) => {
+                            let _ = server
+                                .registry
+                                .complete_replace_failure(&new_session_id, error);
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = server
+                        .registry
+                        .complete_replace_failure(&new_session_id, error);
+                }
+            }
+        });
+        Ok(AppReplaceStart::Started {
+            completion: new_completion,
+        })
+    }
 }
 
 fn replace_lifecycle_effects(outcome: &ReplaceSurfaceOutcome) -> Vec<SurfaceLifecycleEffect> {
@@ -1062,6 +1114,71 @@ mod tests {
             assert_eq!(routing.surface_session(&peer), None);
         }
 
+        release_close_tx.send(()).expect("release close");
+        old_close.wait().await.expect("old close complete");
+
+        assert_eq!(
+            server.registry().get(&new_session_id),
+            Some(TestHandle("new"))
+        );
+        assert_eq!(server.registry().get(&old_session_id), None);
+    }
+
+    #[tokio::test]
+    async fn spawn_replace_detached_commits_then_closes_old_without_origin_waiter() {
+        let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
+        let old_session_id = test_session_id("sess-old");
+        let new_session_id = test_session_id("sess-new");
+        server
+            .registry()
+            .begin_load(old_session_id.clone())
+            .expect("reserve old");
+        server
+            .registry()
+            .complete_load_success(&old_session_id, TestHandle("old"))
+            .expect("old live");
+
+        let (release_build_tx, release_build_rx) = tokio::sync::oneshot::channel();
+        let (close_started_tx, close_started_rx) = tokio::sync::oneshot::channel();
+        let (release_close_tx, release_close_rx) = tokio::sync::oneshot::channel();
+        let AppReplaceStart::Started { completion } = server
+            .spawn_replace_detached(
+                old_session_id.clone(),
+                new_session_id.clone(),
+                async move {
+                    release_build_rx.await.expect("release build");
+                    Ok(TestHandle("new"))
+                },
+                move |old_handle| async move {
+                    assert_eq!(old_handle, TestHandle("old"));
+                    close_started_tx.send(()).expect("signal close started");
+                    release_close_rx.await.expect("release close");
+                },
+            )
+            .expect("start detached replace");
+        drop(completion);
+        let AppLoadStart::Loading(mut new_waiter) = server
+            .spawn_load(new_session_id.clone(), async {
+                Ok(TestHandle("duplicate"))
+            })
+            .expect("observe new loading")
+        else {
+            panic!("expected new loading");
+        };
+
+        release_build_tx.send(()).expect("release build");
+        let new_handle = new_waiter.wait().await.expect("new committed");
+        close_started_rx.await.expect("close started");
+        let AppLoadStart::Closing(mut old_close) = server
+            .spawn_load(old_session_id.clone(), async {
+                Ok(TestHandle("old-duplicate"))
+            })
+            .expect("observe old closing")
+        else {
+            panic!("expected old closing");
+        };
+
+        assert_eq!(new_handle, TestHandle("new"));
         release_close_tx.send(()).expect("release close");
         old_close.wait().await.expect("old close complete");
 

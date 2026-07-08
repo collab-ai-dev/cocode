@@ -19,9 +19,11 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "rt", "sync"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }
+tokio-tungstenite.workspace = true
+futures = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "net", "rt"] }

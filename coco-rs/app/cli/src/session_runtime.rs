@@ -57,6 +57,7 @@ mod agent_catalog;
 mod build;
 mod clear;
 mod engine;
+mod factory;
 mod handles;
 mod hooks;
 mod permissions;
@@ -67,6 +68,8 @@ mod sandbox;
 mod session_handle;
 mod state;
 
+pub use factory::SessionRuntimeFactory;
+pub use factory::SessionRuntimeFactoryOpts;
 pub(crate) use permissions::live_permissions;
 pub use roles::RoleOverride;
 pub(crate) use roles::resolve_model_selection_from_runtime_config;

@@ -343,6 +343,11 @@ pub struct SdkServerState {
     /// cache-break detector baseline. `None` only in tests that don't
     /// wire a runtime.
     pub session_runtime: RwLock<Option<crate::session_runtime::SessionHandle>>,
+    /// Optional SDK production resume replacement context. When installed,
+    /// AppServer bridge `session/resume` builds a fresh runtime through this
+    /// factory and swaps `session_runtime` instead of asking the legacy handler
+    /// to retarget the currently installed fused runtime in place.
+    pub runtime_replacement: RwLock<Option<RuntimeReplacementContext>>,
 
     /// Agent definitions pushed via `initialize.agents`
     /// (`z.record(z.string(), AgentDefinitionSchema)`). Stashed here at `initialize` time and
@@ -356,6 +361,12 @@ pub struct SdkServerState {
     /// it onto the new session so later initialize calls do not mutate an
     /// already-active session.
     pub pending_plan_mode_instructions: RwLock<Option<String>>,
+
+    /// Last SDK `initialize.hooks` registration. Runtime-backed resume builds
+    /// a fresh `SessionRuntime`, so bridge-level replacement replays these
+    /// session-scoped SDK callback hooks onto the new runtime.
+    pub sdk_initialize_hooks:
+        RwLock<Option<HashMap<coco_types::HookEventType, Vec<coco_types::HookCallbackMatcher>>>>,
 
     /// Last `RegisterMcpToolsReport` per MCP server (v4.2). Written by the
     /// register call sites; read by `handle_mcp_status` to source the
@@ -388,8 +399,10 @@ impl Default for SdkServerState {
             agent_progress_summaries_enabled: std::sync::atomic::AtomicBool::new(false),
             bypass_permissions_available: std::sync::atomic::AtomicBool::new(false),
             session_runtime: RwLock::new(None),
+            runtime_replacement: RwLock::new(None),
             pending_sdk_agents: RwLock::new(Vec::new()),
             pending_plan_mode_instructions: RwLock::new(None),
+            sdk_initialize_hooks: RwLock::new(None),
             mcp_registration_reports: RwLock::new(HashMap::new()),
         }
     }
@@ -755,6 +768,14 @@ pub struct SessionStats {
     pub num_api_calls: i32,
 }
 
+#[derive(Clone)]
+pub struct RuntimeReplacementContext {
+    pub runtime_factory: crate::session_runtime::SessionRuntimeFactory,
+    pub process_runtime: Arc<crate::process_runtime::ProcessRuntime>,
+    pub cwd: PathBuf,
+    pub requires_structured_output: bool,
+}
+
 /// Per-request context passed to handlers.
 pub struct HandlerContext {
     /// Channel for forwarding CoreEvent notifications to the transport.
@@ -813,6 +834,14 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         ClientRequest::SessionResume(params) => session::handle_session_resume(params, &ctx).await,
         ClientRequest::SessionList => session::handle_session_list(&ctx).await,
         ClientRequest::SessionRead(params) => session::handle_session_read(params, &ctx).await,
+        ClientRequest::SessionTurnsList(params) => {
+            session::handle_session_turns_list(params, &ctx).await
+        }
+        ClientRequest::SessionSubscribe(_) => HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "session/subscribe requires AppServer routing".to_string(),
+            data: None,
+        },
         ClientRequest::SessionArchive(params) => {
             session::handle_session_archive(params, &ctx).await
         }
