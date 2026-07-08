@@ -264,7 +264,7 @@ pub async fn build_live_server_with_options(
         .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
         .join("skills")]);
     let skill_manager = Arc::new(skill_manager);
-    let process_runtime = Arc::new(coco_cli::process_runtime::ProcessRuntime::start_global());
+    let process_runtime = coco_cli::process_runtime::ProcessRuntime::global();
     let project_services = process_runtime.project_services(&cwd, cwd.clone());
 
     let session_handle = SessionHandle::build(SessionRuntimeBuildOpts {

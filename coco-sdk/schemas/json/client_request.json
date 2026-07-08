@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ClientRequest",
-  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the 22 base variants and §5.4 for the 8 gap additions. 31 total.",
+  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the base variants and §5.4 for gap additions. 43 total.",
   "oneOf": [
     {
       "type": "object",
@@ -100,6 +100,62 @@
       "properties": {
         "method": {
           "type": "string",
+          "const": "session/rename"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionRenameParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/toggleTag"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionToggleTagParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/cost"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/status"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
           "const": "turn/start"
         },
         "params": {
@@ -121,6 +177,34 @@
       },
       "required": [
         "method"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "task/list"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "task/detail"
+        },
+        "params": {
+          "$ref": "#/$defs/TaskDetailParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
       ]
     },
     {
@@ -193,6 +277,22 @@
       "properties": {
         "method": {
           "type": "string",
+          "const": "control/setModelRole"
+        },
+        "params": {
+          "$ref": "#/$defs/SetModelRoleParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
           "const": "control/setPermissionMode"
         },
         "params": {
@@ -218,6 +318,50 @@
       "required": [
         "method",
         "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/setAgentColor"
+        },
+        "params": {
+          "$ref": "#/$defs/SetAgentColorParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/applyPermissionUpdate"
+        },
+        "params": {
+          "$ref": "#/$defs/ApplyPermissionUpdateParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/resetSessionPermissionRules"
+        }
+      },
+      "required": [
+        "method"
       ]
     },
     {
@@ -266,6 +410,18 @@
       "required": [
         "method",
         "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "control/backgroundAllTasks"
+        }
+      },
+      "required": [
+        "method"
       ]
     },
     {
@@ -432,6 +588,19 @@
       ]
     },
     {
+      "description": "Reload hooks from current settings.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "hook/reload"
+        }
+      },
+      "required": [
+        "method"
+      ]
+    },
+    {
       "description": "Apply feature flag settings at runtime.",
       "type": "object",
       "properties": {
@@ -450,6 +619,20 @@
     }
   ],
   "$defs": {
+    "AgentColorName": {
+      "description": "`AgentColorName`. Validated set; unknown values are dropped at parse\ntime with a warning so the runtime never sees an invalid color.",
+      "type": "string",
+      "enum": [
+        "red",
+        "blue",
+        "green",
+        "yellow",
+        "purple",
+        "orange",
+        "pink",
+        "cyan"
+      ]
+    },
     "AgentInterruptCurrentWorkParams": {
       "description": "Params for `agent/interruptCurrentWork`.\n\nAborts the target teammate's current model/tool turn while keeping the\nteammate process alive for later messages.",
       "type": "object",
@@ -474,6 +657,18 @@
           "type": "object",
           "additionalProperties": true
         }
+      ]
+    },
+    "ApplyPermissionUpdateParams": {
+      "description": "Params for `control/applyPermissionUpdate`.",
+      "type": "object",
+      "properties": {
+        "update": {
+          "$ref": "#/$defs/PermissionUpdate"
+        }
+      },
+      "required": [
+        "update"
       ]
     },
     "ApprovalDecision": {
@@ -936,6 +1131,32 @@
         }
       ]
     },
+    "ModelRole": {
+      "description": "Which purpose a model serves. Multiple roles can map to different models.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "main",
+            "fast",
+            "explore",
+            "review",
+            "memory",
+            "hook_agent"
+          ]
+        },
+        {
+          "description": "Plan-mode model. Used in two distinct contexts:\n1. **Subagent role** — when the built-in Plan subagent spawns\n(`SubagentType::Plan → ModelRole::Plan` in\n`core/subagent/src/subagent_role.rs:34`), the spawn factory\nresolves the client via `client_for_role(Plan)`.\n2. **Main-session plan-mode swap** — when the leader enters\n`PermissionMode::Plan`, the engine swaps the active client\nto `client_for_role(Plan)` for the duration of plan mode.\n`getRuntimeMainLoopModel`'s\n`opusplan` → Opus alias swap.\ncoco-rs encodes this as a generic role slot so it works for\nany provider, not just Anthropic.\nUnconfigured `models.plan` falls back to Main's spec via the\nchain in `runtime.rs:507`, and `client_for_role` short-circuits\nto the cached Main `Arc` — both call sites degrade cleanly to\n\"no swap\" without spurious cache breaks.",
+          "type": "string",
+          "const": "plan"
+        },
+        {
+          "description": "Forked-agent spawn (AgentTool / SkillTool). Distinct from\n`Explore` — Explore is an investigative subagent type that\nhappens to often be a \"small fast\" model; Subagent is the\ngeneric spawn role used by tools/Agent and the swarm runtime.",
+          "type": "string",
+          "const": "subagent"
+        }
+      ]
+    },
     "PermissionBehavior": {
       "description": "Permission behavior for a rule.",
       "type": "string",
@@ -1179,6 +1400,38 @@
         }
       ]
     },
+    "ProviderModelSelection": {
+      "description": "Unresolved provider/model selection from user-facing config.\nThis intentionally does not include [`ProviderApi`]: config surfaces\nwrite `provider/model_id`, and the runtime resolves `provider` through\nthe live provider catalog before constructing a runtime slot.",
+      "type": "object",
+      "properties": {
+        "model_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model_id"
+      ]
+    },
+    "QueuedCommandEditImage": {
+      "description": "Image payload paired with a queued command edit restore.",
+      "type": "object",
+      "properties": {
+        "data_base64": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "data_base64"
+      ]
+    },
     "ReasoningEffort": {
       "description": "Reasoning effort. Ordered from \"off\" through numeric intensity.\nProvider-agnostic — `thinking_convert` maps to per-provider wire shapes.",
       "oneOf": [
@@ -1389,6 +1642,18 @@
         "session_id"
       ]
     },
+    "SessionRenameParams": {
+      "description": "Params for `session/rename`.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
     "SessionResumeParams": {
       "description": "Params for `session/resume`.",
       "type": "object",
@@ -1462,6 +1727,34 @@
         }
       }
     },
+    "SessionToggleTagParams": {
+      "description": "Params for `session/toggleTag`.",
+      "type": "object",
+      "properties": {
+        "tag": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tag"
+      ]
+    },
+    "SetAgentColorParams": {
+      "description": "Params for `control/setAgentColor`.",
+      "type": "object",
+      "properties": {
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentColorName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "SetModelParams": {
       "description": "Params for `control/setModel`.",
       "type": "object",
@@ -1474,6 +1767,36 @@
           ]
         }
       }
+    },
+    "SetModelRoleParams": {
+      "description": "Params for `control/setModelRole`.",
+      "type": "object",
+      "properties": {
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ModelRole"
+        }
+      },
+      "required": [
+        "role",
+        "provider",
+        "model_id"
+      ]
     },
     "SetPermissionModeParams": {
       "description": "Params for `control/setPermissionMode`.\n\nThe `ultraplan` field (CCR web-UI refinement flow) is intentionally\nomitted — see CLAUDE.md \"Plan Mode — Skip Ultraplan Only\".",
@@ -1515,6 +1838,18 @@
         "task_id"
       ]
     },
+    "TaskDetailParams": {
+      "description": "Params for `task/detail`.",
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    },
     "ThinkingLevel": {
       "description": "Unified thinking configuration for all providers.\n\n`effort` carries provider-agnostic intent — `Disable`, `Auto`, or\none of the numeric levels (`Minimal`..`XHigh`). Provider-specific\nwire toggles (e.g. DeepSeek's `{\"thinking\":{\"type\":\"enabled\"}}`)\nflow through `options` verbatim.\n\nSemantic states:\n  * `Disable` — explicit \"thinking off\"; emit explicit-off signals\n    where the provider supports them, otherwise omit reasoning fields.\n  * `Auto`    — \"let the provider decide\"; omit reasoning fields\n    so the server-side default applies.\n  * `Minimal`..`XHigh` — explicit numeric efforts; emitted via the\n    provider's typed reasoning channel.",
       "type": "object",
@@ -1545,6 +1880,29 @@
       "description": "Params for `turn/start`.",
       "type": "object",
       "properties": {
+        "history_override": {
+          "description": "Optional full-history override for local compatibility turns that have\nalready assembled transcript messages outside a plain prompt. Each item\nis a serialized `coco_messages::Message`; kept as JSON here to avoid a\nreverse dependency from `coco-types` to `coco-messages`.",
+          "type": "array",
+          "items": true
+        },
+        "images": {
+          "description": "Optional clipboard/paste images to include on the user message.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueuedCommandEditImage"
+          }
+        },
+        "model_selection": {
+          "description": "Optional explicit turn-scoped model selection. When absent, the session\nmodel remains authoritative.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderModelSelection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "permission_mode": {
           "description": "Optional turn-scoped permission mode override.",
           "anyOf": [
@@ -1558,6 +1916,13 @@
         },
         "prompt": {
           "type": "string"
+        },
+        "slash_metadata": {
+          "description": "Optional slash-command metadata to prepend as a model-visible\nattachment before the user prompt.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "thinking_level": {
           "description": "Optional turn-scoped thinking override.",

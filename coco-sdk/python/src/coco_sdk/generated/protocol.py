@@ -910,6 +910,30 @@ class ClientRequestSessionArchive(BaseModel):
     params: SessionArchiveParams
 
 
+class ClientRequestSessionRename(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/rename"] = Field(default="session/rename", alias="method")
+    params: SessionRenameParams
+
+
+class ClientRequestSessionToggleTag(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/toggleTag"] = Field(
+        default="session/toggleTag", alias="method"
+    )
+    params: SessionToggleTagParams
+
+
+class ClientRequestSessionCost(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/cost"] = Field(default="session/cost", alias="method")
+
+
+class ClientRequestSessionStatus(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/status"] = Field(default="session/status", alias="method")
+
+
 class ClientRequestTurnStart(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["turn/start"] = Field(default="turn/start", alias="method")
@@ -919,6 +943,17 @@ class ClientRequestTurnStart(BaseModel):
 class ClientRequestTurnInterrupt(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["turn/interrupt"] = Field(default="turn/interrupt", alias="method")
+
+
+class ClientRequestTaskList(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["task/list"] = Field(default="task/list", alias="method")
+
+
+class ClientRequestTaskDetail(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["task/detail"] = Field(default="task/detail", alias="method")
+    params: TaskDetailParams
 
 
 class ClientRequestApprovalResolve(BaseModel):
@@ -953,6 +988,14 @@ class ClientRequestControlSetModel(BaseModel):
     params: SetModelParams
 
 
+class ClientRequestControlSetModelRole(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/setModelRole"] = Field(
+        default="control/setModelRole", alias="method"
+    )
+    params: SetModelRoleParams
+
+
 class ClientRequestControlSetPermissionMode(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["control/setPermissionMode"] = Field(
@@ -967,6 +1010,29 @@ class ClientRequestControlSetThinking(BaseModel):
         default="control/setThinking", alias="method"
     )
     params: SetThinkingParams
+
+
+class ClientRequestControlSetAgentColor(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/setAgentColor"] = Field(
+        default="control/setAgentColor", alias="method"
+    )
+    params: SetAgentColorParams
+
+
+class ClientRequestControlApplyPermissionUpdate(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/applyPermissionUpdate"] = Field(
+        default="control/applyPermissionUpdate", alias="method"
+    )
+    params: ApplyPermissionUpdateParams
+
+
+class ClientRequestControlResetSessionPermissionRules(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/resetSessionPermissionRules"] = Field(
+        default="control/resetSessionPermissionRules", alias="method"
+    )
 
 
 class ClientRequestControlStopTask(BaseModel):
@@ -991,6 +1057,13 @@ class ClientRequestControlUpdateEnv(BaseModel):
         default="control/updateEnv", alias="method"
     )
     params: UpdateEnvParams
+
+
+class ClientRequestControlBackgroundAllTasks(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/backgroundAllTasks"] = Field(
+        default="control/backgroundAllTasks", alias="method"
+    )
 
 
 class ClientRequestControlKeepAlive(BaseModel):
@@ -1062,6 +1135,11 @@ class ClientRequestPluginReload(BaseModel):
     method: Literal["plugin/reload"] = Field(default="plugin/reload", alias="method")
 
 
+class ClientRequestHookReload(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["hook/reload"] = Field(default="hook/reload", alias="method")
+
+
 class ClientRequestConfigApplyFlags(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["config/applyFlags"] = Field(
@@ -1078,17 +1156,28 @@ ClientRequest = Annotated[
         ClientRequestSessionList,
         ClientRequestSessionRead,
         ClientRequestSessionArchive,
+        ClientRequestSessionRename,
+        ClientRequestSessionToggleTag,
+        ClientRequestSessionCost,
+        ClientRequestSessionStatus,
         ClientRequestTurnStart,
         ClientRequestTurnInterrupt,
+        ClientRequestTaskList,
+        ClientRequestTaskDetail,
         ClientRequestApprovalResolve,
         ClientRequestInputResolveUserInput,
         ClientRequestElicitationResolve,
         ClientRequestControlSetModel,
+        ClientRequestControlSetModelRole,
         ClientRequestControlSetPermissionMode,
         ClientRequestControlSetThinking,
+        ClientRequestControlSetAgentColor,
+        ClientRequestControlApplyPermissionUpdate,
+        ClientRequestControlResetSessionPermissionRules,
         ClientRequestControlStopTask,
         ClientRequestControlRewindFiles,
         ClientRequestControlUpdateEnv,
+        ClientRequestControlBackgroundAllTasks,
         ClientRequestControlKeepAlive,
         ClientRequestControlCancelRequest,
         ClientRequestAgentInterruptCurrentWork,
@@ -1100,6 +1189,7 @@ ClientRequest = Annotated[
         ClientRequestMcpReconnect,
         ClientRequestMcpToggle,
         ClientRequestPluginReload,
+        ClientRequestHookReload,
         ClientRequestConfigApplyFlags,
     ],
     Field(discriminator="method"),
@@ -4021,6 +4111,10 @@ class AgentInterruptCurrentWorkParams(BaseModel):
     agent_id: str
 
 
+class ApplyPermissionUpdateParams(BaseModel):
+    update: PermissionUpdate
+
+
 class ApprovalResolveParams(BaseModel):
     decision: ApprovalDecision
     request_id: str
@@ -4094,6 +4188,10 @@ class SessionReadParams(BaseModel):
     limit: int | None = None
 
 
+class SessionRenameParams(BaseModel):
+    name: str
+
+
 class SessionResumeParams(BaseModel):
     session_id: SessionId
 
@@ -4109,8 +4207,23 @@ class SessionStartParams(BaseModel):
     system_prompt: str | None = None
 
 
+class SessionToggleTagParams(BaseModel):
+    tag: str
+
+
+class SetAgentColorParams(BaseModel):
+    color: AgentColorName | None = None
+
+
 class SetModelParams(BaseModel):
     model: str | None = None
+
+
+class SetModelRoleParams(BaseModel):
+    model_id: str
+    provider: str
+    role: ModelRole
+    effort: ReasoningEffort | None = None
 
 
 class SetPermissionModeParams(BaseModel):
@@ -4125,9 +4238,17 @@ class StopTaskParams(BaseModel):
     task_id: str
 
 
+class TaskDetailParams(BaseModel):
+    task_id: str
+
+
 class TurnStartParams(BaseModel):
     prompt: str
+    history_override: list[Any] | None = None
+    images: list[QueuedCommandEditImage] | None = None
+    model_selection: ProviderModelSelection | None = None
     permission_mode: PermissionMode | None = None
+    slash_metadata: str | None = None
     thinking_level: ThinkingLevel | None = None
 
 
@@ -4154,17 +4275,28 @@ class ClientRequestMethod(str, Enum):
     SESSION_LIST = "session/list"
     SESSION_READ = "session/read"
     SESSION_ARCHIVE = "session/archive"
+    SESSION_RENAME = "session/rename"
+    SESSION_TOGGLE_TAG = "session/toggleTag"
+    SESSION_COST = "session/cost"
+    SESSION_STATUS = "session/status"
     TURN_START = "turn/start"
     TURN_INTERRUPT = "turn/interrupt"
+    TASK_LIST = "task/list"
+    TASK_DETAIL = "task/detail"
     APPROVAL_RESOLVE = "approval/resolve"
     INPUT_RESOLVE_USER_INPUT = "input/resolveUserInput"
     ELICITATION_RESOLVE = "elicitation/resolve"
     CONTROL_SET_MODEL = "control/setModel"
+    CONTROL_SET_MODEL_ROLE = "control/setModelRole"
     CONTROL_SET_PERMISSION_MODE = "control/setPermissionMode"
     CONTROL_SET_THINKING = "control/setThinking"
+    CONTROL_SET_AGENT_COLOR = "control/setAgentColor"
+    CONTROL_APPLY_PERMISSION_UPDATE = "control/applyPermissionUpdate"
+    CONTROL_RESET_SESSION_PERMISSION_RULES = "control/resetSessionPermissionRules"
     CONTROL_STOP_TASK = "control/stopTask"
     CONTROL_REWIND_FILES = "control/rewindFiles"
     CONTROL_UPDATE_ENV = "control/updateEnv"
+    CONTROL_BACKGROUND_ALL_TASKS = "control/backgroundAllTasks"
     CONTROL_KEEP_ALIVE = "control/keepAlive"
     CONTROL_CANCEL_REQUEST = "control/cancelRequest"
     AGENT_INTERRUPT_CURRENT_WORK = "agent/interruptCurrentWork"
@@ -4176,6 +4308,7 @@ class ClientRequestMethod(str, Enum):
     MCP_RECONNECT = "mcp/reconnect"
     MCP_TOGGLE = "mcp/toggle"
     PLUGIN_RELOAD = "plugin/reload"
+    HOOK_RELOAD = "hook/reload"
     CONFIG_APPLY_FLAGS = "config/applyFlags"
 
 
@@ -4256,6 +4389,54 @@ class SessionArchiveRequest(BaseModel):
 SessionArchiveRequestParams = SessionArchiveRequest.SessionArchiveRequestParams
 
 
+class SessionRenameRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/rename"] = Field(default="session/rename")
+    params: SessionRenameRequestParams
+
+    class SessionRenameRequestParams(SessionRenameParams):
+        pass
+
+
+SessionRenameRequestParams = SessionRenameRequest.SessionRenameRequestParams
+
+
+class SessionToggleTagRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/toggleTag"] = Field(default="session/toggleTag")
+    params: SessionToggleTagRequestParams
+
+    class SessionToggleTagRequestParams(SessionToggleTagParams):
+        pass
+
+
+SessionToggleTagRequestParams = SessionToggleTagRequest.SessionToggleTagRequestParams
+
+
+class SessionCostRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/cost"] = Field(default="session/cost")
+    params: SessionCostRequestParams
+
+    class SessionCostRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+
+SessionCostRequestParams = SessionCostRequest.SessionCostRequestParams
+
+
+class SessionStatusRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/status"] = Field(default="session/status")
+    params: SessionStatusRequestParams
+
+    class SessionStatusRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+
+SessionStatusRequestParams = SessionStatusRequest.SessionStatusRequestParams
+
+
 class TurnStartRequest(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["turn/start"] = Field(default="turn/start")
@@ -4278,6 +4459,30 @@ class TurnInterruptRequest(BaseModel):
 
 
 TurnInterruptRequestParams = TurnInterruptRequest.TurnInterruptRequestParams
+
+
+class TaskListRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["task/list"] = Field(default="task/list")
+    params: TaskListRequestParams
+
+    class TaskListRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+
+TaskListRequestParams = TaskListRequest.TaskListRequestParams
+
+
+class TaskDetailRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["task/detail"] = Field(default="task/detail")
+    params: TaskDetailRequestParams
+
+    class TaskDetailRequestParams(TaskDetailParams):
+        pass
+
+
+TaskDetailRequestParams = TaskDetailRequest.TaskDetailRequestParams
 
 
 class ApprovalResolveRequest(BaseModel):
@@ -4330,6 +4535,18 @@ class SetModelRequest(BaseModel):
 SetModelRequestParams = SetModelRequest.SetModelRequestParams
 
 
+class SetModelRoleRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/setModelRole"] = Field(default="control/setModelRole")
+    params: SetModelRoleRequestParams
+
+    class SetModelRoleRequestParams(SetModelRoleParams):
+        pass
+
+
+SetModelRoleRequestParams = SetModelRoleRequest.SetModelRoleRequestParams
+
+
 class SetPermissionModeRequest(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["control/setPermissionMode"] = Field(
@@ -4354,6 +4571,50 @@ class SetThinkingRequest(BaseModel):
 
 
 SetThinkingRequestParams = SetThinkingRequest.SetThinkingRequestParams
+
+
+class SetAgentColorRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/setAgentColor"] = Field(default="control/setAgentColor")
+    params: SetAgentColorRequestParams
+
+    class SetAgentColorRequestParams(SetAgentColorParams):
+        pass
+
+
+SetAgentColorRequestParams = SetAgentColorRequest.SetAgentColorRequestParams
+
+
+class ApplyPermissionUpdateRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/applyPermissionUpdate"] = Field(
+        default="control/applyPermissionUpdate"
+    )
+    params: ApplyPermissionUpdateRequestParams
+
+    class ApplyPermissionUpdateRequestParams(ApplyPermissionUpdateParams):
+        pass
+
+
+ApplyPermissionUpdateRequestParams = (
+    ApplyPermissionUpdateRequest.ApplyPermissionUpdateRequestParams
+)
+
+
+class ResetSessionPermissionRulesRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/resetSessionPermissionRules"] = Field(
+        default="control/resetSessionPermissionRules"
+    )
+    params: ResetSessionPermissionRulesRequestParams
+
+    class ResetSessionPermissionRulesRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+
+ResetSessionPermissionRulesRequestParams = (
+    ResetSessionPermissionRulesRequest.ResetSessionPermissionRulesRequestParams
+)
 
 
 class StopTaskRequest(BaseModel):
@@ -4390,6 +4651,22 @@ class UpdateEnvRequest(BaseModel):
 
 
 UpdateEnvRequestParams = UpdateEnvRequest.UpdateEnvRequestParams
+
+
+class BackgroundAllTasksRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["control/backgroundAllTasks"] = Field(
+        default="control/backgroundAllTasks"
+    )
+    params: BackgroundAllTasksRequestParams
+
+    class BackgroundAllTasksRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+
+BackgroundAllTasksRequestParams = (
+    BackgroundAllTasksRequest.BackgroundAllTasksRequestParams
+)
 
 
 class KeepAliveRequest(BaseModel):
@@ -4528,6 +4805,18 @@ class PluginReloadRequest(BaseModel):
 PluginReloadRequestParams = PluginReloadRequest.PluginReloadRequestParams
 
 
+class HookReloadRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["hook/reload"] = Field(default="hook/reload")
+    params: HookReloadRequestParams
+
+    class HookReloadRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+
+HookReloadRequestParams = HookReloadRequest.HookReloadRequestParams
+
+
 class ConfigApplyFlagsRequest(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["config/applyFlags"] = Field(default="config/applyFlags")
@@ -4547,17 +4836,28 @@ ClientRequest = Annotated[
         SessionListRequest,
         SessionReadRequest,
         SessionArchiveRequest,
+        SessionRenameRequest,
+        SessionToggleTagRequest,
+        SessionCostRequest,
+        SessionStatusRequest,
         TurnStartRequest,
         TurnInterruptRequest,
+        TaskListRequest,
+        TaskDetailRequest,
         ApprovalResolveRequest,
         UserInputResolveRequest,
         ElicitationResolveRequest,
         SetModelRequest,
+        SetModelRoleRequest,
         SetPermissionModeRequest,
         SetThinkingRequest,
+        SetAgentColorRequest,
+        ApplyPermissionUpdateRequest,
+        ResetSessionPermissionRulesRequest,
         StopTaskRequest,
         RewindFilesRequest,
         UpdateEnvRequest,
+        BackgroundAllTasksRequest,
         KeepAliveRequest,
         CancelRequest,
         AgentInterruptCurrentWorkRequest,
@@ -4569,6 +4869,7 @@ ClientRequest = Annotated[
         McpReconnectRequest,
         McpToggleRequest,
         PluginReloadRequest,
+        HookReloadRequest,
         ConfigApplyFlagsRequest,
     ],
     Field(discriminator="method"),
