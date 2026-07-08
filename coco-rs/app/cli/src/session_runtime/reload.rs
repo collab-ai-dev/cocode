@@ -3,7 +3,6 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::project_services::ProjectServices;
-use crate::project_services::project_registry;
 
 use super::SessionRuntime;
 
@@ -19,8 +18,9 @@ impl SessionRuntime {
     /// key. No-op (returns 0) when no manager is attached. Returns the count of
     /// currently-enabled plugin MCP servers.
     pub async fn reload_plugin_mcp_servers(&self) -> usize {
-        let project_services =
-            project_registry().reload(&self.config_home, self.project_root.clone());
+        let project_services = self
+            .process_runtime
+            .reload_project_services(&self.config_home, self.project_root.clone());
         self.reload_plugin_mcp_servers_with(project_services).await
     }
 
@@ -90,10 +90,10 @@ impl SessionRuntime {
     /// Rebuild the slash-command registry from disk and atomically
     /// swap it in. Triggered by `/reload-plugins` so the user can pick
     /// up plugin / skill / command edits without restarting the
-    /// session. A new `SkillManager` and a freshly resolved enabled plugin
-    /// set (`load_enabled_plugins`) are constructed each call; resolution
-    /// order matches the original bootstrap
-    /// (`commands::build_command_registry`).
+    /// session. A fresh `ProjectServices` snapshot and `SkillManager` are
+    /// constructed each call; resolution order matches bootstrap.
+    /// Plugin-contributed agent search paths are refreshed from the same
+    /// project snapshot before callers rebuild the agent catalog.
     /// Uses the frozen [`Self::runtime_config`] snapshot — fine for
     /// the user-initiated `/reload-plugins` path where settings
     /// haven't been mutated. Callers that just wrote to
@@ -124,7 +124,14 @@ impl SessionRuntime {
             cwd,
             &[],
         );
-        let fresh = coco_skills::build_session_skill_manager(&self.config_home, cwd, &gates);
+        let project_services = self
+            .process_runtime
+            .reload_project_services(&self.config_home, self.project_root.clone());
+        {
+            let mut paths = self.agent_search_paths.write().await;
+            *paths = project_services.agent_search_paths(&self.config_home, cwd);
+        }
+        let fresh = project_services.build_skill_manager(&self.config_home, cwd, &gates);
         let fresh_skills: Vec<_> = fresh
             .all_including_conditional()
             .into_iter()
@@ -132,30 +139,12 @@ impl SessionRuntime {
             .collect();
         self.skill_manager.reload_disk_skills(fresh_skills);
         self.skill_manager.reset_announcements();
-        // Unified V2 plugin load (marketplace cache + project inline dirs,
-        // gated by enabled_plugins) so a `/reload-plugins` picks up
-        // disable/enable and marketplace installs, registering real
-        // plugin-command bodies.
-        let project_services =
-            project_registry().reload(&self.config_home, self.project_root.clone());
-        let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> =
-            project_services.plugins().iter().collect();
-        for skill in coco_plugins::skill_bridge::load_all_plugin_skills_v2(&plugin_refs) {
-            self.skill_manager.register(skill);
-        }
-        // Builtin plugin skills — symmetric with bootstrap so a reload
-        // re-registers them too.
-        coco_plugins::builtins::init_builtin_plugins();
-        for skill in coco_plugins::builtin_plugin_skills(&self.config_home) {
-            self.skill_manager.register(skill);
-        }
         let mut command_features = runtime_config.features.clone();
         if !runtime_config.memory_activation.active {
             command_features.disable(coco_types::Feature::AutoMemory);
         }
-        let registry = coco_commands::build_command_registry(
+        let registry = project_services.build_command_registry(
             &self.skill_manager,
-            project_services.plugins(),
             coco_types::UserType::from_env(),
             command_features,
             runtime_config.loop_config.clone(),
@@ -236,13 +225,10 @@ impl SessionRuntime {
 
         // Re-layer plugin hooks on top — they aren't in settings.json
         // so `reload_from_runtime` doesn't see them. Unified V2 source.
-        let project_services =
-            project_registry().reload(&self.config_home, self.project_root.clone());
-        if !project_services.plugins().is_empty() {
-            let refs: Vec<&coco_plugins::loader::LoadedPluginV2> =
-                project_services.plugins().iter().collect();
-            coco_plugins::hook_bridge::register_plugin_hooks_v2(&self.hook_registry, &refs);
-        }
+        let project_services = self
+            .process_runtime
+            .reload_project_services(&self.config_home, self.project_root.clone());
+        project_services.register_plugin_hooks(&self.hook_registry);
 
         Ok(self.hook_registry.len().max(settings_count))
     }

@@ -23,7 +23,7 @@ impl SessionRuntime {
     /// future agent-dir file watcher.
     pub async fn reload_agent_catalog(&self) {
         let catalog = self.builtin_agent_catalog;
-        let paths = self.agent_search_paths.clone();
+        let paths = self.agent_search_paths.read().await.clone();
         let cwd = self.current_cwd.read().await.clone();
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
         let auto_memory_enabled = self.runtime_config.memory_activation.active;

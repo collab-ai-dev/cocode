@@ -72,7 +72,7 @@ async fn async_main() -> Result<()> {
     // `--apply-*` flag and the inner stage would die before applying the filter.
     coco_sandbox::dispatch_or_continue(std::env::args_os());
 
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     // `--bare` is the flag form of bare mode; export the env so every
     // downstream `is_env_truthy(CocoBareMode)` read — session bootstrap
     // and the per-turn finalize — observes it.
@@ -91,6 +91,7 @@ async fn async_main() -> Result<()> {
     // returns `None` and never installs a global subscriber.
     let _tracing_handle = tracing_init::install(&cli, &startup_cwd)?;
     coco_cli::startup_profile::mark("subscriber_installed");
+    let process_runtime = coco_cli::process_runtime::ProcessRuntime::global();
 
     tracing::info!(
         target: "coco_cli::startup",
@@ -123,6 +124,7 @@ async fn async_main() -> Result<()> {
     {
         anyhow::bail!("--plan-mode-instructions can only be used in print mode (-p / --print)");
     }
+    let _embedded_hub_guard = coco_cli::embedded_hub::start_if_requested(&mut cli).await?;
 
     if let Some(cmd) = &cli.command {
         match cmd {
@@ -160,7 +162,8 @@ async fn async_main() -> Result<()> {
                     println!("No sessions to resume.");
                     return Ok(());
                 }
-                return tui_runner::run_tui(&cli_for_resume, plan, cwd).await;
+                return tui_runner::run_tui(&cli_for_resume, plan, cwd, process_runtime.clone())
+                    .await;
             }
             Commands::Config { action } => {
                 let cwd = startup_cwd.clone();
@@ -168,7 +171,13 @@ async fn async_main() -> Result<()> {
             }
             Commands::Chat { prompt } => {
                 let prompt = prompt.as_deref().unwrap_or("Hello!");
-                return run_chat(&cli, Some(prompt), startup_cwd.clone()).await;
+                return run_chat(
+                    &cli,
+                    Some(prompt),
+                    startup_cwd.clone(),
+                    process_runtime.clone(),
+                )
+                .await;
             }
             Commands::Doctor => {
                 println!("Running diagnostics...");
@@ -222,6 +231,7 @@ async fn async_main() -> Result<()> {
                     &cli,
                     Some(&format!("Review the code changes in {t}")),
                     startup_cwd.clone(),
+                    process_runtime.clone(),
                 )
                 .await;
             }
@@ -359,7 +369,7 @@ async fn async_main() -> Result<()> {
                 return Ok(());
             }
             Commands::Sdk => {
-                return run_sdk_mode(&cli, startup_cwd.clone()).await;
+                return run_sdk_mode(&cli, startup_cwd.clone(), process_runtime.clone()).await;
             }
         }
     }
@@ -375,7 +385,13 @@ async fn async_main() -> Result<()> {
             prompt_len = prompt.len(),
             "running headless chat"
         );
-        run_chat(&cli, Some(prompt), startup_cwd.clone()).await
+        run_chat(
+            &cli,
+            Some(prompt),
+            startup_cwd.clone(),
+            process_runtime.clone(),
+        )
+        .await
     } else {
         // Resolve `--resume` / `--continue` / `--fork-session` once
         // and hand off to the TUI runner. `None` keeps the default
@@ -391,12 +407,17 @@ async fn async_main() -> Result<()> {
             resuming = plan.is_some(),
             "launching interactive TUI"
         );
-        tui_runner::run_tui(&cli, plan, cwd).await
+        tui_runner::run_tui(&cli, plan, cwd, process_runtime.clone()).await
     }
 }
 
 /// Run a single-turn print mode (--print / piped stdout).
-async fn run_chat(cli: &Cli, prompt: Option<&str>, cwd: PathBuf) -> Result<()> {
+async fn run_chat(
+    cli: &Cli,
+    prompt: Option<&str>,
+    cwd: PathBuf,
+    process_runtime: Arc<coco_cli::process_runtime::ProcessRuntime>,
+) -> Result<()> {
     // Resolve `--resume` / `--continue` / `--fork-session` once at
     // the boot edge so headless and TUI share identical semantics.
     // `None` means no resume flag was set; fall through to a fresh
@@ -421,10 +442,12 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>, cwd: PathBuf) -> Result<()> {
                 .collect(),
             session_id_override: Some(p.session_id),
             stored_mode: p.conversation.mode,
+            process_runtime: Some(process_runtime.clone()),
             ..Default::default()
         },
         None => coco_cli::headless::RunChatOptions {
             cwd: Some(cwd.clone()),
+            process_runtime: Some(process_runtime.clone()),
             ..Default::default()
         },
     };
@@ -457,7 +480,11 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>, cwd: PathBuf) -> Result<()> {
 }
 
 /// Run in SDK mode: NDJSON-over-stdio JSON-RPC control protocol.
-async fn run_sdk_mode(cli: &Cli, cwd: PathBuf) -> Result<()> {
+async fn run_sdk_mode(
+    cli: &Cli,
+    cwd: PathBuf,
+    process_runtime: Arc<coco_cli::process_runtime::ProcessRuntime>,
+) -> Result<()> {
     tracing::info!(
         target: "coco_cli::sdk",
         cwd = %cwd.display(),
@@ -467,7 +494,7 @@ async fn run_sdk_mode(cli: &Cli, cwd: PathBuf) -> Result<()> {
         coco_cli::headless::build_runtime_config_with_reloader(cli, &cwd)?;
     coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
 
-    let resources = build_engine_resources(cli, &runtime_config, &cwd)?;
+    let resources = build_engine_resources(&process_runtime, cli, &runtime_config, &cwd)?;
     let is_real_anthropic = resources.provider_api == Some(coco_types::ProviderApi::Anthropic);
     let model_id = resources.model_id.clone();
     let system_prompt = Some(resources.system_prompt.clone());
@@ -564,6 +591,7 @@ async fn run_sdk_mode(cli: &Cli, cwd: PathBuf) -> Result<()> {
     // runs for SDK NDJSON sessions. Background + non-fatal.
     coco_cli::session_bootstrap::spawn_marketplace_startup(global_config::config_home());
     let server = SdkServer::new(transport)
+        .with_startup_cwd(cwd.clone())
         .with_session_manager(session_manager)
         .with_mcp_manager(mcp_manager.clone())
         .with_initialize_bootstrap(bootstrap)
@@ -597,6 +625,7 @@ async fn run_sdk_mode(cli: &Cli, cwd: PathBuf) -> Result<()> {
             permission_bridge: Some(bridge),
             command_registry: command_registry.clone(),
             skill_manager: skill_manager.clone(),
+            process_runtime: process_runtime.clone(),
             project_services: resources.project_services.clone(),
             // Same paths the SDK `initialize.agents` listing reads —
             // per-session AgentDefinitionStore is built from these.
@@ -611,6 +640,14 @@ async fn run_sdk_mode(cli: &Cli, cwd: PathBuf) -> Result<()> {
     )
     .await?;
     let session_runtime = session_handle.runtime().clone();
+    let sdk_event_hub_connector = {
+        let session_id = session_runtime.current_typed_session_id().await;
+        coco_cli::event_hub::RuntimeEventHubConnector::spawn_for_session(
+            &session_runtime.runtime_config,
+            session_id,
+            &cwd,
+        )
+    };
 
     // Sandbox hot-reload for the long-lived SDK NDJSON server: settings.json
     // `sandbox.*` edits re-flow into the live SandboxState. Held for the
@@ -649,6 +686,7 @@ async fn run_sdk_mode(cli: &Cli, cwd: PathBuf) -> Result<()> {
     // Late-binds shared with TUI/headless: task runtime, agent transcript
     // persistence, agent-team wiring, fork dispatcher.
     let lsp_handle = coco_cli::session_bootstrap::build_lsp_handle_if_enabled(
+        process_runtime.clone(),
         &session_runtime.runtime_config,
         &global_config::config_home(),
         &session_runtime.project_root,
@@ -697,6 +735,11 @@ async fn run_sdk_mode(cli: &Cli, cwd: PathBuf) -> Result<()> {
     let server = server
         .with_file_history(file_history_for_server, global_config::config_home())
         .with_session_handle(session_handle.clone());
+    let server = if let Some(connector) = &sdk_event_hub_connector {
+        server.with_hub_connector_sender(connector.sender())
+    } else {
+        server
+    };
 
     let runner = Arc::new(QueryEngineRunner::new(
         session_handle,
@@ -745,6 +788,10 @@ async fn run_sdk_mode(cli: &Cli, cwd: PathBuf) -> Result<()> {
             .await;
     }
     drop(session_runtime_guard);
+
+    if let Some(connector) = sdk_event_hub_connector {
+        connector.shutdown_and_flush().await;
+    }
 
     if let Err(e) = dispatch_result {
         tracing::error!(

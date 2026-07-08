@@ -6,6 +6,7 @@ use coco_bridge::ControlRequestHandler;
 use coco_types::CoreEvent;
 use coco_types::ServerNotification;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use super::SdkBridgeControlHandler;
 use crate::sdk_server::handlers::SdkServerState;
@@ -185,13 +186,58 @@ async fn bridge_handler_rejects_when_no_active_session() {
 }
 
 #[tokio::test]
-async fn bridge_handler_rejects_unrouted_variants() {
-    // Only SetPermissionMode is routed through the bridge trait
-    // today. Other variants must fail closed rather than silently
-    // no-op, so the caller knows to dispatch via the SDK path.
+async fn bridge_handler_routes_set_model_through_sdk_dispatch() {
+    let state = state_with_session();
+    let handler = SdkBridgeControlHandler::new(state.clone());
+
+    let ok = handler
+        .handle(ControlRequest::SetModel {
+            model: Some("provider/new-model".to_string()),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(ok, serde_json::Value::Null);
+    let slot = state.session.read().await;
+    assert_eq!(slot.as_ref().unwrap().model, "provider/new-model");
+}
+
+#[tokio::test]
+async fn bridge_handler_routes_interrupt_through_sdk_dispatch() {
+    let state = state_with_session();
+    let token = CancellationToken::new();
+    {
+        let mut slot = state.session.write().await;
+        slot.as_mut().unwrap().active_turn_cancel = Some(token.clone());
+    }
+    let handler = SdkBridgeControlHandler::new(state);
+
+    let ok = handler.handle(ControlRequest::Interrupt).await.unwrap();
+
+    assert_eq!(ok, serde_json::Value::Null);
+    assert!(token.is_cancelled());
+}
+
+#[tokio::test]
+async fn bridge_handler_routes_mcp_status_through_sdk_dispatch() {
     let state = state_with_session();
     let handler = SdkBridgeControlHandler::new(state);
-    let err = handler.handle(ControlRequest::Interrupt).await.unwrap_err();
-    assert_eq!(err.code, coco_types::error_codes::METHOD_NOT_FOUND);
-    assert!(err.message.contains("not yet routed"));
+
+    let value = handler.handle(ControlRequest::McpStatus).await.unwrap();
+
+    assert_eq!(value["mcpServers"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn bridge_handler_returns_sdk_dispatch_errors() {
+    let state = state_with_session();
+    let handler = SdkBridgeControlHandler::new(state);
+
+    let err = handler
+        .handle(ControlRequest::GetContextUsage)
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code, coco_types::error_codes::INVALID_REQUEST);
+    assert!(err.message.contains("active session runtime"));
 }

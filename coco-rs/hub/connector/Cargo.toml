@@ -16,6 +16,15 @@ chrono.workspace = true
 coco-error.workspace = true
 coco-hub-protocol.workspace = true
 coco-types.workspace = true
+coco-utils-rustls-provider.workspace = true
+futures = { workspace = true, features = ["alloc"] }
+http.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
+tokio-tungstenite.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }

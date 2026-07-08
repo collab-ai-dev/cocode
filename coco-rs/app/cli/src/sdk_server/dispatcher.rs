@@ -7,14 +7,18 @@
 //! The dispatch loop reads stdin, routes control requests, and enqueues
 //! messages to stdout.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use coco_hub_connector::HubConnectorSender;
 use coco_query::StreamAccumulator;
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
 use coco_types::JSONRPC_VERSION;
 use coco_types::JsonRpcNotification;
 use coco_types::ServerNotification;
+use coco_types::SessionEnvelope;
+use coco_types::SessionId;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -49,6 +53,7 @@ pub struct SdkServer {
     /// Modeled as merged channels so external subsystems can push
     /// events into the notification system.
     external_notifications: std::sync::Mutex<Vec<mpsc::Receiver<CoreEvent>>>,
+    hub_connector: Option<HubConnectorSender>,
 }
 
 impl SdkServer {
@@ -76,6 +81,7 @@ impl SdkServer {
             transport,
             state,
             external_notifications: std::sync::Mutex::new(Vec::new()),
+            hub_connector: None,
         }
     }
 
@@ -88,6 +94,16 @@ impl SdkServer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(rx);
+        self
+    }
+
+    /// Clone SDK-visible protocol notifications into the Event Hub connector.
+    ///
+    /// The SDK writer remains the single owner of NDJSON output ordering; this
+    /// side channel stamps the same protocol notifications with the active SDK
+    /// session id for Hub egress without changing SDK wire behavior.
+    pub fn with_hub_connector_sender(mut self, sender: HubConnectorSender) -> Self {
+        self.hub_connector = Some(sender);
         self
     }
 
@@ -180,6 +196,17 @@ impl SdkServer {
         self
     }
 
+    /// Install the cwd captured by the process entrypoint before requests
+    /// arrive. SDK handlers use it when no active session/runtime exists yet.
+    pub fn with_startup_cwd(self, cwd: std::path::PathBuf) -> Self {
+        let Ok(mut slot) = self.state.startup_cwd.try_write() else {
+            panic!("with_startup_cwd: state was already locked at construction time");
+        };
+        *slot = Some(cwd);
+        drop(slot);
+        self
+    }
+
     /// Install the process-shared [`SessionHandle`]. Required so
     /// `handle_session_start` can call `runtime.retarget_for_new_session()`
     /// when an SDK client cycles `session/archive` → `session/start`.
@@ -242,14 +269,64 @@ impl SdkServer {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             std::mem::take(&mut *guard)
         };
-        crate::sdk_server::app_server_bridge::run_app_server_sdk_state_over_sdk_transport_with_external_notifications(
+        crate::sdk_server::app_server_bridge::run_app_server_sdk_state_over_sdk_transport_with_external_notifications_and_hub_connector(
             connection,
             self.transport.clone(),
             self.state.clone(),
             external_notifications,
+            self.hub_connector.clone(),
         )
         .await
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct SdkHubEgress {
+    state: Arc<SdkServerState>,
+    sender: HubConnectorSender,
+}
+
+impl SdkHubEgress {
+    pub(crate) fn new(state: Arc<SdkServerState>, sender: HubConnectorSender) -> Self {
+        Self { state, sender }
+    }
+
+    async fn enqueue_notification(
+        &self,
+        next_session_seq: &mut HashMap<SessionId, i64>,
+        notification: &ServerNotification,
+    ) {
+        let Some(session_id) = current_sdk_session_id(&self.state).await else {
+            warn!("dropping SDK Event Hub notification without an active session");
+            return;
+        };
+        let seq_session_id = session_id.clone();
+        let envelope = SessionEnvelope::stamp(
+            session_id,
+            None,
+            CoreEvent::Protocol(notification.clone()),
+            || {
+                let next = next_session_seq.entry(seq_session_id).or_insert(1);
+                let seq = *next;
+                *next += 1;
+                seq
+            },
+        );
+        if let Err(error) = self.sender.try_enqueue(envelope) {
+            warn!(%error, "dropping SDK Event Hub notification from connector queue");
+        }
+    }
+}
+
+async fn current_sdk_session_id(state: &SdkServerState) -> Option<SessionId> {
+    if let Some(session) = state.session.read().await.as_ref() {
+        return Some(session.session_id.clone());
+    }
+    let runtime = state.session_runtime.read().await.clone();
+    if let Some(runtime) = runtime {
+        return Some(runtime.current_typed_session_id().await);
+    }
+    None
 }
 
 /// Spawn the SDK's single-writer transport serializer.
@@ -262,6 +339,7 @@ impl SdkServer {
 pub(crate) fn spawn_sdk_outbound_writer(
     transport: Arc<dyn SdkTransport>,
     mut outbound_rx: mpsc::Receiver<OutboundMessage>,
+    hub_egress: Option<SdkHubEgress>,
 ) -> tokio::task::JoinHandle<()> {
     // Tag every event emitted from the writer task with `sdk_writer` so
     // downstream log filters can trace "what did the SDK see, in what order"
@@ -277,8 +355,19 @@ pub(crate) fn spawn_sdk_outbound_writer(
             // Buffer stream events that arrive before TurnStarted.
             const PRE_TURN_BUFFER_CAP: usize = 64;
             let mut pre_turn_buffer: Vec<AgentStreamEvent> = Vec::new();
+            let mut next_session_seq: HashMap<SessionId, i64> = HashMap::new();
 
-            async fn send_notif(transport: &dyn SdkTransport, notif: &ServerNotification) -> bool {
+            async fn send_notif(
+                transport: &dyn SdkTransport,
+                hub_egress: Option<&SdkHubEgress>,
+                next_session_seq: &mut HashMap<SessionId, i64>,
+                notif: &ServerNotification,
+            ) -> bool {
+                if let Some(hub_egress) = hub_egress {
+                    hub_egress
+                        .enqueue_notification(next_session_seq, notif)
+                        .await;
+                }
                 if let Err(e) = transport.send_notification(notif).await {
                     warn!(error = %e, "notification forward failed");
                     return false;
@@ -288,10 +377,12 @@ pub(crate) fn spawn_sdk_outbound_writer(
 
             async fn send_accumulated(
                 transport: &dyn SdkTransport,
+                hub_egress: Option<&SdkHubEgress>,
+                next_session_seq: &mut HashMap<SessionId, i64>,
                 notifications: Vec<ServerNotification>,
             ) -> bool {
                 for sn in notifications {
-                    if !send_notif(transport, &sn).await {
+                    if !send_notif(transport, hub_egress, next_session_seq, &sn).await {
                         return false;
                     }
                 }
@@ -310,7 +401,14 @@ pub(crate) fn spawn_sdk_outbound_writer(
                                         .drain(..)
                                         .flat_map(|evt| acc.process(evt))
                                         .collect();
-                                    if !send_accumulated(&*transport, buffered).await {
+                                    if !send_accumulated(
+                                        &*transport,
+                                        hub_egress.as_ref(),
+                                        &mut next_session_seq,
+                                        buffered,
+                                    )
+                                    .await
+                                    {
                                         break;
                                     }
                                     accumulator = Some(acc);
@@ -318,7 +416,14 @@ pub(crate) fn spawn_sdk_outbound_writer(
                                 ServerNotification::TurnEnded(_) => {
                                     if let Some(ref mut acc) = accumulator {
                                         let flushed = acc.flush();
-                                        if !send_accumulated(&*transport, flushed).await {
+                                        if !send_accumulated(
+                                            &*transport,
+                                            hub_egress.as_ref(),
+                                            &mut next_session_seq,
+                                            flushed,
+                                        )
+                                        .await
+                                        {
                                             break;
                                         }
                                     }
@@ -327,7 +432,14 @@ pub(crate) fn spawn_sdk_outbound_writer(
                                 }
                                 _ => {}
                             }
-                            if !send_notif(&*transport, &notif).await {
+                            if !send_notif(
+                                &*transport,
+                                hub_egress.as_ref(),
+                                &mut next_session_seq,
+                                &notif,
+                            )
+                            .await
+                            {
                                 break;
                             }
                         }
@@ -347,7 +459,14 @@ pub(crate) fn spawn_sdk_outbound_writer(
                                 }
                                 Vec::new()
                             };
-                            if !send_accumulated(&*transport, notifications).await {
+                            if !send_accumulated(
+                                &*transport,
+                                hub_egress.as_ref(),
+                                &mut next_session_seq,
+                                notifications,
+                            )
+                            .await
+                            {
                                 break;
                             }
                         }

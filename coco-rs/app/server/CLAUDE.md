@@ -179,10 +179,21 @@ construction or transports.
 
 ## Pending
 
-Runtime factory implementation behind `AppServer::spawn_load`, concrete close
-cascade implementation behind `spawn_close`, concrete replace runtime factory
-and old-session close cascade behind `spawn_replace`, production wiring of
-runtime-backed local/JSON-RPC request handlers into TUI/headless/SDK entry
-points, interactive takeover, named-pipe and WebSocket accept loops, production
-listener lifecycle wiring, and persisted transcript/session-store integration
-are not implemented here yet.
+Concrete runtime factory implementation behind `AppServer::spawn_load`,
+concrete close cascade implementation behind `spawn_close`, concrete replace
+runtime factory and old-session close cascade behind `spawn_replace`,
+interactive takeover, named-pipe and WebSocket accept loops, production
+listener lifecycle wiring, and broader persisted transcript/session-store
+integration are not implemented here yet. The CLI local bridge now registers
+`LocalAppSessionHandle` snapshots through `AppServer::spawn_load`, uses
+`AppServer::spawn_replace` for local resume when the old live session has an
+interactive caller surface, falls back to close-then-register when no replace
+caller exists, archives through `spawn_close`, and installs the runtime
+`SessionManager` so local
+`session/list` / `session/read` can read persisted transcripts. The local
+handle snapshots can carry the fused app/cli `SessionHandle`, but their close
+cascade remains retarget-safe and does not tear down the fused runtime until
+Phase B removes in-place runtime retargeting. Re-installing a runtime-backed
+handle for an already-live local session refreshes the registry handle without
+changing surface routing; this is lifecycle and local-handler wiring, not the
+final runtime factory or broad server-client pagination bridge.

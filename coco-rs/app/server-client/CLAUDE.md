@@ -36,22 +36,41 @@ socket dialing for future SDK transports.
 - `ServerClient::detach_passive` consumes a passive handle and removes only
   that surface. It does not close the connection or archive the session.
 - `ServerClient` typed helpers (`session_start`, `session_resume`,
-  `session_list`, `session_read`, `session_archive`, `turn_start`,
-  `turn_interrupt`, approval/user-input/elicitation resolve, `initialize`,
-  config/runtime-control, MCP, plugin reload, and context-usage helpers)
+  `session_list`, `session_read`, `session_archive`, `session_cost`,
+  `session_status`, `task_list`, `task_detail`, `background_all_tasks`,
+  `turn_start`, `turn_interrupt`, approval/user-input/elicitation resolve,
+  `initialize`, config/runtime-control, MCP, plugin/hook reload, and
+  context-usage helpers)
   dispatch canonical `ClientRequest`s through a caller-supplied
   `LocalClientRequestHandler`. This is the typed local TUI/headless seam; it
   must stay in-process and avoid JSON-RPC framing.
+- `ServerClient::stop_task` is the local runtime-control helper for
+  task/subagent cancellation. Handler implementations should target a real task
+  registry when one is installed instead of treating it only as a turn
+  interrupt.
+- `ServerClient::config_apply_flags` carries runtime flag updates; local
+  handlers currently apply `fast_mode` / `fastMode` to the installed session
+  runtime and may acknowledge unknown flags for SDK compatibility.
+- `ServerClient::set_thinking` carries the session thinking override; local
+  handlers apply it to the installed runtime and emit `ModelRoleChanged` for
+  TUI mirrors.
+- `ServerClient::set_model_role` carries in-memory model-role overrides used
+  by the TUI `/model` picker; local handlers apply the installed runtime
+  override and emit `ModelRoleChanged`.
+- `ServerClient::apply_permission_update` carries `/permissions` editor
+  updates; local handlers apply the installed runtime's live permission base
+  and persist destinations that map to settings files.
 - `RemoteJsonRpcClient` owns client-side JSON-RPC request id generation,
   pending-response correlation, and success/error replies to server-initiated
   JSON-RPC requests. Concrete transports own I/O and feed frames to
   `RemoteJsonRpcIncoming`.
 - `RemoteJsonRpcClient` typed helpers (`session_start`, `session_resume`,
-  `session_list`, `session_read`, `session_archive`, `turn_start`,
-  `turn_interrupt`, approval/user-input/elicitation resolve, `initialize`,
-  config/runtime-control, MCP, plugin reload, and context-usage helpers) are
-  thin wrappers over canonical `ClientRequest` variants and decode existing
-  `coco-types` result DTOs.
+  `session_list`, `session_read`, `session_archive`, `session_cost`,
+  `session_status`, `task_list`, `task_detail`, `background_all_tasks`,
+  `turn_start`, `turn_interrupt`, approval/user-input/elicitation resolve,
+  `initialize`, config/runtime-control, MCP, plugin/hook reload, and
+  context-usage helpers) are thin wrappers over canonical `ClientRequest`
+  variants and decode existing `coco-types` result DTOs.
 - `RemoteConnectOptions` names outbound and event channel capacities for
   remote NDJSON/Unix connections. Defaults match the original fixed capacities.
 - `RemoteJsonRpcIncoming` decodes known `session/event` and
@@ -82,7 +101,9 @@ socket dialing for future SDK transports.
 
 ## Pending
 
-Persisted session listing, concrete WS dialing, runtime-backed
-start/resume/query/interrupt/replace/close semantics behind AppServer, and
-typed public client errors for every server failure remain pending follow-up
-work.
+Direct AppServer-owned persisted listing/read semantics, concrete WS dialing,
+runtime-backed start/resume/query/interrupt/replace/close semantics behind
+AppServer, and typed public client errors for every server failure remain
+pending follow-up work. The client crate already exposes typed
+`session_list` / `session_read` request helpers; today the CLI's runtime-backed
+handler supplies persisted transcript data for those requests.

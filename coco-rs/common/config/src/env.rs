@@ -47,6 +47,9 @@ pub enum EnvKey {
     /// so `coco ps` can attribute live sessions. Optional; missing means
     /// the field is omitted from the registry record.
     CocoEntrypoint,
+    /// WebSocket endpoint for Event Hub connector egress.
+    /// Accepted schemes are `ws://` and `wss://`.
+    CocoEventHubUrl,
     /// SessionKind override for the concurrent-sessions PID registry.
     /// Accepted values: `bg`, `daemon`, `daemon-worker`. Anything else
     /// (or unset) means the session registers as `interactive`.
@@ -349,6 +352,7 @@ impl EnvKey {
             Self::CocoAuthGeminiRevokeUrl => "COCO_AUTH_GEMINI_REVOKE_URL",
             Self::CocoAuthCredentialStore => "COCO_AUTH_CREDENTIAL_STORE",
             Self::CocoEntrypoint => "COCO_ENTRYPOINT",
+            Self::CocoEventHubUrl => "COCO_EVENT_HUB_URL",
             Self::CocoSessionKind => "COCO_SESSION_KIND",
             Self::CocoBashAutoBackgroundOnTimeout => "COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT",
             Self::CocoBashMaintainProjectWorkingDir => "COCO_BASH_MAINTAIN_PROJECT_WORKING_DIR",

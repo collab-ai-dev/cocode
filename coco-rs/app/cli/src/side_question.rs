@@ -1,5 +1,5 @@
 //! Shared `/btw` side-question fork logic for both the TUI runner and the
-//! SDK runner. (`runSideQuestion` +
+//! SDK `turn/start` handler. (`runSideQuestion` +
 //! `extractSideQuestionResponse`): wrap the question in a tool-less
 //! "lightweight agent" system-reminder, run a one-shot fork that shares the
 //! parent's prompt cache, then flatten the answer out of the per-block

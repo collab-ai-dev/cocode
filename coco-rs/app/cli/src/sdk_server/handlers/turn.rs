@@ -10,6 +10,7 @@ use coco_types::ElicitationResolveParams;
 use coco_types::TurnId;
 use coco_types::TurnStartParams;
 use coco_types::UserInputResolveParams;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -17,7 +18,10 @@ use tracing::warn;
 
 use super::HandlerContext;
 use super::HandlerResult;
+use super::runtime;
+use super::session;
 use super::session::forward_turn_events;
+use crate::sdk_server::outbound::OutboundMessage;
 use crate::sdk_server::pending_map::ResolveOutcome;
 
 /// `turn/start` — begin a single agent turn in the active session.
@@ -36,9 +40,35 @@ use crate::sdk_server::pending_map::ResolveOutcome;
 /// In headless mode a single turn is kicked off per invocation; coco-rs
 /// lets the SDK client drive the cadence via `turn/start`.
 pub(super) async fn handle_turn_start(
-    params: TurnStartParams,
+    mut params: TurnStartParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
+    if let Some(rename) = coco_commands::parse_rename_sentinel(&params.prompt) {
+        return handle_turn_start_rename_shortcut(rename, ctx).await;
+    }
+    if let Some(shortcut) = TurnStartMemoryShortcut::parse(&params.prompt) {
+        return handle_turn_start_memory_shortcut(shortcut, ctx).await;
+    }
+    if let Some(request) = coco_commands::handlers::btw::parse_btw_sentinel(&params.prompt) {
+        return handle_turn_start_btw_shortcut(request, ctx).await;
+    }
+    if let Some(request) = coco_commands::handlers::compact::parse_compact_sentinel(&params.prompt)
+    {
+        return handle_turn_start_compact_shortcut(request, ctx).await;
+    }
+    if let Some(request) = coco_commands::parse_goal_sentinel(&params.prompt) {
+        match handle_turn_start_goal_shortcut(request, ctx).await {
+            Ok(TurnStartGoalShortcut::Complete(result)) => return result,
+            Ok(TurnStartGoalShortcut::RunWithPrompt(prompt)) => {
+                params.prompt = prompt;
+            }
+            Err(error) => return error,
+        }
+    }
+    if let Some(shortcut) = TurnStartObservabilityShortcut::parse(&params.prompt) {
+        return handle_turn_start_observability_shortcut(shortcut, ctx).await;
+    }
+
     // Read `turn_runner` BEFORE acquiring the session write lock. Lock
     // order is turn_runner → session elsewhere too; avoids nesting a
     // second lock acquisition under the session write guard.
@@ -159,6 +189,619 @@ pub(super) async fn handle_turn_start(
     };
 
     HandlerResult::ok(coco_types::TurnStartResult { turn_id })
+}
+
+enum TurnStartObservabilityShortcut {
+    Cost,
+    Status,
+}
+
+enum TurnStartMemoryShortcut {
+    Dream,
+    Summary,
+}
+
+enum TurnStartGoalShortcut {
+    Complete(HandlerResult),
+    RunWithPrompt(String),
+}
+
+impl TurnStartObservabilityShortcut {
+    fn parse(prompt: &str) -> Option<Self> {
+        if coco_commands::handlers::cost::parse_cost_sentinel(prompt).is_some() {
+            return Some(Self::Cost);
+        }
+        if coco_commands::parse_status_sentinel(prompt).is_some() {
+            return Some(Self::Status);
+        }
+        None
+    }
+}
+
+impl TurnStartMemoryShortcut {
+    fn parse(prompt: &str) -> Option<Self> {
+        if coco_commands::handlers::dream::parse_dream_sentinel(prompt).is_some() {
+            return Some(Self::Dream);
+        }
+        if coco_commands::handlers::summary::parse_summary_sentinel(prompt).is_some() {
+            return Some(Self::Summary);
+        }
+        None
+    }
+}
+
+async fn handle_turn_start_observability_shortcut(
+    shortcut: TurnStartObservabilityShortcut,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let shortcut_turn = match mint_shortcut_turn(ctx).await {
+        Ok(shortcut_turn) => shortcut_turn,
+        Err(error) => return error,
+    };
+
+    let text = match shortcut {
+        TurnStartObservabilityShortcut::Cost => {
+            match decode_session_cost_text(runtime::handle_session_cost(ctx).await) {
+                Ok(text) => text,
+                Err(error) => return error,
+            }
+        }
+        TurnStartObservabilityShortcut::Status => {
+            match decode_session_status_text(runtime::handle_session_status(ctx).await) {
+                Ok(text) => text,
+                Err(error) => return error,
+            }
+        }
+    };
+    shortcut_turn
+        .history
+        .lock()
+        .await
+        .push(Arc::new(coco_messages::create_meta_message(&text)));
+
+    HandlerResult::ok(coco_types::TurnStartResult {
+        turn_id: shortcut_turn.turn_id,
+    })
+}
+
+async fn handle_turn_start_rename_shortcut(
+    rename: coco_commands::ParsedRename,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let turn_id = match mint_shortcut_turn(ctx).await {
+        Ok(shortcut_turn) => shortcut_turn.turn_id,
+        Err(error) => return error,
+    };
+
+    if coco_coordinator::identity::is_teammate() {
+        warn!("SDK rename ignored: session is a swarm teammate");
+        return HandlerResult::ok(coco_types::TurnStartResult { turn_id });
+    }
+
+    let name = match rename {
+        coco_commands::ParsedRename::Explicit(name) => name,
+        coco_commands::ParsedRename::Auto => {
+            let runtime = {
+                let slot = ctx.state.session_runtime.read().await;
+                slot.as_ref().cloned()
+            };
+            let Some(runtime) = runtime else {
+                warn!("SDK rename auto-gen ignored: no active session runtime");
+                return HandlerResult::ok(coco_types::TurnStartResult { turn_id });
+            };
+            match crate::session_rename::auto_generate_session_name(&runtime).await {
+                Ok(name) => name,
+                Err(error) => {
+                    warn!(reason = ?error, "SDK rename auto-gen failed");
+                    return HandlerResult::ok(coco_types::TurnStartResult { turn_id });
+                }
+            }
+        }
+    };
+
+    match session::handle_session_rename(coco_types::SessionRenameParams { name }, ctx).await {
+        HandlerResult::Ok(_) => {}
+        HandlerResult::Err { message, .. } => {
+            warn!(error = %message, "SDK rename persist failed");
+        }
+        HandlerResult::NotImplemented(method) => {
+            warn!(method = %method, "SDK rename persist failed: handler not implemented");
+        }
+    }
+
+    HandlerResult::ok(coco_types::TurnStartResult { turn_id })
+}
+
+async fn handle_turn_start_memory_shortcut(
+    shortcut: TurnStartMemoryShortcut,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let shortcut_turn = match mint_shortcut_turn(ctx).await {
+        Ok(shortcut_turn) => shortcut_turn,
+        Err(error) => return error,
+    };
+
+    let runtime = {
+        let slot = ctx.state.session_runtime.read().await;
+        slot.as_ref().cloned()
+    };
+    let Some(runtime) = runtime else {
+        match shortcut {
+            TurnStartMemoryShortcut::Dream => {
+                info!("SDK /dream: no MemoryRuntime (Feature::AutoMemory off); skipping");
+            }
+            TurnStartMemoryShortcut::Summary => {
+                info!("SDK /summary: no MemoryRuntime; skipping");
+            }
+        }
+        return HandlerResult::ok(coco_types::TurnStartResult {
+            turn_id: shortcut_turn.turn_id,
+        });
+    };
+    let Some(memory_runtime) = runtime.runtime().memory_runtime().cloned() else {
+        match shortcut {
+            TurnStartMemoryShortcut::Dream => {
+                info!("SDK /dream: no MemoryRuntime (Feature::AutoMemory off); skipping");
+            }
+            TurnStartMemoryShortcut::Summary => {
+                info!("SDK /summary: no MemoryRuntime; skipping");
+            }
+        }
+        return HandlerResult::ok(coco_types::TurnStartResult {
+            turn_id: shortcut_turn.turn_id,
+        });
+    };
+
+    match shortcut {
+        TurnStartMemoryShortcut::Dream => {
+            let transcript_dir = memory_runtime
+                .transcript_dir()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            let now_ms = coco_memory::service::dream::DreamService::now_ms();
+            let _ = memory_runtime
+                .dream
+                .force(&transcript_dir, Vec::new, now_ms)
+                .await;
+        }
+        TurnStartMemoryShortcut::Summary => {
+            let history = shortcut_turn.history.lock().await.clone();
+            let tokens = coco_messages::estimate_tokens_for_messages(&history);
+            let last_msg_id = history
+                .last()
+                .and_then(|message| message.uuid())
+                .map(uuid::Uuid::to_string);
+            let had_tool_calls =
+                coco_messages::count_tool_calls_in_last_assistant_turn(&history) > 0;
+            let _ = memory_runtime
+                .session_memory
+                .force(tokens, last_msg_id, had_tool_calls)
+                .await;
+        }
+    }
+
+    HandlerResult::ok(coco_types::TurnStartResult {
+        turn_id: shortcut_turn.turn_id,
+    })
+}
+
+async fn handle_turn_start_btw_shortcut(
+    request: coco_commands::handlers::btw::BtwRequest,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let shortcut_turn = match mint_shortcut_turn(ctx).await {
+        Ok(shortcut_turn) => shortcut_turn,
+        Err(error) => return error,
+    };
+
+    let response_text = match ctx.state.session_runtime.read().await.clone() {
+        None => "(fork dispatcher not installed — /btw requires CLI bootstrap)".to_string(),
+        Some(runtime) => {
+            let cache = match runtime.last_cache_safe_params().await {
+                Some(cache) => cache,
+                None => runtime.fallback_cache_safe_params().await,
+            };
+            match runtime.current_fork_dispatcher().await {
+                None => "(fork dispatcher not installed — /btw requires CLI bootstrap)".to_string(),
+                Some(dispatcher) => {
+                    crate::side_question::run_side_question_fork(
+                        &cache,
+                        &dispatcher,
+                        &request.question,
+                    )
+                    .await
+                }
+            }
+        }
+    };
+
+    let messages = coco_messages::build_slash_command_messages(
+        "btw",
+        &request.question,
+        &response_text,
+        /*is_sensitive*/ false,
+    );
+    {
+        let mut history = shortcut_turn.history.lock().await;
+        for message in messages {
+            let message = Arc::new(message);
+            history.push(message.clone());
+            let _ = ctx
+                .notif_tx
+                .send(OutboundMessage::core_event(CoreEvent::Protocol(
+                    coco_types::ServerNotification::MessageAppended {
+                        message,
+                        identity: coco_types::ServerNotificationIdentity::default(),
+                    },
+                )))
+                .await;
+        }
+    }
+
+    HandlerResult::ok(coco_types::TurnStartResult {
+        turn_id: shortcut_turn.turn_id,
+    })
+}
+
+async fn handle_turn_start_goal_shortcut(
+    request: coco_commands::GoalCommandRequest,
+    ctx: &HandlerContext,
+) -> Result<TurnStartGoalShortcut, HandlerResult> {
+    let runtime_handle = match ctx.state.session_runtime.read().await.clone() {
+        Some(runtime) => runtime,
+        None => {
+            return Err(HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "no session runtime installed; /goal requires CLI bootstrap".into(),
+                data: None,
+            });
+        }
+    };
+    let (history_handle, app_state) = {
+        let slot = ctx.state.session.read().await;
+        let Some(session) = slot.as_ref() else {
+            return Err(HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "no active session; call session/start first".into(),
+                data: None,
+            });
+        };
+        if session.active_turn_cancel.is_some() {
+            return Err(HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "a turn is already running; call turn/interrupt first".into(),
+                data: None,
+            });
+        }
+        (Arc::clone(&session.history), Arc::clone(&session.app_state))
+    };
+
+    let runtime = runtime_handle.runtime();
+    let current_engine_config = runtime.current_engine_config().await;
+    let args = crate::goal_command::goal_display_args(&request).to_string();
+    let gate = crate::goal_command::GoalGate {
+        hooks_restricted: current_engine_config.disable_all_hooks
+            || current_engine_config.allow_managed_hooks_only,
+        // SDK is non-interactive; the trust gate is deliberately skipped.
+        trust_rejected: false,
+    };
+    let tokens_at_start = runtime.session_usage_snapshot().await.totals.output_tokens;
+    let history_snapshot = history_handle.lock().await.clone();
+    let outcome = crate::goal_command::resolve_goal_request(
+        request,
+        &app_state,
+        &runtime.hook_registry(),
+        &history_snapshot,
+        tokens_at_start,
+        gate,
+    )
+    .await;
+
+    match outcome {
+        crate::goal_command::GoalOutcome::Text(text) => {
+            let shortcut_turn = mint_shortcut_turn(ctx).await?;
+            sdk_append_slash_text(&history_handle, &ctx.notif_tx, "goal", &args, &text).await;
+            Ok(TurnStartGoalShortcut::Complete(HandlerResult::ok(
+                coco_types::TurnStartResult {
+                    turn_id: shortcut_turn.turn_id,
+                },
+            )))
+        }
+        crate::goal_command::GoalOutcome::StatusThenText { status, text } => {
+            let shortcut_turn = mint_shortcut_turn(ctx).await?;
+            sdk_append_goal_status_and_slash_text(
+                &runtime_handle,
+                &history_handle,
+                &ctx.notif_tx,
+                status,
+                &args,
+                &text,
+            )
+            .await;
+            sdk_emit_active_goal_snapshot(&runtime_handle, &app_state, &ctx.notif_tx).await;
+            Ok(TurnStartGoalShortcut::Complete(HandlerResult::ok(
+                coco_types::TurnStartResult {
+                    turn_id: shortcut_turn.turn_id,
+                },
+            )))
+        }
+        crate::goal_command::GoalOutcome::SetAndRun {
+            status,
+            text,
+            kickoff,
+        } => {
+            sdk_append_goal_status(&history_handle, &ctx.notif_tx, status).await;
+            sdk_emit_active_goal_snapshot(&runtime_handle, &app_state, &ctx.notif_tx).await;
+            sdk_append_slash_text(&history_handle, &ctx.notif_tx, "goal", &args, &text).await;
+            Ok(TurnStartGoalShortcut::RunWithPrompt(kickoff))
+        }
+    }
+}
+
+async fn handle_turn_start_compact_shortcut(
+    request: coco_commands::handlers::compact::CompactRequest,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let runtime = match ctx.state.session_runtime.read().await.clone() {
+        Some(runtime) => runtime,
+        None => {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "no session runtime installed; /compact requires CLI bootstrap".into(),
+                data: None,
+            };
+        }
+    };
+
+    let turn_id = {
+        let mut slot = ctx.state.session.write().await;
+        let Some(session) = slot.as_mut() else {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "no active session; call session/start first".into(),
+                data: None,
+            };
+        };
+        if session.active_turn_cancel.is_some() {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "a turn is already running; call turn/interrupt first".into(),
+                data: None,
+            };
+        }
+
+        session.turn_counter = session.turn_counter.saturating_add(1);
+        let turn_id = TurnId::from(format!(
+            "turn-{}-{}",
+            session.session_id, session.turn_counter
+        ));
+        let cancel_token = CancellationToken::new();
+        session.active_turn_cancel = Some(cancel_token.clone());
+        let owner_session_id = session.session_id.clone();
+        let history = Arc::clone(&session.history);
+        let (inner_tx, inner_rx) = mpsc::channel::<CoreEvent>(256);
+        session.active_turn_forwarder = Some(tokio::spawn(forward_turn_events(
+            inner_rx,
+            ctx.notif_tx.clone(),
+            ctx.state.clone(),
+            owner_session_id.clone(),
+        )));
+
+        let state = ctx.state.clone();
+        let turn_id_for_task = turn_id.clone();
+        let turn_handle = tokio::spawn(async move {
+            run_manual_compact_shortcut(runtime, history, request, inner_tx, cancel_token).await;
+
+            let mut slot = state.session.write().await;
+            if let Some(session) = slot.as_mut()
+                && session.session_id == owner_session_id
+            {
+                session.active_turn_cancel = None;
+                session.active_turn_task = None;
+                session.active_turn_forwarder = None;
+            }
+        });
+        session.active_turn_task = Some(turn_handle);
+
+        info!(turn_id = %turn_id_for_task, "SdkServer: /compact shortcut");
+        turn_id
+    };
+
+    HandlerResult::ok(coco_types::TurnStartResult { turn_id })
+}
+
+async fn run_manual_compact_shortcut(
+    session: crate::session_runtime::SessionHandle,
+    history_handle: Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    request: coco_commands::handlers::compact::CompactRequest,
+    event_tx: mpsc::Sender<CoreEvent>,
+    cancel: CancellationToken,
+) {
+    let runtime = session.runtime();
+    let engine = runtime.build_engine(cancel).await;
+    let combined = history_handle.lock().await.clone();
+    let mut history = coco_messages::MessageHistory::new();
+    for message in combined {
+        history.push_arc(message);
+    }
+
+    let command_args = request.custom_instructions;
+    let custom_instructions = if command_args.is_empty() {
+        None
+    } else {
+        Some(command_args.clone())
+    };
+    let event_tx_opt = Some(event_tx);
+    let request = coco_query::ManualCompactRequest {
+        custom_instructions,
+        command_args,
+    };
+    engine
+        .run_manual_compact(&mut history, &event_tx_opt, request)
+        .await;
+
+    let compacted = history.to_vec();
+    {
+        let mut sdk_history = history_handle.lock().await;
+        *sdk_history = compacted;
+    }
+    {
+        let mut runtime_history = runtime.history.lock().await;
+        *runtime_history = history;
+    }
+
+    let session_id = runtime.current_typed_session_id().await.to_string();
+    let manager = Arc::clone(&runtime.session_manager);
+    let _ =
+        tokio::task::spawn_blocking(move || manager.re_append_session_metadata(&session_id)).await;
+}
+
+async fn sdk_append_slash_text(
+    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    notif_tx: &mpsc::Sender<OutboundMessage>,
+    command: &str,
+    args: &str,
+    text: &str,
+) {
+    let messages = coco_messages::build_slash_command_messages(
+        command, args, text, /*is_sensitive*/ false,
+    );
+    sdk_append_messages(history_handle, notif_tx, messages).await;
+}
+
+async fn sdk_append_goal_status(
+    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    notif_tx: &mpsc::Sender<OutboundMessage>,
+    payload: coco_types::GoalStatusPayload,
+) {
+    sdk_append_messages(
+        history_handle,
+        notif_tx,
+        vec![coco_messages::Message::Attachment(
+            coco_messages::AttachmentMessage::silent_goal_status(payload),
+        )],
+    )
+    .await;
+}
+
+async fn sdk_append_goal_status_and_slash_text(
+    session: &crate::session_runtime::SessionHandle,
+    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    notif_tx: &mpsc::Sender<OutboundMessage>,
+    payload: coco_types::GoalStatusPayload,
+    args: &str,
+    text: &str,
+) {
+    let mut messages = vec![coco_messages::Message::Attachment(
+        coco_messages::AttachmentMessage::silent_goal_status(payload),
+    )];
+    messages.extend(coco_messages::build_slash_command_messages(
+        "goal", args, text, /*is_sensitive*/ false,
+    ));
+    sdk_append_messages(history_handle, notif_tx, messages.clone()).await;
+    session
+        .runtime()
+        .persist_local_transcript_messages(&messages)
+        .await;
+}
+
+async fn sdk_emit_active_goal_snapshot(
+    session: &crate::session_runtime::SessionHandle,
+    app_state: &tokio::sync::RwLock<coco_types::ToolAppState>,
+    notif_tx: &mpsc::Sender<OutboundMessage>,
+) {
+    let goal = app_state.read().await.active_goal.clone();
+    let _ = notif_tx
+        .send(OutboundMessage::core_event(CoreEvent::Protocol(
+            crate::goal_command::active_goal_changed_notification(goal.clone()),
+        )))
+        .await;
+    session
+        .runtime()
+        .persist_goal_metadata(goal.as_ref().map(|goal| {
+            coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
+        }))
+        .await;
+}
+
+async fn sdk_append_messages(
+    history_handle: &Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+    notif_tx: &mpsc::Sender<OutboundMessage>,
+    messages: Vec<coco_messages::Message>,
+) {
+    let mut history = history_handle.lock().await;
+    for message in messages {
+        let message = Arc::new(message);
+        history.push(message.clone());
+        let _ = notif_tx
+            .send(OutboundMessage::core_event(CoreEvent::Protocol(
+                coco_types::ServerNotification::MessageAppended {
+                    message,
+                    identity: coco_types::ServerNotificationIdentity::default(),
+                },
+            )))
+            .await;
+    }
+}
+
+struct ShortcutTurn {
+    turn_id: TurnId,
+    history: Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+}
+
+async fn mint_shortcut_turn(ctx: &HandlerContext) -> Result<ShortcutTurn, HandlerResult> {
+    let mut slot = ctx.state.session.write().await;
+    let Some(session) = slot.as_mut() else {
+        return Err(HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "no active session; call session/start first".into(),
+            data: None,
+        });
+    };
+    if session.active_turn_cancel.is_some() {
+        return Err(HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "a turn is already running; call turn/interrupt first".into(),
+            data: None,
+        });
+    }
+    session.turn_counter = session.turn_counter.saturating_add(1);
+    let turn_id = TurnId::from(format!(
+        "turn-{}-{}",
+        session.session_id, session.turn_counter
+    ));
+    Ok(ShortcutTurn {
+        turn_id,
+        history: Arc::clone(&session.history),
+    })
+}
+
+fn decode_session_cost_text(result: HandlerResult) -> Result<String, HandlerResult> {
+    match result {
+        HandlerResult::Ok(value) => serde_json::from_value::<coco_types::SessionCostResult>(value)
+            .map(|result| result.text)
+            .map_err(|error| HandlerResult::Err {
+                code: coco_types::error_codes::INTERNAL_ERROR,
+                message: format!("session/cost result decode failed: {error}"),
+                data: None,
+            }),
+        error @ HandlerResult::Err { .. } | error @ HandlerResult::NotImplemented(_) => Err(error),
+    }
+}
+
+fn decode_session_status_text(result: HandlerResult) -> Result<String, HandlerResult> {
+    match result {
+        HandlerResult::Ok(value) => {
+            serde_json::from_value::<coco_types::SessionStatusResult>(value)
+                .map(|result| result.text)
+                .map_err(|error| HandlerResult::Err {
+                    code: coco_types::error_codes::INTERNAL_ERROR,
+                    message: format!("session/status result decode failed: {error}"),
+                    data: None,
+                })
+        }
+        error @ HandlerResult::Err { .. } | error @ HandlerResult::NotImplemented(_) => Err(error),
+    }
 }
 
 /// `turn/interrupt` — cancel the currently-running turn (if any).

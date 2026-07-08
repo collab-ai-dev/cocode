@@ -33,6 +33,47 @@ fn client_request_method_accessor_matches_serde_tag() {
             "mcp/status",
         ),
         (
+            ClientRequest::SessionRename(SessionRenameParams {
+                name: "phase-b".into(),
+            }),
+            ClientRequestMethod::SessionRename,
+            "session/rename",
+        ),
+        (
+            ClientRequest::SessionToggleTag(SessionToggleTagParams {
+                tag: "migration".into(),
+            }),
+            ClientRequestMethod::SessionToggleTag,
+            "session/toggleTag",
+        ),
+        (
+            ClientRequest::SessionCost,
+            ClientRequestMethod::SessionCost,
+            "session/cost",
+        ),
+        (
+            ClientRequest::SessionStatus,
+            ClientRequestMethod::SessionStatus,
+            "session/status",
+        ),
+        (
+            ClientRequest::TaskList,
+            ClientRequestMethod::TaskList,
+            "task/list",
+        ),
+        (
+            ClientRequest::TaskDetail(TaskDetailParams {
+                task_id: "task-1".into(),
+            }),
+            ClientRequestMethod::TaskDetail,
+            "task/detail",
+        ),
+        (
+            ClientRequest::BackgroundAllTasks,
+            ClientRequestMethod::BackgroundAllTasks,
+            "control/backgroundAllTasks",
+        ),
+        (
             ClientRequest::AgentInterruptCurrentWork(AgentInterruptCurrentWorkParams {
                 agent_id: "worker@team".into(),
             }),
@@ -176,6 +217,72 @@ fn plugin_reload_is_unit_variant() {
     let req = ClientRequest::PluginReload;
     let j = serde_json::to_value(&req).unwrap();
     assert_eq!(j["method"], "plugin/reload");
+}
+
+#[test]
+fn set_model_role_carries_role_binding() {
+    let req = ClientRequest::SetModelRole(SetModelRoleParams {
+        role: crate::ModelRole::Main,
+        provider: "anthropic".into(),
+        model_id: "claude-sonnet-4-6".into(),
+        effort: Some(crate::ReasoningEffort::High),
+    });
+    let j = serde_json::to_value(&req).unwrap();
+    assert_eq!(j["method"], "control/setModelRole");
+    assert_eq!(j["params"]["role"], "main");
+    assert_eq!(j["params"]["provider"], "anthropic");
+    assert_eq!(j["params"]["model_id"], "claude-sonnet-4-6");
+    assert_eq!(j["params"]["effort"], "high");
+}
+
+#[test]
+fn apply_permission_update_carries_update() {
+    let req = ClientRequest::ApplyPermissionUpdate(ApplyPermissionUpdateParams {
+        update: crate::PermissionUpdate::AddRules {
+            rules: vec![crate::PermissionRule {
+                source: crate::PermissionRuleSource::Session,
+                behavior: crate::PermissionBehavior::Allow,
+                value: crate::PermissionRuleValue {
+                    tool_pattern: "Read".into(),
+                    rule_content: None,
+                },
+            }],
+            destination: crate::PermissionUpdateDestination::Session,
+        },
+    });
+    let j = serde_json::to_value(&req).unwrap();
+    assert_eq!(j["method"], "control/applyPermissionUpdate");
+    assert_eq!(j["params"]["update"]["type"], "add_rules");
+    assert_eq!(j["params"]["update"]["destination"], "session");
+    assert_eq!(
+        j["params"]["update"]["rules"][0]["value"]["tool_pattern"],
+        "Read"
+    );
+}
+
+#[test]
+fn reset_session_permission_rules_is_unit_variant() {
+    let req = ClientRequest::ResetSessionPermissionRules;
+    let j = serde_json::to_value(&req).unwrap();
+    assert_eq!(j["method"], "control/resetSessionPermissionRules");
+    assert!(j.get("params").is_none());
+}
+
+#[test]
+fn set_agent_color_carries_optional_color() {
+    let req = ClientRequest::SetAgentColor(SetAgentColorParams {
+        color: Some(crate::AgentColorName::Blue),
+    });
+    let j = serde_json::to_value(&req).unwrap();
+    assert_eq!(j["method"], "control/setAgentColor");
+    assert_eq!(j["params"]["color"], "blue");
+}
+
+#[test]
+fn hook_reload_is_unit_variant() {
+    let req = ClientRequest::HookReload;
+    let j = serde_json::to_value(&req).unwrap();
+    assert_eq!(j["method"], "hook/reload");
 }
 
 #[test]

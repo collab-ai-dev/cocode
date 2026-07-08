@@ -1249,6 +1249,8 @@ dependencies = [
  "coco-frontmatter",
  "coco-git",
  "coco-hooks",
+ "coco-hub-connector",
+ "coco-hub-server",
  "coco-inference",
  "coco-keybindings",
  "coco-llm-types",
@@ -1287,6 +1289,8 @@ dependencies = [
  "coco-voice",
  "coco-workflow",
  "dirs",
+ "futures",
+ "http",
  "jsonc-parser",
  "libc",
  "pretty_assertions",
@@ -1298,6 +1302,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tikv-jemallocator",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
  "uuid",
@@ -1624,8 +1629,14 @@ dependencies = [
  "coco-error",
  "coco-hub-protocol",
  "coco-types",
+ "coco-utils-rustls-provider",
+ "futures",
+ "http",
+ "pretty_assertions",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
  "uuid",
 ]
 
@@ -1648,6 +1659,7 @@ name = "coco-hub-server"
 version = "0.1.1"
 dependencies = [
  "askama",
+ "async-stream",
  "async-trait",
  "axum",
  "chrono",
@@ -1660,6 +1672,7 @@ dependencies = [
  "coco-session",
  "coco-types",
  "pretty_assertions",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -1667,6 +1680,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

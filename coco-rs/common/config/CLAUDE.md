@@ -8,6 +8,7 @@ Layered config resolution: settings files, model/provider selection, effort/thin
 - `SettingsWatcher` (debounced file watcher via `utils/file-watch`)
 - `GlobalConfig` (~/.coco.json), `SessionSettings`
 - `ModelInfo`, `ModelRoles`, `ModelAlias`, `RuntimeConfig`, `RuntimeOverrides`
+- `EventHubConfig` (`event_hub_url` + `COCO_EVENT_HUB_URL` + CLI override; `ws://`/`wss://` only)
 - `ProviderConfig`, `ProviderInfo`
 - `EnvOnlyConfig` (env-only overrides: Bedrock/Vertex/Foundry routing, model overrides, limits)
 - `FastModeState` + `CooldownReason`

@@ -99,13 +99,13 @@ the seams this design must cut are concrete:
   per-session fold in §6.5.
 - Query-layer runtime cwd reads have been moved behind temporary
   session-cwd helpers (`QueryEngineConfig::workspace_cwd`,
-  `ToolUseContext::cwd_anchor` / `effective_shell_cwd`), but live
-  `std::env::current_dir()` fallbacks still exist across wider tool and
-  path-resolution boundaries (for example
-  `utils/absolute-path/src/absolutize.rs:16`). With two sessions in
-  different directories, any remaining process-cwd fallback can resolve
-  against whichever cwd the process happens to have — removed by the
-  §6.5 discipline.
+  `ToolUseContext::cwd_anchor` / `effective_shell_cwd`), and the checked-in
+  session-cwd discipline guard now rejects process-cwd reads in
+  session-owned production code. `utils/absolute-path/src/absolutize.rs`
+  now normalizes relative paths from an explicit base instead of reading the
+  process cwd. The remaining §6.5 work is to replace the narrow guard with the
+  final workspace lint/allow-list once standalone process-cwd entrypoints are
+  cleanly separated.
 - The Hub crates encode a **conflicting** identity model: per-instance
   global `seq` and a single per-connection resume cursor
   (`hub/protocol/src/lib.rs:39,51,63`), and `event-hub/spec.md` §4 assumes
@@ -1463,18 +1463,44 @@ No dual-stack, no compatibility shims, no transitional protocol variants.
 4. `coco-app-server`: registry (§7), serialization model (§9), routing + ring (§10),
    surfaces (§11 minus takeover), `LocalClientAdapter`, `JsonRpcAdapter`.
 5. `coco-app-server-transport`, `coco-app-server-client` (§14).
-6. Hub v2: `coco-event-hub.v2` frames, `(session_id, session_seq)`
-   EventStore index, connector egress off the envelope stream; revise
-   `event-hub/spec.md` §4.
+6. Hub v2: `coco-event-hub.v2` frames, connector egress off the envelope
+   stream, `event-hub/spec.md` §4/§5, and a SQLite-backed Hub `EventStore`
+   ingest/index path keyed by `(instance_id, session_id, session_seq)` are in
+   place. The server-side `/v1/connect` WebSocket frame handler now accepts
+   Hub v2 `announce`/`batch` frames and returns scoped `announce_ack` /
+   `batch_ack`; standalone `coco-hub-server serve` now defaults to the
+   SQLite-backed ingest store via `--data-dir`, with `--memory-base` retained
+   for read-only JSONL inspection. `hub/connector` now has a direct Hub v2
+   WebSocket client primitive for `announce` / `batch` round trips and a
+   reusable background worker with bounded producer/backlog queues,
+   max-event batching, reconnect/backoff, and shutdown flushing for
+   AppServer-stamped `SessionEnvelope`s. The local AppServer bridge can attach
+   a `HubConnectorSender` and clone its stamped outbound envelopes into that
+   connector queue after local routing. `RuntimeConfig.event_hub.url` now
+   resolves `event_hub_url`, `COCO_EVENT_HUB_URL`, and `--event-hub-url`;
+   TUI/headless startup creates the worker from that resolved URL and flushes
+   it during normal shutdown. `--serve-hub` / `--hub-port` now parse in all
+   builds; the default build returns the documented missing-feature diagnostic,
+   and the optional `serve-hub` feature starts the SQLite hub in-process under
+   `~/.coco/hub/` while auto-setting the connector URL. SDK/NDJSON mode now
+   starts the same runtime Hub connector when configured and clones
+   SDK-visible protocol notifications from the single-writer path into Hub
+   egress without changing NDJSON output. Connector batching now respects both
+   max-event and serialized-byte limits, and reconnect backoff includes jitter.
+   Remaining work is the richer spec behavior for durable backlog-drop
+   markers. SQLite retention sweep
+   storage, standalone periodic retention scheduling, and per-session SSE
+   fanout for newly accepted batch events are in place.
 7. `ProjectServices` + `ProjectRegistry` (§6.2): move project/local
    settings, project permission rules, hooks, skills, `.mcp.json`,
    CLAUDE.md discovery, ignore, LSP, retrieval behind the per-project
    container; move the `build_runtime_config_with` call from process
    boot to `session/start` (§6.5).
-8. cwd discipline (§6.5): delete the `std::env::current_dir()`
-   fallbacks on session-scoped paths, add the `clippy.toml`
-   `disallowed-methods` entry, thread cwd through
-   `ToolUseContext`/spawn sites.
+8. cwd discipline (§6.5): session-owned production crates no longer read
+   `std::env::current_dir()` outside the `main.rs` startup boundary and are
+   covered by `check-session-cwd-discipline.sh`; the steady-state
+   full-workspace `clippy.toml` `disallowed-methods` entry remains after
+   standalone tools are split or allow-listed.
 
 Implementation progress as of 2026-07-07:
 
@@ -1616,9 +1642,34 @@ Implementation progress as of 2026-07-07:
   forwarder. It can also install an already-built `SessionRuntime` snapshot
   into the shared handler state, so TUI/headless cut-over code can adopt the
   local AppServer client path without minting a second session id. Installing a
-  runtime snapshot now also installs a `QueryEngineRunner` into the shared
-  handler state, giving future local `turn/start` requests the same engine
-  runner used by the SDK bridge. `turn/start` now carries optional base64 paste
+  runtime snapshot now also installs the runtime's `SessionManager` and a
+  `QueryEngineRunner` into the shared handler state, giving local
+  `session/list` / `session/read` access to persisted transcripts and future
+  local `turn/start` requests the same engine runner used by the SDK bridge.
+  Local `session/start`, `session/resume`, and installed runtime snapshots now
+  register live slots through `AppServer::spawn_load` with
+  `LocalAppSessionHandle` registry snapshots instead of empty `()` handles.
+  Installed runtime snapshots carry the fused app/cli `SessionHandle`, whose
+  session id is now an immutable handle snapshot; remaining legacy retarget
+  paths such as `/clear` and TUI `/resume` must create a fresh
+  `SessionHandle::snapshot_current()` before re-installing. The local close
+  cascade is retarget-safe and intentionally avoids tearing down that fused
+  runtime while `session/start` / `session/resume` can still retarget it in
+  place. Local `session/archive` runs the AppServer `spawn_close` path so
+  attached local surfaces receive `SessionEnded`; the local archive request
+  waits for close completion before returning so the registry slot is removed
+  when callers observe success.
+  Local `session/resume` now uses `AppServer::spawn_replace` when the previous
+  live slot has an interactive local surface, so registry and routing replacement
+  commit through the AppServer owner task before the fused runtime snapshot is
+  re-installed. It still falls back to close-then-register when no replace caller
+  surface exists, avoiding leaked registry slots in non-surface local handler
+  tests while the full replace runtime factory remains pending. Re-installing a
+  runtime-backed `LocalAppSessionHandle` for an already-live local session now
+  refreshes the registry handle in place without changing surface routing, so
+  the post-resume TUI bridge upgrade does not leave the AppServer registry stuck
+  with a snapshot-only handle.
+  `turn/start` now carries optional base64 paste
   images, slash metadata attachment text, turn-scoped model selection, and
   thinking overrides; the runner applies those fields before building the
   per-turn engine and emits `TurnStarted` / `TurnEnded` with the same
@@ -1643,16 +1694,89 @@ Implementation progress as of 2026-07-07:
   prompt-mode bash follow-up turns no longer call the engine directly from the
   TUI runner. TUI `/reload-plugins` now routes through this local AppServer
   client via `ServerClient::plugin_reload`, preserving the TUI toast and
-  command-palette refresh while moving one runtime-control request off direct
-  runtime calls. TUI `/context` now routes through `ServerClient::context_usage`
+  command-palette refresh. TUI `/hooks reload` now routes through
+  `ServerClient::hook_reload`, so hook registry reloads also use the local
+  AppServer handler path instead of direct TUI runtime mutation. TUI `/context`
+  now routes through `ServerClient::context_usage`
   as well; the bridge refreshes its installed runtime snapshot before dispatch
-  so the handler sees current transcript history and app state. TUI
+  so the handler sees current transcript history and app state. TUI `/cost`
+  and `/status` now route through local AppServer `session/cost` and
+  `session/status`, so live usage/status observability no longer reads the
+  runtime directly from the TUI runner. SDK `/cost`, `/status`, `/dream`,
+  `/summary`, `/btw`, `/compact`, and `/goal` slash sentinels now
+  short-circuit in the `turn/start` handler before spawning a normal runner
+  task. Cost/status reuse the same AppServer `session/cost` /
+  `session/status` handlers for their meta output; dream/summary call the
+  installed `MemoryRuntime` from the handler boundary and silently no-op when
+  auto-memory is unavailable; `/btw` uses the installed fork dispatcher or
+  emits the same transcript-only degraded response when no dispatcher is
+  installed; `/compact` runs a handler-owned manual compaction task against
+  the installed `SessionRuntime`; `/goal status` and `/goal clear` complete at
+  the handler boundary while `/goal <condition>` installs the managed Stop
+  hook there before falling through to the normal runner with the kickoff
+  prompt. TUI
   permission-mode changes now route through
   `ServerClient::set_permission_mode`; the bridge attaches a local interactive
   surface and drains forwarded `PermissionModeChanged` events back into the TUI
-  event channel after dispatch. TUI teammate current-work interrupt now routes
-  through `ServerClient::agent_interrupt_current_work`, keeping that
-  runtime-control request on the same local AppServer handler path as the SDK.
+  event channel after dispatch. TUI fast-mode toggles now route through
+  `ServerClient::config_apply_flags` with `fast_mode`; the SDK handler mutates
+  the installed runtime engine config and emits `FastModeChanged` from the
+  AppServer path. TUI Ctrl+T thinking-level changes now route through
+  `ServerClient::set_thinking`; the SDK handler updates the installed runtime
+  engine config and emits `ModelRoleChanged` from the AppServer path. TUI
+  `/model` picker role/provider/model overrides now route through
+  `ServerClient::set_model_role`; the SDK handler applies the live
+  `SessionRuntime` role override and emits `ModelRoleChanged`, while the TUI
+  keeps only the picker confirmation/history message. TUI `/permissions`
+  editor, `/permissions allow|deny`, approval always-allow, and `/add-dir`
+  updates now route through `ServerClient::apply_permission_update`; the SDK
+  handler applies the live permission base and persists writable destinations,
+  while the TUI refreshes the editor overlay from disk afterward for editor
+  edits. `/permissions reset` now routes through
+  `ServerClient::reset_session_permission_rules`, clearing only
+  session-scoped live allow/deny rules. TUI `/color` changes now route
+  through `ServerClient::set_agent_color`; the SDK handler updates the
+  installed runtime's live app-state color.
+  TUI teammate
+  current-work interrupt now routes through
+  `ServerClient::agent_interrupt_current_work`, keeping that runtime-control
+  request on the same local AppServer handler path as the SDK.
+  TUI teammate/subagent cancellation now routes through local AppServer
+  `control/stopTask`; the SDK handler prefers the installed `TaskRuntime`
+  cancel token path and retains the active-turn fallback only for legacy
+  SDK-only sessions without an installed `SessionRuntime`. TUI Ctrl+B
+  background-all foreground tasks now routes through local AppServer
+  `control/backgroundAllTasks` via `ServerClient::background_all_tasks`. The
+  `/tasks cancel <id>` slash command now uses the same local
+  `ServerClient::stop_task` path, while `/tasks list` and `/tasks detail <id>`
+  now use local AppServer `task/list` and `task/detail` through
+  `ServerClient::task_list` and `ServerClient::task_detail`.
+  TUI explicit `/rewind` now routes its file-restore half through
+  `ServerClient::rewind_files` on the local AppServer handler path while
+  keeping conversation-history truncation local to preserve TUI event ordering.
+  In-session TUI `/resume <id>` and `/branch` now dispatch local AppServer
+  `session/resume`, then reattach the bridge's interactive/passive local
+  surfaces to the resumed/forked id and emit the TUI reset/history hydration
+  events. Startup resume still uses the shared direct hydration helper until
+  full runtime factory/replace wiring lands.
+  TUI `/clear` still rotates identity through the fused runtime's
+  compatibility retarget helper, but the TUI orchestration now closes the old
+  local AppServer live slot, installs the post-clear runtime snapshot under the
+  new id, and reattaches interactive/passive local surfaces before emitting the
+  reset event. The eventual full `session.replace` runtime factory remains the
+  demolition target.
+  TUI `/rename`, `/tag`, `/branch` fork-title persistence, and post-plan
+  auto-title persistence now route session metadata writes through local
+  AppServer `session/rename` and `session/toggleTag` requests; bare
+  auto-rename still resolves its candidate name locally before issuing the
+  metadata write request. SDK `/rename` slash sentinels are now intercepted in
+  `turn/start`; explicit names and locally resolved auto-rename candidates are
+  persisted through the same AppServer `session/rename` handler instead of
+  direct runner writes.
+  The REPL bridge control handler now routes initialize, interrupt, set-model,
+  MCP-status, context-usage, and rewind-file controls through the same SDK
+  `dispatch_client_request` table, while keeping the explicit bridge-side
+  bypass guard for permission-mode changes.
   `coco-cli` also
   has a tested compatibility bridge between
   the legacy `coco_types::JsonRpcMessage` SDK envelope and the new
@@ -1689,8 +1813,12 @@ Implementation progress as of 2026-07-07:
   AppServer bridge path.
   AppServer now also exposes a live-session summary projection that combines
   registry live slots with routing surface counts, covering the live half of
-  the `session/list` surface-count contract while leaving persisted transcript
-  summaries to the future runtime/session-store bridge. The
+  the `session/list` surface-count contract. The CLI local bridge now wires
+  its installed runtime's `SessionManager` into the shared handler state, so
+  local `session/list` / `session/read` already read persisted transcript
+  summaries through the runtime-backed handler; broader app-server-client
+  pagination and session-store integration still belong to the future
+  runtime/session-store bridge. The
   `coco-app-server-client` crate now exists as the first client-side
   foundation slice: it depends on `coco-app-server`, exposes a local
   in-process `ServerClient` over `LocalClientAdapter`, returns distinct
@@ -1704,14 +1832,17 @@ Implementation progress as of 2026-07-07:
   this is the in-process foundation for the future per-handle stream/request
   API. It now also exposes typed local request helpers for session, turn,
   approval/user-input/elicitation resolution, initialize,
-  config/runtime-control, MCP, plugin-reload, and context-usage operations.
+  config/runtime-control, MCP, plugin/hook-reload, context-usage, and
+  session cost/status plus task list/detail/background-all operations.
   Those helpers dispatch canonical `ClientRequest`s through a caller-supplied
   `LocalClientRequestHandler` and decode existing
   `coco-types` result DTOs, establishing the local TUI/headless request seam
   before a concrete runtime-backed handler is wired into the entrypoints. It
   also exposes a client-side live-session list projection with current surface
-  counts, covering the live half of §14 `list_sessions` while persisted
-  transcript metadata remains pending. The client crate now also has a
+  counts, covering the live half of §14 `list_sessions`; persisted transcript
+  reads are currently available through the CLI runtime-backed local handler,
+  while broader client/store pagination remains pending. The client crate now
+  also has a
   transport-agnostic `RemoteJsonRpcClient` foundation for future SDK UDS/WS
   transports: it mints JSON-RPC request ids, records pending response
   correlations, resolves success/error frames to the waiting RPC, delivers
@@ -1734,9 +1865,10 @@ Implementation progress as of 2026-07-07:
   `RemoteConnectOptions` now names remote outbound/event channel capacities for
   generic NDJSON and Unix dialing. `RemoteJsonRpcClient` now also exposes typed
   session, turn, approval/user-input/elicitation resolution, initialize,
-  config/runtime-control, MCP, plugin-reload, and context-usage helpers as thin
-  wrappers over canonical `ClientRequest` variants and existing `coco-types`
-  result DTOs. On Unix,
+  config/runtime-control, MCP, plugin/hook-reload, context-usage, and session
+  cost/status plus task list/detail/background-all helpers as thin wrappers
+  over canonical `ClientRequest` variants and existing `coco-types` result
+  DTOs. On Unix,
   `RemoteJsonRpcClient::connect_unix` now dials a local NDJSON Unix socket and
   returns the same client, connection owner, and mixed event receiver as the
   generic caller-owned NDJSON constructor.
@@ -1755,13 +1887,18 @@ Implementation progress as of 2026-07-07:
   accept loops, and transport-level slow-consumer policy are still pending.
   This establishes the §14 two-level handle boundary before remote
   transports or runtime-backed start/resume operations land. The
-  crate is intentionally not wired to `SessionRuntime`, TUI, or Hub yet, and
-  the SDK wiring still uses the existing runtime-backed SDK handler state;
-  concrete runtime factory wiring behind `spawn_load`, concrete close cascade
-  implementation behind `spawn_close`, concrete replace runtime factory and
-  old-session close cascade behind `spawn_replace`, production wiring of the
-  remaining TUI/headless runtime-control paths and turn execution through
-  `AppServerLocalBridge`, concrete remote client stream adapters, production
+  crate is intentionally not directly wired to `SessionRuntime`, TUI, or Hub;
+  the CLI bridge supplies the runtime-backed SDK handler state, registers
+  `LocalAppSessionHandle` snapshots through `spawn_load`, archives through
+  `spawn_close`, and uses `spawn_replace` for local resume when an interactive
+  caller surface exists; runtime-backed local handle re-installation refreshes
+  an existing live registry handle without changing routing. Concrete runtime
+  factory wiring behind `spawn_load`,
+  concrete close cascade implementation behind `spawn_close`, concrete replace
+  runtime factory and broad old-session close cascade behind `spawn_replace`,
+  production wiring of
+  additional TUI/headless runtime-control paths through `AppServerLocalBridge`,
+  concrete remote client stream adapters, production
   UDS listener lifecycle wiring,
   WebSocket/named-pipe accept loops, and TUI/Hub
   cut-over remain pending follow-up work.
@@ -1780,6 +1917,10 @@ Implementation progress as of 2026-07-07:
   typed `SessionId` in `coco-types`; session list/read/resume convert from the
   legacy persistence string boundary, and the TUI session browser converts only
   at its string-backed picker state boundary.
+- SDK `session/read` now returns transcript-message JSON from the
+  `SessionManager`'s project-scoped store, paginated by the request's numeric
+  offset cursor and `limit`, instead of returning metadata with an empty
+  reserved messages array.
 - `SessionUsageSnapshot.session_id` now carries typed `SessionId`; usage
   accounting and cost snapshots receive typed runtime ids directly, while
   persisted `usage.json` keeps the same string-shaped serde wire format.
@@ -1847,7 +1988,8 @@ Implementation progress as of 2026-07-07:
   dialog loading, agent creation, the permissions editor, `/context` memory
   path display, and agent-dialog create finalization. SDK handlers now share
   `SdkServerState::workspace_cwd()`, preferring the active SDK session cwd,
-  then the installed runtime cwd, before the legacy no-runtime fallback.
+  then the installed runtime cwd, then the SDK initialize/bootstrap cwd, and
+  finally the startup cwd captured by `main.rs`.
 - TUI app construction now receives the session cwd from `app/cli` and uses
   it for the shared file index and git-index watcher; `app/tui/src` no longer
   reads `std::env::current_dir()` in production code.
@@ -1873,7 +2015,10 @@ Implementation progress as of 2026-07-07:
   transcript adapter instead of `TranscriptStore` reading process cwd; hook
   command execution receives `HOOK_CWD` from `OrchestrationContext`, and
   marketplace local-path parsing has an explicit cwd-aware entry point used
-  by `/plugin marketplace add`.
+  by plugin install/validate and `/plugin marketplace add`. The direct
+  `TranscriptStore::append_agent_messages` convenience path now also requires
+  an explicit cwd, and the session cwd guard covers `app/session/src` so
+  session persistence cannot reintroduce process-cwd reads.
 - Shell path validation's git-escape helper now delegates to the explicit-cwd
   variant with a fixed fallback, and Windows MCP program resolution uses the
   configured MCP server cwd instead of process cwd when resolving PATH entries.
@@ -1886,14 +2031,18 @@ Implementation progress as of 2026-07-07:
   resolves relative paths against that explicit cwd. The interactive TUI runner
   and tracing initialization now also receive the startup cwd from `main`, and
   headless / SDK paths reuse that same snapshot. `app/cli` production
-  `current_dir()` reads are down to the single `main` startup boundary plus
-  the public `headless::run_chat` convenience fallback; the lower-level
-  `run_chat_with_options` entrypoint now requires `RunChatOptions::cwd`
-  unless the CLI carries `--cwd`.
+  `current_dir()` reads are down to the single `main` startup boundary; the
+  public `headless::run_chat` process-cwd convenience fallback was removed, and
+  `run_chat_with_options` requires `RunChatOptions::cwd` unless the CLI carries
+  `--cwd`.
+- `coco-utils-absolute-path::AbsolutePathBuf::from_absolute_path` now rejects
+  relative inputs instead of resolving them against the process cwd. Relative
+  path conversion must use `resolve_path_against_base` or the deliberately
+  named `relative_to_current_dir` entrypoint.
 - `scripts/check-session-cwd-discipline.sh` is wired into `just check-seam`
-  to reject new process-cwd reads in session-owned production crates. It
-  allow-lists only the CLI startup boundary and the documented
-  `headless::run_chat` convenience capture; full-workspace `clippy.toml`
+  to reject new process-cwd reads in session-owned production crates, and now
+  also rejects process-cwd reads in `utils/absolute-path/src/absolutize.rs`.
+  It allow-lists only the CLI startup boundary; full-workspace `clippy.toml`
   enforcement remains the steady-state target after standalone utilities are
   split or allow-listed.
 - `coco-file-search` no longer reads process cwd from its reusable
@@ -1922,22 +2071,48 @@ Implementation progress as of 2026-07-07:
   styles, LSP servers, and MCP servers therefore follow the project catalog
   boundary, while disk skill discovery still uses the session cwd walk so nested
   `.coco/skills` behavior is preserved until the project/local settings split
-  is implemented. Plugin-contributed agent directories and the initial
-  session hook registry's plugin layer now use the same project-root plugin
-  catalog; direct disk agent discovery still starts from the session cwd. The
-  project plugin catalog is now represented by `ProjectCatalogSnapshot` and
-  exposed through a thin `ProjectServices` wrapper. `EngineResources`,
+  is implemented. Plugin-contributed agent directories and the session hook
+  registry's plugin layer now use the same project-root plugin catalog, and
+  plugin reload refreshes the runtime's agent search paths before the agent
+  catalog is rebuilt; direct disk agent discovery still starts from the
+  session cwd. The project plugin catalog is now represented internally by
+  `ProjectCatalogSnapshot` and exposed through a thin `ProjectServices`
+  wrapper. `EngineResources`,
   `SessionRuntimeBuildOpts`, and `SessionRuntime` now carry
-  `Arc<ProjectServices>`, and `app/cli::project_services::ProjectRegistry`
-  caches those handles per `(config_home, project_root)` until `ProcessRuntime`
-  owns the registry field. Startup paths share the cached entry; explicit
+  `Arc<ProjectServices>`, and `app/cli::process_runtime::ProcessRuntime`
+  owns the `ProjectRegistryManager` that serves those handles from a
+  `(config_home, project_root)` cache. `ProcessRuntime::global()` creates the
+  single production process owner, and startup threads that
+  `Arc<ProcessRuntime>` into TUI, SDK, headless, `SessionRuntime`, and LSP
+  reload paths, so production session bootstrap and live plugin/LSP/MCP/hook
+  reloads no longer reach around the process owner to fetch project services.
+  The compatibility `project_registry()` singleton remains only as the backing
+  field for this interim app/cli process runtime until the planned
+  `coco-app-runtime` extraction owns it directly. Explicit
   plugin/LSP/MCP/hook reload paths force-refresh the entry so live reload still
-  sees newly enabled, disabled, installed, or removed plugins. Idle eviction,
-  attached-session ref-counting, and the full project/local settings split are
-  still pending. `ProjectServices` now also exposes the combined MCP server
-  list for a session cwd, so session MCP bootstrap consumes project-rooted
-  config/plugin MCP contributions through the project-service boundary instead
-  of assembling them in `session_bootstrap`.
+  sees newly enabled, disabled, installed, or removed plugins. The
+  `ProjectRegistryManager` runs the background idle-eviction sweep, alongside
+  the opportunistic miss-path sweep: cached entries whose only remaining `Arc`
+  owner is the registry are marked idle and evicted after the configured grace
+  period, while attached sessions' strong references keep their project
+  services alive. The full project/local settings split is still pending.
+  `ProjectServices` now also
+  exposes the combined MCP server list for a session cwd, so session MCP
+  bootstrap consumes project-rooted config/plugin MCP contributions through the
+  project-service boundary instead of assembling them in `session_bootstrap`.
+  Plugin-contributed LSP server discovery is also behind `ProjectServices`, so
+  LSP startup/reload no longer reassembles plugin server config at the
+  bootstrap/adapter call sites. Session skill bootstrap/reload now asks
+  `ProjectServices` to build the complete session `SkillManager`, keeping
+  project plugin skills and builtin plugin skills behind the same boundary
+  while disk skill discovery still uses the session cwd until the full
+  project/local split lands. Plugin hook registration at bootstrap and
+  `/hooks reload` also goes through `ProjectServices`, leaving settings-hook
+  layering in the runtime-config path while project plugin hook discovery stays
+  on the project catalog boundary. Slash-command registry construction now
+  also asks `ProjectServices` to supply project plugin command contributions,
+  so command bootstrap/reload no longer passes the enabled plugin slice around
+  outside the project-service container.
 - `UsageAccounting` now owns its mutable session id as `SessionId`; it no
   longer shares the runtime identity lock. It exposes lifecycle-level
   retarget methods for loading an existing session's usage or starting a
@@ -2030,7 +2205,8 @@ Implementation progress as of 2026-07-07:
   `session_runtime.rs` file focused on the runtime option/state type
   definitions and shared intra-module helpers.
 - A local `SessionHandle` wrapper now exists around `Arc<SessionRuntime>`;
-  TUI, SDK, and headless startup paths construct sessions through this
+  it now carries an immutable session-id snapshot plus the compatibility
+  runtime escape hatch. TUI, SDK, and headless startup paths construct sessions through this
   handle, and `QueryEngineRunner` holds the handle instead of directly owning
   the runtime `Arc`. Startup-owned background session consumers
   (cron tick, leader inbox poller, skill watcher, and post-login OpenAI model
@@ -2196,7 +2372,43 @@ Implementation progress as of 2026-07-07:
   ts, schema_version, payload }`, ephemeral envelopes are skipped, and a
   sequenced non-Protocol envelope is rejected as a stamping taxonomy violation.
   The connector also has a batch helper that preserves durable envelope order
-  while filtering live-only envelopes before constructing `BatchFrame`.
+  while filtering live-only envelopes before constructing `BatchFrame`. It can
+  now open a WebSocket with the `coco-event-hub.v2` subprotocol, send
+  `announce` / `batch`, and validate Hub `announce_ack` / `batch_ack` frames.
+  `HubConnectorWorker` provides the reusable long-lived egress loop for
+  AppServer-stamped `SessionEnvelope`s: bounded producer channel, bounded
+  pending event ring, durable-envelope filtering, max-event batching,
+  reconnect/backoff, and shutdown flushing. The local AppServer bridge can now
+  attach a `HubConnectorSender` and clone each stamped outbound envelope into
+  the connector queue after local routing. `RuntimeConfig.event_hub.url`
+  resolves the `event_hub_url` setting, `COCO_EVENT_HUB_URL`, and
+  `--event-hub-url`; TUI/headless startup creates the connector worker from
+  that URL and flushes it on normal shutdown. `--serve-hub` / `--hub-port`
+  now gate an optional embedded hub feature and auto-fill that URL when
+  enabled. SDK/NDJSON mode now starts the connector worker from the same
+  resolved URL and clones SDK-visible protocol notifications from the
+  single-writer serializer into Hub egress. Byte-size batching and jittered
+  backoff are now in the connector worker; durable backlog-drop markers remain
+  future spec work.
+- `hub/server` now has an ingest-capable `SqliteEventStore` behind the
+  existing `EventStore` trait. It creates fixed-field indexes, upserts announce
+  instance/session state, deduplicates retries with the
+  `(instance_id, session_id, session_seq)` primary key, rolls up session
+  high-water marks, and serves the existing list/get/search read model.
+  `hub/server` also exposes `/v1/connect` for Hub v2 WebSocket ingestion:
+  `announce` frames upsert instance state and return per-session
+  `resume_from`, while `batch` frames ingest events and return per-session
+  `up_to_seq`. The standalone hub binary defaults to `SqliteEventStore`
+  (`--data-dir`, `data/events.sqlite`) and keeps `--memory-base` as the
+  explicit read-only canonical transcript JSONL projection. SQLite retention
+  sweep support is implemented through `EventStore::run_retention_sweep`: it
+  expires events by `received_at`, prunes empty sessions, enforces the DB size
+  cap by dropping oldest sessions, and vacuums after size-cap deletes. The
+  standalone SQLite hub starts a periodic retention task with CLI knobs for
+  days, max bytes, and sweep interval. `/sse/session/{instance}/{session}`
+  subscribes to a per-session live topic and streams rendered event-row
+  partials for newly accepted WebSocket batch events; duplicate retry batches
+  are not republished.
 - Hook orchestration now carries checked session identity through
   `coco_hooks::OrchestrationContext.session_id: SessionId`; hook JSON/env
   conversion stays at the legacy `BaseHookInput` / command execution boundary,
@@ -2327,7 +2539,7 @@ Implementation progress as of 2026-07-07:
 **Phase B — atomic cut-over (single PR):**
 
 Route TUI and headless through `LocalClientAdapter`; route SDK through
-`JsonRpcAdapter`; delete the old stack. Demolition list:
+`JsonRpcAdapter`; delete the old stack. Remaining demolition list:
 
 - `retarget_for_loaded_session`, `retarget_session_id_boundaries`, and the
   `/clear` id-rotation path.
@@ -2336,15 +2548,8 @@ Route TUI and headless through `LocalClientAdapter`; route SDK through
 - `SdkServerState.session` singleton slot
   (`sdk_server/handlers/mod.rs:236`) and the dispatcher's
   archive→start session-cycling (`dispatcher.rs:194-206`).
-- `hub/protocol` v1 frames (`AnnounceAckFrame.resume_from`,
-  scalar `BatchAckFrame.up_to_seq`, global-`seq` `EventEnvelope`).
-- `event-hub/spec.md` §4 single-session identity prose.
 - The process-boot single fold of project/local settings into one
   process-wide `RuntimeConfig` (replaced by the per-session fold, §6.5).
-- `std::env::current_dir()` fallbacks on session-scoped paths
-  (`engine_session.rs:565`, `tool_call_preparer.rs:600`,
-  `engine_prompt.rs:98`) and `absolutize`'s process-cwd default for
-  session paths.
 
 **Phase C — surfaces (multi-attach):** passive surfaces, multiple
 surfaces per connection, interactive-conflict rejection, replace/archive

@@ -646,6 +646,7 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "providers",
     "env",
     "log",
+    "event_hub_url",
     "api",
     "loop",
     "tool",

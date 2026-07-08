@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use coco_app_server::AppCloseStart;
+use coco_app_server::AppLoadStart;
 use coco_app_server::AppServer;
 use coco_app_server::AttachSurfaceOptions;
 use coco_app_server::DisconnectOutcome;
@@ -15,7 +17,6 @@ use coco_app_server::JsonRpcDispatchError;
 use coco_app_server::JsonRpcRequestContext;
 use coco_app_server::JsonRpcRequestFuture;
 use coco_app_server::JsonRpcRequestHandler;
-use coco_app_server::LoadStart;
 use coco_app_server::LocalClientAdapter;
 use coco_app_server::LocalClientRequestContext;
 use coco_app_server::LocalClientRequestFuture;
@@ -30,6 +31,7 @@ use coco_app_server_transport::JsonRpcId;
 use coco_app_server_transport::JsonRpcNotification as TransportJsonRpcNotification;
 use coco_app_server_transport::JsonRpcRequest as TransportJsonRpcRequest;
 use coco_app_server_transport::JsonRpcSuccess;
+use coco_hub_connector::HubConnectorSender;
 use coco_types::ClientRequest;
 use coco_types::CoreEvent;
 use coco_types::JSONRPC_VERSION;
@@ -43,10 +45,13 @@ use coco_types::RequestId;
 use coco_types::ServerNotification;
 use coco_types::SessionEnvelope;
 use coco_types::SessionId;
+use coco_types::SurfaceId;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tracing::debug;
 use tracing::warn;
 
+use crate::sdk_server::dispatcher::SdkHubEgress;
 use crate::sdk_server::dispatcher::spawn_sdk_outbound_writer;
 use crate::sdk_server::handlers::HandlerContext;
 use crate::sdk_server::handlers::HandlerResult;
@@ -71,11 +76,65 @@ pub struct AppServerLocalTurnCompletion {
 pub struct AppServerSdkHandler {
     state: Arc<SdkServerState>,
     notif_tx: mpsc::Sender<OutboundMessage>,
+    local_app_server: Option<Arc<AppServer<LocalAppSessionHandle>>>,
+}
+
+/// Local AppServer registry handle for the current app/cli bridge.
+///
+/// The fused `SessionRuntime` can still be retargeted in-place by
+/// `session/start` / `session/resume`, so this handle snapshots the registry
+/// session id separately from the optional runtime handle. The close cascade is
+/// intentionally retarget-safe until Phase B replaces in-place retargeting with
+/// one immutable runtime handle per live session.
+#[derive(Clone)]
+pub struct LocalAppSessionHandle {
+    session_id: SessionId,
+    runtime: Option<crate::session_runtime::SessionHandle>,
+}
+
+impl LocalAppSessionHandle {
+    fn snapshot(session_id: SessionId) -> Self {
+        Self {
+            session_id,
+            runtime: None,
+        }
+    }
+
+    fn from_runtime(session_id: SessionId, runtime: crate::session_runtime::SessionHandle) -> Self {
+        Self {
+            session_id,
+            runtime: Some(runtime),
+        }
+    }
+
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    pub fn runtime(&self) -> Option<&crate::session_runtime::SessionHandle> {
+        self.runtime.as_ref()
+    }
 }
 
 impl AppServerSdkHandler {
     pub fn new(state: Arc<SdkServerState>, notif_tx: mpsc::Sender<OutboundMessage>) -> Self {
-        Self { state, notif_tx }
+        Self {
+            state,
+            notif_tx,
+            local_app_server: None,
+        }
+    }
+
+    fn with_local_app_server(
+        state: Arc<SdkServerState>,
+        notif_tx: mpsc::Sender<OutboundMessage>,
+        app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    ) -> Self {
+        Self {
+            state,
+            notif_tx,
+            local_app_server: Some(app_server),
+        }
     }
 }
 
@@ -99,17 +158,249 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
         _context: LocalClientRequestContext,
         request: ClientRequest,
     ) -> LocalClientRequestFuture {
+        let local_app_server = self.local_app_server.clone();
+        let lifecycle_request = local_app_server.as_ref().and_then(|app_server| {
+            LocalLifecycleRequest::from_client_request(&request, app_server)
+        });
         let ctx = HandlerContext {
             notif_tx: self.notif_tx.clone(),
             state: Arc::clone(&self.state),
         };
-        Box::pin(async move { dispatch_sdk_client_request(request, ctx).await })
+        Box::pin(async move {
+            let result = dispatch_sdk_client_request(request, ctx).await?;
+            if let (Some(app_server), Some(lifecycle_request)) =
+                (local_app_server, lifecycle_request)
+            {
+                apply_local_lifecycle_request(app_server, lifecycle_request, &result).await?;
+            }
+            Ok(result)
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+enum LocalLifecycleRequest {
+    Start,
+    Resume { live_before: Vec<SessionId> },
+    Archive(SessionId),
+}
+
+impl LocalLifecycleRequest {
+    fn from_client_request(
+        request: &ClientRequest,
+        app_server: &AppServer<LocalAppSessionHandle>,
+    ) -> Option<Self> {
+        match request {
+            ClientRequest::SessionStart(_) => Some(Self::Start),
+            ClientRequest::SessionResume(_) => Some(Self::Resume {
+                live_before: app_server
+                    .list_live_sessions()
+                    .into_iter()
+                    .map(|summary| summary.session_id)
+                    .collect(),
+            }),
+            ClientRequest::SessionArchive(params) => Some(Self::Archive(params.session_id.clone())),
+            _ => None,
+        }
+    }
+}
+
+async fn apply_local_lifecycle_request(
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    request: LocalLifecycleRequest,
+    result: &serde_json::Value,
+) -> Result<(), JsonRpcDispatchError> {
+    match request {
+        LocalLifecycleRequest::Start => {
+            let started: coco_types::SessionStartResult = serde_json::from_value(result.clone())
+                .map_err(|error| JsonRpcDispatchError {
+                    code: coco_types::error_codes::INTERNAL_ERROR,
+                    message: format!("local AppServer session/start decode failed: {error}"),
+                    data: None,
+                })?;
+            register_local_app_server_session(
+                &app_server,
+                LocalAppSessionHandle::snapshot(started.session_id),
+            )
+            .await?;
+        }
+        LocalLifecycleRequest::Resume { live_before } => {
+            let resumed: coco_types::SessionResumeResult =
+                serde_json::from_value(result.clone()).map_err(|error| JsonRpcDispatchError {
+                    code: coco_types::error_codes::INTERNAL_ERROR,
+                    message: format!("local AppServer session/resume decode failed: {error}"),
+                    data: None,
+                })?;
+            let resumed_session_id = resumed.session.session_id;
+            let mut replaced_existing = false;
+            for previous_session_id in live_before {
+                if previous_session_id != resumed_session_id {
+                    if !replaced_existing
+                        && replace_local_app_server_session(
+                            Arc::clone(&app_server),
+                            previous_session_id.clone(),
+                            LocalAppSessionHandle::snapshot(resumed_session_id.clone()),
+                        )
+                        .await?
+                    {
+                        replaced_existing = true;
+                    } else {
+                        close_local_app_server_session(
+                            Arc::clone(&app_server),
+                            previous_session_id,
+                        )
+                        .await?;
+                    }
+                }
+            }
+            if !replaced_existing {
+                register_local_app_server_session(
+                    &app_server,
+                    LocalAppSessionHandle::snapshot(resumed_session_id),
+                )
+                .await?;
+            }
+        }
+        LocalLifecycleRequest::Archive(session_id) => {
+            close_local_app_server_session(app_server, session_id).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn replace_local_app_server_session(
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    old_session_id: SessionId,
+    new_handle: LocalAppSessionHandle,
+) -> Result<bool, JsonRpcDispatchError> {
+    let Some(calling_surface) = local_replace_calling_surface(&app_server, &old_session_id) else {
+        return Ok(false);
+    };
+    let new_session_id = new_handle.session_id.clone();
+    let mut completion = match app_server
+        .spawn_replace(
+            old_session_id,
+            new_session_id,
+            calling_surface,
+            async { Ok::<LocalAppSessionHandle, coco_app_server::RegistryError>(new_handle) },
+            close_local_session_handle,
+        )
+        .map_err(|error| local_lifecycle_error("replace session", error))?
+    {
+        coco_app_server::AppReplaceStart::Started { completion } => completion,
+    };
+    completion
+        .wait()
+        .await
+        .map(|_| true)
+        .map_err(|error| local_lifecycle_error("replace session", error))
+}
+
+fn local_replace_calling_surface(
+    app_server: &AppServer<LocalAppSessionHandle>,
+    session_id: &SessionId,
+) -> Option<SurfaceId> {
+    let routing = app_server
+        .routing()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    routing.interactive_owner(session_id).cloned()
+}
+
+async fn register_local_app_server_session(
+    app_server: &Arc<AppServer<LocalAppSessionHandle>>,
+    handle: LocalAppSessionHandle,
+) -> Result<(), JsonRpcDispatchError> {
+    let session_id = handle.session_id.clone();
+    let handle_for_load = handle.clone();
+    match app_server
+        .spawn_load(session_id, async {
+            Ok::<LocalAppSessionHandle, coco_app_server::RegistryError>(handle_for_load)
+        })
+        .map_err(|error| local_lifecycle_error("register session", error))?
+    {
+        AppLoadStart::Started { mut completion } | AppLoadStart::Loading(mut completion) => {
+            completion
+                .wait()
+                .await
+                .map(|_| ())
+                .map_err(|error| local_lifecycle_error("register session", error))
+        }
+        AppLoadStart::Live(_) => {
+            if handle.runtime().is_some() {
+                let refresh_session_id = handle.session_id.clone();
+                app_server
+                    .registry()
+                    .replace_live_handle(&refresh_session_id, handle)
+                    .map_err(|error| local_lifecycle_error("refresh live session", error))?;
+            }
+            Ok(())
+        }
+        AppLoadStart::Closing(_) => Ok(()),
+    }
+}
+
+async fn close_local_app_server_session(
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    session_id: SessionId,
+) -> Result<(), JsonRpcDispatchError> {
+    if !app_server
+        .list_live_sessions()
+        .iter()
+        .any(|summary| summary.session_id == session_id)
+    {
+        return Ok(());
+    }
+    let mut completion = match app_server
+        .spawn_close(session_id, close_local_session_handle)
+        .map_err(|error| local_lifecycle_error("archive session", error))?
+    {
+        AppCloseStart::Started { completion }
+        | AppCloseStart::Loading(completion)
+        | AppCloseStart::Closing(completion) => completion,
+    };
+    completion
+        .wait()
+        .await
+        .map_err(|error| local_lifecycle_error("archive session", error))
+}
+
+async fn close_local_session_handle(handle: LocalAppSessionHandle) {
+    let has_runtime = handle.runtime.is_some();
+    if let Some(runtime) = handle.runtime() {
+        let current = runtime.current_typed_session_id().await;
+        if current != *handle.session_id() {
+            debug!(
+                target: "coco::app_server_local",
+                registry_session_id = %handle.session_id(),
+                current_session_id = %current,
+                "skipping local AppServer close cascade for retargeted fused runtime"
+            );
+            return;
+        }
+    }
+    debug!(
+        target: "coco::app_server_local",
+        session_id = %handle.session_id(),
+        has_runtime,
+        "local AppServer close cascade reached fused runtime boundary"
+    );
+}
+
+fn local_lifecycle_error(
+    operation: &'static str,
+    error: impl std::fmt::Display,
+) -> JsonRpcDispatchError {
+    JsonRpcDispatchError {
+        code: coco_types::error_codes::INTERNAL_ERROR,
+        message: format!("local AppServer {operation} failed: {error}"),
+        data: None,
     }
 }
 
 pub struct AppServerLocalBridge {
-    app_server: Arc<AppServer<()>>,
-    client: ServerClient<()>,
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    client: ServerClient<LocalAppSessionHandle>,
     handler: AppServerSdkHandler,
     outbound_forwarder: JoinHandle<()>,
     event_pump: Option<JoinHandle<()>>,
@@ -123,12 +414,31 @@ impl AppServerLocalBridge {
         Self::with_channel_capacity(state, APP_SERVER_LOCAL_CHANNEL_CAPACITY)
     }
 
+    pub fn with_hub_connector_sender(
+        state: Arc<SdkServerState>,
+        hub_connector: HubConnectorSender,
+    ) -> Self {
+        Self::with_channel_capacity_and_hub_connector(
+            state,
+            APP_SERVER_LOCAL_CHANNEL_CAPACITY,
+            Some(hub_connector),
+        )
+    }
+
     pub fn with_channel_capacity(state: Arc<SdkServerState>, channel_capacity: usize) -> Self {
+        Self::with_channel_capacity_and_hub_connector(state, channel_capacity, None)
+    }
+
+    fn with_channel_capacity_and_hub_connector(
+        state: Arc<SdkServerState>,
+        channel_capacity: usize,
+        hub_connector: Option<HubConnectorSender>,
+    ) -> Self {
         assert!(
             channel_capacity > 0,
             "local AppServer bridge channel capacity must be non-zero"
         );
-        let app_server = Arc::new(AppServer::<()>::new(
+        let app_server = Arc::new(AppServer::<LocalAppSessionHandle>::new(
             /*max_sessions*/ 1,
             channel_capacity,
         ));
@@ -136,9 +446,17 @@ impl AppServerLocalBridge {
             LocalClientAdapter::with_channel_capacity(Arc::clone(&app_server), channel_capacity);
         let client = ServerClient::connect_local(&adapter);
         let (outbound_tx, outbound_rx) = mpsc::channel(channel_capacity);
-        let handler = AppServerSdkHandler::new(Arc::clone(&state), outbound_tx);
-        let outbound_forwarder =
-            spawn_app_server_local_outbound_forwarder(Arc::clone(&app_server), state, outbound_rx);
+        let handler = AppServerSdkHandler::with_local_app_server(
+            Arc::clone(&state),
+            outbound_tx,
+            Arc::clone(&app_server),
+        );
+        let outbound_forwarder = spawn_app_server_local_outbound_forwarder(
+            Arc::clone(&app_server),
+            state,
+            outbound_rx,
+            hub_connector,
+        );
         Self {
             app_server,
             client,
@@ -151,19 +469,19 @@ impl AppServerLocalBridge {
         }
     }
 
-    pub fn app_server(&self) -> &Arc<AppServer<()>> {
+    pub fn app_server(&self) -> &Arc<AppServer<LocalAppSessionHandle>> {
         &self.app_server
     }
 
-    pub fn client(&self) -> &ServerClient<()> {
+    pub fn client(&self) -> &ServerClient<LocalAppSessionHandle> {
         &self.client
     }
 
-    pub fn client_mut(&mut self) -> &mut ServerClient<()> {
+    pub fn client_mut(&mut self) -> &mut ServerClient<LocalAppSessionHandle> {
         &mut self.client
     }
 
-    pub fn connect_local_client(&self) -> ServerClient<()> {
+    pub fn connect_local_client(&self) -> ServerClient<LocalAppSessionHandle> {
         let adapter = LocalClientAdapter::with_channel_capacity(
             Arc::clone(&self.app_server),
             self.channel_capacity,
@@ -175,6 +493,16 @@ impl AppServerLocalBridge {
         &self.handler
     }
 
+    pub async fn close_registered_session(&self, session_id: SessionId) -> Result<(), ClientError> {
+        close_local_app_server_session(Arc::clone(&self.app_server), session_id)
+            .await
+            .map_err(|error| ClientError::Server {
+                code: error.code,
+                message: error.message,
+                data: error.data,
+            })
+    }
+
     pub fn ensure_interactive_surface(&mut self, session_id: SessionId) -> Result<(), ClientError> {
         if self
             .interactive_surface
@@ -183,11 +511,30 @@ impl AppServerLocalBridge {
         {
             return Ok(());
         }
+        if let Some(surface) = self.interactive_surface.as_ref()
+            && self.surface_is_attached_to_session(surface.surface_id(), &session_id)
+        {
+            self.interactive_surface = Some(surface.with_session_id(session_id));
+            return Ok(());
+        }
         let surface = self
             .client
             .attach_interactive_session(session_id, AttachSurfaceOptions::default())?;
         self.interactive_surface = Some(surface);
         Ok(())
+    }
+
+    fn surface_is_attached_to_session(
+        &self,
+        surface_id: &SurfaceId,
+        session_id: &SessionId,
+    ) -> bool {
+        let routing = self
+            .app_server
+            .routing()
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        routing.surface_session(surface_id) == Some(session_id)
     }
 
     pub fn start_passive_event_pump(
@@ -313,6 +660,14 @@ impl AppServerLocalBridge {
         cwd: impl Into<String>,
         model: impl Into<String>,
     ) {
+        if let Err(error) = register_local_app_server_session(
+            &self.app_server,
+            LocalAppSessionHandle::snapshot(session_id.clone()),
+        )
+        .await
+        {
+            warn!(?error, session_id = %session_id, "local AppServer registry snapshot install failed");
+        }
         self.install_sdk_session_handle(SdkSessionHandle::new(
             session_id,
             cwd.into(),
@@ -337,9 +692,12 @@ impl AppServerLocalBridge {
             bypass_permissions_available,
             app_state,
             history,
+            session_manager,
+            file_history,
+            config_home,
         ) = {
             let runtime = session.runtime();
-            let session_id = runtime.current_typed_session_id().await;
+            let session_id = session.session_id().clone();
             let cwd = runtime
                 .current_cwd
                 .read()
@@ -359,19 +717,18 @@ impl AppServerLocalBridge {
                 config.permission_mode_availability.bypass_permissions,
                 Arc::clone(&runtime.app_state),
                 history,
+                Arc::clone(&runtime.session_manager),
+                runtime.file_history.clone(),
+                runtime.config_home.clone(),
             )
         };
-        match self.app_server.registry().begin_load(session_id.clone()) {
-            Ok(LoadStart::Reserved) => {
-                let _ = self
-                    .app_server
-                    .registry()
-                    .complete_load_success(&session_id, ());
-            }
-            Ok(LoadStart::Live(_)) | Ok(LoadStart::Loading(_)) | Ok(LoadStart::Closing(_)) => {}
-            Err(error) => {
-                warn!(%error, session_id = %session_id, "local AppServer registry install failed");
-            }
+        if let Err(error) = register_local_app_server_session(
+            &self.app_server,
+            LocalAppSessionHandle::from_runtime(session_id.clone(), session.clone()),
+        )
+        .await
+        {
+            warn!(?error, session_id = %session_id, "local AppServer registry install failed");
         }
 
         let mut sdk_session = SdkSessionHandle::new(session_id, cwd, model);
@@ -391,6 +748,18 @@ impl AppServerLocalBridge {
                 max_turns,
                 system_prompt,
             ));
+        }
+        {
+            let mut slot = self.handler.state.session_manager.write().await;
+            *slot = Some(session_manager);
+        }
+        {
+            let mut slot = self.handler.state.file_history.write().await;
+            *slot = file_history;
+        }
+        {
+            let mut slot = self.handler.state.file_history_config_home.write().await;
+            *slot = Some(config_home);
         }
         let mut slot = self.handler.state.session_runtime.write().await;
         *slot = Some(session);
@@ -415,6 +784,7 @@ pub fn spawn_app_server_local_outbound_forwarder<H>(
     server: Arc<AppServer<H>>,
     state: Arc<SdkServerState>,
     mut outbound_rx: mpsc::Receiver<OutboundMessage>,
+    hub_connector: Option<HubConnectorSender>,
 ) -> JoinHandle<()>
 where
     H: Clone + Send + Sync + 'static,
@@ -435,7 +805,13 @@ where
                         *next += 1;
                         seq
                     });
+                    let hub_envelope = envelope.clone();
                     server.route_envelope(envelope);
+                    if let Some(hub_connector) = &hub_connector
+                        && let Err(error) = hub_connector.try_enqueue(hub_envelope)
+                    {
+                        warn!(%error, "dropping local AppServer event from Hub connector queue");
+                    }
                 }
                 OutboundMessage::JsonRpc(_) => {
                     warn!("dropping JSON-RPC outbound message on local AppServer forwarder");
@@ -535,11 +911,34 @@ where
     .await
 }
 
-pub async fn run_app_server_sdk_state_over_sdk_transport_with_external_notifications<H>(
+#[cfg(test)]
+async fn run_app_server_sdk_state_over_sdk_transport_with_external_notifications<H>(
     connection: JsonRpcAdapterConnection<H>,
     transport: Arc<dyn SdkTransport>,
     state: Arc<SdkServerState>,
     external_notifications: Vec<mpsc::Receiver<CoreEvent>>,
+) -> Result<DisconnectOutcome, SdkAppServerBridgeError>
+where
+    H: Clone + Send + Sync + 'static,
+{
+    run_app_server_sdk_state_over_sdk_transport_with_external_notifications_and_hub_connector(
+        connection,
+        transport,
+        state,
+        external_notifications,
+        None,
+    )
+    .await
+}
+
+pub async fn run_app_server_sdk_state_over_sdk_transport_with_external_notifications_and_hub_connector<
+    H,
+>(
+    connection: JsonRpcAdapterConnection<H>,
+    transport: Arc<dyn SdkTransport>,
+    state: Arc<SdkServerState>,
+    external_notifications: Vec<mpsc::Receiver<CoreEvent>>,
+    hub_connector: Option<HubConnectorSender>,
 ) -> Result<DisconnectOutcome, SdkAppServerBridgeError>
 where
     H: Clone + Send + Sync + 'static,
@@ -583,7 +982,8 @@ where
         }));
     }
 
-    let writer_task = spawn_sdk_outbound_writer(Arc::clone(&transport), outbound_rx);
+    let hub_egress = hub_connector.map(|sender| SdkHubEgress::new(Arc::clone(&state), sender));
+    let writer_task = spawn_sdk_outbound_writer(Arc::clone(&transport), outbound_rx, hub_egress);
     let handler = Arc::new(AppServerSdkHandler::new(
         Arc::clone(&state),
         outbound_tx.clone(),
@@ -810,549 +1210,5 @@ fn request_id_from_json_rpc_id(id: JsonRpcId) -> Result<RequestId, JsonRpcBridge
 }
 
 #[cfg(test)]
-mod tests {
-    use std::pin::Pin;
-
-    use coco_app_server::AppServer;
-    use coco_app_server::AttachSurfaceOptions;
-    use coco_app_server::JsonRpcAdapter;
-    use coco_app_server::JsonRpcRequestHandler;
-    use coco_app_server::LocalClientAdapter;
-    use coco_app_server::LocalClientRequestHandler;
-    use coco_types::ClientRequest;
-    use coco_types::ServerNotification;
-    use coco_types::SessionState;
-    use tokio_util::sync::CancellationToken;
-
-    use super::*;
-    use crate::sdk_server::handlers::TurnHandoff;
-    use crate::sdk_server::handlers::TurnRunner;
-    use crate::sdk_server::transport::InMemoryTransport;
-
-    struct EndingTurnRunner;
-
-    impl TurnRunner for EndingTurnRunner {
-        fn run_turn<'a>(
-            &'a self,
-            _params: coco_types::TurnStartParams,
-            turn_id: coco_types::TurnId,
-            _handoff: TurnHandoff,
-            event_tx: mpsc::Sender<CoreEvent>,
-            _cancel: CancellationToken,
-        ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
-            Box::pin(async move {
-                event_tx
-                    .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
-                        coco_types::TurnStartedParams {
-                            turn_id: turn_id.clone(),
-                        },
-                    )))
-                    .await
-                    .ok();
-                event_tx
-                    .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
-                        coco_types::TurnEndedParams::completed(
-                            turn_id,
-                            Some(coco_types::TokenUsage::default()),
-                            Some(coco_messages::StopReason::EndTurn),
-                        ),
-                    )))
-                    .await
-                    .ok();
-                Ok(())
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn app_server_sdk_handler_dispatches_into_existing_handlers() {
-        let (notif_tx, _notif_rx) = mpsc::channel(8);
-        let handler = AppServerSdkHandler::new(Arc::new(SdkServerState::default()), notif_tx);
-
-        let result = handler
-            .handle_json_rpc_request(
-                JsonRpcRequestContext {
-                    connection: coco_app_server::ConnectionKey::generate(),
-                },
-                ClientRequest::KeepAlive,
-            )
-            .await
-            .expect("keepAlive succeeds");
-
-        assert_eq!(result, serde_json::Value::Null);
-    }
-
-    #[tokio::test]
-    async fn app_server_sdk_handler_dispatches_local_requests_into_existing_handlers() {
-        let (notif_tx, _notif_rx) = mpsc::channel(8);
-        let handler = AppServerSdkHandler::new(Arc::new(SdkServerState::default()), notif_tx);
-
-        let result = handler
-            .handle_local_client_request(
-                LocalClientRequestContext::new(coco_app_server::ConnectionKey::generate()),
-                ClientRequest::KeepAlive,
-            )
-            .await
-            .expect("keepAlive succeeds");
-
-        assert_eq!(result, serde_json::Value::Null);
-    }
-
-    #[tokio::test]
-    async fn app_server_local_bridge_dispatches_requests_and_reads_surface_events() {
-        let state = Arc::new(SdkServerState::default());
-        let mut bridge = AppServerLocalBridge::with_channel_capacity(Arc::clone(&state), 8);
-
-        let started = bridge
-            .client()
-            .session_start(
-                bridge.handler(),
-                coco_types::SessionStartParams {
-                    cwd: Some(".".to_string()),
-                    model: Some("test-model".to_string()),
-                    ..coco_types::SessionStartParams::default()
-                },
-            )
-            .await
-            .expect("session/start succeeds");
-
-        {
-            let slot = state.session.read().await;
-            let session = slot.as_ref().expect("session installed");
-            assert_eq!(session.session_id, started.session_id);
-            assert_eq!(session.model, "test-model");
-        }
-
-        let surface = bridge
-            .client()
-            .attach_interactive_session(started.session_id.clone(), AttachSurfaceOptions::default())
-            .expect("attach interactive surface");
-        let app_server = Arc::clone(bridge.app_server());
-        app_server.route_envelope(SessionEnvelope::ephemeral(
-            started.session_id.clone(),
-            None,
-            None,
-            CoreEvent::Protocol(ServerNotification::SessionStateChanged {
-                state: SessionState::Running,
-            }),
-        ));
-
-        let delivered = bridge
-            .client_mut()
-            .events_mut()
-            .recv()
-            .await
-            .expect("surface event");
-        assert_eq!(delivered.surface_id, surface.surface_id().clone());
-        assert_eq!(delivered.envelope.session_id, started.session_id);
-    }
-
-    #[tokio::test]
-    async fn app_server_local_bridge_can_install_existing_session_snapshot() {
-        let state = Arc::new(SdkServerState::default());
-        let bridge = AppServerLocalBridge::with_channel_capacity(Arc::clone(&state), 8);
-        let session_id =
-            coco_types::SessionId::try_new("sess-existing-local").expect("valid session id");
-
-        bridge
-            .install_session_snapshot(
-                session_id.clone(),
-                "/tmp/existing-session",
-                "existing-model",
-            )
-            .await;
-
-        let slot = state.session.read().await;
-        let session = slot.as_ref().expect("session installed");
-        assert_eq!(session.session_id, session_id);
-        assert_eq!(session.cwd, "/tmp/existing-session");
-        assert_eq!(session.model, "existing-model");
-    }
-
-    #[tokio::test]
-    async fn app_server_local_bridge_drains_handler_events_to_surface_channel() {
-        let state = Arc::new(SdkServerState::default());
-        let mut bridge = AppServerLocalBridge::with_channel_capacity(Arc::clone(&state), 8);
-        let session_id =
-            coco_types::SessionId::try_new("sess-local-event-drain").expect("valid session id");
-        bridge
-            .install_session_snapshot(session_id.clone(), ".", "test-model")
-            .await;
-        bridge
-            .ensure_interactive_surface(session_id)
-            .expect("attach local surface");
-
-        bridge
-            .client()
-            .set_permission_mode(
-                bridge.handler(),
-                coco_types::SetPermissionModeParams {
-                    mode: coco_types::PermissionMode::Plan,
-                },
-            )
-            .await
-            .expect("set permission mode");
-
-        let (event_tx, mut event_rx) = mpsc::channel(8);
-        for _ in 0..20 {
-            bridge.drain_interactive_events_to(&event_tx).await;
-            if let Ok(event) = event_rx.try_recv() {
-                assert!(matches!(
-                    event,
-                    CoreEvent::Protocol(ServerNotification::PermissionModeChanged(params))
-                        if params.mode == coco_types::PermissionMode::Plan
-                ));
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-        panic!("expected permission mode event");
-    }
-
-    #[tokio::test]
-    async fn app_server_local_bridge_passive_event_pump_forwards_handler_events() {
-        let state = Arc::new(SdkServerState::default());
-        let mut bridge = AppServerLocalBridge::with_channel_capacity(Arc::clone(&state), 8);
-        let session_id =
-            coco_types::SessionId::try_new("sess-local-event-pump").expect("valid session id");
-        bridge
-            .install_session_snapshot(session_id.clone(), ".", "test-model")
-            .await;
-        let (event_tx, mut event_rx) = mpsc::channel(8);
-        bridge
-            .start_passive_event_pump(session_id, event_tx)
-            .expect("start event pump");
-
-        bridge
-            .client()
-            .set_permission_mode(
-                bridge.handler(),
-                coco_types::SetPermissionModeParams {
-                    mode: coco_types::PermissionMode::Plan,
-                },
-            )
-            .await
-            .expect("set permission mode");
-
-        let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
-            .await
-            .expect("event delivered")
-            .expect("event channel open");
-        assert!(matches!(
-            event,
-            CoreEvent::Protocol(ServerNotification::PermissionModeChanged(params))
-                if params.mode == coco_types::PermissionMode::Plan
-        ));
-    }
-
-    #[tokio::test]
-    async fn app_server_local_bridge_waits_for_matching_turn_end() {
-        let state = Arc::new(SdkServerState::default());
-        {
-            let mut runner = state.turn_runner.write().await;
-            *runner = Arc::new(EndingTurnRunner);
-        }
-        let mut bridge = AppServerLocalBridge::with_channel_capacity(Arc::clone(&state), 8);
-        let session_id =
-            coco_types::SessionId::try_new("sess-local-turn-wait").expect("valid session id");
-        bridge
-            .install_session_snapshot(session_id.clone(), ".", "test-model")
-            .await;
-
-        let completion = bridge
-            .start_turn_and_wait_for_end(
-                session_id,
-                coco_types::TurnStartParams {
-                    prompt: "hello".into(),
-                    history_override: Vec::new(),
-                    images: Vec::new(),
-                    slash_metadata: None,
-                    model_selection: None,
-                    permission_mode: None,
-                    thinking_level: None,
-                },
-            )
-            .await
-            .expect("turn completes");
-
-        assert_eq!(completion.ended.turn_id, completion.started.turn_id);
-    }
-
-    #[tokio::test]
-    async fn local_outbound_forwarder_routes_core_events_through_app_server() {
-        let state = Arc::new(SdkServerState::default());
-        let session_id =
-            coco_types::SessionId::try_new("sess-local-forwarder").expect("valid session id");
-        {
-            let mut slot = state.session.write().await;
-            *slot = Some(crate::sdk_server::handlers::SessionHandle::new(
-                session_id.clone(),
-                ".".to_string(),
-                "test-model".to_string(),
-            ));
-        }
-
-        let server = Arc::new(AppServer::<()>::new(1, 8));
-        let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
-        let mut connection = adapter.connect();
-        let surface = connection
-            .attach_surface(session_id.clone(), AttachSurfaceOptions::default())
-            .expect("attach surface");
-
-        let (outbound_tx, outbound_rx) = mpsc::channel(8);
-        let forwarder =
-            spawn_app_server_local_outbound_forwarder(Arc::clone(&server), state, outbound_rx);
-
-        outbound_tx
-            .send(OutboundMessage::core_event(CoreEvent::Protocol(
-                ServerNotification::SessionStateChanged {
-                    state: SessionState::Running,
-                },
-            )))
-            .await
-            .expect("send outbound event");
-        drop(outbound_tx);
-
-        let delivered = connection.events_mut().recv().await.expect("delivery");
-        assert_eq!(delivered.surface_id, surface.surface_id);
-        assert_eq!(delivered.envelope.session_id, session_id);
-        assert_eq!(delivered.envelope.session_seq, Some(1));
-        assert!(matches!(
-            delivered.envelope.event,
-            CoreEvent::Protocol(ServerNotification::SessionStateChanged {
-                state: SessionState::Running
-            })
-        ));
-
-        forwarder.await.expect("forwarder task");
-    }
-
-    #[tokio::test]
-    async fn app_server_bridge_runs_json_rpc_adapter_over_sdk_transport() {
-        #[derive(Debug, Clone)]
-        struct TestHandle;
-
-        let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-        let adapter = JsonRpcAdapter::with_channel_capacity(server, 8);
-        let connection = adapter.connect();
-        let (server_transport, client_transport) = InMemoryTransport::pair(8);
-        let server_transport: Arc<dyn SdkTransport> = server_transport;
-        let bridge_task = tokio::spawn(run_app_server_sdk_state_over_sdk_transport(
-            connection,
-            server_transport,
-            Arc::new(SdkServerState::default()),
-        ));
-
-        client_transport
-            .send(JsonRpcMessage::Request(JsonRpcRequest {
-                jsonrpc: JSONRPC_VERSION.into(),
-                request_id: RequestId::Integer(11),
-                method: "control/keepAlive".to_string(),
-                params: serde_json::json!({}),
-            }))
-            .await
-            .expect("send request");
-        let reply = client_transport
-            .recv()
-            .await
-            .expect("recv reply")
-            .expect("reply");
-
-        let JsonRpcMessage::Response(response) = reply else {
-            panic!("expected response");
-        };
-        assert_eq!(response.request_id, RequestId::Integer(11));
-        assert!(response.result.is_null());
-
-        drop(client_transport);
-        bridge_task
-            .await
-            .expect("bridge task")
-            .expect("bridge exits cleanly");
-    }
-
-    #[tokio::test]
-    async fn app_server_bridge_forwards_external_notifications() {
-        #[derive(Debug, Clone)]
-        struct TestHandle;
-
-        let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-        let adapter = JsonRpcAdapter::with_channel_capacity(server, 8);
-        let connection = adapter.connect();
-        let (server_transport, client_transport) = InMemoryTransport::pair(8);
-        let server_transport: Arc<dyn SdkTransport> = server_transport;
-        let (external_tx, external_rx) = mpsc::channel(8);
-        let bridge_task = tokio::spawn(
-            run_app_server_sdk_state_over_sdk_transport_with_external_notifications(
-                connection,
-                server_transport,
-                Arc::new(SdkServerState::default()),
-                vec![external_rx],
-            ),
-        );
-
-        external_tx
-            .send(CoreEvent::Protocol(
-                ServerNotification::SessionStateChanged {
-                    state: SessionState::Running,
-                },
-            ))
-            .await
-            .expect("send external event");
-        let message = client_transport
-            .recv()
-            .await
-            .expect("recv notification")
-            .expect("notification");
-
-        let JsonRpcMessage::Notification(notification) = message else {
-            panic!("expected notification");
-        };
-        assert_eq!(notification.method, "session/stateChanged");
-
-        drop(external_tx);
-        drop(client_transport);
-        bridge_task
-            .await
-            .expect("bridge task")
-            .expect("bridge exits cleanly");
-    }
-
-    #[tokio::test]
-    async fn app_server_bridge_routes_legacy_server_request_replies_to_sdk_state() {
-        #[derive(Debug, Clone)]
-        struct TestHandle;
-
-        let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
-        let adapter = JsonRpcAdapter::with_channel_capacity(server, 8);
-        let connection = adapter.connect();
-        let (server_transport, client_transport) = InMemoryTransport::pair(8);
-        let server_transport_for_request: Arc<dyn SdkTransport> = server_transport.clone();
-        let server_transport: Arc<dyn SdkTransport> = server_transport;
-        let state = Arc::new(SdkServerState::default());
-        let bridge_task = tokio::spawn(run_app_server_sdk_state_over_sdk_transport(
-            connection,
-            server_transport,
-            Arc::clone(&state),
-        ));
-
-        wait_for_outbound_queue(&state).await;
-        let state_for_request = Arc::clone(&state);
-        let request_task = tokio::spawn(async move {
-            state_for_request
-                .send_server_request(
-                    &server_transport_for_request,
-                    "hook/callback",
-                    serde_json::json!({ "name": "stop" }),
-                )
-                .await
-        });
-        let JsonRpcMessage::Request(request) = client_transport
-            .recv()
-            .await
-            .expect("recv server request")
-            .expect("server request")
-        else {
-            panic!("expected server request");
-        };
-        assert_eq!(request.method, "hook/callback");
-
-        client_transport
-            .send(JsonRpcMessage::Response(JsonRpcResponse {
-                jsonrpc: JSONRPC_VERSION.into(),
-                request_id: request.request_id.clone(),
-                result: serde_json::json!({ "ok": true }),
-            }))
-            .await
-            .expect("send server-request response");
-
-        let reply = request_task
-            .await
-            .expect("request task")
-            .expect("server request resolved");
-        let JsonRpcMessage::Response(response) = reply else {
-            panic!("expected server-request response");
-        };
-        assert_eq!(response.request_id, request.request_id);
-        assert_eq!(response.result, serde_json::json!({ "ok": true }));
-
-        drop(client_transport);
-        bridge_task
-            .await
-            .expect("bridge task")
-            .expect("bridge exits cleanly");
-    }
-
-    async fn wait_for_outbound_queue(state: &SdkServerState) {
-        for _ in 0..100 {
-            if state.outbound_tx.read().await.is_some() {
-                return;
-            }
-            tokio::task::yield_now().await;
-        }
-        panic!("outbound queue was not installed");
-    }
-
-    #[test]
-    fn decode_client_request_accepts_empty_params_for_unit_variant() {
-        let request = decode_client_request("control/keepAlive", Some(serde_json::json!({})))
-            .expect("decode keepAlive");
-
-        assert!(matches!(request, ClientRequest::KeepAlive));
-    }
-
-    #[test]
-    fn legacy_json_rpc_message_converts_to_transport_frame() {
-        let message = JsonRpcMessage::Request(JsonRpcRequest {
-            jsonrpc: JSONRPC_VERSION.into(),
-            request_id: RequestId::Integer(7),
-            method: "control/keepAlive".to_string(),
-            params: serde_json::json!({}),
-        });
-
-        let frame = legacy_json_rpc_message_to_frame(message).expect("convert to frame");
-
-        let JsonRpcFrame::Request(request) = frame else {
-            panic!("expected request frame");
-        };
-        assert_eq!(request.id, JsonRpcId::Number(7));
-        assert_eq!(request.method, "control/keepAlive");
-        assert_eq!(request.params, Some(serde_json::json!({})));
-    }
-
-    #[test]
-    fn transport_frame_converts_to_legacy_json_rpc_message() {
-        let frame = JsonRpcFrame::Error(TransportJsonRpcErrorResponse::new(
-            JsonRpcId::String("req-1".to_string()),
-            TransportJsonRpcErrorObject::new(
-                -32602,
-                "invalid params",
-                Some(serde_json::json!({ "field": "session_id" })),
-            ),
-        ));
-
-        let message = json_rpc_frame_to_legacy_message(frame).expect("convert to message");
-
-        let JsonRpcMessage::Error(error) = message else {
-            panic!("expected error message");
-        };
-        assert_eq!(error.request_id, RequestId::String("req-1".to_string()));
-        assert_eq!(error.error.code, -32602);
-        assert_eq!(
-            error.error.data,
-            Some(serde_json::json!({ "field": "session_id" }))
-        );
-    }
-
-    #[test]
-    fn transport_null_id_is_rejected_for_legacy_json_rpc_message() {
-        let frame = JsonRpcFrame::Success(JsonRpcSuccess::new(
-            JsonRpcId::Null,
-            serde_json::Value::Null,
-        ));
-
-        let error = json_rpc_frame_to_legacy_message(frame).expect_err("null id rejected");
-
-        assert!(matches!(error, JsonRpcBridgeError::NullId));
-    }
-}
+#[path = "app_server_bridge.test.rs"]
+mod tests;

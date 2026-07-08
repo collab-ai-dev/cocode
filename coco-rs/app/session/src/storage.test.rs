@@ -522,13 +522,13 @@ fn test_load_agent_messages_walks_latest_parent_chain() {
 
 #[test]
 fn test_append_agent_messages_stamps_envelope_fields() {
-    let (_dir, store, _project_dir) = test_store();
+    let (_dir, store, project_dir) = test_store();
     let sid = "agent-stamped";
     let agent_id = "agent-bg";
     let message = Arc::new(coco_messages::create_user_message("framework sidechain"));
 
     store
-        .append_agent_messages(sid, agent_id, &[message])
+        .append_agent_messages(sid, agent_id, &project_dir, &[message])
         .expect("agent messages should append");
 
     let entries = store.load_agent_transcript_entries(sid).unwrap();
@@ -536,7 +536,7 @@ fn test_append_agent_messages_stamps_envelope_fields() {
         panic!("expected transcript entry");
     };
     assert_eq!(entry.agent_id.as_deref(), Some(agent_id));
-    assert!(!entry.cwd.is_empty(), "cwd must not be blank");
+    assert_eq!(entry.cwd, project_dir.display().to_string());
     assert!(!entry.timestamp.is_empty(), "timestamp must not be blank");
 }
 

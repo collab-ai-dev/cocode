@@ -1,8 +1,9 @@
 //! Project-scoped service/catalog preparation.
 //!
-//! This is the first narrow slice of the future `ProjectServices` container:
-//! a per-project plugin catalog snapshot, project-rooted MCP discovery, and
-//! the registry that shares them across sessions in the same process.
+//! This is the project-service slice of the future Process/Project/Session
+//! split: a per-project plugin catalog snapshot, project-rooted command,
+//! skill, hook, MCP, LSP, output-style, and agent discovery, and the registry
+//! that shares them across sessions in the same process.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -12,11 +13,84 @@ use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::sync::RwLockReadGuard;
 use std::sync::RwLockWriteGuard;
+use std::time::Duration;
+use std::time::Instant;
 
-/// Process-wide project registry used until `ProcessRuntime` owns this field.
+const PROJECT_SERVICES_IDLE_TTL: Duration = Duration::from_secs(60 * 60);
+const PROJECT_SERVICES_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// Backing singleton for the interim app/cli `ProcessRuntime`.
+///
+/// Keep production access routed through `ProcessRuntime`; this accessor exists
+/// so the startup-owned manager has a single process registry to wrap until the
+/// planned `coco-app-runtime` extraction owns the field directly.
 pub fn project_registry() -> &'static ProjectRegistry {
     static REGISTRY: OnceLock<ProjectRegistry> = OnceLock::new();
     REGISTRY.get_or_init(ProjectRegistry::default)
+}
+
+/// Process-level owner for [`ProjectRegistry`] lifecycle work.
+///
+/// It keeps the idle-eviction task tied to an explicit startup-owned guard
+/// instead of hiding background work inside the registry accessor.
+pub struct ProjectRegistryManager {
+    registry: &'static ProjectRegistry,
+    idle_eviction_task: tokio::task::JoinHandle<()>,
+}
+
+impl ProjectRegistryManager {
+    pub fn start_global() -> Self {
+        Self::start(
+            project_registry(),
+            PROJECT_SERVICES_IDLE_TTL,
+            PROJECT_SERVICES_IDLE_SWEEP_INTERVAL,
+        )
+    }
+
+    pub fn start(
+        registry: &'static ProjectRegistry,
+        idle_for: Duration,
+        sweep_interval: Duration,
+    ) -> Self {
+        let idle_eviction_task = spawn_idle_eviction_loop(registry, idle_for, sweep_interval);
+        Self {
+            registry,
+            idle_eviction_task,
+        }
+    }
+
+    pub fn registry(&self) -> &ProjectRegistry {
+        self.registry
+    }
+}
+
+impl Drop for ProjectRegistryManager {
+    fn drop(&mut self) {
+        self.idle_eviction_task.abort();
+    }
+}
+
+fn spawn_idle_eviction_loop(
+    registry: &'static ProjectRegistry,
+    idle_for: Duration,
+    sweep_interval: Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(sweep_interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let evicted = registry.evict_idle(idle_for);
+            if evicted > 0 {
+                tracing::debug!(
+                    target: "coco::project_services",
+                    evicted,
+                    "evicted idle project service entries"
+                );
+            }
+        }
+    })
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -41,7 +115,7 @@ impl ProjectRegistryKey {
 /// same key share the first loaded `Arc<ProjectServices>`.
 #[derive(Debug, Default)]
 pub struct ProjectRegistry {
-    projects: RwLock<HashMap<ProjectRegistryKey, Arc<ProjectServices>>>,
+    projects: RwLock<HashMap<ProjectRegistryKey, ProjectRegistryEntry>>,
 }
 
 impl ProjectRegistry {
@@ -56,19 +130,19 @@ impl ProjectRegistry {
     ) -> Arc<ProjectServices> {
         let key = ProjectRegistryKey::new(config_home, project_root);
         if let Some(project) = self.read_projects().get(&key) {
-            return project.clone();
+            return project.services.clone();
         }
 
         let mut projects = self.write_projects();
-        projects
-            .entry(key.clone())
-            .or_insert_with(|| {
-                Arc::new(ProjectServices::load(
-                    &key.config_home,
-                    key.project_root.clone(),
-                ))
-            })
-            .clone()
+        Self::evict_idle_locked(&mut projects, PROJECT_SERVICES_IDLE_TTL, Instant::now());
+        let entry = projects.entry(key.clone()).or_insert_with(|| {
+            ProjectRegistryEntry::new(Arc::new(ProjectServices::load(
+                &key.config_home,
+                key.project_root.clone(),
+            )))
+        });
+        entry.idle_since = None;
+        entry.services.clone()
     }
 
     pub fn reload(
@@ -81,8 +155,16 @@ impl ProjectRegistry {
             &key.config_home,
             key.project_root.clone(),
         ));
-        self.write_projects().insert(key, project.clone());
+        self.write_projects()
+            .insert(key, ProjectRegistryEntry::new(project.clone()));
         project
+    }
+
+    /// Evict project services whose only remaining strong reference is the
+    /// registry itself and whose idle grace period has elapsed.
+    pub fn evict_idle(&self, idle_for: Duration) -> usize {
+        let mut projects = self.write_projects();
+        Self::evict_idle_locked(&mut projects, idle_for, Instant::now())
     }
 
     #[cfg(test)]
@@ -90,9 +172,32 @@ impl ProjectRegistry {
         self.read_projects().len()
     }
 
+    fn evict_idle_locked(
+        projects: &mut HashMap<ProjectRegistryKey, ProjectRegistryEntry>,
+        idle_for: Duration,
+        now: Instant,
+    ) -> usize {
+        let before = projects.len();
+        projects.retain(|_, entry| {
+            if Arc::strong_count(&entry.services) > 1 {
+                entry.idle_since = None;
+                return true;
+            }
+            match entry.idle_since {
+                Some(idle_since) if now.duration_since(idle_since) >= idle_for => false,
+                Some(_) => true,
+                None => {
+                    entry.idle_since = Some(now);
+                    true
+                }
+            }
+        });
+        before.saturating_sub(projects.len())
+    }
+
     fn read_projects(
         &self,
-    ) -> RwLockReadGuard<'_, HashMap<ProjectRegistryKey, Arc<ProjectServices>>> {
+    ) -> RwLockReadGuard<'_, HashMap<ProjectRegistryKey, ProjectRegistryEntry>> {
         match self.projects.read() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -101,10 +206,25 @@ impl ProjectRegistry {
 
     fn write_projects(
         &self,
-    ) -> RwLockWriteGuard<'_, HashMap<ProjectRegistryKey, Arc<ProjectServices>>> {
+    ) -> RwLockWriteGuard<'_, HashMap<ProjectRegistryKey, ProjectRegistryEntry>> {
         match self.projects.write() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ProjectRegistryEntry {
+    services: Arc<ProjectServices>,
+    idle_since: Option<Instant>,
+}
+
+impl ProjectRegistryEntry {
+    fn new(services: Arc<ProjectServices>) -> Self {
+        Self {
+            services,
+            idle_since: None,
         }
     }
 }
@@ -124,14 +244,6 @@ impl ProjectServices {
 
     pub fn project_root(&self) -> &Path {
         self.catalog.project_root()
-    }
-
-    pub fn catalog(&self) -> &ProjectCatalogSnapshot {
-        &self.catalog
-    }
-
-    pub fn plugins(&self) -> &[coco_plugins::loader::LoadedPluginV2] {
-        self.catalog.plugins()
     }
 
     pub fn output_style_sources(&self) -> Vec<coco_output_styles::PluginOutputStyleSource> {
@@ -165,114 +277,60 @@ impl ProjectServices {
     pub fn plugin_mcp_servers(&self) -> Vec<coco_mcp::ScopedMcpServerConfig> {
         self.catalog.plugin_mcp_servers()
     }
+
+    pub fn lsp_servers(&self) -> coco_lsp::LspServersConfig {
+        self.catalog.lsp_servers()
+    }
+
+    pub fn build_skill_manager(
+        &self,
+        config_home: &Path,
+        session_cwd: &Path,
+        gates: &coco_skills::SkillLoadGates,
+    ) -> coco_skills::SkillManager {
+        let manager = coco_skills::build_session_skill_manager(config_home, session_cwd, gates);
+        self.catalog
+            .register_project_plugin_skills(config_home, &manager);
+        manager
+    }
+
+    pub fn register_plugin_hooks(&self, registry: &coco_hooks::HookRegistry) -> usize {
+        self.catalog.register_plugin_hooks(registry)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_command_registry(
+        &self,
+        skill_manager: &coco_skills::SkillManager,
+        user_type: coco_types::UserType,
+        features: coco_types::Features,
+        loop_config: coco_config::LoopConfig,
+        session_cwd: PathBuf,
+        user_home: PathBuf,
+        managed_root: Option<PathBuf>,
+        skill_overrides: &coco_config::SkillOverrideTiers,
+    ) -> coco_commands::CommandRegistry {
+        coco_commands::build_command_registry(
+            skill_manager,
+            self.catalog.plugins(),
+            user_type,
+            features,
+            loop_config,
+            session_cwd,
+            user_home,
+            managed_root,
+            skill_overrides,
+        )
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn registry_reuses_services_for_same_project_root() {
-        let temp = tempdir().unwrap();
-        let config_home = temp.path().join("home");
-        let project_root = temp.path().join("repo");
-        std::fs::create_dir_all(&config_home).unwrap();
-        std::fs::create_dir_all(&project_root).unwrap();
-        let registry = ProjectRegistry::new();
-
-        let first = registry.get_or_load(&config_home, project_root.clone());
-        let second = registry.get_or_load(&config_home, project_root.clone());
-
-        assert!(Arc::ptr_eq(&first, &second));
-        assert_eq!(registry.len(), 1);
-        assert_eq!(first.project_root(), project_root.as_path());
-    }
-
-    #[test]
-    fn registry_separates_project_roots() {
-        let temp = tempdir().unwrap();
-        let config_home = temp.path().join("home");
-        let project_a = temp.path().join("repo-a");
-        let project_b = temp.path().join("repo-b");
-        std::fs::create_dir_all(&config_home).unwrap();
-        std::fs::create_dir_all(&project_a).unwrap();
-        std::fs::create_dir_all(&project_b).unwrap();
-        let registry = ProjectRegistry::new();
-
-        let first = registry.get_or_load(&config_home, project_a);
-        let second = registry.get_or_load(&config_home, project_b);
-
-        assert!(!Arc::ptr_eq(&first, &second));
-        assert_eq!(registry.len(), 2);
-    }
-
-    #[test]
-    fn registry_reload_replaces_cached_entry() {
-        let temp = tempdir().unwrap();
-        let config_home = temp.path().join("home");
-        let project_root = temp.path().join("repo");
-        std::fs::create_dir_all(&config_home).unwrap();
-        std::fs::create_dir_all(&project_root).unwrap();
-        let registry = ProjectRegistry::new();
-
-        let first = registry.get_or_load(&config_home, project_root.clone());
-        let second = registry.reload(&config_home, project_root.clone());
-        let third = registry.get_or_load(&config_home, project_root);
-
-        assert!(!Arc::ptr_eq(&first, &second));
-        assert!(Arc::ptr_eq(&second, &third));
-        assert_eq!(registry.len(), 1);
-    }
-
-    #[test]
-    fn mcp_servers_use_project_root_and_session_cwd() {
-        let temp = tempdir().unwrap();
-        let config_home = temp.path().join("home");
-        let project_root = temp.path().join("repo");
-        let session_cwd = project_root.join("nested");
-        std::fs::create_dir_all(&config_home).unwrap();
-        std::fs::create_dir_all(project_root.join(".coco")).unwrap();
-        let local_dir =
-            session_cwd.join(format!("{}.local", coco_utils_common::COCO_CONFIG_DIR_NAME));
-        std::fs::create_dir_all(&local_dir).unwrap();
-        std::fs::write(
-            project_root.join(".mcp.json"),
-            serde_json::json!({
-                "mcpServers": {
-                    "project": {"command": "project-cmd", "args": []}
-                }
-            })
-            .to_string(),
-        )
-        .unwrap();
-        std::fs::write(
-            local_dir.join("mcp.json"),
-            serde_json::json!({
-                "mcpServers": {
-                    "local": {"command": "local-cmd", "args": []}
-                }
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let services = ProjectServices::load(&config_home, project_root.clone());
-        assert_eq!(services.project_root(), project_root.as_path());
-
-        let servers = services.mcp_servers(&config_home, &session_cwd);
-        let by_name: HashMap<_, _> = servers
-            .into_iter()
-            .map(|server| (server.name.clone(), server))
-            .collect();
-
-        assert_eq!(by_name["project"].scope, coco_mcp::ConfigScope::Project);
-        assert_eq!(by_name["local"].scope, coco_mcp::ConfigScope::Local);
-    }
-}
+#[path = "project_services.test.rs"]
+mod tests;
 
 /// Project-scoped plugin catalog loaded against a resolved project root.
 #[derive(Debug, Clone)]
-pub struct ProjectCatalogSnapshot {
+struct ProjectCatalogSnapshot {
     project_root: PathBuf,
     plugins: Vec<coco_plugins::loader::LoadedPluginV2>,
 }
@@ -291,7 +349,7 @@ impl ProjectCatalogSnapshot {
         &self.project_root
     }
 
-    pub fn plugins(&self) -> &[coco_plugins::loader::LoadedPluginV2] {
+    fn plugins(&self) -> &[coco_plugins::loader::LoadedPluginV2] {
         &self.plugins
     }
 
@@ -313,5 +371,32 @@ impl ProjectCatalogSnapshot {
     pub fn plugin_mcp_servers(&self) -> Vec<coco_mcp::ScopedMcpServerConfig> {
         let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = self.plugins.iter().collect();
         coco_plugins::mcp_bridge::extract_mcp_servers_from_plugins(&plugin_refs)
+    }
+
+    pub fn lsp_servers(&self) -> coco_lsp::LspServersConfig {
+        let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = self.plugins.iter().collect();
+        coco_plugins::lsp_bridge::extract_lsp_servers_from_plugins(&plugin_refs)
+    }
+
+    fn register_project_plugin_skills(
+        &self,
+        config_home: &Path,
+        manager: &coco_skills::SkillManager,
+    ) {
+        let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = self.plugins.iter().collect();
+        for skill in coco_plugins::skill_bridge::load_all_plugin_skills_v2(&plugin_refs) {
+            manager.register(skill);
+        }
+
+        coco_plugins::builtins::init_builtin_plugins();
+        for skill in coco_plugins::builtin_plugin_skills(config_home) {
+            manager.register(skill);
+        }
+    }
+
+    fn register_plugin_hooks(&self, registry: &coco_hooks::HookRegistry) -> usize {
+        let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = self.plugins.iter().collect();
+        coco_plugins::hook_bridge::register_plugin_hooks_v2(registry, &plugin_refs);
+        plugin_refs.len()
     }
 }

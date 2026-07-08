@@ -12,12 +12,17 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 
+use crate::AgentColorName;
 use crate::HookEventType;
+use crate::ModelRole;
 use crate::PermissionMode;
 use crate::PermissionUpdate;
 use crate::ProviderModelSelection;
 use crate::QueuedCommandEditImage;
+use crate::ReasoningEffort;
 use crate::SessionId;
+use crate::SessionUsageSnapshot;
+use crate::TaskStateBase;
 use crate::ThinkingLevel;
 use crate::wire_tagged::wire_tagged_enum;
 
@@ -34,20 +39,28 @@ raw wire strings.",
 Bidirectional control protocol — client-initiated requests.\n\n\
 Each variant carries a unique `method` string used on the wire. \
 The method is the discriminator; params are the variant-specific payload.\n\n\
-See `event-system-design.md` §5.1 for the 22 base variants and §5.4 for \
-the 8 gap additions. 31 total.",
+See `event-system-design.md` §5.1 for the base variants and §5.4 for \
+gap additions. 43 total.",
     variants = {
-        // === Session lifecycle (6) ===
+        // === Session lifecycle (10) ===
         "initialize" => Initialize(InitializeParams),
         "session/start" => SessionStart(Box<SessionStartParams>),
         "session/resume" => SessionResume(SessionResumeParams),
         "session/list" => SessionList,
         "session/read" => SessionRead(SessionReadParams),
         "session/archive" => SessionArchive(SessionArchiveParams),
+        "session/rename" => SessionRename(SessionRenameParams),
+        "session/toggleTag" => SessionToggleTag(SessionToggleTagParams),
+        "session/cost" => SessionCost,
+        "session/status" => SessionStatus,
 
         // === Turn control (2) ===
         "turn/start" => TurnStart(TurnStartParams),
         "turn/interrupt" => TurnInterrupt,
+
+        // === Running task observability (2) ===
+        "task/list" => TaskList,
+        "task/detail" => TaskDetail(TaskDetailParams),
 
         // === Approval + user input resolution (3) ===
         "approval/resolve" => ApprovalResolve(ApprovalResolveParams),
@@ -58,13 +71,18 @@ the 8 gap additions. 31 total.",
         /// See `event-system-design.md` §5.4.
         "elicitation/resolve" => ElicitationResolve(ElicitationResolveParams),
 
-        // === Runtime control (9) ===
+        // === Runtime control (13) ===
         "control/setModel" => SetModel(SetModelParams),
+        "control/setModelRole" => SetModelRole(SetModelRoleParams),
         "control/setPermissionMode" => SetPermissionMode(SetPermissionModeParams),
         "control/setThinking" => SetThinking(SetThinkingParams),
+        "control/setAgentColor" => SetAgentColor(SetAgentColorParams),
+        "control/applyPermissionUpdate" => ApplyPermissionUpdate(ApplyPermissionUpdateParams),
+        "control/resetSessionPermissionRules" => ResetSessionPermissionRules,
         "control/stopTask" => StopTask(StopTaskParams),
         "control/rewindFiles" => RewindFiles(RewindFilesParams),
         "control/updateEnv" => UpdateEnv(UpdateEnvParams),
+        "control/backgroundAllTasks" => BackgroundAllTasks,
         "control/keepAlive" => KeepAlive,
         "control/cancelRequest" => CancelRequest(CancelRequestParams),
         /// Interrupt one in-process teammate's active turn without
@@ -88,6 +106,8 @@ the 8 gap additions. 31 total.",
         "mcp/toggle" => McpToggle(McpToggleParams),
         /// Reload all plugins from disk.
         "plugin/reload" => PluginReload,
+        /// Reload hooks from current settings.
+        "hook/reload" => HookReload,
         /// Apply feature flag settings at runtime.
         "config/applyFlags" => ConfigApplyFlags(ConfigApplyFlagsParams),
     }
@@ -252,6 +272,84 @@ pub struct SessionArchiveParams {
     pub session_id: SessionId,
 }
 
+/// Params for `session/rename`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRenameParams {
+    pub name: String,
+}
+
+/// Result for `session/rename`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionRenameResult {
+    pub name: String,
+}
+
+/// Params for `session/toggleTag`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionToggleTagParams {
+    pub tag: String,
+}
+
+/// Result for `session/toggleTag`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionToggleTagResult {
+    pub tag: String,
+    pub added: bool,
+}
+
+/// Result for `session/cost`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionCostResult {
+    pub text: String,
+    pub usage: SessionUsageSnapshot,
+}
+
+/// Result for `session/status`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionStatusResult {
+    pub text: String,
+}
+
+/// Params for `task/detail`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskDetailParams {
+    pub task_id: String,
+}
+
+/// Result for `task/list`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskListResult {
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<serde_json::Value>"))]
+    pub tasks: Vec<TaskStateBase>,
+}
+
+/// Result for `task/detail`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskDetailResult {
+    pub task_id: String,
+    pub stdout: String,
+    pub stderr: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub interrupted: bool,
+}
+
+/// Result for `control/backgroundAllTasks`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackgroundAllTasksResult {
+    pub task_ids: Vec<String>,
+}
+
 /// Params for `turn/start`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,6 +464,17 @@ pub struct SetModelParams {
     pub model: Option<String>,
 }
 
+/// Params for `control/setModelRole`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetModelRoleParams {
+    pub role: ModelRole,
+    pub provider: String,
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ReasoningEffort>,
+}
+
 /// Params for `control/setPermissionMode`.
 ///
 /// The `ultraplan` field (CCR web-UI refinement flow) is intentionally
@@ -383,6 +492,29 @@ pub struct SetPermissionModeParams {
 pub struct SetThinkingParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<ThinkingLevel>,
+}
+
+/// Params for `control/setAgentColor`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetAgentColorParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<AgentColorName>,
+}
+
+/// Params for `control/applyPermissionUpdate`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyPermissionUpdateParams {
+    pub update: PermissionUpdate,
+}
+
+/// Result for `control/resetSessionPermissionRules`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResetSessionPermissionRulesResult {
+    pub cleared_allow_rules: usize,
+    pub cleared_deny_rules: usize,
 }
 
 /// Params for `control/stopTask`.

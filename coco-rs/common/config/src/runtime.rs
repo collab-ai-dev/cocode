@@ -14,6 +14,7 @@ use crate::compact_settings::CompactConfig;
 use crate::env::EnvOnlyConfig;
 use crate::env::EnvSnapshot;
 use crate::error::ConfigError;
+use crate::event_hub::EventHubConfig;
 use crate::model::MAX_REFERENCE_MODELS;
 use crate::model::MOA_PROVIDER;
 use crate::model::MoaEndpointSpec;
@@ -90,6 +91,8 @@ pub struct RuntimeConfig {
     /// Voice-input (speech-to-text) knobs. On/off is `Feature::Voice`; this
     /// carries backend/language/model selection. Consumed by `coco-voice`.
     pub voice: VoiceConfig,
+    /// Event Hub connector egress settings. `url == None` disables egress.
+    pub event_hub: EventHubConfig,
     pub paths: PathConfig,
     /// Resolved compaction parameters (auto threshold, micro keep-recent,
     /// api-native gate, session-memory budgets, experimental flags). Single
@@ -375,6 +378,7 @@ pub fn build_runtime_config_with(
         diagnostics: DiagnosticsConfig::resolve(merged, &env),
         lsp: LspConfig::resolve(merged, &env),
         voice: VoiceConfig::resolve(merged, &env),
+        event_hub: EventHubConfig::resolve(merged, &env, &overrides)?,
         paths: PathConfig::resolve(merged),
         compact: CompactConfig::resolve(merged, &env),
         agent_teams: AgentTeamsConfig::resolve(merged)?,

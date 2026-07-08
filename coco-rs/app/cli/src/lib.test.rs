@@ -60,6 +60,39 @@ fn parses_all_pr_e3_flags() {
     );
 }
 
+#[test]
+fn parses_event_hub_flags() {
+    let cli = Cli::try_parse_from(["coco", "--serve-hub", "--hub-port", "0"])
+        .expect("parse serve-hub flags");
+
+    assert!(cli.serve_hub);
+    assert_eq!(cli.hub_port, 0);
+    assert!(cli.event_hub_url.is_none());
+}
+
+#[test]
+fn event_hub_url_conflicts_with_serve_hub() {
+    let Err(err) = Cli::try_parse_from([
+        "coco",
+        "--serve-hub",
+        "--event-hub-url",
+        "ws://127.0.0.1:8731/v1/connect",
+    ]) else {
+        panic!("embedded and external hub endpoints must be mutually exclusive");
+    };
+
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn hub_port_requires_serve_hub() {
+    let Err(err) = Cli::try_parse_from(["coco", "--hub-port", "0"]) else {
+        panic!("hub-port should only apply to serve-hub");
+    };
+
+    assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+}
+
 /// Existing flags must still parse; new additions must not change existing
 /// defaults or argument parsing for pre-PR-E3 flags.
 #[test]

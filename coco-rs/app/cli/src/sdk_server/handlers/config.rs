@@ -20,7 +20,10 @@ use super::HandlerResult;
 pub(super) async fn handle_config_read(ctx: &HandlerContext) -> HandlerResult {
     // Project/local settings live under cwd, so this matters for clients
     // that have multiple repos open.
-    let cwd = ctx.state.workspace_cwd().await;
+    let cwd = match ctx.state.workspace_cwd().await {
+        Ok(cwd) => cwd,
+        Err(err) => return err,
+    };
 
     // `load_settings` reads up to 6 layered JSON files synchronously; run
     // it on the blocking pool so frequent `config/read` polls don't stall
@@ -92,7 +95,10 @@ pub(super) async fn handle_config_write(
     ctx: &HandlerContext,
 ) -> HandlerResult {
     let scope = params.scope.as_deref().unwrap_or("user");
-    let cwd = ctx.state.workspace_cwd().await;
+    let cwd = match ctx.state.workspace_cwd().await {
+        Ok(cwd) => cwd,
+        Err(err) => return err,
+    };
 
     let target_path = match scope {
         "user" => coco_config::global_config::user_settings_path(),
