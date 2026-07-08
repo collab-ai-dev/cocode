@@ -585,6 +585,18 @@
       ],
       "title": "ApplyPatchToolType"
     },
+    "ApplyPermissionUpdateParams": {
+      "description": "Params for `control/applyPermissionUpdate`.",
+      "properties": {
+        "update": {
+          "$ref": "#/$defs/PermissionUpdate"
+        }
+      },
+      "required": [
+        "update"
+      ],
+      "type": "object"
+    },
     "ApprovalDecision": {
       "description": "Permission approval decision.",
       "enum": [
@@ -1305,7 +1317,7 @@
       "title": "Capability"
     },
     "ClientRequest": {
-      "description": "Bidirectional control protocol \u2014 client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` \u00a75.1 for the 22 base variants and \u00a75.4 for the 8 gap additions. 31 total.",
+      "description": "Bidirectional control protocol \u2014 client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` \u00a75.1 for the base variants and \u00a75.4 for gap additions. 43 total.",
       "oneOf": [
         {
           "properties": {
@@ -1402,6 +1414,62 @@
         {
           "properties": {
             "method": {
+              "const": "session/rename",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionRenameParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "session/toggleTag",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SessionToggleTagParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "session/cost",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "session/status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "turn/start",
               "type": "string"
             },
@@ -1424,6 +1492,34 @@
           },
           "required": [
             "method"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "task/list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "task/detail",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/TaskDetailParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
           ],
           "type": "object"
         },
@@ -1495,6 +1591,22 @@
         {
           "properties": {
             "method": {
+              "const": "control/setModelRole",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SetModelRoleParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "control/setPermissionMode",
               "type": "string"
             },
@@ -1521,6 +1633,50 @@
           "required": [
             "method",
             "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "control/setAgentColor",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/SetAgentColorParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "control/applyPermissionUpdate",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/ApplyPermissionUpdateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "control/resetSessionPermissionRules",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method"
           ],
           "type": "object"
         },
@@ -1569,6 +1725,18 @@
           "required": [
             "method",
             "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "control/backgroundAllTasks",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method"
           ],
           "type": "object"
         },
@@ -1736,6 +1904,19 @@
           "type": "object"
         },
         {
+          "description": "Reload hooks from current settings.",
+          "properties": {
+            "method": {
+              "const": "hook/reload",
+              "type": "string"
+            }
+          },
+          "required": [
+            "method"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Apply feature flag settings at runtime.",
           "properties": {
             "method": {
@@ -1764,17 +1945,28 @@
         "session/list",
         "session/read",
         "session/archive",
+        "session/rename",
+        "session/toggleTag",
+        "session/cost",
+        "session/status",
         "turn/start",
         "turn/interrupt",
+        "task/list",
+        "task/detail",
         "approval/resolve",
         "input/resolveUserInput",
         "elicitation/resolve",
         "control/setModel",
+        "control/setModelRole",
         "control/setPermissionMode",
         "control/setThinking",
+        "control/setAgentColor",
+        "control/applyPermissionUpdate",
+        "control/resetSessionPermissionRules",
         "control/stopTask",
         "control/rewindFiles",
         "control/updateEnv",
+        "control/backgroundAllTasks",
         "control/keepAlive",
         "control/cancelRequest",
         "agent/interruptCurrentWork",
@@ -1786,6 +1978,7 @@
         "mcp/reconnect",
         "mcp/toggle",
         "plugin/reload",
+        "hook/reload",
         "config/applyFlags"
       ],
       "title": "ClientRequestMethod",
@@ -9274,7 +9467,7 @@
       "type": "object"
     },
     "SessionReadResult": {
-      "description": "Response to `ClientRequest::SessionRead`.\nPhase 2.C.11 returns session metadata only. Message-history\nretrieval (via the JSONL transcript) is a future enhancement \u2014 the\n`messages` / `next_cursor` / `has_more` fields are reserved for\nwhen the transcript reader is wired.",
+      "description": "Response to `ClientRequest::SessionRead`.\nReturns session metadata plus transcript-message JSON values paginated by\nthe original request's numeric offset cursor.",
       "properties": {
         "has_more": {
           "default": false,
@@ -9282,7 +9475,7 @@
         },
         "messages": {
           "default": [],
-          "description": "Messages paginated by `cursor`/`limit` from the original\nrequest. Empty until the transcript reader lands.",
+          "description": "Messages paginated by `cursor`/`limit` from the original request.",
           "items": true,
           "type": "array"
         },
@@ -9300,6 +9493,18 @@
         "session"
       ],
       "title": "SessionReadResult",
+      "type": "object"
+    },
+    "SessionRenameParams": {
+      "description": "Params for `session/rename`.",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
       "type": "object"
     },
     "SessionResultParams": {
@@ -9630,6 +9835,18 @@
         }
       ]
     },
+    "SessionToggleTagParams": {
+      "description": "Params for `session/toggleTag`.",
+      "properties": {
+        "tag": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tag"
+      ],
+      "type": "object"
+    },
     "SessionUsageSnapshot": {
       "description": "Persisted and protocol-visible cumulative usage for one session.",
       "properties": {
@@ -9871,6 +10088,22 @@
       ],
       "type": "object"
     },
+    "SetAgentColorParams": {
+      "description": "Params for `control/setAgentColor`.",
+      "properties": {
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentColorName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SetModelParams": {
       "description": "Params for `control/setModel`.",
       "properties": {
@@ -9882,6 +10115,36 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "SetModelRoleParams": {
+      "description": "Params for `control/setModelRole`.",
+      "properties": {
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ModelRole"
+        }
+      },
+      "required": [
+        "role",
+        "provider",
+        "model_id"
+      ],
       "type": "object"
     },
     "SetPermissionModeParams": {
@@ -11411,6 +11674,18 @@
         "stopped"
       ],
       "type": "string"
+    },
+    "TaskDetailParams": {
+      "description": "Params for `task/detail`.",
+      "properties": {
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
     },
     "TaskKilledBy": {
       "description": "Actor that caused a running task to be stopped.",
@@ -14474,6 +14749,29 @@
     "TurnStartParams": {
       "description": "Params for `turn/start`.",
       "properties": {
+        "history_override": {
+          "description": "Optional full-history override for local compatibility turns that have\nalready assembled transcript messages outside a plain prompt. Each item\nis a serialized `coco_messages::Message`; kept as JSON here to avoid a\nreverse dependency from `coco-types` to `coco-messages`.",
+          "items": true,
+          "type": "array"
+        },
+        "images": {
+          "description": "Optional clipboard/paste images to include on the user message.",
+          "items": {
+            "$ref": "#/$defs/QueuedCommandEditImage"
+          },
+          "type": "array"
+        },
+        "model_selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderModelSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional explicit turn-scoped model selection. When absent, the session\nmodel remains authoritative."
+        },
         "permission_mode": {
           "anyOf": [
             {
@@ -14487,6 +14785,13 @@
         },
         "prompt": {
           "type": "string"
+        },
+        "slash_metadata": {
+          "description": "Optional slash-command metadata to prepend as a model-visible\nattachment before the user prompt.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "thinking_level": {
           "anyOf": [

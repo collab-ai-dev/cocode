@@ -284,7 +284,7 @@ impl RealTuiHarness {
         // Stage 1: layered runtime config (settings.json + env + flags).
         let runtime_config = build_runtime_config_for_cli(&cli, &cwd)
             .with_context(|| "build_runtime_config_for_cli")?;
-        let process_runtime = Arc::new(coco_cli::process_runtime::ProcessRuntime::start_global());
+        let process_runtime = coco_cli::process_runtime::ProcessRuntime::global();
 
         // Stage 2: shared engine resources (full ToolRegistry, system
         // prompt with CLAUDE.md, command registry, startup permission
