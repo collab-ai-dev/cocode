@@ -17,6 +17,7 @@ cd "$(dirname "$0")/.."
 
 roots=(
     app/cli/src
+    app/session/src
     app/query/src
     app/tui/src
     commands/src
@@ -39,7 +40,6 @@ violations=$(
     printf '%s\n' "$matches" \
         | grep -Ev '^[^:]+:[0-9]+:[[:space:]]*(//|///|/\*)' \
         | grep -Ev '^app/cli/src/main\.rs:' \
-        | grep -Ev '^app/cli/src/headless\.rs:[0-9]+:[[:space:]]*Some\(std::env::current_dir\(\)\?\)$' \
         | grep -v '^$' \
         || true
 )
@@ -48,6 +48,15 @@ if [ -n "$violations" ]; then
     echo "✗ session-owned production code reads the process cwd:" >&2
     echo "$violations" | sed 's/^/    /' >&2
     echo "  → thread the session/startup cwd explicitly instead." >&2
-    echo "  → allowed: app/cli/src/main.rs startup capture and headless run_chat convenience capture." >&2
+    echo "  → allowed: app/cli/src/main.rs startup capture." >&2
     exit 1
 fi
+
+if grep -nE "$pattern" utils/absolute-path/src/absolutize.rs >/tmp/coco-absolutize-cwd.$$; then
+    echo "✗ absolute-path absolutize helper reads the process cwd:" >&2
+    sed 's/^/    utils\/absolute-path\/src\/absolutize.rs:/' /tmp/coco-absolutize-cwd.$$ >&2
+    rm -f /tmp/coco-absolutize-cwd.$$
+    echo "  → use an explicit base path or the named relative_to_current_dir entrypoint." >&2
+    exit 1
+fi
+rm -f /tmp/coco-absolutize-cwd.$$

@@ -744,19 +744,15 @@ impl TranscriptStore {
         &self,
         session_id: &str,
         agent_id: &str,
+        cwd: &Path,
         messages: &[Arc<coco_messages::Message>],
     ) -> crate::Result<()> {
         if messages.is_empty() {
             return Ok(());
         }
         let mut seen = HashSet::new();
-        let cwd = std::env::current_dir()
-            .ok()
-            .map(|path| path.to_string_lossy().into_owned())
-            .filter(|path| !path.is_empty())
-            .unwrap_or_else(|| ".".to_string());
         let options = ChainWriteOptions {
-            cwd,
+            cwd: cwd.display().to_string(),
             timestamp: chrono::Utc::now().to_rfc3339(),
             is_sidechain: true,
             agent_id: Some(agent_id.to_string()),

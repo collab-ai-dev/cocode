@@ -54,7 +54,13 @@ impl AbsolutePathBuf {
 
     pub fn from_absolute_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let expanded = Self::maybe_expand_home_directory(path.as_ref());
-        Ok(Self(absolutize::absolutize(&expanded)?))
+        if !expanded.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("path is not absolute: {}", expanded.display()),
+            ));
+        }
+        Ok(Self(absolutize::absolutize_from(&expanded, Path::new("/"))))
     }
 
     pub fn current_dir() -> std::io::Result<Self> {

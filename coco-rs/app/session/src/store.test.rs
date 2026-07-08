@@ -124,7 +124,7 @@ fn test_in_memory_store_round_trips_through_dyn_session_store() {
     // Subagent transcript round-trips.
     let agent_msgs: Vec<Arc<Message>> = convo.iter().cloned().map(Arc::new).collect();
     store
-        .append_agent_messages(sid, "agent-1", &agent_msgs)
+        .append_agent_messages(sid, "agent-1", Path::new("/tmp/session-cwd"), &agent_msgs)
         .expect("append agent");
     let loaded = store
         .load_agent_messages(sid, "agent-1")

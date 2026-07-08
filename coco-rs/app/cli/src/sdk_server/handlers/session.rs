@@ -247,12 +247,10 @@ pub(super) async fn handle_session_start(
     let session_id = coco_types::SessionId::generate();
     let cwd = match params.cwd.clone() {
         Some(cwd) => cwd,
-        None => ctx
-            .state
-            .workspace_cwd()
-            .await
-            .to_string_lossy()
-            .into_owned(),
+        None => match ctx.state.workspace_cwd().await {
+            Ok(cwd) => cwd.to_string_lossy().into_owned(),
+            Err(err) => return err,
+        },
     };
     let model = params
         .model
@@ -656,6 +654,91 @@ pub(super) async fn handle_session_archive(
     HandlerResult::ok_empty()
 }
 
+/// `session/rename` — persist a user-visible title for the active session.
+pub(super) async fn handle_session_rename(
+    params: coco_types::SessionRenameParams,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let runtime = {
+        let slot = ctx.state.session_runtime.read().await;
+        slot.as_ref().cloned()
+    };
+    let Some(runtime) = runtime else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "no active session runtime".into(),
+            data: None,
+        };
+    };
+    match crate::session_rename::persist_resolved_rename(&runtime, params.name).await {
+        Ok(name) => {
+            info!(name = %name, "SdkServer: session/rename");
+            HandlerResult::ok(coco_types::SessionRenameResult { name })
+        }
+        Err(
+            error @ (crate::session_rename::RenamePersistenceError::EmptyName
+            | crate::session_rename::RenamePersistenceError::TranscriptNotFound),
+        ) => HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: error.user_message(),
+            data: None,
+        },
+        Err(error) => HandlerResult::Err {
+            code: coco_types::error_codes::INTERNAL_ERROR,
+            message: error.user_message(),
+            data: None,
+        },
+    }
+}
+
+/// `session/toggleTag` — toggle a tag on the active persisted session.
+pub(super) async fn handle_session_toggle_tag(
+    params: coco_types::SessionToggleTagParams,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let tag = params.tag.trim().to_string();
+    if tag.is_empty() {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "session/toggleTag requires a non-empty tag".into(),
+            data: None,
+        };
+    }
+    let runtime = {
+        let slot = ctx.state.session_runtime.read().await;
+        slot.as_ref().cloned()
+    };
+    let Some(runtime) = runtime else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "no active session runtime".into(),
+            data: None,
+        };
+    };
+    let rt = runtime.runtime();
+    let session_id = rt.current_typed_session_id().await;
+    let manager = Arc::clone(&rt.session_manager);
+    let tag_for_toggle = tag.clone();
+    let session_id_for_toggle = session_id.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        manager.toggle_tag(&session_id_for_toggle, &tag_for_toggle)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|inner| inner.map_err(anyhow::Error::from));
+    match result {
+        Ok((_, added)) => {
+            info!(session_id = %session_id, tag = %tag, added, "SdkServer: session/toggleTag");
+            HandlerResult::ok(coco_types::SessionToggleTagResult { tag, added })
+        }
+        Err(error) => HandlerResult::Err {
+            code: coco_types::error_codes::INTERNAL_ERROR,
+            message: format!("session/toggleTag failed for {session_id}: {error}"),
+            data: None,
+        },
+    }
+}
+
 /// Build a final `SessionResultParams` from an active session's
 /// accumulated stats. Used by `session/archive` to synthesize the
 /// once-per-session aggregate the SDK client expects.
@@ -763,18 +846,41 @@ pub(super) async fn handle_session_list(ctx: &HandlerContext) -> HandlerResult {
     }
 }
 
-/// `session/read` — load a single persisted session's metadata.
-///
-/// Returns the summary only; message history retrieval via the JSONL
-/// transcript is a follow-up.
+/// `session/read` — load a single persisted session's metadata plus transcript
+/// messages.
 ///
 /// Errors:
 /// - `INVALID_REQUEST` if no session manager is wired
 /// - `INVALID_REQUEST` if the session_id is not found on disk
+/// - `INVALID_REQUEST` if the cursor or limit is invalid
 pub(super) async fn handle_session_read(
     params: coco_types::SessionReadParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
+    let cursor = match params.cursor.as_deref() {
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(cursor) => cursor,
+            Err(_) => {
+                return HandlerResult::Err {
+                    code: coco_types::error_codes::INVALID_REQUEST,
+                    message: format!("session/read: invalid cursor {raw:?}"),
+                    data: None,
+                };
+            }
+        },
+        None => 0,
+    };
+    let limit = match params.limit {
+        Some(limit) if limit < 0 => {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: format!("session/read: invalid limit {limit}"),
+                data: None,
+            };
+        }
+        Some(limit) => Some(limit as usize),
+        None => None,
+    };
     // Clone the Arc out and drop the read guard before the blocking call.
     let manager = {
         let slot = ctx.state.session_manager.read().await;
@@ -790,9 +896,27 @@ pub(super) async fn handle_session_read(
         }
     };
     let session_id = params.session_id.as_str().to_string();
-    let load_result = tokio::task::spawn_blocking(move || manager.load(&session_id)).await;
-    match load_result {
-        Ok(Ok(session)) => {
+    let read_result = tokio::task::spawn_blocking(move || {
+        let session = manager.load(&session_id)?;
+        let store = manager.store_for(&session.working_dir);
+        let transcript_messages = store.load_transcript_messages(&session_id)?;
+        let total = transcript_messages.len();
+        let start = cursor.min(total);
+        let end = match limit {
+            Some(limit) => start.saturating_add(limit).min(total),
+            None => total,
+        };
+        let has_more = end < total;
+        let next_cursor = has_more.then(|| end.to_string());
+        let messages = transcript_messages[start..end]
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok::<_, anyhow::Error>((session, messages, next_cursor, has_more))
+    })
+    .await;
+    match read_result {
+        Ok(Ok((session, messages, next_cursor, has_more))) => {
             info!(session_id = %params.session_id, "SdkServer: session/read");
             let summary = match session_to_summary(&session) {
                 Ok(summary) => summary,
@@ -806,9 +930,9 @@ pub(super) async fn handle_session_read(
             };
             HandlerResult::ok(coco_types::SessionReadResult {
                 session: summary,
-                messages: Vec::new(),
-                next_cursor: None,
-                has_more: false,
+                messages,
+                next_cursor,
+                has_more,
             })
         }
         Ok(Err(e)) => HandlerResult::Err {

@@ -32,6 +32,7 @@ use crate::store::SearchHit;
 use crate::store::SearchQuery;
 use crate::store::SessionRow;
 use crate::store::event_kind;
+use crate::store::event_matches_filter;
 use crate::store::lane;
 use crate::store::msg_type;
 
@@ -1046,41 +1047,6 @@ fn truncate_preview(text: &str) -> String {
 
 fn as_string_value(value: &serde_json::Value) -> Option<String> {
     value.as_str().map(str::to_string)
-}
-
-fn event_matches_filter(event: &EventRow, filter: &EventFilter) -> bool {
-    filter
-        .kind
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .is_none_or(|kind| event.kind == kind)
-        && filter
-            .inner_kind
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .is_none_or(|inner_kind| event.inner_kind.as_deref() == Some(inner_kind))
-        && filter
-            .tool
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .is_none_or(|tool| event.tool_name.as_deref() == Some(tool))
-        && filter
-            .error
-            .is_none_or(|error| event.is_error == Some(error))
-        && filter
-            .agent
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .is_none_or(|agent| event.agent_id.as_deref() == Some(agent))
-        && filter
-            .msg_type
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .is_none_or(|msg_type| {
-                event.msg_type == msg_type || event.lane == msg_type || event.role == msg_type
-            })
-        && filter.from_ms.is_none_or(|from_ms| event.ts >= from_ms)
-        && filter.to_ms.is_none_or(|to_ms| event.ts <= to_ms)
 }
 
 fn role_action(role: &str) -> &'static str {

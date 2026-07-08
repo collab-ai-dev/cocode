@@ -28,6 +28,8 @@ voice = ["coco-voice/capture"]
 # needs a C++ toolchain (cmake + libclang) at build time. On macOS this pulls
 # the Metal GPU backend automatically (target-specific dep in coco-voice).
 voice-local = ["voice", "coco-voice/local-voice"]
+# Embed the local Event Hub server behind `coco --serve-hub`.
+serve-hub = ["dep:coco-hub-server"]
 
 [dependencies]
 coco-types.workspace = true
@@ -68,6 +70,8 @@ coco-state.workspace = true
 coco-app-server.workspace = true
 coco-app-server-client.workspace = true
 coco-app-server-transport.workspace = true
+coco-hub-connector.workspace = true
+coco-hub-server = { workspace = true, optional = true }
 coco-exec-server.workspace = true
 coco-git.workspace = true
 coco-paths.workspace = true
@@ -115,6 +119,9 @@ coco-utils-common.workspace = true
 coco-frontmatter.workspace = true
 coco-utils-cargo-bin.workspace = true
 coco-utils-pty.workspace = true
+futures = { workspace = true, features = ["alloc"] }
+http.workspace = true
 pretty_assertions.workspace = true
 tempfile.workspace = true
+tokio-tungstenite.workspace = true
 wiremock.workspace = true

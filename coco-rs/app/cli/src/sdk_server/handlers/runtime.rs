@@ -1,12 +1,18 @@
-//! Runtime-state mutations (`setModel` / `setPermissionMode` / `setThinking`
-//! / `updateEnv` / `stopTask`) plus observability and lightweight stub
-//! handlers (`context/usage`, `plugin/reload`, `config/applyFlags`).
+//! Runtime-state mutations (`setModel` / `setModelRole` / `setPermissionMode`
+//! / `setThinking` / `applyPermissionUpdate` / `updateEnv` / `stopTask`) plus observability and lightweight stub
+//! handlers (`context/usage`, `plugin/reload`, `hook/reload`,
+//! `config/applyFlags`).
 
 use tracing::info;
 
 use super::DEFAULT_SDK_MODEL;
 use super::HandlerContext;
 use super::HandlerResult;
+use crate::sdk_server::outbound::OutboundMessage;
+use coco_tool_runtime::TaskHandle;
+
+const FAST_MODE_FLAG_SNAKE: &str = "fast_mode";
+const FAST_MODE_FLAG_CAMEL: &str = "fastMode";
 
 /// `control/setModel` — mutate the active session's model.
 ///
@@ -41,6 +47,130 @@ pub(super) async fn handle_set_model(
     );
     session.model = new_model;
     HandlerResult::ok_empty()
+}
+
+/// `control/setModelRole` — apply an in-memory role/provider/model override.
+pub(super) async fn handle_set_model_role(
+    params: coco_types::SetModelRoleParams,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let runtime_arc = {
+        let slot = ctx.state.session_runtime.read().await;
+        slot.as_ref().cloned()
+    };
+    let Some(session_runtime) = runtime_arc else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "no session runtime installed".into(),
+            data: None,
+        };
+    };
+    let runtime = session_runtime.runtime();
+    let moa_endpoint = if params.provider == "moa" {
+        runtime
+            .runtime_config
+            .model_roles
+            .moa_preset(&params.model_id)
+            .cloned()
+    } else {
+        None
+    };
+    let (acting_provider, acting_model_id, display_provider, display_model_id) =
+        if let Some(endpoint) = moa_endpoint.as_ref() {
+            (
+                endpoint.aggregator.provider.clone(),
+                endpoint.aggregator.model_id.clone(),
+                params.provider.clone(),
+                params.model_id.clone(),
+            )
+        } else {
+            (
+                params.provider.clone(),
+                params.model_id.clone(),
+                params.provider.clone(),
+                params.model_id.clone(),
+            )
+        };
+    let display_name = runtime
+        .runtime_config
+        .model_registry
+        .resolve(&acting_provider, &acting_model_id)
+        .map(|resolved| {
+            resolved
+                .info
+                .display_name
+                .clone()
+                .unwrap_or_else(|| acting_model_id.clone())
+        })
+        .unwrap_or_else(|| acting_model_id.clone());
+    let context_window = runtime
+        .runtime_config
+        .model_registry
+        .resolve(&acting_provider, &acting_model_id)
+        .map(|resolved| resolved.info.context_window.get() as i64);
+    let api = runtime
+        .runtime_config
+        .providers
+        .get(&acting_provider)
+        .map(|provider| provider.api)
+        .unwrap_or(coco_types::ProviderApi::Anthropic);
+    let spec = coco_types::ModelSpec {
+        provider: acting_provider.clone(),
+        api,
+        model_id: acting_model_id.clone(),
+        display_name: display_name.clone(),
+    };
+    if let Err(error) = runtime
+        .apply_role_override(
+            params.role,
+            crate::session_runtime::RoleOverride {
+                spec,
+                effort: params.effort,
+            },
+        )
+        .await
+    {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: format!(
+                "failed to apply {role} -> {provider}/{model_id}: {error}",
+                role = params.role.as_str(),
+                provider = display_provider,
+                model_id = display_model_id,
+            ),
+            data: None,
+        };
+    }
+    runtime
+        .model_runtimes()
+        .set_role_moa_endpoint_override(params.role, moa_endpoint);
+    info!(
+        role = %params.role.as_str(),
+        provider = %display_provider,
+        model_id = %display_model_id,
+        effort = ?params.effort,
+        "SdkServer: control/setModelRole"
+    );
+
+    let changed = coco_types::ModelRoleChangedParams {
+        role: params.role,
+        model_id: display_model_id,
+        provider: display_provider,
+        context_window,
+        effort: params.effort,
+    };
+    let _ = ctx
+        .notif_tx
+        .send(OutboundMessage::core_event(
+            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::ModelRoleChanged(
+                changed.clone(),
+            )),
+        ))
+        .await;
+    HandlerResult::ok(coco_types::SetModelRoleResult {
+        changed,
+        display_name,
+    })
 }
 
 /// `control/setPermissionMode` — mutate the session's permission mode.
@@ -175,46 +305,220 @@ pub(super) async fn handle_set_thinking(
     params: coco_types::SetThinkingParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let mut slot = ctx.state.session.write().await;
-    let Some(session) = slot.as_mut() else {
-        return HandlerResult::Err {
-            code: coco_types::error_codes::INVALID_REQUEST,
-            message: "no active session".into(),
-            data: None,
+    let session_id = {
+        let mut slot = ctx.state.session.write().await;
+        let Some(session) = slot.as_mut() else {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "no active session".into(),
+                data: None,
+            };
         };
+        session.thinking_level = params.thinking_level.clone();
+        session.session_id.clone()
     };
+
     info!(
-        session_id = %session.session_id,
+        session_id = %session_id,
         level = ?params.thinking_level,
         "SdkServer: control/setThinking"
     );
-    session.thinking_level = params.thinking_level;
+
+    if let Some(runtime) = ctx.state.session_runtime.read().await.clone() {
+        let thinking_level = params.thinking_level.clone();
+        runtime
+            .update_engine_config(move |cfg| {
+                cfg.thinking_level = thinking_level;
+            })
+            .await;
+        publish_main_role_changed_for_thinking(ctx, &runtime, params.thinking_level).await;
+    }
+
     HandlerResult::ok_empty()
+}
+
+/// `control/setAgentColor` — mutate the session's UI badge color.
+pub(super) async fn handle_set_agent_color(
+    params: coco_types::SetAgentColorParams,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let runtime_arc = {
+        let slot = ctx.state.session_runtime.read().await;
+        slot.as_ref().cloned()
+    };
+    let Some(session_runtime) = runtime_arc else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "no session runtime installed".into(),
+            data: None,
+        };
+    };
+
+    session_runtime
+        .runtime()
+        .app_state
+        .write()
+        .await
+        .agent_color = params.color;
+    info!("SdkServer: control/setAgentColor");
+    HandlerResult::ok_empty()
+}
+
+/// `control/applyPermissionUpdate` — apply one permission editor update.
+pub(super) async fn handle_apply_permission_update(
+    params: coco_types::ApplyPermissionUpdateParams,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let runtime_arc = {
+        let slot = ctx.state.session_runtime.read().await;
+        slot.as_ref().cloned()
+    };
+    let Some(session_runtime) = runtime_arc else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "no session runtime installed".into(),
+            data: None,
+        };
+    };
+    session_runtime
+        .runtime()
+        .apply_permission_updates_everywhere(std::slice::from_ref(&params.update))
+        .await;
+    info!("SdkServer: control/applyPermissionUpdate");
+    HandlerResult::ok_empty()
+}
+
+/// `control/resetSessionPermissionRules` — clear session-scoped allow/deny rules.
+pub(super) async fn handle_reset_session_permission_rules(ctx: &HandlerContext) -> HandlerResult {
+    let runtime_arc = {
+        let slot = ctx.state.session_runtime.read().await;
+        slot.as_ref().cloned()
+    };
+    let Some(session_runtime) = runtime_arc else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "no session runtime installed".into(),
+            data: None,
+        };
+    };
+
+    let runtime = session_runtime.runtime();
+    let mut guard = runtime.app_state.write().await;
+    let cleared_allow_rules = guard
+        .permissions
+        .allow_rules
+        .remove(&coco_types::PermissionRuleSource::Session)
+        .map_or(0, |rules| rules.len());
+    let cleared_deny_rules = guard
+        .permissions
+        .deny_rules
+        .remove(&coco_types::PermissionRuleSource::Session)
+        .map_or(0, |rules| rules.len());
+    drop(guard);
+
+    info!(
+        cleared_allow_rules,
+        cleared_deny_rules, "SdkServer: control/resetSessionPermissionRules"
+    );
+    HandlerResult::ok(coco_types::ResetSessionPermissionRulesResult {
+        cleared_allow_rules,
+        cleared_deny_rules,
+    })
+}
+
+async fn publish_main_role_changed_for_thinking(
+    ctx: &HandlerContext,
+    runtime: &crate::session_runtime::SessionHandle,
+    thinking_level: Option<coco_types::ThinkingLevel>,
+) {
+    let runtime = runtime.runtime();
+    let Some(resolved) = runtime.resolve_role(coco_types::ModelRole::Main).await else {
+        return;
+    };
+    let context_window = runtime
+        .runtime_config
+        .model_registry
+        .resolve(&resolved.spec.provider, &resolved.spec.model_id)
+        .map(|model| model.info.context_window.get() as i64);
+    let _ = ctx
+        .notif_tx
+        .send(OutboundMessage::core_event(
+            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::ModelRoleChanged(
+                coco_types::ModelRoleChangedParams {
+                    role: coco_types::ModelRole::Main,
+                    model_id: resolved.spec.model_id,
+                    provider: resolved.spec.provider,
+                    context_window,
+                    effort: thinking_level.map(|level| level.effort),
+                },
+            )),
+        ))
+        .await;
 }
 
 /// `control/stopTask` — cooperative cancellation of a specific task.
 ///
-/// The in-process background task registry isn't threaded through
-/// the SDK server yet, so this is structurally equivalent to
-/// `turn/interrupt`: we cancel any in-flight turn so the runner unwinds.
-/// The `task_id` is logged for later correlation once the task manager
-/// is wired through `SdkServerState`.
+/// When the local AppServer bridge has installed a [`SessionRuntime`],
+/// route through its task registry so the target task's cancel token fires.
+/// SDK-only sessions that have no installed runtime keep the legacy active-turn
+/// fallback.
 pub(super) async fn handle_stop_task(
     params: coco_types::StopTaskParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let slot = ctx.state.session.read().await;
-    let Some(session) = slot.as_ref() else {
-        return HandlerResult::Err {
-            code: coco_types::error_codes::INVALID_REQUEST,
-            message: "no active session".into(),
-            data: None,
+    let session_id = {
+        let slot = ctx.state.session.read().await;
+        let Some(session) = slot.as_ref() else {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "no active session".into(),
+                data: None,
+            };
         };
+        session.session_id.clone()
     };
-    match &session.active_turn_cancel {
+
+    if let Some(runtime) = ctx.state.session_runtime.read().await.clone() {
+        let Some(task_runtime) = runtime.current_task_runtime().await else {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "task runtime is not available for this session".into(),
+                data: None,
+            };
+        };
+        return match task_runtime.kill_task(&params.task_id).await {
+            Ok(()) => {
+                info!(
+                    session_id = %session_id,
+                    task_id = %params.task_id,
+                    "SdkServer: control/stopTask (task runtime)"
+                );
+                HandlerResult::ok_empty()
+            }
+            Err(error) => HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: format!("control/stopTask: {error}"),
+                data: None,
+            },
+        };
+    }
+
+    let token = {
+        let slot = ctx.state.session.read().await;
+        let Some(session) = slot.as_ref() else {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "no active session".into(),
+                data: None,
+            };
+        };
+        session.active_turn_cancel.clone()
+    };
+
+    match token {
         Some(token) => {
             info!(
-                session_id = %session.session_id,
+                session_id = %session_id,
                 task_id = %params.task_id,
                 "SdkServer: control/stopTask (cancels active turn)"
             );
@@ -304,6 +608,115 @@ pub(super) async fn handle_agent_interrupt_current_work(
     }
 }
 
+/// `task/list` — list running/background tasks for the active session.
+pub(super) async fn handle_task_list(ctx: &HandlerContext) -> HandlerResult {
+    let Some(runtime) = ctx.state.session_runtime.read().await.clone() else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "task/list requires an active session runtime".into(),
+            data: None,
+        };
+    };
+    let Some(task_runtime) = runtime.current_task_runtime().await else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "task runtime is not available for this session".into(),
+            data: None,
+        };
+    };
+    let tasks = task_runtime.list_tasks().await;
+    info!(count = tasks.len(), "SdkServer: task/list");
+    HandlerResult::ok(coco_types::TaskListResult { tasks })
+}
+
+/// `task/detail` — read terminal outputs for one running/background task.
+pub(super) async fn handle_task_detail(
+    params: coco_types::TaskDetailParams,
+    ctx: &HandlerContext,
+) -> HandlerResult {
+    let Some(runtime) = ctx.state.session_runtime.read().await.clone() else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "task/detail requires an active session runtime".into(),
+            data: None,
+        };
+    };
+    let Some(task_runtime) = runtime.current_task_runtime().await else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "task runtime is not available for this session".into(),
+            data: None,
+        };
+    };
+    match task_runtime.read_terminal_outputs(&params.task_id).await {
+        Ok(outputs) => {
+            info!(task_id = %params.task_id, "SdkServer: task/detail");
+            HandlerResult::ok(coco_types::TaskDetailResult {
+                task_id: params.task_id,
+                stdout: outputs.stdout,
+                stderr: outputs.stderr,
+                exit_code: outputs.exit_code,
+                interrupted: outputs.interrupted,
+            })
+        }
+        Err(error) => HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: format!("task/detail: {error}"),
+            data: None,
+        },
+    }
+}
+
+/// `control/backgroundAllTasks` — detach every foreground task into the
+/// background. No-op when this session has no task runtime installed.
+pub(super) async fn handle_background_all_tasks(ctx: &HandlerContext) -> HandlerResult {
+    let Some(runtime) = ctx.state.session_runtime.read().await.clone() else {
+        return HandlerResult::ok(coco_types::BackgroundAllTasksResult {
+            task_ids: Vec::new(),
+        });
+    };
+    let Some(task_runtime) = runtime.current_task_runtime().await else {
+        return HandlerResult::ok(coco_types::BackgroundAllTasksResult {
+            task_ids: Vec::new(),
+        });
+    };
+    let task_ids = task_runtime.manager().background_all_foreground().await;
+    info!(
+        count = task_ids.len(),
+        "SdkServer: control/backgroundAllTasks"
+    );
+    HandlerResult::ok(coco_types::BackgroundAllTasksResult { task_ids })
+}
+
+/// `session/cost` — return the active session's live usage/cost report.
+pub(super) async fn handle_session_cost(ctx: &HandlerContext) -> HandlerResult {
+    let Some(runtime) = ctx.state.session_runtime.read().await.clone() else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "session/cost requires an active session runtime".into(),
+            data: None,
+        };
+    };
+    let usage = runtime.session_usage_snapshot().await;
+    let text = coco_messages::format_session_cost(&usage);
+    info!("SdkServer: session/cost");
+    HandlerResult::ok(coco_types::SessionCostResult { text, usage })
+}
+
+/// `session/status` — return the active session's live status report.
+pub(super) async fn handle_session_status(ctx: &HandlerContext) -> HandlerResult {
+    let Some(runtime) = ctx.state.session_runtime.read().await.clone() else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "session/status requires an active session runtime".into(),
+            data: None,
+        };
+    };
+    let text = runtime.status_report().await;
+    info!("SdkServer: session/status");
+    HandlerResult::ok(coco_types::SessionStatusResult { text })
+}
+
 /// `context/usage` — return the active session's current Main context view.
 pub(super) async fn handle_context_usage(ctx: &HandlerContext) -> HandlerResult {
     let (history_handle, app_state) = {
@@ -361,7 +774,10 @@ pub(super) async fn handle_plugin_reload(ctx: &HandlerContext) -> HandlerResult 
         });
     };
 
-    let cwd = ctx.state.workspace_cwd().await;
+    let cwd = match ctx.state.workspace_cwd().await {
+        Ok(cwd) => cwd,
+        Err(err) => return err,
+    };
     let command_count = runtime.reload_plugins(&cwd).await;
     runtime.reload_agent_catalog().await;
     runtime.reload_lsp_servers().await;
@@ -408,18 +824,82 @@ pub(super) async fn handle_plugin_reload(ctx: &HandlerContext) -> HandlerResult 
     })
 }
 
+/// `hook/reload` — rebuild the live `HookRegistry` from current settings.
+pub(super) async fn handle_hook_reload(ctx: &HandlerContext) -> HandlerResult {
+    let runtime_arc = {
+        let slot = ctx.state.session_runtime.read().await;
+        slot.as_ref().cloned()
+    };
+    let Some(runtime) = runtime_arc else {
+        info!("SdkServer: hook/reload (no SessionRuntime wired, returning empty)");
+        return HandlerResult::ok(coco_types::HookReloadResult { hook_count: 0 });
+    };
+
+    match runtime.reload_hooks().await {
+        Ok(hook_count) => {
+            info!(hook_count, "SdkServer: hook/reload");
+            HandlerResult::ok(coco_types::HookReloadResult {
+                hook_count: i64::try_from(hook_count).unwrap_or(i64::MAX),
+            })
+        }
+        Err(error) => HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: error.to_string(),
+            data: None,
+        },
+    }
+}
+
 /// `config/applyFlags` — apply runtime feature-flag settings.
 ///
-/// Currently logs the flags and acks. A follow-up could merge them into
-/// a runtime overrides map on `SdkServerState` so other handlers see
-/// the effective values.
+/// Unknown flags are acknowledged for SDK compatibility. When a local
+/// `SessionRuntime` is installed, the recognized `fast_mode` / `fastMode`
+/// boolean updates the live engine config and publishes the same
+/// `FastModeChanged` notification as the TUI direct path used to emit.
 pub(super) async fn handle_config_apply_flags(
     params: coco_types::ConfigApplyFlagsParams,
-    _ctx: &HandlerContext,
+    ctx: &HandlerContext,
 ) -> HandlerResult {
+    let fast_mode = match params
+        .settings
+        .get(FAST_MODE_FLAG_SNAKE)
+        .or_else(|| params.settings.get(FAST_MODE_FLAG_CAMEL))
+    {
+        Some(value) => match value.as_bool() {
+            Some(value) => Some(value),
+            None => {
+                return HandlerResult::Err {
+                    code: coco_types::error_codes::INVALID_PARAMS,
+                    message: format!("config/applyFlags: {FAST_MODE_FLAG_SNAKE} must be a boolean"),
+                    data: None,
+                };
+            }
+        },
+        None => None,
+    };
+
+    if let Some(active) = fast_mode
+        && let Some(runtime) = ctx.state.session_runtime.read().await.clone()
+    {
+        runtime
+            .update_engine_config(|cfg| {
+                cfg.fast_mode = active;
+            })
+            .await;
+        let _ = ctx
+            .notif_tx
+            .send(OutboundMessage::core_event(
+                coco_types::CoreEvent::Protocol(coco_types::ServerNotification::FastModeChanged {
+                    active,
+                }),
+            ))
+            .await;
+    }
+
     info!(
         count = params.settings.len(),
-        "SdkServer: config/applyFlags (logged; no runtime override map yet)"
+        fast_mode = ?fast_mode,
+        "SdkServer: config/applyFlags"
     );
     HandlerResult::ok_empty()
 }

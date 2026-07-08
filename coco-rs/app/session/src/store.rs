@@ -144,6 +144,7 @@ pub trait AgentTranscriptStore: Send + Sync {
         &self,
         session_id: &str,
         agent_id: &str,
+        cwd: &Path,
         messages: &[Arc<Message>],
     ) -> crate::Result<()>;
     fn load_agent_messages(
@@ -373,9 +374,10 @@ impl AgentTranscriptStore for TranscriptStore {
         &self,
         session_id: &str,
         agent_id: &str,
+        cwd: &Path,
         messages: &[Arc<Message>],
     ) -> crate::Result<()> {
-        TranscriptStore::append_agent_messages(self, session_id, agent_id, messages)
+        TranscriptStore::append_agent_messages(self, session_id, agent_id, cwd, messages)
     }
     fn load_agent_messages(
         &self,
@@ -838,6 +840,7 @@ impl AgentTranscriptStore for InMemoryStore {
         &self,
         session_id: &str,
         agent_id: &str,
+        cwd: &Path,
         messages: &[Arc<Message>],
     ) -> crate::Result<()> {
         if messages.is_empty() {
@@ -848,7 +851,7 @@ impl AgentTranscriptStore for InMemoryStore {
         let refs: Vec<&Message> = messages.iter().map(AsRef::as_ref).collect();
         let mut seen = HashSet::new();
         let options = ChainWriteOptions {
-            cwd: String::new(),
+            cwd: cwd.display().to_string(),
             timestamp: String::new(),
             is_sidechain: true,
             agent_id: Some(agent_id.to_string()),

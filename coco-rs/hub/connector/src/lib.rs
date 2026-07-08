@@ -1,14 +1,40 @@
 use chrono::DateTime;
 use chrono::Utc;
+use coco_hub_protocol::AnnounceAckFrame;
+use coco_hub_protocol::AnnounceFrame;
+use coco_hub_protocol::BatchAckFrame;
 use coco_hub_protocol::BatchFrame;
+use coco_hub_protocol::ErrorFrame;
 use coco_hub_protocol::EventEnvelope;
 use coco_hub_protocol::EventPayload;
+use coco_hub_protocol::HubFrame;
 use coco_hub_protocol::SCHEMA_VERSION_V2;
+use coco_hub_protocol::SUBPROTOCOL_V2;
 use coco_types::CoreEvent;
 use coco_types::SessionEnvelope;
+use coco_utils_rustls_provider::ensure_rustls_crypto_provider;
+use futures::SinkExt;
+use futures::StreamExt;
+use tokio::net::TcpStream;
+use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use uuid::Uuid;
 
+mod worker;
+
+pub use worker::HubConnectorQueueError;
+pub use worker::HubConnectorSender;
+pub use worker::HubConnectorWorker;
+pub use worker::HubConnectorWorkerConfig;
+pub use worker::HubConnectorWorkerError;
+pub use worker::HubConnectorWorkerStats;
+
 pub use coco_hub_protocol as protocol;
+
+type HubWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvelopeEgressError {
@@ -16,6 +42,115 @@ pub enum EnvelopeEgressError {
     NonProtocolDurable,
     #[error("failed to serialize protocol notification: {0}")]
     Serialize(#[from] serde_json::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum HubConnectorError {
+    #[error("failed to build hub websocket request: {0}")]
+    BuildRequest(#[source] tokio_tungstenite::tungstenite::Error),
+    #[error("hub websocket connect failed: {0}")]
+    Connect(#[source] tokio_tungstenite::tungstenite::Error),
+    #[error("hub websocket send failed: {0}")]
+    Send(#[source] tokio_tungstenite::tungstenite::Error),
+    #[error("hub websocket receive failed: {0}")]
+    Receive(#[source] tokio_tungstenite::tungstenite::Error),
+    #[error("failed to serialize hub frame: {0}")]
+    Serialize(#[from] serde_json::Error),
+    #[error("hub rejected frame: {code}: {detail}")]
+    HubError { code: String, detail: String },
+    #[error("hub protocol error: {0}")]
+    Protocol(String),
+    #[error("hub returned unexpected frame: {0}")]
+    UnexpectedFrame(&'static str),
+    #[error("hub websocket closed")]
+    Closed,
+}
+
+pub struct HubConnectorClient {
+    stream: HubWebSocket,
+}
+
+impl HubConnectorClient {
+    pub async fn connect(url: &str) -> Result<Self, HubConnectorError> {
+        ensure_rustls_crypto_provider();
+        let mut request = url
+            .into_client_request()
+            .map_err(HubConnectorError::BuildRequest)?;
+        request.headers_mut().insert(
+            "Sec-WebSocket-Protocol",
+            http::HeaderValue::from_static(SUBPROTOCOL_V2),
+        );
+        let (stream, response) = connect_async(request)
+            .await
+            .map_err(HubConnectorError::Connect)?;
+        let selected_protocol = response
+            .headers()
+            .get("Sec-WebSocket-Protocol")
+            .and_then(|value| value.to_str().ok());
+        if selected_protocol != Some(SUBPROTOCOL_V2) {
+            return Err(HubConnectorError::Protocol(format!(
+                "hub did not select websocket subprotocol {SUBPROTOCOL_V2}"
+            )));
+        }
+        Ok(Self { stream })
+    }
+
+    pub async fn announce(
+        &mut self,
+        announce: AnnounceFrame,
+    ) -> Result<AnnounceAckFrame, HubConnectorError> {
+        self.send_frame(HubFrame::Announce(announce)).await?;
+        match self.recv_frame().await? {
+            HubFrame::AnnounceAck(ack) => Ok(ack),
+            HubFrame::Error(error) => Err(hub_error(error)),
+            _ => Err(HubConnectorError::UnexpectedFrame("announce_ack")),
+        }
+    }
+
+    pub async fn send_batch(
+        &mut self,
+        batch: BatchFrame,
+    ) -> Result<BatchAckFrame, HubConnectorError> {
+        self.send_frame(HubFrame::Batch(batch)).await?;
+        match self.recv_frame().await? {
+            HubFrame::BatchAck(ack) => Ok(ack),
+            HubFrame::Error(error) => Err(hub_error(error)),
+            _ => Err(HubConnectorError::UnexpectedFrame("batch_ack")),
+        }
+    }
+
+    async fn send_frame(&mut self, frame: HubFrame) -> Result<(), HubConnectorError> {
+        let text = serde_json::to_string(&frame)?;
+        self.stream
+            .send(Message::Text(text.into()))
+            .await
+            .map_err(HubConnectorError::Send)
+    }
+
+    async fn recv_frame(&mut self) -> Result<HubFrame, HubConnectorError> {
+        loop {
+            let Some(message) = self.stream.next().await else {
+                return Err(HubConnectorError::Closed);
+            };
+            match message.map_err(HubConnectorError::Receive)? {
+                Message::Text(text) => return Ok(serde_json::from_str(&text)?),
+                Message::Binary(_) => {
+                    return Err(HubConnectorError::Protocol(
+                        "hub returned binary frame".to_string(),
+                    ));
+                }
+                Message::Close(_) => return Err(HubConnectorError::Closed),
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+            }
+        }
+    }
+}
+
+fn hub_error(error: ErrorFrame) -> HubConnectorError {
+    HubConnectorError::HubError {
+        code: error.code,
+        detail: error.detail,
+    }
 }
 
 /// Convert an AppServer-stamped session envelope into the Hub v2 wire envelope.
@@ -68,162 +203,5 @@ pub fn batch_frame_from_session_envelopes(
 }
 
 #[cfg(test)]
-mod tests {
-    use chrono::TimeZone;
-    use coco_types::AgentId;
-    use coco_types::AgentStreamEvent;
-    use coco_types::CoreEvent;
-    use coco_types::EventReplayPolicy;
-    use coco_types::ServerNotification;
-    use coco_types::SessionEnvelope;
-    use coco_types::SessionId;
-    use coco_types::SessionStartedParams;
-    use serde_json::json;
-    use uuid::Uuid;
-
-    use super::*;
-
-    fn session_id() -> SessionId {
-        SessionId::try_new("session-1").expect("valid session id")
-    }
-
-    fn agent_id() -> AgentId {
-        AgentId::try_new_generated("aagent-0000000000000001").expect("valid generated agent id")
-    }
-
-    fn fixed_ts() -> chrono::DateTime<Utc> {
-        Utc.timestamp_opt(1_704_067_200, 0)
-            .single()
-            .expect("fixed timestamp")
-    }
-
-    fn session_started(session_id: SessionId) -> ServerNotification {
-        ServerNotification::SessionStarted(SessionStartedParams {
-            session_id,
-            protocol_version: "1.0".into(),
-            cwd: "/work".into(),
-            model: "claude".into(),
-            provider: "anthropic".into(),
-            permission_mode: "default".into(),
-            tools: vec!["Read".into()],
-            slash_commands: Vec::new(),
-            agents: Vec::new(),
-            skills: Vec::new(),
-            mcp_servers: Vec::new(),
-            plugins: Vec::new(),
-            api_key_source: None,
-            betas: Vec::new(),
-            version: "0.1.0".into(),
-            output_style: None,
-            fast_mode_state: None,
-            lsp_active: false,
-        })
-    }
-
-    #[test]
-    fn durable_protocol_envelope_becomes_hub_event_envelope() {
-        let session_id = session_id();
-        let agent_id = agent_id();
-        let envelope = SessionEnvelope::durable(
-            session_id.clone(),
-            Some(agent_id.clone()),
-            None,
-            42,
-            CoreEvent::Protocol(session_started(session_id.clone())),
-        );
-
-        let event =
-            event_envelope_from_session_envelope(Uuid::nil(), fixed_ts(), envelope).unwrap();
-        let event = event.expect("durable envelope should be shipped");
-
-        assert_eq!(event.instance_id, Uuid::nil());
-        assert_eq!(event.session_id, session_id);
-        assert_eq!(event.agent_id, Some(agent_id));
-        assert_eq!(event.session_seq, 42);
-        assert_eq!(event.schema_version, SCHEMA_VERSION_V2);
-
-        let EventPayload::Protocol { value } = event.payload else {
-            panic!("expected protocol payload");
-        };
-        assert_eq!(value["method"], "session/started");
-        assert_eq!(value["params"]["session_id"], "session-1");
-    }
-
-    #[test]
-    fn batch_conversion_preserves_durable_order_and_skips_ephemeral() {
-        let first_session = session_id();
-        let second_session = SessionId::try_new("session-2").expect("valid session id");
-        let envelopes = vec![
-            SessionEnvelope::durable(
-                first_session.clone(),
-                None,
-                None,
-                1,
-                CoreEvent::Protocol(session_started(first_session.clone())),
-            ),
-            SessionEnvelope::ephemeral(
-                first_session.clone(),
-                None,
-                None,
-                CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
-                    call_id: "call-1".into(),
-                    name: "Read".into(),
-                    input: json!({}),
-                }),
-            ),
-            SessionEnvelope::durable(
-                second_session.clone(),
-                None,
-                None,
-                7,
-                CoreEvent::Protocol(session_started(second_session.clone())),
-            ),
-        ];
-
-        let batch = batch_frame_from_session_envelopes(Uuid::nil(), fixed_ts, envelopes).unwrap();
-
-        assert_eq!(batch.events.len(), 2);
-        assert_eq!(batch.events[0].session_id, first_session);
-        assert_eq!(batch.events[0].session_seq, 1);
-        assert_eq!(batch.events[1].session_id, second_session);
-        assert_eq!(batch.events[1].session_seq, 7);
-    }
-
-    #[test]
-    fn ephemeral_envelope_is_not_shipped_to_hub() {
-        let envelope = SessionEnvelope::stamp(
-            session_id(),
-            None,
-            CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
-                call_id: "call-1".into(),
-                name: "Read".into(),
-                input: json!({"file_path": "a.txt"}),
-            }),
-            || panic!("ephemeral events must not allocate session_seq"),
-        );
-
-        assert_eq!(envelope.event.replay_policy(), EventReplayPolicy::Ephemeral);
-        let event =
-            event_envelope_from_session_envelope(Uuid::nil(), fixed_ts(), envelope).unwrap();
-        assert!(event.is_none());
-    }
-
-    #[test]
-    fn sequenced_non_protocol_envelope_is_rejected() {
-        let envelope = SessionEnvelope::durable(
-            session_id(),
-            None,
-            None,
-            1,
-            CoreEvent::Stream(AgentStreamEvent::ToolUseQueued {
-                call_id: "call-1".into(),
-                name: "Read".into(),
-                input: json!({}),
-            }),
-        );
-
-        let err = event_envelope_from_session_envelope(Uuid::nil(), fixed_ts(), envelope)
-            .expect_err("sequenced stream event must be rejected");
-        assert!(matches!(err, EnvelopeEgressError::NonProtocolDurable));
-    }
-}
+#[path = "lib.test.rs"]
+mod tests;

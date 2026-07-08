@@ -1,0 +1,20 @@
+---
+source: hub/protocol/tests/wire_format.rs
+expression: json
+---
+[
+  {
+    "kind": "announce_ack",
+    "firstSeen": true,
+    "hubVersion": "0.1.0",
+    "resumeFrom": {
+      "sess-1": 42
+    }
+  },
+  {
+    "kind": "batch_ack",
+    "upToSeq": {
+      "sess-1": 9
+    }
+  }
+]

@@ -2,26 +2,26 @@
 //!
 //! Slash-command handlers in this crate are pure functions returning a
 //! status string; they don't hold a `QueryEngine` reference. This
-//! handler emits a sentinel control prefix so the TUI / SDK runner
-//! recognizes the request and dispatches it to
+//! handler emits a sentinel control prefix so the TUI runner and SDK
+//! `turn/start` handler recognize the request and dispatch it to
 //! [`coco_query::QueryEngine::run_manual_compact`]. The trailing text
 //! is shown verbatim to the user as confirmation.
 //!
 //! The sentinel format is one line:
 //!   `__COCO_COMPACT_NOW__ <custom_instructions>\n<status text>`
-//! Runners parse the first line, drop it from displayed output, and
-//! drive the engine. If a runner doesn't understand the sentinel it
+//! Runtime surfaces parse the first line, drop it from displayed output,
+//! and drive the engine. If a surface doesn't understand the sentinel it
 //! falls back to displaying both lines — no crash, just a no-op.
 
 use std::pin::Pin;
 
-/// Sentinel prefix recognised by SDK / TUI runners. The text after the
-/// prefix (until newline) is the optional `custom_instructions`.
+/// Sentinel prefix recognised by SDK / TUI runtime surfaces. The text
+/// after the prefix (until newline) is the optional `custom_instructions`.
 pub const COMPACT_SENTINEL: &str = "__COCO_COMPACT_NOW__";
 
 /// Parsed compact request extracted from a handler output's sentinel
-/// line. Runners obtain this by calling [`parse_compact_sentinel`] on
-/// the handler's first line of output.
+/// line. Runtime surfaces obtain this by calling
+/// [`parse_compact_sentinel`] on the handler's first line of output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactRequest {
     /// The user's `/compact <instructions>` argument, trimmed; empty
@@ -37,9 +37,9 @@ pub struct CompactRequest {
 /// the sentinel — the runner should then treat the output as ordinary
 /// command text.
 ///
-/// Rust uses a sentinel because the slash-command registry
-/// returns plain strings. This helper centralizes the parse so both
-/// `tui_runner` and `sdk_runner` consume it identically.
+/// Rust uses a sentinel because the slash-command registry returns plain
+/// strings. This helper centralizes the parse so TUI and SDK runtime
+/// surfaces consume it identically.
 #[must_use]
 pub fn parse_compact_sentinel(handler_output: &str) -> Option<CompactRequest> {
     let parsed = super::sentinel::parse_sentinel(handler_output, COMPACT_SENTINEL)?;

@@ -50,6 +50,7 @@ use coco_types::ToolAppState;
 use tokio_util::sync::CancellationToken;
 
 use crate::Cli;
+use crate::process_runtime::ProcessRuntime;
 use crate::project_services::ProjectServices;
 
 mod agent_catalog;
@@ -120,6 +121,9 @@ pub struct SessionRuntimeBuildOpts<'a> {
     pub skill_manager: Arc<coco_skills::SkillManager>,
     /// Project-scoped services/catalog loaded for this session's project root.
     pub project_services: Arc<ProjectServices>,
+    /// Process-scoped owner used for project-service reloads during this
+    /// session's lifetime.
+    pub process_runtime: Arc<ProcessRuntime>,
     /// Where to look for markdown agent definitions. Threaded into the
     /// runtime's [`coco_subagent::AgentDefinitionStore`] so AgentTool's
     /// dynamic prompt sees the same set the SDK `initialize.agents`
@@ -176,6 +180,7 @@ pub struct SessionRuntime {
     pub(crate) skill_manager: Arc<coco_skills::SkillManager>,
     pub config_home: PathBuf,
     pub runtime_config: Arc<RuntimeConfig>,
+    pub process_runtime: Arc<ProcessRuntime>,
     pub project_services: Arc<ProjectServices>,
     pub session_manager: Arc<SessionManager>,
     pub fast_model_spec: Option<ModelSpec>,
@@ -439,8 +444,10 @@ pub struct SessionRuntime {
     lsp_handle: Arc<RwLock<Option<coco_tool_runtime::LspHandleRef>>>,
     /// Where the agent loader looks for markdown agents. Cached so
     /// `/agents reload` and the file-watcher reload paths can rebuild
-    /// the snapshot without re-resolving the paths from scratch.
-    agent_search_paths: coco_subagent::definition_store::AgentSearchPaths,
+    /// the snapshot without re-resolving the paths from scratch. Plugin
+    /// reload refreshes this from the latest `ProjectServices` snapshot before
+    /// the catalog is rebuilt.
+    agent_search_paths: Arc<RwLock<coco_subagent::definition_store::AgentSearchPaths>>,
     /// Built-in agent toggles applied to every reload. Set at
     /// `SessionRuntime::build` and treated as immutable thereafter
     /// (toggling the roster mid-session would require a full restart).

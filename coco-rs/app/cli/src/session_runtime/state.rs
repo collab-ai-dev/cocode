@@ -160,6 +160,15 @@ impl SessionRuntime {
         self.engine_config.read().await.session_id.clone()
     }
 
+    /// Synchronous mirror of the current session id.
+    ///
+    /// This is used only to create cheap handle snapshots at construction or
+    /// after legacy in-place retargets. Async runtime paths should prefer
+    /// [`Self::current_typed_session_id`] while the fused runtime still exists.
+    pub fn current_typed_session_id_snapshot(&self) -> SessionId {
+        clone_std_rwlock(&self.orchestration_engine_config).session_id
+    }
+
     /// Whether this run persists session artifacts (transcript / usage /
     /// file-history / subagent transcripts). False under
     /// `--no-session-persistence`.

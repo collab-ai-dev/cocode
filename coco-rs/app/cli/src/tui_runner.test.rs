@@ -214,6 +214,7 @@ use super::ActiveTurnDrain;
 use super::PermissionsMutation;
 use super::SentinelTrigger;
 use super::add_dir_already_message;
+use super::background_all_tasks_through_app_server;
 use super::build_remote_model_change_reminder;
 use super::build_system_message_from_push_kind;
 use super::classify_sentinel_trigger;
@@ -222,14 +223,22 @@ use super::dispatch_slash_command;
 use super::drain_active_turn;
 use super::drain_completed_turn;
 use super::format_slash_command_metadata;
+use super::handle_rewind;
 use super::parse_editor_command;
 use super::parse_permissions_mutation;
 use super::parse_slash_command;
 use super::process_idle_command_queue;
+use super::run_clear_conversation;
+use super::run_session_rename;
+use super::run_session_tag;
+use super::run_show_cost;
+use super::run_show_status;
 use super::session_plan_file_path;
+use super::set_thinking_level_through_app_server;
 use super::should_prompt_mode_bash_respond;
 use super::should_trigger_title_gen;
 use super::slash_unavailable_in_session_message;
+use super::toggle_fast_mode_through_app_server;
 use clap::Parser;
 use coco_config::CatalogPaths;
 use coco_config::EnvSnapshot;
@@ -520,6 +529,7 @@ async fn build_runtime_with_registry_and_settings(
                 ..Default::default()
             },
             available_models: settings_overrides.available_models,
+            file_checkpointing_enabled: settings_overrides.file_checkpointing_enabled,
             respond_to_bash_commands: settings_overrides.respond_to_bash_commands,
             ..Default::default()
         },
@@ -556,6 +566,7 @@ async fn build_runtime_with_registry_and_settings(
         permission_bridge: None,
         command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(registry))),
         skill_manager: Arc::new(coco_skills::SkillManager::new()),
+        process_runtime: coco_cli::process_runtime::ProcessRuntime::global(),
         project_services: Arc::new(coco_cli::project_services::ProjectServices::load(
             home.path(),
             home.path(),
@@ -567,6 +578,56 @@ async fn build_runtime_with_registry_and_settings(
     })
     .await
     .expect("build runtime")
+}
+
+async fn seed_runtime_session_transcript(runtime: &crate::session_runtime::SessionHandle) {
+    let rt = runtime.runtime();
+    let session_id = rt.current_typed_session_id().await;
+    let cwd = rt.original_cwd.clone();
+    seed_session_transcript_for_cwd(rt.session_manager.memory_base(), &cwd, &session_id);
+}
+
+fn seed_session_transcript_for_cwd(
+    memory_base: &std::path::Path,
+    cwd: &std::path::Path,
+    session_id: &coco_types::SessionId,
+) {
+    let store = coco_session::TranscriptStore::new(std::sync::Arc::new(
+        coco_paths::ProjectPaths::new(memory_base.to_path_buf(), cwd),
+    ));
+    append_seed_transcript(&store, cwd, session_id);
+}
+
+fn append_seed_transcript(
+    store: &coco_session::TranscriptStore,
+    cwd: &std::path::Path,
+    session_id: &coco_types::SessionId,
+) {
+    let entry = coco_session::TranscriptEntry {
+        entry_type: "user".to_string(),
+        uuid: uuid::Uuid::new_v4().to_string(),
+        parent_uuid: None,
+        logical_parent_uuid: None,
+        session_id: Some(session_id.clone()),
+        cwd: cwd.display().to_string(),
+        timestamp: "2026-01-01T00:00:00Z".to_string(),
+        version: None,
+        git_branch: None,
+        is_sidechain: false,
+        agent_id: None,
+        message: Some(serde_json::json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "seed"}],
+        })),
+        usage: None,
+        model: Some("seed-model".to_string()),
+        request_id: None,
+        cost_usd: None,
+        extra: serde_json::Map::new(),
+    };
+    store
+        .append_message(session_id.as_str(), &entry)
+        .expect("seed transcript");
 }
 
 #[tokio::test]
@@ -715,6 +776,674 @@ async fn local_app_server_turn_writes_back_runtime_history() {
 }
 
 #[tokio::test]
+async fn local_app_server_bridge_uses_runtime_session_manager_for_session_list() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let session_id = runtime.runtime().current_typed_session_id().await;
+    seed_runtime_session_transcript(&runtime).await;
+    let local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    let listed = local_app_server_bridge
+        .client()
+        .session_list(local_app_server_bridge.handler())
+        .await
+        .expect("local session/list succeeds");
+
+    assert!(
+        listed
+            .sessions
+            .iter()
+            .any(|session| session.session_id == session_id),
+        "local AppServer session/list should read persisted runtime sessions"
+    );
+}
+
+#[tokio::test]
+async fn local_app_server_bridge_uses_runtime_session_manager_for_session_read() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let session_id = runtime.runtime().current_typed_session_id().await;
+    seed_runtime_session_transcript(&runtime).await;
+    let local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    let read = local_app_server_bridge
+        .client()
+        .session_read(
+            local_app_server_bridge.handler(),
+            coco_types::SessionReadParams {
+                session_id: session_id.clone(),
+                cursor: None,
+                limit: None,
+            },
+        )
+        .await
+        .expect("local session/read succeeds");
+
+    assert_eq!(read.session.session_id, session_id);
+    assert_eq!(read.messages.len(), 1);
+    assert_eq!(read.messages[0]["message"]["content"][0]["text"], "seed");
+    assert!(!read.has_more);
+}
+
+#[tokio::test]
+async fn resume_slash_uses_local_app_server_session_resume() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let old_session_id = runtime.runtime().current_typed_session_id().await;
+    let target_session_id =
+        coco_types::SessionId::try_new("sess-tui-resume-target").expect("valid session id");
+    let rt = runtime.runtime();
+    seed_session_transcript_for_cwd(
+        rt.session_manager.memory_base(),
+        &rt.original_cwd,
+        &target_session_id,
+    );
+    let project_store =
+        coco_session::TranscriptStore::new(coco_cli::paths::project_paths(&rt.original_cwd));
+    append_seed_transcript(&project_store, &rt.original_cwd, &target_session_id);
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+    local_app_server_bridge
+        .ensure_interactive_surface(old_session_id)
+        .expect("attach old surface");
+
+    let outcome = dispatch_slash_command(
+        "resume",
+        target_session_id.as_str(),
+        &runtime,
+        &tx,
+        &mut local_app_server_bridge,
+    )
+    .await;
+
+    assert!(matches!(outcome, super::SlashOutcome::Handled));
+    let events = {
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        events
+    };
+    assert_eq!(
+        runtime.runtime().current_typed_session_id().await,
+        target_session_id,
+        "resume events: {events:?}"
+    );
+    let live = local_app_server_bridge.app_server().list_live_sessions();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].session_id, target_session_id);
+
+    let mut saw_reset = false;
+    let mut saw_history = false;
+    for event in events {
+        match event {
+            coco_types::CoreEvent::Protocol(
+                coco_types::ServerNotification::SessionResetForResume { identity },
+            ) if identity.session_id.as_ref() == Some(&target_session_id) => {
+                saw_reset = true;
+            }
+            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::HistoryReplaced {
+                identity,
+                ..
+            }) if identity.session_id.as_ref() == Some(&target_session_id) => {
+                saw_history = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_reset, "resume should emit TUI reset event");
+    assert!(saw_history, "resume should emit TUI history replacement");
+}
+
+#[tokio::test]
+async fn branch_slash_switches_to_fork_through_local_app_server() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let old_session_id = runtime.runtime().current_typed_session_id().await;
+    seed_runtime_session_transcript(&runtime).await;
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+    local_app_server_bridge
+        .ensure_interactive_surface(old_session_id.clone())
+        .expect("attach old surface");
+
+    let outcome = dispatch_slash_command(
+        "branch",
+        "test fork",
+        &runtime,
+        &tx,
+        &mut local_app_server_bridge,
+    )
+    .await;
+
+    assert!(matches!(outcome, super::SlashOutcome::Handled));
+    let new_session_id = runtime.runtime().current_typed_session_id().await;
+    assert_ne!(new_session_id, old_session_id);
+    let live = local_app_server_bridge.app_server().list_live_sessions();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].session_id, new_session_id);
+    let forked_session = runtime
+        .runtime()
+        .session_manager
+        .load(new_session_id.as_str())
+        .expect("branch title should persist through local AppServer session/rename");
+    assert_eq!(forked_session.title.as_deref(), Some("test fork (Branch)"));
+
+    let mut saw_reset = false;
+    let mut saw_history = false;
+    let mut saw_branch_result = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            coco_types::CoreEvent::Protocol(
+                coco_types::ServerNotification::SessionResetForResume { identity },
+            ) if identity.session_id.as_ref() == Some(&new_session_id) => {
+                saw_reset = true;
+            }
+            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::HistoryReplaced {
+                identity,
+                ..
+            }) if identity.session_id.as_ref() == Some(&new_session_id) => {
+                saw_history = true;
+            }
+            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+                name,
+                text,
+                ..
+            }) if name == "branch" && text.contains("Branched into a new session") => {
+                saw_branch_result = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_reset, "branch should emit TUI reset event");
+    assert!(saw_history, "branch should emit TUI history replacement");
+    assert!(saw_branch_result, "branch should report the forked session");
+}
+
+#[tokio::test]
+async fn clear_slash_refreshes_local_app_server_session() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let old_session_id = runtime.runtime().current_typed_session_id().await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let active_turn = Arc::new(Mutex::new(None));
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+    local_app_server_bridge
+        .ensure_interactive_surface(old_session_id.clone())
+        .expect("attach old surface");
+
+    run_clear_conversation(&runtime, &active_turn, &tx, &mut local_app_server_bridge).await;
+
+    let new_session_id = runtime.runtime().current_typed_session_id().await;
+    assert_ne!(new_session_id, old_session_id);
+    let live = local_app_server_bridge.app_server().list_live_sessions();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].session_id, new_session_id);
+
+    let mut saw_reset = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            coco_types::CoreEvent::Protocol(
+                coco_types::ServerNotification::SessionResetForResume { identity },
+            ) if identity.session_id.as_ref() == Some(&new_session_id) => {
+                saw_reset = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_reset, "/clear should emit TUI reset event");
+}
+
+#[tokio::test]
+async fn rename_and_tag_slashes_use_local_app_server_session_metadata_controls() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let session_id = runtime.runtime().current_typed_session_id().await;
+    seed_runtime_session_transcript(&runtime).await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    run_session_rename(
+        &runtime,
+        &tx,
+        &local_app_server_bridge,
+        coco_commands::ParsedRename::Explicit("phase-b-cleanup".to_string()),
+    )
+    .await;
+    run_session_tag(&runtime, &tx, &local_app_server_bridge, "phase-b").await;
+
+    let session = runtime
+        .runtime()
+        .session_manager
+        .load(session_id.as_str())
+        .expect("metadata controls should persist session updates");
+    assert_eq!(session.title.as_deref(), Some("phase-b-cleanup"));
+    assert_eq!(session.tags, vec!["phase-b".to_string()]);
+
+    let mut saw_rename = false;
+    let mut saw_tag = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+                name,
+                text,
+                ..
+            }) if name == "rename" && text == "Session renamed to: phase-b-cleanup" => {
+                saw_rename = true;
+            }
+            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+                name,
+                text,
+                ..
+            }) if name == "tag" && text == "Tag added: phase-b" => {
+                saw_tag = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_rename, "rename should report success");
+    assert!(saw_tag, "tag should report success");
+}
+
+#[tokio::test]
+async fn cost_and_status_slashes_use_local_app_server_observability() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    run_show_cost(&tx, &local_app_server_bridge).await;
+    run_show_status(&tx, &local_app_server_bridge).await;
+
+    let mut saw_cost = false;
+    let mut saw_status = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+                name,
+                text,
+                ..
+            }) if name == "cost" && text.contains("No API usage recorded yet") => {
+                saw_cost = true;
+            }
+            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::OpenGoalStatus {
+                title,
+                body,
+            }) if title == "Status" && body.contains("Session status:") => {
+                saw_status = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        saw_cost,
+        "cost should render from local AppServer session/cost"
+    );
+    assert!(
+        saw_status,
+        "status should render from local AppServer session/status"
+    );
+}
+
+#[tokio::test]
+async fn tasks_list_and_detail_slashes_use_local_app_server_task_observability() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let task_runtime = Arc::new(coco_cli::task_runtime::TaskRuntime::new(Arc::new(
+        coco_tasks::TaskManager::new(),
+    )));
+    let task_id = task_runtime
+        .register_agent_task(
+            "background work",
+            None,
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            coco_tool_runtime::AgentRegistration::Background,
+        )
+        .await;
+    runtime.attach_task_runtime(Arc::clone(&task_runtime)).await;
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    let list_outcome =
+        dispatch_slash_command("tasks", "list", &runtime, &tx, &mut local_app_server_bridge).await;
+    let detail_outcome = dispatch_slash_command(
+        "tasks",
+        &format!("detail {task_id}"),
+        &runtime,
+        &tx,
+        &mut local_app_server_bridge,
+    )
+    .await;
+
+    assert!(matches!(list_outcome, super::SlashOutcome::Handled));
+    assert!(matches!(detail_outcome, super::SlashOutcome::Handled));
+
+    let mut saw_list = false;
+    let mut saw_detail = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+                name,
+                args,
+                text,
+            }) if name == "tasks"
+                && args == "list"
+                && text.contains(&task_id)
+                && text.contains("background work") =>
+            {
+                saw_list = true;
+            }
+            coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+                name,
+                args,
+                text,
+            }) if name == "tasks"
+                && args == format!("detail {task_id}")
+                && text.contains(&format!("Task {task_id}"))
+                && text.contains("Interrupted: false") =>
+            {
+                saw_detail = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_list,
+        "tasks list should render from local AppServer task/list"
+    );
+    assert!(
+        saw_detail,
+        "tasks detail should render from local AppServer task/detail"
+    );
+}
+
+#[tokio::test]
+async fn background_all_tasks_uses_local_app_server_control() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let task_runtime = Arc::new(coco_cli::task_runtime::TaskRuntime::new(Arc::new(
+        coco_tasks::TaskManager::new(),
+    )));
+    let task_id = task_runtime
+        .register_agent_task(
+            "foreground work",
+            None,
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            coco_tool_runtime::AgentRegistration::Foreground,
+        )
+        .await;
+    runtime.attach_task_runtime(Arc::clone(&task_runtime)).await;
+
+    let local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    let task_ids = background_all_tasks_through_app_server(&runtime, &local_app_server_bridge)
+        .await
+        .expect("background-all should dispatch through local AppServer");
+
+    assert_eq!(task_ids, vec![task_id.clone()]);
+    let state = task_runtime
+        .manager()
+        .get(&task_id)
+        .await
+        .expect("task should remain registered");
+    assert!(state.is_backgrounded());
+}
+
+#[tokio::test]
+async fn tasks_cancel_slash_uses_local_app_server_stop_task() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let task_runtime = Arc::new(coco_cli::task_runtime::TaskRuntime::new(Arc::new(
+        coco_tasks::TaskManager::new(),
+    )));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let task_id = task_runtime
+        .register_agent_task(
+            "background work",
+            None,
+            None,
+            cancel.clone(),
+            coco_tool_runtime::AgentRegistration::Background,
+        )
+        .await;
+    runtime.attach_task_runtime(Arc::clone(&task_runtime)).await;
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    let outcome = dispatch_slash_command(
+        "tasks",
+        &format!("cancel {task_id}"),
+        &runtime,
+        &tx,
+        &mut local_app_server_bridge,
+    )
+    .await;
+
+    assert!(matches!(outcome, super::SlashOutcome::Handled));
+    assert!(cancel.is_cancelled(), "task cancel token should fire");
+    let event = rx.recv().await.expect("slash result event");
+    match event {
+        coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::SlashCommandResult {
+            name,
+            args,
+            text,
+        }) => {
+            assert_eq!(name, "tasks");
+            assert_eq!(args, format!("cancel {task_id}"));
+            assert_eq!(text, format!("Cancelled task {task_id}."));
+        }
+        other => panic!("expected slash result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn toggle_fast_mode_uses_local_app_server_apply_flags() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    assert!(!runtime.runtime().current_engine_config().await.fast_mode);
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+
+    toggle_fast_mode_through_app_server(&runtime, &tx, &mut local_app_server_bridge).await;
+
+    assert!(runtime.runtime().current_engine_config().await.fast_mode);
+    let event = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("fast-mode event should be forwarded")
+        .expect("event channel should stay open");
+    match event {
+        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::FastModeChanged {
+            active,
+        }) => {
+            assert!(active);
+        }
+        other => panic!("expected FastModeChanged, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn set_thinking_level_uses_local_app_server_set_thinking() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    assert!(
+        runtime
+            .runtime()
+            .current_engine_config()
+            .await
+            .thinking_level
+            .is_none()
+    );
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+
+    set_thinking_level_through_app_server(
+        &runtime,
+        &tx,
+        &mut local_app_server_bridge,
+        "high".to_string(),
+    )
+    .await;
+
+    let cfg = runtime.runtime().current_engine_config().await;
+    let thinking = cfg.thinking_level.expect("runtime thinking level");
+    assert_eq!(thinking.effort, coco_types::ReasoningEffort::High);
+    let event = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("model-role event should be forwarded")
+        .expect("event channel should stay open");
+    match event {
+        coco_types::CoreEvent::Protocol(coco_types::ServerNotification::ModelRoleChanged(
+            params,
+        )) => {
+            assert_eq!(params.role, coco_types::ModelRole::Main);
+            assert_eq!(params.effort, Some(coco_types::ReasoningEffort::High));
+        }
+        other => panic!("expected ModelRoleChanged, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn explicit_file_rewind_restores_files_through_local_app_server() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry_and_settings(
+        &home,
+        registry,
+        Settings {
+            file_checkpointing_enabled: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let rt = runtime.runtime();
+    let session_id = rt.current_typed_session_id().await;
+    let file = home.path().join("rewind.txt");
+    tokio::fs::write(&file, "original\n").await.unwrap();
+    let file_history = rt.file_history.as_ref().expect("file history enabled");
+    file_history
+        .write()
+        .await
+        .track_edit(&file, "msg-1", &rt.config_home, session_id.as_str())
+        .await
+        .expect("track file edit");
+    tokio::fs::write(&file, "modified\n").await.unwrap();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+
+    handle_rewind(
+        &coco_tui::state::RestoreType::CodeOnly,
+        "msg-1",
+        /*rewound_turn*/ 1,
+        &tx,
+        &runtime,
+        &local_app_server_bridge,
+    )
+    .await;
+
+    assert_eq!(
+        tokio::fs::read_to_string(&file).await.unwrap(),
+        "original\n"
+    );
+    let event = rx.recv().await.expect("rewind completed event");
+    match event {
+        coco_types::CoreEvent::Tui(coco_types::TuiOnlyEvent::RewindCompleted {
+            target_message_id,
+            files_changed,
+        }) => {
+            assert_eq!(target_message_id, "");
+            assert_eq!(files_changed, 1);
+        }
+        other => panic!("expected RewindCompleted, got {other:?}"),
+    }
+    while let Ok(event) = rx.try_recv() {
+        if matches!(
+            event,
+            coco_types::CoreEvent::Protocol(coco_types::ServerNotification::Error(_))
+        ) {
+            panic!("successful file rewind should not emit an error: {event:?}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn model_slash_arg_rejects_unavailable_model() {
     let mut registry = coco_commands::CommandRegistry::new();
     coco_commands::register_extended_builtins(&mut registry);
@@ -729,7 +1458,7 @@ async fn model_slash_arg_rejects_unavailable_model() {
     )
     .await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    let local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
         coco_cli::sdk_server::SdkServerState::default(),
     ));
     local_app_server_bridge
@@ -737,7 +1466,7 @@ async fn model_slash_arg_rejects_unavailable_model() {
         .await;
 
     let outcome =
-        dispatch_slash_command("model", "gpt5", &runtime, &tx, &local_app_server_bridge).await;
+        dispatch_slash_command("model", "gpt5", &runtime, &tx, &mut local_app_server_bridge).await;
 
     assert!(matches!(outcome, super::SlashOutcome::Handled));
     let event = rx.recv().await.expect("slash result event");
@@ -789,15 +1518,21 @@ async fn inactive_slash_command_emits_session_hint_without_running_handler() {
     let home = TempDir::new().expect("tempdir");
     let runtime = build_runtime_with_registry(&home, registry).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    let local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
         coco_cli::sdk_server::SdkServerState::default(),
     ));
     local_app_server_bridge
         .install_session_runtime(runtime.clone())
         .await;
 
-    let outcome =
-        dispatch_slash_command("blocked", "arg", &runtime, &tx, &local_app_server_bridge).await;
+    let outcome = dispatch_slash_command(
+        "blocked",
+        "arg",
+        &runtime,
+        &tx,
+        &mut local_app_server_bridge,
+    )
+    .await;
 
     assert!(matches!(outcome, super::SlashOutcome::Handled));
     let event = rx.recv().await.expect("slash result event");

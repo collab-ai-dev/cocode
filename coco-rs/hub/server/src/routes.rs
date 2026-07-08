@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use askama::Template;
 use axum::Json;
@@ -7,19 +10,30 @@ use axum::Router;
 use axum::extract::Path;
 use axum::extract::Query;
 use axum::extract::State;
+use axum::extract::ws::Message;
+use axum::extract::ws::WebSocket;
+use axum::extract::ws::WebSocketUpgrade;
 use axum::http::StatusCode;
 use axum::response::Html;
 use axum::response::IntoResponse;
 use axum::response::Response;
+use axum::response::sse::Event as SseEvent;
+use axum::response::sse::KeepAlive;
+use axum::response::sse::Sse;
 use axum::routing::get;
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use coco_hub_protocol::AnnounceAckFrame;
+use coco_hub_protocol::BatchAckFrame;
+use coco_hub_protocol::ErrorFrame;
+use coco_hub_protocol::HubFrame;
 use coco_hub_protocol::SCHEMA_VERSION_V2;
 use coco_hub_protocol::SUBPROTOCOL_V2;
 use coco_types::SessionId;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::broadcast;
 
 use crate::local_store::parse_optional_rfc3339;
 use crate::store::EventFilter;
@@ -39,6 +53,7 @@ use crate::store::msg_type;
 pub struct AppState {
     store: Arc<dyn EventStore>,
     web_static_dir: Arc<std::path::PathBuf>,
+    live_topics: Arc<Mutex<HashMap<LiveTopicKey, broadcast::Sender<EventRow>>>>,
 }
 
 impl AppState {
@@ -48,8 +63,43 @@ impl AppState {
             web_static_dir: Arc::new(
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/static"),
             ),
+            live_topics: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+
+    fn subscribe_session(
+        &self,
+        instance_id: String,
+        session_id: SessionId,
+    ) -> broadcast::Receiver<EventRow> {
+        self.live_topic(instance_id, session_id).subscribe()
+    }
+
+    fn publish_event(&self, event: EventRow) {
+        let sender = self.live_topic(event.instance_id.clone(), event.session_id.clone());
+        let _ = sender.send(event);
+    }
+
+    fn live_topic(
+        &self,
+        instance_id: String,
+        session_id: SessionId,
+    ) -> broadcast::Sender<EventRow> {
+        let mut topics = self
+            .live_topics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        topics
+            .entry((instance_id, session_id))
+            .or_insert_with(|| broadcast::channel(1024).0)
+            .clone()
+    }
+}
+
+type LiveTopicKey = (String, SessionId);
+
+fn live_supported_for(health: &HealthSnapshot) -> bool {
+    health.ingest_supported
 }
 
 pub fn router(state: AppState) -> Router {
@@ -64,6 +114,8 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/static/{file}", get(static_asset))
         .route("/p/events", get(events_partial))
+        .route("/sse/session/{instance_id}/{session_id}", get(sse_session))
+        .route("/v1/connect", get(connect_ws))
         .route("/v1/protocol", get(protocol))
         .route("/v1/instances", get(list_instances))
         .route("/v1/instances/{instance_id}", get(get_instance))
@@ -77,18 +129,198 @@ pub fn router(state: AppState) -> Router {
 }
 
 async fn healthz(State(state): State<AppState>) -> Result<Json<HealthSnapshot>, ApiError> {
-    Ok(Json(state.store.health().await?))
+    let mut health = state.store.health().await?;
+    health.live_supported = live_supported_for(&health);
+    Ok(Json(health))
 }
 
-async fn protocol(State(state): State<AppState>) -> Json<ProtocolResponse> {
-    Json(ProtocolResponse {
+async fn protocol(State(state): State<AppState>) -> Result<Json<ProtocolResponse>, ApiError> {
+    let health = state.store.health().await?;
+    Ok(Json(ProtocolResponse {
         mode: state.store.mode(),
         supported_subprotocols: vec![SUBPROTOCOL_V2],
         schema_version: SCHEMA_VERSION_V2,
-        read_only: true,
-        ingest_supported: false,
-        live_supported: false,
+        read_only: health.read_only,
+        ingest_supported: health.ingest_supported,
+        live_supported: live_supported_for(&health),
+    }))
+}
+
+async fn connect_ws(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+    let requested_v2 = ws
+        .requested_protocols()
+        .any(|protocol| protocol.as_bytes() == SUBPROTOCOL_V2.as_bytes());
+    if !requested_v2 {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("missing websocket subprotocol {SUBPROTOCOL_V2}"),
+        )
+            .into_response();
+    }
+    ws.protocols([SUBPROTOCOL_V2])
+        .max_message_size(10 * 1024 * 1024)
+        .on_upgrade(move |socket| async move {
+            run_ws_connection(socket, state).await;
+        })
+}
+
+async fn run_ws_connection(mut socket: WebSocket, state: AppState) {
+    let mut announced_instance = None;
+    while let Some(message) = socket.recv().await {
+        let response = match message {
+            Ok(Message::Text(text)) => match serde_json::from_str::<HubFrame>(&text) {
+                Ok(frame) => handle_hub_frame(&state, &mut announced_instance, frame).await,
+                Err(err) => HubFrame::Error(ErrorFrame {
+                    code: "invalid_json".to_string(),
+                    detail: err.to_string(),
+                }),
+            },
+            Ok(Message::Binary(_)) => HubFrame::Error(ErrorFrame {
+                code: "unsupported_frame".to_string(),
+                detail: "binary hub frames are not supported".to_string(),
+            }),
+            Ok(Message::Close(_)) => return,
+            Ok(Message::Ping(_) | Message::Pong(_)) => continue,
+            Err(err) => {
+                tracing::debug!(error = %err, "event hub websocket receive failed");
+                return;
+            }
+        };
+        let Ok(text) = serde_json::to_string(&response) else {
+            tracing::error!("failed to serialize event hub websocket response");
+            return;
+        };
+        if socket.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
+    }
+}
+
+async fn handle_hub_frame(
+    state: &AppState,
+    announced_instance: &mut Option<String>,
+    frame: HubFrame,
+) -> HubFrame {
+    match frame {
+        HubFrame::Announce(announce) => {
+            let instance_id = announce.instance_id.to_string();
+            let live_sessions = announce.live_sessions.clone();
+            match state.store.upsert_instance(&announce).await {
+                Ok(outcome) => {
+                    *announced_instance = Some(instance_id.clone());
+                    let mut resume_from = HashMap::new();
+                    for session_id in live_sessions {
+                        let cursor = match state
+                            .store
+                            .get_session(&instance_id, session_id.as_str())
+                            .await
+                        {
+                            Ok(Some(session)) => session.last_seq,
+                            Ok(None) => 0,
+                            Err(err) => {
+                                return store_error(err);
+                            }
+                        };
+                        resume_from.insert(session_id, cursor);
+                    }
+                    HubFrame::AnnounceAck(AnnounceAckFrame {
+                        first_seen: outcome.first_seen,
+                        hub_version: env!("CARGO_PKG_VERSION").to_string(),
+                        resume_from,
+                    })
+                }
+                Err(err) => store_error(err),
+            }
+        }
+        HubFrame::Batch(batch) => {
+            let Some(instance_id) = announced_instance.as_deref() else {
+                return HubFrame::Error(ErrorFrame {
+                    code: "announce_required".to_string(),
+                    detail: "send announce before batch".to_string(),
+                });
+            };
+            let mut up_to_seq = HashMap::<SessionId, i64>::new();
+            let mut publish_keys = Vec::new();
+            for event in &batch.events {
+                up_to_seq
+                    .entry(event.session_id.clone())
+                    .and_modify(|seq| *seq = (*seq).max(event.session_seq))
+                    .or_insert(event.session_seq);
+                match state
+                    .store
+                    .get_event(instance_id, event.session_id.as_str(), event.session_seq)
+                    .await
+                {
+                    Ok(None) => publish_keys.push((event.session_id.clone(), event.session_seq)),
+                    Ok(Some(_)) => {}
+                    Err(err) => return store_error(err),
+                }
+            }
+            match state.store.ingest_batch(instance_id, batch).await {
+                Ok(_) => {
+                    for (session_id, session_seq) in publish_keys {
+                        match state
+                            .store
+                            .get_event(instance_id, session_id.as_str(), session_seq)
+                            .await
+                        {
+                            Ok(Some(event)) => state.publish_event(event),
+                            Ok(None) => {}
+                            Err(err) => return store_error(err),
+                        }
+                    }
+                    HubFrame::BatchAck(BatchAckFrame { up_to_seq })
+                }
+                Err(err) => store_error(err),
+            }
+        }
+        HubFrame::AnnounceAck(_) | HubFrame::BatchAck(_) | HubFrame::Error(_) => {
+            HubFrame::Error(ErrorFrame {
+                code: "unexpected_frame".to_string(),
+                detail: "hub received a server-to-client frame".to_string(),
+            })
+        }
+    }
+}
+
+fn store_error(err: EventStoreError) -> HubFrame {
+    HubFrame::Error(ErrorFrame {
+        code: "store_error".to_string(),
+        detail: err.to_string(),
     })
+}
+
+async fn sse_session(
+    State(state): State<AppState>,
+    Path((instance_id, session_id)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let session_id = parse_session_id(session_id)?;
+    let mut receiver = state.subscribe_session(instance_id, session_id);
+    let stream = async_stream::stream! {
+        loop {
+            match receiver.recv().await {
+                Ok(event) => {
+                    let session_seq = event.session_seq;
+                    let html = EventListTemplate {
+                        events: vec![EventView::from(event)],
+                    }
+                    .render()
+                    .unwrap_or_default();
+                    yield Ok::<_, Infallible>(
+                        SseEvent::default()
+                            .event("event")
+                            .id(session_seq.to_string())
+                            .data(html),
+                    );
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+    Ok(Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response())
 }
 
 async fn static_asset(
@@ -768,3 +1000,7 @@ impl IntoResponse for ApiError {
 fn is_safe_asset_name(file: &str) -> bool {
     !file.is_empty() && !file.contains('/') && !file.contains('\\') && file != "." && file != ".."
 }
+
+#[cfg(test)]
+#[path = "routes.test.rs"]
+mod tests;

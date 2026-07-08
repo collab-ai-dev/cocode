@@ -23,12 +23,11 @@
 //! __COCO_BTW_NOW__ <question>
 //! ```
 //!
-//! Both runner surfaces consume it: the TUI via
-//! `tui_runner::run_side_question` (classified in
-//! `classify_sentinel_trigger`) and the SDK via the `parse_btw_sentinel`
-//! short-circuit in `sdk_runner`. Both delegate the fork + answer
-//! extraction to `coco_cli::side_question`. Headless `-p` mode does not
-//! expand registry slash commands, so it never reaches this handler.
+//! Both surfaces consume it: the TUI via `tui_runner::run_side_question`
+//! (classified in `classify_sentinel_trigger`) and the SDK via the
+//! `turn/start` handler shortcut. Both delegate the fork + answer extraction
+//! to `coco_cli::side_question`. Headless `-p` mode does not expand registry
+//! slash commands, so it never reaches this handler.
 
 /// Sentinel prefix runners recognise on the handler output. Text after
 /// the prefix (until newline) is the user's question.

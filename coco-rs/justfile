@@ -156,6 +156,14 @@ alias c := coco
 coco *args:
     cargo run --bin coco -- "$@"
 
+# Build coco with the optional embedded Event Hub server available.
+coco-with-hub:
+    cargo build -p coco-cli --features serve-hub
+
+# Build the standalone Event Hub server binary.
+hub-server:
+    cargo build -p coco-hub-server
+
 # Run coco CLI with jemalloc allocator + page reclamation enabled
 coco-jemalloc *args:
     #!/usr/bin/env bash

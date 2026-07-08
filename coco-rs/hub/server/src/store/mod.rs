@@ -29,7 +29,7 @@ impl<T> Page<T> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct InstanceRow {
     pub instance_id: String,
@@ -49,7 +49,7 @@ pub struct InstanceRow {
     pub synthetic_identity: bool,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionRow {
     pub instance_id: String,
@@ -70,7 +70,7 @@ pub struct SessionRow {
     pub file_size: u64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct EventRow {
     pub instance_id: String,
@@ -192,7 +192,7 @@ impl SearchQuery {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub event: EventRow,
@@ -265,6 +265,8 @@ pub enum EventStoreError {
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("sqlite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
     #[error("session error: {0}")]
     Session(#[from] coco_session::SessionError),
     #[error("free_text_not_supported")]
@@ -296,6 +298,7 @@ impl ErrorExt for EventStoreError {
         match self {
             Self::Io { .. } => StatusCode::IoError,
             Self::Json { .. } => StatusCode::InvalidJson,
+            Self::Sqlite { .. } => StatusCode::Internal,
             Self::Session { .. } => StatusCode::Internal,
             Self::FreeTextNotSupported | Self::NotSupported(_) => StatusCode::Unsupported,
             Self::NotFound(_) => StatusCode::FileNotFound,
@@ -308,6 +311,41 @@ impl ErrorExt for EventStoreError {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+}
+
+pub(crate) fn event_matches_filter(event: &EventRow, filter: &EventFilter) -> bool {
+    filter
+        .kind
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .is_none_or(|kind| event.kind == kind)
+        && filter
+            .inner_kind
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .is_none_or(|inner_kind| event.inner_kind.as_deref() == Some(inner_kind))
+        && filter
+            .tool
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .is_none_or(|tool| event.tool_name.as_deref() == Some(tool))
+        && filter
+            .error
+            .is_none_or(|error| event.is_error == Some(error))
+        && filter
+            .agent
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .is_none_or(|agent| event.agent_id.as_deref() == Some(agent))
+        && filter
+            .msg_type
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .is_none_or(|msg_type| {
+                event.msg_type == msg_type || event.lane == msg_type || event.role == msg_type
+            })
+        && filter.from_ms.is_none_or(|from_ms| event.ts >= from_ms)
+        && filter.to_ms.is_none_or(|to_ms| event.ts <= to_ms)
 }
 
 #[async_trait]

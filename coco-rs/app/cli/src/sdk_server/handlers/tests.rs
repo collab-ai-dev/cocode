@@ -13,6 +13,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use clap::Parser;
 use coco_types::CoreEvent;
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcRequest;
@@ -54,9 +55,13 @@ fn req(id: i64, method: &str, params: serde_json::Value) -> JsonRpcMessage {
     })
 }
 
+fn test_startup_cwd() -> std::path::PathBuf {
+    std::env::temp_dir()
+}
+
 async fn spawn_server() -> (tokio::task::JoinHandle<()>, Arc<InMemoryTransport>) {
     let (server_end, client_end) = InMemoryTransport::pair(32);
-    let server = SdkServer::new(server_end);
+    let server = SdkServer::new(server_end).with_startup_cwd(test_startup_cwd());
     let handle = spawn_app_server_bridge(server);
     (handle, client_end)
 }
@@ -67,7 +72,7 @@ async fn spawn_server_with_state() -> (
     Arc<SdkServerState>,
 ) {
     let (server_end, client_end) = InMemoryTransport::pair(32);
-    let server = SdkServer::new(server_end);
+    let server = SdkServer::new(server_end).with_startup_cwd(test_startup_cwd());
     let state = server.state();
     let handle = spawn_app_server_bridge(server);
     (handle, client_end, state)
@@ -77,9 +82,116 @@ async fn spawn_server_with_runner(
     runner: Arc<dyn TurnRunner>,
 ) -> (tokio::task::JoinHandle<()>, Arc<InMemoryTransport>) {
     let (server_end, client_end) = InMemoryTransport::pair(32);
-    let server = SdkServer::new(server_end).with_turn_runner(runner);
+    let server = SdkServer::new(server_end)
+        .with_startup_cwd(test_startup_cwd())
+        .with_turn_runner(runner);
     let handle = spawn_app_server_bridge(server);
     (handle, client_end)
+}
+
+struct SdkStopTaskMockModel;
+
+#[async_trait::async_trait]
+impl coco_inference::LanguageModel for SdkStopTaskMockModel {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "sdk-stop-task-mock"
+    }
+
+    async fn do_generate(
+        &self,
+        _options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<CancellationToken>,
+    ) -> Result<coco_inference::LanguageModelGenerateResult, coco_inference::AISdkError> {
+        Ok(coco_inference::LanguageModelGenerateResult {
+            content: vec![coco_llm_types::AssistantContentPart::Text(
+                coco_llm_types::TextPart {
+                    text: "ok".into(),
+                    provider_metadata: None,
+                },
+            )],
+            usage: coco_llm_types::Usage::new(1, 1),
+            finish_reason: coco_llm_types::FinishReason::new(coco_llm_types::StopReason::EndTurn),
+            warnings: Vec::new(),
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+
+    async fn do_stream(
+        &self,
+        options: &coco_inference::LanguageModelCallOptions,
+        _abort_signal: Option<CancellationToken>,
+    ) -> Result<coco_inference::LanguageModelStreamResult, coco_inference::AISdkError> {
+        let result = self.do_generate(options, None).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
+async fn build_sdk_test_runtime(home: &std::path::Path) -> crate::session_runtime::SessionHandle {
+    let settings = coco_config::SettingsWithSource {
+        merged: coco_config::Settings {
+            models: coco_config::ModelSelectionSettings {
+                main: Some(coco_config::RoleSlots::new(
+                    coco_types::ProviderModelSelection {
+                        provider: "anthropic".into(),
+                        model_id: "claude-opus-4-7".into(),
+                    },
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        per_source: std::collections::HashMap::new(),
+        source_paths: std::collections::HashMap::new(),
+    };
+    let runtime_config = coco_config::build_runtime_config_with(
+        settings,
+        coco_config::EnvSnapshot::default(),
+        coco_config::RuntimeOverrides::default(),
+        coco_config::CatalogPaths::empty_in(home),
+        coco_config::parse_enabled_setting_sources(None),
+    )
+    .expect("runtime config");
+    let model_id = crate::headless::resolve_main_model(&runtime_config).model_id;
+    let cli = crate::Cli::try_parse_from(["coco"]).expect("parse cli");
+
+    crate::session_runtime::SessionHandle::build(crate::session_runtime::SessionRuntimeBuildOpts {
+        cli: &cli,
+        runtime_config: Arc::new(runtime_config),
+        cwd: home.to_path_buf(),
+        model_id,
+        system_prompt: "test".to_string(),
+        permission_mode_availability: coco_types::PermissionModeAvailability::default(),
+        permission_mode: coco_types::PermissionMode::default(),
+        model_runtimes: Some(coco_query::test_support::model_runtime_registry(Arc::new(
+            SdkStopTaskMockModel,
+        ))),
+        tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
+        session_manager: Arc::new(coco_session::SessionManager::new(home.join("sessions"))),
+        fast_model_spec: None,
+        permission_bridge: None,
+        command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
+            coco_commands::CommandRegistry::default(),
+        ))),
+        skill_manager: Arc::new(coco_skills::SkillManager::new()),
+        process_runtime: crate::process_runtime::ProcessRuntime::global(),
+        project_services: Arc::new(crate::project_services::ProjectServices::load(home, home)),
+        agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+        builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
+        session_id_override: None,
+        is_non_interactive: false,
+    })
+    .await
+    .expect("build runtime")
 }
 
 fn spawn_app_server_bridge(server: SdkServer) -> tokio::task::JoinHandle<()> {
@@ -139,6 +251,17 @@ fn seed_session_transcript(
     cwd: &str,
     model: Option<&str>,
 ) {
+    append_session_transcript_message(memory_base, sid, cwd, model, 1, "seed");
+}
+
+fn append_session_transcript_message(
+    memory_base: &std::path::Path,
+    sid: &str,
+    cwd: &str,
+    model: Option<&str>,
+    ordinal: i32,
+    content: &str,
+) {
     let paths = std::sync::Arc::new(coco_paths::ProjectPaths::new(
         memory_base.to_path_buf(),
         std::path::Path::new(cwd),
@@ -146,7 +269,7 @@ fn seed_session_transcript(
     let store = coco_session::TranscriptStore::new(paths);
     let entry = coco_session::TranscriptEntry {
         entry_type: "user".to_string(),
-        uuid: format!("{sid}-u1"),
+        uuid: format!("{sid}-u{ordinal}"),
         parent_uuid: None,
         logical_parent_uuid: None,
         session_id: Some(coco_types::SessionId::try_new(sid).expect("valid session id")),
@@ -156,7 +279,7 @@ fn seed_session_transcript(
         git_branch: None,
         is_sidechain: false,
         agent_id: None,
-        message: Some(serde_json::json!({"role":"user","content":"seed"})),
+        message: Some(serde_json::json!({"role":"user","content": content})),
         usage: None,
         model: model.map(str::to_string),
         request_id: None,
@@ -178,7 +301,9 @@ async fn spawn_server_with_session_manager() -> (
     let tmp = TempSessionsDir::new();
     let manager = Arc::new(coco_session::SessionManager::new(tmp.path.clone()));
     let (server_end, client_end) = InMemoryTransport::pair(32);
-    let server = SdkServer::new(server_end).with_session_manager(manager);
+    let server = SdkServer::new(server_end)
+        .with_startup_cwd(test_startup_cwd())
+        .with_session_manager(manager);
     let state = server.state();
     let handle = spawn_app_server_bridge(server);
     (handle, client_end, state, tmp)
@@ -203,6 +328,69 @@ impl TurnRunner for ScriptedRunner {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
         let completed = self.completed.clone();
         Box::pin(async move {
+            event_tx
+                .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
+                    TurnStartedParams {
+                        turn_id: turn_id.clone(),
+                    },
+                )))
+                .await
+                .ok();
+            event_tx
+                .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
+                    TurnEndedParams::completed(
+                        turn_id,
+                        Some(coco_types::TokenUsage::default()),
+                        Some(coco_messages::StopReason::EndTurn),
+                    ),
+                )))
+                .await
+                .ok();
+            completed.notify_one();
+            Ok(())
+        })
+    }
+}
+
+struct FlaggingRunner {
+    called: Arc<AtomicBool>,
+}
+
+impl TurnRunner for FlaggingRunner {
+    fn run_turn<'a>(
+        &'a self,
+        _params: coco_types::TurnStartParams,
+        _turn_id: coco_types::TurnId,
+        _handoff: TurnHandoff,
+        _event_tx: mpsc::Sender<CoreEvent>,
+        _cancel: CancellationToken,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        let called = Arc::clone(&self.called);
+        Box::pin(async move {
+            called.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+}
+
+struct PromptRecordingRunner {
+    prompt: Arc<tokio::sync::Mutex<Option<String>>>,
+    completed: Arc<Notify>,
+}
+
+impl TurnRunner for PromptRecordingRunner {
+    fn run_turn<'a>(
+        &'a self,
+        params: coco_types::TurnStartParams,
+        turn_id: coco_types::TurnId,
+        _handoff: TurnHandoff,
+        event_tx: mpsc::Sender<CoreEvent>,
+        _cancel: CancellationToken,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        let prompt = Arc::clone(&self.prompt);
+        let completed = Arc::clone(&self.completed);
+        Box::pin(async move {
+            *prompt.lock().await = Some(params.prompt);
             event_tx
                 .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
                     TurnStartedParams {
@@ -376,7 +564,9 @@ async fn initialize_with_bootstrap_returns_real_commands() {
         CliInitializeBootstrap::new("Explanatory".into())
             .with_command_registry(Arc::new(tokio::sync::RwLock::new(Arc::new(registry)))),
     );
-    let server = SdkServer::new(server_end).with_initialize_bootstrap(bootstrap);
+    let server = SdkServer::new(server_end)
+        .with_startup_cwd(test_startup_cwd())
+        .with_initialize_bootstrap(bootstrap);
     let server_task = spawn_app_server_bridge(server);
 
     client_end
@@ -458,7 +648,9 @@ async fn initialize_fast_mode_state_some_serializes_to_wire() {
         let (server_end, client_end) = InMemoryTransport::pair(32);
         let bootstrap: Arc<dyn crate::sdk_server::InitializeBootstrap> =
             Arc::new(MockFastModeBootstrap { state });
-        let server = SdkServer::new(server_end).with_initialize_bootstrap(bootstrap);
+        let server = SdkServer::new(server_end)
+            .with_startup_cwd(test_startup_cwd())
+            .with_initialize_bootstrap(bootstrap);
         let server_task = spawn_app_server_bridge(server);
 
         client_end
@@ -727,6 +919,564 @@ async fn turn_start_returns_turn_id_and_forwards_notifications() {
         .await
         .expect("runner should complete");
 
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn turn_start_cost_and_status_sentinels_use_appserver_observability_handlers() {
+    let runner_called = Arc::new(AtomicBool::new(false));
+    let runner = Arc::new(FlaggingRunner {
+        called: Arc::clone(&runner_called),
+    });
+    let (server_task, client, state) = spawn_server_with_state().await;
+    *state.turn_runner.write().await = runner;
+
+    let session_id = start_session(&client).await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    *state.session_runtime.write().await = Some(runtime);
+
+    client
+        .send(req(
+            2,
+            "turn/start",
+            serde_json::json!({ "prompt": coco_commands::handlers::cost::COST_SENTINEL }),
+        ))
+        .await
+        .unwrap();
+    let cost_reply = client.recv().await.unwrap().unwrap();
+    let JsonRpcMessage::Response(cost_response) = cost_reply else {
+        panic!("expected cost turn/start response");
+    };
+    let cost_turn_id = cost_response.result["turn_id"]
+        .as_str()
+        .expect("cost turn_id");
+    assert_eq!(cost_turn_id, format!("turn-{session_id}-1"));
+
+    client
+        .send(req(
+            3,
+            "turn/start",
+            serde_json::json!({ "prompt": coco_commands::STATUS_SENTINEL }),
+        ))
+        .await
+        .unwrap();
+    let status_reply = client.recv().await.unwrap().unwrap();
+    let JsonRpcMessage::Response(status_response) = status_reply else {
+        panic!("expected status turn/start response");
+    };
+    let status_turn_id = status_response.result["turn_id"]
+        .as_str()
+        .expect("status turn_id");
+    assert_eq!(status_turn_id, format!("turn-{session_id}-2"));
+
+    assert!(
+        !runner_called.load(Ordering::SeqCst),
+        "observability sentinels should not invoke the turn runner"
+    );
+    let slot = state.session.read().await;
+    let session = slot.as_ref().expect("active session");
+    assert!(session.active_turn_cancel.is_none());
+    let history = session.history.lock().await;
+    assert_eq!(history.len(), 2);
+    let cost_text = coco_messages::wrapping::extract_text_from_message(&history[0]);
+    let status_text = coco_messages::wrapping::extract_text_from_message(&history[1]);
+    assert!(cost_text.contains("No API usage recorded yet"));
+    assert!(status_text.contains("claude-opus-4-7"));
+    assert!(!cost_text.contains(coco_commands::handlers::cost::COST_SENTINEL));
+    assert!(!status_text.contains(coco_commands::STATUS_SENTINEL));
+
+    drop(history);
+    drop(slot);
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn turn_start_rename_sentinel_uses_appserver_session_rename_handler() {
+    let runner_called = Arc::new(AtomicBool::new(false));
+    let runner = Arc::new(FlaggingRunner {
+        called: Arc::clone(&runner_called),
+    });
+    let (server_task, client, state) = spawn_server_with_state().await;
+    *state.turn_runner.write().await = runner;
+
+    let session_id = start_session(&client).await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    let runtime_session_id = runtime.current_typed_session_id().await;
+    let memory_base = home.path().join("sessions");
+    append_session_transcript_message(
+        &memory_base,
+        runtime_session_id.as_str(),
+        &home.path().display().to_string(),
+        Some("claude-opus-4-7"),
+        1,
+        "please fix the login bug",
+    );
+    *state.session_runtime.write().await = Some(runtime.clone());
+
+    client
+        .send(req(
+            2,
+            "turn/start",
+            serde_json::json!({
+                "prompt": format!("{} {}", coco_commands::RENAME_SENTINEL, "fix-login")
+            }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    let JsonRpcMessage::Response(response) = reply else {
+        panic!("expected rename turn/start response");
+    };
+    let turn_id = response.result["turn_id"].as_str().expect("turn_id");
+    assert_eq!(turn_id, format!("turn-{session_id}-1"));
+
+    assert!(
+        !runner_called.load(Ordering::SeqCst),
+        "rename sentinel should not invoke the turn runner"
+    );
+    let slot = state.session.read().await;
+    let session = slot.as_ref().expect("active session");
+    assert!(session.active_turn_cancel.is_none());
+    assert!(session.history.lock().await.is_empty());
+    drop(slot);
+
+    let persisted = runtime
+        .session_manager
+        .load(runtime_session_id.as_str())
+        .expect("renamed session should load");
+    assert_eq!(persisted.title.as_deref(), Some("fix-login"));
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn turn_start_memory_sentinels_do_not_invoke_runner_when_memory_runtime_absent() {
+    let runner_called = Arc::new(AtomicBool::new(false));
+    let runner = Arc::new(FlaggingRunner {
+        called: Arc::clone(&runner_called),
+    });
+    let (server_task, client, state) = spawn_server_with_state().await;
+    *state.turn_runner.write().await = runner;
+
+    let session_id = start_session(&client).await;
+
+    client
+        .send(req(
+            2,
+            "turn/start",
+            serde_json::json!({
+                "prompt": coco_commands::handlers::dream::DREAM_SENTINEL
+            }),
+        ))
+        .await
+        .unwrap();
+    let dream_reply = client.recv().await.unwrap().unwrap();
+    let JsonRpcMessage::Response(dream_response) = dream_reply else {
+        panic!("expected dream turn/start response");
+    };
+    let dream_turn_id = dream_response.result["turn_id"]
+        .as_str()
+        .expect("dream turn_id");
+    assert_eq!(dream_turn_id, format!("turn-{session_id}-1"));
+
+    client
+        .send(req(
+            3,
+            "turn/start",
+            serde_json::json!({
+                "prompt": coco_commands::handlers::summary::SUMMARY_SENTINEL
+            }),
+        ))
+        .await
+        .unwrap();
+    let summary_reply = client.recv().await.unwrap().unwrap();
+    let JsonRpcMessage::Response(summary_response) = summary_reply else {
+        panic!("expected summary turn/start response");
+    };
+    let summary_turn_id = summary_response.result["turn_id"]
+        .as_str()
+        .expect("summary turn_id");
+    assert_eq!(summary_turn_id, format!("turn-{session_id}-2"));
+
+    assert!(
+        !runner_called.load(Ordering::SeqCst),
+        "memory sentinels should not invoke the turn runner"
+    );
+    let slot = state.session.read().await;
+    let session = slot.as_ref().expect("active session");
+    assert!(session.active_turn_cancel.is_none());
+    assert!(session.history.lock().await.is_empty());
+
+    drop(slot);
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn turn_start_btw_sentinel_uses_handler_shortcut_without_runner() {
+    let runner_called = Arc::new(AtomicBool::new(false));
+    let runner = Arc::new(FlaggingRunner {
+        called: Arc::clone(&runner_called),
+    });
+    let (server_task, client, state) = spawn_server_with_state().await;
+    *state.turn_runner.write().await = runner;
+
+    let session_id = start_session(&client).await;
+    let question = "what changed?";
+
+    client
+        .send(req(
+            2,
+            "turn/start",
+            serde_json::json!({
+                "prompt": format!("{} {question}", coco_commands::handlers::btw::BTW_SENTINEL)
+            }),
+        ))
+        .await
+        .unwrap();
+
+    let mut turn_start_reply = None;
+    let mut message_append_count = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline
+        && (turn_start_reply.is_none() || message_append_count < 2)
+    {
+        match tokio::time::timeout(Duration::from_millis(500), client.recv()).await {
+            Ok(Ok(Some(JsonRpcMessage::Response(response))))
+                if response.request_id == RequestId::Integer(2) =>
+            {
+                turn_start_reply = Some(response);
+            }
+            Ok(Ok(Some(JsonRpcMessage::Notification(notification))))
+                if notification.method == NotificationMethod::MessageAppended.as_str() =>
+            {
+                message_append_count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    let response = turn_start_reply.expect("turn/start response");
+    let turn_id = response.result["turn_id"].as_str().expect("turn_id");
+    assert_eq!(turn_id, format!("turn-{session_id}-1"));
+    assert_eq!(message_append_count, 2);
+
+    assert!(
+        !runner_called.load(Ordering::SeqCst),
+        "btw sentinel should not invoke the turn runner"
+    );
+    let slot = state.session.read().await;
+    let session = slot.as_ref().expect("active session");
+    assert!(session.active_turn_cancel.is_none());
+    let history = session.history.lock().await;
+    assert_eq!(history.len(), 2);
+    let echo = coco_messages::wrapping::extract_text_from_message(&history[0]);
+    let result = coco_messages::wrapping::extract_text_from_message(&history[1]);
+    assert!(echo.contains("/btw"));
+    assert!(echo.contains(question));
+    assert!(result.contains("fork dispatcher not installed"));
+    assert!(!echo.contains(coco_commands::handlers::btw::BTW_SENTINEL));
+    assert!(!result.contains(coco_commands::handlers::btw::BTW_SENTINEL));
+
+    drop(history);
+    drop(slot);
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn turn_start_compact_sentinel_uses_handler_shortcut_without_runner() {
+    let runner_called = Arc::new(AtomicBool::new(false));
+    let runner = Arc::new(FlaggingRunner {
+        called: Arc::clone(&runner_called),
+    });
+    let (server_task, client, state) = spawn_server_with_state().await;
+    *state.turn_runner.write().await = runner;
+
+    let session_id = start_session(&client).await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    *state.session_runtime.write().await = Some(runtime.clone());
+    let prompt = coco_commands::handlers::compact::handler("focus auth".to_string())
+        .await
+        .expect("compact handler output");
+
+    client
+        .send(req(
+            2,
+            "turn/start",
+            serde_json::json!({ "prompt": prompt }),
+        ))
+        .await
+        .unwrap();
+
+    let mut turn_start_reply = None;
+    let mut message_append_count = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline
+        && (turn_start_reply.is_none() || message_append_count < 2)
+    {
+        match tokio::time::timeout(Duration::from_millis(500), client.recv()).await {
+            Ok(Ok(Some(JsonRpcMessage::Response(response))))
+                if response.request_id == RequestId::Integer(2) =>
+            {
+                turn_start_reply = Some(response);
+            }
+            Ok(Ok(Some(JsonRpcMessage::Notification(notification))))
+                if notification.method == NotificationMethod::MessageAppended.as_str() =>
+            {
+                message_append_count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    let response = turn_start_reply.expect("turn/start response");
+    let turn_id = response.result["turn_id"].as_str().expect("turn_id");
+    assert_eq!(turn_id, format!("turn-{session_id}-1"));
+    assert_eq!(message_append_count, 2);
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        let active = state
+            .session
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|session| session.active_turn_cancel.is_some());
+        if !active {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    assert!(
+        !runner_called.load(Ordering::SeqCst),
+        "compact sentinel should not invoke the turn runner"
+    );
+    let slot = state.session.read().await;
+    let session = slot.as_ref().expect("active session");
+    assert!(session.active_turn_cancel.is_none());
+    let history = session.history.lock().await;
+    assert_eq!(history.len(), 2);
+    let echo = coco_messages::wrapping::extract_text_from_message(&history[0]);
+    let result = coco_messages::wrapping::extract_text_from_message(&history[1]);
+    assert!(echo.contains("/compact"));
+    assert!(echo.contains("focus auth"));
+    assert!(result.contains("No messages to compact."));
+    assert!(!echo.contains(coco_commands::handlers::compact::COMPACT_SENTINEL));
+    assert!(!result.contains(coco_commands::handlers::compact::COMPACT_SENTINEL));
+
+    let runtime_history = runtime.history.lock().await;
+    assert_eq!(runtime_history.len(), 2);
+
+    drop(runtime_history);
+    drop(history);
+    drop(slot);
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn turn_start_goal_status_and_clear_sentinels_use_handler_shortcut_without_runner() {
+    let runner_called = Arc::new(AtomicBool::new(false));
+    let runner = Arc::new(FlaggingRunner {
+        called: Arc::clone(&runner_called),
+    });
+    let (server_task, client, state) = spawn_server_with_state().await;
+    *state.turn_runner.write().await = runner;
+
+    let session_id = start_session(&client).await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    *state.session_runtime.write().await = Some(runtime.clone());
+
+    client
+        .send(req(
+            2,
+            "turn/start",
+            serde_json::json!({ "prompt": format!("{}\nstatus", coco_commands::GOAL_SENTINEL) }),
+        ))
+        .await
+        .unwrap();
+    let mut status_response = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline && status_response.is_none() {
+        match tokio::time::timeout(Duration::from_millis(500), client.recv()).await {
+            Ok(Ok(Some(JsonRpcMessage::Response(response))))
+                if response.request_id == RequestId::Integer(2) =>
+            {
+                status_response = Some(response);
+            }
+            _ => {}
+        }
+    }
+    let status_response = status_response.expect("goal status turn/start response");
+    let status_turn_id = status_response.result["turn_id"]
+        .as_str()
+        .expect("status turn_id");
+    assert_eq!(status_turn_id, format!("turn-{session_id}-1"));
+
+    {
+        let slot = state.session.read().await;
+        let session = slot.as_ref().expect("active session");
+        session.app_state.write().await.active_goal = Some(crate::goal_command::active_goal(
+            "finish migration".to_string(),
+            0,
+        ));
+        runtime
+            .runtime()
+            .hook_registry()
+            .register(crate::goal_command::managed_goal_hook(
+                "finish migration".to_string(),
+            ));
+    }
+
+    client
+        .send(req(
+            3,
+            "turn/start",
+            serde_json::json!({ "prompt": format!("{}\nclear", coco_commands::GOAL_SENTINEL) }),
+        ))
+        .await
+        .unwrap();
+    let mut clear_response = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline && clear_response.is_none() {
+        match tokio::time::timeout(Duration::from_millis(500), client.recv()).await {
+            Ok(Ok(Some(JsonRpcMessage::Response(response))))
+                if response.request_id == RequestId::Integer(3) =>
+            {
+                clear_response = Some(response);
+            }
+            _ => {}
+        }
+    }
+    let clear_response = clear_response.expect("goal clear turn/start response");
+    let clear_turn_id = clear_response.result["turn_id"]
+        .as_str()
+        .expect("clear turn_id");
+    assert_eq!(clear_turn_id, format!("turn-{session_id}-2"));
+
+    assert!(
+        !runner_called.load(Ordering::SeqCst),
+        "goal status/clear sentinels should not invoke the turn runner"
+    );
+    let slot = state.session.read().await;
+    let session = slot.as_ref().expect("active session");
+    assert!(session.active_turn_cancel.is_none());
+    assert!(session.app_state.read().await.active_goal.is_none());
+    let history = session.history.lock().await;
+    let rendered = history
+        .iter()
+        .map(|message| coco_messages::wrapping::extract_text_from_message(message))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("No goal set. Usage: `/goal <condition>`"));
+    assert!(rendered.contains("Goal cleared: finish migration"));
+    assert!(!rendered.contains(coco_commands::GOAL_SENTINEL));
+
+    drop(history);
+    drop(slot);
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn turn_start_goal_set_sentinel_rewrites_prompt_before_runner() {
+    let recorded_prompt = Arc::new(tokio::sync::Mutex::new(None));
+    let completed = Arc::new(Notify::new());
+    let runner = Arc::new(PromptRecordingRunner {
+        prompt: Arc::clone(&recorded_prompt),
+        completed: Arc::clone(&completed),
+    });
+    let (server_task, client, state) = spawn_server_with_state().await;
+    *state.turn_runner.write().await = runner;
+
+    let session_id = start_session(&client).await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    *state.session_runtime.write().await = Some(runtime);
+
+    client
+        .send(req(
+            2,
+            "turn/start",
+            serde_json::json!({
+                "prompt": format!(
+                    "{}\nset\nfinish the app-server migration",
+                    coco_commands::GOAL_SENTINEL
+                )
+            }),
+        ))
+        .await
+        .unwrap();
+
+    let mut turn_start_reply = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline && turn_start_reply.is_none() {
+        match tokio::time::timeout(Duration::from_millis(500), client.recv()).await {
+            Ok(Ok(Some(JsonRpcMessage::Response(response))))
+                if response.request_id == RequestId::Integer(2) =>
+            {
+                turn_start_reply = Some(response);
+            }
+            _ => {}
+        }
+    }
+    let response = turn_start_reply.expect("turn/start response");
+    let turn_id = response.result["turn_id"].as_str().expect("turn_id");
+    assert_eq!(turn_id, format!("turn-{session_id}-1"));
+    tokio::time::timeout(Duration::from_secs(1), completed.notified())
+        .await
+        .expect("runner should receive rewritten prompt");
+
+    let prompt = recorded_prompt.lock().await.clone().expect("runner prompt");
+    assert!(prompt.contains("A session-scoped Stop hook is now active"));
+    assert!(prompt.contains("finish the app-server migration"));
+    assert!(!prompt.contains(coco_commands::GOAL_SENTINEL));
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        let active = state
+            .session
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|session| session.active_turn_cancel.is_some());
+        if !active {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let slot = state.session.read().await;
+    let session = slot.as_ref().expect("active session");
+    assert!(session.active_turn_cancel.is_none());
+    let active_goal = session
+        .app_state
+        .read()
+        .await
+        .active_goal
+        .clone()
+        .expect("active goal");
+    assert_eq!(active_goal.condition, "finish the app-server migration");
+    let history = session.history.lock().await;
+    let rendered = history
+        .iter()
+        .map(|message| coco_messages::wrapping::extract_text_from_message(message))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Goal set: finish the app-server migration"));
+    assert!(!rendered.contains(coco_commands::GOAL_SENTINEL));
+
+    drop(history);
+    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }
@@ -1176,6 +1926,38 @@ async fn set_model_with_null_reverts_to_default() {
 }
 
 #[tokio::test]
+async fn set_model_role_without_session_runtime_errors() {
+    let (server_task, client, _state) = spawn_server_with_state().await;
+
+    start_session(&client).await;
+
+    client
+        .send(req(
+            2,
+            "control/setModelRole",
+            serde_json::json!({
+                "role": "main",
+                "provider": "anthropic",
+                "model_id": "claude-sonnet-4-6",
+                "effort": "high",
+            }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Error(e) => {
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no session runtime installed"));
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn set_permission_mode_updates_session_field() {
     let (server_task, client, state) = spawn_server_with_state().await;
 
@@ -1512,6 +2294,261 @@ async fn set_thinking_updates_session_field() {
 }
 
 #[tokio::test]
+async fn set_thinking_updates_runtime_and_emits_role_changed() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+    start_session(&client).await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    *state.session_runtime.write().await = Some(runtime.clone());
+
+    client
+        .send(req(
+            2,
+            "control/setThinking",
+            serde_json::json!({
+                "thinking_level": {
+                    "effort": "high",
+                    "budget_tokens": 4096,
+                }
+            }),
+        ))
+        .await
+        .unwrap();
+
+    let mut saw_response = false;
+    let mut saw_role_changed = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline && (!saw_response || !saw_role_changed) {
+        match tokio::time::timeout(Duration::from_millis(500), client.recv()).await {
+            Ok(Ok(Some(JsonRpcMessage::Response(r)))) if r.request_id == RequestId::Integer(2) => {
+                assert!(r.result.is_null());
+                saw_response = true;
+            }
+            Ok(Ok(Some(JsonRpcMessage::Notification(n))))
+                if n.method == NotificationMethod::ModelRoleChanged.as_str() =>
+            {
+                assert_eq!(n.params["role"], "main");
+                assert_eq!(n.params["effort"], "high");
+                saw_role_changed = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_response, "control/setThinking response not seen");
+    assert!(saw_role_changed, "model/roleChanged notification not seen");
+    let cfg = runtime.runtime().current_engine_config().await;
+    let thinking = cfg.thinking_level.expect("runtime thinking level");
+    assert_eq!(thinking.effort, coco_types::ReasoningEffort::High);
+    assert_eq!(thinking.budget_tokens, Some(4096));
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn apply_permission_update_without_session_runtime_errors() {
+    let (server_task, client, _state) = spawn_server_with_state().await;
+
+    start_session(&client).await;
+
+    client
+        .send(req(
+            2,
+            "control/applyPermissionUpdate",
+            serde_json::json!({
+                "update": {
+                    "type": "add_rules",
+                    "rules": [{
+                        "source": "session",
+                        "behavior": "allow",
+                        "value": { "tool_pattern": "Read" }
+                    }],
+                    "destination": "session"
+                }
+            }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Error(e) => {
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no session runtime installed"));
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn set_agent_color_without_session_runtime_errors() {
+    let (server_task, client, _state) = spawn_server_with_state().await;
+
+    start_session(&client).await;
+
+    client
+        .send(req(
+            2,
+            "control/setAgentColor",
+            serde_json::json!({ "color": "blue" }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Error(e) => {
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no session runtime installed"));
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn set_agent_color_updates_live_app_state() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+
+    start_session(&client).await;
+
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    *state.session_runtime.write().await = Some(runtime.clone());
+
+    client
+        .send(req(
+            2,
+            "control/setAgentColor",
+            serde_json::json!({ "color": "blue" }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(reply, JsonRpcMessage::Response(_)));
+    assert_eq!(
+        runtime.runtime().app_state.read().await.agent_color,
+        Some(coco_types::AgentColorName::Blue)
+    );
+
+    client
+        .send(req(3, "control/setAgentColor", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(reply, JsonRpcMessage::Response(_)));
+    assert_eq!(runtime.runtime().app_state.read().await.agent_color, None);
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_session_permission_rules_without_session_runtime_errors() {
+    let (server_task, client, _state) = spawn_server_with_state().await;
+
+    start_session(&client).await;
+
+    client
+        .send(req(
+            2,
+            "control/resetSessionPermissionRules",
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Error(e) => {
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(e.error.message.contains("no session runtime installed"));
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn reset_session_permission_rules_clears_live_session_allow_and_deny_rules() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+
+    start_session(&client).await;
+
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    let allow_rule = coco_types::PermissionRule {
+        source: coco_types::PermissionRuleSource::Session,
+        behavior: coco_types::PermissionBehavior::Allow,
+        value: coco_types::PermissionRuleValue {
+            tool_pattern: "Read".into(),
+            rule_content: None,
+        },
+    };
+    let deny_rule = coco_types::PermissionRule {
+        source: coco_types::PermissionRuleSource::Session,
+        behavior: coco_types::PermissionBehavior::Deny,
+        value: coco_types::PermissionRuleValue {
+            tool_pattern: "Bash".into(),
+            rule_content: Some("rm *".into()),
+        },
+    };
+    {
+        let session_runtime = runtime.runtime();
+        let mut app_state = session_runtime.app_state.write().await;
+        app_state
+            .permissions
+            .allow_rules
+            .insert(coco_types::PermissionRuleSource::Session, vec![allow_rule]);
+        app_state
+            .permissions
+            .deny_rules
+            .insert(coco_types::PermissionRuleSource::Session, vec![deny_rule]);
+    }
+    *state.session_runtime.write().await = Some(runtime.clone());
+
+    client
+        .send(req(
+            2,
+            "control/resetSessionPermissionRules",
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Response(r) => {
+            assert_eq!(r.result["cleared_allow_rules"], 1);
+            assert_eq!(r.result["cleared_deny_rules"], 1);
+        }
+        other => panic!("expected Response, got {other:?}"),
+    }
+
+    let session_runtime = runtime.runtime();
+    let app_state = session_runtime.app_state.read().await;
+    assert!(
+        !app_state
+            .permissions
+            .allow_rules
+            .contains_key(&coco_types::PermissionRuleSource::Session)
+    );
+    assert!(
+        !app_state
+            .permissions
+            .deny_rules
+            .contains_key(&coco_types::PermissionRuleSource::Session)
+    );
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn stop_task_cancels_running_turn() {
     let cancelled = Arc::new(AtomicBool::new(false));
     let started = Arc::new(Notify::new());
@@ -1550,6 +2587,107 @@ async fn stop_task_cancels_running_turn() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(cancelled.load(Ordering::SeqCst));
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn stop_task_uses_installed_task_runtime() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+    start_session(&client).await;
+
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    let task_runtime = Arc::new(crate::task_runtime::TaskRuntime::new(Arc::new(
+        coco_tasks::TaskManager::new(),
+    )));
+    let cancel = CancellationToken::new();
+    let task_id = task_runtime
+        .register_agent_task(
+            "background work",
+            None,
+            None,
+            cancel.clone(),
+            coco_tool_runtime::AgentRegistration::Background,
+        )
+        .await;
+    runtime.attach_task_runtime(Arc::clone(&task_runtime)).await;
+    *state.session_runtime.write().await = Some(runtime);
+
+    client
+        .send(req(
+            3,
+            "control/stopTask",
+            serde_json::json!({ "task_id": task_id }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(reply, JsonRpcMessage::Response(_)));
+    assert!(cancel.is_cancelled(), "task cancel token should fire");
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn stop_task_with_runtime_but_no_task_runtime_does_not_cancel_active_turn() {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(Notify::new());
+    let runner = Arc::new(BlockingRunner {
+        cancelled: cancelled.clone(),
+        started: started.clone(),
+    });
+    let (server_task, client, state) = spawn_server_with_state().await;
+    *state.turn_runner.write().await = runner;
+
+    start_session(&client).await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    *state.session_runtime.write().await = Some(runtime);
+
+    client
+        .send(req(2, "turn/start", serde_json::json!({ "prompt": "hi" })))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(reply, JsonRpcMessage::Response(_)));
+    tokio::time::timeout(Duration::from_secs(1), started.notified())
+        .await
+        .expect("runner should start");
+
+    client
+        .send(req(
+            3,
+            "control/stopTask",
+            serde_json::json!({ "task_id": "some-task" }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Error(e) => {
+            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
+            assert!(
+                e.error.message.contains("task runtime is not available"),
+                "unexpected error: {}",
+                e.error.message
+            );
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+    assert!(
+        !cancelled.load(Ordering::SeqCst),
+        "active turn must not be cancelled by task-runtime errors"
+    );
+
+    client
+        .send(req(4, "turn/interrupt", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(reply, JsonRpcMessage::Response(_)));
 
     drop(client);
     server_task.await.unwrap();
@@ -1706,7 +2844,9 @@ async fn session_archive_emits_aggregated_session_result() {
     });
     let (server_task, client, state) = {
         let (server_end, client_end) = InMemoryTransport::pair(32);
-        let server = SdkServer::new(server_end).with_turn_runner(runner);
+        let server = SdkServer::new(server_end)
+            .with_startup_cwd(test_startup_cwd())
+            .with_turn_runner(runner);
         let state = server.state();
         let handle = spawn_app_server_bridge(server);
         (handle, client_end, state)
@@ -1838,7 +2978,9 @@ async fn session_archive_flushes_late_events_before_aggregate() {
     });
     let (server_task, client) = {
         let (server_end, client_end) = InMemoryTransport::pair(32);
-        let server = SdkServer::new(server_end).with_turn_runner(runner);
+        let server = SdkServer::new(server_end)
+            .with_startup_cwd(test_startup_cwd())
+            .with_turn_runner(runner);
         let handle = spawn_app_server_bridge(server);
         (handle, client_end)
     };
@@ -1915,7 +3057,7 @@ async fn session_archive_flushes_late_events_before_aggregate() {
 #[tokio::test]
 async fn send_server_request_roundtrips_success() {
     let (server_end, client_end) = InMemoryTransport::pair(32);
-    let server = SdkServer::new(server_end);
+    let server = SdkServer::new(server_end).with_startup_cwd(test_startup_cwd());
     let state = server.state();
     let transport = server.transport();
     let server_task = spawn_app_server_bridge(server);
@@ -1972,7 +3114,7 @@ async fn send_server_request_roundtrips_success() {
 #[tokio::test]
 async fn send_server_request_returns_error_on_error_reply() {
     let (server_end, client_end) = InMemoryTransport::pair(32);
-    let server = SdkServer::new(server_end);
+    let server = SdkServer::new(server_end).with_startup_cwd(test_startup_cwd());
     let state = server.state();
     let transport = server.transport();
     let server_task = spawn_app_server_bridge(server);
@@ -2023,7 +3165,7 @@ async fn send_server_request_returns_error_on_error_reply() {
 #[tokio::test]
 async fn send_server_request_unique_ids() {
     let (server_end, client_end) = InMemoryTransport::pair(32);
-    let server = SdkServer::new(server_end);
+    let server = SdkServer::new(server_end).with_startup_cwd(test_startup_cwd());
     let state = server.state();
     let transport = server.transport();
     let server_task = spawn_app_server_bridge(server);
@@ -2207,7 +3349,9 @@ async fn session_archive_is_atomic_under_concurrent_forwarder_updates() {
     });
     let (server_task, client, _state) = {
         let (server_end, client_end) = InMemoryTransport::pair(32);
-        let server = SdkServer::new(server_end).with_turn_runner(runner);
+        let server = SdkServer::new(server_end)
+            .with_startup_cwd(test_startup_cwd())
+            .with_turn_runner(runner);
         let state = server.state();
         let handle = spawn_app_server_bridge(server);
         (handle, client_end, state)
@@ -2411,7 +3555,9 @@ async fn turn_cleanup_does_not_corrupt_successor_session_cancel_state() {
     });
     let (server_task, client, state) = {
         let (server_end, client_end) = InMemoryTransport::pair(32);
-        let server = SdkServer::new(server_end).with_turn_runner(runner);
+        let server = SdkServer::new(server_end)
+            .with_startup_cwd(test_startup_cwd())
+            .with_turn_runner(runner);
         let state = server.state();
         let handle = spawn_app_server_bridge(server);
         (handle, client_end, state)
@@ -2502,7 +3648,9 @@ async fn forwarder_does_not_contaminate_successor_session_stats() {
     });
     let (server_task, client, state) = {
         let (server_end, client_end) = InMemoryTransport::pair(32);
-        let server = SdkServer::new(server_end).with_turn_runner(runner);
+        let server = SdkServer::new(server_end)
+            .with_startup_cwd(test_startup_cwd())
+            .with_turn_runner(runner);
         let state = server.state();
         let handle = spawn_app_server_bridge(server);
         (handle, client_end, state)
@@ -2587,7 +3735,7 @@ async fn send_server_request_cleans_up_pending_on_receiver_drop() {
     // entry must be removed by the PendingRequestGuard. Without the
     // guard, the entry would leak in the map until state drop.
     let (server_end, client_end) = InMemoryTransport::pair(32);
-    let server = SdkServer::new(server_end);
+    let server = SdkServer::new(server_end).with_startup_cwd(test_startup_cwd());
     let state = server.state();
     let transport = server.transport();
     let server_task = spawn_app_server_bridge(server);
@@ -2649,7 +3797,9 @@ async fn engine_error_is_recorded_in_session_stats() {
     let runner = Arc::new(ErrorRunner);
     let (server_task, client, state) = {
         let (server_end, client_end) = InMemoryTransport::pair(32);
-        let server = SdkServer::new(server_end).with_turn_runner(runner);
+        let server = SdkServer::new(server_end)
+            .with_startup_cwd(test_startup_cwd())
+            .with_turn_runner(runner);
         let state = server.state();
         let handle = spawn_app_server_bridge(server);
         (handle, client_end, state)
@@ -2801,6 +3951,60 @@ async fn session_list_returns_persisted_sessions() {
 }
 
 #[tokio::test]
+async fn session_start_without_cwd_uses_startup_cwd() {
+    let startup_cwd = std::path::PathBuf::from("/tmp/sdk-startup-cwd");
+    let (server_end, client) = InMemoryTransport::pair(32);
+    let server = SdkServer::new(server_end).with_startup_cwd(startup_cwd.clone());
+    let state = server.state();
+    let server_task = spawn_app_server_bridge(server);
+
+    client
+        .send(req(1, "session/start", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(reply, JsonRpcMessage::Response(_)));
+
+    {
+        let session_slot = state.session.read().await;
+        let session = session_slot
+            .as_ref()
+            .expect("session/start should install active session");
+        assert_eq!(session.cwd, startup_cwd.to_string_lossy().as_ref());
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn session_start_without_any_workspace_cwd_errors() {
+    let (server_end, client) = InMemoryTransport::pair(32);
+    let server = SdkServer::new(server_end);
+    let server_task = spawn_app_server_bridge(server);
+
+    client
+        .send(req(1, "session/start", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Error(error) => {
+            assert_eq!(error.error.code, error_codes::INVALID_REQUEST);
+            assert!(
+                error.error.message.contains("workspace cwd is unavailable"),
+                "unexpected error: {}",
+                error.error.message
+            );
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn session_start_returns_session_id_without_eager_persist() {
     // `session/start` returns a fresh id but does not create a
     // transcript on disk — the JSONL is written lazily on the first
@@ -2863,8 +4067,76 @@ async fn session_read_returns_metadata_for_persisted_session() {
         JsonRpcMessage::Response(r) => {
             assert_eq!(r.result["session"]["session_id"], "read-test");
             assert_eq!(r.result["session"]["title"], "my session");
-            // Phase 2.C.11 doesn't return messages yet.
-            assert_eq!(r.result["messages"].as_array().unwrap().len(), 0);
+            let messages = r.result["messages"].as_array().unwrap();
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["message"]["content"], "seed");
+            assert_eq!(r.result["has_more"], false);
+        }
+        other => panic!("expected Response, got {other:?}"),
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn session_read_paginates_transcript_messages() {
+    let (server_task, client, _state, tmp) = spawn_server_with_session_manager().await;
+
+    seed_session_transcript(
+        &tmp.path,
+        "read-page-test",
+        "/tmp/read-page",
+        Some("claude-opus-4-6"),
+    );
+    append_session_transcript_message(
+        &tmp.path,
+        "read-page-test",
+        "/tmp/read-page",
+        Some("claude-opus-4-6"),
+        2,
+        "second",
+    );
+
+    client
+        .send(req(
+            1,
+            "session/read",
+            serde_json::json!({ "session_id": "read-page-test", "limit": 1 }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Response(r) => {
+            let messages = r.result["messages"].as_array().unwrap();
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["message"]["content"], "seed");
+            assert_eq!(r.result["next_cursor"], "1");
+            assert_eq!(r.result["has_more"], true);
+        }
+        other => panic!("expected Response, got {other:?}"),
+    }
+
+    client
+        .send(req(
+            2,
+            "session/read",
+            serde_json::json!({
+                "session_id": "read-page-test",
+                "cursor": "1",
+                "limit": 1
+            }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Response(r) => {
+            let messages = r.result["messages"].as_array().unwrap();
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["message"]["content"], "second");
+            assert!(r.result.get("next_cursor").is_none());
             assert_eq!(r.result["has_more"], false);
         }
         other => panic!("expected Response, got {other:?}"),
@@ -3433,6 +4705,26 @@ async fn plugin_reload_without_session_runtime_returns_empty() {
 }
 
 #[tokio::test]
+async fn hook_reload_without_session_runtime_returns_empty() {
+    let (server_task, client) = spawn_server().await;
+
+    client
+        .send(req(1, "hook/reload", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Response(r) => {
+            assert_eq!(r.result["hook_count"], 0);
+        }
+        other => panic!("expected Response, got {other:?}"),
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn config_apply_flags_acknowledges_flags() {
     let (server_task, client) = spawn_server().await;
 
@@ -3456,6 +4748,57 @@ async fn config_apply_flags_acknowledges_flags() {
         }
         other => panic!("expected Response, got {other:?}"),
     }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn config_apply_flags_updates_runtime_fast_mode() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+    start_session(&client).await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    *state.session_runtime.write().await = Some(runtime.clone());
+
+    client
+        .send(req(
+            2,
+            "config/applyFlags",
+            serde_json::json!({
+                "settings": {
+                    "fast_mode": true,
+                }
+            }),
+        ))
+        .await
+        .unwrap();
+
+    let mut saw_response = false;
+    let mut saw_fast_mode_notification = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline && (!saw_response || !saw_fast_mode_notification) {
+        match tokio::time::timeout(Duration::from_millis(500), client.recv()).await {
+            Ok(Ok(Some(JsonRpcMessage::Response(r)))) if r.request_id == RequestId::Integer(2) => {
+                assert!(r.result.is_null());
+                saw_response = true;
+            }
+            Ok(Ok(Some(JsonRpcMessage::Notification(n))))
+                if n.method == NotificationMethod::FastModeChanged.as_str() =>
+            {
+                assert_eq!(n.params["active"], true);
+                saw_fast_mode_notification = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_response, "config/applyFlags response not seen");
+    assert!(
+        saw_fast_mode_notification,
+        "fast-mode notification not seen"
+    );
+    assert!(runtime.runtime().current_engine_config().await.fast_mode);
 
     drop(client);
     server_task.await.unwrap();
@@ -3699,7 +5042,9 @@ async fn spawn_server_with_mcp_manager() -> (
         coco_mcp::McpConnectionManager::new(tmp.path.clone()),
     ));
     let (server_end, client_end) = InMemoryTransport::pair(32);
-    let server = SdkServer::new(server_end).with_mcp_manager(manager);
+    let server = SdkServer::new(server_end)
+        .with_startup_cwd(test_startup_cwd())
+        .with_mcp_manager(manager);
     let state = server.state();
     let handle = spawn_app_server_bridge(server);
     (handle, client_end, state, tmp)
@@ -4094,7 +5439,9 @@ async fn rewind_files_errors_on_unknown_message_id() {
     ));
     let tmp_config = TempSessionsDir::new(); // reuse temp helper for a tmpdir
     let (server_end, client_end) = InMemoryTransport::pair(32);
-    let server = SdkServer::new(server_end).with_file_history(history, tmp_config.path.clone());
+    let server = SdkServer::new(server_end)
+        .with_startup_cwd(test_startup_cwd())
+        .with_file_history(history, tmp_config.path.clone());
     let server_task = spawn_app_server_bridge(server);
 
     start_session(&client_end).await;

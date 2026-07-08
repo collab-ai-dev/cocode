@@ -27,8 +27,13 @@ use std::sync::atomic::Ordering;
 use coco_bridge::ControlError;
 use coco_bridge::ControlRequest;
 use coco_bridge::ControlRequestHandler;
+use coco_types::ClientRequest;
 
+use super::handlers::HandlerContext;
+use super::handlers::HandlerResult;
 use super::handlers::SdkServerState;
+use super::handlers::dispatch_client_request;
+use super::outbound::OutboundMessage;
 
 /// Production handler for REPL-bridge control requests. Holds an
 /// `Arc<SdkServerState>` so it can read the bypass capability, mutate
@@ -108,24 +113,73 @@ impl SdkBridgeControlHandler {
 
         Ok(serde_json::Value::Null)
     }
+
+    async fn dispatch_sdk_request(
+        &self,
+        request: ClientRequest,
+    ) -> Result<serde_json::Value, ControlError> {
+        // Bridge-origin requests reuse the SDK handler semantics. The local
+        // channel is intentionally best-effort: routed bridge requests covered
+        // here are single-shot controls/reads, while permission-mode changes
+        // keep their explicit state-outbound path above.
+        let (notif_tx, _notif_rx) = tokio::sync::mpsc::channel::<OutboundMessage>(16);
+        let ctx = HandlerContext {
+            notif_tx,
+            state: self.state.clone(),
+        };
+        match dispatch_client_request(request, ctx).await {
+            HandlerResult::Ok(value) => Ok(value),
+            HandlerResult::Err {
+                code,
+                message,
+                data: _,
+            } => Err(ControlError::new(code, message)),
+            HandlerResult::NotImplemented(message) => Err(ControlError::new(
+                coco_types::error_codes::METHOD_NOT_FOUND,
+                message,
+            )),
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl ControlRequestHandler for SdkBridgeControlHandler {
     async fn handle(&self, request: ControlRequest) -> Result<serde_json::Value, ControlError> {
         match request {
+            ControlRequest::Initialize { system_prompt } => {
+                self.dispatch_sdk_request(ClientRequest::Initialize(coco_types::InitializeParams {
+                    system_prompt,
+                    ..Default::default()
+                }))
+                .await
+            }
+            ControlRequest::Interrupt => {
+                self.dispatch_sdk_request(ClientRequest::TurnInterrupt)
+                    .await
+            }
+            ControlRequest::SetModel { model } => {
+                self.dispatch_sdk_request(ClientRequest::SetModel(coco_types::SetModelParams {
+                    model,
+                }))
+                .await
+            }
             ControlRequest::SetPermissionMode { mode } => self.set_permission_mode(mode).await,
-            // Remaining variants live on the SDK dispatcher path;
-            // plumbing each through the bridge trait is a separate
-            // task. Fail closed so a partially-wired bridge doesn't
-            // silently drop requests on the floor.
-            other => Err(ControlError::new(
-                coco_types::error_codes::METHOD_NOT_FOUND,
-                format!(
-                    "bridge control request {other:?} not yet routed — \
-                     dispatch through the SDK server instead"
-                ),
-            )),
+            ControlRequest::McpStatus => self.dispatch_sdk_request(ClientRequest::McpStatus).await,
+            ControlRequest::GetContextUsage => {
+                self.dispatch_sdk_request(ClientRequest::ContextUsage).await
+            }
+            ControlRequest::RewindFiles {
+                user_message_id,
+                dry_run,
+            } => {
+                self.dispatch_sdk_request(ClientRequest::RewindFiles(
+                    coco_types::RewindFilesParams {
+                        user_message_id,
+                        dry_run,
+                    },
+                ))
+                .await
+            }
         }
     }
 }

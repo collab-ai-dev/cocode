@@ -284,6 +284,7 @@ impl RealTuiHarness {
         // Stage 1: layered runtime config (settings.json + env + flags).
         let runtime_config = build_runtime_config_for_cli(&cli, &cwd)
             .with_context(|| "build_runtime_config_for_cli")?;
+        let process_runtime = Arc::new(coco_cli::process_runtime::ProcessRuntime::start_global());
 
         // Stage 2: shared engine resources (full ToolRegistry, system
         // prompt with CLAUDE.md, command registry, startup permission
@@ -298,7 +299,7 @@ impl RealTuiHarness {
             skill_manager,
             project_services,
             output_style_manager: _,
-        } = build_engine_resources(&cli, &runtime_config, &cwd)
+        } = build_engine_resources(&process_runtime, &cli, &runtime_config, &cwd)
             .with_context(|| "build_engine_resources")?;
 
         // SessionManager — memory_base mirrors prod (`config_home` or
@@ -346,6 +347,7 @@ impl RealTuiHarness {
             permission_bridge: Some(bridge),
             command_registry,
             skill_manager,
+            process_runtime,
             project_services,
             agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),

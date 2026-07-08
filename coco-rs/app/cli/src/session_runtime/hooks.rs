@@ -82,15 +82,12 @@ pub(super) fn populate_hook_registry(
     // settings.json `enabled_plugins`) — not just the local-dir, all-enabled V1
     // scan. `register_plugin_hooks_v2` uses `register_deduped` so a plugin
     // re-declaring a settings hook stays single-fire.
-    if !project_services.plugins().is_empty() {
+    let plugin_count = project_services.register_plugin_hooks(registry);
+    if plugin_count > 0 {
         info!(
-            plugins = project_services.plugins().len(),
-            "loaded {} enabled plugin(s)",
-            project_services.plugins().len()
+            plugins = plugin_count,
+            "loaded {} enabled plugin(s)", plugin_count
         );
-        let refs: Vec<&coco_plugins::loader::LoadedPluginV2> =
-            project_services.plugins().iter().collect();
-        coco_plugins::hook_bridge::register_plugin_hooks_v2(registry, &refs);
     }
 }
 

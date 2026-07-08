@@ -97,6 +97,7 @@ async fn try_build_runtime_with_main(
             coco_commands::CommandRegistry::new(),
         ))),
         skill_manager: Arc::new(coco_skills::SkillManager::new()),
+        process_runtime: crate::process_runtime::ProcessRuntime::global(),
         project_services: Arc::new(crate::project_services::ProjectServices::load(
             home.path(),
             home.path(),
@@ -124,6 +125,24 @@ async fn build_uses_typed_session_id_override() {
     .expect("build should accept typed session id override");
 
     assert_eq!(runtime.current_typed_session_id().await, session_id);
+}
+
+#[tokio::test]
+async fn session_handle_keeps_immutable_session_id_snapshot() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = try_build_runtime_with_main(&home, "anthropic", "claude-opus-4-7", None)
+        .await
+        .expect("build runtime");
+    let session = crate::session_runtime::SessionHandle::new(runtime);
+    let initial = session.session_id().clone();
+    let next = SessionId::try_new("sess-handle-retargeted").expect("valid session id");
+
+    session.retarget_for_loaded_session(next.clone()).await;
+
+    assert_eq!(session.session_id(), &initial);
+    assert_eq!(session.current_typed_session_id().await, next);
+    let refreshed = session.snapshot_current();
+    assert_eq!(refreshed.session_id(), &next);
 }
 
 #[tokio::test]

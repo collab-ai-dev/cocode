@@ -47,6 +47,7 @@ pub mod transport;
 
 pub use app_server_bridge::AppServerLocalBridge;
 pub use app_server_bridge::AppServerSdkHandler;
+pub use app_server_bridge::LocalAppSessionHandle;
 pub use app_server_bridge::SdkAppServerBridgeError;
 pub use app_server_bridge::spawn_app_server_local_outbound_forwarder;
 pub use approval_bridge::SdkPermissionBridge;

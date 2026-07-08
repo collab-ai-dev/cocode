@@ -82,6 +82,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         permission_bridge: None,
         command_registry,
         skill_manager,
+        process_runtime: crate::process_runtime::ProcessRuntime::global(),
         project_services: Arc::new(crate::project_services::ProjectServices::load(
             home.path(),
             home.path(),

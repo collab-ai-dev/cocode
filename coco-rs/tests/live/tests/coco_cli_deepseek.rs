@@ -1,7 +1,7 @@
 //! Live tests for the **`coco -p`** headless entry point.
 //!
-//! Drives `coco_cli::headless::run_chat` in-process — the **same**
-//! function `main.rs` calls when the user runs `coco -p "<prompt>"`.
+//! Drives `coco_cli::headless::run_chat_with_options` in-process — the
+//! **same** function `main.rs` calls when the user runs `coco -p "<prompt>"`.
 //! Goes through:
 //!
 //! ```text
@@ -27,8 +27,7 @@ use anyhow::Result;
 use coco_cli::Cli;
 use coco_cli::headless::RunChatOptions;
 use coco_cli::headless::RunChatOutcome;
-use coco_cli::headless::run_chat;
-use coco_cli::headless::run_chat_with_options;
+use coco_cli::headless::run_chat_with_options as run_chat_with_options_raw;
 use coco_types::ProviderApi;
 use tokio_util::sync::CancellationToken;
 
@@ -62,6 +61,21 @@ fn parse_cli(argv: &[&str]) -> Cli {
         hermetic.push("project,local,flag");
     }
     Cli::parse_from(hermetic)
+}
+
+async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<RunChatOutcome> {
+    run_chat_with_options(cli, prompt, RunChatOptions::default()).await
+}
+
+async fn run_chat_with_options(
+    cli: &Cli,
+    prompt: Option<&str>,
+    mut opts: RunChatOptions,
+) -> Result<RunChatOutcome> {
+    if opts.cwd.is_none() {
+        opts.cwd = Some(std::env::current_dir()?);
+    }
+    run_chat_with_options_raw(cli, prompt, opts).await
 }
 
 /// Build a `Cli` configured to drive a single one-shot prompt against

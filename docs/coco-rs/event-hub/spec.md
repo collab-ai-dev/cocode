@@ -284,6 +284,23 @@ The connector has three internal tasks: aggregator (consumes
 `CoreEvent`), sender (owns WS write half), reader (owns WS read half;
 consumes ack/error frames).
 
+Implementation status as of 2026-07-08: `hub/connector` has the reusable
+`HubConnectorWorker` for AppServer-stamped `SessionEnvelope`s with bounded
+producer/backlog queues, max-event batching, reconnect/backoff, and shutdown
+flushing. The local AppServer bridge can attach a `HubConnectorSender` and
+clone stamped outbound envelopes into that queue after local routing.
+TUI/headless startup resolves `event_hub_url` / `COCO_EVENT_HUB_URL` /
+`--event-hub-url`, starts the worker when configured, and flushes it during
+normal shutdown. `coco --serve-hub` / `--hub-port` now parse in all builds;
+without the `serve-hub` feature they return the documented diagnostic, and
+with the feature they start an embedded SQLite hub under `~/.coco/hub/` and
+auto-set the process egress URL. SDK/NDJSON mode now starts the same runtime
+Hub connector when configured and clones SDK-visible protocol notifications
+from the single-writer path into Hub egress without changing NDJSON output.
+The connector now respects both max-event and serialized-byte batch limits,
+and reconnect backoff includes jitter. Durable backlog-drop markers are still
+pending because producer-queue overflow needs a sequence-safe marker policy.
+
 **Reconnect:** any broken connection → mark reconnecting, push
 in-flight batch back to ring buffer front, exponential backoff
 (100 ms → 200 ms → … → 30 s, ±20 % jitter), reopen WS, resend
@@ -591,7 +608,7 @@ JSON API (parallel to HTML, for external consumers — Web UI does
 
 ```
 WS reader → ingest_batch() →┬→ EventStore::ingest_batch (SQLite)
-                            └→ broadcast::Sender<EventEnvelope> per session topic
+                            └→ broadcast::Sender<EventRow> per session topic
                                           └→ SSE subscriber → Askama partial → SSE data: line
 ```
 
@@ -599,6 +616,8 @@ Each browser tab opens one SSE connection per session it's viewing.
 Browser close → subscriber drops → no server-side reconnect
 bookkeeping. HTMX `hx-ext="sse"` + `sse-connect="/sse/session/.../..."`
 + `sse-swap="event"` swaps the fragment into the event list.
+Only newly accepted batch events are broadcast; HTTP list/search remains the
+replay/read-model path.
 
 ### 7.4 Search API surface
 
@@ -666,6 +685,12 @@ Settings keys, env vars (`COCO_EVENT_HUB_*`), and CLI flags
 (`--event-hub-url`) all flat at root. Presence of `event_hub_url` =
 connector enabled.
 
+Implementation status: `event_hub_url`, `COCO_EVENT_HUB_URL`, and
+`--event-hub-url` are implemented for TUI/headless and SDK/NDJSON.
+`--serve-hub` auto-fills the same URL when the optional embedded-hub feature is
+compiled in. The remaining connector settings below are target spec values,
+not all exposed settings yet.
+
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `event_hub_url` | `null` | `ws[s]://host:port/v1/connect`; `null` ⇒ disabled |
@@ -714,6 +739,10 @@ coco-hub-server serve
   --bind 127.0.0.1
   --port 8731
   --data-dir ./data
+  --hub-retention-days 3
+  --hub-retention-max-bytes 3221225472
+  --hub-retention-sweep-interval-secs 900
+  [--memory-base ~/.coco]                  # read-only local JSONL inspection
   [--dev-assets ./coco-rs/hub/server/web]  # dev only; reads CSS/JS from disk
 ```
 
@@ -884,9 +913,16 @@ forgotten.
 - **`SessionRegistration`** in
   `coco-rs/app/session/src/concurrent_sessions.rs` gains
   `instance_id: Uuid`.
-- **`QueryEngine`** (or wherever the `CoreEvent` `Sender` is owned)
-  clones one additional sender for `coco-hub-connector` when
-  `event_hub_url` is set.
+- **Local AppServer bridge egress** clones each AppServer-stamped
+  `SessionEnvelope` to `coco-hub-connector` when `event_hub_url` is set
+  on TUI/headless paths.
+- **SDK/NDJSON egress** clones each SDK-visible protocol notification from the
+  single-writer serializer into `coco-hub-connector` when `event_hub_url` is
+  set, preserving SDK wire ordering and output behavior.
+- **Embedded hub CLI** parses `--serve-hub` / `--hub-port` in all builds. The
+  default build exits non-zero with the documented diagnostic; the
+  `serve-hub` feature starts the same SQLite-backed router in-process and
+  points `event_hub_url` at `ws://127.0.0.1:<port>/v1/connect`.
 
 ## 11. Phase-1 Definition of Done
 
@@ -941,9 +977,9 @@ forgotten.
 After this spec, work can proceed in parallel. Suggested first PR
 (lowest risk, highest value):
 
-1. `app/cli` flag wiring — `--event-hub-url` / `--serve-hub` /
-   `--hub-port` plumbing + `coco-hub-server` listed as optional
-   feature dep. The hub crates can still be empty shells.
+1. `app/cli` flag wiring — `--event-hub-url` is in place for
+   TUI/headless. `--serve-hub` / `--hub-port` now gate an optional embedded
+   `coco-hub-server` feature and fill the connector URL when enabled.
 2. `SessionRegistration.instance_id` — one-line addition to
    `coco-rs/app/session/src/concurrent_sessions.rs`.
 

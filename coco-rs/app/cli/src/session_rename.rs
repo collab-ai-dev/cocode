@@ -55,6 +55,27 @@ impl AutoRenameError {
     }
 }
 
+/// Failure from persisting a resolved session name.
+#[derive(Debug)]
+pub enum RenamePersistenceError {
+    EmptyName,
+    TranscriptNotFound,
+    Failed(anyhow::Error),
+}
+
+impl RenamePersistenceError {
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::EmptyName => "session/rename requires a non-empty name".to_string(),
+            Self::TranscriptNotFound => {
+                "Cannot rename: send a message first so the session transcript exists, then try again."
+                    .to_string()
+            }
+            Self::Failed(error) => format!("session/rename failed: {error}"),
+        }
+    }
+}
+
 /// Build a kebab-case session name via the `ModelRole::Fast` resolver.
 ///
 /// Snapshots `messages_after_compact_boundary` off the runtime's
@@ -170,6 +191,37 @@ pub async fn persist_rename(session: &SessionHandle, name: String) -> Result<(),
         .and_then(|inner| inner.map_err(anyhow::Error::from))?;
     session.update_session_registry_name(&name);
     Ok(())
+}
+
+/// Persist a caller-resolved rename using the same normalization and
+/// transcript error mapping as the AppServer `session/rename` request.
+pub async fn persist_resolved_rename(
+    session: &SessionHandle,
+    name: String,
+) -> Result<String, RenamePersistenceError> {
+    let name = normalize_resolved_name(name)?;
+    persist_rename(session, name.clone())
+        .await
+        .map_err(map_persist_error)?;
+    Ok(name)
+}
+
+fn normalize_resolved_name(name: String) -> Result<String, RenamePersistenceError> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(RenamePersistenceError::EmptyName);
+    }
+    Ok(name)
+}
+
+fn map_persist_error(error: anyhow::Error) -> RenamePersistenceError {
+    if matches!(
+        error.downcast_ref::<coco_session::SessionError>(),
+        Some(coco_session::SessionError::TranscriptNotFound { .. })
+    ) {
+        return RenamePersistenceError::TranscriptNotFound;
+    }
+    RenamePersistenceError::Failed(error)
 }
 
 /// Snapshot the conversation text used for auto-name generation.

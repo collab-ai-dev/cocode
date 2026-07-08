@@ -22,7 +22,8 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use crate::project_services::project_registry;
+use crate::process_runtime::ProcessRuntime;
+use crate::project_services::ProjectServices;
 
 /// Adapter that wraps a shared `Arc<LspServerManager>` and implements
 /// [`LspHandle`].
@@ -33,6 +34,7 @@ use crate::project_services::project_registry;
 /// file before the LSP `didSave` notification.
 pub struct LspManagerAdapter {
     manager: Arc<LspServerManager>,
+    process_runtime: Arc<ProcessRuntime>,
     diagnostics: Arc<DiagnosticsStore>,
     /// Tracks whether at least one configured server is in a non-failed
     /// state. Set to `true` at construction (lazy-spawn path: we trust
@@ -45,14 +47,24 @@ pub struct LspManagerAdapter {
 }
 
 impl LspManagerAdapter {
-    pub fn new(manager: Arc<LspServerManager>) -> Self {
+    pub fn new(manager: Arc<LspServerManager>, process_runtime: Arc<ProcessRuntime>) -> Self {
         let diagnostics = manager.diagnostics().clone();
         let has_active = Arc::new(AtomicBool::new(manager.has_configured_servers()));
         Self {
             manager,
+            process_runtime,
             diagnostics,
             has_active,
         }
+    }
+
+    pub fn project_services(
+        &self,
+        config_home: &Path,
+        project_root: PathBuf,
+    ) -> Arc<ProjectServices> {
+        self.process_runtime
+            .project_services(config_home, project_root)
     }
 
     /// Eagerly spawn LSP servers for every configured extension, anchored
@@ -105,16 +117,12 @@ impl LspManagerAdapter {
     /// servers (dropped by the disk reload) are re-merged.
     pub async fn reload_and_prewarm(&self, project_root: &Path) {
         self.manager.reload_config().await;
-        let project_services = project_registry().reload(
+        let project_services = self.process_runtime.reload_project_services(
             &coco_config::global_config::config_home(),
             project_root.to_path_buf(),
         );
-        let refs: Vec<&coco_plugins::loader::LoadedPluginV2> =
-            project_services.plugins().iter().collect();
-        self.merge_plugin_servers(coco_plugins::lsp_bridge::extract_lsp_servers_from_plugins(
-            &refs,
-        ))
-        .await;
+        self.merge_plugin_servers(project_services.lsp_servers())
+            .await;
         self.prewarm(project_root).await;
     }
 }

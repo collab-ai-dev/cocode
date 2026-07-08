@@ -598,8 +598,8 @@ impl QueryEngine {
     }
 
     /// Public accessor used by `/dream` and `/summary` slash-command
-    /// dispatchers in the SDK / TUI runner to reach the runtime
-    /// services. Returns `None` when `Feature::AutoMemory` is off.
+    /// dispatchers to reach the runtime services. Returns `None` when
+    /// `Feature::AutoMemory` is off.
     pub fn memory_runtime(&self) -> Option<&Arc<coco_memory::MemoryRuntime>> {
         self.memory_runtime.as_ref()
     }

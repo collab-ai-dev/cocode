@@ -375,6 +375,21 @@ pub struct PluginReloadResult {
     pub error_count: i32,
 }
 
+/// Response to `ClientRequest::HookReload`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HookReloadResult {
+    pub hook_count: i64,
+}
+
+/// Response to `ClientRequest::SetModelRole`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetModelRoleResult {
+    pub changed: crate::ModelRoleChangedParams,
+    pub display_name: String,
+}
+
 /// Response to `ClientRequest::Initialize`.
 /// Returned synchronously after the client sends `initialize`; gives the
 /// client the full bootstrap context it needs before calling `session/start`.
@@ -580,16 +595,13 @@ pub struct SessionListResult {
 }
 
 /// Response to `ClientRequest::SessionRead`.
-/// Phase 2.C.11 returns session metadata only. Message-history
-/// retrieval (via the JSONL transcript) is a future enhancement — the
-/// `messages` / `next_cursor` / `has_more` fields are reserved for
-/// when the transcript reader is wired.
+/// Returns session metadata plus transcript-message JSON values paginated by
+/// the original request's numeric offset cursor.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReadResult {
     pub session: SdkSessionSummary,
-    /// Messages paginated by `cursor`/`limit` from the original
-    /// request. Empty until the transcript reader lands.
+    /// Messages paginated by `cursor`/`limit` from the original request.
     #[serde(default)]
     pub messages: Vec<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -146,6 +146,22 @@ fn snapshot_announce_frame_json() {
 }
 
 #[test]
+fn snapshot_cursor_ack_frames_json() {
+    // Locks the v2 per-session cursor maps that replaced the old single
+    // process-wide cursor fields.
+    let announce_ack = HubFrame::AnnounceAck(AnnounceAckFrame {
+        first_seen: true,
+        hub_version: "0.1.0".to_string(),
+        resume_from: cursor_map(42),
+    });
+    let batch_ack = HubFrame::BatchAck(BatchAckFrame {
+        up_to_seq: cursor_map(9),
+    });
+    let json = serde_json::to_string_pretty(&vec![announce_ack, batch_ack]).unwrap();
+    insta::assert_snapshot!("hubframe_cursor_acks", json);
+}
+
+#[test]
 fn snapshot_batch_with_event_json() {
     // Locks the nested EventEnvelope camelCase shape + payload `kind` tagging.
     let frame = HubFrame::Batch(BatchFrame {

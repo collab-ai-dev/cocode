@@ -29,6 +29,22 @@ fn relative_path_dots_are_normalized_against_base_path() {
 }
 
 #[test]
+fn from_absolute_path_rejects_relative_path() {
+    let err = AbsolutePathBuf::from_absolute_path("file.txt")
+        .expect_err("relative path must require an explicit base");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn deserializing_relative_path_without_guard_rejects_relative_path() {
+    let err = serde_json::from_str::<AbsolutePathBuf>("\"file.txt\"")
+        .expect_err("relative path must require a guard base");
+
+    assert!(err.to_string().contains("without a base path"));
+}
+
+#[test]
 fn relative_to_current_dir_resolves_relative_path() -> std::io::Result<()> {
     let current_dir = std::env::current_dir()?;
     let abs_path_buf = AbsolutePathBuf::relative_to_current_dir("file.txt")?;

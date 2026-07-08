@@ -21,7 +21,7 @@ Depends on everything — wires registries, builds model runtime registry, start
 | `tui_runner::*` | Launches `coco-tui` after bootstrap |
 | `model_factory::*` | Builds `Arc<dyn LanguageModelV4>` from provider/model config |
 | `output::*` | Non-interactive output formatters (text/json/stream-json) |
-| `project_services::ProjectServices` | Project-rooted plugin catalog plus MCP server discovery shared by sessions with the same project root |
+| `project_services::ProjectServices` | Project-rooted plugin catalog plus command, skill, hook, MCP, and LSP discovery shared by sessions with the same project root |
 
 ## Startup Flow
 
@@ -56,15 +56,44 @@ session id from `SdkServerState`.
 `AppServerLocalBridge` is the preferred local entrypoint: it owns the local
 `AppServer`, `ServerClient`, shared handler, and outbound forwarder so
 TUI/headless code does not duplicate adapter wiring.
+Its AppServer registry stores `LocalAppSessionHandle` snapshots rather than
+empty `()` handles. Installed runtime snapshots carry the current app/cli
+`SessionHandle`, whose session id is an immutable snapshot; legacy retarget
+paths must call `SessionHandle::snapshot_current()` before re-installing. Close
+cascade logic remains retarget-safe until Phase B removes fused runtime
+in-place retargeting. Local `session/resume` uses `AppServer::spawn_replace`
+when the previous live session has an interactive local surface, and falls back
+to close-then-register when no replace caller surface exists. Re-installing a
+runtime-backed handle for an already-live local session refreshes the registry
+handle without changing surface routing.
+When constructed with a `HubConnectorSender`, the local outbound forwarder
+clones each AppServer-stamped `SessionEnvelope` to the Hub connector queue
+after routing it locally. Startup-owned Hub worker construction/configuration
+is now wired for TUI/headless through `RuntimeConfig.event_hub.url`
+(`event_hub_url`, `COCO_EVENT_HUB_URL`, or `--event-hub-url`), and both paths
+flush the worker during normal shutdown. `--serve-hub` / `--hub-port` are
+accepted by all builds; the default build emits the documented missing-feature
+diagnostic, while the `serve-hub` Cargo feature starts an embedded
+SQLite-backed `coco-hub-server` and fills `event_hub_url` with its local
+WebSocket endpoint. SDK/NDJSON egress is wired separately because that path
+does not use the local AppServer forwarder: the SDK single-writer serializer
+clones each SDK-visible protocol notification into the same Hub connector
+queue when configured, preserving NDJSON output behavior.
 For the TUI, `start_passive_event_pump` attaches a separate passive local
 surface and continuously forwards bridge-routed `CoreEvent`s into the TUI
 event channel. Keep the interactive surface for server-request ownership; use
 the passive pump for ordinary event delivery.
 Use `install_session_runtime` when TUI/headless have already built a
 `SessionRuntime`; it snapshots the existing session id/cwd/model into the
-shared handler state instead of issuing a fresh `session/start`, and installs a
-`QueryEngineRunner` so local `turn/start` requests have the same engine runner
-as the SDK bridge.
+shared handler state instead of issuing a fresh `session/start`, installs the
+runtime's `SessionManager` so local `session/list` / `session/read` see
+persisted transcripts, and installs a `QueryEngineRunner` so local
+`turn/start` requests have the same engine runner as the SDK bridge.
+Local `session/start` and `session/resume` register the session in the local
+`AppServer` registry; resume first closes any previous local live slot for the
+single-session bridge so the resumed session can load without leaking registry
+state. Local `session/archive` drives the AppServer close path so attached
+surfaces receive `SessionEnded` lifecycle notifications.
 `turn/start` lifecycle events must use the same `TurnId` returned by the
 synchronous `TurnStartResult`; `AppServerLocalBridge::start_turn_and_wait_for_end`
 depends on that correlation and waits for the matching `TurnEnded` on the local
@@ -82,20 +111,94 @@ runtime history, and usage snapshot. TUI queued prebuilt-history turns now pass
 a serialized full-history override through local AppServer `turn/start`, so
 permission retries, queued prompts, and prompt-mode bash follow-up turns no
 longer call the engine directly from the TUI runner.
-TUI `/reload-plugins` is the first runtime-control path routed through this
-local AppServer client (`ServerClient::plugin_reload`) while preserving the TUI
-toast and command-palette refresh behavior.
+Headless embedding/test callers must use `run_chat_with_options` with an
+explicit `RunChatOptions::cwd` unless `Cli::cwd` is set; only `main.rs` reads
+process cwd at startup and passes that snapshot into headless execution. SDK
+mode also installs the same startup cwd into `SdkServerState`, so pre-session
+`session/start`, `config/read`, and `config/value/write` requests do not fall
+back to a relative process cwd.
+TUI `/reload-plugins` routes through this local AppServer client
+(`ServerClient::plugin_reload`) while preserving the TUI toast and
+command-palette refresh behavior. TUI `/hooks reload` uses the same local
+client path (`ServerClient::hook_reload`) instead of directly mutating the
+runtime from the TUI runner.
 TUI `/context` also routes through the local client
 (`ServerClient::context_usage`); the bridge refreshes its snapshot from the
 live `SessionRuntime` immediately before dispatch so history-sensitive reports
 see current state.
+TUI `/cost` and `/status` route through local AppServer `session/cost` and
+`session/status`, so live usage/status observability uses the same handler
+boundary instead of direct TUI runtime reads.
+SDK `/cost`, `/status`, `/dream`, `/summary`, `/btw`, `/compact`, and
+`/goal` slash sentinels are intercepted in `turn/start` before a normal runner
+task is spawned. Cost/status reuse the same AppServer `session/cost` /
+`session/status` handlers to append meta output; dream/summary call the
+installed `MemoryRuntime` from the handler boundary and silently no-op when
+auto-memory is unavailable; `/btw` uses the installed fork dispatcher or emits
+the same transcript-only degraded response when no dispatcher is installed;
+`/compact` runs a handler-owned manual compaction task against the installed
+`SessionRuntime`; `/goal status` and `/goal clear` complete at the handler
+boundary while `/goal <condition>` installs the managed Stop hook there before
+falling through to the normal runner with the kickoff prompt.
 TUI permission-mode changes route through
 `ServerClient::set_permission_mode`; the bridge attaches a local interactive
 surface and drains forwarded `PermissionModeChanged` events back into the TUI
 event channel after dispatch.
+TUI fast-mode toggles route through `ServerClient::config_apply_flags` with
+the `fast_mode` setting; the SDK handler mutates the installed runtime's
+engine config and emits `FastModeChanged` from the AppServer path.
+TUI Ctrl+T thinking-level changes route through `ServerClient::set_thinking`;
+the SDK handler updates the installed runtime's engine config and emits
+`ModelRoleChanged` from the AppServer path.
+TUI `/model` picker role/provider/model overrides route through
+`ServerClient::set_model_role`; the SDK handler applies the live
+`SessionRuntime` role override and emits `ModelRoleChanged`, while the TUI
+keeps only the picker confirmation/history message.
+TUI `/permissions` editor, `/permissions allow|deny`, approval always-allow,
+and `/add-dir` updates route through `ServerClient::apply_permission_update`;
+the SDK handler applies the live permission base and persists writable
+destinations, while the TUI refreshes the editor overlay from disk afterward
+for editor edits. `/permissions reset` routes through
+`ServerClient::reset_session_permission_rules`, clearing only session-scoped
+live allow/deny rules.
+TUI `/color` changes route through `ServerClient::set_agent_color`; the SDK
+handler updates the installed runtime's live app-state color.
 TUI teammate current-work interrupt now routes through
 `ServerClient::agent_interrupt_current_work`, keeping that runtime-control
 request on the same local AppServer path as the SDK handler.
+TUI teammate/subagent cancellation routes through local AppServer
+`ServerClient::stop_task`; the SDK handler uses the installed `TaskRuntime`
+when present and only falls back to active-turn cancellation for legacy
+SDK-only sessions with no installed `SessionRuntime`.
+TUI Ctrl+B background-all foreground tasks routes through
+`ServerClient::background_all_tasks`, which dispatches the AppServer
+`control/backgroundAllTasks` request and returns the ids that transitioned.
+The `/tasks cancel <id>` slash command uses the same local
+`ServerClient::stop_task` path; `/tasks list` and `/tasks detail <id>` use the
+same local AppServer seam through `ServerClient::task_list` and
+`ServerClient::task_detail`.
+TUI explicit `/rewind` keeps conversation truncation local to the TUI runner,
+but its file-restore half routes through `ServerClient::rewind_files`; the
+bridge installs the runtime's `FileHistoryState` and config home into
+`SdkServerState` when it adopts a `SessionRuntime`.
+In-session TUI `/resume <id>` and `/branch` route through local
+`ServerClient::session_resume`; the TUI keeps only target resolution/fork
+creation, coordinator-mode reconciliation, and UI reset/history hydration.
+TUI `/clear` still uses the runtime clear/retarget compatibility helper for
+id rotation, then closes the old local AppServer live slot and re-installs the
+post-clear runtime snapshot so local interactive/passive surfaces follow the
+new session id.
+TUI `/rename`, `/tag`, `/branch` fork-title persistence, and post-plan
+auto-title persistence route session metadata writes through local AppServer
+`session/rename` and `session/toggleTag`; auto-rename still resolves the name
+locally before sending the metadata write request. SDK `/rename` slash
+sentinels are intercepted in `turn/start`; explicit names and locally resolved
+auto-rename candidates are persisted through the same AppServer
+`session/rename` handler instead of direct runner writes.
+The REPL bridge `ControlRequestHandler` keeps the explicit bypass guard for
+permission-mode changes, and routes initialize, interrupt, set-model,
+MCP-status, context-usage, and rewind-file controls through the same SDK
+`dispatch_client_request` handler table instead of carrying bridge-only stubs.
 
 ## Runtime Paths
 
@@ -106,10 +209,29 @@ Production code should derive transcript/session task-output/memory
 `ProjectPaths` through `crate::paths::project_paths(cwd)`.
 
 Project-scoped plugin catalogs and MCP server discovery go through
-`project_services::ProjectServices`. Session MCP bootstrap asks
+`project_services::ProjectServices`. Session command bootstrap/reload asks
+`ProjectServices::build_command_registry(...)` so project plugin slash
+commands are registered from the project-service catalog. Session skill
+bootstrap/reload asks
+`ProjectServices::build_skill_manager(config_home, session_cwd, gates)` so
+project plugin skills and builtin plugin skills are folded into the same
+manager behind the project-service boundary. Session hook bootstrap/reload
+calls `ProjectServices::register_plugin_hooks()` for project plugin hooks
+after settings hooks are layered. Agent search paths also come from
+`ProjectServices::agent_search_paths(config_home, session_cwd)`, and plugin
+reload refreshes the runtime's agent search paths before the agent catalog is
+rebuilt. Session MCP bootstrap asks
 `ProjectServices::mcp_servers(config_home, session_cwd)` so project-rooted
 config/plugin MCP contributions stay tied to the project key while local MCP
-config remains session-cwd scoped.
+config remains session-cwd scoped. LSP startup/reload likewise asks
+`ProjectServices::lsp_servers()` for plugin-contributed server config before
+prewarming the live manager.
+`ProjectRegistry` caches `Arc<ProjectServices>` per `(config_home,
+project_root)`. `ProcessRuntime::global()` is the process-level owner for the
+`ProjectRegistryManager` background idle sweep, and startup threads the same
+`Arc<ProcessRuntime>` into TUI, SDK, headless, session runtime, and LSP reload
+paths. The sweep evicts only entries with no external strong references, so
+live sessions keep their shared project services attached.
 
 `config_home` remains the root for user/global artifacts such as logs,
 plugins, settings, output styles, models, task lists, and file-history
@@ -125,6 +247,7 @@ Tools: `--allowed-tools`, `--disallowed-tools`, `--add-dir`
 Config: `--settings`, `--setting-sources`, `--system-prompt`, `--append-system-prompt(-file)`, `--mcp-config`, `--strict-mcp-config`
 Model: `--models.main`, `--fallback-model`, `--betas`, `--agent`, `--thinking`, `--thinking-budget`, `--max-thinking-tokens`, `--effort`
 Worktree/bg: `--worktree`, `--bg`
+Hub: `--event-hub-url`, `--serve-hub`, `--hub-port`
 SDK: `--replay-user-messages`, `--include-hook-events`, `--include-partial-messages`
 
 ## Stop Hooks Dispatch Order

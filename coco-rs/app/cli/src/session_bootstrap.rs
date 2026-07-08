@@ -21,7 +21,6 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use coco_commands::CommandRegistry;
-use coco_commands::build_command_registry;
 use coco_config::RuntimeConfig;
 use coco_config::global_config;
 use coco_tool_runtime::ToolRegistry;
@@ -36,8 +35,8 @@ use crate::headless::resolve_additional_dirs;
 use crate::headless::resolve_additional_dirs_display;
 use crate::headless::resolve_main_model;
 use crate::headless::resolve_startup_permission_state;
+use crate::process_runtime::ProcessRuntime;
 use crate::project_services::ProjectServices;
-use crate::project_services::project_registry;
 use crate::session_runtime::SessionHandle;
 
 /// Resources produced by [`build_engine_resources`]. Caller threads
@@ -123,6 +122,7 @@ pub fn spawn_marketplace_startup(config_home: std::path::PathBuf) {
 }
 
 pub async fn build_lsp_handle_if_enabled(
+    process_runtime: Arc<ProcessRuntime>,
     runtime_config: &RuntimeConfig,
     coco_home: &Path,
     project_root: &Path,
@@ -131,22 +131,19 @@ pub async fn build_lsp_handle_if_enabled(
         return None;
     }
     let manager = coco_lsp::create_manager(Some(coco_home), Some(project_root.to_path_buf()));
-    let adapter = crate::lsp_handle_adapter::LspManagerAdapter::new(manager);
+    let adapter = crate::lsp_handle_adapter::LspManagerAdapter::new(manager, process_runtime);
     // Merge plugin-contributed LSP servers before prewarm so they spawn
     // eagerly alongside disk-configured servers.
-    let project_services = project_registry().get_or_load(coco_home, project_root.to_path_buf());
-    let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> =
-        project_services.plugins().iter().collect();
+    let project_services = adapter.project_services(coco_home, project_root.to_path_buf());
     adapter
-        .merge_plugin_servers(coco_plugins::lsp_bridge::extract_lsp_servers_from_plugins(
-            &plugin_refs,
-        ))
+        .merge_plugin_servers(project_services.lsp_servers())
         .await;
     adapter.prewarm(project_root).await;
     Some(Arc::new(adapter))
 }
 
 pub fn build_engine_resources(
+    process_runtime: &ProcessRuntime,
     cli: &Cli,
     runtime_config: &RuntimeConfig,
     cwd: &Path,
@@ -171,7 +168,7 @@ pub fn build_engine_resources(
     // session cwd below; plugin standing dirs are project-scoped.
     let project_root = crate::paths::resolve_project_root(cwd);
     let config_home = global_config::config_home();
-    let project_services = project_registry().get_or_load(&config_home, project_root);
+    let project_services = process_runtime.project_services(&config_home, project_root);
 
     // Resolve the active output style up front: it shapes the system
     // prompt cache prefix and surfaces on the SDK init message + the
@@ -196,7 +193,7 @@ pub fn build_engine_resources(
     let startup = resolve_startup_permission_state(cli, &runtime_config.settings.merged)?;
 
     let (command_registry, skill_manager) =
-        build_session_command_registry(cli, runtime_config, cwd, project_services.plugins());
+        build_session_command_registry(cli, runtime_config, cwd, &project_services);
     let command_count = command_registry.len();
     let skill_count = skill_manager.len();
 
@@ -255,40 +252,20 @@ pub(crate) fn build_session_command_registry(
     cli: &Cli,
     runtime_config: &RuntimeConfig,
     cwd: &Path,
-    plugins: &[coco_plugins::loader::LoadedPluginV2],
+    project_services: &ProjectServices,
 ) -> (CommandRegistry, Arc<coco_skills::SkillManager>) {
     let config_home = global_config::config_home();
 
     let gates = resolve_skill_load_gates(cli, runtime_config, cwd);
-    let skill_manager = Arc::new(coco_skills::build_session_skill_manager(
-        &config_home,
-        cwd,
-        &gates,
-    ));
-
-    // Plugin-contributed skills (namespaced `plugin:skill`) into the live
-    // SkillManager so the model catalog + dispatch see them.
-    let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
-    for skill in coco_plugins::skill_bridge::load_all_plugin_skills_v2(&plugin_refs) {
-        skill_manager.register(skill);
-    }
-
-    // Builtin (compiled-in) plugins: seed the registry once, then register any
-    // enabled builtin skills. No-op until a builtin is registered in
-    // `init_builtin_plugins`.
-    coco_plugins::builtins::init_builtin_plugins();
-    for skill in coco_plugins::builtin_plugin_skills(&config_home) {
-        skill_manager.register(skill);
-    }
+    let skill_manager = Arc::new(project_services.build_skill_manager(&config_home, cwd, &gates));
 
     let mut command_features = runtime_config.features.clone();
     if !runtime_config.memory_activation.active {
         command_features.disable(coco_types::Feature::AutoMemory);
     }
 
-    let registry = build_command_registry(
+    let registry = project_services.build_command_registry(
         skill_manager.as_ref(),
-        plugins,
         UserType::from_env(),
         command_features,
         runtime_config.loop_config.clone(),
@@ -417,7 +394,7 @@ pub async fn install_session_late_binds(
     // `<config_home>/projects/<slug>/<session_id>/tasks/`.
     // Captured ONCE here so subsequent `/clear` regenerations don't
     // invalidate paths held by in-flight `DiskTaskOutput` instances.
-    let task_session_id = runtime.current_typed_session_id().await;
+    let task_session_id = session.session_id().clone();
     let task_session_dir =
         crate::paths::project_paths(cwd).task_outputs_dir(task_session_id.as_str());
     // Wire the session-scoped `CommandQueue` into the TaskRuntime

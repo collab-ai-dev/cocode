@@ -25,6 +25,8 @@ pub struct RuntimeOverrides {
     /// `settings.models.main.fallbacks` from JSON (CLI wins over
     /// settings for Main fallback).
     pub fallback_model_overrides: Vec<ProviderModelSelection>,
+    /// CLI `--event-hub-url` override. `None` falls through to env/settings.
+    pub event_hub_url_override: Option<String>,
     /// CLI `--enable <feature>` / `--disable <feature>` overrides.
     /// Applied last in `Features::resolve()`, after settings.json + env
     /// vars. Public field so callers can splat with

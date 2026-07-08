@@ -10,6 +10,8 @@ pub mod coordinator_mode_resume;
 pub mod cron_tick;
 pub mod disk_task_output;
 pub mod elicitation_hooks;
+pub mod embedded_hub;
+pub mod event_hub;
 pub mod file_changed_watcher;
 pub mod fork_dispatcher;
 pub mod goal_command;
@@ -27,6 +29,7 @@ pub mod output;
 pub mod paths;
 pub mod permission_rule_loader;
 pub mod plugin_watch;
+pub mod process_runtime;
 pub mod project_services;
 pub mod provider_login;
 pub mod resume_hint;
@@ -108,6 +111,22 @@ pub struct Cli {
     /// Settings file override.
     #[arg(long)]
     pub settings: Option<String>,
+
+    /// Event Hub WebSocket endpoint for session event egress.
+    #[arg(
+        long = "event-hub-url",
+        value_name = "WS_URL",
+        conflicts_with = "serve_hub"
+    )]
+    pub event_hub_url: Option<String>,
+
+    /// Start an embedded local Event Hub and send this process's events to it.
+    #[arg(long = "serve-hub")]
+    pub serve_hub: bool,
+
+    /// Port for the embedded Event Hub.
+    #[arg(long = "hub-port", default_value_t = 8731, requires = "serve_hub")]
+    pub hub_port: u16,
 
     /// Maximum tokens.
     #[arg(long)]

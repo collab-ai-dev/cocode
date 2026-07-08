@@ -9,9 +9,10 @@
 //!
 //! - [`session`] — `initialize`, `session/*`, event forwarding + aggregation
 //! - [`turn`] — `turn/*`, `*/resolve`, `cancelRequest`
-//! - [`runtime`] — `setModel` / `setPermissionMode` / `setThinking` /
-//! `updateEnv` / `stopTask` / `context/usage` / `plugin/reload` /
-//! `config/applyFlags`
+//! - [`runtime`] — `setModel` / `setModelRole` / `setPermissionMode` /
+//! `setThinking` / `setAgentColor` / `applyPermissionUpdate` /
+//! `resetSessionPermissionRules` / `updateEnv` / `stopTask` /
+//! `context/usage` / `plugin/reload` / `hook/reload` / `config/applyFlags`
 //! - [`config`] — `config/read` + `config/value/write`
 //! - [`mcp`] — `mcp/status` / `mcp/setServers` / `mcp/reconnect` / `mcp/toggle`
 //! - [`rewind`] — `control/rewindFiles`
@@ -22,6 +23,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
@@ -311,6 +313,10 @@ pub struct SdkServerState {
     /// When `None`, the handler returns empty / default values for those
     /// fields so the wire format stays TS-conformant.
     pub initialize_bootstrap: RwLock<Option<Arc<dyn InitializeBootstrap>>>,
+    /// Startup cwd captured by the CLI entrypoint before requests arrive.
+    ///
+    /// Used by session/config requests before a session or runtime exists.
+    pub startup_cwd: RwLock<Option<PathBuf>>,
     /// Whether the SDK client opted into per-spawn periodic
     /// AgentSummary timers via `initialize { agentProgressSummaries: true }`.
     ///  `getSdkAgentProgressSummariesEnabled`.
@@ -378,6 +384,7 @@ impl Default for SdkServerState {
             file_history_config_home: RwLock::new(None),
             mcp_manager: RwLock::new(None),
             initialize_bootstrap: RwLock::new(None),
+            startup_cwd: RwLock::new(None),
             agent_progress_summaries_enabled: std::sync::atomic::AtomicBool::new(false),
             bypass_permissions_available: std::sync::atomic::AtomicBool::new(false),
             session_runtime: RwLock::new(None),
@@ -389,18 +396,25 @@ impl Default for SdkServerState {
 }
 
 impl SdkServerState {
-    pub(super) async fn workspace_cwd(&self) -> std::path::PathBuf {
+    pub(super) async fn workspace_cwd(&self) -> Result<PathBuf, HandlerResult> {
         if let Some(session) = self.session.read().await.as_ref() {
-            return std::path::PathBuf::from(&session.cwd);
+            return Ok(PathBuf::from(&session.cwd));
         }
         let runtime = self.session_runtime.read().await.clone();
         if let Some(runtime) = runtime {
-            return runtime.current_cwd.read().await.clone();
+            return Ok(runtime.current_cwd.read().await.clone());
         }
         if let Some(bootstrap) = self.initialize_bootstrap.read().await.as_ref() {
-            return bootstrap.cwd().await;
+            return Ok(bootstrap.cwd().await);
         }
-        std::path::PathBuf::from(".")
+        if let Some(cwd) = self.startup_cwd.read().await.as_ref() {
+            return Ok(cwd.clone());
+        }
+        Err(HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "workspace cwd is unavailable before session/start; provide session/start.cwd or install startup cwd".to_string(),
+            data: None,
+        })
     }
 
     /// Persist the last MCP-registration report for `server` (v4.2). Read by
@@ -615,6 +629,7 @@ impl std::fmt::Debug for SdkServerState {
                 "initialize_bootstrap",
                 &"RwLock<Option<Arc<dyn InitializeBootstrap>>>",
             )
+            .field("startup_cwd", &"RwLock<Option<PathBuf>>")
             .finish()
     }
 }
@@ -801,10 +816,20 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         ClientRequest::SessionArchive(params) => {
             session::handle_session_archive(params, &ctx).await
         }
+        ClientRequest::SessionRename(params) => session::handle_session_rename(params, &ctx).await,
+        ClientRequest::SessionToggleTag(params) => {
+            session::handle_session_toggle_tag(params, &ctx).await
+        }
+        ClientRequest::SessionCost => runtime::handle_session_cost(&ctx).await,
+        ClientRequest::SessionStatus => runtime::handle_session_status(&ctx).await,
 
         // === Turn control ===
         ClientRequest::TurnStart(params) => turn::handle_turn_start(params, &ctx).await,
         ClientRequest::TurnInterrupt => turn::handle_turn_interrupt(&ctx).await,
+
+        // === Running task observability ===
+        ClientRequest::TaskList => runtime::handle_task_list(&ctx).await,
+        ClientRequest::TaskDetail(params) => runtime::handle_task_detail(params, &ctx).await,
 
         // === Approval + user input + elicitation ===
         ClientRequest::ApprovalResolve(params) => turn::handle_approval_resolve(params, &ctx).await,
@@ -817,13 +842,22 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
 
         // === Runtime control ===
         ClientRequest::SetModel(params) => runtime::handle_set_model(params, &ctx).await,
+        ClientRequest::SetModelRole(params) => runtime::handle_set_model_role(params, &ctx).await,
         ClientRequest::SetPermissionMode(params) => {
             runtime::handle_set_permission_mode(params, &ctx).await
         }
         ClientRequest::SetThinking(params) => runtime::handle_set_thinking(params, &ctx).await,
+        ClientRequest::SetAgentColor(params) => runtime::handle_set_agent_color(params, &ctx).await,
+        ClientRequest::ApplyPermissionUpdate(params) => {
+            runtime::handle_apply_permission_update(params, &ctx).await
+        }
+        ClientRequest::ResetSessionPermissionRules => {
+            runtime::handle_reset_session_permission_rules(&ctx).await
+        }
         ClientRequest::StopTask(params) => runtime::handle_stop_task(params, &ctx).await,
         ClientRequest::RewindFiles(params) => rewind::handle_rewind_files(params, &ctx).await,
         ClientRequest::UpdateEnv(params) => runtime::handle_update_env(params, &ctx).await,
+        ClientRequest::BackgroundAllTasks => runtime::handle_background_all_tasks(&ctx).await,
 
         // `keepAlive` is the simplest handler — respond with empty ok so
         // clients using it as a heartbeat get immediate acknowledgement.
@@ -845,6 +879,7 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         ClientRequest::McpReconnect(params) => mcp::handle_mcp_reconnect(params, &ctx).await,
         ClientRequest::McpToggle(params) => mcp::handle_mcp_toggle(params, &ctx).await,
         ClientRequest::PluginReload => runtime::handle_plugin_reload(&ctx).await,
+        ClientRequest::HookReload => runtime::handle_hook_reload(&ctx).await,
         ClientRequest::ConfigApplyFlags(params) => {
             runtime::handle_config_apply_flags(params, &ctx).await
         }

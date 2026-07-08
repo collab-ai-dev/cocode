@@ -163,6 +163,8 @@ async fn serve(args: Args) -> Result<()> {
         .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
         .join("skills")]);
     let skill_manager = Arc::new(skill_manager);
+    let process_runtime = Arc::new(coco_cli::process_runtime::ProcessRuntime::start_global());
+    let project_services = process_runtime.project_services(&cwd, cwd.clone());
 
     let session_handle = SessionHandle::build(SessionRuntimeBuildOpts {
         cli: &cli,
@@ -182,10 +184,8 @@ async fn serve(args: Args) -> Result<()> {
         permission_bridge: None,
         command_registry: command_registry.clone(),
         skill_manager,
-        project_services: Arc::new(coco_cli::project_services::ProjectServices::load(
-            &cwd,
-            cwd.clone(),
-        )),
+        process_runtime,
+        project_services,
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,

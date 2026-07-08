@@ -36,6 +36,7 @@ use coco_types::TokenUsage;
 use tokio_util::sync::CancellationToken;
 
 use crate::Cli;
+use crate::process_runtime::ProcessRuntime;
 
 /// Fallback base instructions used when a resolved `ModelInfo`
 /// declares no `base_instructions` (e.g. Claude built-ins and any
@@ -166,6 +167,7 @@ pub fn cli_runtime_overrides(cli: &Cli) -> Result<coco_config::RuntimeOverrides>
                 .map_err(|e| anyhow::anyhow!("--fallback-model: {e}"))
         })
         .collect::<Result<Vec<_>>>()?;
+    overrides.event_hub_url_override = cli.event_hub_url.clone();
     if let Some(max_tokens) = cli.max_tokens
         && max_tokens <= 0
     {
@@ -583,8 +585,6 @@ pub struct RunChatOutcome {
     pub final_messages: Vec<std::sync::Arc<coco_messages::Message>>,
     /// Working directory the engine actually used. Reflects the
     /// effective resolution: `--cwd <flag>` then `RunChatOptions::cwd`.
-    /// The convenience [`run_chat`] wrapper fills `RunChatOptions::cwd`
-    /// from the process cwd when no `--cwd` flag is present.
     pub effective_cwd: PathBuf,
     /// Additional directories declared via `--add-dir` (resolved to
     /// absolute paths). Threaded onto every tool's permission context
@@ -604,8 +604,7 @@ pub struct ToolFilterSummary {
     pub disallowed: Vec<String>,
 }
 
-/// Options for [`run_chat_with_options`]. Use [`run_chat`] when the
-/// convenience process-cwd default is desired.
+/// Options for [`run_chat_with_options`].
 #[derive(Default)]
 pub struct RunChatOptions {
     /// Working directory for this run. Required unless the CLI carries
@@ -617,7 +616,7 @@ pub struct RunChatOptions {
     /// outcome. `None` = a fresh token is created internally.
     pub cancel: Option<CancellationToken>,
     /// Pre-built message history to seed the conversation. Empty =
-    /// start a fresh conversation (the default `run_chat` behavior).
+    /// start a fresh conversation.
     /// Non-empty = continue from the prior turns; the local AppServer
     /// turn is seeded with the prior history before `turn/start`.
     pub prior_messages: Vec<std::sync::Arc<coco_messages::Message>>,
@@ -631,25 +630,10 @@ pub struct RunChatOptions {
     /// reconcile coordinator mode. `None` = no
     /// resume / no stored mode.
     pub stored_mode: Option<String>,
-}
-
-/// Drive one headless agent run with default options. See
-/// [`run_chat_with_options`] for cwd / cancellation / session-continuation.
-pub async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<RunChatOutcome> {
-    let cwd = if cli.cwd.is_some() {
-        None
-    } else {
-        Some(std::env::current_dir()?)
-    };
-    run_chat_with_options(
-        cli,
-        prompt,
-        RunChatOptions {
-            cwd,
-            ..Default::default()
-        },
-    )
-    .await
+    /// Process-scoped owner for shared runtime managers. Production callers pass
+    /// the startup-owned instance; tests/embedders may omit it and get a
+    /// call-scoped compatibility runtime.
+    pub process_runtime: Option<Arc<ProcessRuntime>>,
 }
 
 /// Drive one headless agent run with explicit options.
@@ -674,8 +658,7 @@ pub async fn run_chat_with_options(
 ) -> Result<RunChatOutcome> {
     let prompt = prompt.unwrap_or("Hello!");
     // Cwd precedence: explicit user `--cwd` flag > `RunChatOptions::cwd`
-    // (test/embedder injection). `run_chat` supplies the process-cwd
-    // convenience default before calling this function.
+    // (startup/test/embedder injection).
     let cwd: PathBuf = if let Some(flag) = cli.cwd.as_deref() {
         std::path::Path::new(flag).to_path_buf()
     } else if let Some(p) = opts.cwd {
@@ -683,6 +666,7 @@ pub async fn run_chat_with_options(
     } else {
         anyhow::bail!("run_chat_with_options requires RunChatOptions::cwd when --cwd is not set")
     };
+    let process_runtime = opts.process_runtime.unwrap_or_else(ProcessRuntime::global);
     // Resolve the session id before any local no-model-turn exits. A
     // print-mode local command should still leave a resumable transcript, and
     // `--session-id` is the automation-facing way to address that session.
@@ -765,8 +749,8 @@ pub async fn run_chat_with_options(
     // reminder generator. Plugin-contributed styles are folded in alongside
     // user / project / managed dirs.
     let project_root = crate::paths::resolve_project_root(&cwd);
-    let project_services = crate::project_services::project_registry()
-        .get_or_load(&coco_config::global_config::config_home(), project_root);
+    let project_services =
+        process_runtime.project_services(&coco_config::global_config::config_home(), project_root);
     // Startup marketplace maintenance (seed/reconcile/delist) on the headless
     // surface too; background + non-fatal, mirroring the TUI.
     crate::session_bootstrap::spawn_marketplace_startup(coco_config::global_config::config_home());
@@ -847,7 +831,7 @@ pub async fn run_chat_with_options(
             cli,
             &runtime_config,
             &cwd,
-            project_services.plugins(),
+            &project_services,
         );
     let session_handle = crate::session_runtime::SessionHandle::build(
         crate::session_runtime::SessionRuntimeBuildOpts {
@@ -871,6 +855,7 @@ pub async fn run_chat_with_options(
             permission_bridge: None,
             command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry))),
             skill_manager,
+            process_runtime: process_runtime.clone(),
             project_services: project_services.clone(),
             agent_search_paths: project_services.agent_search_paths(&config_home, &cwd),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
@@ -940,9 +925,21 @@ pub async fn run_chat_with_options(
     // 1 s poll fires — that bounded end-of-run drain is a documented follow-up.
     crate::leader_inbox_poller::install_leader(session_handle.clone(), None).await;
 
-    let mut local_app_server_bridge = crate::sdk_server::AppServerLocalBridge::new(Arc::new(
-        crate::sdk_server::SdkServerState::default(),
-    ));
+    let event_hub_connector = crate::event_hub::RuntimeEventHubConnector::spawn_for_session(
+        &runtime_config,
+        session_id.clone(),
+        &cwd,
+    );
+    let mut local_app_server_bridge = if let Some(connector) = &event_hub_connector {
+        crate::sdk_server::AppServerLocalBridge::with_hub_connector_sender(
+            Arc::new(crate::sdk_server::SdkServerState::default()),
+            connector.sender(),
+        )
+    } else {
+        crate::sdk_server::AppServerLocalBridge::new(Arc::new(
+            crate::sdk_server::SdkServerState::default(),
+        ))
+    };
     local_app_server_bridge
         .install_session_runtime(session_handle.clone())
         .await;
@@ -1313,6 +1310,9 @@ pub async fn run_chat_with_options(
         completion.ended.outcome,
         coco_types::TurnOutcome::Interrupted(_)
     );
+    if let Some(connector) = event_hub_connector {
+        connector.shutdown_and_flush().await;
+    }
 
     Ok(RunChatOutcome {
         effective_cwd: cwd.clone(),
@@ -1585,117 +1585,5 @@ pub fn resolve_additional_dirs_display(cli: &Cli, cwd: &Path) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Mutex;
-
-    use clap::Parser;
-
-    use super::RunChatOptions;
-    use super::parse_headless_goal_slash;
-    use super::run_chat_with_options;
-    use crate::Cli;
-
-    static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    struct ConfigDirGuard {
-        previous: Option<std::ffi::OsString>,
-    }
-
-    impl ConfigDirGuard {
-        fn set(path: &std::path::Path) -> Self {
-            let previous = std::env::var_os(coco_utils_common::COCO_CONFIG_DIR_ENV);
-            // SAFETY: tests using this helper hold CONFIG_ENV_LOCK for the
-            // guard's lifetime.
-            unsafe { std::env::set_var(coco_utils_common::COCO_CONFIG_DIR_ENV, path) };
-            Self { previous }
-        }
-    }
-
-    impl Drop for ConfigDirGuard {
-        fn drop(&mut self) {
-            match &self.previous {
-                Some(value) => {
-                    // SAFETY: tests using this helper hold CONFIG_ENV_LOCK.
-                    unsafe { std::env::set_var(coco_utils_common::COCO_CONFIG_DIR_ENV, value) };
-                }
-                None => {
-                    // SAFETY: tests using this helper hold CONFIG_ENV_LOCK.
-                    unsafe { std::env::remove_var(coco_utils_common::COCO_CONFIG_DIR_ENV) };
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn parse_headless_goal_slash_accepts_exact_goal_command() {
-        assert_eq!(parse_headless_goal_slash("/goal"), Some(""));
-        assert_eq!(parse_headless_goal_slash("  /goal   "), Some(""));
-        assert_eq!(
-            parse_headless_goal_slash("/goal finish migration"),
-            Some("finish migration")
-        );
-    }
-
-    #[test]
-    fn parse_headless_goal_slash_rejects_other_inputs() {
-        assert_eq!(parse_headless_goal_slash("goal finish"), None);
-        assert_eq!(parse_headless_goal_slash("/goalx finish"), None);
-        assert_eq!(parse_headless_goal_slash("/loop 5m /goal done"), None);
-    }
-
-    #[test]
-    fn run_chat_with_options_requires_explicit_cwd_without_cli_cwd() {
-        let cli = Cli::parse_from(["coco", "--print"]);
-
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let err = rt
-            .block_on(run_chat_with_options(
-                &cli,
-                Some("/goal"),
-                RunChatOptions::default(),
-            ))
-            .expect_err("run_chat_with_options should require explicit cwd");
-
-        assert!(
-            err.to_string().contains("requires RunChatOptions::cwd"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn local_goal_print_run_writes_resumable_zero_turn_transcript() {
-        let _lock = CONFIG_ENV_LOCK.lock().expect("config env lock");
-        let config_home = tempfile::tempdir().expect("config home");
-        let cwd = tempfile::tempdir().expect("cwd");
-        let _guard = ConfigDirGuard::set(config_home.path());
-        let cli = Cli::parse_from(["coco", "--print", "--session-id", "zero-model-turn-session"]);
-
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let outcome = rt
-            .block_on(run_chat_with_options(
-                &cli,
-                Some("/goal"),
-                RunChatOptions {
-                    cwd: Some(cwd.path().to_path_buf()),
-                    ..Default::default()
-                },
-            ))
-            .expect("local goal run");
-
-        assert_eq!(outcome.turns, 0);
-        let paths = coco_paths::ProjectPaths::new(config_home.path().to_path_buf(), cwd.path());
-        let transcript = paths.transcript("zero-model-turn-session");
-        assert!(
-            coco_session::recovery::can_resume_session(&transcript),
-            "local no-model-turn run must create a resumable transcript at {}",
-            transcript.display()
-        );
-        let conversation = coco_session::recovery::load_conversation_for_resume(&transcript)
-            .expect("zero-turn transcript should load");
-        assert_eq!(conversation.turn_count, 0);
-        assert!(
-            !conversation.messages.is_empty(),
-            "resume should recover the local slash-command transcript"
-        );
-    }
-}
+#[path = "headless.test.rs"]
+mod tests;
