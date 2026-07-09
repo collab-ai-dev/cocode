@@ -109,6 +109,10 @@ construction or transports.
 - Keep `SurfaceAttachment` and `interactive_owners` in sync with those maps.
 - Passive surfaces can share a session; a second interactive surface returns
   `InteractiveOwnerConflict` with owner metadata. Takeover is not implemented.
+- `sole_interactive_session_for_connection` returns a session id only when the
+  connection has exactly one attached interactive surface. It deliberately
+  returns `None` for zero or multiple interactive surfaces so higher layers do
+  not recreate a per-connection active-session default.
 - `subscribe` must read the retention ring and attach the surface in one
   `RoutingState` mutation so replay-to-live has no gap.
 - Only durable `SessionEnvelope`s enter the ring. Ephemeral envelopes are
@@ -227,24 +231,29 @@ initial TUI/headless/SDK runtime through `AppServer::spawn_load`, registers
 remaining `LocalAppSessionHandle` snapshots through `spawn_load`, exposes
 runtime-backed replace helpers that construct replacement handles inside
 `spawn_replace` / `spawn_replace_detached` and return those handles to callers,
-closes the startup placeholder slot
-when SDK `session/start` registers the client-started session, uses
-runtime-backed `AppServer::spawn_replace` / `spawn_replace_detached` for TUI
-`/resume` and `/branch` runtime construction, uses the same runtime-backed
-replacement ordering for production SDK `session/resume`, archives through
-`spawn_close`, and installs the runtime
+uses the runtime replacement context for production SDK `session/start` so the
+client-started runtime is built through AppServer load/replace before the
+startup placeholder slot closes, uses runtime-backed
+`AppServer::spawn_replace` / `spawn_replace_detached` for TUI `/resume` and
+`/branch` runtime construction, uses the same runtime-backed replacement
+ordering for production SDK `session/resume`, archives through `spawn_close`,
+and installs the runtime
 `SessionManager` so local
 `session/list` / `session/read` can read persisted transcripts. The local
 handle snapshots can carry the fused app/cli `SessionHandle`, but their close
 cascade remains retarget-safe and does not tear down the fused runtime until
 Phase B removes in-place runtime retargeting. Runtime-backed handles are now
 also the preferred live data source for unpersisted local
-`session/list` / `session/read` / `session/turns/list` fallback results, with
-the SDK singleton session slot retained only for snapshot/SDK-only handles.
+`session/list` / `session/read` / `session/turns/list` fallback results; SDK
+snapshot and SDK-only handles read keyed SDK state instead of singleton
+identity state.
 Re-installing a runtime-backed handle for an already-live local session
 refreshes the registry handle without changing surface routing; this is
-lifecycle and local-handler wiring, not the final runtime factory or broad
-server-client pagination bridge. Persisted/live session-data composition is
+lifecycle and local-handler wiring, not the final broad server-client
+pagination bridge. The SDK production resume bridge now swaps SDK-visible
+runtime/session state only after AppServer construction and replacement commit,
+and rebuilds the SDK handoff from the resumed transcript plus runtime app
+state. Persisted/live session-data composition is
 centralized in the CLI bridge's local session-data view for now; this crate
 still does not depend on `coco-session`, but it now owns the pure cursor,
 pagination, and turn-span projection helpers shared by the local bridge and

@@ -462,16 +462,15 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
                                 Ok(response) => response,
                                 Err(error) => break Err(error.into()),
                             };
-                            if let Some(response) = response {
-                                if let Err(error) = write_ndjson_json_rpc_frame_with_timeout(
+                            if let Some(response) = response
+                                && let Err(error) = write_ndjson_json_rpc_frame_with_timeout(
                                     &mut writer,
                                     &response,
                                     self.write_timeout,
                                 )
                                 .await
-                                {
-                                    break Err(error);
-                                }
+                            {
+                                break Err(error);
                             }
                         }
                         Ok(None) => break Ok(()),
@@ -565,16 +564,15 @@ impl<H: Clone> JsonRpcAdapterConnection<H> {
                                 Ok(response) => response,
                                 Err(error) => break Err(error.into()),
                             };
-                            if let Some(response) = response {
-                                if let Err(error) = write_websocket_json_rpc_frame_with_timeout(
+                            if let Some(response) = response
+                                && let Err(error) = write_websocket_json_rpc_frame_with_timeout(
                                     &mut websocket,
                                     &response,
                                     self.write_timeout,
                                 )
                                 .await
-                                {
-                                    break Err(error);
-                                }
+                            {
+                                break Err(error);
                             }
                         }
                         WebSocketInboundFrame::Ignore => {}

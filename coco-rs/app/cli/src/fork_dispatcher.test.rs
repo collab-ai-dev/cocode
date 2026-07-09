@@ -135,6 +135,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
     SessionRuntime::build(SessionRuntimeBuildOpts {
         cli: &cli,
         runtime_config: Arc::new(runtime_config),
+        config_reloader: None,
         cwd: home.path().to_path_buf(),
         model_id: "mock-model".into(),
         system_prompt: "test".to_string(),

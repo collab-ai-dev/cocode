@@ -79,11 +79,11 @@ impl SessionRuntime {
         // Arc with subagents/forks. This is both the in-cycle (the in-flight
         // engine re-reads it next batch) and cross-cycle home for the rule.
         {
-            let mut guard = self.app_state.write().await;
+            let mut guard = self.engine_state_resources.app_state().write().await;
             coco_permissions::apply_permission_updates_to_live(&mut guard.permissions, updates);
         }
         // 2. Persist destinations that wire to a settings.json layer.
-        let cwd = self.current_cwd.read().await.clone();
+        let cwd = self.current_cwd().read().await.clone();
         let store = coco_permissions::SettingsPermissionStore::new(cwd);
         use coco_permissions::permissions_store::PermissionStore;
         for update in updates {

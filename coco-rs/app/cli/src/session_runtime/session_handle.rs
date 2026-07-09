@@ -37,15 +37,6 @@ impl SessionHandle {
         &self.session_id
     }
 
-    /// Create a new handle snapshot for the runtime's current mutable session id.
-    ///
-    /// This is a compatibility bridge for the remaining in-place retarget paths
-    /// (`/clear`, `/resume`, SDK archive/start cycling). The steady-state
-    /// runtime split should construct a new handle instead of retargeting.
-    pub fn snapshot_current(&self) -> Self {
-        Self::new(Arc::clone(&self.runtime))
-    }
-
     pub fn runtime(&self) -> &Arc<SessionRuntime> {
         &self.runtime
     }

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tracing::info;
 use tracing::warn;
 
+use super::SessionHandle;
 use super::SessionRuntime;
 
 use coco_query::CommandQueue;
@@ -27,6 +28,37 @@ pub(super) struct FileWatchRegistrationContext {
 
 pub(super) fn async_rewake_sink(queue: &CommandQueue) -> Arc<dyn coco_hooks::AsyncRewakeSink> {
     Arc::new(crate::command_queue_sink::CommandQueueNotificationSink::new(queue.clone()))
+}
+
+/// Spawn a TUI-lifetime ConfigChange watcher that resolves the active
+/// [`SessionHandle`] for every reload event.
+///
+/// This mirrors the skill/cron watchers: hook execution targets the current
+/// runtime, while the TUI owner reattaches this subscription whenever
+/// `/resume`, `/branch`, or `/clear` installs a replacement runtime.
+pub fn spawn_current_session_config_change_watcher(
+    current_session: Arc<RwLock<SessionHandle>>,
+    mut rx: tokio::sync::broadcast::Receiver<coco_config_reload::ConfigChange>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(change) => {
+                    let source = config_change_source_for_kind(change.kind);
+                    let path = change.path.to_string_lossy().into_owned();
+                    let session = current_session.read().await.clone();
+                    session
+                        .runtime()
+                        .fire_config_change_hooks(source, Some(&path))
+                        .await;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    warn!(skipped, "ConfigChange watcher lagged; events dropped");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
 }
 
 /// Populate a `HookRegistry` from the current `RuntimeConfig` snapshot
@@ -204,16 +236,16 @@ impl SessionRuntime {
             transcript_path: None,
             agent_id: None,
             agent_type: None,
-            cancel: self.cancel.clone(),
+            cancel: self.lifecycle_resources.cancel(),
             disable_all_hooks: cfg.disable_all_hooks,
             allow_managed_hooks_only: cfg.allow_managed_hooks_only,
             attachment_emitter: coco_messages::AttachmentEmitter::noop(),
-            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            sync_event_sink: Some(self.hook_resources.sync_buffer()),
             http_url_allowlist: None,
             http_env_var_policy: None,
-            async_registry: Some(self.async_hook_registry.clone()),
-            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
-            llm_handle: Some(self.hook_llm_handle.clone()),
+            async_registry: Some(self.hook_resources.async_registry()),
+            async_rewake_sink: Some(async_rewake_sink(self.command_resources.command_queue())),
+            llm_handle: Some(self.hook_resources.llm_handle()),
             workspace_trust_accepted: None,
         };
         let model_arg = if cfg.model_id.is_empty() {
@@ -221,8 +253,9 @@ impl SessionRuntime {
         } else {
             Some(cfg.model_id.as_str())
         };
+        let hook_registry = self.hook_resources.registry();
         match coco_hooks::orchestration::execute_session_start(
-            &self.hook_registry,
+            &hook_registry,
             &ctx,
             parsed_source,
             /*agent_type*/ None,
@@ -256,20 +289,21 @@ impl SessionRuntime {
             transcript_path: None,
             agent_id: None,
             agent_type: None,
-            cancel: self.cancel.clone(),
+            cancel: self.lifecycle_resources.cancel(),
             disable_all_hooks: cfg.disable_all_hooks,
             allow_managed_hooks_only: cfg.allow_managed_hooks_only,
             attachment_emitter: coco_messages::AttachmentEmitter::noop(),
             sync_event_sink: None,
             http_url_allowlist: None,
             http_env_var_policy: None,
-            async_registry: Some(self.async_hook_registry.clone()),
-            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
-            llm_handle: Some(self.hook_llm_handle.clone()),
+            async_registry: Some(self.hook_resources.async_registry()),
+            async_rewake_sink: Some(async_rewake_sink(self.command_resources.command_queue())),
+            llm_handle: Some(self.hook_resources.llm_handle()),
             workspace_trust_accepted: None,
         };
+        let hook_registry = self.hook_resources.registry();
         if let Err(e) =
-            coco_hooks::orchestration::execute_session_end(&self.hook_registry, &ctx, reason).await
+            coco_hooks::orchestration::execute_session_end(&hook_registry, &ctx, reason).await
         {
             warn!(error = %e, ?reason, "SessionEnd hook execution failed");
         }
@@ -289,20 +323,21 @@ impl SessionRuntime {
             transcript_path: None,
             agent_id: None,
             agent_type: None,
-            cancel: self.cancel.clone(),
+            cancel: self.lifecycle_resources.cancel(),
             disable_all_hooks: cfg.disable_all_hooks,
             allow_managed_hooks_only: cfg.allow_managed_hooks_only,
             attachment_emitter: coco_messages::AttachmentEmitter::noop(),
-            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            sync_event_sink: Some(self.hook_resources.sync_buffer()),
             http_url_allowlist: None,
             http_env_var_policy: None,
-            async_registry: Some(self.async_hook_registry.clone()),
-            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
-            llm_handle: Some(self.hook_llm_handle.clone()),
+            async_registry: Some(self.hook_resources.async_registry()),
+            async_rewake_sink: Some(async_rewake_sink(self.command_resources.command_queue())),
+            llm_handle: Some(self.hook_resources.llm_handle()),
             workspace_trust_accepted: None,
         };
+        let hook_registry = self.hook_resources.registry();
         if let Err(e) =
-            coco_hooks::orchestration::execute_setup(&self.hook_registry, &ctx, trigger).await
+            coco_hooks::orchestration::execute_setup(&hook_registry, &ctx, trigger).await
         {
             warn!(error = %e, ?trigger, "Setup hook execution failed");
         }
@@ -327,24 +362,21 @@ impl SessionRuntime {
             transcript_path: None,
             agent_id: None,
             agent_type: None,
-            cancel: self.cancel.clone(),
+            cancel: self.lifecycle_resources.cancel(),
             disable_all_hooks: cfg.disable_all_hooks,
             allow_managed_hooks_only: cfg.allow_managed_hooks_only,
             attachment_emitter: coco_messages::AttachmentEmitter::noop(),
-            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            sync_event_sink: Some(self.hook_resources.sync_buffer()),
             http_url_allowlist: None,
             http_env_var_policy: None,
-            async_registry: Some(self.async_hook_registry.clone()),
-            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
-            llm_handle: Some(self.hook_llm_handle.clone()),
+            async_registry: Some(self.hook_resources.async_registry()),
+            async_rewake_sink: Some(async_rewake_sink(self.command_resources.command_queue())),
+            llm_handle: Some(self.hook_resources.llm_handle()),
             workspace_trust_accepted: None,
         };
-        match coco_hooks::orchestration::execute_user_prompt_submit(
-            &self.hook_registry,
-            &ctx,
-            prompt,
-        )
-        .await
+        let hook_registry = self.hook_resources.registry();
+        match coco_hooks::orchestration::execute_user_prompt_submit(&hook_registry, &ctx, prompt)
+            .await
         {
             Ok(agg) => agg,
             Err(e) => {
@@ -376,20 +408,21 @@ impl SessionRuntime {
             transcript_path: None,
             agent_id: None,
             agent_type: None,
-            cancel: self.cancel.clone(),
+            cancel: self.lifecycle_resources.cancel(),
             disable_all_hooks: cfg.disable_all_hooks,
             allow_managed_hooks_only: cfg.allow_managed_hooks_only,
             attachment_emitter: coco_messages::AttachmentEmitter::noop(),
-            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            sync_event_sink: Some(self.hook_resources.sync_buffer()),
             http_url_allowlist: None,
             http_env_var_policy: None,
-            async_registry: Some(self.async_hook_registry.clone()),
-            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
-            llm_handle: Some(self.hook_llm_handle.clone()),
+            async_registry: Some(self.hook_resources.async_registry()),
+            async_rewake_sink: Some(async_rewake_sink(self.command_resources.command_queue())),
+            llm_handle: Some(self.hook_resources.llm_handle()),
             workspace_trust_accepted: None,
         };
+        let hook_registry = self.hook_resources.registry();
         if let Err(e) = coco_hooks::orchestration::execute_notification(
-            &self.hook_registry,
+            &hook_registry,
             &ctx,
             notification_type,
             message,
@@ -407,13 +440,13 @@ impl SessionRuntime {
 
     pub(super) fn file_watch_registration_context(&self) -> FileWatchRegistrationContext {
         FileWatchRegistrationContext {
-            file_changed_watcher: self.file_changed_watcher.clone(),
-            hook_registry: self.hook_registry.clone(),
-            engine_config: self.engine_config.clone(),
-            cancel: self.cancel.clone(),
-            async_hook_registry: self.async_hook_registry.clone(),
-            command_queue: self.command_queue.clone(),
-            hook_llm_handle: self.hook_llm_handle.clone(),
+            file_changed_watcher: self.hook_resources.file_changed_watcher(),
+            hook_registry: self.hook_resources.registry(),
+            engine_config: self.engine_config_resources.engine_config().clone(),
+            cancel: self.lifecycle_resources.cancel(),
+            async_hook_registry: self.hook_resources.async_registry(),
+            command_queue: self.command_resources.command_queue().clone(),
+            hook_llm_handle: self.hook_resources.llm_handle(),
         }
     }
 
@@ -444,25 +477,21 @@ impl SessionRuntime {
             transcript_path: None,
             agent_id: None,
             agent_type: None,
-            cancel: self.cancel.clone(),
+            cancel: self.lifecycle_resources.cancel(),
             disable_all_hooks: cfg.disable_all_hooks,
             allow_managed_hooks_only: cfg.allow_managed_hooks_only,
             attachment_emitter: coco_messages::AttachmentEmitter::noop(),
-            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            sync_event_sink: Some(self.hook_resources.sync_buffer()),
             http_url_allowlist: None,
             http_env_var_policy: None,
-            async_registry: Some(self.async_hook_registry.clone()),
-            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
-            llm_handle: Some(self.hook_llm_handle.clone()),
+            async_registry: Some(self.hook_resources.async_registry()),
+            async_rewake_sink: Some(async_rewake_sink(self.command_resources.command_queue())),
+            llm_handle: Some(self.hook_resources.llm_handle()),
             workspace_trust_accepted: None,
         };
-        match coco_hooks::orchestration::execute_cwd_changed(
-            &self.hook_registry,
-            &ctx,
-            old_cwd,
-            new_cwd,
-        )
-        .await
+        let hook_registry = self.hook_resources.registry();
+        match coco_hooks::orchestration::execute_cwd_changed(&hook_registry, &ctx, old_cwd, new_cwd)
+            .await
         {
             Ok(agg) => {
                 // The cwd swap is a natural moment for hooks to update
@@ -494,20 +523,21 @@ impl SessionRuntime {
             transcript_path: None,
             agent_id: None,
             agent_type: None,
-            cancel: self.cancel.clone(),
+            cancel: self.lifecycle_resources.cancel(),
             disable_all_hooks: cfg.disable_all_hooks,
             allow_managed_hooks_only: cfg.allow_managed_hooks_only,
             attachment_emitter: coco_messages::AttachmentEmitter::noop(),
-            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            sync_event_sink: Some(self.hook_resources.sync_buffer()),
             http_url_allowlist: None,
             http_env_var_policy: None,
-            async_registry: Some(self.async_hook_registry.clone()),
-            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
-            llm_handle: Some(self.hook_llm_handle.clone()),
+            async_registry: Some(self.hook_resources.async_registry()),
+            async_rewake_sink: Some(async_rewake_sink(self.command_resources.command_queue())),
+            llm_handle: Some(self.hook_resources.llm_handle()),
             workspace_trust_accepted: None,
         };
+        let hook_registry = self.hook_resources.registry();
         match coco_hooks::orchestration::execute_config_change(
-            &self.hook_registry,
+            &hook_registry,
             &ctx,
             source,
             file_path,
@@ -536,7 +566,7 @@ impl SessionRuntime {
     /// Returns the [`tokio::task::JoinHandle`] so the caller can hold it for
     /// the session lifetime; dropping it aborts the watcher.
     /// `cancel` lets callers terminate the watcher proactively
-    /// (typically the session-level [`Self::cancel`] token); when the
+    /// (typically the session-level shutdown token); when the
     /// broadcast channel closes (reloader dropped), the loop exits on
     /// its own.
     pub fn spawn_config_change_watcher(
@@ -544,7 +574,7 @@ impl SessionRuntime {
         mut rx: tokio::sync::broadcast::Receiver<coco_config_reload::ConfigChange>,
     ) -> tokio::task::JoinHandle<()> {
         let runtime = Arc::clone(self);
-        let cancel = self.cancel.clone();
+        let cancel = self.lifecycle_resources.cancel();
         tokio::spawn(async move {
             loop {
                 tokio::select! {

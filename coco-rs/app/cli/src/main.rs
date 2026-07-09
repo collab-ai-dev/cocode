@@ -48,7 +48,6 @@ mod bin_handlers;
 mod tui_runner;
 use coco_cli::conversation_export;
 use coco_cli::session_runtime;
-use coco_cli::side_question;
 
 /// Stack size for tokio worker + blocking threads (default: 2 MiB).
 ///
@@ -151,10 +150,13 @@ fn start_sdk_unix_listener(
             Arc::clone(&app_server),
         ),
     );
-    let outbound_forwarder =
-        spawn_app_server_local_outbound_forwarder(app_server, state, outbound_rx, hub_connector);
+    let outbound_forwarder = spawn_app_server_local_outbound_forwarder(
+        app_server,
+        state,
+        outbound_rx,
+        Arc::new(std::sync::RwLock::new(hub_connector)),
+    );
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let adapter = adapter.clone();
     let task_socket_path = socket_path.clone();
     let listener_task = tokio::spawn(async move {
         let result = adapter
@@ -213,8 +215,12 @@ async fn start_sdk_websocket_listener(
             Arc::clone(&app_server),
         ),
     );
-    let outbound_forwarder =
-        spawn_app_server_local_outbound_forwarder(app_server, state, outbound_rx, hub_connector);
+    let outbound_forwarder = spawn_app_server_local_outbound_forwarder(
+        app_server,
+        state,
+        outbound_rx,
+        Arc::new(std::sync::RwLock::new(hub_connector)),
+    );
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let adapter = adapter.clone();
     let task_bind_addr = local_addr.clone();
@@ -271,8 +277,12 @@ fn start_sdk_named_pipe_listener(
             Arc::clone(&app_server),
         ),
     );
-    let outbound_forwarder =
-        spawn_app_server_local_outbound_forwarder(app_server, state, outbound_rx, hub_connector);
+    let outbound_forwarder = spawn_app_server_local_outbound_forwarder(
+        app_server,
+        state,
+        outbound_rx,
+        Arc::new(std::sync::RwLock::new(hub_connector)),
+    );
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let adapter = adapter.clone();
     let task_pipe_name = pipe_name.clone();
@@ -877,13 +887,11 @@ async fn run_sdk_mode(
         cwd = %cwd.display(),
         "sdk mode starting"
     );
-    let (sandbox_reloader, runtime_config) =
-        coco_cli::headless::build_runtime_config_with_reloader(cli, &cwd)?;
+    let runtime_config = coco_cli::headless::build_runtime_config_for_cli(cli, &cwd)?;
     coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
 
     let resources = build_engine_resources(&process_runtime, cli, &runtime_config, &cwd)?;
     let is_real_anthropic = resources.provider_api == Some(coco_types::ProviderApi::Anthropic);
-    let model_id = resources.model_id.clone();
     let system_prompt = Some(resources.system_prompt.clone());
 
     let session_manager = Arc::new(SessionManager::with_backend(
@@ -892,24 +900,12 @@ async fn run_sdk_mode(
     ));
     let session_manager_for_runtime = session_manager.clone();
 
-    let mcp_manager = Arc::new(tokio::sync::Mutex::new(
-        coco_mcp::McpConnectionManager::new_with_runtime_config(
-            global_config::config_home(),
-            &runtime_config.mcp,
-        ),
-    ));
-
-    // Config-file + plugin MCP server registration + connect happens in the
-    // unified `bootstrap_session_mcp` below (shared with TUI/headless). The bare
-    // manager is created here only so `SdkServer` can hold it for `mcp/setServers`.
-
     // Slash-command registry — built once inside `build_engine_resources`
     // with the full load order (builtins → extended → skills →
     // plugin contributions → P1 handlers). Both the SDK
     // `initialize.commands` advertisement and the TUI dispatch chain
     // (`tui_runner::dispatch_slash_command`) read from the same Arc.
     let command_registry = resources.command_registry.clone();
-    let skill_manager = resources.skill_manager.clone();
 
     // Use the manager built inside `build_engine_resources` — the
     // active style already shaped the system prompt, and we surface
@@ -980,7 +976,6 @@ async fn run_sdk_mode(
     let server = SdkServer::new(transport)
         .with_startup_cwd(cwd.clone())
         .with_session_manager(session_manager)
-        .with_mcp_manager(mcp_manager.clone())
         .with_initialize_bootstrap(bootstrap)
         .with_external_notifications(plugin_notif_rx);
     let state = server.state();
@@ -1004,30 +999,22 @@ async fn run_sdk_mode(
     let adapter =
         coco_app_server::JsonRpcAdapter::with_channel_capacity(Arc::clone(&app_server), 256);
 
+    let runtime_factory_cli = Arc::new(cli.clone());
     let runtime_factory = crate::session_runtime::SessionRuntimeFactory::new(
         crate::session_runtime::SessionRuntimeFactoryOpts {
-            cli: Arc::new(cli.clone()),
-            runtime_config: Arc::new(runtime_config),
+            cli: Arc::clone(&runtime_factory_cli),
+            bootstrap_source:
+                crate::session_runtime::SessionRuntimeBootstrapSource::per_session_fold(
+                    Arc::clone(&runtime_factory_cli),
+                    process_runtime.clone(),
+                ),
             cwd: cwd.clone(),
-            model_id,
-            system_prompt: system_prompt.clone().unwrap_or_default(),
-            permission_mode_availability: coco_types::PermissionModeAvailability::new(
-                bypass_permissions_available,
-                resources.startup.auto_available,
-            ),
-            permission_mode,
             model_runtimes: None,
             tools: resources.tools,
             session_manager: session_manager_for_runtime,
             fast_model_spec: None,
             permission_bridge: Some(bridge),
-            command_registry: command_registry.clone(),
-            skill_manager: skill_manager.clone(),
             process_runtime: process_runtime.clone(),
-            project_services: resources.project_services.clone(),
-            // Same paths the SDK `initialize.agents` listing reads —
-            // per-session AgentDefinitionStore is built from these.
-            agent_search_paths: agent_search_paths.clone(),
             // Interactive sessions get the full built-in roster;
             // SDK noninteractive paths can override.
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
@@ -1069,38 +1056,24 @@ async fn run_sdk_mode(
         )
     })?;
     let session_runtime = session_handle.runtime().clone();
+    let mcp_manager = Arc::new(tokio::sync::Mutex::new(
+        coco_mcp::McpConnectionManager::new_with_runtime_config(
+            global_config::config_home(),
+            &session_runtime.runtime_config().mcp,
+        ),
+    ));
+    {
+        let mut slot = state.mcp_manager.write().await;
+        *slot = Some(mcp_manager.clone());
+    }
     let sdk_event_hub_connector = {
         let session_id = session_runtime.current_typed_session_id().await;
         coco_cli::event_hub::RuntimeEventHubConnector::spawn_for_session(
-            &session_runtime.runtime_config,
+            session_runtime.runtime_config(),
             session_id,
             &cwd,
         )
     };
-
-    // Sandbox hot-reload for the long-lived SDK NDJSON server: settings.json
-    // `sandbox.*` edits re-flow into the live SandboxState. Held for the
-    // session; the task exits when `sandbox_reloader` drops at the end of
-    // `run_sdk_mode`.
-    let _sandbox_reload = match (sandbox_reloader.as_ref(), session_runtime.sandbox_state()) {
-        (Some(reloader), Some(state)) => Some(coco_cli::sandbox_reload::spawn_sandbox_reload(
-            state,
-            &reloader.publisher(),
-            cwd.clone(),
-        )),
-        _ => None,
-    };
-
-    // Install the SDK sandbox approval bridge onto the live SandboxState so a
-    // denied sandbox path/network operation can be approved over the SDK
-    // control channel. The bridge is interior-mutable on the persistent
-    // `Arc<SandboxState>`, so it survives hot-reload. No-op when sandbox is
-    // disabled.
-    if let Some(sandbox_state) = session_runtime.sandbox_state() {
-        sandbox_state.set_approval_bridge(Arc::new(
-            coco_cli::sdk_server::SdkSandboxApprovalBridge::new(state.clone()),
-        ));
-    }
 
     // SDK NDJSON is a non-interactive session. Inject the `StructuredOutput`
     // tool and enable the inline enforcement nudge when `--json-schema` is set.
@@ -1120,9 +1093,9 @@ async fn run_sdk_mode(
     // persistence, agent-team wiring, fork dispatcher.
     let lsp_handle = coco_cli::session_bootstrap::build_lsp_handle_if_enabled(
         process_runtime.clone(),
-        &session_runtime.runtime_config,
+        session_runtime.runtime_config(),
         &global_config::config_home(),
-        &session_runtime.project_root,
+        session_runtime.project_root(),
     )
     .await;
     install_session_late_binds(session_handle.clone(), &cwd, None, lsp_handle, None).await?;
@@ -1160,7 +1133,10 @@ async fn run_sdk_mode(
         .fire_setup_hooks(coco_hooks::orchestration::SetupTrigger::Maintenance)
         .await;
 
-    let file_history_for_server = session_runtime.file_history.clone().unwrap_or_else(|| {
+    coco_cli::sdk_server::install_sdk_session_runtime_state(state.clone(), session_handle.clone())
+        .await;
+
+    let file_history_for_server = session_runtime.file_history().cloned().unwrap_or_else(|| {
         Arc::new(tokio::sync::RwLock::new(
             coco_context::FileHistoryState::new(),
         ))
@@ -1174,9 +1150,7 @@ async fn run_sdk_mode(
             requires_structured_output,
         });
     }
-    let server = server
-        .with_file_history(file_history_for_server, global_config::config_home())
-        .with_session_handle(session_handle.clone());
+    let server = server.with_file_history(file_history_for_server, global_config::config_home());
     let server = if let Some(connector) = &sdk_event_hub_connector {
         server.with_hub_connector_sender(connector.sender())
     } else {
@@ -1204,7 +1178,7 @@ async fn run_sdk_mode(
         state.clone(),
         sdk_event_hub_connector
             .as_ref()
-            .map(|connector| connector.sender()),
+            .map(coco_cli::event_hub::RuntimeEventHubConnector::sender),
     )?;
     let sdk_websocket_listener = start_sdk_websocket_listener(
         sdk_websocket_bind,
@@ -1213,7 +1187,7 @@ async fn run_sdk_mode(
         state.clone(),
         sdk_event_hub_connector
             .as_ref()
-            .map(|connector| connector.sender()),
+            .map(coco_cli::event_hub::RuntimeEventHubConnector::sender),
     )
     .await?;
     #[cfg(windows)]
@@ -1224,7 +1198,7 @@ async fn run_sdk_mode(
         state.clone(),
         sdk_event_hub_connector
             .as_ref()
-            .map(|connector| connector.sender()),
+            .map(coco_cli::event_hub::RuntimeEventHubConnector::sender),
     )?;
     let connection = adapter.connect();
     let dispatch_result = server
@@ -1249,9 +1223,9 @@ async fn run_sdk_mode(
         // dropping the coordinator role on resume.
         let session_id = session_runtime.current_typed_session_id().await;
         coco_cli::coordinator_mode_resume::persist_session_mode(
-            &session_runtime.session_manager,
+            session_runtime.session_manager(),
             &session_id,
-            &session_runtime.runtime_config.features,
+            &session_runtime.runtime_config().features,
         );
     }
     if let Some(session_runtime) = session_runtime_guard.as_ref()

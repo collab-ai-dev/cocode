@@ -19,6 +19,8 @@
 //!   requirements"). When a TUI banner lands, wire the reader and
 //!   add the producer call here in the **same** PR.
 
+use std::sync::Arc;
+
 use coco_types::Capability;
 use coco_types::ModelRole;
 use coco_types::SideQueryToolDef;
@@ -182,7 +184,7 @@ pub async fn generate_session_name_from_text(
 /// `SessionError::TranscriptNotFound` for a clearer message.
 pub async fn persist_rename(session: &SessionHandle, name: String) -> Result<(), anyhow::Error> {
     let session_id = session.current_typed_session_id().await;
-    let manager = session.session_manager.clone();
+    let manager = Arc::clone(session.session_manager());
     let name_for_set = name.clone();
     let session_id_for_set = session_id.to_string();
     tokio::task::spawn_blocking(move || manager.set_title(&session_id_for_set, &name_for_set))

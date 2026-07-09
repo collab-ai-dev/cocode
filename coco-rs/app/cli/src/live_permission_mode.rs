@@ -53,7 +53,7 @@ pub async fn apply_to_runtime(
     // allow rules (the single base the factory reads), not the now-dead config
     // maps. Read them off the shared `ToolAppState.permissions` base.
     let live_allow_rules = session
-        .app_state
+        .app_state()
         .read()
         .await
         .permissions
@@ -65,7 +65,7 @@ pub async fn apply_to_runtime(
         auto_mode_available: config.permission_mode_availability.auto,
     };
     let change = apply_to_app_state(
-        &session.app_state,
+        session.app_state(),
         fallback_mode,
         mode,
         &live_allow_rules,

@@ -189,6 +189,7 @@ impl TurnRunner for StateQueryEngineRunner {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_turn_with_session(
     session: crate::session_runtime::SessionHandle,
     max_turns: Option<i32>,
@@ -214,29 +215,13 @@ fn run_turn_with_session(
     // rather than `turn/failed`.
     let cancel_for_terminal = cancel.clone();
     Box::pin(async move {
-        info!(
-            session_id = %handoff.session_id,
-            model = %handoff.model,
-            cwd = %handoff.cwd,
-            "QueryEngineRunner: run_turn"
-        );
-
-        // Resolve the permission mode. Priority:
-        //   1. `params.permission_mode` (turn-scoped).
-        //   2. `handoff.permission_mode` (session-scoped, set by
-        //      `control/setPermissionMode`).
-        //   3. `PermissionMode::default()`.
-        let permission_mode = permission_mode_override
-            .or(handoff.permission_mode)
-            .unwrap_or_default();
-
         // Re-use the SessionRuntime's already-loaded `RuntimeConfig`
         // instead of re-running `RuntimeConfigBuilder::from_process`
         // per turn. The runtime's config is the canonical session-
         // scoped resolution (incl. CLI overrides + flag settings);
         // rebuilding from `from_process` would lose them and slow
         // every turn down by re-walking settings layers.
-        let runtime_config = runtime.runtime_config.as_ref();
+        let runtime_config = runtime.runtime_config().as_ref();
         // SDK turns honor the same settings-layered permission rules
         // as TUI / headless.
         let (allow_rules, deny_rules, ask_rules) =
@@ -244,9 +229,14 @@ fn run_turn_with_session(
         let permission_rule_source_roots =
             crate::permission_rule_loader::permission_rule_source_roots(
                 &runtime_config.settings,
-                &runtime.original_cwd,
+                runtime.original_cwd(),
             );
         let current_engine_config = runtime.current_engine_config().await;
+        let turn_cwd = current_engine_config.workspace_cwd();
+        // Resolve the permission mode. Turn-scoped request params win; the
+        // runtime config carries the current session-scoped control state.
+        let permission_mode =
+            permission_mode_override.unwrap_or(current_engine_config.permission_mode);
         let model_selection = model_selection_override;
         let model_runtime_source = model_selection
             .clone()
@@ -256,6 +246,12 @@ fn run_turn_with_session(
             .as_ref()
             .map(|selection| selection.model_id.clone())
             .unwrap_or_else(|| current_engine_config.model_id.clone());
+        info!(
+            session_id = %handoff.session_id,
+            model = %model_id,
+            cwd = %turn_cwd.display(),
+            "QueryEngineRunner: run_turn"
+        );
         let mut plan_mode_settings = runtime_config.settings.merged.plan_mode.clone();
         if let Some(instructions) = handoff.plan_mode_instructions.clone() {
             plan_mode_settings.custom_instructions = Some(instructions);
@@ -299,8 +295,7 @@ fn run_turn_with_session(
             compact: runtime_config.compact.clone(),
             plan_mode_settings,
             thinking_level: thinking_level_override
-                .or(handoff.thinking_level.clone())
-                .or(current_engine_config.thinking_level.clone()),
+                .or_else(|| current_engine_config.thinking_level.clone()),
             features: std::sync::Arc::new(runtime_config.features.clone()),
             skill_overrides: std::sync::Arc::new(runtime_config.skill_overrides.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
@@ -311,9 +306,8 @@ fn run_turn_with_session(
             ..current_engine_config.clone()
         };
 
-        // SDK pre-builds an engine_config with handoff overrides
-        // (model / session_id / cwd may differ from runtime
-        // defaults). `build_engine_from_config` installs every
+        // SDK pre-builds an engine_config with request/session overrides.
+        // `build_engine_from_config` installs every
         // per-session subsystem via `wire_engine`, and the
         // `app_state_override` argument keeps the compaction
         // observers' app_state pointer aligned with the engine's —
@@ -331,7 +325,7 @@ fn run_turn_with_session(
             refresh_live_permissions_for_turn(
                 &mut guard,
                 SdkTurnPermissionInputs {
-                    fallback_previous_mode: handoff.permission_mode.unwrap_or_default(),
+                    fallback_previous_mode: current_engine_config.permission_mode,
                     permission_mode,
                     allow_rules,
                     deny_rules,
@@ -468,13 +462,12 @@ fn run_turn_with_session(
             // instead of the file's contents (the `at_mentioned_files`
             // reminder body claims content is "loaded into context" —
             // this is what makes that true).
-            let cwd_path = std::path::Path::new(&handoff.cwd);
             let inputs = crate::at_mention_turn::resolve_turn_inputs(
                 &prompt,
                 &images,
-                cwd_path,
+                &turn_cwd,
                 uuid::Uuid::new_v4(),
-                &runtime.file_read_state,
+                runtime.file_read_state(),
             )
             .await;
             let mut new_msgs = Vec::new();
@@ -546,7 +539,7 @@ fn run_turn_with_session(
         let session_id_for_error = handoff.session_id.clone();
         let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
         let event_tx_forward = event_tx.clone();
-        let session_manager_for_forward = Arc::clone(&runtime.session_manager);
+        let session_manager_for_forward = Arc::clone(runtime.session_manager());
         let session_id_for_forward = handoff.session_id.clone();
         let forward_handle = tokio::spawn(async move {
             while let Some(event) = core_event_rx.recv().await {

@@ -207,14 +207,10 @@ impl SdkServer {
         self
     }
 
-    /// Install the process-shared [`SessionHandle`]. Required so
-    /// `handle_session_start` can call `runtime.retarget_for_new_session()`
-    /// when an SDK client cycles `session/archive` → `session/start`.
-    /// Without this, sequential SDK sessions reuse the prior session's
-    /// `FileReadState`, `SessionMemoryService` paths, file-history sink
-    /// session id, and cache-break baseline — surfacing as @mention
-    /// dedup leakage, memory writes to wrong directory, and false-
-    /// positive cache break alerts on the first turn of session 2.
+    /// Install the process-shared [`SessionHandle`]. Production SDK
+    /// `session/start` / `session/resume` must pair this with a
+    /// [`crate::sdk_server::RuntimeReplacementContext`] so new client sessions
+    /// build replacement runtimes instead of rotating this one in place.
     pub fn with_session_handle(self, session: crate::session_runtime::SessionHandle) -> Self {
         crate::sdk_server::sdk_hooks::install_runtime_callback(self.state.clone(), &session);
         let Ok(mut slot) = self.state.session_runtime.try_write() else {
@@ -294,11 +290,18 @@ impl SdkHubEgress {
     async fn enqueue_notification(
         &self,
         next_session_seq: &mut HashMap<SessionId, i64>,
+        session_id: Option<&SessionId>,
         notification: &ServerNotification,
     ) {
-        let Some(session_id) = current_sdk_session_id(&self.state).await else {
-            warn!("dropping SDK Event Hub notification without an active session");
-            return;
+        let session_id = match session_id {
+            Some(session_id) => session_id.clone(),
+            None => {
+                let Some(session_id) = current_sdk_session_id(&self.state).await else {
+                    warn!("dropping SDK Event Hub notification without an active session");
+                    return;
+                };
+                session_id
+            }
         };
         let seq_session_id = session_id.clone();
         let envelope = SessionEnvelope::stamp(
@@ -319,14 +322,7 @@ impl SdkHubEgress {
 }
 
 async fn current_sdk_session_id(state: &SdkServerState) -> Option<SessionId> {
-    if let Some(session) = state.session.read().await.as_ref() {
-        return Some(session.session_id.clone());
-    }
-    let runtime = state.session_runtime.read().await.clone();
-    if let Some(runtime) = runtime {
-        return Some(runtime.current_typed_session_id().await);
-    }
-    None
+    state.runtime_or_active_session_id().await
 }
 
 /// Spawn the SDK's single-writer transport serializer.
@@ -361,11 +357,12 @@ pub(crate) fn spawn_sdk_outbound_writer(
                 transport: &dyn SdkTransport,
                 hub_egress: Option<&SdkHubEgress>,
                 next_session_seq: &mut HashMap<SessionId, i64>,
+                session_id: Option<&SessionId>,
                 notif: &ServerNotification,
             ) -> bool {
                 if let Some(hub_egress) = hub_egress {
                     hub_egress
-                        .enqueue_notification(next_session_seq, notif)
+                        .enqueue_notification(next_session_seq, session_id, notif)
                         .await;
                 }
                 if let Err(e) = transport.send_notification(notif).await {
@@ -379,10 +376,11 @@ pub(crate) fn spawn_sdk_outbound_writer(
                 transport: &dyn SdkTransport,
                 hub_egress: Option<&SdkHubEgress>,
                 next_session_seq: &mut HashMap<SessionId, i64>,
+                session_id: Option<&SessionId>,
                 notifications: Vec<ServerNotification>,
             ) -> bool {
                 for sn in notifications {
-                    if !send_notif(transport, hub_egress, next_session_seq, &sn).await {
+                    if !send_notif(transport, hub_egress, next_session_seq, session_id, &sn).await {
                         return false;
                     }
                 }
@@ -390,94 +388,103 @@ pub(crate) fn spawn_sdk_outbound_writer(
             }
 
             while let Some(outbound) = outbound_rx.recv().await {
-                match outbound {
-                    OutboundMessage::CoreEvent(event) => match *event {
-                        CoreEvent::Protocol(notif) => {
-                            match &notif {
-                                ServerNotification::TurnStarted(p) => {
-                                    let turn_id = p.turn_id.as_str().to_string();
-                                    let mut acc = StreamAccumulator::new(turn_id);
-                                    let buffered: Vec<_> = pre_turn_buffer
-                                        .drain(..)
-                                        .flat_map(|evt| acc.process(evt))
-                                        .collect();
-                                    if !send_accumulated(
-                                        &*transport,
-                                        hub_egress.as_ref(),
-                                        &mut next_session_seq,
-                                        buffered,
-                                    )
-                                    .await
-                                    {
-                                        break;
-                                    }
-                                    accumulator = Some(acc);
-                                }
-                                ServerNotification::TurnEnded(_) => {
-                                    if let Some(ref mut acc) = accumulator {
-                                        let flushed = acc.flush();
-                                        if !send_accumulated(
-                                            &*transport,
-                                            hub_egress.as_ref(),
-                                            &mut next_session_seq,
-                                            flushed,
-                                        )
-                                        .await
-                                        {
-                                            break;
-                                        }
-                                    }
-                                    accumulator = None;
-                                    pre_turn_buffer.clear();
-                                }
-                                _ => {}
-                            }
-                            if !send_notif(
-                                &*transport,
-                                hub_egress.as_ref(),
-                                &mut next_session_seq,
-                                &notif,
-                            )
-                            .await
-                            {
-                                break;
-                            }
-                        }
-                        CoreEvent::Stream(stream_evt) => {
-                            let notifications = if let Some(ref mut acc) = accumulator {
-                                acc.process(stream_evt)
-                            } else {
-                                if pre_turn_buffer.len() >= PRE_TURN_BUFFER_CAP {
-                                    warn!(
-                                        metric = "pre_turn_buffer_overflow",
-                                        cap = PRE_TURN_BUFFER_CAP,
-                                        "pre-turn buffer full, dropping stream event"
-                                    );
-                                } else {
-                                    debug!("stream event before TurnStarted; buffering");
-                                    pre_turn_buffer.push(stream_evt);
-                                }
-                                Vec::new()
-                            };
-                            if !send_accumulated(
-                                &*transport,
-                                hub_egress.as_ref(),
-                                &mut next_session_seq,
-                                notifications,
-                            )
-                            .await
-                            {
-                                break;
-                            }
-                        }
-                        CoreEvent::Tui(_) => {}
-                    },
+                let (event, event_session_id) = match outbound {
+                    OutboundMessage::CoreEvent(event) => (event, None),
+                    OutboundMessage::SessionCoreEvent { session_id, event } => {
+                        (event, Some(session_id))
+                    }
                     OutboundMessage::JsonRpc(msg) => {
                         if let Err(e) = transport.send(msg).await {
                             warn!(error = %e, "json-rpc forward failed");
                             break;
                         }
+                        continue;
                     }
+                };
+                match *event {
+                    CoreEvent::Protocol(notif) => {
+                        match &notif {
+                            ServerNotification::TurnStarted(p) => {
+                                let turn_id = p.turn_id.as_str().to_string();
+                                let mut acc = StreamAccumulator::new(turn_id);
+                                let buffered: Vec<_> = pre_turn_buffer
+                                    .drain(..)
+                                    .flat_map(|evt| acc.process(evt))
+                                    .collect();
+                                if !send_accumulated(
+                                    &*transport,
+                                    hub_egress.as_ref(),
+                                    &mut next_session_seq,
+                                    event_session_id.as_ref(),
+                                    buffered,
+                                )
+                                .await
+                                {
+                                    break;
+                                }
+                                accumulator = Some(acc);
+                            }
+                            ServerNotification::TurnEnded(_) => {
+                                if let Some(ref mut acc) = accumulator {
+                                    let flushed = acc.flush();
+                                    if !send_accumulated(
+                                        &*transport,
+                                        hub_egress.as_ref(),
+                                        &mut next_session_seq,
+                                        event_session_id.as_ref(),
+                                        flushed,
+                                    )
+                                    .await
+                                    {
+                                        break;
+                                    }
+                                }
+                                accumulator = None;
+                                pre_turn_buffer.clear();
+                            }
+                            _ => {}
+                        }
+                        if !send_notif(
+                            &*transport,
+                            hub_egress.as_ref(),
+                            &mut next_session_seq,
+                            event_session_id.as_ref(),
+                            &notif,
+                        )
+                        .await
+                        {
+                            break;
+                        }
+                    }
+                    CoreEvent::Stream(stream_evt) => {
+                        let notifications = if let Some(ref mut acc) = accumulator {
+                            acc.process(stream_evt)
+                        } else {
+                            if pre_turn_buffer.len() >= PRE_TURN_BUFFER_CAP {
+                                warn!(
+                                    metric = "pre_turn_buffer_overflow",
+                                    cap = PRE_TURN_BUFFER_CAP,
+                                    "pre-turn buffer full, dropping stream event"
+                                );
+                            } else {
+                                debug!("stream event before TurnStarted; buffering");
+                                pre_turn_buffer.push(stream_evt);
+                            }
+                            Vec::new()
+                        };
+                        if !send_accumulated(
+                            &*transport,
+                            hub_egress.as_ref(),
+                            &mut next_session_seq,
+                            event_session_id.as_ref(),
+                            notifications,
+                        )
+                        .await
+                        {
+                            break;
+                        }
+                    }
+                    CoreEvent::Tui(_) => {}
                 }
             }
             debug!("transport writer exited");

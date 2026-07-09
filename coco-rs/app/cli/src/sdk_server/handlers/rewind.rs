@@ -30,18 +30,12 @@ pub(super) async fn handle_rewind_files(
     ctx: &HandlerContext,
 ) -> HandlerResult {
     // Resolve the active session_id.
-    let session_id = {
-        let slot = ctx.state.session.read().await;
-        match slot.as_ref() {
-            Some(s) => s.session_id.clone(),
-            None => {
-                return HandlerResult::Err {
-                    code: coco_types::error_codes::INVALID_REQUEST,
-                    message: "no active session; call session/start first".into(),
-                    data: None,
-                };
-            }
-        }
+    let Some(session_id) = ctx.active_session_id().await else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "no active session; call session/start first".into(),
+            data: None,
+        };
     };
 
     // Resolve the file history + config home.

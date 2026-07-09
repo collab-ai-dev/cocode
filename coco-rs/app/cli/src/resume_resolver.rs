@@ -44,6 +44,10 @@ pub struct ResumePlan {
     /// Path to the destination transcript JSONL (= source for
     /// resume/continue, fresh file for fork).
     pub destination_path: PathBuf,
+    /// Working directory for the runtime being constructed from this plan.
+    /// Resume/continue use the source session cwd; fork uses the caller cwd
+    /// because the destination transcript is rooted in the current project.
+    pub cwd: PathBuf,
     /// Pre-loaded messages from the source transcript.
     pub prior_messages: Vec<coco_messages::Message>,
     /// Conversation and aggregate metadata loaded from the source transcript.
@@ -149,6 +153,7 @@ pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<Resum
             source_session_id,
             source_path,
             destination_path: dest_path,
+            cwd: cwd.to_path_buf(),
             prior_messages,
             conversation,
             is_fork: true,
@@ -160,6 +165,7 @@ pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<Resum
         source_session_id,
         source_path: source_path.clone(),
         destination_path: source_path,
+        cwd: cwd.to_path_buf(),
         prior_messages,
         conversation,
         is_fork: false,

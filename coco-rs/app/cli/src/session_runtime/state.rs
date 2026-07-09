@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -29,7 +31,7 @@ use super::write_std_rwlock;
 /// §3.4). So even under a non-`Disk` `session.backend` they stay on disk;
 /// there's nothing to gain from routing them through the swappable boundary.
 /// Reads the current session id from the synchronized engine-config mirror so
-/// legacy in-place retargets do not need a separate file-history id mirror.
+/// file-history does not need a separate mutable identity mirror.
 pub(super) struct TranscriptFileHistorySink {
     store: coco_session::TranscriptStore,
     engine_config: Arc<std::sync::RwLock<QueryEngineConfig>>,
@@ -91,7 +93,7 @@ impl SessionRuntime {
     /// [`coco_query::QueryEngine::drain_attachment_inbox`] so producers
     /// don't need access to `MessageHistory`.
     pub fn attachment_emitter(&self) -> coco_messages::AttachmentEmitter {
-        coco_messages::AttachmentEmitter::new(self.session_attachment_tx.clone())
+        self.command_resources.attachment_emitter()
     }
 
     /// The tool registry shared by every engine instance.
@@ -99,7 +101,7 @@ impl SessionRuntime {
     /// the SDK MCP lifecycle handlers) use this to mutate the registry
     /// via its interior-mutability API.
     pub fn tools(&self) -> &Arc<ToolRegistry> {
-        &self.tools
+        self.execution.tools()
     }
 
     /// Session-scoped sandbox state. Cheap-clone via `Arc`; consumers
@@ -113,13 +115,13 @@ impl SessionRuntime {
     /// `wire_engine`. Call this after `SessionRuntime::build` returns
     /// so the bootstrap can wrap a real `McpConnectionManager`.
     pub async fn attach_mcp_handle(&self, handle: coco_tool_runtime::McpHandleRef) {
-        let mut slot = self.mcp_handle.write().await;
+        let mut slot = self.integration_resources.mcp_handle().write().await;
         *slot = Some(handle);
     }
 
     /// Snapshot the installed MCP handle. `None` => no handle wired.
     pub async fn current_mcp_handle(&self) -> Option<coco_tool_runtime::McpHandleRef> {
-        self.mcp_handle.read().await.clone()
+        self.integration_resources.mcp_handle().read().await.clone()
     }
 
     /// Install the live `McpConnectionManager` so reload paths can re-register
@@ -129,14 +131,15 @@ impl SessionRuntime {
         &self,
         manager: Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>,
     ) {
-        let mut slot = self.mcp_manager.write().await;
+        let mut slot = self.integration_resources.mcp_manager().write().await;
         *slot = Some(manager);
     }
 
     /// Current MCP reconnect key. Increments each time
     /// [`Self::reload_plugin_mcp_servers`] changes the registered set.
     pub fn mcp_reconnect_key(&self) -> u64 {
-        self.mcp_reconnect_key
+        self.integration_resources
+            .mcp_reconnect_key()
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -144,7 +147,7 @@ impl SessionRuntime {
     /// [`Self::attach_mcp_handle`] - slot is read at every
     /// `wire_engine` call so per-turn engines pick up swaps.
     pub async fn attach_lsp_handle(&self, handle: coco_tool_runtime::LspHandleRef) {
-        let mut slot = self.lsp_handle.write().await;
+        let mut slot = self.integration_resources.lsp_handle().write().await;
         *slot = Some(handle);
     }
 
@@ -152,47 +155,122 @@ impl SessionRuntime {
     /// `wire_engine` falls back to `NoOpLspHandle` and `LspTool` hides
     /// from the model.
     pub async fn current_lsp_handle(&self) -> Option<coco_tool_runtime::LspHandleRef> {
-        self.lsp_handle.read().await.clone()
+        self.integration_resources.lsp_handle().read().await.clone()
     }
 
     /// Snapshot the current session id as a checked typed identity.
     pub async fn current_typed_session_id(&self) -> SessionId {
-        self.engine_config.read().await.session_id.clone()
+        self.engine_config_resources
+            .engine_config()
+            .read()
+            .await
+            .session_id
+            .clone()
     }
 
     /// Synchronous mirror of the current session id.
     ///
-    /// This is used only to create cheap handle snapshots at construction or
-    /// after legacy in-place retargets. Async runtime paths should prefer
-    /// [`Self::current_typed_session_id`] while the fused runtime still exists.
+    /// This is used only to create cheap handle snapshots. Async runtime paths
+    /// should prefer [`Self::current_typed_session_id`] while the fused runtime
+    /// still exists.
     pub fn current_typed_session_id_snapshot(&self) -> SessionId {
-        clone_std_rwlock(&self.orchestration_engine_config).session_id
+        clone_std_rwlock(self.engine_config_resources.orchestration_engine_config()).session_id
     }
 
     /// Whether this run persists session artifacts (transcript / usage /
     /// file-history / subagent transcripts). False under
     /// `--no-session-persistence`.
     pub fn persist_session(&self) -> bool {
-        self.persist_session
+        self.persistence.persist_session()
+    }
+
+    pub fn session_manager(&self) -> &Arc<coco_session::SessionManager> {
+        self.persistence.session_manager()
+    }
+
+    pub fn project_paths(&self) -> &Arc<coco_paths::ProjectPaths> {
+        self.persistence.project_paths()
+    }
+
+    pub fn transcript_store(&self) -> &Arc<dyn coco_session::SessionStore> {
+        self.persistence.transcript_store()
+    }
+
+    pub fn fast_model_spec(&self) -> Option<&coco_types::ModelSpec> {
+        self.title_resources.fast_model_spec()
+    }
+
+    pub fn auto_title_enabled(&self) -> bool {
+        self.title_resources.auto_title_enabled()
+    }
+
+    pub fn original_cwd(&self) -> &std::path::PathBuf {
+        self.workspace_resources.original_cwd()
+    }
+
+    pub fn project_root(&self) -> &std::path::PathBuf {
+        self.workspace_resources.project_root()
+    }
+
+    pub fn current_cwd(&self) -> &Arc<RwLock<std::path::PathBuf>> {
+        self.workspace_resources.current_cwd()
+    }
+
+    pub fn file_read_state(&self) -> &Arc<RwLock<coco_context::FileReadState>> {
+        self.engine_state_resources.file_read_state()
+    }
+
+    pub fn file_history(&self) -> Option<&Arc<RwLock<coco_context::FileHistoryState>>> {
+        self.engine_state_resources.file_history()
+    }
+
+    pub fn app_state(&self) -> &Arc<RwLock<coco_types::ToolAppState>> {
+        self.engine_state_resources.app_state()
+    }
+
+    pub fn loop_sentinel_state(
+        &self,
+    ) -> &Arc<Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>> {
+        self.engine_state_resources.loop_sentinel_state()
+    }
+
+    pub fn config_home(&self) -> &std::path::PathBuf {
+        self.config_resources.config_home()
+    }
+
+    pub fn runtime_config(&self) -> &Arc<coco_config::RuntimeConfig> {
+        self.config_resources.runtime_config()
+    }
+
+    pub fn process_runtime(&self) -> &Arc<crate::process_runtime::ProcessRuntime> {
+        self.project_resources.process_runtime()
+    }
+
+    pub fn project_services(&self) -> &Arc<crate::project_services::ProjectServices> {
+        self.project_resources.project_services()
     }
 
     pub async fn flush_session_usage_snapshot(&self) {
-        self.usage_accounting.flush_snapshot().await;
+        self.turn_resources
+            .usage_accounting()
+            .flush_snapshot()
+            .await;
     }
 
     pub async fn session_usage_snapshot(&self) -> coco_types::SessionUsageSnapshot {
-        self.usage_accounting.snapshot().await
+        self.turn_resources.usage_accounting().snapshot().await
     }
 
     pub async fn persist_goal_metadata(&self, goal: Option<coco_session::GoalMetadata>) {
-        if !self.persist_session {
+        if !self.persistence.persist_session() {
             return;
         }
-        self.terminal_goal_metadata_written
+        self.engine_state_resources
+            .terminal_goal_metadata_written()
             .store(goal.as_ref().is_some_and(|goal| goal.met), Ordering::SeqCst);
         let session_id = self.current_typed_session_id().await;
         let session_id_string = session_id.to_string();
-        let store = Arc::clone(&self.transcript_store);
+        let store = Arc::clone(self.persistence.transcript_store());
         let entry = coco_session::MetadataEntry::Goal {
             session_id: session_id.clone(),
             goal,
@@ -214,14 +292,14 @@ impl SessionRuntime {
     }
 
     pub async fn persist_local_transcript_messages(&self, messages: &[coco_messages::Message]) {
-        if !self.persist_session || messages.is_empty() {
+        if !self.persistence.persist_session() || messages.is_empty() {
             return;
         }
         let session_id = self.current_typed_session_id().await;
         let session_id_string = session_id.to_string();
-        let store = Arc::clone(&self.transcript_store);
-        let seen = Arc::clone(&self.transcript_dedup);
-        let cwd_path = self.current_cwd.read().await.clone();
+        let store = Arc::clone(self.persistence.transcript_store());
+        let seen = Arc::clone(self.engine_state_resources.transcript_dedup());
+        let cwd_path = self.current_cwd().read().await.clone();
         let cwd = cwd_path.display().to_string();
         let git_branch = coco_git::get_current_branch(&cwd_path)
             .ok()
@@ -247,14 +325,23 @@ impl SessionRuntime {
     }
 
     pub async fn pre_clear_rewind_messages(&self) -> Option<Vec<Arc<Message>>> {
-        self.clear_rewind_messages.lock().await.clone()
+        self.engine_state_resources
+            .clear_rewind_messages()
+            .lock()
+            .await
+            .clone()
     }
 
     pub async fn restore_pre_clear_rewind_prefix(
         &self,
         message_id: &str,
     ) -> Option<(i32, i32, Vec<Message>)> {
-        let messages = self.clear_rewind_messages.lock().await.clone()?;
+        let messages = self
+            .engine_state_resources
+            .clear_rewind_messages()
+            .lock()
+            .await
+            .clone()?;
         let idx = messages.iter().position(|m| match m.as_ref() {
             Message::User(u) => u.uuid.to_string() == message_id,
             _ => false,
@@ -282,7 +369,7 @@ impl SessionRuntime {
         self.persist_local_transcript_messages(&kept).await;
         let session_id = self.current_typed_session_id().await;
         let session_id_string = session_id.to_string();
-        if let Err(e) = self.transcript_store.append_metadata(
+        if let Err(e) = self.persistence.transcript_store().append_metadata(
             &session_id_string,
             &coco_session::MetadataEntry::LastPrompt {
                 session_id: session_id.clone(),
@@ -298,15 +385,18 @@ impl SessionRuntime {
     }
 
     pub fn side_query(&self) -> coco_tool_runtime::SideQueryHandle {
-        self.side_query.clone()
+        self.turn_resources.side_query()
     }
 
     pub(crate) fn usage_accounting(&self) -> coco_query::usage_accounting::UsageAccounting {
-        self.usage_accounting.clone()
+        self.turn_resources.usage_accounting()
     }
 
     pub async fn install_side_query_event_tx(&self, event_tx: mpsc::Sender<coco_query::CoreEvent>) {
-        self.usage_accounting.install_event_tx(event_tx).await;
+        self.turn_resources
+            .usage_accounting()
+            .install_event_tx(event_tx)
+            .await;
     }
 
     /// Generate the on-demand LLM risk explanation for a permission prompt.
@@ -321,7 +411,7 @@ impl SessionRuntime {
         params: coco_permissions::ExplainerParams<'_>,
     ) -> Option<coco_types::PermissionExplanation> {
         if !self
-            .runtime_config
+            .runtime_config()
             .settings
             .merged
             .permissions
@@ -341,7 +431,7 @@ impl SessionRuntime {
     }
 
     pub fn model_runtimes(&self) -> Arc<coco_inference::ModelRuntimeRegistry> {
-        self.model_runtimes.clone()
+        self.execution.model_runtimes()
     }
 
     /// Resolve an SDK/user-supplied model string into a concrete
@@ -350,19 +440,17 @@ impl SessionRuntime {
     /// model ids first bind to the current Main provider, then to the
     /// deterministic provider catalog order.
     pub fn resolve_model_selection(&self, raw_model: &str) -> Option<ProviderModelSelection> {
-        resolve_model_selection_from_runtime_config(&self.runtime_config, raw_model)
+        resolve_model_selection_from_runtime_config(self.runtime_config(), raw_model)
     }
 
     /// Best-effort PID-registry live patch - push the human-readable
     /// session name into the `<config_home>/sessions/<pid>.json` file
     /// that `coco ps` reads. Silently no-ops when the session isn't
     /// registered (subagent context, FS-constrained startup, etc.)
-    /// because `_pid_registry` is `Option`. Without this patch the live
+    /// because the PID registry guard is optional. Without this patch the live
     /// registry shows the stale startup name forever.
     pub fn update_session_registry_name(&self, name: &str) {
-        if let Some(reg) = self._pid_registry.as_ref() {
-            reg.update_session_name(name);
-        }
+        self.lifecycle_resources.update_session_registry_name(name);
     }
 
     /// Seed the transcript dedup set with uuids that are already
@@ -376,7 +464,7 @@ impl SessionRuntime {
     where
         I: IntoIterator<Item = uuid::Uuid>,
     {
-        let mut g = self.transcript_dedup.lock().await;
+        let mut g = self.engine_state_resources.transcript_dedup().lock().await;
         g.clear();
         g.extend(uuids);
     }
@@ -398,7 +486,8 @@ impl SessionRuntime {
         agent_id: Option<&str>,
     ) {
         let records = self
-            .transcript_store
+            .persistence
+            .transcript_store()
             .load_content_replacements_for_chain(session_id.as_str(), agent_id)
             .unwrap_or_default();
         let mut next =
@@ -415,7 +504,11 @@ impl SessionRuntime {
                 record.replacement().to_string(),
             );
         }
-        *self.tool_result_replacement_state.write().await = next;
+        *self
+            .engine_state_resources
+            .tool_result_replacement_state()
+            .write()
+            .await = next;
     }
 
     /// Borrow the optional `MemoryRuntime`. `None` when
@@ -436,7 +529,7 @@ impl SessionRuntime {
     /// Public accessor for the hook registry. Same `Arc` as the one
     /// installed on every per-turn engine; safe to clone.
     pub fn hook_registry(&self) -> Arc<coco_hooks::HookRegistry> {
-        self.hook_registry.clone()
+        self.hook_resources.registry()
     }
 
     /// Public accessor for the session-scoped [`coco_skills::SkillManager`].
@@ -445,7 +538,13 @@ impl SessionRuntime {
     /// Used by binary-entry wiring (e.g. `mcp_handle_adapter`) that
     /// sits outside the crate's `pub(crate)` field-access scope.
     pub fn skill_manager(&self) -> Arc<coco_skills::SkillManager> {
-        self.skill_manager.clone()
+        Arc::clone(self.catalog_resources.skill_manager())
+    }
+
+    pub fn command_registry_slot(
+        &self,
+    ) -> &Arc<tokio::sync::RwLock<Arc<coco_commands::CommandRegistry>>> {
+        self.catalog_resources.command_registry()
     }
 
     /// Session-scoped command queue handle. Producers outside the
@@ -457,20 +556,20 @@ impl SessionRuntime {
     /// Teammate messages and task notifications use the same queue
     /// with `QueueOrigin::Coordinator` / `QueueOrigin::TaskNotification`.
     pub fn command_queue(&self) -> &CommandQueue {
-        &self.command_queue
+        self.command_resources.command_queue()
     }
 
     /// The session's schedule store (cron tasks + triggers). Shared with the
     /// cron tick driver ([`crate::cron_tick`]) so it reads/writes the same
     /// tasks the `Cron*` tools persist.
     pub fn schedule_store(&self) -> coco_tool_runtime::ScheduleStoreRef {
-        self.schedule_store.clone()
+        self.turn_resources.schedule_store()
     }
 
     /// Session shutdown signal - long-lived background tasks (e.g. the cron
     /// tick) observe it for clean teardown.
     pub fn shutdown_signal(&self) -> CancellationToken {
-        self.cancel.clone()
+        self.lifecycle_resources.cancel()
     }
 
     /// Build a closure that materialises an
@@ -487,7 +586,11 @@ impl SessionRuntime {
     ) -> Arc<dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync> {
         let runtime = self.clone();
         Arc::new(move || {
-            let cfg = clone_std_rwlock(&runtime.orchestration_engine_config);
+            let cfg = clone_std_rwlock(
+                runtime
+                    .engine_config_resources
+                    .orchestration_engine_config(),
+            );
             coco_hooks::orchestration::OrchestrationContext {
                 session_id: cfg.session_id.clone(),
                 cwd: cfg.workspace_cwd(),
@@ -496,35 +599,32 @@ impl SessionRuntime {
                 transcript_path: None,
                 agent_id: None,
                 agent_type: None,
-                cancel: runtime.cancel.clone(),
+                cancel: runtime.lifecycle_resources.cancel(),
                 disable_all_hooks: cfg.disable_all_hooks,
                 allow_managed_hooks_only: cfg.allow_managed_hooks_only,
                 attachment_emitter: coco_messages::AttachmentEmitter::noop(),
                 sync_event_sink: None,
                 http_url_allowlist: None,
                 http_env_var_policy: None,
-                async_registry: Some(runtime.async_hook_registry.clone()),
-                async_rewake_sink: Some(async_rewake_sink(&runtime.command_queue)),
-                llm_handle: Some(runtime.hook_llm_handle.clone()),
+                async_registry: Some(runtime.hook_resources.async_registry()),
+                async_rewake_sink: Some(async_rewake_sink(
+                    runtime.command_resources.command_queue(),
+                )),
+                llm_handle: Some(runtime.hook_resources.llm_handle()),
                 workspace_trust_accepted: None,
             }
         })
     }
 
     /// Snapshot the current `QueryEngineConfig` (clones the inner struct).
-    /// Per-turn engine builds use this so mid-session mutations
-    /// (`set_permission_mode`, `/clear` regen) propagate immediately.
+    /// Per-turn engine builds use this so mid-session mutations like
+    /// `set_permission_mode` propagate immediately.
     pub async fn current_engine_config(&self) -> QueryEngineConfig {
-        self.engine_config.read().await.clone()
-    }
-
-    /// Clear cache-break tracking on every registry-owned runtime client.
-    /// Called whenever the agent transcript is being reset (new SDK
-    /// session, full `/clear`, history-only `/clear`) so the next
-    /// outbound prompt establishes a fresh baseline rather than
-    /// false-positive-firing against the prior session's snapshot.
-    pub(super) async fn reset_cache_break_detectors(&self) {
-        self.model_runtimes.reset_cache_break_detectors().await;
+        self.engine_config_resources
+            .engine_config()
+            .read()
+            .await
+            .clone()
     }
 
     /// Mutate `engine_config` under lock. Use for mid-session updates
@@ -534,26 +634,20 @@ impl SessionRuntime {
         F: FnOnce(&mut QueryEngineConfig),
     {
         let snapshot = {
-            let mut g = self.engine_config.write().await;
+            let mut g = self.engine_config_resources.engine_config().write().await;
             f(&mut g);
             g.clone()
         };
-        write_std_rwlock(&self.orchestration_engine_config, snapshot);
-    }
-
-    pub(super) async fn reset_todo_list(&self) {
-        *self.todo_list.write().await = Arc::new(coco_tool_runtime::InMemoryTodoListHandle::new());
-        let mut app_state = self.app_state.write().await;
-        app_state.plan_tasks.clear();
-        app_state.todos_by_agent.clear();
-        app_state.expanded_view = coco_types::ExpandedView::None;
-        app_state.verification_nudge_pending = false;
+        write_std_rwlock(
+            self.engine_config_resources.orchestration_engine_config(),
+            snapshot,
+        );
     }
 
     pub async fn seed_todo_list_snapshot(&self, key: String, items: Vec<coco_types::TodoRecord>) {
         let handle = self.todo_list.read().await.clone();
         handle.write(&key, items.clone()).await;
-        let mut app_state = self.app_state.write().await;
+        let mut app_state = self.engine_state_resources.app_state().write().await;
         if items.is_empty() {
             app_state.todos_by_agent.remove(&key);
         } else {

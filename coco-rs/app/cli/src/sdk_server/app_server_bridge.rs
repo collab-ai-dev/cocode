@@ -60,9 +60,12 @@ use crate::sdk_server::dispatcher::SdkHubEgress;
 use crate::sdk_server::dispatcher::spawn_sdk_outbound_writer;
 use crate::sdk_server::handlers::HandlerContext;
 use crate::sdk_server::handlers::HandlerResult;
+use crate::sdk_server::handlers::PriorSessionCleanup;
+use crate::sdk_server::handlers::ReplacementSessionState;
 use crate::sdk_server::handlers::RuntimeReplacementContext;
 use crate::sdk_server::handlers::SdkServerState;
-use crate::sdk_server::handlers::SessionHandle as SdkSessionHandle;
+use crate::sdk_server::handlers::SessionHandoffState;
+use crate::sdk_server::handlers::SessionMetadata;
 use crate::sdk_server::handlers::dispatch_client_request;
 use crate::sdk_server::handlers::session;
 use crate::sdk_server::outbound::OutboundMessage;
@@ -89,11 +92,9 @@ pub struct AppServerSdkHandler {
 
 /// Local AppServer registry handle for the current app/cli bridge.
 ///
-/// The fused `SessionRuntime` can still be retargeted in-place by
-/// `session/start` / `session/resume`, so this handle snapshots the registry
-/// session id separately from the optional runtime handle. The close cascade is
-/// intentionally retarget-safe until Phase B replaces in-place retargeting with
-/// one immutable runtime handle per live session.
+/// The registry id is an immutable snapshot that is checked against the
+/// optional runtime handle during close cascades. Runtime replacement installs a
+/// fresh handle instead of mutating an existing handle in place.
 #[derive(Clone)]
 pub struct LocalAppSessionHandle {
     session_id: SessionId,
@@ -172,13 +173,47 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
             .as_ref()
             .and_then(|_| LocalSessionDataRequest::from_client_request(&request));
         if let (Some(app_server), Some(session_data_request)) =
-            (local_app_server.clone(), session_data_request.clone())
+            (local_app_server.clone(), session_data_request)
         {
             let state = Arc::clone(&self.state);
             return Box::pin(async move {
                 LocalSessionDataView { app_server, state }
                     .handle(&session_data_request)
                     .await
+            });
+        }
+        if let (Some(app_server), ClientRequest::SessionStart(params)) =
+            (local_app_server.clone(), &request)
+        {
+            let params = params.as_ref().clone();
+            let connection = context.connection;
+            let live_before = app_server
+                .list_live_sessions()
+                .into_iter()
+                .map(|summary| summary.session_id)
+                .collect::<Vec<_>>();
+            let state = Arc::clone(&self.state);
+            return Box::pin(async move {
+                let replacement = state.runtime_replacement.read().await.clone();
+                if let Some(replacement) = replacement {
+                    return start_sdk_session_with_runtime_replacement(
+                        app_server,
+                        state,
+                        connection,
+                        live_before,
+                        params,
+                        replacement,
+                    )
+                    .await;
+                }
+                start_sdk_session_with_scoped_state(
+                    app_server,
+                    state,
+                    connection,
+                    live_before,
+                    params,
+                )
+                .await
             });
         }
         if let (Some(app_server), ClientRequest::SessionResume(params)) =
@@ -191,7 +226,6 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                 .into_iter()
                 .map(|summary| summary.session_id)
                 .collect::<Vec<_>>();
-            let notif_tx = self.notif_tx.clone();
             let state = Arc::clone(&self.state);
             return Box::pin(async move {
                 let replacement = state.runtime_replacement.read().await.clone();
@@ -206,31 +240,22 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                     )
                     .await;
                 }
-                let ctx = HandlerContext {
-                    notif_tx,
-                    state: Arc::clone(&state),
-                };
-                let mut result =
-                    dispatch_sdk_client_request(ClientRequest::SessionResume(params), ctx).await?;
-                if let Some(surface_id) = apply_local_lifecycle_request(
+                resume_sdk_session_with_scoped_state(
                     app_server,
-                    Arc::clone(&state),
-                    LocalLifecycleRequest::Resume {
-                        connection,
-                        live_before,
-                    },
-                    &result,
+                    state,
+                    connection,
+                    live_before,
+                    params,
                 )
-                .await?
-                {
-                    inject_surface_id(&mut result, surface_id)?;
-                }
-                Ok(result)
+                .await
             });
         }
         let ctx = HandlerContext {
             notif_tx: self.notif_tx.clone(),
             state: Arc::clone(&self.state),
+            scoped_session_id: local_app_server.as_ref().and_then(|app_server| {
+                app_server.sole_interactive_session_for_connection(context.connection)
+            }),
         };
         let state = Arc::clone(&self.state);
         Box::pin(async move {
@@ -238,17 +263,15 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
             let mut result = dispatch_result?;
             if let (Some(app_server), Some(lifecycle_request)) =
                 (local_app_server, lifecycle_request)
-            {
-                if let Some(surface_id) = apply_local_lifecycle_request(
+                && let Some(surface_id) = apply_local_lifecycle_request(
                     app_server,
                     Arc::clone(&state),
                     lifecycle_request,
                     &result,
                 )
                 .await?
-                {
-                    inject_surface_id(&mut result, surface_id)?;
-                }
+            {
+                inject_surface_id(&mut result, surface_id)?;
             }
             Ok(result)
         })
@@ -282,13 +305,47 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
             .as_ref()
             .and_then(|_| LocalSessionDataRequest::from_client_request(&request));
         if let (Some(app_server), Some(session_data_request)) =
-            (local_app_server.clone(), session_data_request.clone())
+            (local_app_server.clone(), session_data_request)
         {
             let state = Arc::clone(&self.state);
             return Box::pin(async move {
                 LocalSessionDataView { app_server, state }
                     .handle(&session_data_request)
                     .await
+            });
+        }
+        if let (Some(app_server), ClientRequest::SessionStart(params)) =
+            (local_app_server.clone(), &request)
+        {
+            let params = params.as_ref().clone();
+            let connection = context.connection_key();
+            let live_before = app_server
+                .list_live_sessions()
+                .into_iter()
+                .map(|summary| summary.session_id)
+                .collect::<Vec<_>>();
+            let state = Arc::clone(&self.state);
+            return Box::pin(async move {
+                let replacement = state.runtime_replacement.read().await.clone();
+                if let Some(replacement) = replacement {
+                    return start_sdk_session_with_runtime_replacement(
+                        app_server,
+                        state,
+                        connection,
+                        live_before,
+                        params,
+                        replacement,
+                    )
+                    .await;
+                }
+                start_sdk_session_with_scoped_state(
+                    app_server,
+                    state,
+                    connection,
+                    live_before,
+                    params,
+                )
+                .await
             });
         }
         if let (Some(app_server), ClientRequest::SessionResume(params)) =
@@ -301,7 +358,6 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                 .into_iter()
                 .map(|summary| summary.session_id)
                 .collect::<Vec<_>>();
-            let notif_tx = self.notif_tx.clone();
             let state = Arc::clone(&self.state);
             return Box::pin(async move {
                 let replacement = state.runtime_replacement.read().await.clone();
@@ -316,31 +372,22 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                     )
                     .await;
                 }
-                let ctx = HandlerContext {
-                    notif_tx,
-                    state: Arc::clone(&state),
-                };
-                let mut result =
-                    dispatch_sdk_client_request(ClientRequest::SessionResume(params), ctx).await?;
-                if let Some(surface_id) = apply_local_lifecycle_request(
+                resume_sdk_session_with_scoped_state(
                     app_server,
-                    Arc::clone(&state),
-                    LocalLifecycleRequest::Resume {
-                        connection,
-                        live_before,
-                    },
-                    &result,
+                    state,
+                    connection,
+                    live_before,
+                    params,
                 )
-                .await?
-                {
-                    inject_surface_id(&mut result, surface_id)?;
-                }
-                Ok(result)
+                .await
             });
         }
         let ctx = HandlerContext {
             notif_tx: self.notif_tx.clone(),
             state: Arc::clone(&self.state),
+            scoped_session_id: local_app_server.as_ref().and_then(|app_server| {
+                app_server.sole_interactive_session_for_connection(context.connection_key())
+            }),
         };
         let state = Arc::clone(&self.state);
         Box::pin(async move {
@@ -348,17 +395,15 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
             let mut result = dispatch_result?;
             if let (Some(app_server), Some(lifecycle_request)) =
                 (local_app_server, lifecycle_request)
-            {
-                if let Some(surface_id) = apply_local_lifecycle_request(
+                && let Some(surface_id) = apply_local_lifecycle_request(
                     app_server,
                     Arc::clone(&state),
                     lifecycle_request,
                     &result,
                 )
                 .await?
-                {
-                    inject_surface_id(&mut result, surface_id)?;
-                }
+            {
+                inject_surface_id(&mut result, surface_id)?;
             }
             Ok(result)
         })
@@ -781,7 +826,7 @@ async fn live_runtime_session_summary_and_history(
         coco_types::SdkSessionSummary {
             session_id: handle.session_id().clone(),
             model: config.model_id,
-            cwd: runtime.original_cwd.to_string_lossy().into_owned(),
+            cwd: runtime.original_cwd().to_string_lossy().into_owned(),
             created_at: timestamp.clone(),
             updated_at: Some(timestamp),
             title: None,
@@ -802,31 +847,22 @@ async fn live_sdk_session_summary_and_history(
     coco_types::SdkSessionSummary,
     Vec<std::sync::Arc<coco_messages::Message>>,
 )> {
-    let (cwd, model, history, stats) = {
-        let session = state.session.read().await;
-        let session = session.as_ref()?;
-        if &session.session_id != session_id {
-            return None;
-        }
-        (
-            session.cwd.clone(),
-            session.model.clone(),
-            Arc::clone(&session.history),
-            session.stats.clone(),
-        )
-    };
-    let history = history.lock().await.clone();
+    let metadata = state.session_metadata_snapshot(session_id)?;
+    let handoff = state.session_handoff_snapshot(session_id)?;
+    let history = handoff.history.lock().await.clone();
+    let accounting = state.session_accounting_snapshot(session_id);
     let timestamp = chrono::Utc::now().to_rfc3339();
     Some((
         coco_types::SdkSessionSummary {
             session_id: session_id.clone(),
-            model,
-            cwd,
+            model: metadata.model,
+            cwd: metadata.cwd,
             created_at: timestamp.clone(),
             updated_at: Some(timestamp),
             title: None,
             message_count: history.len() as i32,
-            total_tokens: stats.usage.input_tokens.total + stats.usage.output_tokens.total,
+            total_tokens: accounting.stats.usage.input_tokens.total
+                + accounting.stats.usage.output_tokens.total,
         },
         history,
     ))
@@ -858,6 +894,237 @@ fn local_session_data_projection_error(
     }
 }
 
+async fn start_sdk_session_with_scoped_state(
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    state: Arc<SdkServerState>,
+    connection: ConnectionKey,
+    live_before: Vec<SessionId>,
+    params: coco_types::SessionStartParams,
+) -> Result<serde_json::Value, JsonRpcDispatchError> {
+    if state.session_runtime.read().await.is_some() {
+        return Err(JsonRpcDispatchError {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message:
+                "session/start requires AppServer runtime replacement when a runtime is already installed"
+                    .to_string(),
+            data: None,
+        });
+    }
+    let prepared = session::prepare_session_start(params, &state, false)
+        .await
+        .map_err(handler_result_to_dispatch_error)?;
+    session::install_scoped_started_session_state(&state, &prepared, None).await;
+
+    let mut result = serde_json::to_value(coco_types::SessionStartResult {
+        session_id: prepared.session_id,
+        surface_id: None,
+    })
+    .map_err(|error| JsonRpcDispatchError {
+        code: coco_types::error_codes::INTERNAL_ERROR,
+        message: format!("session/start result encode failed: {error}"),
+        data: None,
+    })?;
+    if let Some(surface_id) = apply_local_lifecycle_request(
+        app_server,
+        state,
+        LocalLifecycleRequest::Start {
+            connection,
+            live_before,
+        },
+        &result,
+    )
+    .await?
+    {
+        inject_surface_id(&mut result, surface_id)?;
+    }
+    Ok(result)
+}
+
+async fn resume_sdk_session_with_scoped_state(
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    state: Arc<SdkServerState>,
+    connection: ConnectionKey,
+    live_before: Vec<SessionId>,
+    params: coco_types::SessionResumeParams,
+) -> Result<serde_json::Value, JsonRpcDispatchError> {
+    let loaded = session::load_resume_session(params, &state)
+        .await
+        .map_err(handler_result_to_dispatch_error)?;
+    let matching_runtime = if let Some(runtime) = state.session_runtime.read().await.clone() {
+        let runtime_session_id = runtime.current_typed_session_id().await;
+        if runtime_session_id != loaded.session_id {
+            return Err(JsonRpcDispatchError {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "session/resume requires AppServer runtime replacement when the installed runtime belongs to a different session".to_string(),
+                data: None,
+            });
+        }
+        Some(runtime)
+    } else {
+        None
+    };
+
+    if let Some(runtime) = matching_runtime {
+        session::hydrate_runtime_for_resume_messages(
+            &runtime,
+            &loaded.session_id,
+            &loaded.conversation.messages,
+        )
+        .await;
+        runtime.fire_session_start_hooks("resume").await;
+        install_sdk_session_runtime_state(Arc::clone(&state), runtime.clone()).await;
+        install_runtime_backed_resumed_sdk_session_state(
+            &state,
+            &loaded.session,
+            loaded.session_id.clone(),
+            &runtime,
+            &loaded.conversation.messages,
+        )
+        .await;
+    } else {
+        session::install_scoped_resumed_session_state(
+            &state,
+            &loaded.session,
+            loaded.session_id.clone(),
+            &loaded.conversation.messages,
+        )
+        .await;
+    }
+
+    let mut result = encode_session_resume_result(&loaded.session, None)?;
+    if let Some(surface_id) = apply_local_lifecycle_request(
+        app_server,
+        state,
+        LocalLifecycleRequest::Resume {
+            connection,
+            live_before,
+        },
+        &result,
+    )
+    .await?
+    {
+        inject_surface_id(&mut result, surface_id)?;
+    }
+    Ok(result)
+}
+
+async fn start_sdk_session_with_runtime_replacement(
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    state: Arc<SdkServerState>,
+    connection: ConnectionKey,
+    live_before: Vec<SessionId>,
+    params: coco_types::SessionStartParams,
+    replacement: RuntimeReplacementContext,
+) -> Result<serde_json::Value, JsonRpcDispatchError> {
+    let prepared = session::prepare_session_start(params, &state, false)
+        .await
+        .map_err(handler_result_to_dispatch_error)?;
+    let started_session_id = prepared.session_id.clone();
+
+    let make_factory = || {
+        let state = Arc::clone(&state);
+        let replacement = replacement.clone();
+        let prepared = prepared.clone();
+        async move {
+            let session_id = prepared.session_id.clone();
+            let runtime = build_sdk_runtime_for_start(replacement, state, prepared)
+                .await
+                .map_err(|error| coco_app_server::RegistryError::load_failed(error.to_string()))?;
+            Ok::<LocalAppSessionHandle, coco_app_server::RegistryError>(
+                LocalAppSessionHandle::from_runtime(session_id, runtime),
+            )
+        }
+    };
+
+    let mut replacement_surface_id = None;
+    let mut replacement_handle = None;
+    let mut replaced_existing = false;
+    for previous_session_id in live_before {
+        if previous_session_id == started_session_id {
+            continue;
+        }
+        if !replaced_existing {
+            if let Some((handle, surface_id)) = replace_local_app_server_session_with_factory(
+                Arc::clone(&app_server),
+                Arc::clone(&state),
+                previous_session_id.clone(),
+                started_session_id.clone(),
+                make_factory(),
+            )
+            .await?
+            {
+                replacement_handle = Some(handle);
+                replacement_surface_id = Some(surface_id);
+            } else {
+                replacement_handle = Some(
+                    replace_detached_local_app_server_session_with_factory(
+                        Arc::clone(&app_server),
+                        Arc::clone(&state),
+                        previous_session_id,
+                        started_session_id.clone(),
+                        make_factory(),
+                    )
+                    .await?,
+                );
+            }
+            replaced_existing = true;
+        } else {
+            close_local_app_server_session(
+                Arc::clone(&app_server),
+                Arc::clone(&state),
+                previous_session_id,
+            )
+            .await?;
+        }
+    }
+
+    let handle = match replacement_handle {
+        Some(handle) => handle,
+        None => {
+            load_local_app_server_session_with_factory(
+                &app_server,
+                started_session_id.clone(),
+                make_factory(),
+            )
+            .await?
+        }
+    };
+    let Some(runtime) = handle.runtime().cloned() else {
+        return Err(JsonRpcDispatchError {
+            code: coco_types::error_codes::INTERNAL_ERROR,
+            message: format!(
+                "local AppServer session {} started without a runtime handle",
+                handle.session_id()
+            ),
+            data: None,
+        });
+    };
+
+    install_sdk_session_runtime_state(Arc::clone(&state), runtime.clone()).await;
+    session::install_scoped_started_session_state(
+        &state,
+        &prepared,
+        Some(Arc::clone(runtime.runtime().app_state())),
+    )
+    .await;
+
+    let surface_id = match replacement_surface_id {
+        Some(surface_id) => surface_id,
+        None => {
+            attach_local_app_server_surface(&app_server, connection, started_session_id.clone())?
+        }
+    };
+    serde_json::to_value(coco_types::SessionStartResult {
+        session_id: started_session_id,
+        surface_id: Some(surface_id),
+    })
+    .map_err(|error| JsonRpcDispatchError {
+        code: coco_types::error_codes::INTERNAL_ERROR,
+        message: format!("session/start result encode failed: {error}"),
+        data: None,
+    })
+}
+
 async fn resume_sdk_session_with_runtime_replacement(
     app_server: Arc<AppServer<LocalAppSessionHandle>>,
     state: Arc<SdkServerState>,
@@ -870,10 +1137,8 @@ async fn resume_sdk_session_with_runtime_replacement(
         .await
         .map_err(handler_result_to_dispatch_error)?;
     let resumed_session_id = loaded.session_id.clone();
+    let resumed_cwd = loaded.session.working_dir.clone();
     let prior_messages = loaded.conversation.messages.clone();
-
-    session::install_resumed_session_slot(&state, &loaded.session, resumed_session_id.clone())
-        .await;
 
     if let Some(current_runtime) = state.session_runtime.read().await.clone() {
         let current_session_id = current_runtime.current_typed_session_id().await;
@@ -885,7 +1150,15 @@ async fn resume_sdk_session_with_runtime_replacement(
             )
             .await;
             current_runtime.fire_session_start_hooks("resume").await;
-            install_sdk_session_runtime_state(Arc::clone(&state), current_runtime).await;
+            install_sdk_session_runtime_state(Arc::clone(&state), current_runtime.clone()).await;
+            install_runtime_backed_resumed_sdk_session_state(
+                &state,
+                &loaded.session,
+                resumed_session_id.clone(),
+                &current_runtime,
+                &prior_messages,
+            )
+            .await;
             let surface_id =
                 attach_local_app_server_surface(&app_server, connection, resumed_session_id)?;
             return encode_session_resume_result(&loaded.session, Some(surface_id));
@@ -896,12 +1169,14 @@ async fn resume_sdk_session_with_runtime_replacement(
         let state = Arc::clone(&state);
         let replacement = replacement.clone();
         let session_id = resumed_session_id.clone();
+        let cwd = resumed_cwd.clone();
         let prior_messages = prior_messages.clone();
         async move {
             let runtime = build_sdk_runtime_for_resume(
                 replacement,
                 state,
                 session_id.clone(),
+                cwd,
                 prior_messages,
             )
             .await
@@ -975,7 +1250,15 @@ async fn resume_sdk_session_with_runtime_replacement(
             data: None,
         });
     };
-    install_sdk_session_runtime_state(Arc::clone(&state), runtime).await;
+    install_sdk_session_runtime_state(Arc::clone(&state), runtime.clone()).await;
+    install_runtime_backed_resumed_sdk_session_state(
+        &state,
+        &loaded.session,
+        resumed_session_id.clone(),
+        &runtime,
+        &prior_messages,
+    )
+    .await;
 
     let surface_id = match replacement_surface_id {
         Some(surface_id) => surface_id,
@@ -984,43 +1267,86 @@ async fn resume_sdk_session_with_runtime_replacement(
     encode_session_resume_result(&loaded.session, Some(surface_id))
 }
 
+async fn build_sdk_runtime_for_start(
+    replacement: RuntimeReplacementContext,
+    state: Arc<SdkServerState>,
+    prepared: session::PreparedStartSession,
+) -> anyhow::Result<crate::session_runtime::SessionHandle> {
+    let session = replacement
+        .runtime_factory
+        .build_with_session_id_and_cwd(
+            prepared.session_id.clone(),
+            session_build_cwd_from_str(&replacement.cwd, &prepared.cwd),
+        )
+        .await?;
+    setup_sdk_replacement_runtime(&replacement, state, &session).await?;
+    session.runtime().fire_session_start_hooks("startup").await;
+    Ok(session)
+}
+
+fn session_build_cwd_from_str(base: &std::path::Path, cwd: &str) -> std::path::PathBuf {
+    session_build_cwd(base, std::path::Path::new(cwd))
+}
+
+fn session_build_cwd(base: &std::path::Path, cwd: &std::path::Path) -> std::path::PathBuf {
+    if cwd.is_absolute() {
+        cwd.to_path_buf()
+    } else {
+        base.join(cwd)
+    }
+}
+
 async fn build_sdk_runtime_for_resume(
     replacement: RuntimeReplacementContext,
     state: Arc<SdkServerState>,
     session_id: SessionId,
+    cwd: std::path::PathBuf,
     prior_messages: Vec<coco_messages::Message>,
 ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
     let session = replacement
         .runtime_factory
-        .build_with_session_id(session_id.clone())
+        .build_with_session_id_and_cwd(
+            session_id.clone(),
+            session_build_cwd(&replacement.cwd, &cwd),
+        )
         .await?;
+    setup_sdk_replacement_runtime(&replacement, state, &session).await?;
+    session::hydrate_runtime_for_resume_messages(&session, &session_id, &prior_messages).await;
+    session.runtime().fire_session_start_hooks("resume").await;
+    Ok(session)
+}
+
+async fn setup_sdk_replacement_runtime(
+    replacement: &RuntimeReplacementContext,
+    state: Arc<SdkServerState>,
+    session: &crate::session_runtime::SessionHandle,
+) -> anyhow::Result<()> {
     let runtime = session.runtime().clone();
+    let session_cwd = runtime.original_cwd().clone();
     if replacement.requires_structured_output {
         runtime
             .update_engine_config(|cfg| cfg.requires_structured_output = true)
             .await;
     }
-    if let Some(sandbox_state) = runtime.sandbox_state() {
-        sandbox_state.set_approval_bridge(Arc::new(
-            crate::sdk_server::SdkSandboxApprovalBridge::new(Arc::clone(&state)),
-        ));
-    }
-    crate::sdk_server::sdk_hooks::install_runtime_callback(Arc::clone(&state), &session);
+    crate::sdk_server::sdk_hooks::install_runtime_callback(Arc::clone(&state), session);
     if let Some(hooks) = state.sdk_initialize_hooks.read().await.clone() {
-        crate::sdk_server::sdk_hooks::register_initialize_hooks(&session, &hooks);
+        crate::sdk_server::sdk_hooks::register_initialize_hooks(session, &hooks);
     }
-    session::hydrate_runtime_for_resume_messages(&session, &session_id, &prior_messages).await;
+    let sdk_agents = state.pending_sdk_agents.read().await.clone();
+    if !sdk_agents.is_empty() {
+        session.set_sdk_supplied_agents(sdk_agents).await;
+    }
 
     let lsp_handle = crate::session_bootstrap::build_lsp_handle_if_enabled(
         Arc::clone(&replacement.process_runtime),
-        &runtime.runtime_config,
+        runtime.runtime_config(),
         &coco_config::global_config::config_home(),
-        &runtime.project_root,
+        runtime.project_root(),
     )
     .await;
     crate::session_bootstrap::install_session_late_binds(
         session.clone(),
-        &replacement.cwd,
+        &session_cwd,
         None,
         lsp_handle,
         None,
@@ -1028,42 +1354,103 @@ async fn build_sdk_runtime_for_resume(
     .await?;
     let mcp_manager = state.mcp_manager.read().await.clone();
     crate::session_bootstrap::bootstrap_session_mcp(
-        &session,
-        &replacement.cwd,
+        session,
+        &session_cwd,
         mcp_manager,
         /*await_connect*/ false,
     )
     .await;
     crate::leader_inbox_poller::install_leader(session.clone(), None).await;
-    runtime.fire_session_start_hooks("resume").await;
-    Ok(session)
+    Ok(())
 }
 
-async fn install_sdk_session_runtime_state(
+pub async fn install_sdk_session_runtime_state(
     state: Arc<SdkServerState>,
     session: crate::session_runtime::SessionHandle,
 ) {
     crate::sdk_server::sdk_hooks::install_runtime_callback(Arc::clone(&state), &session);
     let runtime = session.runtime();
+    let session_manager = Arc::clone(runtime.session_manager());
+    let file_history = runtime.file_history().cloned();
+    let file_history_config_home = runtime
+        .file_history()
+        .map(|_| runtime.config_home().clone());
+    install_sdk_runtime_reload_subscription(Arc::clone(&state), &session).await;
     {
         let mut slot = state.session_runtime.write().await;
         *slot = Some(session);
     }
     {
         let mut slot = state.session_manager.write().await;
-        *slot = Some(Arc::clone(&runtime.session_manager));
+        *slot = Some(session_manager);
     }
     {
         let mut slot = state.file_history.write().await;
-        *slot = runtime.file_history.clone();
+        *slot = file_history;
     }
     {
         let mut slot = state.file_history_config_home.write().await;
-        *slot = runtime
-            .file_history
-            .as_ref()
-            .map(|_| runtime.config_home.clone());
+        *slot = file_history_config_home;
     }
+}
+
+async fn install_sdk_runtime_reload_subscription(
+    state: Arc<SdkServerState>,
+    session: &crate::session_runtime::SessionHandle,
+) {
+    let runtime = session.runtime();
+    let mut slot = state.sdk_runtime_reload_subscription.lock().await;
+    if let Some(handle) = slot.take() {
+        handle.abort();
+    }
+
+    let Some(sandbox_state) = runtime.sandbox_state() else {
+        return;
+    };
+    sandbox_state.set_approval_bridge(Arc::new(crate::sdk_server::SdkSandboxApprovalBridge::new(
+        Arc::clone(&state),
+    )));
+
+    let Some(publisher) = runtime.runtime_publisher() else {
+        return;
+    };
+    *slot = Some(crate::sandbox_reload::spawn_sandbox_reload(
+        sandbox_state,
+        &publisher,
+        runtime.original_cwd().clone(),
+    ));
+}
+
+async fn install_runtime_backed_resumed_sdk_session_state(
+    state: &SdkServerState,
+    session: &coco_session::Session,
+    session_id: SessionId,
+    runtime_handle: &crate::session_runtime::SessionHandle,
+    prior_messages: &[coco_messages::Message],
+) {
+    let plan_mode_instructions = state.pending_plan_mode_instructions.read().await.clone();
+    let runtime = runtime_handle.runtime();
+    let history = prior_messages
+        .iter()
+        .cloned()
+        .map(Arc::new)
+        .collect::<Vec<_>>();
+
+    state.install_scoped_replacement_session_state(ReplacementSessionState {
+        session_id: session_id.clone(),
+        metadata: SessionMetadata {
+            cwd: session.working_dir.to_string_lossy().into_owned(),
+            model: session.model.clone(),
+        },
+        handoff: SessionHandoffState {
+            history: Arc::new(tokio::sync::Mutex::new(history)),
+            app_state: Arc::clone(runtime.app_state()),
+        },
+        plan_mode_instructions,
+        prior_cleanup: PriorSessionCleanup::ActiveTurnAndHandoff,
+        reset_accounting: false,
+        cancel_reason: "runtime-backed session/resume",
+    });
 }
 
 async fn load_local_app_server_session_with_factory<F>(
@@ -1275,7 +1662,7 @@ fn attach_local_app_server_surface(
         ..Default::default()
     };
     app_server
-        .attach_surface_with_options(connection, surface_id.clone(), session_id.clone(), options)
+        .attach_surface_with_options(connection, surface_id.clone(), session_id, options)
         .map_err(|error| local_lifecycle_error("attach session surface", error))?;
     Ok(surface_id)
 }
@@ -1344,7 +1731,7 @@ fn encode_session_subscribe_envelope(
     };
     coco_types::SessionSubscribeEnvelope {
         session_id: envelope.session_id,
-        agent_id: envelope.agent_id.map(|agent_id| agent_id.into_inner()),
+        agent_id: envelope.agent_id.map(coco_types::AgentId::into_inner),
         turn_id: envelope.turn_id,
         session_seq: envelope.session_seq,
         event,
@@ -1381,6 +1768,30 @@ where
         + Send
         + 'static,
 {
+    replace_local_app_server_session_with_factory_and_close_reason(
+        app_server,
+        state,
+        old_session_id,
+        new_session_id,
+        factory,
+        coco_hooks::orchestration::ExitReason::Other,
+    )
+    .await
+}
+
+async fn replace_local_app_server_session_with_factory_and_close_reason<F>(
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    state: Arc<SdkServerState>,
+    old_session_id: SessionId,
+    new_session_id: SessionId,
+    factory: F,
+    close_reason: coco_hooks::orchestration::ExitReason,
+) -> Result<Option<(LocalAppSessionHandle, SurfaceId)>, JsonRpcDispatchError>
+where
+    F: Future<Output = Result<LocalAppSessionHandle, coco_app_server::RegistryError>>
+        + Send
+        + 'static,
+{
     let Some(calling_surface) = local_replace_calling_surface(&app_server, &old_session_id) else {
         return Ok(None);
     };
@@ -1394,7 +1805,7 @@ where
             factory,
             move |handle| async move {
                 close_sdk_session_state_for_app_server(&close_state, handle.session_id()).await;
-                close_local_session_handle(handle).await;
+                close_local_session_handle_with_reason(handle, close_reason).await;
             },
         )
         .map_err(|error| local_lifecycle_error("replace session", error))?
@@ -1534,6 +1945,14 @@ async fn close_local_app_server_session(
 }
 
 async fn close_local_session_handle(handle: LocalAppSessionHandle) {
+    close_local_session_handle_with_reason(handle, coco_hooks::orchestration::ExitReason::Other)
+        .await;
+}
+
+async fn close_local_session_handle_with_reason(
+    handle: LocalAppSessionHandle,
+    reason: coco_hooks::orchestration::ExitReason,
+) {
     let has_runtime = handle.runtime.is_some();
     if let Some(runtime) = handle.runtime() {
         let current = runtime.current_typed_session_id().await;
@@ -1542,14 +1961,11 @@ async fn close_local_session_handle(handle: LocalAppSessionHandle) {
                 target: "coco::app_server_local",
                 registry_session_id = %handle.session_id(),
                 current_session_id = %current,
-                "skipping local AppServer close cascade for retargeted fused runtime"
+                "skipping local AppServer close cascade for stale registry snapshot"
             );
             return;
         }
-        runtime
-            .runtime()
-            .fire_session_end_hooks(coco_hooks::orchestration::ExitReason::Other)
-            .await;
+        runtime.runtime().fire_session_end_hooks(reason).await;
         runtime.runtime().shutdown_signal().cancel();
     }
     debug!(
@@ -1561,27 +1977,14 @@ async fn close_local_session_handle(handle: LocalAppSessionHandle) {
 }
 
 async fn close_sdk_session_state_for_app_server(state: &SdkServerState, session_id: &SessionId) {
-    let (token_to_cancel, turn_handle, forwarder_handle) = {
-        let mut slot = state.session.write().await;
-        let Some(session) = slot.as_mut() else {
-            return;
-        };
-        if &session.session_id != session_id {
-            return;
-        }
-        let token = session.active_turn_cancel.take();
-        let turn_handle = session.active_turn_task.take();
-        let forwarder_handle = session.active_turn_forwarder.take();
-        *slot = None;
-        (token, turn_handle, forwarder_handle)
-    };
+    let active_turn = state.clear_scoped_session_state(session_id).await;
 
-    if let Some(token) = token_to_cancel {
-        token.cancel();
+    if let Some(active_turn) = &active_turn {
+        active_turn.cancel_token.cancel();
     }
 
-    if let Some(handle) = turn_handle {
-        match tokio::time::timeout(APP_SERVER_CLOSE_DRAIN_TIMEOUT, handle).await {
+    if let Some(active_turn) = active_turn {
+        match tokio::time::timeout(APP_SERVER_CLOSE_DRAIN_TIMEOUT, active_turn.turn_task).await {
             Ok(Ok(())) => {}
             Ok(Err(join_err)) => warn!(
                 session_id = %session_id,
@@ -1594,9 +1997,8 @@ async fn close_sdk_session_state_for_app_server(state: &SdkServerState, session_
                 "local AppServer close: turn task did not drain before timeout"
             ),
         }
-    }
-    if let Some(handle) = forwarder_handle {
-        match tokio::time::timeout(APP_SERVER_CLOSE_DRAIN_TIMEOUT, handle).await {
+        match tokio::time::timeout(APP_SERVER_CLOSE_DRAIN_TIMEOUT, active_turn.forwarder_task).await
+        {
             Ok(Ok(())) => {}
             Ok(Err(join_err)) => warn!(
                 session_id = %session_id,
@@ -1628,6 +2030,7 @@ pub struct AppServerLocalBridge {
     client: ServerClient<LocalAppSessionHandle>,
     handler: AppServerSdkHandler,
     outbound_forwarder: JoinHandle<()>,
+    hub_connector: Arc<std::sync::RwLock<Option<HubConnectorSender>>>,
     event_pump: Option<JoinHandle<()>>,
     event_pump_session_id: Option<SessionId>,
     interactive_surface: Option<SessionClient>,
@@ -1676,17 +2079,19 @@ impl AppServerLocalBridge {
             outbound_tx,
             Arc::clone(&app_server),
         );
+        let hub_connector = Arc::new(std::sync::RwLock::new(hub_connector));
         let outbound_forwarder = spawn_app_server_local_outbound_forwarder(
             Arc::clone(&app_server),
             state,
             outbound_rx,
-            hub_connector,
+            Arc::clone(&hub_connector),
         );
         Self {
             app_server,
             client,
             handler,
             outbound_forwarder,
+            hub_connector,
             event_pump: None,
             event_pump_session_id: None,
             interactive_surface: None,
@@ -1700,6 +2105,13 @@ impl AppServerLocalBridge {
 
     pub fn client(&self) -> &ServerClient<LocalAppSessionHandle> {
         &self.client
+    }
+
+    pub fn set_hub_connector_sender(&self, sender: HubConnectorSender) {
+        match self.hub_connector.write() {
+            Ok(mut guard) => *guard = Some(sender),
+            Err(poisoned) => *poisoned.into_inner() = Some(sender),
+        }
     }
 
     pub fn client_mut(&mut self) -> &mut ServerClient<LocalAppSessionHandle> {
@@ -1882,12 +2294,16 @@ impl AppServerLocalBridge {
         surface_id: &SurfaceId,
         session_id: &SessionId,
     ) -> bool {
+        self.surface_session_id(surface_id).as_ref() == Some(session_id)
+    }
+
+    fn surface_session_id(&self, surface_id: &SurfaceId) -> Option<SessionId> {
         let routing = self
             .app_server
             .routing()
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        routing.surface_session(surface_id) == Some(session_id)
+        routing.surface_session(surface_id).cloned()
     }
 
     pub fn start_passive_event_pump(
@@ -1978,33 +2394,59 @@ impl AppServerLocalBridge {
     }
 
     pub async fn current_session_result(&self) -> Option<coco_types::SessionResultParams> {
-        let slot = self.handler.state.session.read().await;
-        let session = slot.as_ref()?;
-        let stats = &session.stats;
-        Some(coco_types::SessionResultParams {
-            session_id: session.session_id.clone(),
-            total_turns: stats.total_turns,
-            duration_ms: session.started_at.elapsed().as_millis() as i64,
-            duration_api_ms: stats.total_duration_api_ms,
-            is_error: stats.had_error,
-            stop_reason: stats
-                .last_stop_reason
-                .clone()
-                .unwrap_or_else(|| "end_turn".into()),
-            total_cost_usd: stats.total_cost_usd,
-            usage: stats.usage,
-            model_usage: stats.model_usage.clone(),
-            permission_denials: stats.permission_denials.clone(),
-            result: stats.last_result_text.clone(),
-            errors: stats.errors.clone(),
-            structured_output: if stats.had_error {
-                None
-            } else {
-                stats.structured_output.clone()
+        let session_id = if let Some(surface) = self.interactive_surface.as_ref()
+            && let Some(session_id) = self.surface_session_id(surface.surface_id())
+        {
+            session_id
+        } else {
+            self.handler.state.runtime_or_active_session_id().await?
+        };
+        Some(session::build_aggregated_session_result(
+            &session_id,
+            self.handler.state.as_ref(),
+            "end_turn",
+        ))
+    }
+
+    pub async fn replace_session_runtime_for_clear<F>(
+        &self,
+        old_session_id: SessionId,
+        new_session_id: SessionId,
+        factory: F,
+    ) -> anyhow::Result<Option<(crate::session_runtime::SessionHandle, SurfaceId)>>
+    where
+        F: Future<Output = anyhow::Result<crate::session_runtime::SessionHandle>> + Send + 'static,
+    {
+        let registry_session_id = new_session_id.clone();
+        let replacement = replace_local_app_server_session_with_factory_and_close_reason(
+            Arc::clone(&self.app_server),
+            Arc::clone(&self.handler.state),
+            old_session_id,
+            new_session_id,
+            async move {
+                let runtime = factory.await.map_err(|error| {
+                    coco_app_server::RegistryError::load_failed(error.to_string())
+                })?;
+                Ok(LocalAppSessionHandle::from_runtime(
+                    registry_session_id,
+                    runtime,
+                ))
             },
-            fast_mode_state: None,
-            num_api_calls: (stats.num_api_calls > 0).then_some(stats.num_api_calls),
-        })
+            coco_hooks::orchestration::ExitReason::Clear,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("{}", error.message))?;
+
+        match replacement {
+            Some((handle, surface_id)) => {
+                let runtime = handle
+                    .runtime()
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("replacement handle did not include runtime"))?;
+                Ok(Some((runtime, surface_id)))
+            }
+            None => Ok(None),
+        }
     }
 
     pub async fn install_session_snapshot(
@@ -2013,6 +2455,8 @@ impl AppServerLocalBridge {
         cwd: impl Into<String>,
         model: impl Into<String>,
     ) {
+        let cwd = cwd.into();
+        let model = model.into();
         if let Err(error) = register_local_app_server_session(
             &self.app_server,
             LocalAppSessionHandle::snapshot(session_id.clone()),
@@ -2021,12 +2465,18 @@ impl AppServerLocalBridge {
         {
             warn!(?error, session_id = %session_id, "local AppServer registry snapshot install failed");
         }
-        self.install_sdk_session_handle(SdkSessionHandle::new(
-            session_id,
-            cwd.into(),
-            model.into(),
-        ))
-        .await;
+        self.handler
+            .state
+            .set_session_metadata(session_id.clone(), SessionMetadata { cwd, model });
+        self.handler
+            .state
+            .set_session_handoff(session_id.clone(), SessionHandoffState::new());
+        self.handler
+            .state
+            .clear_session_plan_mode_instructions(&session_id);
+        self.handler
+            .state
+            .reset_session_accounting(session_id.clone());
     }
 
     pub async fn install_session_runtime(&self, session: crate::session_runtime::SessionHandle) {
@@ -2040,8 +2490,6 @@ impl AppServerLocalBridge {
             model,
             max_turns,
             system_prompt,
-            permission_mode,
-            thinking_level,
             bypass_permissions_available,
             app_state,
             history,
@@ -2052,7 +2500,7 @@ impl AppServerLocalBridge {
             let runtime = session.runtime();
             let session_id = session.session_id().clone();
             let cwd = runtime
-                .current_cwd
+                .current_cwd()
                 .read()
                 .await
                 .to_string_lossy()
@@ -2065,14 +2513,12 @@ impl AppServerLocalBridge {
                 config.model_id.clone(),
                 config.max_turns,
                 config.system_prompt.clone(),
-                config.permission_mode,
-                config.thinking_level.clone(),
                 config.permission_mode_availability.bypass_permissions,
-                Arc::clone(&runtime.app_state),
+                Arc::clone(runtime.app_state()),
                 history,
-                Arc::clone(&runtime.session_manager),
-                runtime.file_history.clone(),
-                runtime.config_home.clone(),
+                Arc::clone(runtime.session_manager()),
+                runtime.file_history().cloned(),
+                runtime.config_home().clone(),
             )
         };
         if let Err(error) = register_local_app_server_session(
@@ -2084,12 +2530,22 @@ impl AppServerLocalBridge {
             warn!(?error, session_id = %session_id, "local AppServer registry install failed");
         }
 
-        let mut sdk_session = SdkSessionHandle::new(session_id, cwd, model);
-        sdk_session.permission_mode = Some(permission_mode);
-        sdk_session.thinking_level = thinking_level;
-        sdk_session.app_state = app_state;
-        sdk_session.history = Arc::new(tokio::sync::Mutex::new(history));
-        self.install_sdk_session_handle(sdk_session).await;
+        self.handler
+            .state
+            .set_session_metadata(session_id.clone(), SessionMetadata { cwd, model });
+        self.handler.state.set_session_handoff(
+            session_id.clone(),
+            SessionHandoffState {
+                history: Arc::new(tokio::sync::Mutex::new(history)),
+                app_state,
+            },
+        );
+        self.handler
+            .state
+            .clear_session_plan_mode_instructions(&session_id);
+        self.handler
+            .state
+            .reset_session_accounting(session_id.clone());
         self.handler.state.bypass_permissions_available.store(
             bypass_permissions_available,
             std::sync::atomic::Ordering::Relaxed,
@@ -2117,11 +2573,6 @@ impl AppServerLocalBridge {
         let mut slot = self.handler.state.session_runtime.write().await;
         *slot = Some(session);
     }
-
-    async fn install_sdk_session_handle(&self, session: SdkSessionHandle) {
-        let mut slot = self.handler.state.session.write().await;
-        *slot = Some(session);
-    }
 }
 
 impl Drop for AppServerLocalBridge {
@@ -2137,7 +2588,7 @@ pub fn spawn_app_server_local_outbound_forwarder<H>(
     server: Arc<AppServer<H>>,
     state: Arc<SdkServerState>,
     mut outbound_rx: mpsc::Receiver<OutboundMessage>,
-    hub_connector: Option<HubConnectorSender>,
+    hub_connector: Arc<std::sync::RwLock<Option<HubConnectorSender>>>,
 ) -> JoinHandle<()>
 where
     H: Clone + Send + Sync + 'static,
@@ -2151,20 +2602,24 @@ where
                         warn!("dropping local AppServer event without an active session");
                         continue;
                     };
-                    let seq_session_id = session_id.clone();
-                    let envelope = SessionEnvelope::stamp(session_id, None, *event, || {
-                        let next = next_session_seq.entry(seq_session_id).or_insert(1);
-                        let seq = *next;
-                        *next += 1;
-                        seq
-                    });
-                    let hub_envelope = envelope.clone();
-                    server.route_envelope(envelope);
-                    if let Some(hub_connector) = &hub_connector
-                        && let Err(error) = hub_connector.try_enqueue(hub_envelope)
-                    {
-                        warn!(%error, "dropping local AppServer event from Hub connector queue");
-                    }
+                    let hub_connector = clone_hub_connector_sender(&hub_connector);
+                    route_local_outbound_event(
+                        &server,
+                        hub_connector.as_ref(),
+                        &mut next_session_seq,
+                        session_id,
+                        *event,
+                    );
+                }
+                OutboundMessage::SessionCoreEvent { session_id, event } => {
+                    let hub_connector = clone_hub_connector_sender(&hub_connector);
+                    route_local_outbound_event(
+                        &server,
+                        hub_connector.as_ref(),
+                        &mut next_session_seq,
+                        session_id,
+                        *event,
+                    );
                 }
                 OutboundMessage::JsonRpc(_) => {
                     warn!("dropping JSON-RPC outbound message on local AppServer forwarder");
@@ -2174,15 +2629,42 @@ where
     })
 }
 
+fn clone_hub_connector_sender(
+    hub_connector: &Arc<std::sync::RwLock<Option<HubConnectorSender>>>,
+) -> Option<HubConnectorSender> {
+    match hub_connector.read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
+
+fn route_local_outbound_event<H>(
+    server: &AppServer<H>,
+    hub_connector: Option<&HubConnectorSender>,
+    next_session_seq: &mut HashMap<SessionId, i64>,
+    session_id: SessionId,
+    event: CoreEvent,
+) where
+    H: Clone + Send + Sync + 'static,
+{
+    let seq_session_id = session_id.clone();
+    let envelope = SessionEnvelope::stamp(session_id, None, event, || {
+        let next = next_session_seq.entry(seq_session_id).or_insert(1);
+        let seq = *next;
+        *next += 1;
+        seq
+    });
+    let hub_envelope = envelope.clone();
+    server.route_envelope(envelope);
+    if let Some(hub_connector) = hub_connector
+        && let Err(error) = hub_connector.try_enqueue(hub_envelope)
+    {
+        warn!(%error, "dropping local AppServer event from Hub connector queue");
+    }
+}
+
 async fn current_app_server_session_id(state: &SdkServerState) -> Option<SessionId> {
-    if let Some(session) = state.session.read().await.as_ref() {
-        return Some(session.session_id.clone());
-    }
-    let runtime = state.session_runtime.read().await.clone();
-    if let Some(runtime) = runtime {
-        return Some(runtime.current_typed_session_id().await);
-    }
-    None
+    state.runtime_or_active_session_id().await
 }
 
 #[cfg(test)]

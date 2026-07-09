@@ -20,7 +20,7 @@ use super::HandlerResult;
 pub(super) async fn handle_config_read(ctx: &HandlerContext) -> HandlerResult {
     // Project/local settings live under cwd, so this matters for clients
     // that have multiple repos open.
-    let cwd = match ctx.state.workspace_cwd().await {
+    let cwd = match ctx.workspace_cwd().await {
         Ok(cwd) => cwd,
         Err(err) => return err,
     };
@@ -95,7 +95,7 @@ pub(super) async fn handle_config_write(
     ctx: &HandlerContext,
 ) -> HandlerResult {
     let scope = params.scope.as_deref().unwrap_or("user");
-    let cwd = match ctx.state.workspace_cwd().await {
+    let cwd = match ctx.workspace_cwd().await {
         Ok(cwd) => cwd,
         Err(err) => return err,
     };

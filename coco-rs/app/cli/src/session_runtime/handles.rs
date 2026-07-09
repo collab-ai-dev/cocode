@@ -10,6 +10,25 @@ use super::EnginePersistenceMode;
 use super::SessionRuntime;
 
 impl SessionRuntime {
+    /// Publisher for this session's config snapshot when hot-reload is active.
+    pub fn runtime_publisher(&self) -> Option<Arc<coco_config::RuntimePublisher>> {
+        self.config_resources.runtime_publisher()
+    }
+
+    /// Subscribe to raw config-change events for this session's cwd fold.
+    pub fn subscribe_config_changes(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<coco_config_reload::ConfigChange>> {
+        self.config_resources.subscribe_config_changes()
+    }
+
+    /// Subscribe to failed config reload attempts for this session's cwd fold.
+    pub fn subscribe_config_reload_errors(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<coco_config_reload::ConfigReloadError>> {
+        self.config_resources.subscribe_config_reload_errors()
+    }
+
     /// Install the agent-spawn handle on this runtime. Called once
     /// after `build()` returns the `Arc<Self>`. The handle is
     /// late-bound because the adapter inside it needs to capture
@@ -47,7 +66,7 @@ impl SessionRuntime {
                 .display()
                 .to_string(),
             task_list_path: self
-                .config_home
+                .config_home()
                 .join("tasks")
                 .join(coco_tasks::task_list::sanitize_path_component(
                     &task_list_id,
@@ -154,12 +173,15 @@ impl SessionRuntime {
     /// LLM hook handle. Called after `SessionRuntime::build` returns
     /// because the runner captures `Arc<SessionRuntime>`.
     pub async fn attach_hook_agent_runner(&self, runner: coco_query::hook_llm::HookAgentRunnerRef) {
-        self.hook_llm_handle.install_agent_runner(runner).await;
+        self.hook_resources
+            .llm_handle()
+            .install_agent_runner(runner)
+            .await;
     }
 
     /// Snapshot the registered tool set for scoped child registries.
     pub(crate) fn registered_tools(&self) -> Vec<Arc<dyn coco_tool_runtime::DynTool>> {
-        self.tools.all()
+        self.execution.tools().all()
     }
 
     /// Build an engine with caller-supplied scoped registries, then
@@ -173,7 +195,13 @@ impl SessionRuntime {
         tools: Arc<ToolRegistry>,
         hooks: Option<Arc<coco_hooks::HookRegistry>>,
     ) -> QueryEngine {
-        let engine = QueryEngine::new(config, self.model_runtimes.clone(), tools, cancel, hooks);
+        let engine = QueryEngine::new(
+            config,
+            self.execution.model_runtimes(),
+            tools,
+            cancel,
+            hooks,
+        );
         self.wire_engine(engine, None, EnginePersistenceMode::Fork)
             .await
     }
@@ -204,7 +232,8 @@ impl SessionRuntime {
     pub async fn fallback_cache_safe_params(&self) -> coco_types::CacheSafeParams {
         let cfg = self.current_engine_config().await;
         let snapshot = self
-            .model_runtimes
+            .execution
+            .model_runtimes()
             .snapshot_for_role(coco_types::ModelRole::Main)
             .ok();
         let provider = snapshot

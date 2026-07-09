@@ -16,8 +16,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
 
+use super::ActiveTurnHandles;
+use super::ActiveTurnStartError;
+use super::ActiveTurnStartState;
 use super::HandlerContext;
 use super::HandlerResult;
+use super::ShortcutTurnState;
+use super::TurnHandoff;
 use super::runtime;
 use super::session;
 use super::session::forward_turn_events;
@@ -69,123 +74,98 @@ pub(super) async fn handle_turn_start(
         return handle_turn_start_observability_shortcut(shortcut, ctx).await;
     }
 
-    // Read `turn_runner` BEFORE acquiring the session write lock. Lock
-    // order is turn_runner → session elsewhere too; avoids nesting a
-    // second lock acquisition under the session write guard.
     let runner = ctx.state.turn_runner.read().await.clone();
+    let Some((turn_session_id, _session_source)) = ctx.active_session_resolution().await else {
+        return active_turn_start_error(ActiveTurnStartError::NoActiveSession);
+    };
 
-    // Entire per-turn setup runs under the session write lock so that
-    // the spawned forwarder + runner handles are stored on the
-    // SessionHandle before the lock is released — `session/archive` can
-    // rely on finding them when it cancels and waits for flushing.
-    let turn_id = {
-        let mut slot = ctx.state.session.write().await;
-        let Some(session) = slot.as_mut() else {
-            return HandlerResult::Err {
-                code: coco_types::error_codes::INVALID_REQUEST,
-                message: "no active session; call session/start first".into(),
-                data: None,
+    let notif_tx = ctx.notif_tx.clone();
+    let state_for_turn = ctx.state.clone();
+    let turn_id = match ctx.state.start_active_turn_for_session(
+        turn_session_id,
+        move |start: ActiveTurnStartState| {
+            let handoff = TurnHandoff {
+                session_id: start.session_id.clone(),
+                history: start.handoff.history,
+                app_state: start.handoff.app_state,
+                plan_mode_instructions: start.plan_mode_instructions,
             };
-        };
-        if session.active_turn_cancel.is_some() {
-            return HandlerResult::Err {
-                code: coco_types::error_codes::INVALID_REQUEST,
-                message: "a turn is already running; call turn/interrupt first".into(),
-                data: None,
-            };
-        }
-        session.turn_counter = session.turn_counter.saturating_add(1);
-        let turn_id = TurnId::from(format!(
-            "turn-{}-{}",
-            session.session_id, session.turn_counter
-        ));
-        let cancel_token = CancellationToken::new();
-        session.active_turn_cancel = Some(cancel_token.clone());
-        // Narrow handoff built under the lock — avoids cloning `stats` /
-        // `env_overrides` / `permission_denials` out of the SessionHandle.
-        let handoff = session.handoff();
 
-        info!(
-            session_id = %handoff.session_id,
-            turn_id = %turn_id,
-            "SdkServer: turn/start"
-        );
+            info!(
+                session_id = %handoff.session_id,
+                turn_id = %start.turn_id,
+                "SdkServer: turn/start"
+            );
 
-        // Event-forwarder bridge: the runner writes to `inner_tx`; the
-        // forwarder task reads events, intercepts `SessionResult` to
-        // fold per-turn stats into `SessionHandle.stats`, and forwards
-        // everything else (sans SessionStarted / SessionResult) to the
-        // real `notif_tx`.
-        //
-        // This decouples the engine's "one SessionResult per
-        // run_with_events" assumption from the SDK's "one SessionResult
-        // per session" wire contract. See `event-system-design.md`.
-        //
-        // The forwarder is parameterized by the owner session_id so it
-        // can refuse to fold stats into a DIFFERENT session after
-        // archive + session/start has replaced the slot.
-        let (inner_tx, inner_rx) = mpsc::channel::<CoreEvent>(256);
-        let forwarder_handle = tokio::spawn(forward_turn_events(
-            inner_rx,
-            ctx.notif_tx.clone(),
-            ctx.state.clone(),
-            handoff.session_id.clone(),
-        ));
-        session.active_turn_forwarder = Some(forwarder_handle);
+            // Event-forwarder bridge: the runner writes to `inner_tx`; the
+            // forwarder task reads events, intercepts `SessionResult` to
+            // fold per-turn stats into state-level SDK accounting, and forwards
+            // everything else (sans SessionStarted / SessionResult) to the
+            // real `notif_tx`.
+            //
+            // This decouples the engine's "one SessionResult per
+            // run_with_events" assumption from the SDK's "one SessionResult
+            // per session" wire contract. See `event-system-design.md`.
+            //
+            // The forwarder is parameterized by the owner session_id so it
+            // can refuse to fold stats into a DIFFERENT session after
+            // archive + session/start has replaced the slot.
+            let (inner_tx, inner_rx) = mpsc::channel::<CoreEvent>(256);
+            let forwarder_state = state_for_turn.clone();
+            let forwarder_handle = tokio::spawn(forward_turn_events(
+                inner_rx,
+                notif_tx,
+                forwarder_state,
+                handoff.session_id.clone(),
+            ));
 
-        // Spawn the turn as a detached task so `turn/start` returns the
-        // turn_id synchronously. The task's post-run cleanup clears its
-        // own handle fields only if the session is still the same one
-        // (cross-session guard).
-        let state = ctx.state.clone();
-        let turn_id_for_task = turn_id.clone();
-        let inner_tx_for_error = inner_tx.clone();
-        let owner_session_id = handoff.session_id.clone();
-        let turn_handle = tokio::spawn(async move {
-            let run_result = runner
-                .run_turn(
-                    params,
-                    turn_id_for_task.clone(),
-                    handoff,
-                    inner_tx,
-                    cancel_token,
-                )
-                .await;
-            if let Err(e) = run_result {
-                warn!(turn_id = %turn_id_for_task, error = %e, "turn runner failed");
-                let _ = inner_tx_for_error
-                    .send(CoreEvent::Protocol(
-                        coco_types::ServerNotification::TurnEnded(
-                            coco_types::TurnEndedParams::failed(
-                                turn_id_for_task.clone(),
-                                /*usage*/ None,
-                                coco_types::ErrorPayload {
-                                    message: e.to_string(),
-                                    code: coco_types::ErrorCode::Unknown,
-                                },
-                            ),
-                        ),
-                    ))
+            // Spawn the turn as a detached task so `turn/start` returns the
+            // turn_id synchronously. The task's post-run cleanup clears its
+            // own handle fields only if the session is still the same one
+            // (cross-session guard).
+            let state = state_for_turn;
+            let turn_id_for_task = start.turn_id.clone();
+            let inner_tx_for_error = inner_tx.clone();
+            let owner_session_id = handoff.session_id.clone();
+            let cancel_token_for_task = start.cancel_token.clone();
+            let turn_handle = tokio::spawn(async move {
+                let run_result = runner
+                    .run_turn(
+                        params,
+                        turn_id_for_task.clone(),
+                        handoff,
+                        inner_tx,
+                        cancel_token_for_task,
+                    )
                     .await;
+                if let Err(e) = run_result {
+                    warn!(turn_id = %turn_id_for_task, error = %e, "turn runner failed");
+                    let _ = inner_tx_for_error
+                        .send(CoreEvent::Protocol(
+                            coco_types::ServerNotification::TurnEnded(
+                                coco_types::TurnEndedParams::failed(
+                                    turn_id_for_task.clone(),
+                                    /*usage*/ None,
+                                    coco_types::ErrorPayload {
+                                        message: e.to_string(),
+                                        code: coco_types::ErrorCode::Unknown,
+                                    },
+                                ),
+                            ),
+                        ))
+                        .await;
+                }
+                state.clear_active_turn(&owner_session_id);
+            });
+            ActiveTurnHandles {
+                cancel_token: start.cancel_token,
+                turn_task: turn_handle,
+                forwarder_task: forwarder_handle,
             }
-            // Cross-session guard: only clear if the session in the
-            // slot is STILL the session this turn belonged to. If
-            // `session/archive` + `session/start` ran while this turn
-            // was winding down, the slot now holds a different session
-            // (or is `None` during archive-in-progress) and we must not
-            // touch it.
-            let mut slot = state.session.write().await;
-            if let Some(session) = slot.as_mut()
-                && session.session_id == owner_session_id
-            {
-                session.active_turn_cancel = None;
-                session.active_turn_task = None;
-                session.active_turn_forwarder = None;
-            }
-        });
-        session.active_turn_task = Some(turn_handle);
-
-        turn_id
+        },
+    ) {
+        Ok(turn_id) => turn_id,
+        Err(error) => return active_turn_start_error(error),
     };
 
     HandlerResult::ok(coco_types::TurnStartResult { turn_id })
@@ -334,6 +314,7 @@ async fn handle_turn_start_memory_shortcut(
                 info!("SDK /summary: no MemoryRuntime; skipping");
             }
         }
+        emit_shortcut_turn_lifecycle(&shortcut_turn, &ctx.notif_tx).await;
         return HandlerResult::ok(coco_types::TurnStartResult {
             turn_id: shortcut_turn.turn_id,
         });
@@ -347,6 +328,7 @@ async fn handle_turn_start_memory_shortcut(
                 info!("SDK /summary: no MemoryRuntime; skipping");
             }
         }
+        emit_shortcut_turn_lifecycle(&shortcut_turn, &ctx.notif_tx).await;
         return HandlerResult::ok(coco_types::TurnStartResult {
             turn_id: shortcut_turn.turn_id,
         });
@@ -380,6 +362,7 @@ async fn handle_turn_start_memory_shortcut(
         }
     }
 
+    emit_shortcut_turn_lifecycle(&shortcut_turn, &ctx.notif_tx).await;
     HandlerResult::ok(coco_types::TurnStartResult {
         turn_id: shortcut_turn.turn_id,
     })
@@ -428,15 +411,17 @@ async fn handle_turn_start_btw_shortcut(
             history.push(message.clone());
             let _ = ctx
                 .notif_tx
-                .send(OutboundMessage::core_event(CoreEvent::Protocol(
-                    coco_types::ServerNotification::MessageAppended {
+                .send(OutboundMessage::session_core_event(
+                    shortcut_turn.session_id.clone(),
+                    CoreEvent::Protocol(coco_types::ServerNotification::MessageAppended {
                         message,
                         identity: coco_types::ServerNotificationIdentity::default(),
-                    },
-                )))
+                    }),
+                ))
                 .await;
         }
     }
+    emit_shortcut_turn_lifecycle(&shortcut_turn, &ctx.notif_tx).await;
 
     HandlerResult::ok(coco_types::TurnStartResult {
         turn_id: shortcut_turn.turn_id,
@@ -458,22 +443,28 @@ async fn handle_turn_start_goal_shortcut(
         }
     };
     let (history_handle, app_state) = {
-        let slot = ctx.state.session.read().await;
-        let Some(session) = slot.as_ref() else {
+        let Some(session_id) = ctx.active_session_id().await else {
             return Err(HandlerResult::Err {
                 code: coco_types::error_codes::INVALID_REQUEST,
                 message: "no active session; call session/start first".into(),
                 data: None,
             });
         };
-        if session.active_turn_cancel.is_some() {
+        if ctx.state.has_active_turn(&session_id) {
             return Err(HandlerResult::Err {
                 code: coco_types::error_codes::INVALID_REQUEST,
                 message: "a turn is already running; call turn/interrupt first".into(),
                 data: None,
             });
         }
-        (Arc::clone(&session.history), Arc::clone(&session.app_state))
+        let Some(handoff) = ctx.state.session_handoff_snapshot(&session_id) else {
+            return Err(HandlerResult::Err {
+                code: coco_types::error_codes::INTERNAL_ERROR,
+                message: "session handoff state is missing".into(),
+                data: None,
+            });
+        };
+        (handoff.history, handoff.app_state)
     };
 
     let runtime = runtime_handle.runtime();
@@ -553,58 +544,53 @@ async fn handle_turn_start_compact_shortcut(
         }
     };
 
-    let turn_id = {
-        let mut slot = ctx.state.session.write().await;
-        let Some(session) = slot.as_mut() else {
-            return HandlerResult::Err {
-                code: coco_types::error_codes::INVALID_REQUEST,
-                message: "no active session; call session/start first".into(),
-                data: None,
-            };
-        };
-        if session.active_turn_cancel.is_some() {
-            return HandlerResult::Err {
-                code: coco_types::error_codes::INVALID_REQUEST,
-                message: "a turn is already running; call turn/interrupt first".into(),
-                data: None,
-            };
-        }
+    let notif_tx = ctx.notif_tx.clone();
+    let state_for_turn = ctx.state.clone();
+    let Some((turn_session_id, _session_source)) = ctx.active_session_resolution().await else {
+        return active_turn_start_error(ActiveTurnStartError::NoActiveSession);
+    };
+    let turn_id = match ctx.state.start_active_turn_for_session(
+        turn_session_id,
+        move |start: ActiveTurnStartState| {
+            let history = start.handoff.history;
+            let (inner_tx, inner_rx) = mpsc::channel::<CoreEvent>(256);
+            let forwarder_state = state_for_turn.clone();
+            let forwarder_handle = tokio::spawn(forward_turn_events(
+                inner_rx,
+                notif_tx,
+                forwarder_state,
+                start.session_id.clone(),
+            ));
 
-        session.turn_counter = session.turn_counter.saturating_add(1);
-        let turn_id = TurnId::from(format!(
-            "turn-{}-{}",
-            session.session_id, session.turn_counter
-        ));
-        let cancel_token = CancellationToken::new();
-        session.active_turn_cancel = Some(cancel_token.clone());
-        let owner_session_id = session.session_id.clone();
-        let history = Arc::clone(&session.history);
-        let (inner_tx, inner_rx) = mpsc::channel::<CoreEvent>(256);
-        session.active_turn_forwarder = Some(tokio::spawn(forward_turn_events(
-            inner_rx,
-            ctx.notif_tx.clone(),
-            ctx.state.clone(),
-            owner_session_id.clone(),
-        )));
+            let state = state_for_turn;
+            let turn_id_for_task = start.turn_id.clone();
+            let turn_id_for_log = turn_id_for_task.clone();
+            let cleanup_session_id = start.session_id;
+            let cancel_token_for_task = start.cancel_token.clone();
+            let turn_handle = tokio::spawn(async move {
+                run_manual_compact_shortcut(
+                    runtime,
+                    history,
+                    request,
+                    turn_id_for_task.clone(),
+                    inner_tx,
+                    cancel_token_for_task,
+                )
+                .await;
 
-        let state = ctx.state.clone();
-        let turn_id_for_task = turn_id.clone();
-        let turn_handle = tokio::spawn(async move {
-            run_manual_compact_shortcut(runtime, history, request, inner_tx, cancel_token).await;
+                state.clear_active_turn(&cleanup_session_id);
+            });
 
-            let mut slot = state.session.write().await;
-            if let Some(session) = slot.as_mut()
-                && session.session_id == owner_session_id
-            {
-                session.active_turn_cancel = None;
-                session.active_turn_task = None;
-                session.active_turn_forwarder = None;
+            info!(turn_id = %turn_id_for_log, "SdkServer: /compact shortcut");
+            ActiveTurnHandles {
+                cancel_token: start.cancel_token,
+                turn_task: turn_handle,
+                forwarder_task: forwarder_handle,
             }
-        });
-        session.active_turn_task = Some(turn_handle);
-
-        info!(turn_id = %turn_id_for_task, "SdkServer: /compact shortcut");
-        turn_id
+        },
+    ) {
+        Ok(turn_id) => turn_id,
+        Err(error) => return active_turn_start_error(error),
     };
 
     HandlerResult::ok(coco_types::TurnStartResult { turn_id })
@@ -614,9 +600,17 @@ async fn run_manual_compact_shortcut(
     session: crate::session_runtime::SessionHandle,
     history_handle: Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
     request: coco_commands::handlers::compact::CompactRequest,
+    turn_id: TurnId,
     event_tx: mpsc::Sender<CoreEvent>,
     cancel: CancellationToken,
 ) {
+    let _ = event_tx
+        .send(CoreEvent::Protocol(
+            coco_types::ServerNotification::TurnStarted(coco_types::TurnStartedParams {
+                turn_id: turn_id.clone(),
+            }),
+        ))
+        .await;
     let runtime = session.runtime();
     let engine = runtime.build_engine(cancel).await;
     let combined = history_handle.lock().await.clone();
@@ -631,7 +625,7 @@ async fn run_manual_compact_shortcut(
     } else {
         Some(command_args.clone())
     };
-    let event_tx_opt = Some(event_tx);
+    let event_tx_opt = Some(event_tx.clone());
     let request = coco_query::ManualCompactRequest {
         custom_instructions,
         command_args,
@@ -651,9 +645,18 @@ async fn run_manual_compact_shortcut(
     }
 
     let session_id = runtime.current_typed_session_id().await.to_string();
-    let manager = Arc::clone(&runtime.session_manager);
+    let manager = Arc::clone(runtime.session_manager());
     let _ =
         tokio::task::spawn_blocking(move || manager.re_append_session_metadata(&session_id)).await;
+    let _ = event_tx
+        .send(CoreEvent::Protocol(
+            coco_types::ServerNotification::TurnEnded(coco_types::TurnEndedParams::completed(
+                turn_id,
+                Some(coco_types::TokenUsage::default()),
+                Some(coco_messages::StopReason::EndTurn),
+            )),
+        ))
+        .await;
 }
 
 async fn sdk_append_slash_text(
@@ -744,36 +747,64 @@ async fn sdk_append_messages(
     }
 }
 
-struct ShortcutTurn {
-    turn_id: TurnId,
-    history: Arc<tokio::sync::Mutex<Vec<Arc<coco_messages::Message>>>>,
+async fn emit_shortcut_turn_lifecycle(
+    shortcut_turn: &ShortcutTurnState,
+    notif_tx: &mpsc::Sender<OutboundMessage>,
+) {
+    let turn_id = shortcut_turn.turn_id.clone();
+    let _ = notif_tx
+        .send(OutboundMessage::session_core_event(
+            shortcut_turn.session_id.clone(),
+            CoreEvent::Protocol(coco_types::ServerNotification::TurnStarted(
+                coco_types::TurnStartedParams {
+                    turn_id: turn_id.clone(),
+                },
+            )),
+        ))
+        .await;
+    let _ = notif_tx
+        .send(OutboundMessage::session_core_event(
+            shortcut_turn.session_id.clone(),
+            CoreEvent::Protocol(coco_types::ServerNotification::TurnEnded(
+                coco_types::TurnEndedParams::completed(
+                    turn_id,
+                    Some(coco_types::TokenUsage::default()),
+                    Some(coco_messages::StopReason::EndTurn),
+                ),
+            )),
+        ))
+        .await;
 }
 
-async fn mint_shortcut_turn(ctx: &HandlerContext) -> Result<ShortcutTurn, HandlerResult> {
-    let mut slot = ctx.state.session.write().await;
-    let Some(session) = slot.as_mut() else {
-        return Err(HandlerResult::Err {
+async fn mint_shortcut_turn(ctx: &HandlerContext) -> Result<ShortcutTurnState, HandlerResult> {
+    let session_id = ctx
+        .active_session_id()
+        .await
+        .ok_or(ActiveTurnStartError::NoActiveSession)
+        .map_err(active_turn_start_error)?;
+    ctx.state
+        .mint_shortcut_turn_for_session(session_id)
+        .map_err(active_turn_start_error)
+}
+
+fn active_turn_start_error(error: ActiveTurnStartError) -> HandlerResult {
+    match error {
+        ActiveTurnStartError::NoActiveSession => HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: "no active session; call session/start first".into(),
             data: None,
-        });
-    };
-    if session.active_turn_cancel.is_some() {
-        return Err(HandlerResult::Err {
+        },
+        ActiveTurnStartError::TurnAlreadyRunning => HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: "a turn is already running; call turn/interrupt first".into(),
             data: None,
-        });
+        },
+        ActiveTurnStartError::MissingHandoff => HandlerResult::Err {
+            code: coco_types::error_codes::INTERNAL_ERROR,
+            message: "session handoff state is missing".into(),
+            data: None,
+        },
     }
-    session.turn_counter = session.turn_counter.saturating_add(1);
-    let turn_id = TurnId::from(format!(
-        "turn-{}-{}",
-        session.session_id, session.turn_counter
-    ));
-    Ok(ShortcutTurn {
-        turn_id,
-        history: Arc::clone(&session.history),
-    })
 }
 
 fn decode_session_cost_text(result: HandlerResult) -> Result<String, HandlerResult> {
@@ -811,17 +842,16 @@ fn decode_session_status_text(result: HandlerResult) -> Result<String, HandlerRe
 /// expected to observe `cancel.is_cancelled()` at tool boundaries and
 /// emit a `turn/failed` notification before exiting.
 pub(super) async fn handle_turn_interrupt(ctx: &HandlerContext) -> HandlerResult {
-    let slot = ctx.state.session.read().await;
-    let Some(session) = slot.as_ref() else {
+    let Some(session_id) = ctx.active_session_id().await else {
         return HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: "no active session".into(),
             data: None,
         };
     };
-    match &session.active_turn_cancel {
+    match ctx.state.active_turn_cancel_token(&session_id) {
         Some(token) => {
-            info!(session_id = %session.session_id, "SdkServer: turn/interrupt");
+            info!(session_id = %session_id, "SdkServer: turn/interrupt");
             token.cancel();
             HandlerResult::ok_empty()
         }

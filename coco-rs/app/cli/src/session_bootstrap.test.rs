@@ -70,6 +70,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
     SessionRuntime::build(SessionRuntimeBuildOpts {
         cli: &cli,
         runtime_config: Arc::new(runtime_config),
+        config_reloader: None,
         cwd,
         model_id,
         system_prompt: "test".to_string(),

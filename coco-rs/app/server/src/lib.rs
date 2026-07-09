@@ -945,6 +945,28 @@ impl RoutingState {
         self.interactive_owners.get(session_id)
     }
 
+    pub fn sole_interactive_session_for_connection(
+        &self,
+        connection: ConnectionKey,
+    ) -> Option<SessionId> {
+        let mut found = None;
+        for surface_id in self.connection_to_surfaces.get(&connection)? {
+            let Some(attachment) = self.attachments.get(surface_id) else {
+                continue;
+            };
+            if attachment.state != SurfaceState::Attached
+                || attachment.role != SurfaceRole::Interactive
+            {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some(attachment.session_id.clone());
+        }
+        found
+    }
+
     pub fn connection_surface_count(&self, connection: ConnectionKey) -> usize {
         self.connection_to_surfaces
             .get(&connection)
@@ -1593,6 +1615,58 @@ mod tests {
 
         assert_eq!(routing.interactive_owner(&session_id), Some(&interactive));
         assert_eq!(routing.surface_session(&passive), Some(&session_id));
+    }
+
+    #[test]
+    fn sole_interactive_session_for_connection_requires_unique_attached_interactive_surface() {
+        let mut routing = RoutingState::new(8);
+        let first_session_id = test_session_id("sess-1");
+        let second_session_id = test_session_id("sess-2");
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let connection = ConnectionKey::for_test(1);
+        let passive = SurfaceId::from("surface-passive");
+        let first_interactive = SurfaceId::from("surface-interactive-1");
+        let second_interactive = SurfaceId::from("surface-interactive-2");
+        routing.connect(connection, tx);
+        routing
+            .attach_surface(connection, passive, first_session_id.clone())
+            .expect("attach passive");
+        assert_eq!(
+            routing.sole_interactive_session_for_connection(connection),
+            None
+        );
+
+        routing
+            .attach_surface_with_options(
+                connection,
+                first_interactive,
+                first_session_id.clone(),
+                AttachSurfaceOptions {
+                    role: SurfaceRole::Interactive,
+                    ..AttachSurfaceOptions::default()
+                },
+            )
+            .expect("attach first interactive");
+        assert_eq!(
+            routing.sole_interactive_session_for_connection(connection),
+            Some(first_session_id)
+        );
+
+        routing
+            .attach_surface_with_options(
+                connection,
+                second_interactive,
+                second_session_id,
+                AttachSurfaceOptions {
+                    role: SurfaceRole::Interactive,
+                    ..AttachSurfaceOptions::default()
+                },
+            )
+            .expect("attach second interactive for a different session");
+        assert_eq!(
+            routing.sole_interactive_session_for_connection(connection),
+            None
+        );
     }
 
     #[test]

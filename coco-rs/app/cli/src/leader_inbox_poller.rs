@@ -88,7 +88,7 @@ pub async fn install_leader(
 ) {
     let runtime = session.runtime().clone();
     if !runtime
-        .runtime_config
+        .runtime_config()
         .features
         .enabled(coco_types::Feature::AgentTeams)
     {
@@ -130,7 +130,7 @@ async fn bootstrap_session_team(
         leader_session_id: session_id,
         leader_agent_type: None,
         leader_model,
-        cwd: runtime.original_cwd.clone(),
+        cwd: runtime.original_cwd().clone(),
         task_list_router: runtime.current_team_task_list_router().await,
     };
     if let Err(e) = handle.initialize_session_team(request).await {

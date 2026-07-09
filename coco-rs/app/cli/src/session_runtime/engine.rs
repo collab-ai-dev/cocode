@@ -58,10 +58,10 @@ impl SessionRuntime {
             .await;
         let engine = QueryEngine::new_with_turn_abort(
             engine_config,
-            self.model_runtimes.clone(),
-            self.tools.clone(),
+            self.execution.model_runtimes(),
+            self.execution.tools().clone(),
             turn_abort,
-            Some(self.hook_registry.clone()),
+            Some(self.hook_resources.registry()),
         );
         let engine = self
             .wire_engine(engine, None, EnginePersistenceMode::MainSession)
@@ -72,7 +72,12 @@ impl SessionRuntime {
         // main-session engine build, so it also survives a `/reload-plugins`
         // registry swap (the new registry starts with an empty handle cell).
         let base_ctx = engine.build_base_tool_context().await;
-        let registry = self.command_registry.read().await.clone();
+        let registry = self
+            .catalog_resources
+            .command_registry()
+            .read()
+            .await
+            .clone();
         // One handle, two consumers: the command registry (slash /
         // shell-expanding prompt commands) and the skill runtime's shared
         // cell (model-invoked + fork-mode skills). Refreshed every build so
@@ -121,7 +126,7 @@ impl SessionRuntime {
         coco_query::context_analysis::analyze_engine_context_with_sources(
             &engine,
             &history,
-            Some(self.skill_manager.clone()),
+            Some(Arc::clone(self.catalog_resources.skill_manager())),
         )
         .await
     }
@@ -206,16 +211,21 @@ impl SessionRuntime {
             .is_some_and(|iso| iso.clone_file_read_state);
         let engine = QueryEngine::new(
             config,
-            self.model_runtimes.clone(),
-            self.tools.clone(),
+            self.execution.model_runtimes(),
+            self.execution.tools().clone(),
             cancel,
-            Some(self.hook_registry.clone()),
+            Some(self.hook_resources.registry()),
         );
         let mut engine = self
             .wire_engine(engine, app_state_override, persistence)
             .await;
         if isolate_file_read_state {
-            let snapshot = self.file_read_state.read().await.clone();
+            let snapshot = self
+                .engine_state_resources
+                .file_read_state()
+                .read()
+                .await
+                .clone();
             engine = engine.with_file_read_state(Arc::new(RwLock::new(snapshot)));
         }
         engine
@@ -238,22 +248,23 @@ impl SessionRuntime {
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
         persistence: EnginePersistenceMode,
     ) -> QueryEngine {
-        let app_state = app_state_override.unwrap_or_else(|| self.app_state.clone());
-        engine = engine.with_file_read_state(self.file_read_state.clone());
+        let app_state =
+            app_state_override.unwrap_or_else(|| self.engine_state_resources.app_state().clone());
+        engine = engine.with_file_read_state(self.engine_state_resources.file_read_state().clone());
         engine = engine.with_app_state(app_state.clone());
         // `auto_mode_state` is a SESSION-GLOBAL flag shared by every engine in
         // this runtime. Pure Auto still keys off the per-call
         // `permission_context.mode`; Plan uses this flag as the authoritative
         // plan-auto bridge signal, matching TS `mode === 'plan' &&
         // isAutoModeActive()`. Sync it from the session's authoritative
-        // `self.app_state` (NOT the per-build `app_state` override): a
+        // `self.engine_state_resources.app_state()` (NOT the per-build `app_state` override): a
         // fork/skill/compaction sub-engine carrying a non-Auto override would
         // otherwise clobber it. Every build re-syncs from the single source,
         // covering all mode-change funnels (TUI + SDK) uniformly without
         // threading the flag through each.
         let engine_config = self.current_engine_config().await;
         {
-            let mut app_state = self.app_state.write().await;
+            let mut app_state = self.engine_state_resources.app_state().write().await;
             let allow_rules = app_state.permissions.allow_rules.clone();
             let plan_auto_options = coco_permissions::PlanModeAutoOptions {
                 use_auto_mode_during_plan: engine_config.use_auto_mode_during_plan,
@@ -263,10 +274,10 @@ impl SessionRuntime {
                 &mut app_state,
                 &allow_rules,
                 plan_auto_options,
-                &self.auto_mode_state,
+                self.engine_state_resources.auto_mode_state(),
             );
             if app_state.permissions.mode != Some(coco_types::PermissionMode::Plan) {
-                self.auto_mode_state.set_active(
+                self.engine_state_resources.auto_mode_state().set_active(
                     app_state.permissions.mode == Some(coco_types::PermissionMode::Auto),
                 );
             }
@@ -276,7 +287,7 @@ impl SessionRuntime {
         // passed `::default()`, so allow/soft_deny/environment AND the
         // classifier mode were all silently dropped.
         let auto_mode_rules = self
-            .runtime_config
+            .runtime_config()
             .settings
             .merged
             .auto_mode
@@ -288,14 +299,14 @@ impl SessionRuntime {
                 classifier_mode: c.classifier_mode,
                 classifier_unavailable_fail_open: c.classifier_unavailable_fail_open,
                 classify_all_shell: self
-                    .runtime_config
+                    .runtime_config()
                     .settings
                     .auto_mode_classify_all_shell_enabled(),
             })
             .unwrap_or_default();
         engine = engine.with_auto_mode(
-            self.auto_mode_state.clone(),
-            self.denial_tracker.clone(),
+            self.engine_state_resources.auto_mode_state().clone(),
+            self.engine_state_resources.denial_tracker().clone(),
             auto_mode_rules,
         );
         // Skill-emitted `permission_updates` now flow through the
@@ -311,16 +322,14 @@ impl SessionRuntime {
         // future task / coordinator forwarders) enqueueing on
         // `runtime.command_queue()` would land on an instance the
         // running engine cannot see.
-        engine = engine.with_command_queue(self.command_queue.clone());
+        engine = engine.with_command_queue(self.command_resources.command_queue().clone());
         // Same lifetime argument as `with_command_queue`: the attachment
         // channel must live across engine rebuilds so cross-turn
         // producers (TUI slash commands, future swarm forwarders) see a
         // stable handle. The engine's own per-instance attachment
         // channel is replaced by the session-scoped one.
-        engine = engine.with_attachment_channel(
-            self.session_attachment_tx.clone(),
-            self.session_attachment_rx.clone(),
-        );
+        let (attachment_tx, attachment_rx) = self.command_resources.attachment_channel();
+        engine = engine.with_attachment_channel(attachment_tx, attachment_rx);
         if let Some(runtime) = &self.memory_runtime {
             let svc = runtime.session_memory.clone();
             let sm_text_now = svc.current_text().await;
@@ -334,21 +343,22 @@ impl SessionRuntime {
         // `OrchestrationContext.sync_event_sink` constructed from this
         // engine's `orchestration_ctx()` writes into the same buffer
         // that the reminder source below drains.
-        engine = engine.with_sync_hook_buffer(self.sync_hook_buffer.clone());
+        engine = engine.with_sync_hook_buffer(self.hook_resources.sync_buffer());
         // Same wiring for async hooks: the engine's `orchestration_ctx`
         // populates `async_registry` so engine-fired async hooks
         // (PreToolUse / PostToolUse / Stop / SubagentStop with
         // `is_async: true`) deliver via `CombinedHookEventsSource`.
-        engine = engine.with_async_hook_registry(self.async_hook_registry.clone());
+        engine = engine.with_async_hook_registry(self.hook_resources.async_registry());
         // Same wiring for the LLM-driven hook handler so the engine's
         // `orchestration_ctx` carries it on every fired event. Usage
         // recording is scoped per engine; the shared handle only owns model
         // runtime state and the late-bound HookAgent runner.
         engine = engine.with_hook_llm_handle(Arc::new(
-            self.hook_llm_handle
-                .scoped_with_usage_accounting(self.usage_accounting.clone()),
+            self.hook_resources
+                .llm_handle()
+                .scoped_with_usage_accounting(self.turn_resources.usage_accounting()),
         ));
-        engine = engine.with_model_runtimes(self.model_runtimes.clone());
+        engine = engine.with_model_runtimes(self.execution.model_runtimes());
         engine =
             engine.with_session_start_hook_side_effect_sink(Arc::new(QuerySessionStartHookSink {
                 file_watch: self.file_watch_registration_context(),
@@ -369,8 +379,8 @@ impl SessionRuntime {
             // then the sync-hook buffer that orchestration just wrote.
             hook_events: Some(Arc::new(
                 coco_hooks::reminder_source::CombinedHookEventsSource::new(
-                    self.async_hook_registry.clone(),
-                    self.sync_hook_buffer.clone(),
+                    self.hook_resources.async_registry(),
+                    self.hook_resources.sync_buffer(),
                 ),
             )),
             // Memory source: only when the runtime is built (gated on
@@ -382,7 +392,8 @@ impl SessionRuntime {
             }),
             // Skills source: in-process `SkillManager` Arc kept alive
             // for the session. Empty manager => generator short-circuits.
-            skills: Some(self.skill_manager.clone() as Arc<dyn coco_system_reminder::SkillsSource>),
+            skills: Some(Arc::clone(self.catalog_resources.skill_manager())
+                as Arc<dyn coco_system_reminder::SkillsSource>),
             // Running-task source: TaskRuntime owns both the TaskManager row
             // state and the disk output reader needed for offset-based
             // task_status bookkeeping.
@@ -395,7 +406,9 @@ impl SessionRuntime {
             // below (the producer side) - otherwise messages vanish.
             swarm: Some(Arc::new(
                 coco_query::reminder_adapters::SwarmAdapter::new()
-                    .with_pending_messages(self.pending_message_store.clone())
+                    .with_pending_messages(
+                        self.engine_state_resources.pending_message_store().clone(),
+                    )
                     .with_team_context(team_snapshot),
             ) as Arc<dyn coco_system_reminder::SwarmSource>),
             ..Default::default()
@@ -404,31 +417,32 @@ impl SessionRuntime {
         // Producer side of the pending-message pipeline: `SendMessage` pushes
         // into `ToolUseContext.pending_messages` (= this store). Shared across
         // the leader + in-process teammate engines (both via `wire_engine`).
-        engine = engine.with_pending_messages(self.pending_message_store.clone());
+        engine = engine
+            .with_pending_messages(self.engine_state_resources.pending_message_store().clone());
         // Build observers fresh per call so the FileReadState and
         // AppState observers reference the engine's actual handles.
         // Cheap - the registry is just a Vec of Arc<dyn Observer>.
         let observers = coco_query::observers::build_default_registry(
-            Some(self.file_read_state.clone()),
-            Some(self.denial_tracker.clone()),
+            Some(self.engine_state_resources.file_read_state().clone()),
+            Some(self.engine_state_resources.denial_tracker().clone()),
             Some(app_state),
-            Some(self.loop_sentinel_state.clone()),
+            Some(self.engine_state_resources.loop_sentinel_state().clone()),
         );
         engine = engine.with_compaction_observers(observers);
-        engine = engine.with_mailbox(self.mailbox.clone());
+        engine = engine.with_mailbox(self.turn_resources.mailbox());
         // Install the MCP handle so AgentTool::prompt's per-turn
         // dynamic listing can pre-filter agents whose
         // `required_mcp_servers` aren't connected. Snapshot semantics:
         // each engine instance reads the handle slot at wire time;
         // hot-reloads land on the next engine.
-        if let Some(mcp) = self.mcp_handle.read().await.clone() {
+        if let Some(mcp) = self.integration_resources.mcp_handle().read().await.clone() {
             engine = engine.with_mcp_handle(mcp);
         }
-        engine = engine.with_schedule_store(self.schedule_store.clone());
+        engine = engine.with_schedule_store(self.turn_resources.schedule_store());
         // Same snapshot pattern as MCP - every per-turn engine reads
         // the late-bound LSP slot once at wire time. Hot-reloads of
         // the LSP config land on the next engine build.
-        if let Some(lsp) = self.lsp_handle.read().await.clone() {
+        if let Some(lsp) = self.integration_resources.lsp_handle().read().await.clone() {
             engine = engine.with_lsp_handle(lsp);
         }
         // Install the agent catalog snapshot so `AgentTool::prompt`
@@ -442,15 +456,15 @@ impl SessionRuntime {
         // config_home drives plan-mode (`plans_dir` / `session_plan_file`)
         // independent of persistence - always wire it; only the file-history
         // snapshot store is gated by persistence.
-        engine = engine.with_config_home(self.config_home.clone());
+        engine = engine.with_config_home(self.config_home().clone());
         if persistence == EnginePersistenceMode::MainSession
-            && self.persist_session
-            && let Some(fh) = &self.file_history
+            && self.persistence.persist_session()
+            && let Some(fh) = self.engine_state_resources.file_history()
         {
-            engine = engine.with_file_history(fh.clone(), self.config_home.clone());
+            engine = engine.with_file_history(fh.clone(), self.config_home().clone());
         }
-        if let Some(bridge) = &self.permission_bridge {
-            engine = engine.with_permission_bridge(bridge.clone());
+        if let Some(bridge) = self.turn_resources.permission_bridge() {
+            engine = engine.with_permission_bridge(bridge);
         }
         // Main-session transcript persistence. Same `TranscriptStore`
         // instance feeds both the per-turn user / assistant JSONL
@@ -459,16 +473,25 @@ impl SessionRuntime {
         // lives on `SessionRuntime` so a fresh per-turn engine doesn't
         // re-write history each time; writes are keyed by session id and
         // skip already-persisted uuids.
-        if persistence == EnginePersistenceMode::MainSession && self.persist_session {
+        if persistence == EnginePersistenceMode::MainSession && self.persistence.persist_session() {
             let transcript_session_id = self.current_typed_session_id().await;
-            engine =
-                engine.with_transcript_store(self.transcript_store.clone(), transcript_session_id);
-            engine = engine.with_usage_accounting(self.usage_accounting.clone());
-            engine = engine.with_transcript_dedup(self.transcript_dedup.clone());
+            engine = engine.with_transcript_store(
+                Arc::clone(self.persistence.transcript_store()),
+                transcript_session_id,
+            );
+            engine = engine.with_usage_accounting(self.turn_resources.usage_accounting());
             engine = engine
-                .with_terminal_goal_metadata_flag(self.terminal_goal_metadata_written.clone());
-            engine = engine
-                .with_tool_result_replacement_state(self.tool_result_replacement_state.clone());
+                .with_transcript_dedup(self.engine_state_resources.transcript_dedup().clone());
+            engine = engine.with_terminal_goal_metadata_flag(
+                self.engine_state_resources
+                    .terminal_goal_metadata_written()
+                    .clone(),
+            );
+            engine = engine.with_tool_result_replacement_state(
+                self.engine_state_resources
+                    .tool_result_replacement_state()
+                    .clone(),
+            );
         }
         // Agent handle: installed by bootstrap after TaskRuntime exists.
         // Until then the engine carries the explicit no-op handle from

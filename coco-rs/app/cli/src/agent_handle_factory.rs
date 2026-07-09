@@ -98,7 +98,7 @@ pub async fn build_agent_team_wiring(
     // removed in the post-D cleanup pass.
     let runner = Arc::new(InProcessAgentRunner::new(
         cwd.clone(),
-        session.runtime_config.agent_teams.max_agents,
+        session.runtime_config().agent_teams.max_agents,
     ));
     let team_manager = Arc::new(RwLock::new(None::<TeamManager>));
 
@@ -110,7 +110,7 @@ pub async fn build_agent_team_wiring(
         runner.clone(),
         team_manager,
         cwd.clone(),
-        session.runtime_config.clone(),
+        Arc::clone(session.runtime_config()),
         task_rt as coco_tool_runtime::AgentTaskRegistryRef,
     );
     // Bridge subagent `TaskPanelChanged` snapshots to the surface (TUI).
@@ -225,21 +225,21 @@ pub async fn build_agent_team_wiring(
                 // Overwrite those fields here from the live RuntimeConfig
                 // so subagent engines compact at the user's tuned
                 // thresholds, honour the user's sandbox mode, etc.
-                engine_config.compact = session.runtime_config.compact.clone();
+                engine_config.compact = session.runtime_config().compact.clone();
                 engine_config.system_reminder = session
-                    .runtime_config
+                    .runtime_config()
                     .settings
                     .merged
                     .system_reminder
                     .clone();
-                engine_config.tool_config = session.runtime_config.tool.clone();
-                engine_config.sandbox_config = session.runtime_config.sandbox.clone();
-                engine_config.memory_config = session.runtime_config.memory.clone();
-                engine_config.shell_config = session.runtime_config.shell.clone();
-                engine_config.web_fetch_config = session.runtime_config.web_fetch.clone();
-                engine_config.web_search_config = session.runtime_config.web_search.clone();
+                engine_config.tool_config = session.runtime_config().tool.clone();
+                engine_config.sandbox_config = session.runtime_config().sandbox.clone();
+                engine_config.memory_config = session.runtime_config().memory.clone();
+                engine_config.shell_config = session.runtime_config().shell.clone();
+                engine_config.web_fetch_config = session.runtime_config().web_fetch.clone();
+                engine_config.web_search_config = session.runtime_config().web_search.clone();
                 engine_config.plan_mode_settings =
-                    session.runtime_config.settings.merged.plan_mode.clone();
+                    session.runtime_config().settings.merged.plan_mode.clone();
                 if engine_config.wire_dump.is_none()
                     && let Some(parent_wire_dump) =
                         session.current_engine_config().await.wire_dump.as_ref()
@@ -291,11 +291,11 @@ pub async fn build_agent_team_wiring(
             .with_agent_engine(adapter.clone())
             .with_session_id(session.current_typed_session_id().await)
             .with_loop_context(coco_query::skill_runtime::LoopSkillContext {
-                project_root: session.project_root.clone(),
-                cwd: session.current_cwd.clone(),
-                config: session.runtime_config.loop_config.clone(),
+                project_root: session.project_root().clone(),
+                cwd: Arc::clone(session.current_cwd()),
+                config: session.runtime_config().loop_config.clone(),
                 remote_schedule_enabled: session
-                    .runtime_config
+                    .runtime_config()
                     .features
                     .enabled(coco_types::Feature::AgentTriggersRemote),
             })
@@ -335,7 +335,7 @@ pub async fn build_agent_team_wiring(
     let auto_compact_threshold = coco_compact::auto_compact_threshold(
         i64::from(main_model_info.context_window),
         i64::from(main_model_info.max_output_tokens),
-        &session.runtime_config.compact.auto,
+        &session.runtime_config().compact.auto,
     );
     handle.set_teammate_auto_compact_threshold(auto_compact_threshold);
 
@@ -349,7 +349,7 @@ pub async fn build_agent_team_wiring(
 
     // Wire the hook registry so SubagentStart / SubagentStop hooks fire
     // around subagent execution.
-    handle.set_hook_registry(session.hook_registry.clone());
+    handle.set_hook_registry(session.hook_registry());
 
     // Wire the MCP handle so per-agent inline `mcpServers: [{name: config}]`
     // entries get registered as dynamic servers at spawn and torn down
@@ -443,7 +443,7 @@ async fn install_coco_guide_context_builder(
                 // Empty string when serialisation fails (rare; serde never
                 // panics on the well-typed Settings struct).
                 let settings_json =
-                    serde_json::to_string_pretty(&session_inner.runtime_config.settings.merged)
+                    serde_json::to_string_pretty(&session_inner.runtime_config().settings.merged)
                         .unwrap_or_default();
 
                 coco_subagent::CocoGuideDynamicContext {

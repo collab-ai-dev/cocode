@@ -108,7 +108,7 @@ impl SessionRuntime {
     /// Main effort onto `QueryEngineConfig.thinking_level`.
     pub async fn resolve_role(&self, role: ModelRole) -> Option<RoleOverride> {
         {
-            let overrides = self.role_overrides.read().await;
+            let overrides = self.engine_config_resources.role_overrides().read().await;
             if let Some(ov) = overrides.get(&role) {
                 return Some(ov.clone());
             }
@@ -118,7 +118,7 @@ impl SessionRuntime {
         // `/status` and the picker reflect the effort that will actually
         // apply. A role defaulted to Main at config time has its effort
         // stripped, so this yields `None` there (model default applies).
-        if let Some(slot) = self.runtime_config.model_roles.primary_slot(role) {
+        if let Some(slot) = self.runtime_config().model_roles.primary_slot(role) {
             return Some(RoleOverride {
                 spec: slot.model.clone(),
                 effort: slot.effort,
@@ -126,7 +126,7 @@ impl SessionRuntime {
         }
         // Role absent entirely (pre-defaulting edge) - borrow Main's
         // model with no effort.
-        self.runtime_config
+        self.runtime_config()
             .model_roles
             .get(role)
             .map(|spec| RoleOverride {
@@ -157,15 +157,16 @@ impl SessionRuntime {
             // forks inherit - so pass `None` here to keep the slot
             // effort-less. This is the fork-isolation guarantee: a picker
             // or Ctrl+T effort on Main never leaks into fork spawns.
-            self.model_runtimes
+            self.execution
+                .model_runtimes()
                 .rebind_role_primary(role, spec, /*effort*/ None)
                 .map_err(anyhow::Error::from)?;
             let model_info =
-                resolve_model_info(&self.runtime_config, &ov.spec.provider, &ov.spec.model_id);
+                resolve_model_info(self.runtime_config(), &ov.spec.provider, &ov.spec.model_id);
             // Store the override only after the registry accepted the
             // replacement runtime.
             {
-                let mut overrides = self.role_overrides.write().await;
+                let mut overrides = self.engine_config_resources.role_overrides().write().await;
                 overrides.insert(role, ov);
             }
             self.update_engine_config(move |cfg| {
@@ -182,10 +183,11 @@ impl SessionRuntime {
         // is safe to isolate - each non-Main role owns its own client, not
         // shared with the main loop or forks.
         let spec = ov.spec.clone();
-        self.model_runtimes
+        self.execution
+            .model_runtimes()
             .rebind_role_primary(role, spec, ov.effort)
             .map_err(anyhow::Error::from)?;
-        let mut overrides = self.role_overrides.write().await;
+        let mut overrides = self.engine_config_resources.role_overrides().write().await;
         overrides.insert(role, ov);
         Ok(())
     }
@@ -207,15 +209,16 @@ impl SessionRuntime {
     ///   actually read it. Without the rebind the override map updates
     ///   but the wire never changes.
     pub async fn apply_role_effort(&self, role: ModelRole, effort: Option<ReasoningEffort>) {
-        let spec_for_seed = self.runtime_config.model_roles.get(role).cloned();
+        let spec_for_seed = self.runtime_config().model_roles.get(role).cloned();
         let effective_spec = self
-            .role_overrides
+            .engine_config_resources
+            .role_overrides()
             .read()
             .await
             .get(&role)
             .map(|ov| ov.spec.clone())
             .or_else(|| spec_for_seed.clone());
-        let mut overrides = self.role_overrides.write().await;
+        let mut overrides = self.engine_config_resources.role_overrides().write().await;
         match overrides.get_mut(&role) {
             Some(existing) => existing.effort = effort,
             None => {
@@ -227,7 +230,7 @@ impl SessionRuntime {
         drop(overrides);
         if role == ModelRole::Main {
             let model_info = effective_spec.as_ref().and_then(|spec| {
-                resolve_model_info(&self.runtime_config, &spec.provider, &spec.model_id)
+                resolve_model_info(self.runtime_config(), &spec.provider, &spec.model_id)
             });
             self.update_engine_config(|cfg| {
                 cfg.thinking_level =
@@ -235,7 +238,10 @@ impl SessionRuntime {
             })
             .await;
         } else if let Some(spec) = effective_spec
-            && let Err(error) = self.model_runtimes.rebind_role_primary(role, spec, effort)
+            && let Err(error) = self
+                .execution
+                .model_runtimes()
+                .rebind_role_primary(role, spec, effort)
         {
             tracing::warn!(
                 role = %role.as_str(),

@@ -26,6 +26,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
@@ -117,8 +118,8 @@ pub trait TurnRunner: Send + Sync {
     /// - `params`: the `turn/start` parameters from the client.
     /// - `turn_id`: the server-minted id returned by `turn/start`; lifecycle
     ///   events emitted by the runner must use the same id.
-    /// - `handoff`: the narrow subset of `SessionHandle` the runner needs
-    /// (id, cwd, model, shared history). Stats and other per-session
+    /// - `handoff`: the narrow subset of active session state the runner needs
+    /// (id, shared history, live app state). Stats and other per-session
     /// state deliberately stay on the server-side slot to avoid an
     /// O(history) deep clone per turn.
     /// - `event_tx`: the channel on which CoreEvents must be emitted.
@@ -162,16 +163,13 @@ impl TurnRunner for NotImplementedRunner {
 
 /// Narrow per-turn view of an active session handed to a [`TurnRunner`].
 /// Holds only what the runner actually reads — session metadata used for
-/// logging / `QueryEngineConfig`, plus the `Arc`-wrapped shared history so
-/// the runner can thread messages across turns without taking ownership
-/// of the whole `SessionHandle`. Crucially excludes `stats`,
-/// `env_overrides`, `permission_denials`, and similar server-bookkeeping
-/// state that was previously deep-cloned into the runner on every turn.
+/// `QueryEngineConfig`, plus the `Arc`-wrapped shared history so the runner can
+/// thread messages across turns. Crucially excludes `stats` and similar
+/// server-bookkeeping state that was previously deep-cloned into the runner on
+/// every turn.
 #[derive(Debug, Clone)]
 pub struct TurnHandoff {
     pub session_id: coco_types::SessionId,
-    pub cwd: String,
-    pub model: String,
     pub history: Arc<Mutex<Vec<std::sync::Arc<coco_messages::Message>>>>,
     /// Session-scoped shared state. Attached to every turn's engine
     /// via `with_app_state` so plan-mode cadence + live permission
@@ -180,15 +178,6 @@ pub struct TurnHandoff {
     pub app_state: Arc<RwLock<coco_types::ToolAppState>>,
     /// SDK initialize-scoped `planModeInstructions`, copied onto the session.
     pub plan_mode_instructions: Option<String>,
-    /// Session-scoped permission-mode override set by
-    /// `control/setPermissionMode`. Used by `sdk_runner::run_turn`
-    /// as a fallback when the `turn/start` params don't carry an
-    /// explicit mode — before this wire-up the SessionHandle field
-    /// was dead (no reader).
-    pub permission_mode: Option<coco_types::PermissionMode>,
-    /// Session-scoped thinking override set by `control/setThinking`.
-    /// `turn/start.thinking_level` wins when present.
-    pub thinking_level: Option<coco_types::ThinkingLevel>,
 }
 
 // ---------------------------------------------------------------------------
@@ -239,19 +228,46 @@ pub trait InitializeBootstrap: Send + Sync {
 // Server + session state
 // ---------------------------------------------------------------------------
 
-/// Shared server state carried across ClientRequests within a single
-/// stdio session. Only one concurrent session per server — a single
-/// `currentSession` slot per server process.
+/// Shared server state carried across ClientRequests within a single stdio
+/// session. Session-local state is keyed by `SessionId`; unscoped legacy
+/// handlers may address the sole installed handoff.
 pub struct SdkServerState {
-    /// Active session if any. Set by `session/start`, cleared by
-    /// `session/archive` or when the transport closes.
-    pub session: RwLock<Option<SessionHandle>>,
     /// The runner that executes turns. Defaulted to `NotImplementedRunner`.
     /// Stored behind `RwLock` so `SdkServer::set_turn_runner()` can
     /// install a real runner after the state is already shared (used
     /// by the approval-bridge wiring path where the bridge needs a
     /// reference to the live state before the runner is constructed).
     pub turn_runner: RwLock<Arc<dyn TurnRunner>>,
+    /// Per-session counters used to mint SDK turn ids.
+    ///
+    /// Kept outside session handoff state so turn identity allocation is keyed
+    /// independently.
+    pub turn_counters: StdMutex<HashMap<coco_types::SessionId, i32>>,
+    /// Per-session aggregate accounting for SDK archive/result summaries.
+    ///
+    /// Kept outside session handoff state so once-per-session result
+    /// aggregation is keyed independently.
+    pub session_accounting: StdMutex<HashMap<coco_types::SessionId, SessionAccounting>>,
+    /// Active turn handles keyed by session id.
+    ///
+    /// Kept outside session handoff state so cancellation and task-drain handles
+    /// are keyed independently.
+    active_turns: StdMutex<HashMap<coco_types::SessionId, ActiveTurnHandles>>,
+    /// Per-session history and live app state handed to SDK turns.
+    ///
+    /// Stored outside runtime handles so SDK/AppServer turns can share the same
+    /// keyed handoff state.
+    session_handoffs: StdMutex<HashMap<coco_types::SessionId, SessionHandoffState>>,
+    /// Legacy SDK session metadata keyed by session id.
+    ///
+    /// Kept as keyed metadata outside runtime handles for legacy and
+    /// AppServer-scoped requests.
+    session_metadata: StdMutex<HashMap<coco_types::SessionId, SessionMetadata>>,
+    /// Per-session SDK plan-mode workflow override from `initialize`.
+    ///
+    /// Kept as keyed metadata outside runtime handles for initialize-scoped
+    /// handoff strings.
+    session_plan_mode_instructions: StdMutex<HashMap<coco_types::SessionId, String>>,
     /// Pending `approval/askForApproval` ServerRequests awaiting a client
     /// `approval/resolve`. Keyed by `request_id`.
     pub pending_approvals: PendingMap<ApprovalResolveParams>,
@@ -334,19 +350,20 @@ pub struct SdkServerState {
     /// to `bypassPermissions` are rejected with an explicit error
     /// when `isBypassPermissionsModeAvailable` is false.
     pub bypass_permissions_available: std::sync::atomic::AtomicBool,
-    /// Process-shared `SessionHandle`. Set by `run_sdk_mode` at
-    /// startup (same handle threaded into `QueryEngineRunner`). Read by
-    /// `handle_session_start` to call `runtime.retarget_for_new_session()`
-    /// when an SDK client cycles `session/archive` → `session/start`,
-    /// so the new session sees fresh `FileReadState`,
-    /// `SessionMemoryService` paths, file-history sink target, and
-    /// cache-break detector baseline. `None` only in tests that don't
-    /// wire a runtime.
+    /// Process-shared `SessionHandle`. Set by `run_sdk_mode` at startup and
+    /// swapped by AppServer-backed SDK `session/start` / `session/resume`
+    /// replacement paths. Legacy handlers still read it for tests and
+    /// non-replacement fixtures. `None` only in tests that don't wire a
+    /// runtime.
     pub session_runtime: RwLock<Option<crate::session_runtime::SessionHandle>>,
-    /// Optional SDK production resume replacement context. When installed,
-    /// AppServer bridge `session/resume` builds a fresh runtime through this
-    /// factory and swaps `session_runtime` instead of asking the legacy handler
-    /// to retarget the currently installed fused runtime in place.
+    /// Runtime-owned SDK reload subscriber for the currently installed
+    /// `session_runtime`. Replaced whenever SDK AppServer start/resume swaps
+    /// in a fresh runtime.
+    pub sdk_runtime_reload_subscription: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Optional SDK production runtime replacement context. When installed,
+    /// AppServer bridge `session/start` / `session/resume` builds a fresh
+    /// runtime through this factory and swaps `session_runtime` instead of
+    /// reusing the previously installed fused runtime.
     pub runtime_replacement: RwLock<Option<RuntimeReplacementContext>>,
 
     /// Agent definitions pushed via `initialize.agents`
@@ -378,8 +395,13 @@ pub struct SdkServerState {
 impl Default for SdkServerState {
     fn default() -> Self {
         Self {
-            session: RwLock::new(None),
             turn_runner: RwLock::new(Arc::new(NotImplementedRunner) as Arc<dyn TurnRunner>),
+            turn_counters: StdMutex::new(HashMap::new()),
+            session_accounting: StdMutex::new(HashMap::new()),
+            active_turns: StdMutex::new(HashMap::new()),
+            session_handoffs: StdMutex::new(HashMap::new()),
+            session_metadata: StdMutex::new(HashMap::new()),
+            session_plan_mode_instructions: StdMutex::new(HashMap::new()),
             pending_approvals: PendingMap::new(),
             pending_user_input: PendingMap::new(),
             pending_elicitations: PendingMap::new(),
@@ -399,6 +421,7 @@ impl Default for SdkServerState {
             agent_progress_summaries_enabled: std::sync::atomic::AtomicBool::new(false),
             bypass_permissions_available: std::sync::atomic::AtomicBool::new(false),
             session_runtime: RwLock::new(None),
+            sdk_runtime_reload_subscription: Mutex::new(None),
             runtime_replacement: RwLock::new(None),
             pending_sdk_agents: RwLock::new(Vec::new()),
             pending_plan_mode_instructions: RwLock::new(None),
@@ -409,13 +432,490 @@ impl Default for SdkServerState {
 }
 
 impl SdkServerState {
-    pub(super) async fn workspace_cwd(&self) -> Result<PathBuf, HandlerResult> {
-        if let Some(session) = self.session.read().await.as_ref() {
-            return Ok(PathBuf::from(&session.cwd));
-        }
+    /// Best-effort current session id for process-level bridge fallbacks that
+    /// do not have an AppServer request context.
+    pub async fn runtime_or_active_session_id(&self) -> Option<coco_types::SessionId> {
         let runtime = self.session_runtime.read().await.clone();
         if let Some(runtime) = runtime {
-            return Ok(runtime.current_cwd.read().await.clone());
+            return Some(runtime.current_typed_session_id().await);
+        }
+        self.sole_session_handoff_id()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn install_test_session_state(
+        &self,
+        session_id: coco_types::SessionId,
+        metadata: SessionMetadata,
+    ) {
+        self.set_session_metadata(session_id.clone(), metadata);
+        self.set_session_handoff(session_id, SessionHandoffState::new());
+    }
+
+    pub(super) async fn claim_started_session_state(
+        &self,
+        started: StartedSessionState,
+    ) -> Result<(), StartedSessionState> {
+        if self.has_session_handoffs() {
+            return Err(started);
+        }
+        self.set_session_metadata(started.session_id.clone(), started.metadata);
+        self.set_session_plan_mode_instructions(
+            started.session_id.clone(),
+            started.plan_mode_instructions.clone(),
+        );
+        self.set_session_handoff(started.session_id.clone(), started.handoff);
+        self.reset_session_accounting(started.session_id);
+        Ok(())
+    }
+
+    pub(super) async fn archive_active_session<F>(
+        &self,
+        requested_session_id: &coco_types::SessionId,
+        build_result: F,
+    ) -> Result<ArchivedSessionState, ArchiveSessionError>
+    where
+        F: FnOnce(&coco_types::SessionId, &Self) -> coco_types::SessionResultParams,
+    {
+        let Some(active_session_id) = self.sole_session_handoff_id() else {
+            return Err(ArchiveSessionError::NoActiveSession);
+        };
+        if active_session_id != *requested_session_id {
+            return Err(ArchiveSessionError::SessionMismatch {
+                active: active_session_id,
+                requested: requested_session_id.clone(),
+            });
+        }
+        let result = build_result(&active_session_id, self);
+        let active_turn = self.take_active_turn(&active_session_id);
+        self.clear_turn_counter(&active_session_id);
+        self.clear_session_accounting(&active_session_id);
+        self.clear_session_handoff(&active_session_id);
+        self.clear_session_metadata(&active_session_id);
+        self.clear_session_plan_mode_instructions(&active_session_id);
+        Ok(ArchivedSessionState {
+            result,
+            active_turn,
+        })
+    }
+
+    pub(super) async fn archive_scoped_session<F>(
+        &self,
+        session_id: &coco_types::SessionId,
+        build_result: F,
+    ) -> ArchivedSessionState
+    where
+        F: FnOnce(&coco_types::SessionId, &Self) -> coco_types::SessionResultParams,
+    {
+        let result = build_result(session_id, self);
+        let active_turn = self.take_active_turn(session_id);
+        self.clear_turn_counter(session_id);
+        self.clear_session_accounting(session_id);
+        self.clear_session_handoff(session_id);
+        self.clear_session_metadata(session_id);
+        self.clear_session_plan_mode_instructions(session_id);
+        ArchivedSessionState {
+            result,
+            active_turn,
+        }
+    }
+
+    pub(super) fn next_turn_id(&self, session_id: &coco_types::SessionId) -> coco_types::TurnId {
+        let mut counters = match self.turn_counters.lock() {
+            Ok(counters) => counters,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let counter = counters.entry(session_id.clone()).or_insert(0);
+        *counter = counter.saturating_add(1);
+        coco_types::TurnId::from(format!("turn-{session_id}-{counter}"))
+    }
+
+    pub(super) fn clear_turn_counter(&self, session_id: &coco_types::SessionId) {
+        let mut counters = match self.turn_counters.lock() {
+            Ok(counters) => counters,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        counters.remove(session_id);
+    }
+
+    pub(super) fn reset_session_accounting(&self, session_id: coco_types::SessionId) {
+        let mut accounting = match self.session_accounting.lock() {
+            Ok(accounting) => accounting,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        accounting.insert(session_id, SessionAccounting::new());
+    }
+
+    pub(super) fn clear_session_accounting(&self, session_id: &coco_types::SessionId) {
+        let mut accounting = match self.session_accounting.lock() {
+            Ok(accounting) => accounting,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        accounting.remove(session_id);
+    }
+
+    pub(super) fn session_accounting_snapshot(
+        &self,
+        session_id: &coco_types::SessionId,
+    ) -> SessionAccounting {
+        let accounting = match self.session_accounting.lock() {
+            Ok(accounting) => accounting,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        accounting
+            .get(session_id)
+            .cloned()
+            .unwrap_or_else(SessionAccounting::new)
+    }
+
+    pub(super) fn accumulate_session_result(
+        &self,
+        session_id: &coco_types::SessionId,
+        params: &coco_types::SessionResultParams,
+    ) {
+        let mut accounting = match self.session_accounting.lock() {
+            Ok(accounting) => accounting,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let entry = accounting
+            .entry(session_id.clone())
+            .or_insert_with(SessionAccounting::new);
+        entry.stats.accumulate(params);
+    }
+
+    pub(super) fn has_active_turn(&self, session_id: &coco_types::SessionId) -> bool {
+        let active_turns = match self.active_turns.lock() {
+            Ok(active_turns) => active_turns,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        active_turns.contains_key(session_id)
+    }
+
+    pub(super) fn active_turn_cancel_token(
+        &self,
+        session_id: &coco_types::SessionId,
+    ) -> Option<CancellationToken> {
+        let active_turns = match self.active_turns.lock() {
+            Ok(active_turns) => active_turns,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        active_turns
+            .get(session_id)
+            .map(|turn| turn.cancel_token.clone())
+    }
+
+    pub(super) fn mint_shortcut_turn_for_session(
+        &self,
+        session_id: coco_types::SessionId,
+    ) -> Result<ShortcutTurnState, ActiveTurnStartError> {
+        if self.has_active_turn(&session_id) {
+            return Err(ActiveTurnStartError::TurnAlreadyRunning);
+        }
+        let turn_id = self.next_turn_id(&session_id);
+        let Some(handoff) = self.session_handoff_snapshot(&session_id) else {
+            return Err(ActiveTurnStartError::MissingHandoff);
+        };
+        Ok(ShortcutTurnState {
+            session_id,
+            turn_id,
+            history: handoff.history,
+        })
+    }
+
+    pub(super) fn start_active_turn_for_session<F>(
+        &self,
+        session_id: coco_types::SessionId,
+        build_handles: F,
+    ) -> Result<coco_types::TurnId, ActiveTurnStartError>
+    where
+        F: FnOnce(ActiveTurnStartState) -> ActiveTurnHandles,
+    {
+        if self.has_active_turn(&session_id) {
+            return Err(ActiveTurnStartError::TurnAlreadyRunning);
+        }
+        let turn_id = self.next_turn_id(&session_id);
+        let cancel_token = CancellationToken::new();
+        let Some(handoff) = self.session_handoff_snapshot(&session_id) else {
+            return Err(ActiveTurnStartError::MissingHandoff);
+        };
+        let plan_mode_instructions = self.session_plan_mode_instructions(&session_id);
+        let active_session_id = session_id.clone();
+        let active_turn = build_handles(ActiveTurnStartState {
+            session_id,
+            turn_id: turn_id.clone(),
+            cancel_token,
+            handoff,
+            plan_mode_instructions,
+        });
+        self.install_active_turn(active_session_id, active_turn);
+        Ok(turn_id)
+    }
+
+    pub(super) fn install_active_turn(
+        &self,
+        session_id: coco_types::SessionId,
+        active_turn: ActiveTurnHandles,
+    ) {
+        let mut active_turns = match self.active_turns.lock() {
+            Ok(active_turns) => active_turns,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        active_turns.insert(session_id, active_turn);
+    }
+
+    pub(super) fn take_active_turn(
+        &self,
+        session_id: &coco_types::SessionId,
+    ) -> Option<ActiveTurnHandles> {
+        let mut active_turns = match self.active_turns.lock() {
+            Ok(active_turns) => active_turns,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        active_turns.remove(session_id)
+    }
+
+    pub(super) fn clear_active_turn(&self, session_id: &coco_types::SessionId) {
+        let mut active_turns = match self.active_turns.lock() {
+            Ok(active_turns) => active_turns,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        active_turns.remove(session_id);
+    }
+
+    pub(super) async fn clear_scoped_session_state(
+        &self,
+        session_id: &coco_types::SessionId,
+    ) -> Option<ActiveTurnHandles> {
+        let active_turn = self.take_active_turn(session_id);
+        self.clear_turn_counter(session_id);
+        self.clear_session_accounting(session_id);
+        self.clear_session_handoff(session_id);
+        self.clear_session_metadata(session_id);
+        self.clear_session_plan_mode_instructions(session_id);
+        active_turn
+    }
+
+    pub(super) async fn install_replacement_session_state(
+        &self,
+        replacement: ReplacementSessionState,
+    ) -> bool {
+        let prior_session = self.sole_session_handoff_id();
+        let prior_was_active = prior_session.is_some();
+        if let Some(prior) = prior_session.as_ref()
+            && let Some(token) = self.active_turn_cancel_token(prior)
+        {
+            warn!(
+                prior_session = %prior,
+                new_session = %replacement.session_id,
+                reason = replacement.cancel_reason,
+                "SdkServer: replacing active session; cancelling in-flight turn"
+            );
+            token.cancel();
+        }
+        if let Some(prior) = prior_session.as_ref() {
+            self.clear_active_turn(prior);
+            self.clear_session_handoff(prior);
+            if replacement.prior_cleanup == PriorSessionCleanup::Full {
+                self.clear_turn_counter(prior);
+                self.clear_session_accounting(prior);
+                self.clear_session_metadata(prior);
+                self.clear_session_plan_mode_instructions(prior);
+            }
+        }
+
+        if replacement.reset_accounting {
+            self.reset_session_accounting(replacement.session_id.clone());
+        }
+        self.set_session_handoff(replacement.session_id.clone(), replacement.handoff);
+        self.set_session_metadata(replacement.session_id.clone(), replacement.metadata);
+        self.set_session_plan_mode_instructions(
+            replacement.session_id.clone(),
+            replacement.plan_mode_instructions,
+        );
+        prior_was_active
+    }
+
+    pub(super) fn install_scoped_replacement_session_state(
+        &self,
+        replacement: ReplacementSessionState,
+    ) {
+        if let Some(token) = self.active_turn_cancel_token(&replacement.session_id) {
+            warn!(
+                session_id = %replacement.session_id,
+                reason = replacement.cancel_reason,
+                "SdkServer: replacing scoped session state; cancelling in-flight turn"
+            );
+            token.cancel();
+        }
+        self.clear_active_turn(&replacement.session_id);
+        self.clear_session_handoff(&replacement.session_id);
+        if replacement.prior_cleanup == PriorSessionCleanup::Full {
+            self.clear_turn_counter(&replacement.session_id);
+            self.clear_session_accounting(&replacement.session_id);
+            self.clear_session_metadata(&replacement.session_id);
+            self.clear_session_plan_mode_instructions(&replacement.session_id);
+        }
+
+        if replacement.reset_accounting {
+            self.reset_session_accounting(replacement.session_id.clone());
+        }
+        self.set_session_handoff(replacement.session_id.clone(), replacement.handoff);
+        self.set_session_metadata(replacement.session_id.clone(), replacement.metadata);
+        self.set_session_plan_mode_instructions(
+            replacement.session_id.clone(),
+            replacement.plan_mode_instructions,
+        );
+    }
+
+    pub(super) fn set_session_handoff(
+        &self,
+        session_id: coco_types::SessionId,
+        handoff: SessionHandoffState,
+    ) {
+        let mut handoffs = match self.session_handoffs.lock() {
+            Ok(handoffs) => handoffs,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        handoffs.insert(session_id, handoff);
+    }
+
+    pub fn session_handoff_snapshot(
+        &self,
+        session_id: &coco_types::SessionId,
+    ) -> Option<SessionHandoffState> {
+        let handoffs = match self.session_handoffs.lock() {
+            Ok(handoffs) => handoffs,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        handoffs.get(session_id).cloned()
+    }
+
+    pub(super) fn sole_session_handoff_snapshot(
+        &self,
+    ) -> Option<(coco_types::SessionId, SessionHandoffState)> {
+        let handoffs = match self.session_handoffs.lock() {
+            Ok(handoffs) => handoffs,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if handoffs.len() == 1 {
+            handoffs
+                .iter()
+                .next()
+                .map(|(session_id, handoff)| (session_id.clone(), handoff.clone()))
+        } else {
+            None
+        }
+    }
+
+    fn has_session_handoffs(&self) -> bool {
+        let handoffs = match self.session_handoffs.lock() {
+            Ok(handoffs) => handoffs,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        !handoffs.is_empty()
+    }
+
+    fn sole_session_handoff_id(&self) -> Option<coco_types::SessionId> {
+        self.sole_session_handoff_snapshot()
+            .map(|(session_id, _)| session_id)
+    }
+
+    pub(super) fn clear_session_handoff(&self, session_id: &coco_types::SessionId) {
+        let mut handoffs = match self.session_handoffs.lock() {
+            Ok(handoffs) => handoffs,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        handoffs.remove(session_id);
+    }
+
+    pub(super) fn set_session_metadata(
+        &self,
+        session_id: coco_types::SessionId,
+        metadata: SessionMetadata,
+    ) {
+        let mut all_metadata = match self.session_metadata.lock() {
+            Ok(metadata) => metadata,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        all_metadata.insert(session_id, metadata);
+    }
+
+    pub(super) fn session_metadata_snapshot(
+        &self,
+        session_id: &coco_types::SessionId,
+    ) -> Option<SessionMetadata> {
+        let all_metadata = match self.session_metadata.lock() {
+            Ok(metadata) => metadata,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        all_metadata.get(session_id).cloned()
+    }
+
+    pub(super) fn update_session_model(
+        &self,
+        session_id: &coco_types::SessionId,
+        model: String,
+    ) -> Option<String> {
+        let mut all_metadata = match self.session_metadata.lock() {
+            Ok(metadata) => metadata,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let metadata = all_metadata.get_mut(session_id)?;
+        Some(std::mem::replace(&mut metadata.model, model))
+    }
+
+    pub(super) fn clear_session_metadata(&self, session_id: &coco_types::SessionId) {
+        let mut all_metadata = match self.session_metadata.lock() {
+            Ok(metadata) => metadata,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        all_metadata.remove(session_id);
+    }
+
+    pub(super) fn set_session_plan_mode_instructions(
+        &self,
+        session_id: coco_types::SessionId,
+        instructions: Option<String>,
+    ) {
+        let mut all_instructions = match self.session_plan_mode_instructions.lock() {
+            Ok(instructions) => instructions,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(instructions) = instructions {
+            all_instructions.insert(session_id, instructions);
+        } else {
+            all_instructions.remove(&session_id);
+        }
+    }
+
+    pub(super) fn session_plan_mode_instructions(
+        &self,
+        session_id: &coco_types::SessionId,
+    ) -> Option<String> {
+        let all_instructions = match self.session_plan_mode_instructions.lock() {
+            Ok(instructions) => instructions,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        all_instructions.get(session_id).cloned()
+    }
+
+    pub(super) fn clear_session_plan_mode_instructions(&self, session_id: &coco_types::SessionId) {
+        let mut all_instructions = match self.session_plan_mode_instructions.lock() {
+            Ok(instructions) => instructions,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        all_instructions.remove(session_id);
+    }
+
+    pub(super) async fn workspace_cwd(&self) -> Result<PathBuf, HandlerResult> {
+        let runtime = self.session_runtime.read().await.clone();
+        if let Some(runtime) = runtime {
+            return Ok(runtime.current_cwd().read().await.clone());
+        }
+        if let Some(session_id) = self.sole_session_handoff_id().as_ref()
+            && let Some(metadata) = self.session_metadata_snapshot(session_id)
+        {
+            return Ok(PathBuf::from(metadata.cwd));
         }
         if let Some(bootstrap) = self.initialize_bootstrap.read().await.as_ref() {
             return Ok(bootstrap.cwd().await);
@@ -619,6 +1119,27 @@ impl std::fmt::Debug for SdkServerState {
         f.debug_struct("SdkServerState")
             .field("session", &"RwLock<..>")
             .field("turn_runner", &"RwLock<Arc<dyn TurnRunner>>")
+            .field("turn_counters", &"Mutex<HashMap<SessionId, i32>>")
+            .field(
+                "session_accounting",
+                &"Mutex<HashMap<SessionId, SessionAccounting>>",
+            )
+            .field(
+                "active_turns",
+                &"Mutex<HashMap<SessionId, ActiveTurnHandles>>",
+            )
+            .field(
+                "session_handoffs",
+                &"Mutex<HashMap<SessionId, SessionHandoffState>>",
+            )
+            .field(
+                "session_metadata",
+                &"Mutex<HashMap<SessionId, SessionMetadata>>",
+            )
+            .field(
+                "session_plan_mode_instructions",
+                &"Mutex<HashMap<SessionId, String>>",
+            )
             .field("pending_approvals", &"PendingMap<..>")
             .field("pending_user_input", &"PendingMap<..>")
             .field("pending_elicitations", &"PendingMap<..>")
@@ -647,103 +1168,106 @@ impl std::fmt::Debug for SdkServerState {
     }
 }
 
-/// Handle for an active SDK session.
-#[derive(Debug)]
-pub struct SessionHandle {
-    pub session_id: coco_types::SessionId,
-    pub cwd: String,
-    pub model: String,
-    /// Session-scoped permission mode override. When `None`, turns use
-    /// the CLI-default mode; `control/setPermissionMode` sets this.
-    pub permission_mode: Option<coco_types::PermissionMode>,
-    /// Session-scoped thinking level override.
-    /// `control/setThinking` sets this.
-    pub thinking_level: Option<coco_types::ThinkingLevel>,
-    /// Session-scoped environment variable overrides. Mutated by
-    /// `control/updateEnv`; applied to tool invocations when wired.
-    pub env_overrides: std::collections::HashMap<String, String>,
-    /// Cancel token for the currently-running turn (if any).
-    /// Set by `turn/start`, cleared when the turn completes.
-    /// `turn/interrupt` looks this up and calls `.cancel()`.
-    pub active_turn_cancel: Option<CancellationToken>,
-    /// `JoinHandle` for the currently-running turn's runner task.
-    /// `session/archive` takes this out (after cancelling) and awaits it
-    /// to ensure every event the runner emits is flushed through the
-    /// forwarder before the aggregated `SessionResult` is sent, so the
-    /// client sees the archive event last.
-    pub active_turn_task: Option<tokio::task::JoinHandle<()>>,
-    /// `JoinHandle` for the currently-running turn's event forwarder
-    /// task. Paired with `active_turn_task` — archive awaits both, in
-    /// order (runner first, forwarder second), so every per-turn event
-    /// has been written to `notif_tx` before the aggregated result.
-    pub active_turn_forwarder: Option<tokio::task::JoinHandle<()>>,
-    /// Monotonic counter for issuing turn IDs within this session.
-    pub turn_counter: i32,
-    /// Wall-clock timestamp when the session was created (for duration_ms).
-    pub started_at: std::time::Instant,
-    /// Per-session aggregated stats accumulated across every `turn/start`.
-    /// Populated by the event forwarder when it intercepts per-turn
-    /// `SessionResult` notifications from the engine. Emitted back to the
-    /// client as a single `SessionResult` when the session is archived.
-    pub stats: SessionStats,
-    /// Cumulative message history across every `turn/start` in this
-    /// session. Used by `QueryEngineRunner` to thread context between
-    /// turns: the runner locks this, builds combined messages
-    /// `prior_history + [new_user_msg]`, calls
-    /// `QueryEngine::run_with_messages`, then replaces the contents
-    /// with `QueryResult.final_messages`. The `Arc<Mutex<>>` wrapping
-    /// lets the runner's detached turn task mutate it without holding
-    /// the session write-lock for the whole turn.
+/// State handed to SDK turns and local shortcuts for one active session.
+#[derive(Clone)]
+pub struct SessionHandoffState {
+    /// Cumulative message history across every `turn/start` in this session.
     pub history: Arc<Mutex<Vec<std::sync::Arc<coco_messages::Message>>>>,
-
-    /// Session-scoped `ToolAppState` —
-    /// `appState.toolPermissionContext` and the plan-mode latches.
-    /// Created once at session/start, attached to every turn's engine
-    /// via `with_app_state`, and mutated by
-    /// `control/setPermissionMode` so Shift+Tab / SDK mode toggles
-    /// propagate to the engine's next `create_tool_context` read.
-    /// Before this wiring, `control/setPermissionMode` was a dead
-    /// API (wrote only `SessionHandle.permission_mode`, which no
-    /// reader consumed).
+    /// Session-scoped `ToolAppState` attached to each turn's engine.
     pub app_state: Arc<RwLock<coco_types::ToolAppState>>,
-    /// Session-scoped plan-mode workflow override from SDK initialize.
+}
+
+impl SessionHandoffState {
+    pub(super) fn new() -> Self {
+        Self {
+            history: Arc::new(Mutex::new(Vec::new())),
+            app_state: Arc::new(RwLock::new(coco_types::ToolAppState::default())),
+        }
+    }
+}
+
+/// State-owned handles for one active SDK turn.
+pub(super) struct ActiveTurnHandles {
+    pub cancel_token: CancellationToken,
+    pub turn_task: tokio::task::JoinHandle<()>,
+    pub forwarder_task: tokio::task::JoinHandle<()>,
+}
+
+pub(super) struct ArchivedSessionState {
+    pub result: coco_types::SessionResultParams,
+    pub active_turn: Option<ActiveTurnHandles>,
+}
+
+pub(super) enum ArchiveSessionError {
+    NoActiveSession,
+    SessionMismatch {
+        active: coco_types::SessionId,
+        requested: coco_types::SessionId,
+    },
+}
+
+pub(super) struct ActiveTurnStartState {
+    pub session_id: coco_types::SessionId,
+    pub turn_id: coco_types::TurnId,
+    pub cancel_token: CancellationToken,
+    pub handoff: SessionHandoffState,
     pub plan_mode_instructions: Option<String>,
 }
 
-impl SessionHandle {
-    pub(super) fn new(session_id: coco_types::SessionId, cwd: String, model: String) -> Self {
+pub(super) enum ActiveTurnStartError {
+    NoActiveSession,
+    TurnAlreadyRunning,
+    MissingHandoff,
+}
+
+pub(super) struct ShortcutTurnState {
+    pub session_id: coco_types::SessionId,
+    pub turn_id: coco_types::TurnId,
+    pub history: Arc<Mutex<Vec<std::sync::Arc<coco_messages::Message>>>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PriorSessionCleanup {
+    ActiveTurnAndHandoff,
+    Full,
+}
+
+pub(super) struct ReplacementSessionState {
+    pub session_id: coco_types::SessionId,
+    pub metadata: SessionMetadata,
+    pub handoff: SessionHandoffState,
+    pub plan_mode_instructions: Option<String>,
+    pub prior_cleanup: PriorSessionCleanup,
+    pub reset_accounting: bool,
+    pub cancel_reason: &'static str,
+}
+
+pub(super) struct StartedSessionState {
+    pub session_id: coco_types::SessionId,
+    pub metadata: SessionMetadata,
+    pub handoff: SessionHandoffState,
+    pub plan_mode_instructions: Option<String>,
+}
+
+/// Legacy SDK metadata for one active session.
+#[derive(Debug, Clone)]
+pub(super) struct SessionMetadata {
+    pub cwd: String,
+    pub model: String,
+}
+
+/// Aggregate SDK accounting for one session.
+#[derive(Debug, Clone)]
+pub struct SessionAccounting {
+    pub started_at: std::time::Instant,
+    pub stats: SessionStats,
+}
+
+impl SessionAccounting {
+    fn new() -> Self {
         Self {
-            session_id,
-            cwd,
-            model,
-            permission_mode: None,
-            thinking_level: None,
-            env_overrides: std::collections::HashMap::new(),
-            active_turn_cancel: None,
-            active_turn_task: None,
-            active_turn_forwarder: None,
-            turn_counter: 0,
             started_at: std::time::Instant::now(),
             stats: SessionStats::default(),
-            history: Arc::new(Mutex::new(Vec::new())),
-            app_state: Arc::new(RwLock::new(coco_types::ToolAppState::default())),
-            plan_mode_instructions: None,
-        }
-    }
-
-    /// Build a narrow [`TurnHandoff`] for this session — avoids deep-
-    /// cloning `stats` / `env_overrides` / `permission_denials` just to
-    /// hand a turn to the runner.
-    pub fn handoff(&self) -> TurnHandoff {
-        TurnHandoff {
-            session_id: self.session_id.clone(),
-            cwd: self.cwd.clone(),
-            model: self.model.clone(),
-            history: Arc::clone(&self.history),
-            app_state: Arc::clone(&self.app_state),
-            plan_mode_instructions: self.plan_mode_instructions.clone(),
-            permission_mode: self.permission_mode,
-            thinking_level: self.thinking_level.clone(),
         }
     }
 }
@@ -768,6 +1292,48 @@ pub struct SessionStats {
     pub num_api_calls: i32,
 }
 
+impl SessionStats {
+    fn accumulate(&mut self, params: &coco_types::SessionResultParams) {
+        self.total_turns = self.total_turns.saturating_add(1);
+        self.total_duration_api_ms = self
+            .total_duration_api_ms
+            .saturating_add(params.duration_api_ms);
+        self.total_cost_usd += params.total_cost_usd;
+        self.usage += params.usage;
+        for (model, mu) in &params.model_usage {
+            let entry = self.model_usage.entry(model.clone()).or_default();
+            entry.input_tokens = entry.input_tokens.saturating_add(mu.input_tokens);
+            entry.output_tokens = entry.output_tokens.saturating_add(mu.output_tokens);
+            entry.cache_read_input_tokens = entry
+                .cache_read_input_tokens
+                .saturating_add(mu.cache_read_input_tokens);
+            entry.cache_creation_input_tokens = entry
+                .cache_creation_input_tokens
+                .saturating_add(mu.cache_creation_input_tokens);
+            entry.web_search_requests = entry
+                .web_search_requests
+                .saturating_add(mu.web_search_requests);
+            entry.cost_usd += mu.cost_usd;
+        }
+        self.permission_denials
+            .extend(params.permission_denials.iter().cloned());
+        if params.result.is_some() {
+            self.last_result_text = params.result.clone();
+        }
+        if params.structured_output.is_some() {
+            self.structured_output = params.structured_output.clone();
+        }
+        self.last_stop_reason = Some(params.stop_reason.clone());
+        if params.is_error {
+            self.had_error = true;
+            self.errors.extend(params.errors.iter().cloned());
+        }
+        if let Some(n) = params.num_api_calls {
+            self.num_api_calls = self.num_api_calls.saturating_add(n);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeReplacementContext {
     pub runtime_factory: crate::session_runtime::SessionRuntimeFactory,
@@ -784,8 +1350,62 @@ pub struct HandlerContext {
     /// it; long-running handlers (e.g., `turn/start`) emit events here.
     pub notif_tx: mpsc::Sender<OutboundMessage>,
 
-    /// Shared server state across requests (session slot).
+    /// Shared server state across requests.
     pub state: Arc<SdkServerState>,
+
+    /// AppServer-derived session scope for the request connection.
+    ///
+    /// Set only when the connection has exactly one attached interactive
+    /// surface. Handlers fall back to the installed runtime's scoped state,
+    /// then to a sole keyed handoff when this is absent.
+    pub scoped_session_id: Option<coco_types::SessionId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ActiveSessionSource {
+    Scoped,
+    Runtime,
+    ScopedState,
+}
+
+impl HandlerContext {
+    pub fn has_scoped_session(&self) -> bool {
+        self.scoped_session_id.is_some()
+    }
+
+    pub(super) async fn active_session_resolution(
+        &self,
+    ) -> Option<(coco_types::SessionId, ActiveSessionSource)> {
+        if let Some(session_id) = &self.scoped_session_id {
+            return Some((session_id.clone(), ActiveSessionSource::Scoped));
+        }
+        let runtime = self.state.session_runtime.read().await.clone();
+        if let Some(runtime) = runtime {
+            let session_id = runtime.current_typed_session_id().await;
+            if self.state.session_handoff_snapshot(&session_id).is_some() {
+                return Some((session_id, ActiveSessionSource::Runtime));
+            }
+        }
+        if let Some(session_id) = self.state.sole_session_handoff_id() {
+            return Some((session_id, ActiveSessionSource::ScopedState));
+        }
+        None
+    }
+
+    pub async fn active_session_id(&self) -> Option<coco_types::SessionId> {
+        self.active_session_resolution()
+            .await
+            .map(|(session_id, _)| session_id)
+    }
+
+    pub(super) async fn workspace_cwd(&self) -> Result<PathBuf, HandlerResult> {
+        if let Some(session_id) = &self.scoped_session_id
+            && let Some(metadata) = self.state.session_metadata_snapshot(session_id)
+        {
+            return Ok(PathBuf::from(metadata.cwd));
+        }
+        self.state.workspace_cwd().await
+    }
 }
 
 /// Result of dispatching a ClientRequest.

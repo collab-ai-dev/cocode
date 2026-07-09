@@ -415,9 +415,10 @@ impl NdjsonUnixListener {
 
     pub fn into_inner(mut self) -> tokio::net::UnixListener {
         self.socket_path = None;
-        self.listener
-            .take()
-            .expect("listener is present before into_inner")
+        match self.listener.take() {
+            Some(listener) => listener,
+            None => unreachable!("listener is present before into_inner"),
+        }
     }
 }
 

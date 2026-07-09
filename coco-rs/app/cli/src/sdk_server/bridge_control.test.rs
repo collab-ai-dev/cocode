@@ -9,28 +9,34 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::SdkBridgeControlHandler;
+use crate::sdk_server::handlers::ActiveTurnHandles;
 use crate::sdk_server::handlers::SdkServerState;
-use crate::sdk_server::handlers::SessionHandle;
+use crate::sdk_server::handlers::SessionMetadata;
 use crate::sdk_server::outbound::OutboundMessage;
 
-fn state_with_session() -> Arc<SdkServerState> {
+async fn state_with_session() -> Arc<SdkServerState> {
     let state = Arc::new(SdkServerState::default());
-    {
-        let mut slot = state.session.try_write().unwrap();
-        *slot = Some(SessionHandle::new(
-            coco_types::SessionId::try_new("sess-1").unwrap(),
-            "/tmp".into(),
-            "mock-model".into(),
-        ));
-    }
     state
+        .install_test_session_state(
+            coco_types::SessionId::try_new("sess-1").unwrap(),
+            SessionMetadata {
+                cwd: "/tmp".into(),
+                model: "mock-model".into(),
+            },
+        )
+        .await;
+    state
+}
+
+fn test_session_id() -> coco_types::SessionId {
+    coco_types::SessionId::try_new("sess-1").unwrap()
 }
 
 #[tokio::test]
 async fn bridge_handler_rejects_bypass_without_capability() {
     // Startup capability defaults to false — the bridge handler
     // must refuse to escalate into BypassPermissions.
-    let state = state_with_session();
+    let state = state_with_session().await;
     assert!(!state.bypass_permissions_available.load(Ordering::Relaxed));
 
     let handler = SdkBridgeControlHandler::new(state.clone());
@@ -43,14 +49,16 @@ async fn bridge_handler_rejects_bypass_without_capability() {
     assert_eq!(err.code, coco_types::error_codes::PERMISSION_DENIED);
     assert!(err.message.contains("bypassPermissions"));
 
-    // Session was not mutated.
-    let slot = state.session.read().await;
+    // Live app-state mode was not mutated.
+    let session_id = test_session_id();
+    let handoff = state.session_handoff_snapshot(&session_id).unwrap();
+    let app_state = handoff.app_state.read().await;
     assert!(
         !matches!(
-            slot.as_ref().unwrap().permission_mode,
+            app_state.permissions.mode,
             Some(coco_types::PermissionMode::BypassPermissions)
         ),
-        "rejected bridge request must not write session.permission_mode",
+        "rejected bridge request must not write app_state.permission_mode",
     );
 }
 
@@ -59,7 +67,7 @@ async fn bridge_handler_accepts_bypass_when_capability_on() {
     // Flipping the capability flag at startup allows bridge-origin
     // escalation. Verifies the handler reads the live AtomicBool
     // (not a cached value).
-    let state = state_with_session();
+    let state = state_with_session().await;
     state
         .bypass_permissions_available
         .store(true, Ordering::Relaxed);
@@ -73,14 +81,10 @@ async fn bridge_handler_accepts_bypass_when_capability_on() {
         .unwrap();
     assert_eq!(ok, serde_json::Value::Null);
 
-    let slot = state.session.read().await;
-    let session = slot.as_ref().unwrap();
-    assert_eq!(
-        session.permission_mode,
-        Some(coco_types::PermissionMode::BypassPermissions),
-    );
+    let session_id = test_session_id();
+    let handoff = state.session_handoff_snapshot(&session_id).unwrap();
     // app_state propagation — engine's live source of truth.
-    let app_state = session.app_state.read().await;
+    let app_state = handoff.app_state.read().await;
     assert_eq!(
         app_state.permissions.mode,
         Some(coco_types::PermissionMode::BypassPermissions),
@@ -90,7 +94,7 @@ async fn bridge_handler_accepts_bypass_when_capability_on() {
 #[tokio::test]
 async fn bridge_handler_allows_non_bypass_modes_unconditionally() {
     // Non-bypass transitions never touch the killswitch gate.
-    let state = state_with_session();
+    let state = state_with_session().await;
     assert!(!state.bypass_permissions_available.load(Ordering::Relaxed));
 
     let handler = SdkBridgeControlHandler::new(state.clone());
@@ -101,20 +105,22 @@ async fn bridge_handler_allows_non_bypass_modes_unconditionally() {
         .await
         .unwrap();
 
-    let slot = state.session.read().await;
+    let session_id = test_session_id();
+    let handoff = state.session_handoff_snapshot(&session_id).unwrap();
+    let app_state = handoff.app_state.read().await;
     assert_eq!(
-        slot.as_ref().unwrap().permission_mode,
+        app_state.permissions.mode,
         Some(coco_types::PermissionMode::AcceptEdits),
     );
 }
 
 #[tokio::test]
 async fn bridge_handler_enter_plan_applies_plan_transition_state() {
-    let state = state_with_session();
+    let state = state_with_session().await;
     {
-        let slot = state.session.read().await;
-        let session = slot.as_ref().unwrap();
-        session.app_state.write().await.permissions.mode =
+        let session_id = test_session_id();
+        let handoff = state.session_handoff_snapshot(&session_id).unwrap();
+        handoff.app_state.write().await.permissions.mode =
             Some(coco_types::PermissionMode::AcceptEdits);
     }
 
@@ -126,9 +132,9 @@ async fn bridge_handler_enter_plan_applies_plan_transition_state() {
         .await
         .unwrap();
 
-    let slot = state.session.read().await;
-    let session = slot.as_ref().unwrap();
-    let app_state = session.app_state.read().await;
+    let session_id = test_session_id();
+    let handoff = state.session_handoff_snapshot(&session_id).unwrap();
+    let app_state = handoff.app_state.read().await;
     assert_eq!(
         app_state.permissions.mode,
         Some(coco_types::PermissionMode::Plan),
@@ -143,7 +149,7 @@ async fn bridge_handler_enter_plan_applies_plan_transition_state() {
 
 #[tokio::test]
 async fn bridge_handler_enter_plan_publishes_permission_mode_changed() {
-    let state = state_with_session();
+    let state = state_with_session().await;
     let (tx, mut rx) = mpsc::channel(4);
     {
         let mut outbox = state.outbound_tx.write().await;
@@ -187,7 +193,7 @@ async fn bridge_handler_rejects_when_no_active_session() {
 
 #[tokio::test]
 async fn bridge_handler_routes_set_model_through_sdk_dispatch() {
-    let state = state_with_session();
+    let state = state_with_session().await;
     let handler = SdkBridgeControlHandler::new(state.clone());
 
     let ok = handler
@@ -198,18 +204,25 @@ async fn bridge_handler_routes_set_model_through_sdk_dispatch() {
         .unwrap();
 
     assert_eq!(ok, serde_json::Value::Null);
-    let slot = state.session.read().await;
-    assert_eq!(slot.as_ref().unwrap().model, "provider/new-model");
+    let session_id = test_session_id();
+    assert_eq!(
+        state.session_metadata_snapshot(&session_id).unwrap().model,
+        "provider/new-model"
+    );
 }
 
 #[tokio::test]
 async fn bridge_handler_routes_interrupt_through_sdk_dispatch() {
-    let state = state_with_session();
+    let state = state_with_session().await;
     let token = CancellationToken::new();
-    {
-        let mut slot = state.session.write().await;
-        slot.as_mut().unwrap().active_turn_cancel = Some(token.clone());
-    }
+    state.install_active_turn(
+        coco_types::SessionId::try_new("sess-1").unwrap(),
+        ActiveTurnHandles {
+            cancel_token: token.clone(),
+            turn_task: tokio::spawn(async {}),
+            forwarder_task: tokio::spawn(async {}),
+        },
+    );
     let handler = SdkBridgeControlHandler::new(state);
 
     let ok = handler.handle(ControlRequest::Interrupt).await.unwrap();
@@ -220,7 +233,7 @@ async fn bridge_handler_routes_interrupt_through_sdk_dispatch() {
 
 #[tokio::test]
 async fn bridge_handler_routes_mcp_status_through_sdk_dispatch() {
-    let state = state_with_session();
+    let state = state_with_session().await;
     let handler = SdkBridgeControlHandler::new(state);
 
     let value = handler.handle(ControlRequest::McpStatus).await.unwrap();
@@ -230,7 +243,7 @@ async fn bridge_handler_routes_mcp_status_through_sdk_dispatch() {
 
 #[tokio::test]
 async fn bridge_handler_returns_sdk_dispatch_errors() {
-    let state = state_with_session();
+    let state = state_with_session().await;
     let handler = SdkBridgeControlHandler::new(state);
 
     let err = handler

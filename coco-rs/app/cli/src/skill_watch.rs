@@ -46,13 +46,38 @@ pub fn spawn(
     cwd: PathBuf,
     config_home: PathBuf,
 ) -> Option<Arc<SkillChangeDetector>> {
-    let runtime = session.runtime().clone();
+    spawn_current_session(
+        session.clone(),
+        Arc::new(tokio::sync::RwLock::new(session)),
+        notify_tx,
+        cwd,
+        config_home,
+    )
+}
+
+/// Spawn the skill-change detector using the swappable current-session owner.
+///
+/// The filesystem watch roots remain fixed to the TUI project/config roots, but
+/// each debounced reload resolves the current [`SessionHandle`] before running
+/// hooks or rebuilding slash commands. After `/resume` or `/branch`, skill
+/// edits therefore mutate the replacement runtime rather than the startup
+/// runtime captured when the watcher was created.
+pub fn spawn_current_session(
+    initial_session: SessionHandle,
+    current_session: Arc<tokio::sync::RwLock<SessionHandle>>,
+    notify_tx: mpsc::Sender<CoreEvent>,
+    cwd: PathBuf,
+    config_home: PathBuf,
+) -> Option<Arc<SkillChangeDetector>> {
+    let initial_runtime = initial_session.runtime().clone();
     let scopes = session_reload_scopes(&config_home, &cwd);
-    match SkillChangeDetector::new(runtime.skill_manager(), scopes) {
+    match SkillChangeDetector::new(initial_runtime.skill_manager(), scopes) {
         Ok(detector) => {
             let mut rx = detector.subscribe();
             tokio::spawn(async move {
                 while let Ok(event) = rx.recv().await {
+                    let session = current_session.read().await.clone();
+                    let runtime = session.runtime().clone();
                     let changed_path = event
                         .changed_paths
                         .first()
@@ -74,7 +99,8 @@ pub fn spawn(
                     // Rebuild the live catalog and slash-command registry
                     // from the fresh on-disk skills, then push the refreshed
                     // list to the `/` autocomplete.
-                    let count = runtime.reload_plugins(&cwd).await;
+                    let session_cwd = runtime.current_cwd().read().await.clone();
+                    let count = runtime.reload_plugins(&session_cwd).await;
                     tracing::info!(commands = count, "skills changed: command registry rebuilt");
                     let snapshot = runtime.current_command_registry().await.snapshot_for_ui();
                     let _ = notify_tx
