@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use coco_bridge::ControlRequest;
 use coco_bridge::ControlRequestHandler;
@@ -37,7 +36,7 @@ async fn bridge_handler_rejects_bypass_without_capability() {
     // Startup capability defaults to false — the bridge handler
     // must refuse to escalate into BypassPermissions.
     let state = state_with_session().await;
-    assert!(!state.bypass_permissions_available.load(Ordering::Relaxed));
+    assert!(!state.bypass_permissions_available());
 
     let handler = SdkBridgeControlHandler::new(state.clone());
     let err = handler
@@ -68,9 +67,7 @@ async fn bridge_handler_accepts_bypass_when_capability_on() {
     // escalation. Verifies the handler reads the live AtomicBool
     // (not a cached value).
     let state = state_with_session().await;
-    state
-        .bypass_permissions_available
-        .store(true, Ordering::Relaxed);
+    state.set_bypass_permissions_available(true);
 
     let handler = SdkBridgeControlHandler::new(state.clone());
     let ok = handler
@@ -95,7 +92,7 @@ async fn bridge_handler_accepts_bypass_when_capability_on() {
 async fn bridge_handler_allows_non_bypass_modes_unconditionally() {
     // Non-bypass transitions never touch the killswitch gate.
     let state = state_with_session().await;
-    assert!(!state.bypass_permissions_available.load(Ordering::Relaxed));
+    assert!(!state.bypass_permissions_available());
 
     let handler = SdkBridgeControlHandler::new(state.clone());
     handler
@@ -151,10 +148,7 @@ async fn bridge_handler_enter_plan_applies_plan_transition_state() {
 async fn bridge_handler_enter_plan_publishes_permission_mode_changed() {
     let state = state_with_session().await;
     let (tx, mut rx) = mpsc::channel(4);
-    {
-        let mut outbox = state.outbound_tx.write().await;
-        *outbox = Some(tx);
-    }
+    state.install_sdk_outbound_tx(tx).await;
 
     let handler = SdkBridgeControlHandler::new(state);
     handler

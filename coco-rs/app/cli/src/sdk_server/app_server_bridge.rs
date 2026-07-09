@@ -29,24 +29,10 @@ use coco_app_server::SurfaceRole;
 use coco_app_server_client::ClientError;
 use coco_app_server_client::ServerClient;
 use coco_app_server_client::SessionClient;
-use coco_app_server_transport::JsonRpcErrorObject as TransportJsonRpcErrorObject;
-use coco_app_server_transport::JsonRpcErrorResponse as TransportJsonRpcErrorResponse;
 use coco_app_server_transport::JsonRpcFrame;
-use coco_app_server_transport::JsonRpcId;
-use coco_app_server_transport::JsonRpcNotification as TransportJsonRpcNotification;
-use coco_app_server_transport::JsonRpcRequest as TransportJsonRpcRequest;
-use coco_app_server_transport::JsonRpcSuccess;
 use coco_hub_connector::HubConnectorSender;
 use coco_types::ClientRequest;
 use coco_types::CoreEvent;
-use coco_types::JSONRPC_VERSION;
-use coco_types::JsonRpcError;
-use coco_types::JsonRpcErrorObject;
-use coco_types::JsonRpcMessage;
-use coco_types::JsonRpcNotification;
-use coco_types::JsonRpcRequest;
-use coco_types::JsonRpcResponse;
-use coco_types::RequestId;
 use coco_types::ServerNotification;
 use coco_types::SessionEnvelope;
 use coco_types::SessionId;
@@ -69,6 +55,10 @@ use crate::sdk_server::handlers::SessionMetadata;
 use crate::sdk_server::handlers::dispatch_client_request;
 use crate::sdk_server::handlers::session;
 use crate::sdk_server::outbound::OutboundMessage;
+use crate::sdk_server::session_data::LocalSessionDataRequest;
+use crate::sdk_server::session_data::LocalSessionDataView;
+#[cfg(test)]
+use crate::sdk_server::session_data::live_sdk_session_summary_and_history;
 use crate::sdk_server::transport::SdkTransport;
 use crate::sdk_server::transport::TransportError;
 
@@ -125,6 +115,40 @@ impl LocalAppSessionHandle {
 
     pub fn runtime(&self) -> Option<&crate::session_runtime::SessionHandle> {
         self.runtime.as_ref()
+    }
+
+    pub(crate) async fn live_summary_and_history(
+        &self,
+    ) -> Option<(
+        coco_types::SdkSessionSummary,
+        Vec<Arc<coco_messages::Message>>,
+    )> {
+        let runtime = self.runtime()?;
+        let current_session_id = runtime.current_typed_session_id().await;
+        if current_session_id.as_str() != self.session_id.as_str() {
+            return None;
+        }
+
+        let config = runtime.current_engine_config().await;
+        let history = runtime.history().lock().await.to_vec();
+        let usage = runtime.session_usage_snapshot().await;
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        Some((
+            coco_types::SdkSessionSummary {
+                session_id: self.session_id.clone(),
+                model: config.model_id,
+                cwd: runtime.original_cwd().to_string_lossy().into_owned(),
+                created_at: timestamp.clone(),
+                updated_at: Some(timestamp),
+                title: None,
+                message_count: history.len() as i32,
+                total_tokens: usage
+                    .totals
+                    .input_tokens
+                    .saturating_add(usage.totals.output_tokens),
+            },
+            history,
+        ))
     }
 }
 
@@ -194,7 +218,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                 .collect::<Vec<_>>();
             let state = Arc::clone(&self.state);
             return Box::pin(async move {
-                let replacement = state.runtime_replacement.read().await.clone();
+                let replacement = state.runtime_replacement_snapshot().await;
                 if let Some(replacement) = replacement {
                     return start_sdk_session_with_runtime_replacement(
                         app_server,
@@ -228,7 +252,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                 .collect::<Vec<_>>();
             let state = Arc::clone(&self.state);
             return Box::pin(async move {
-                let replacement = state.runtime_replacement.read().await.clone();
+                let replacement = state.runtime_replacement_snapshot().await;
                 if let Some(replacement) = replacement {
                     return resume_sdk_session_with_runtime_replacement(
                         app_server,
@@ -326,7 +350,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                 .collect::<Vec<_>>();
             let state = Arc::clone(&self.state);
             return Box::pin(async move {
-                let replacement = state.runtime_replacement.read().await.clone();
+                let replacement = state.runtime_replacement_snapshot().await;
                 if let Some(replacement) = replacement {
                     return start_sdk_session_with_runtime_replacement(
                         app_server,
@@ -360,7 +384,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                 .collect::<Vec<_>>();
             let state = Arc::clone(&self.state);
             return Box::pin(async move {
-                let replacement = state.runtime_replacement.read().await.clone();
+                let replacement = state.runtime_replacement_snapshot().await;
                 if let Some(replacement) = replacement {
                     return resume_sdk_session_with_runtime_replacement(
                         app_server,
@@ -452,448 +476,6 @@ impl LocalLifecycleRequest {
     }
 }
 
-#[derive(Debug, Clone)]
-enum LocalSessionDataRequest {
-    List,
-    Read(coco_types::SessionReadParams),
-    TurnsList(coco_types::SessionTurnsListParams),
-}
-
-impl LocalSessionDataRequest {
-    fn from_client_request(request: &ClientRequest) -> Option<Self> {
-        match request {
-            ClientRequest::SessionList => Some(Self::List),
-            ClientRequest::SessionRead(params) => Some(Self::Read(params.clone())),
-            ClientRequest::SessionTurnsList(params) => Some(Self::TurnsList(params.clone())),
-            _ => None,
-        }
-    }
-}
-
-struct LocalSessionDataView {
-    app_server: Arc<AppServer<LocalAppSessionHandle>>,
-    state: Arc<SdkServerState>,
-}
-
-impl LocalSessionDataView {
-    async fn handle(
-        &self,
-        request: &LocalSessionDataRequest,
-    ) -> Result<serde_json::Value, JsonRpcDispatchError> {
-        match request {
-            LocalSessionDataRequest::List => {
-                let listed = self.list_persisted_sessions().await?;
-                self.merge_session_list(listed).await
-            }
-            LocalSessionDataRequest::Read(params) => {
-                match self.read_persisted_session(params).await {
-                    Ok(result) => encode_local_session_data_result("session/read", result),
-                    Err(error) if error.code == coco_types::error_codes::INVALID_REQUEST => {
-                        match self.read_live_session(params).await? {
-                            Some(result) => Ok(result),
-                            None => Err(error),
-                        }
-                    }
-                    Err(error) => Err(error),
-                }
-            }
-            LocalSessionDataRequest::TurnsList(params) => {
-                match self.list_persisted_session_turns(params).await {
-                    Ok(result) => encode_local_session_data_result("session/turns/list", result),
-                    Err(error) if error.code == coco_types::error_codes::INVALID_REQUEST => {
-                        match self.list_live_session_turns(params).await? {
-                            Some(result) => Ok(result),
-                            None => Err(error),
-                        }
-                    }
-                    Err(error) => Err(error),
-                }
-            }
-        }
-    }
-
-    async fn merge_session_list(
-        &self,
-        mut listed: coco_types::SessionListResult,
-    ) -> Result<serde_json::Value, JsonRpcDispatchError> {
-        let mut known: std::collections::HashSet<SessionId> = listed
-            .sessions
-            .iter()
-            .map(|session| session.session_id.clone())
-            .collect();
-        for live in self.app_server.list_live_sessions() {
-            if known.contains(&live.session_id) {
-                continue;
-            }
-            if let Some(summary) = self.live_session_summary(&live.session_id).await {
-                known.insert(summary.session_id.clone());
-                listed.sessions.push(summary);
-            }
-        }
-        encode_local_session_data_result("session/list", listed)
-    }
-
-    async fn list_persisted_sessions(
-        &self,
-    ) -> Result<coco_types::SessionListResult, JsonRpcDispatchError> {
-        let manager = {
-            let slot = self.state.session_manager.read().await;
-            match slot.as_ref() {
-                Some(manager) => Arc::clone(manager),
-                None => return Ok(coco_types::SessionListResult::default()),
-            }
-        };
-        let list_result = tokio::task::spawn_blocking(move || {
-            let sessions = manager
-                .list()
-                .map_err(|error| format!("session/list failed: {error}"))?;
-            sessions
-                .iter()
-                .map(session_record_to_summary)
-                .collect::<Result<Vec<_>, _>>()
-                .map(|sessions| coco_types::SessionListResult { sessions })
-                .map_err(|error| format!("session/list returned invalid session id: {error}"))
-        })
-        .await;
-        match list_result {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(message)) => Err(internal_local_session_data_error(message)),
-            Err(join_err) => Err(internal_local_session_data_error(format!(
-                "session/list task panicked: {join_err}"
-            ))),
-        }
-    }
-
-    async fn read_persisted_session(
-        &self,
-        params: &coco_types::SessionReadParams,
-    ) -> Result<coco_types::SessionReadResult, JsonRpcDispatchError> {
-        let cursor = parse_local_session_data_cursor("session/read", params.cursor.as_deref())?;
-        let limit = parse_local_session_data_limit("session/read", params.limit)?;
-        let manager = self.session_manager_or_invalid().await?;
-        let session_id = params.session_id.as_str().to_string();
-        let read_result = tokio::task::spawn_blocking(move || {
-            let session = manager
-                .load(&session_id)
-                .map_err(|error| format!("session/read: {error}"))?;
-            let store = manager.store_for(&session.working_dir);
-            let transcript_messages = store
-                .load_transcript_messages(&session_id)
-                .map_err(|error| format!("session/read: {error}"))?;
-            let page = coco_app_server::session_data_page(transcript_messages.len(), cursor, limit);
-            let messages = transcript_messages[page.start..page.end]
-                .iter()
-                .map(serde_json::to_value)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| format!("session/read: {error}"))?;
-            Ok::<_, String>(coco_types::SessionReadResult {
-                session: session_record_to_summary(&session).map_err(|error| {
-                    format!("session/read returned invalid session id: {error}")
-                })?,
-                messages,
-                next_cursor: page.next_cursor(),
-                has_more: page.has_more,
-            })
-        })
-        .await;
-        match read_result {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(message)) => Err(invalid_local_session_data_error(message)),
-            Err(join_err) => Err(internal_local_session_data_error(format!(
-                "session/read task panicked: {join_err}"
-            ))),
-        }
-    }
-
-    async fn list_persisted_session_turns(
-        &self,
-        params: &coco_types::SessionTurnsListParams,
-    ) -> Result<coco_types::SessionTurnsListResult, JsonRpcDispatchError> {
-        let cursor =
-            parse_local_session_data_cursor("session/turns/list", params.cursor.as_deref())?;
-        let limit = parse_local_session_data_limit("session/turns/list", params.limit)?;
-        let manager = self.session_manager_or_invalid().await?;
-        let session_id = params.session_id.as_str().to_string();
-        let list_result = tokio::task::spawn_blocking(move || {
-            let session = manager
-                .load(&session_id)
-                .map_err(|error| format!("session/turns/list: {error}"))?;
-            let store = manager.store_for(&session.working_dir);
-            let transcript_messages = store
-                .load_transcript_messages(&session_id)
-                .map_err(|error| format!("session/turns/list: {error}"))?;
-            let turns =
-                coco_app_server::derive_session_turn_summaries(transcript_messages.iter().map(
-                    |entry| coco_app_server::TranscriptTurnEntry {
-                        is_user: entry.entry_type == "user",
-                        timestamp: Some(entry.timestamp.as_str()),
-                    },
-                ));
-            let (turns, next_cursor, has_more) =
-                coco_app_server::page_session_items(&turns, cursor, limit);
-            Ok::<_, String>(coco_types::SessionTurnsListResult {
-                session: session_record_to_summary(&session).map_err(|error| {
-                    format!("session/turns/list returned invalid session id: {error}")
-                })?,
-                turns,
-                next_cursor,
-                has_more,
-            })
-        })
-        .await;
-        match list_result {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(message)) => Err(invalid_local_session_data_error(message)),
-            Err(join_err) => Err(internal_local_session_data_error(format!(
-                "session/turns/list task panicked: {join_err}"
-            ))),
-        }
-    }
-
-    async fn session_manager_or_invalid(
-        &self,
-    ) -> Result<Arc<coco_session::SessionManager>, JsonRpcDispatchError> {
-        let slot = self.state.session_manager.read().await;
-        slot.as_ref().map(Arc::clone).ok_or_else(|| {
-            invalid_local_session_data_error("session persistence is not enabled on this server")
-        })
-    }
-
-    async fn read_live_session(
-        &self,
-        params: &coco_types::SessionReadParams,
-    ) -> Result<Option<serde_json::Value>, JsonRpcDispatchError> {
-        if self.app_server.registry().get(&params.session_id).is_none() {
-            return Ok(None);
-        }
-        let Some((summary, history)) = self
-            .live_session_summary_and_history(&params.session_id)
-            .await
-        else {
-            return Ok(None);
-        };
-        let cursor = parse_local_session_data_cursor("session/read", params.cursor.as_deref())?;
-        let limit = parse_local_session_data_limit("session/read", params.limit)?;
-        let page = coco_app_server::session_data_page(history.len(), cursor, limit);
-        let messages = history[page.start..page.end]
-            .iter()
-            .map(serde_json::to_value)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| JsonRpcDispatchError {
-                code: coco_types::error_codes::INTERNAL_ERROR,
-                message: format!("local AppServer session/read encode failed: {error}"),
-                data: None,
-            })?;
-        let result = coco_types::SessionReadResult {
-            session: summary,
-            messages,
-            next_cursor: page.next_cursor(),
-            has_more: page.has_more,
-        };
-        serde_json::to_value(result)
-            .map(Some)
-            .map_err(|error| JsonRpcDispatchError {
-                code: coco_types::error_codes::INTERNAL_ERROR,
-                message: format!("local AppServer session/read encode failed: {error}"),
-                data: None,
-            })
-    }
-
-    async fn list_live_session_turns(
-        &self,
-        params: &coco_types::SessionTurnsListParams,
-    ) -> Result<Option<serde_json::Value>, JsonRpcDispatchError> {
-        if self.app_server.registry().get(&params.session_id).is_none() {
-            return Ok(None);
-        }
-        let Some((summary, history)) = self
-            .live_session_summary_and_history(&params.session_id)
-            .await
-        else {
-            return Ok(None);
-        };
-        let cursor =
-            parse_local_session_data_cursor("session/turns/list", params.cursor.as_deref())?;
-        let limit = parse_local_session_data_limit("session/turns/list", params.limit)?;
-        let turns = coco_app_server::derive_session_turn_summaries(history.iter().map(|message| {
-            coco_app_server::TranscriptTurnEntry {
-                is_user: matches!(message.as_ref(), coco_messages::Message::User(_)),
-                timestamp: None,
-            }
-        }));
-        let (turns, next_cursor, has_more) =
-            coco_app_server::page_session_items(&turns, cursor, limit);
-        let result = coco_types::SessionTurnsListResult {
-            session: summary,
-            turns,
-            next_cursor,
-            has_more,
-        };
-        serde_json::to_value(result)
-            .map(Some)
-            .map_err(|error| JsonRpcDispatchError {
-                code: coco_types::error_codes::INTERNAL_ERROR,
-                message: format!("local AppServer session/turns/list encode failed: {error}"),
-                data: None,
-            })
-    }
-
-    async fn live_session_summary(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<coco_types::SdkSessionSummary> {
-        self.live_session_summary_and_history(session_id)
-            .await
-            .map(|(summary, _)| summary)
-    }
-
-    async fn live_session_summary_and_history(
-        &self,
-        session_id: &SessionId,
-    ) -> Option<(
-        coco_types::SdkSessionSummary,
-        Vec<std::sync::Arc<coco_messages::Message>>,
-    )> {
-        if let Some(handle) = self.app_server.registry().get(session_id)
-            && let Some(result) = live_runtime_session_summary_and_history(&handle).await
-        {
-            return Some(result);
-        }
-
-        live_sdk_session_summary_and_history(&self.state, session_id).await
-    }
-}
-
-fn encode_local_session_data_result(
-    operation: &str,
-    result: impl serde::Serialize,
-) -> Result<serde_json::Value, JsonRpcDispatchError> {
-    serde_json::to_value(result).map_err(|error| JsonRpcDispatchError {
-        code: coco_types::error_codes::INTERNAL_ERROR,
-        message: format!("local AppServer {operation} encode failed: {error}"),
-        data: None,
-    })
-}
-
-fn invalid_local_session_data_error(message: impl Into<String>) -> JsonRpcDispatchError {
-    JsonRpcDispatchError {
-        code: coco_types::error_codes::INVALID_REQUEST,
-        message: message.into(),
-        data: None,
-    }
-}
-
-fn internal_local_session_data_error(message: impl Into<String>) -> JsonRpcDispatchError {
-    JsonRpcDispatchError {
-        code: coco_types::error_codes::INTERNAL_ERROR,
-        message: message.into(),
-        data: None,
-    }
-}
-
-fn session_record_to_summary(
-    session: &coco_session::Session,
-) -> Result<coco_types::SdkSessionSummary, String> {
-    Ok(coco_types::SdkSessionSummary {
-        session_id: SessionId::try_new(session.id.clone()).map_err(|error| error.to_string())?,
-        model: session.model.clone(),
-        cwd: session.working_dir.to_string_lossy().into_owned(),
-        created_at: session.created_at.clone(),
-        updated_at: session.updated_at.clone(),
-        title: session.title.clone(),
-        message_count: session.message_count,
-        total_tokens: session.total_tokens,
-    })
-}
-
-async fn live_runtime_session_summary_and_history(
-    handle: &LocalAppSessionHandle,
-) -> Option<(
-    coco_types::SdkSessionSummary,
-    Vec<std::sync::Arc<coco_messages::Message>>,
-)> {
-    let runtime = handle.runtime()?;
-    let current_session_id = runtime.current_typed_session_id().await;
-    if current_session_id != *handle.session_id() {
-        return None;
-    }
-
-    let config = runtime.current_engine_config().await;
-    let history = runtime.history.lock().await.to_vec();
-    let usage = runtime.session_usage_snapshot().await;
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    Some((
-        coco_types::SdkSessionSummary {
-            session_id: handle.session_id().clone(),
-            model: config.model_id,
-            cwd: runtime.original_cwd().to_string_lossy().into_owned(),
-            created_at: timestamp.clone(),
-            updated_at: Some(timestamp),
-            title: None,
-            message_count: history.len() as i32,
-            total_tokens: usage
-                .totals
-                .input_tokens
-                .saturating_add(usage.totals.output_tokens),
-        },
-        history,
-    ))
-}
-
-async fn live_sdk_session_summary_and_history(
-    state: &Arc<SdkServerState>,
-    session_id: &SessionId,
-) -> Option<(
-    coco_types::SdkSessionSummary,
-    Vec<std::sync::Arc<coco_messages::Message>>,
-)> {
-    let metadata = state.session_metadata_snapshot(session_id)?;
-    let handoff = state.session_handoff_snapshot(session_id)?;
-    let history = handoff.history.lock().await.clone();
-    let accounting = state.session_accounting_snapshot(session_id);
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    Some((
-        coco_types::SdkSessionSummary {
-            session_id: session_id.clone(),
-            model: metadata.model,
-            cwd: metadata.cwd,
-            created_at: timestamp.clone(),
-            updated_at: Some(timestamp),
-            title: None,
-            message_count: history.len() as i32,
-            total_tokens: accounting.stats.usage.input_tokens.total
-                + accounting.stats.usage.output_tokens.total,
-        },
-        history,
-    ))
-}
-
-fn parse_local_session_data_cursor(
-    operation: &str,
-    raw: Option<&str>,
-) -> Result<usize, JsonRpcDispatchError> {
-    coco_app_server::parse_session_data_cursor(operation, raw)
-        .map_err(local_session_data_projection_error)
-}
-
-fn parse_local_session_data_limit(
-    operation: &str,
-    limit: Option<i32>,
-) -> Result<Option<usize>, JsonRpcDispatchError> {
-    coco_app_server::parse_session_data_limit(operation, limit)
-        .map_err(local_session_data_projection_error)
-}
-
-fn local_session_data_projection_error(
-    error: coco_app_server::SessionDataProjectionError,
-) -> JsonRpcDispatchError {
-    JsonRpcDispatchError {
-        code: coco_types::error_codes::INVALID_REQUEST,
-        message: error.message(),
-        data: None,
-    }
-}
-
 async fn start_sdk_session_with_scoped_state(
     app_server: Arc<AppServer<LocalAppSessionHandle>>,
     state: Arc<SdkServerState>,
@@ -901,7 +483,7 @@ async fn start_sdk_session_with_scoped_state(
     live_before: Vec<SessionId>,
     params: coco_types::SessionStartParams,
 ) -> Result<serde_json::Value, JsonRpcDispatchError> {
-    if state.session_runtime.read().await.is_some() {
+    if state.has_session_runtime().await {
         return Err(JsonRpcDispatchError {
             code: coco_types::error_codes::INVALID_REQUEST,
             message:
@@ -950,7 +532,7 @@ async fn resume_sdk_session_with_scoped_state(
     let loaded = session::load_resume_session(params, &state)
         .await
         .map_err(handler_result_to_dispatch_error)?;
-    let matching_runtime = if let Some(runtime) = state.session_runtime.read().await.clone() {
+    let matching_runtime = if let Some(runtime) = state.session_runtime_snapshot().await {
         let runtime_session_id = runtime.current_typed_session_id().await;
         if runtime_session_id != loaded.session_id {
             return Err(JsonRpcDispatchError {
@@ -1104,7 +686,7 @@ async fn start_sdk_session_with_runtime_replacement(
     session::install_scoped_started_session_state(
         &state,
         &prepared,
-        Some(Arc::clone(runtime.runtime().app_state())),
+        Some(Arc::clone(runtime.app_state())),
     )
     .await;
 
@@ -1140,7 +722,7 @@ async fn resume_sdk_session_with_runtime_replacement(
     let resumed_cwd = loaded.session.working_dir.clone();
     let prior_messages = loaded.conversation.messages.clone();
 
-    if let Some(current_runtime) = state.session_runtime.read().await.clone() {
+    if let Some(current_runtime) = state.session_runtime_snapshot().await {
         let current_session_id = current_runtime.current_typed_session_id().await;
         if current_session_id == resumed_session_id {
             session::hydrate_runtime_for_resume_messages(
@@ -1280,7 +862,7 @@ async fn build_sdk_runtime_for_start(
         )
         .await?;
     setup_sdk_replacement_runtime(&replacement, state, &session).await?;
-    session.runtime().fire_session_start_hooks("startup").await;
+    session.fire_session_start_hooks("startup").await;
     Ok(session)
 }
 
@@ -1312,7 +894,7 @@ async fn build_sdk_runtime_for_resume(
         .await?;
     setup_sdk_replacement_runtime(&replacement, state, &session).await?;
     session::hydrate_runtime_for_resume_messages(&session, &session_id, &prior_messages).await;
-    session.runtime().fire_session_start_hooks("resume").await;
+    session.fire_session_start_hooks("resume").await;
     Ok(session)
 }
 
@@ -1321,7 +903,7 @@ async fn setup_sdk_replacement_runtime(
     state: Arc<SdkServerState>,
     session: &crate::session_runtime::SessionHandle,
 ) -> anyhow::Result<()> {
-    let runtime = session.runtime().clone();
+    let runtime = session;
     let session_cwd = runtime.original_cwd().clone();
     if replacement.requires_structured_output {
         runtime
@@ -1329,10 +911,10 @@ async fn setup_sdk_replacement_runtime(
             .await;
     }
     crate::sdk_server::sdk_hooks::install_runtime_callback(Arc::clone(&state), session);
-    if let Some(hooks) = state.sdk_initialize_hooks.read().await.clone() {
+    if let Some(hooks) = state.sdk_initialize_hooks().await {
         crate::sdk_server::sdk_hooks::register_initialize_hooks(session, &hooks);
     }
-    let sdk_agents = state.pending_sdk_agents.read().await.clone();
+    let sdk_agents = state.pending_sdk_agents().await;
     if !sdk_agents.is_empty() {
         session.set_sdk_supplied_agents(sdk_agents).await;
     }
@@ -1352,7 +934,7 @@ async fn setup_sdk_replacement_runtime(
         None,
     )
     .await?;
-    let mcp_manager = state.mcp_manager.read().await.clone();
+    let mcp_manager = state.mcp_manager_snapshot().await;
     crate::session_bootstrap::bootstrap_session_mcp(
         session,
         &session_cwd,
@@ -1369,40 +951,26 @@ pub async fn install_sdk_session_runtime_state(
     session: crate::session_runtime::SessionHandle,
 ) {
     crate::sdk_server::sdk_hooks::install_runtime_callback(Arc::clone(&state), &session);
-    let runtime = session.runtime();
+    let runtime = &session;
     let session_manager = Arc::clone(runtime.session_manager());
     let file_history = runtime.file_history().cloned();
     let file_history_config_home = runtime
         .file_history()
         .map(|_| runtime.config_home().clone());
     install_sdk_runtime_reload_subscription(Arc::clone(&state), &session).await;
-    {
-        let mut slot = state.session_runtime.write().await;
-        *slot = Some(session);
-    }
-    {
-        let mut slot = state.session_manager.write().await;
-        *slot = Some(session_manager);
-    }
-    {
-        let mut slot = state.file_history.write().await;
-        *slot = file_history;
-    }
-    {
-        let mut slot = state.file_history_config_home.write().await;
-        *slot = file_history_config_home;
-    }
+    state.install_session_runtime(session).await;
+    state.install_session_manager(session_manager).await;
+    state
+        .install_file_history(file_history, file_history_config_home)
+        .await;
 }
 
 async fn install_sdk_runtime_reload_subscription(
     state: Arc<SdkServerState>,
     session: &crate::session_runtime::SessionHandle,
 ) {
-    let runtime = session.runtime();
-    let mut slot = state.sdk_runtime_reload_subscription.lock().await;
-    if let Some(handle) = slot.take() {
-        handle.abort();
-    }
+    let runtime = session;
+    state.abort_sdk_runtime_reload_subscription().await;
 
     let Some(sandbox_state) = runtime.sandbox_state() else {
         return;
@@ -1414,11 +982,13 @@ async fn install_sdk_runtime_reload_subscription(
     let Some(publisher) = runtime.runtime_publisher() else {
         return;
     };
-    *slot = Some(crate::sandbox_reload::spawn_sandbox_reload(
-        sandbox_state,
-        &publisher,
-        runtime.original_cwd().clone(),
-    ));
+    state
+        .install_sdk_runtime_reload_subscription(crate::sandbox_reload::spawn_sandbox_reload(
+            sandbox_state,
+            &publisher,
+            runtime.original_cwd().clone(),
+        ))
+        .await;
 }
 
 async fn install_runtime_backed_resumed_sdk_session_state(
@@ -1428,8 +998,8 @@ async fn install_runtime_backed_resumed_sdk_session_state(
     runtime_handle: &crate::session_runtime::SessionHandle,
     prior_messages: &[coco_messages::Message],
 ) {
-    let plan_mode_instructions = state.pending_plan_mode_instructions.read().await.clone();
-    let runtime = runtime_handle.runtime();
+    let plan_mode_instructions = state.pending_plan_mode_instructions().await;
+    let runtime = runtime_handle;
     let history = prior_messages
         .iter()
         .cloned()
@@ -1965,8 +1535,8 @@ async fn close_local_session_handle_with_reason(
             );
             return;
         }
-        runtime.runtime().fire_session_end_hooks(reason).await;
-        runtime.runtime().shutdown_signal().cancel();
+        runtime.fire_session_end_hooks(reason).await;
+        runtime.shutdown_signal().cancel();
     }
     debug!(
         target: "coco::app_server_local",
@@ -2497,7 +2067,7 @@ impl AppServerLocalBridge {
             file_history,
             config_home,
         ) = {
-            let runtime = session.runtime();
+            let runtime = &session;
             let session_id = session.session_id().clone();
             let cwd = runtime
                 .current_cwd()
@@ -2506,7 +2076,7 @@ impl AppServerLocalBridge {
                 .to_string_lossy()
                 .into_owned();
             let config = runtime.current_engine_config().await;
-            let history = runtime.history.lock().await.iter().cloned().collect();
+            let history = runtime.history().lock().await.iter().cloned().collect();
             (
                 session_id,
                 cwd,
@@ -2546,32 +2116,26 @@ impl AppServerLocalBridge {
         self.handler
             .state
             .reset_session_accounting(session_id.clone());
-        self.handler.state.bypass_permissions_available.store(
-            bypass_permissions_available,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        {
-            let mut runner = self.handler.state.turn_runner.write().await;
-            *runner = Arc::new(crate::sdk_server::QueryEngineRunner::new(
+        self.handler
+            .state
+            .set_bypass_permissions_available(bypass_permissions_available);
+        self.handler
+            .state
+            .install_turn_runner(Arc::new(crate::sdk_server::QueryEngineRunner::new(
                 session.clone(),
                 max_turns,
                 system_prompt,
-            ));
-        }
-        {
-            let mut slot = self.handler.state.session_manager.write().await;
-            *slot = Some(session_manager);
-        }
-        {
-            let mut slot = self.handler.state.file_history.write().await;
-            *slot = file_history;
-        }
-        {
-            let mut slot = self.handler.state.file_history_config_home.write().await;
-            *slot = Some(config_home);
-        }
-        let mut slot = self.handler.state.session_runtime.write().await;
-        *slot = Some(session);
+            )))
+            .await;
+        self.handler
+            .state
+            .install_session_manager(session_manager)
+            .await;
+        self.handler
+            .state
+            .install_file_history(file_history, Some(config_home))
+            .await;
+        self.handler.state.install_session_runtime(session).await;
     }
 }
 
@@ -2621,7 +2185,7 @@ where
                         *event,
                     );
                 }
-                OutboundMessage::JsonRpc(_) => {
+                OutboundMessage::JsonRpcFrame(_) => {
                     warn!("dropping JSON-RPC outbound message on local AppServer forwarder");
                 }
             }
@@ -2769,19 +2333,10 @@ pub async fn run_app_server_sdk_state_over_sdk_transport_with_external_notificat
 ) -> Result<DisconnectOutcome, SdkAppServerBridgeError> {
     let app_server = connection.app_server();
     let (outbound_tx, outbound_rx) = mpsc::channel::<OutboundMessage>(256);
-    {
-        let mut slot = state.transport.write().await;
-        *slot = Some(Arc::clone(&transport));
-    }
-    {
-        let mut slot = state.outbound_tx.write().await;
-        *slot = Some(outbound_tx.clone());
-    }
+    state.install_sdk_transport(Arc::clone(&transport)).await;
+    state.install_sdk_outbound_tx(outbound_tx.clone()).await;
 
-    let mcp_manager = {
-        let slot = state.mcp_manager.read().await;
-        slot.as_ref().cloned()
-    };
+    let mcp_manager = state.mcp_manager_snapshot().await;
     if let Some(manager) = mcp_manager {
         crate::sdk_server::sdk_mcp::install_route(
             manager,
@@ -2823,10 +2378,7 @@ pub async fn run_app_server_sdk_state_over_sdk_transport_with_external_notificat
     )
     .await;
 
-    {
-        let mut slot = state.outbound_tx.write().await;
-        *slot = None;
-    }
+    state.clear_sdk_outbound_tx().await;
     for forwarder in external_forwarders {
         forwarder.abort();
         let _ = forwarder.await;
@@ -2841,7 +2393,7 @@ async fn run_app_server_connection_over_sdk_transport_inner<H, Handler>(
     transport: Arc<dyn SdkTransport>,
     handler: Arc<Handler>,
     outbound_messages: Option<mpsc::Sender<OutboundMessage>>,
-    legacy_response_state: Option<Arc<SdkServerState>>,
+    server_request_state: Option<Arc<SdkServerState>>,
 ) -> Result<DisconnectOutcome, SdkAppServerBridgeError>
 where
     H: Clone + Send + Sync + 'static,
@@ -2855,18 +2407,14 @@ where
     let reader_transport = Arc::clone(&transport);
     let mut reader_task = tokio::spawn(async move {
         loop {
-            let Some(message) = reader_transport.recv().await? else {
+            let Some(frame) = reader_transport.recv_frame().await? else {
                 break Ok(());
             };
-            if matches!(
-                message,
-                JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)
-            ) && let Some(state) = &legacy_response_state
-                && state.resolve_server_request(message.clone()).await
+            if let Some(state) = &server_request_state
+                && state.resolve_server_request_frame(frame.clone()).await
             {
                 continue;
             }
-            let frame = legacy_json_rpc_message_to_frame(message)?;
             if inbound_tx.send(frame).await.is_err() {
                 break Ok(());
             }
@@ -2877,14 +2425,13 @@ where
     let outbound_messages_for_frames = outbound_messages.clone();
     let writer_task = tokio::spawn(async move {
         while let Some(frame) = outbound_rx.recv().await {
-            let message = json_rpc_frame_to_legacy_message(frame)?;
             if let Some(outbound_messages) = &outbound_messages_for_frames {
                 outbound_messages
-                    .send(OutboundMessage::JsonRpc(message))
+                    .send(OutboundMessage::JsonRpcFrame(frame))
                     .await
                     .map_err(|_| TransportError::PeerDropped)?;
             } else {
-                writer_transport.send(message).await?;
+                writer_transport.send_frame(frame).await?;
             }
         }
         Ok::<(), SdkAppServerBridgeError>(())
@@ -2913,85 +2460,12 @@ where
     owner_result
 }
 
-fn legacy_json_rpc_message_to_frame(
-    message: JsonRpcMessage,
-) -> Result<JsonRpcFrame, JsonRpcBridgeError> {
-    match message {
-        JsonRpcMessage::Request(request) => {
-            Ok(JsonRpcFrame::Request(TransportJsonRpcRequest::new(
-                json_rpc_id_from_request_id(request.request_id),
-                request.method,
-                Some(request.params),
-            )))
-        }
-        JsonRpcMessage::Response(response) => Ok(JsonRpcFrame::Success(JsonRpcSuccess::new(
-            json_rpc_id_from_request_id(response.request_id),
-            response.result,
-        ))),
-        JsonRpcMessage::Error(error) => {
-            Ok(JsonRpcFrame::Error(TransportJsonRpcErrorResponse::new(
-                json_rpc_id_from_request_id(error.request_id),
-                TransportJsonRpcErrorObject::new(
-                    error.error.code,
-                    error.error.message,
-                    error.error.data,
-                ),
-            )))
-        }
-        JsonRpcMessage::Notification(notification) => Ok(JsonRpcFrame::Notification(
-            TransportJsonRpcNotification::new(notification.method, Some(notification.params)),
-        )),
-    }
-}
-
-fn json_rpc_frame_to_legacy_message(
-    frame: JsonRpcFrame,
-) -> Result<JsonRpcMessage, JsonRpcBridgeError> {
-    match frame {
-        JsonRpcFrame::Request(request) => Ok(JsonRpcMessage::Request(JsonRpcRequest {
-            jsonrpc: JSONRPC_VERSION.into(),
-            request_id: request_id_from_json_rpc_id(request.id)?,
-            method: request.method,
-            params: request.params.unwrap_or(serde_json::Value::Null),
-        })),
-        JsonRpcFrame::Success(success) => Ok(JsonRpcMessage::Response(JsonRpcResponse {
-            jsonrpc: JSONRPC_VERSION.into(),
-            request_id: request_id_from_json_rpc_id(success.id)?,
-            result: success.result,
-        })),
-        JsonRpcFrame::Error(error) => Ok(JsonRpcMessage::Error(JsonRpcError {
-            jsonrpc: JSONRPC_VERSION.into(),
-            request_id: request_id_from_json_rpc_id(error.id)?,
-            error: JsonRpcErrorObject {
-                code: error.error.code,
-                message: error.error.message,
-                data: error.error.data,
-            },
-        })),
-        JsonRpcFrame::Notification(notification) => {
-            Ok(JsonRpcMessage::Notification(JsonRpcNotification {
-                jsonrpc: JSONRPC_VERSION.into(),
-                method: notification.method,
-                params: notification.params.unwrap_or(serde_json::Value::Null),
-            }))
-        }
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum JsonRpcBridgeError {
-    #[error("legacy SDK JSON-RPC ids cannot represent null")]
-    NullId,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum SdkAppServerBridgeError {
     #[error("{source}")]
     Adapter { source: JsonRpcAdapterError },
     #[error("{source}")]
     Transport { source: TransportError },
-    #[error("{source}")]
-    JsonRpcBridge { source: JsonRpcBridgeError },
     #[error("SDK app-server bridge task failed: {source}")]
     Join { source: tokio::task::JoinError },
 }
@@ -3011,27 +2485,6 @@ impl From<JsonRpcAdapterError> for SdkAppServerBridgeError {
 impl From<TransportError> for SdkAppServerBridgeError {
     fn from(source: TransportError) -> Self {
         Self::Transport { source }
-    }
-}
-
-impl From<JsonRpcBridgeError> for SdkAppServerBridgeError {
-    fn from(source: JsonRpcBridgeError) -> Self {
-        Self::JsonRpcBridge { source }
-    }
-}
-
-fn json_rpc_id_from_request_id(request_id: RequestId) -> JsonRpcId {
-    match request_id {
-        RequestId::Integer(value) => JsonRpcId::Number(value),
-        RequestId::String(value) => JsonRpcId::String(value),
-    }
-}
-
-fn request_id_from_json_rpc_id(id: JsonRpcId) -> Result<RequestId, JsonRpcBridgeError> {
-    match id {
-        JsonRpcId::Number(value) => Ok(RequestId::Integer(value)),
-        JsonRpcId::String(value) => Ok(RequestId::String(value)),
-        JsonRpcId::Null => Err(JsonRpcBridgeError::NullId),
     }
 }
 

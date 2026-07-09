@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use coco_app_server_transport::JsonRpcFrame;
 use tokio::sync::Mutex;
 use tracing::warn;
 
@@ -31,12 +32,10 @@ pub async fn register_and_connect(
     state: Arc<SdkServerState>,
     server_names: Vec<String>,
 ) -> Result<(), String> {
-    let manager = {
-        let slot = state.mcp_manager.read().await;
-        slot.as_ref()
-            .cloned()
-            .ok_or_else(|| "MCP manager not enabled".to_string())?
-    };
+    let manager = state
+        .mcp_manager_snapshot()
+        .await
+        .ok_or_else(|| "MCP manager not enabled".to_string())?;
     {
         let mut manager_guard = manager.lock().await;
         for name in &server_names {
@@ -71,8 +70,9 @@ pub async fn register_and_connect(
         )
         .await;
         let report = {
-            let guard = state.session_runtime.read().await;
-            guard
+            state
+                .session_runtime_snapshot()
+                .await
                 .as_ref()
                 .map(|runtime| coco_tools::register_mcp_tools(runtime.tools(), &name, schemas))
         };
@@ -100,7 +100,7 @@ async fn route_message(
         .await
         .map_err(|e| format!("send mcp/routeMessage: {e}"))?;
     match reply {
-        coco_types::JsonRpcMessage::Response(response) => {
+        JsonRpcFrame::Success(response) => {
             // The SDK's reply body is `{message: <raw JSON-RPC message
             // from the SDK-hosted MCP server>}`. Typed parse so a
             // malformed body errors here rather than downstream.
@@ -109,7 +109,7 @@ async fn route_message(
                     .map_err(|e| format!("parse mcp/routeMessage response: {e}"))?;
             Ok(resolved.message)
         }
-        coco_types::JsonRpcMessage::Error(error) => Err(format!(
+        JsonRpcFrame::Error(error) => Err(format!(
             "SDK client returned mcp/routeMessage error: {} ({})",
             error.error.message, error.error.code
         )),

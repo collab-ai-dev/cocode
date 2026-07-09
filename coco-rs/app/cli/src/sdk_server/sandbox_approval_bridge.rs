@@ -20,12 +20,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use coco_app_server_transport::JsonRpcFrame;
 use coco_sandbox::{
     SandboxApprovalBridge, SandboxApprovalDecision, SandboxApprovalRequest, SandboxOperation,
 };
-use coco_types::{
-    ApprovalDecision, ApprovalResolveParams, JsonRpcMessage, ServerAskForApprovalParams,
-};
+use coco_types::{ApprovalDecision, ApprovalResolveParams, ServerAskForApprovalParams};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -66,18 +65,15 @@ impl SandboxApprovalBridge for SdkSandboxApprovalBridge {
         // startup. Missing transport → Rejected (preserves the
         // sandbox's deny error). Same fail-closed semantics
         // `SdkPermissionBridge` uses.
-        let transport = {
-            let guard = self.state.transport.read().await;
-            match guard.as_ref() {
-                Some(t) => t.clone(),
-                None => {
-                    warn!(
-                        operation = request.operation.as_str(),
-                        path = %request.path,
-                        "SdkSandboxApprovalBridge: SDK transport unavailable; rejecting"
-                    );
-                    return SandboxApprovalDecision::Rejected;
-                }
+        let transport = match self.state.sdk_transport_snapshot().await {
+            Some(t) => t,
+            None => {
+                warn!(
+                    operation = request.operation.as_str(),
+                    path = %request.path,
+                    "SdkSandboxApprovalBridge: SDK transport unavailable; rejecting"
+                );
+                return SandboxApprovalDecision::Rejected;
             }
         };
 
@@ -140,7 +136,7 @@ impl SandboxApprovalBridge for SdkSandboxApprovalBridge {
         // the same hook fires regardless of whether the prompt comes from
         // a regular tool or a sandbox-level deny. Best-effort — runtime
         // not yet installed (e.g. tests) leaves the hook unfired.
-        if let Some(runtime) = self.state.session_runtime.read().await.clone() {
+        if let Some(runtime) = self.state.session_runtime_snapshot().await {
             let title = format!("Sandbox prompt: {tool_name}");
             runtime
                 .fire_notification_hooks(
@@ -167,8 +163,8 @@ impl SandboxApprovalBridge for SdkSandboxApprovalBridge {
         };
 
         match reply {
-            JsonRpcMessage::Response(r) => {
-                let parsed: ApprovalResolveParams = match serde_json::from_value(r.result) {
+            JsonRpcFrame::Success(success) => {
+                let parsed: ApprovalResolveParams = match serde_json::from_value(success.result) {
                     Ok(p) => p,
                     Err(e) => {
                         warn!(error = %e, "SdkSandboxApprovalBridge: invalid response shape");
@@ -180,7 +176,7 @@ impl SandboxApprovalBridge for SdkSandboxApprovalBridge {
                     ApprovalDecision::Deny => SandboxApprovalDecision::Rejected,
                 }
             }
-            JsonRpcMessage::Error(e) => {
+            JsonRpcFrame::Error(e) => {
                 warn!(
                     code = e.error.code,
                     message = %e.error.message,

@@ -41,7 +41,7 @@ use crate::sdk_server::handlers::TurnRunner;
 ///
 /// Holds a `SessionHandle` for the same per-session state container
 /// the TUI runner uses. Per-turn engine assembly routes through
-/// `runtime.build_engine_from_config(...)` so SDK and TUI share the
+/// `session.build_engine_from_config(...)` so SDK and TUI share the
 /// `with_*` install list.
 pub struct QueryEngineRunner {
     session: crate::session_runtime::SessionHandle,
@@ -56,8 +56,8 @@ pub struct QueryEngineRunner {
 /// `TurnRunner` that resolves the active [`SessionHandle`] at turn start.
 ///
 /// This is the compatibility bridge for AppServer-owned session replacement:
-/// callers can update `SdkServerState.session_runtime`, and subsequent turns
-/// use the new runtime without replacing the runner object itself.
+/// callers install a new runtime through `SdkServerState`, and subsequent
+/// turns use the new runtime without replacing the runner object itself.
 pub struct StateQueryEngineRunner {
     state: Arc<SdkServerState>,
     max_turns: Option<i32>,
@@ -171,7 +171,7 @@ impl TurnRunner for StateQueryEngineRunner {
         let max_turns = self.max_turns;
         let system_prompt = self.system_prompt.clone();
         Box::pin(async move {
-            let session = state.session_runtime.read().await.clone().ok_or_else(|| {
+            let session = state.session_runtime_snapshot().await.ok_or_else(|| {
                 anyhow::anyhow!("SdkServer was constructed without a SessionRuntime")
             })?;
             run_turn_with_session(
@@ -207,7 +207,6 @@ fn run_turn_with_session(
     let model_selection_override = params.model_selection.clone();
     let permission_mode_override = params.permission_mode;
     let thinking_level_override = params.thinking_level;
-    let runtime = session.runtime().clone();
     let history_handle = handoff.history.clone();
     // Keep our own handle on the cancel token. The engine consumes
     // its copy; we still need to know post-run whether the user
@@ -221,7 +220,7 @@ fn run_turn_with_session(
         // scoped resolution (incl. CLI overrides + flag settings);
         // rebuilding from `from_process` would lose them and slow
         // every turn down by re-walking settings layers.
-        let runtime_config = runtime.runtime_config().as_ref();
+        let runtime_config = session.runtime_config().as_ref();
         // SDK turns honor the same settings-layered permission rules
         // as TUI / headless.
         let (allow_rules, deny_rules, ask_rules) =
@@ -229,9 +228,9 @@ fn run_turn_with_session(
         let permission_rule_source_roots =
             crate::permission_rule_loader::permission_rule_source_roots(
                 &runtime_config.settings,
-                runtime.original_cwd(),
+                session.original_cwd(),
             );
-        let current_engine_config = runtime.current_engine_config().await;
+        let current_engine_config = session.current_engine_config().await;
         let turn_cwd = current_engine_config.workspace_cwd();
         // Resolve the permission mode. Turn-scoped request params win; the
         // runtime config carries the current session-scoped control state.
@@ -268,7 +267,7 @@ fn run_turn_with_session(
             total_token_budget: current_engine_config
                 .total_token_budget
                 .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from)),
-            prompt_cache: runtime
+            prompt_cache: session
                 .model_runtimes()
                 .snapshot_for_source(model_runtime_source.clone())
                 .ok()
@@ -285,7 +284,7 @@ fn run_turn_with_session(
             session_id: handoff.session_id.clone(),
             tool_config: runtime_config.tool.clone(),
             sandbox_config: runtime_config.sandbox.clone(),
-            sandbox_state: runtime.sandbox_state(),
+            sandbox_state: session.sandbox_state(),
             memory_config: runtime_config.memory.clone(),
             shell_config: runtime_config.shell.clone(),
             active_shell_tool: current_engine_config.active_shell_tool,
@@ -341,7 +340,7 @@ fn run_turn_with_session(
             );
         }
 
-        let engine = runtime
+        let engine = session
             .build_engine_from_config(config, cancel, Some(handoff.app_state.clone()))
             .await
             .with_model_runtime_source(model_runtime_source);
@@ -370,7 +369,7 @@ fn run_turn_with_session(
             // a blocking_error suppresses the turn (warns instead);
             // prevent_continuation keeps the prompt but skips the
             // engine.
-            let prompt_hook_result = runtime.fire_user_prompt_submit_hooks(&prompt).await;
+            let prompt_hook_result = session.fire_user_prompt_submit_hooks(&prompt).await;
             if let Some(blocking) = &prompt_hook_result.blocking_error {
                 let warning = format!(
                     "UserPromptSubmit hook blocked the turn: {}\n\nOriginal prompt: {prompt}",
@@ -467,7 +466,7 @@ fn run_turn_with_session(
                 &images,
                 &turn_cwd,
                 uuid::Uuid::new_v4(),
-                runtime.file_read_state(),
+                session.file_read_state(),
             )
             .await;
             let mut new_msgs = Vec::new();
@@ -500,7 +499,7 @@ fn run_turn_with_session(
                 h.clone()
             };
             {
-                let mut h = runtime.history.lock().await;
+                let mut h = session.history().lock().await;
                 for msg in new_msg_arcs {
                     h.push_arc(msg);
                 }
@@ -524,7 +523,7 @@ fn run_turn_with_session(
                 *h = override_messages.clone();
             }
             {
-                let mut h = runtime.history.lock().await;
+                let mut h = session.history().lock().await;
                 h.clear();
                 for msg in override_messages.iter().cloned() {
                     h.push_arc(msg);
@@ -539,7 +538,7 @@ fn run_turn_with_session(
         let session_id_for_error = handoff.session_id.clone();
         let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
         let event_tx_forward = event_tx.clone();
-        let session_manager_for_forward = Arc::clone(runtime.session_manager());
+        let session_manager_for_forward = Arc::clone(session.session_manager());
         let session_id_for_forward = handoff.session_id.clone();
         let forward_handle = tokio::spawn(async move {
             while let Some(event) = core_event_rx.recv().await {
@@ -585,7 +584,7 @@ fn run_turn_with_session(
                     *h = final_messages;
                 }
                 {
-                    let mut h = runtime.history.lock().await;
+                    let mut h = session.history().lock().await;
                     *h = final_history;
                 }
                 // Sole Interrupted emit site. Fires when either the

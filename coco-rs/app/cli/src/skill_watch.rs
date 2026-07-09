@@ -69,20 +69,18 @@ pub fn spawn_current_session(
     cwd: PathBuf,
     config_home: PathBuf,
 ) -> Option<Arc<SkillChangeDetector>> {
-    let initial_runtime = initial_session.runtime().clone();
     let scopes = session_reload_scopes(&config_home, &cwd);
-    match SkillChangeDetector::new(initial_runtime.skill_manager(), scopes) {
+    match SkillChangeDetector::new(initial_session.skill_manager(), scopes) {
         Ok(detector) => {
             let mut rx = detector.subscribe();
             tokio::spawn(async move {
                 while let Ok(event) = rx.recv().await {
                     let session = current_session.read().await.clone();
-                    let runtime = session.runtime().clone();
                     let changed_path = event
                         .changed_paths
                         .first()
                         .map(|path| path.to_string_lossy().into_owned());
-                    let hook_result = runtime
+                    let hook_result = session
                         .run_config_change_hooks(
                             coco_hooks::orchestration::ConfigChangeSource::Skills,
                             changed_path.as_deref(),
@@ -99,10 +97,10 @@ pub fn spawn_current_session(
                     // Rebuild the live catalog and slash-command registry
                     // from the fresh on-disk skills, then push the refreshed
                     // list to the `/` autocomplete.
-                    let session_cwd = runtime.current_cwd().read().await.clone();
-                    let count = runtime.reload_plugins(&session_cwd).await;
+                    let session_cwd = session.current_cwd().read().await.clone();
+                    let count = session.reload_plugins(&session_cwd).await;
                     tracing::info!(commands = count, "skills changed: command registry rebuilt");
-                    let snapshot = runtime.current_command_registry().await.snapshot_for_ui();
+                    let snapshot = session.current_command_registry().await.snapshot_for_ui();
                     let _ = notify_tx
                         .send(CoreEvent::Tui(TuiOnlyEvent::AvailableCommandsRefreshed {
                             commands: snapshot,

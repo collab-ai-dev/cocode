@@ -60,8 +60,11 @@ pub(crate) struct PreparedStartSession {
 ///   runtime exists, these fall back to the optional
 ///   [`super::InitializeBootstrap`] snapshot installed via
 ///   `SdkServer::with_initialize_bootstrap()`.
-/// - `account`, `fast_mode_state`: populated from the optional bootstrap
-///   provider until those process/auth sources grow runtime-owned accessors.
+/// - `fast_mode_state`: populated from the live [`SessionHandle`] when
+///   installed, falling back to the optional bootstrap provider before runtime
+///   construction.
+/// - `account`: populated from the optional bootstrap provider until auth
+///   sources grow runtime-owned accessors.
 /// - Internal `_cocoRs*` extension fields carry the coco-rs binary and
 ///   protocol version for debugging.
 pub(super) async fn handle_initialize(
@@ -77,23 +80,18 @@ pub(super) async fn handle_initialize(
     // minute on summarization, so opt-in semantics keep that off the
     // user's hot path.
     if params.agent_progress_summaries.unwrap_or(false) {
-        ctx.state
-            .agent_progress_summaries_enabled
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        ctx.state.enable_agent_progress_summaries();
         info!("SdkServer: agentProgressSummaries enabled by client");
     }
 
-    {
-        let mut slot = ctx.state.pending_plan_mode_instructions.write().await;
-        *slot = params.plan_mode_instructions.clone();
-    }
+    ctx.state
+        .set_pending_plan_mode_instructions(params.plan_mode_instructions.clone())
+        .await;
+    ctx.state
+        .set_sdk_initialize_hooks(params.hooks.clone())
+        .await;
 
-    {
-        let mut slot = ctx.state.sdk_initialize_hooks.write().await;
-        *slot = params.hooks.clone();
-    }
-
-    if let Some(runtime) = ctx.state.session_runtime.read().await.clone()
+    if let Some(runtime) = ctx.state.session_runtime_snapshot().await
         && let Some(hooks) = params.hooks.as_ref()
     {
         crate::sdk_server::sdk_hooks::install_runtime_callback(ctx.state.clone(), &runtime);
@@ -141,18 +139,15 @@ pub(super) async fn handle_initialize(
             // listing below sees them in this initialize response,
             // even when the SessionRuntime isn't wired yet — e.g.
             // in tests).
-            {
-                let mut stash = ctx.state.pending_sdk_agents.write().await;
-                // Replace (not extend) — `initialize` is a fresh handshake;
-                // a prior connection's stash should not bleed into this one.
-                *stash = accepted.clone();
-            }
+            // Replace (not extend) — `initialize` is a fresh handshake; a
+            // prior connection's stash should not bleed into this one.
+            ctx.state.set_pending_sdk_agents(accepted.clone()).await;
             // Inject into the live SessionRuntime so subsequent
             // `turn/start` spawns can actually use the SDK-supplied agents.
             // The SessionRuntime is None in tests; the stash-only
             // branch above still gives the wire response correct
             // contents.
-            if let Some(runtime) = ctx.state.session_runtime.read().await.clone() {
+            if let Some(runtime) = ctx.state.session_runtime_snapshot().await {
                 runtime.set_sdk_supplied_agents(accepted).await;
                 info!(
                     target: "coco::sdk_server::initialize",
@@ -172,18 +167,12 @@ pub(super) async fn handle_initialize(
     // Pull the bootstrap provider out of state, drop the read guard, then
     // call its async accessors. Holding the guard across awaits would
     // block any concurrent mutation (e.g. a hot-swap via builder).
-    let bootstrap = {
-        let slot = ctx.state.initialize_bootstrap.read().await;
-        slot.as_ref().map(Arc::clone)
-    };
-    let runtime = {
-        let slot = ctx.state.session_runtime.read().await;
-        slot.as_ref().cloned()
-    };
+    let bootstrap = ctx.state.initialize_bootstrap_snapshot().await;
+    let runtime = ctx.state.session_runtime_snapshot().await;
 
     let (commands, mut agents, output_style, available_output_styles) =
-        if let Some(runtime) = runtime {
-            runtime_initialize_metadata(&runtime).await
+        if let Some(runtime) = runtime.as_ref() {
+            runtime_initialize_metadata(runtime).await
         } else if let Some(b) = bootstrap.as_ref() {
             (
                 b.commands().await,
@@ -200,17 +189,24 @@ pub(super) async fn handle_initialize(
             )
         };
 
-    let (account, fast_mode_state) = if let Some(b) = bootstrap.as_ref() {
-        (b.account().await, b.fast_mode_state().await)
+    let account = if let Some(b) = bootstrap.as_ref() {
+        b.account().await
     } else {
-        (SdkAccountInfo::default(), None)
+        SdkAccountInfo::default()
+    };
+    let fast_mode_state = if let Some(runtime) = runtime.as_ref() {
+        Some(runtime_fast_mode_state(runtime).await)
+    } else if let Some(b) = bootstrap.as_ref() {
+        b.fast_mode_state().await
+    } else {
+        None
     };
 
     // Merge SDK-supplied agents into the response listing so the client
     // immediately sees what it pushed. Stashed entries always win —
     // they're the freshest user intent.
     {
-        let stash = ctx.state.pending_sdk_agents.read().await;
+        let stash = ctx.state.pending_sdk_agents().await;
         if !stash.is_empty() {
             let stash_names: std::collections::HashSet<String> =
                 stash.iter().map(|d| d.agent_type.to_string()).collect();
@@ -300,6 +296,14 @@ async fn runtime_initialize_metadata(
     (commands, agents, output_style, available_output_styles)
 }
 
+async fn runtime_fast_mode_state(runtime: &SessionHandle) -> coco_types::FastModeState {
+    if runtime.current_engine_config().await.fast_mode {
+        coco_types::FastModeState::On
+    } else {
+        coco_types::FastModeState::Off
+    }
+}
+
 /// `session/start` — create a new SDK session.
 ///
 /// Legacy fallback installs the session in the scoped SDK state maps and
@@ -310,7 +314,7 @@ pub(super) async fn handle_session_start(
     params: coco_types::SessionStartParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    if ctx.state.session_runtime.read().await.is_some() {
+    if ctx.state.has_session_runtime().await {
         return HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: "session/start requires AppServer runtime replacement when a runtime is already installed".into(),
@@ -370,14 +374,9 @@ pub(crate) async fn prepare_session_start(
     //
     // `SessionManager::save` is sync (`std::fs::write`); run it on the
     // blocking pool so the tokio worker isn't stalled by disk I/O.
-    // The manager Arc is cloned out of the read guard which is then
-    // dropped BEFORE the spawn_blocking await — holding the guard
-    // across a blocking call would serialize every session_manager
-    // reader behind this request.
-    let manager_arc = {
-        let manager_slot = state.session_manager.read().await;
-        manager_slot.as_ref().map(Arc::clone)
-    };
+    // Snapshot the manager before the blocking call so disk I/O does
+    // not serialize other session-manager readers.
+    let manager_arc = state.session_manager_snapshot().await;
     if let Some(manager) = manager_arc {
         let record = coco_session::Session {
             id: session_id.to_string(),
@@ -406,7 +405,7 @@ pub(crate) async fn prepare_session_start(
         }
     }
 
-    let plan_mode_instructions = state.pending_plan_mode_instructions.read().await.clone();
+    let plan_mode_instructions = state.pending_plan_mode_instructions().await;
     Ok(PreparedStartSession {
         session_id,
         cwd,
@@ -487,10 +486,7 @@ async fn build_started_session_handoff(
     // session's ToolAppState so the bg AgentTool path can gate
     // periodic-summary timers without reaching into SdkServerState.
     // Coordinator mode auto-enables independently.
-    if state
-        .agent_progress_summaries_enabled
-        .load(std::sync::atomic::Ordering::SeqCst)
-    {
+    if state.agent_progress_summaries_enabled() {
         handoff
             .app_state
             .write()
@@ -714,12 +710,9 @@ pub(super) async fn handle_session_archive(
     // Delete the persisted session record if a SessionManager is wired.
     // Non-fatal — log and continue if disk delete fails. Runs on the
     // blocking pool to avoid stalling the tokio worker on `remove_file`.
-    // Clone the Arc out and drop the read guard before the blocking
-    // call so other readers aren't serialized behind disk I/O.
-    let manager_arc = {
-        let manager_slot = ctx.state.session_manager.read().await;
-        manager_slot.as_ref().map(Arc::clone)
-    };
+    // Snapshot the manager before the blocking call so disk I/O does
+    // not serialize other session-manager readers.
+    let manager_arc = ctx.state.session_manager_snapshot().await;
     if let Some(manager) = manager_arc {
         let target_id = params.session_id.as_str().to_string();
         let delete_result = tokio::task::spawn_blocking(move || manager.delete(&target_id)).await;
@@ -760,10 +753,7 @@ pub(super) async fn handle_session_rename(
     params: coco_types::SessionRenameParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let runtime = {
-        let slot = ctx.state.session_runtime.read().await;
-        slot.as_ref().cloned()
-    };
+    let runtime = ctx.state.session_runtime_snapshot().await;
     let Some(runtime) = runtime else {
         return HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
@@ -805,10 +795,7 @@ pub(super) async fn handle_session_toggle_tag(
             data: None,
         };
     }
-    let runtime = {
-        let slot = ctx.state.session_runtime.read().await;
-        slot.as_ref().cloned()
-    };
+    let runtime = ctx.state.session_runtime_snapshot().await;
     let Some(runtime) = runtime else {
         return HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
@@ -816,9 +803,8 @@ pub(super) async fn handle_session_toggle_tag(
             data: None,
         };
     };
-    let rt = runtime.runtime();
-    let session_id = rt.current_typed_session_id().await;
-    let manager = Arc::clone(rt.session_manager());
+    let session_id = runtime.current_typed_session_id().await;
+    let manager = Arc::clone(runtime.session_manager());
     let tag_for_toggle = tag.clone();
     let session_id_for_toggle = session_id.to_string();
     let result = tokio::task::spawn_blocking(move || {
@@ -907,15 +893,12 @@ pub(super) async fn handle_session_list(ctx: &HandlerContext) -> HandlerResult {
     // `list()` walks the session directory with `read_dir` and reads every
     // JSON blob synchronously — offload to the blocking pool so a session-
     // browser client polling this endpoint can't stall the tokio worker.
-    // Clone the Arc out and drop the read guard before the blocking call.
-    let manager = {
-        let slot = ctx.state.session_manager.read().await;
-        match slot.as_ref() {
-            Some(m) => Arc::clone(m),
-            None => {
-                info!("SdkServer: session/list (no session manager installed, returning empty)");
-                return HandlerResult::ok(coco_types::SessionListResult::default());
-            }
+    // Snapshot the manager before the blocking call.
+    let manager = match ctx.state.session_manager_snapshot().await {
+        Some(manager) => manager,
+        None => {
+            info!("SdkServer: session/list (no session manager installed, returning empty)");
+            return HandlerResult::ok(coco_types::SessionListResult::default());
         }
     };
     let list_result = tokio::task::spawn_blocking(move || manager.list()).await;
@@ -975,18 +958,15 @@ pub(super) async fn handle_session_read(
         Ok(limit) => limit,
         Err(error) => return session_data_projection_error(error),
     };
-    // Clone the Arc out and drop the read guard before the blocking call.
-    let manager = {
-        let slot = ctx.state.session_manager.read().await;
-        match slot.as_ref() {
-            Some(m) => Arc::clone(m),
-            None => {
-                return HandlerResult::Err {
-                    code: coco_types::error_codes::INVALID_REQUEST,
-                    message: "session persistence is not enabled on this server".into(),
-                    data: None,
-                };
-            }
+    // Snapshot the manager before the blocking call.
+    let manager = match ctx.state.session_manager_snapshot().await {
+        Some(manager) => manager,
+        None => {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "session persistence is not enabled on this server".into(),
+                data: None,
+            };
         }
     };
     let session_id = params.session_id.as_str().to_string();
@@ -1057,17 +1037,14 @@ pub(super) async fn handle_session_turns_list(
         Ok(limit) => limit,
         Err(error) => return session_data_projection_error(error),
     };
-    let manager = {
-        let slot = ctx.state.session_manager.read().await;
-        match slot.as_ref() {
-            Some(m) => Arc::clone(m),
-            None => {
-                return HandlerResult::Err {
-                    code: coco_types::error_codes::INVALID_REQUEST,
-                    message: "session persistence is not enabled on this server".into(),
-                    data: None,
-                };
-            }
+    let manager = match ctx.state.session_manager_snapshot().await {
+        Some(manager) => manager,
+        None => {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "session persistence is not enabled on this server".into(),
+                data: None,
+            };
         }
     };
     let session_id = params.session_id.as_str().to_string();
@@ -1136,7 +1113,7 @@ fn session_data_projection_error(
 /// Replaces the current active session id (if any) and installs the
 /// state-owned SDK handoff/metadata maps for the resumed id. Any in-flight
 /// turn on the previous session is cancelled first to prevent orphaned state.
-/// When a `SessionRuntime` is already on the requested id, `runtime.history`
+/// When a `SessionRuntime` is already on the requested id, `runtime.history()`
 /// is seeded with the loaded messages; mismatched runtime-backed resume must
 /// use the AppServer runtime-replacement path.
 /// The transcript dedup set is pre-populated so the per-turn JSONL append
@@ -1161,7 +1138,7 @@ pub(super) async fn handle_session_resume(
         conversation,
     } = loaded;
 
-    let runtime = ctx.state.session_runtime.read().await.clone();
+    let runtime = ctx.state.session_runtime_snapshot().await;
     if let Some(runtime) = runtime.as_ref() {
         let runtime_session_id = runtime.current_typed_session_id().await;
         if runtime_session_id != session_id {
@@ -1219,8 +1196,7 @@ pub(crate) async fn load_resume_session(
     params: coco_types::SessionResumeParams,
     state: &Arc<SdkServerState>,
 ) -> Result<LoadedResumeSession, HandlerResult> {
-    let manager_slot = state.session_manager.read().await;
-    let Some(manager) = manager_slot.as_ref() else {
+    let Some(manager) = state.session_manager_snapshot().await else {
         return Err(HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: "session persistence is not enabled on this server".into(),
@@ -1228,10 +1204,7 @@ pub(crate) async fn load_resume_session(
         });
     };
     let memory_base = manager.memory_base().to_path_buf();
-    let manager_arc = Arc::clone(manager);
-    // Release the manager read lock before acquiring the session write lock
-    // to avoid potential lock-ordering complications in future refactors.
-    drop(manager_slot);
+    let manager_arc = Arc::clone(&manager);
     let target_id = params.session_id.as_str().to_string();
     let resume_result = tokio::task::spawn_blocking(move || manager_arc.resume(&target_id)).await;
     let session = match resume_result {
@@ -1314,7 +1287,7 @@ pub(crate) async fn install_resumed_session_slot(
     session_id: coco_types::SessionId,
     prior_messages: &[coco_messages::Message],
 ) -> bool {
-    let plan_mode_instructions = state.pending_plan_mode_instructions.read().await.clone();
+    let plan_mode_instructions = state.pending_plan_mode_instructions().await;
 
     state
         .install_replacement_session_state(ReplacementSessionState {
@@ -1338,7 +1311,7 @@ pub(crate) async fn install_scoped_resumed_session_state(
     session_id: coco_types::SessionId,
     prior_messages: &[coco_messages::Message],
 ) {
-    let plan_mode_instructions = state.pending_plan_mode_instructions.read().await.clone();
+    let plan_mode_instructions = state.pending_plan_mode_instructions().await;
 
     state.install_scoped_replacement_session_state(ReplacementSessionState {
         session_id: session_id.clone(),
@@ -1383,9 +1356,9 @@ pub(crate) async fn hydrate_runtime_for_resume_messages(
     session_id: &coco_types::SessionId,
     prior_messages: &[coco_messages::Message],
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     {
-        let mut history = runtime.history.lock().await;
+        let mut history = runtime.history().lock().await;
         history.clear();
         for message in prior_messages.iter().cloned() {
             history.push(message);

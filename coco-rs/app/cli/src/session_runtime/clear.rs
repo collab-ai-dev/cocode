@@ -6,7 +6,13 @@ use super::SessionRuntime;
 
 impl SessionRuntime {
     pub async fn prepare_for_clear_replacement(&self) -> Option<Vec<Arc<Message>>> {
-        let pre_clear_messages = self.history.lock().await.as_slice().to_vec();
+        let pre_clear_messages = self
+            .history_resources
+            .history()
+            .lock()
+            .await
+            .as_slice()
+            .to_vec();
         let rewind_messages = pre_clear_messages
             .iter()
             .any(|m| matches!(m.as_ref(), Message::User(_)))

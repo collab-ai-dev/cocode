@@ -17,7 +17,6 @@ use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
 
 use crate::session_runtime::SessionHandle;
-use crate::session_runtime::SessionRuntime;
 
 /// Hard cap so a hung `/models` request can never wedge the refresh task.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -32,9 +31,8 @@ pub fn spawn_after_login(
     event_tx: mpsc::Sender<CoreEvent>,
     base_catalog: Vec<ModelCatalogInfo>,
 ) {
-    let runtime = session.runtime().clone();
     tokio::spawn(async move {
-        let Some(discovered) = discover(&runtime, &instance).await else {
+        let Some(discovered) = discover(&session, &instance).await else {
             return;
         };
         let merged = merge(base_catalog, &instance, discovered);
@@ -48,8 +46,8 @@ pub fn spawn_after_login(
 
 /// Query the provider's live model list, or `None` when the provider is not an
 /// OpenAI-family instance, isn't configured, or the call fails / times out.
-async fn discover(runtime: &SessionRuntime, instance: &str) -> Option<Vec<(String, Option<i64>)>> {
-    let cfg = runtime.runtime_config().providers.get(instance)?;
+async fn discover(session: &SessionHandle, instance: &str) -> Option<Vec<(String, Option<i64>)>> {
+    let cfg = session.runtime_config().providers.get(instance)?;
     // The `/models` listing is OpenAI-shaped (codex backend + platform). Other
     // APIs (Anthropic, Gemini, generic openai-compat) are out of scope.
     if cfg.api != ProviderApi::Openai {

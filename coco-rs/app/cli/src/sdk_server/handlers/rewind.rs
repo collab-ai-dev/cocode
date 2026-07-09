@@ -39,31 +39,19 @@ pub(super) async fn handle_rewind_files(
     };
 
     // Resolve the file history + config home.
-    let history_arc = {
-        let slot = ctx.state.file_history.read().await;
-        match slot.as_ref() {
-            Some(h) => h.clone(),
-            None => {
-                return HandlerResult::Err {
-                    code: coco_types::error_codes::INVALID_REQUEST,
-                    message: "control/rewindFiles: file history not enabled on this server".into(),
-                    data: None,
-                };
-            }
-        }
+    let Some(history_arc) = ctx.state.file_history_snapshot().await else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "control/rewindFiles: file history not enabled on this server".into(),
+            data: None,
+        };
     };
-    let config_home = {
-        let slot = ctx.state.file_history_config_home.read().await;
-        match slot.as_ref() {
-            Some(p) => p.clone(),
-            None => {
-                return HandlerResult::Err {
-                    code: coco_types::error_codes::INVALID_REQUEST,
-                    message: "control/rewindFiles: file history config home not set".into(),
-                    data: None,
-                };
-            }
-        }
+    let Some(config_home) = ctx.state.file_history_config_home_snapshot().await else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "control/rewindFiles: file history config home not set".into(),
+            data: None,
+        };
     };
 
     // Verify the snapshot exists before attempting the operation —

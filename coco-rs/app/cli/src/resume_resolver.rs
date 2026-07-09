@@ -11,7 +11,7 @@
 //! `ResumePlan` into either:
 //! - `RunChatOptions::prior_messages` (headless path) +
 //!   `ResumePlan::session_id` for the runtime config, or
-//! - `runtime.history.lock().await = plan.prior_messages` before
+//! - `runtime.history().lock().await = plan.prior_messages` before
 //!   spawning the TUI driver.
 
 use std::path::Path;

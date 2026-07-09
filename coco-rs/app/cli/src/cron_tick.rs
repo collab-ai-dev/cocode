@@ -113,9 +113,8 @@ pub fn spawn_current_session(
 }
 
 async fn process_missed_for_session(session: &SessionHandle) {
-    let runtime = session.runtime().clone();
-    let store = runtime.schedule_store();
-    let queue = runtime.command_queue().clone();
+    let store = session.schedule_store();
+    let queue = session.command_queue().clone();
 
     // Surface missed one-shot tasks as one batched notification, then remove
     // them so the tick doesn't fire them directly. Recurring tasks that came
@@ -145,13 +144,12 @@ async fn process_missed_for_session(session: &SessionHandle) {
 }
 
 async fn process_tick_for_session(session: &SessionHandle, state: &mut CronTickState) {
-    let runtime = session.runtime().clone();
-    let store = runtime.schedule_store();
-    let queue = runtime.command_queue().clone();
-    let project_root = runtime.project_root().clone();
-    let current_cwd = Arc::clone(runtime.current_cwd());
-    let loop_sentinel_state = runtime.loop_sentinel_state().clone();
-    let loop_persistent_preamble_enabled = runtime
+    let store = session.schedule_store();
+    let queue = session.command_queue().clone();
+    let project_root = session.project_root().clone();
+    let current_cwd = Arc::clone(session.current_cwd());
+    let loop_sentinel_state = session.loop_sentinel_state().clone();
+    let loop_persistent_preamble_enabled = session
         .runtime_config()
         .loop_config
         .persistent_preamble_enabled;

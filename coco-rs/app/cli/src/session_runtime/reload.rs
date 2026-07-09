@@ -29,13 +29,7 @@ impl SessionRuntime {
         &self,
         project_services: Arc<ProjectServices>,
     ) -> usize {
-        let Some(manager) = self
-            .integration_resources
-            .mcp_manager()
-            .read()
-            .await
-            .clone()
-        else {
+        let Some(manager) = self.current_mcp_manager().await else {
             return 0;
         };
         let scoped = project_services.plugin_mcp_servers();
@@ -72,9 +66,7 @@ impl SessionRuntime {
             )
             .await;
         }
-        self.integration_resources
-            .mcp_reconnect_key()
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.bump_mcp_reconnect_key();
         count
     }
 
@@ -141,7 +133,11 @@ impl SessionRuntime {
             .process_runtime()
             .reload_project_services(self.config_home(), self.project_root().clone());
         {
-            let mut paths = self.agent_search_paths.write().await;
+            let mut paths = self
+                .agent_catalog_resources
+                .agent_search_paths
+                .write()
+                .await;
             *paths = project_services.agent_search_paths(self.config_home(), cwd);
         }
         let fresh = project_services.build_skill_manager(self.config_home(), cwd, &gates);

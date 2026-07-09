@@ -2,25 +2,37 @@
 //!
 //! Defines the `SdkTransport` async trait and two implementations:
 //!
-//! - [`StdioTransport`]: reads `JsonRpcMessage` lines from `tokio::io::stdin`,
-//!   writes them to `tokio::io::stdout`. This is the primary transport for
-//!   SDK clients that spawn `coco --sdk-mode` as a subprocess.
+//! - [`StdioTransport`]: reads/writes NDJSON over `tokio::io::stdin` and
+//!   `tokio::io::stdout`. This is the primary transport for SDK clients that
+//!   spawn `coco --sdk-mode` as a subprocess.
 //! - [`InMemoryTransport`]: in-memory duplex pipes using tokio channels,
 //!   used for unit tests and integration harnesses.
 //!
-//! The transport layer is **protocol-agnostic**: it deals in
-//! `JsonRpcMessage` envelopes only. The `SdkServer` dispatch loop on top
-//! of it owns the `ClientRequest` → handler routing.
-//!
-//! Wire format is typed as `JsonRpcMessage` from the start.
+//! The compatibility transport still exposes legacy `JsonRpcMessage` methods
+//! for existing tests and cold compatibility paths, and exposes
+//! `JsonRpcFrame` methods for the AppServer bridge. Stdio decodes/encodes
+//! AppServer frames directly; in-memory tests can rely on the default
+//! conversion helpers.
 //!
 //! See `event-system-design.md` §5 and §12.
 
 use std::sync::Arc;
 
+use coco_app_server_transport::JsonRpcErrorObject as TransportJsonRpcErrorObject;
+use coco_app_server_transport::JsonRpcErrorResponse as TransportJsonRpcErrorResponse;
+use coco_app_server_transport::JsonRpcFrame;
+use coco_app_server_transport::JsonRpcId;
+use coco_app_server_transport::JsonRpcNotification as TransportJsonRpcNotification;
+use coco_app_server_transport::JsonRpcRequest as TransportJsonRpcRequest;
+use coco_app_server_transport::JsonRpcSuccess;
 use coco_types::JSONRPC_VERSION;
+use coco_types::JsonRpcError;
+use coco_types::JsonRpcErrorObject;
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcNotification;
+use coco_types::JsonRpcRequest;
+use coco_types::JsonRpcResponse;
+use coco_types::RequestId;
 use coco_types::ServerNotification;
 use thiserror::Error;
 use tokio::io::AsyncBufReadExt;
@@ -47,9 +59,19 @@ pub enum TransportError {
     #[error("parse error: {0}")]
     Parse(#[from] serde_json::Error),
 
+    /// A JSON-RPC frame could not be represented by the legacy SDK envelope.
+    #[error("{0}")]
+    FrameBridge(#[from] SdkJsonRpcFrameError),
+
     /// Send failed because the receiver has been dropped.
     #[error("channel send error: peer dropped")]
     PeerDropped,
+}
+
+#[derive(Debug, Error)]
+pub enum SdkJsonRpcFrameError {
+    #[error("legacy SDK JSON-RPC ids cannot represent null")]
+    NullId,
 }
 
 /// Async-trait for SDK transports.
@@ -68,6 +90,28 @@ pub trait SdkTransport: Send + Sync {
 
     /// Write a message to the peer.
     async fn send(&self, msg: JsonRpcMessage) -> Result<(), TransportError>;
+
+    /// Read the next AppServer JSON-RPC frame.
+    ///
+    /// Legacy transports can use the default conversion from `JsonRpcMessage`;
+    /// byte-based transports should override this to decode the canonical
+    /// AppServer transport frame directly.
+    async fn recv_frame(&self) -> Result<Option<JsonRpcFrame>, TransportError> {
+        self.recv()
+            .await?
+            .map(json_rpc_message_to_frame)
+            .transpose()
+            .map_err(TransportError::from)
+    }
+
+    /// Write an AppServer JSON-RPC frame to the peer.
+    ///
+    /// Legacy transports can use the default conversion to `JsonRpcMessage`;
+    /// byte-based transports should override this to encode the canonical
+    /// AppServer transport frame directly.
+    async fn send_frame(&self, frame: JsonRpcFrame) -> Result<(), TransportError> {
+        self.send(json_rpc_frame_to_message(frame)?).await
+    }
 
     /// Send a `ServerNotification` on the fast path.
     ///
@@ -194,6 +238,36 @@ impl SdkTransport for StdioTransport {
         }
     }
 
+    async fn recv_frame(&self) -> Result<Option<JsonRpcFrame>, TransportError> {
+        if !self.is_open() {
+            return Err(TransportError::Closed);
+        }
+        let mut reader = self.reader.lock().await;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => {
+                    debug!("stdio transport: EOF on stdin");
+                    return Ok(None);
+                }
+                Ok(_) => {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    trace!(line = %trimmed, "stdio transport: recv frame");
+                    let frame = serde_json::from_str::<JsonRpcFrame>(trimmed)?;
+                    return Ok(Some(frame));
+                }
+                Err(e) => {
+                    warn!(error = %e, "stdio transport: read error");
+                    return Err(TransportError::Io(e));
+                }
+            }
+        }
+    }
+
     async fn send(&self, msg: JsonRpcMessage) -> Result<(), TransportError> {
         if !self.is_open() {
             return Err(TransportError::Closed);
@@ -205,6 +279,19 @@ impl SdkTransport for StdioTransport {
         writer.write_all(b"\n").await?;
         writer.flush().await?;
         trace!("stdio transport: sent {} bytes", json.len() + 1);
+        Ok(())
+    }
+
+    async fn send_frame(&self, frame: JsonRpcFrame) -> Result<(), TransportError> {
+        if !self.is_open() {
+            return Err(TransportError::Closed);
+        }
+        let json = serde_json::to_string(&frame)?;
+        let mut writer = self.writer.lock().await;
+        writer.write_all(json.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+        writer.flush().await?;
+        trace!("stdio transport: sent frame {} bytes", json.len() + 1);
         Ok(())
     }
 
@@ -328,6 +415,88 @@ impl SdkTransport for InMemoryTransport {
 
     fn is_open(&self) -> bool {
         self.open.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+pub(crate) fn json_rpc_message_to_frame(
+    message: JsonRpcMessage,
+) -> Result<JsonRpcFrame, SdkJsonRpcFrameError> {
+    match message {
+        JsonRpcMessage::Request(request) => {
+            Ok(JsonRpcFrame::Request(TransportJsonRpcRequest::new(
+                json_rpc_id_from_request_id(request.request_id),
+                request.method,
+                Some(request.params),
+            )))
+        }
+        JsonRpcMessage::Response(response) => Ok(JsonRpcFrame::Success(JsonRpcSuccess::new(
+            json_rpc_id_from_request_id(response.request_id),
+            response.result,
+        ))),
+        JsonRpcMessage::Error(error) => {
+            Ok(JsonRpcFrame::Error(TransportJsonRpcErrorResponse::new(
+                json_rpc_id_from_request_id(error.request_id),
+                TransportJsonRpcErrorObject::new(
+                    error.error.code,
+                    error.error.message,
+                    error.error.data,
+                ),
+            )))
+        }
+        JsonRpcMessage::Notification(notification) => Ok(JsonRpcFrame::Notification(
+            TransportJsonRpcNotification::new(notification.method, Some(notification.params)),
+        )),
+    }
+}
+
+pub(crate) fn json_rpc_frame_to_message(
+    frame: JsonRpcFrame,
+) -> Result<JsonRpcMessage, SdkJsonRpcFrameError> {
+    match frame {
+        JsonRpcFrame::Request(request) => Ok(JsonRpcMessage::Request(JsonRpcRequest {
+            jsonrpc: JSONRPC_VERSION.into(),
+            request_id: request_id_from_json_rpc_id(request.id)?,
+            method: request.method,
+            params: request.params.unwrap_or(serde_json::Value::Null),
+        })),
+        JsonRpcFrame::Success(success) => Ok(JsonRpcMessage::Response(JsonRpcResponse {
+            jsonrpc: JSONRPC_VERSION.into(),
+            request_id: request_id_from_json_rpc_id(success.id)?,
+            result: success.result,
+        })),
+        JsonRpcFrame::Error(error) => Ok(JsonRpcMessage::Error(JsonRpcError {
+            jsonrpc: JSONRPC_VERSION.into(),
+            request_id: request_id_from_json_rpc_id(error.id)?,
+            error: JsonRpcErrorObject {
+                code: error.error.code,
+                message: error.error.message,
+                data: error.error.data,
+            },
+        })),
+        JsonRpcFrame::Notification(notification) => {
+            Ok(JsonRpcMessage::Notification(JsonRpcNotification {
+                jsonrpc: JSONRPC_VERSION.into(),
+                method: notification.method,
+                params: notification.params.unwrap_or(serde_json::Value::Null),
+            }))
+        }
+    }
+}
+
+pub(crate) fn json_rpc_id_from_request_id(request_id: RequestId) -> JsonRpcId {
+    match request_id {
+        RequestId::Integer(value) => JsonRpcId::Number(value),
+        RequestId::String(value) => JsonRpcId::String(value),
+    }
+}
+
+pub(crate) fn request_id_from_json_rpc_id(
+    id: JsonRpcId,
+) -> Result<RequestId, SdkJsonRpcFrameError> {
+    match id {
+        JsonRpcId::Number(value) => Ok(RequestId::Integer(value)),
+        JsonRpcId::String(value) => Ok(RequestId::String(value)),
+        JsonRpcId::Null => Err(SdkJsonRpcFrameError::NullId),
     }
 }
 

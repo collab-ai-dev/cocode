@@ -385,7 +385,6 @@ pub async fn install_session_late_binds(
     lsp_handle: Option<coco_tool_runtime::LspHandleRef>,
     event_sink: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 ) -> Result<()> {
-    let runtime = session.runtime().clone();
     // Background task runtime — owns the `TaskManager` and per-task
     // disk output; shared with `SwarmAgentHandle` so AgentTool
     // background spawns and the engine's `Task*` tools see one
@@ -407,7 +406,7 @@ pub async fn install_session_late_binds(
     // then injects it as a User message wrapped in `<system-reminder>`.
     let sink: coco_tasks::NotificationSinkRef = Arc::new(
         crate::command_queue_sink::CommandQueueNotificationSink::new(
-            runtime.command_queue().clone(),
+            session.command_queue().clone(),
         ),
     );
     // Wire the surface's long-lived `CoreEvent` sink into the manager so
@@ -425,16 +424,16 @@ pub async fn install_session_late_binds(
         )
         .with_notification_sink(sink),
     );
-    task_runtime.start_memory_pressure_shell_reaper(runtime.shutdown_signal());
-    runtime.attach_task_runtime(task_runtime).await;
+    task_runtime.start_memory_pressure_shell_reaper(session.shutdown_signal());
+    session.attach_task_runtime(task_runtime).await;
     let task_list_id = coco_tasks::resolve_task_list_id(None, None, task_session_id.as_str());
     let task_list_root = coco_config::global_config::config_home().join("tasks");
     let task_list_router =
         crate::team_task_list_router::RoutedTaskList::open(task_list_root, task_list_id)?;
-    runtime
+    session
         .attach_task_list(task_list_router.clone() as coco_tool_runtime::TaskListHandleRef)
         .await;
-    runtime
+    session
         .attach_team_task_list_router(task_list_router as coco_tool_runtime::TeamTaskListRouterRef)
         .await;
 
@@ -444,7 +443,7 @@ pub async fn install_session_late_binds(
     // alongside the main session JSONL. Skipped under
     // `--no-session-persistence` so a print run that spawns subagents
     // writes no subagent JSONL.
-    if runtime.persist_session() {
+    if session.persist_session() {
         let agent_transcript_store: Arc<dyn coco_tool_runtime::AgentTranscriptStore> = Arc::new(
             crate::agent_transcript_persistence::SessionAgentTranscriptStore::new(
                 Arc::new(coco_session::TranscriptStore::new(
@@ -453,7 +452,7 @@ pub async fn install_session_late_binds(
                 cwd.to_path_buf(),
             ),
         );
-        runtime
+        session
             .attach_agent_transcript_store(agent_transcript_store)
             .await;
     }
@@ -462,7 +461,7 @@ pub async fn install_session_late_binds(
     // AgentTool's prompt-time MCP filter sees a populated handle on
     // the very first engine build, matching the original SDK ordering.
     if let Some(handle) = mcp_handle {
-        runtime.attach_mcp_handle(handle).await;
+        session.attach_mcp_handle(handle).await;
     }
 
     // LSP handle install: same pattern as MCP. When the caller did the
@@ -470,7 +469,7 @@ pub async fn install_session_late_binds(
     // handle threads in here so per-turn engines pick it up via
     // `wire_engine`. TUI passes `None` (no LSP boot yet).
     if let Some(handle) = lsp_handle {
-        runtime.attach_lsp_handle(handle).await;
+        session.attach_lsp_handle(handle).await;
     }
 
     // Agent wiring (`SwarmAgentHandle` + `QueryEngineAdapter`
@@ -486,8 +485,7 @@ pub async fn install_session_late_binds(
     .await?;
 
     // Post-turn fork dispatcher (`/btw`, `promptSuggestion`) and hook-agent
-    // runner install through the session handle boundary, while their current
-    // implementations still route through the underlying runtime.
+    // runner install through the session handle boundary.
     crate::fork_dispatcher::install(session.clone()).await;
     crate::hook_agent_runner::install(session).await;
 
@@ -525,13 +523,12 @@ pub async fn bootstrap_session_mcp(
     existing_manager: Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>,
     await_connect: bool,
 ) {
-    let runtime = session.runtime();
     let config_home = global_config::config_home();
     let manager = existing_manager.unwrap_or_else(|| {
         Arc::new(tokio::sync::Mutex::new(
             coco_mcp::McpConnectionManager::new_with_runtime_config(
                 config_home.clone(),
-                &runtime.runtime_config().mcp,
+                &session.runtime_config().mcp,
             ),
         ))
     });
@@ -540,7 +537,7 @@ pub async fn bootstrap_session_mcp(
     // connect is deferred to the background pass below). Project MCP config and
     // plugin contributions are rooted at the ProjectServices key; local config
     // remains session-cwd scoped.
-    let project_services = Arc::clone(runtime.project_services());
+    let project_services = Arc::clone(session.project_services());
     let mcp_servers = project_services.mcp_servers(&config_home, cwd);
     {
         let mut mgr = manager.lock().await;
@@ -552,7 +549,7 @@ pub async fn bootstrap_session_mcp(
     let skill_cache = Arc::new(tokio::sync::RwLock::new(
         coco_mcp::discovery::DiscoveryCache::default(),
     ));
-    let elicit_counter = runtime
+    let elicit_counter = session
         .app_state()
         .read()
         .await
@@ -560,17 +557,17 @@ pub async fn bootstrap_session_mcp(
         .clone();
     let adapter = crate::mcp_handle_adapter::McpManagerAdapter::new(manager.clone())
         .with_elicitation_hooks(
-            runtime.hook_registry(),
-            runtime.orchestration_ctx_factory(),
+            session.hook_registry(),
+            session.orchestration_ctx_factory(),
             Some(elicit_counter),
         )
         .with_skill_bridge(
-            runtime.skill_manager(),
+            session.skill_manager(),
             skill_cache.clone(),
-            Arc::clone(runtime.runtime_config()),
+            Arc::clone(session.runtime_config()),
         );
-    runtime.attach_mcp_manager(manager.clone()).await;
-    runtime.attach_mcp_handle(Arc::new(adapter)).await;
+    session.attach_mcp_manager(manager.clone()).await;
+    session.attach_mcp_handle(Arc::new(adapter)).await;
 
     // Post-OAuth reconnect → registry re-reconcile. The manager can't touch
     // the `ToolRegistry` (layering), so it notifies this app-layer listener
@@ -583,7 +580,7 @@ pub async fn bootstrap_session_mcp(
         let (reconnect_tx, mut reconnect_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         manager.lock().await.set_reconnect_notifier(reconnect_tx);
         let listener_manager = manager.clone();
-        let listener_registry = runtime.tools().clone();
+        let listener_registry = session.tools().clone();
         tokio::spawn(async move {
             while let Some(server) = reconnect_rx.recv().await {
                 let snapshot = listener_manager.lock().await.clone();
@@ -600,9 +597,9 @@ pub async fn bootstrap_session_mcp(
     //     `connect_and_register_mcp`.
     //   - `false` (interactive / long-lived SDK): connect in the background so
     //     startup isn't blocked (codex-rs pattern); tools appear within seconds.
-    let registry = runtime.tools().clone();
-    let features = runtime.runtime_config().features.clone();
-    let skills = runtime.skill_manager();
+    let registry = session.tools().clone();
+    let features = session.runtime_config().features.clone();
+    let skills = session.skill_manager();
     let connect_task = async move {
         connect_and_register_mcp(manager.clone(), registry).await;
         let snapshot = manager.lock().await.clone();

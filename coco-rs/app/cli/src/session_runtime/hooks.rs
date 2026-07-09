@@ -47,10 +47,7 @@ pub fn spawn_current_session_config_change_watcher(
                     let source = config_change_source_for_kind(change.kind);
                     let path = change.path.to_string_lossy().into_owned();
                     let session = current_session.read().await.clone();
-                    session
-                        .runtime()
-                        .fire_config_change_hooks(source, Some(&path))
-                        .await;
+                    session.fire_config_change_hooks(source, Some(&path)).await;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                     warn!(skipped, "ConfigChange watcher lagged; events dropped");

@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use coco_types::CoreEvent;
 use coco_types::PermissionMode;
@@ -77,7 +76,7 @@ pub async fn apply_to_runtime(
 }
 
 pub fn sdk_bypass_available(state: &SdkServerState) -> bool {
-    state.bypass_permissions_available.load(Ordering::Relaxed)
+    state.bypass_permissions_available()
 }
 
 pub async fn publish_core_if_changed(
@@ -118,7 +117,7 @@ pub async fn publish_sdk_state_outbound_if_changed(
     mode: PermissionMode,
     changed: bool,
 ) {
-    let Some(tx) = ({ state.outbound_tx.read().await.clone() }) else {
+    let Some(tx) = state.sdk_outbound_tx_snapshot().await else {
         return;
     };
     publish_outbound_if_changed(&tx, mode, sdk_bypass_available(state), changed).await;

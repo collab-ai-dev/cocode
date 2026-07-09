@@ -43,6 +43,8 @@ pub mod sandbox_approval_bridge;
 pub mod sdk_hooks;
 pub mod sdk_mcp;
 pub mod sdk_runner;
+mod session_data;
+mod session_store;
 pub mod transport;
 
 pub use app_server_bridge::AppServerLocalBridge;

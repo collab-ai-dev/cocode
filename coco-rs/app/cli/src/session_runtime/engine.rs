@@ -85,7 +85,7 @@ impl SessionRuntime {
         // latest tool config / cwd.
         let bash_handle = crate::bash_tool_handle::build_session_bash_handle(base_ctx);
         registry.set_bash_tool_handle(bash_handle.clone());
-        if let Ok(mut cell) = self.skill_bash_cell.write() {
+        if let Ok(mut cell) = self.handle_resources.skill_bash_cell.write() {
             *cell = Some(bash_handle);
         }
         // Late-bind the session id so user-typed skill slash commands can
@@ -96,7 +96,8 @@ impl SessionRuntime {
         // the engine is rebuilt per turn. The handle is an `Arc` shared with
         // the engine's slot - it keeps observing writes the engine makes at
         // turn finalize and outlives the engine drop.
-        *self.last_engine_cache_handle.write().await = Some(engine.cache_safe_params_handle());
+        *self.handle_resources.last_engine_cache_handle.write().await =
+            Some(engine.cache_safe_params_handle());
         engine
     }
 
@@ -105,7 +106,7 @@ impl SessionRuntime {
     ) -> coco_query::context_analysis::Result<coco_query::context_analysis::ContextUsageReport>
     {
         let history = {
-            let guard = self.history.lock().await;
+            let guard = self.history_resources.history().lock().await;
             guard.snapshot()
         };
         self.analyze_context_snapshot(history, None).await
@@ -330,7 +331,7 @@ impl SessionRuntime {
         // channel is replaced by the session-scoped one.
         let (attachment_tx, attachment_rx) = self.command_resources.attachment_channel();
         engine = engine.with_attachment_channel(attachment_tx, attachment_rx);
-        if let Some(runtime) = &self.memory_runtime {
+        if let Some(runtime) = &self.memory_resources.memory_runtime {
             let svc = runtime.session_memory.clone();
             let sm_text_now = svc.current_text().await;
             engine = engine.with_session_memory_text(sm_text_now);
@@ -338,7 +339,7 @@ impl SessionRuntime {
         }
         // Install the real swarm-backed AgentHandle so AgentTool /
         // SendMessageTool reach the swarm runtime on every engine instance.
-        engine = engine.with_agent_handle(self.swarm_agent_handle.clone());
+        engine = engine.with_agent_handle(self.handle_resources.swarm_agent_handle.clone());
         // Install the per-engine sync-hook-event buffer so the
         // `OrchestrationContext.sync_event_sink` constructed from this
         // engine's `orchestration_ctx()` writes into the same buffer
@@ -363,10 +364,10 @@ impl SessionRuntime {
             engine.with_session_start_hook_side_effect_sink(Arc::new(QuerySessionStartHookSink {
                 file_watch: self.file_watch_registration_context(),
             }));
-        if let Some(runtime) = &self.memory_runtime {
+        if let Some(runtime) = &self.memory_resources.memory_runtime {
             engine = engine.with_memory_runtime(runtime.clone());
         }
-        if let Some(rt) = &self.skill_review_runtime {
+        if let Some(rt) = &self.memory_resources.skill_review_runtime {
             engine = engine.with_skill_review_runtime(rt.clone());
         }
         // Reminder sources - populated unconditionally so non-memory
@@ -385,11 +386,15 @@ impl SessionRuntime {
             )),
             // Memory source: only when the runtime is built (gated on
             // `Feature::AutoMemory` upstream).
-            memory: self.memory_runtime.as_ref().map(|runtime| {
-                Arc::new(coco_query::reminder_adapters::MemoryAdapter::new(
-                    runtime.clone(),
-                )) as Arc<dyn coco_system_reminder::MemorySource>
-            }),
+            memory: self
+                .memory_resources
+                .memory_runtime
+                .as_ref()
+                .map(|runtime| {
+                    Arc::new(coco_query::reminder_adapters::MemoryAdapter::new(
+                        runtime.clone(),
+                    )) as Arc<dyn coco_system_reminder::MemorySource>
+                }),
             // Skills source: in-process `SkillManager` Arc kept alive
             // for the session. Empty manager => generator short-circuits.
             skills: Some(Arc::clone(self.catalog_resources.skill_manager())
@@ -435,14 +440,14 @@ impl SessionRuntime {
         // `required_mcp_servers` aren't connected. Snapshot semantics:
         // each engine instance reads the handle slot at wire time;
         // hot-reloads land on the next engine.
-        if let Some(mcp) = self.integration_resources.mcp_handle().read().await.clone() {
+        if let Some(mcp) = self.current_mcp_handle().await {
             engine = engine.with_mcp_handle(mcp);
         }
         engine = engine.with_schedule_store(self.turn_resources.schedule_store());
         // Same snapshot pattern as MCP - every per-turn engine reads
         // the late-bound LSP slot once at wire time. Hot-reloads of
         // the LSP config land on the next engine build.
-        if let Some(lsp) = self.integration_resources.lsp_handle().read().await.clone() {
+        if let Some(lsp) = self.current_lsp_handle().await {
             engine = engine.with_lsp_handle(lsp);
         }
         // Install the agent catalog snapshot so `AgentTool::prompt`
@@ -452,7 +457,13 @@ impl SessionRuntime {
         // Each engine instance captures the inner `Arc<...>` once at
         // wire time; concurrent `/agents reload` swaps land on the
         // next per-turn engine, not the in-flight one.
-        engine = engine.with_agent_catalog(self.agent_catalog.read().await.clone());
+        engine = engine.with_agent_catalog(
+            self.agent_catalog_resources
+                .agent_catalog
+                .read()
+                .await
+                .clone(),
+        );
         // config_home drives plan-mode (`plans_dir` / `session_plan_file`)
         // independent of persistence - always wire it; only the file-history
         // snapshot store is gated by persistence.
@@ -496,7 +507,7 @@ impl SessionRuntime {
         // Agent handle: installed by bootstrap after TaskRuntime exists.
         // Until then the engine carries the explicit no-op handle from
         // `swarm_agent_handle`.
-        if let Some(handle) = self.agent_handle.read().await.clone() {
+        if let Some(handle) = self.handle_resources.agent_handle.read().await.clone() {
             engine = engine.with_agent_handle(handle);
         }
         // Skill handle: installed by bootstrap (`agent_handle_factory`)
@@ -504,33 +515,40 @@ impl SessionRuntime {
         // carries `NoOpSkillHandle` and every `SkillTool` call returns
         // `Unavailable`. Installed on subagent engines too (this runs via
         // `build_engine_from_config`) so children can invoke skills.
-        if let Some(handle) = self.skill_handle.read().await.clone() {
+        if let Some(handle) = self.handle_resources.skill_handle.read().await.clone() {
             engine = engine.with_skill_handle(handle);
         }
         // Fork dispatcher (D1/D2). Same late-bind contract as
         // `agent_handle` - installed only when `attach_fork_dispatcher`
         // ran at bootstrap. Without it, post-turn forks fall back to
         // their no-op paths (placeholder text / silent skip).
-        if let Some(dispatcher) = self.fork_dispatcher.read().await.clone() {
+        if let Some(dispatcher) = self.handle_resources.fork_dispatcher.read().await.clone() {
             engine = engine.with_fork_dispatcher(dispatcher);
         }
         // Session-scoped prompt-suggestion abort slot. Sharing the same
         // `Arc` across every per-turn engine lets a new spawn cancel the
         // in-flight previous one.
-        engine = engine.with_current_suggestion_abort(self.current_suggestion_abort.clone());
+        engine = engine
+            .with_current_suggestion_abort(self.handle_resources.current_suggestion_abort.clone());
         // Production task runtime - same `Arc` is shared with
         // `SwarmAgentHandle` so AgentTool background spawns and the
         // engine's `Task*` tools see one source of truth.
-        if let Some(rt) = self.task_runtime.read().await.clone() {
+        if let Some(rt) = self.handle_resources.task_runtime.read().await.clone() {
             engine = engine.with_task_handle(rt as coco_tool_runtime::BackgroundTaskHandleRef);
         }
-        if let Some(task_list) = self.task_list.read().await.clone() {
+        if let Some(task_list) = self.handle_resources.task_list.read().await.clone() {
             engine = engine.with_task_list(task_list);
         }
-        if let Some(router) = self.team_task_list_router.read().await.clone() {
+        if let Some(router) = self
+            .handle_resources
+            .team_task_list_router
+            .read()
+            .await
+            .clone()
+        {
             engine = engine.with_team_task_list_router(router);
         }
-        engine = engine.with_todo_list(self.todo_list.read().await.clone());
+        engine = engine.with_todo_list(self.handle_resources.todo_list.read().await.clone());
         engine
     }
 }

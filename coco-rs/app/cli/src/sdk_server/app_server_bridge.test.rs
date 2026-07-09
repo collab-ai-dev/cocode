@@ -15,6 +15,11 @@ use coco_app_server::JsonRpcRequestHandler;
 use coco_app_server::LocalClientAdapter;
 use coco_app_server::LocalClientRequestHandler;
 use coco_app_server::SurfaceRole;
+use coco_app_server_transport::JsonRpcErrorObject as TransportJsonRpcErrorObject;
+use coco_app_server_transport::JsonRpcErrorResponse as TransportJsonRpcErrorResponse;
+use coco_app_server_transport::JsonRpcFrame;
+use coco_app_server_transport::JsonRpcId;
+use coco_app_server_transport::JsonRpcSuccess;
 use coco_bridge::ControlRequestHandler;
 use coco_hub_connector::HubConnectorWorker;
 use coco_hub_connector::HubConnectorWorkerConfig;
@@ -26,7 +31,11 @@ use coco_hub_connector::protocol::HubFrame;
 use coco_hub_connector::protocol::SUBPROTOCOL_V2;
 use coco_types::ClientRequest;
 use coco_types::CoreEvent;
+use coco_types::JSONRPC_VERSION;
 use coco_types::JsonRpcMessage;
+use coco_types::JsonRpcRequest;
+use coco_types::JsonRpcResponse;
+use coco_types::RequestId;
 use coco_types::ServerNotification;
 use coco_types::SessionEnvelope;
 use coco_types::SessionId;
@@ -47,7 +56,10 @@ use crate::sdk_server::handlers::SessionMetadata;
 use crate::sdk_server::handlers::TurnHandoff;
 use crate::sdk_server::handlers::TurnRunner;
 use crate::sdk_server::transport::InMemoryTransport;
+use crate::sdk_server::transport::SdkJsonRpcFrameError;
 use crate::sdk_server::transport::SdkTransport;
+use crate::sdk_server::transport::json_rpc_frame_to_message;
+use crate::sdk_server::transport::json_rpc_message_to_frame;
 
 struct EndingTurnRunner;
 
@@ -359,14 +371,16 @@ async fn app_server_sdk_session_start_uses_runtime_replacement_context() {
 
     let state = Arc::new(SdkServerState::default());
     {
-        *state.session_runtime.write().await = Some(startup_runtime.clone());
-        *state.runtime_replacement.write().await = Some(RuntimeReplacementContext {
+        state.install_session_runtime(startup_runtime.clone()).await;
+    }
+    state
+        .install_runtime_replacement(RuntimeReplacementContext {
             runtime_factory: factory,
             process_runtime: crate::process_runtime::ProcessRuntime::global(),
             cwd: home.path().to_path_buf(),
             requires_structured_output: false,
-        });
-    }
+        })
+        .await;
 
     let app_server = Arc::new(AppServer::<LocalAppSessionHandle>::new(1, 8));
     register_local_app_server_session(
@@ -395,10 +409,8 @@ async fn app_server_sdk_session_start_uses_runtime_replacement_context() {
 
     assert_ne!(started.session_id, startup_session_id);
     let current_runtime = state
-        .session_runtime
-        .read()
+        .session_runtime_snapshot()
         .await
-        .clone()
         .expect("runtime replaced");
     assert_eq!(
         current_runtime.current_typed_session_id().await,
@@ -459,15 +471,19 @@ async fn app_server_sdk_session_resume_uses_scoped_runtime_replacement_state() {
 
     let state = Arc::new(SdkServerState::default());
     {
-        *state.session_runtime.write().await = Some(startup_runtime.clone());
-        *state.session_manager.write().await = Some(Arc::clone(&session_manager));
-        *state.runtime_replacement.write().await = Some(RuntimeReplacementContext {
+        state.install_session_runtime(startup_runtime.clone()).await;
+        state
+            .install_session_manager(Arc::clone(&session_manager))
+            .await;
+    }
+    state
+        .install_runtime_replacement(RuntimeReplacementContext {
             runtime_factory: factory,
             process_runtime: crate::process_runtime::ProcessRuntime::global(),
             cwd: home.path().to_path_buf(),
             requires_structured_output: false,
-        });
-    }
+        })
+        .await;
 
     let app_server = Arc::new(AppServer::<LocalAppSessionHandle>::new(1, 8));
     register_local_app_server_session(
@@ -495,10 +511,8 @@ async fn app_server_sdk_session_resume_uses_scoped_runtime_replacement_state() {
     assert_eq!(resumed.session.session_id, resumed_session_id);
     assert!(resumed.surface_id.is_some());
     let current_runtime = state
-        .session_runtime
-        .read()
+        .session_runtime_snapshot()
         .await
-        .clone()
         .expect("runtime replaced");
     assert_eq!(
         current_runtime.current_typed_session_id().await,
@@ -1021,10 +1035,9 @@ async fn app_server_local_bridge_can_install_existing_session_snapshot() {
 #[tokio::test]
 async fn current_session_result_prefers_interactive_surface_over_sdk_slot() {
     let state = Arc::new(SdkServerState::default());
-    {
-        let mut runner = state.turn_runner.write().await;
-        *runner = Arc::new(AccountingTurnRunner);
-    }
+    state
+        .install_turn_runner(Arc::new(AccountingTurnRunner))
+        .await;
     let mut bridge = AppServerLocalBridge::with_channel_capacity(Arc::clone(&state), 8);
     let old_session_id =
         coco_types::SessionId::try_new("sess-result-old").expect("valid old session id");
@@ -1202,10 +1215,7 @@ async fn app_server_local_bridge_passive_event_pump_forwards_handler_events() {
 #[tokio::test]
 async fn app_server_local_bridge_waits_for_matching_turn_end() {
     let state = Arc::new(SdkServerState::default());
-    {
-        let mut runner = state.turn_runner.write().await;
-        *runner = Arc::new(EndingTurnRunner);
-    }
+    state.install_turn_runner(Arc::new(EndingTurnRunner)).await;
     let mut bridge = AppServerLocalBridge::with_channel_capacity(Arc::clone(&state), 8);
     let session_id =
         coco_types::SessionId::try_new("sess-local-turn-wait").expect("valid session id");
@@ -1404,8 +1414,7 @@ async fn app_server_no_replacement_resume_installs_scoped_state_without_sdk_slot
 
     let state = Arc::new(SdkServerState::default());
     {
-        let mut slot = state.session_manager.write().await;
-        *slot = Some(Arc::clone(&manager));
+        state.install_session_manager(Arc::clone(&manager)).await;
     }
     let app_server = Arc::new(AppServer::<LocalAppSessionHandle>::new(1, 8));
     let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&app_server), 8);
@@ -1630,8 +1639,7 @@ async fn app_server_local_session_data_view_reads_persisted_transcript() {
     let manager = Arc::new(coco_session::SessionManager::new(tmp.path().to_path_buf()));
     let state = Arc::new(SdkServerState::default());
     {
-        let mut slot = state.session_manager.write().await;
-        *slot = Some(Arc::clone(&manager));
+        state.install_session_manager(Arc::clone(&manager)).await;
     }
 
     let session_id = SessionId::try_new("bridge-persisted-read").expect("valid session id");
@@ -1870,7 +1878,7 @@ async fn app_server_bridge_forwards_external_notifications() {
 }
 
 #[tokio::test]
-async fn app_server_bridge_routes_legacy_server_request_replies_to_sdk_state() {
+async fn app_server_bridge_routes_server_request_reply_frames_to_sdk_state() {
     let server = Arc::new(AppServer::<LocalAppSessionHandle>::new(1, 8));
     let adapter = JsonRpcAdapter::with_channel_capacity(server, 8);
     let connection = adapter.connect();
@@ -1918,10 +1926,13 @@ async fn app_server_bridge_routes_legacy_server_request_replies_to_sdk_state() {
         .await
         .expect("request task")
         .expect("server request resolved");
-    let JsonRpcMessage::Response(response) = reply else {
-        panic!("expected server-request response");
+    let JsonRpcFrame::Success(response) = reply else {
+        panic!("expected server-request success frame");
     };
-    assert_eq!(response.request_id, request.request_id);
+    assert_eq!(
+        response.id,
+        crate::sdk_server::transport::json_rpc_id_from_request_id(request.request_id.clone())
+    );
     assert_eq!(response.result, serde_json::json!({ "ok": true }));
 
     drop(client_transport);
@@ -1951,7 +1962,7 @@ async fn recv_response_with_id(
 
 async fn wait_for_outbound_queue(state: &SdkServerState) {
     for _ in 0..100 {
-        if state.outbound_tx.read().await.is_some() {
+        if state.has_sdk_outbound_tx().await {
             return;
         }
         tokio::task::yield_now().await;
@@ -2012,7 +2023,7 @@ fn legacy_json_rpc_message_converts_to_transport_frame() {
         params: serde_json::json!({}),
     });
 
-    let frame = legacy_json_rpc_message_to_frame(message).expect("convert to frame");
+    let frame = json_rpc_message_to_frame(message).expect("convert to frame");
 
     let JsonRpcFrame::Request(request) = frame else {
         panic!("expected request frame");
@@ -2033,7 +2044,7 @@ fn transport_frame_converts_to_legacy_json_rpc_message() {
         ),
     ));
 
-    let message = json_rpc_frame_to_legacy_message(frame).expect("convert to message");
+    let message = json_rpc_frame_to_message(frame).expect("convert to message");
 
     let JsonRpcMessage::Error(error) = message else {
         panic!("expected error message");
@@ -2053,9 +2064,9 @@ fn transport_null_id_is_rejected_for_legacy_json_rpc_message() {
         serde_json::Value::Null,
     ));
 
-    let error = json_rpc_frame_to_legacy_message(frame).expect_err("null id rejected");
+    let error = json_rpc_frame_to_message(frame).expect_err("null id rejected");
 
-    assert!(matches!(error, JsonRpcBridgeError::NullId));
+    assert!(matches!(error, SdkJsonRpcFrameError::NullId));
 }
 
 fn hub_announce_frame(live_sessions: Vec<SessionId>) -> AnnounceFrame {

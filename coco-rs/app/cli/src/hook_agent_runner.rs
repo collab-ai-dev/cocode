@@ -10,7 +10,6 @@ use coco_types::ToolName;
 use tokio_util::sync::CancellationToken;
 
 use crate::session_runtime::SessionHandle;
-use crate::session_runtime::SessionRuntime;
 
 const MAX_AGENT_HOOK_TURNS: i32 = 50;
 
@@ -89,9 +88,9 @@ async fn run_agent(
     parse_structured_output(query_result.structured_output)
 }
 
-fn scoped_tool_registry(runtime: &SessionRuntime) -> Result<Arc<ToolRegistry>, String> {
+fn scoped_tool_registry(session: &SessionHandle) -> Result<Arc<ToolRegistry>, String> {
     let registry = Arc::new(ToolRegistry::new());
-    for tool in runtime.registered_tools() {
+    for tool in session.registered_tools() {
         // Withhold tools a Stop-hook judge must not use — spawning
         // subagents, entering/exiting plan mode, asking the user, or
         // stopping tasks — to keep the verifier from steering the main

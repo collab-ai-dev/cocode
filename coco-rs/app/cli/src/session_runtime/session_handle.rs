@@ -41,8 +41,10 @@ impl SessionHandle {
         &self.runtime
     }
 
-    pub fn into_runtime(self) -> Arc<SessionRuntime> {
-        self.runtime
+    pub fn orchestration_ctx_factory(
+        &self,
+    ) -> Arc<dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync> {
+        self.runtime.orchestration_ctx_factory()
     }
 }
 

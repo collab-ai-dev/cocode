@@ -35,11 +35,11 @@ impl SessionRuntime {
     /// `Arc<Self>` to drive per-spawn engine builds - calling this
     /// from inside `build()` would create a cycle.
     pub async fn attach_agent_handle(&self, handle: AgentHandleRef) {
-        *self.agent_handle.write().await = Some(handle.clone());
-        if let Some(runtime) = &self.memory_runtime {
+        *self.handle_resources.agent_handle.write().await = Some(handle.clone());
+        if let Some(runtime) = &self.memory_resources.memory_runtime {
             runtime.install_agent(handle.clone());
         }
-        if let Some(rt) = &self.skill_review_runtime {
+        if let Some(rt) = &self.memory_resources.skill_review_runtime {
             rt.install_agent(handle);
         }
     }
@@ -85,14 +85,14 @@ impl SessionRuntime {
     /// `wire_engine` installs it on every per-turn engine so the model's
     /// `SkillTool` and user-typed fork-mode `/slash` skills resolve.
     pub async fn attach_skill_handle(&self, handle: coco_tool_runtime::SkillHandleRef) {
-        *self.skill_handle.write().await = Some(handle);
+        *self.handle_resources.skill_handle.write().await = Some(handle);
     }
 
     /// Snapshot the installed skill handle, if any. Used by the TUI
     /// slash-command dispatch to run user-typed fork-mode skills through
     /// the same `SkillHandle` the model's `SkillTool` uses.
     pub async fn skill_handle(&self) -> Option<coco_tool_runtime::SkillHandleRef> {
-        self.skill_handle.read().await.clone()
+        self.handle_resources.skill_handle.read().await.clone()
     }
 
     /// The shared Bash-handle cell threaded into `QuerySkillRuntime` so the
@@ -101,7 +101,7 @@ impl SessionRuntime {
     pub(crate) fn skill_bash_cell(
         &self,
     ) -> Arc<std::sync::RwLock<Option<Arc<dyn coco_skills::shell_exec::BashToolHandle>>>> {
-        self.skill_bash_cell.clone()
+        self.handle_resources.skill_bash_cell.clone()
     }
 
     /// Run a user-typed fork-mode skill (`/<name>`) through the installed
@@ -151,11 +151,12 @@ impl SessionRuntime {
     /// cancelling the teammate lifecycle.
     pub async fn interrupt_agent_current_work(&self, agent_id: &str) -> Result<bool, String> {
         let handle = self
+            .handle_resources
             .agent_handle
             .read()
             .await
             .clone()
-            .unwrap_or_else(|| self.swarm_agent_handle.clone());
+            .unwrap_or_else(|| self.handle_resources.swarm_agent_handle.clone());
         handle.interrupt_agent_current_work(agent_id).await
     }
 
@@ -166,12 +167,12 @@ impl SessionRuntime {
         &self,
         dispatcher: coco_query::forked_agent::ForkDispatcherRef,
     ) {
-        *self.fork_dispatcher.write().await = Some(dispatcher);
+        *self.handle_resources.fork_dispatcher.write().await = Some(dispatcher);
     }
 
     /// Install the runtime-backed Agent hook runner onto the shared
     /// LLM hook handle. Called after `SessionRuntime::build` returns
-    /// because the runner captures `Arc<SessionRuntime>`.
+    /// because the runner captures the finished `SessionHandle`.
     pub async fn attach_hook_agent_runner(&self, runner: coco_query::hook_llm::HookAgentRunnerRef) {
         self.hook_resources
             .llm_handle()
@@ -213,14 +214,19 @@ impl SessionRuntime {
     pub async fn current_fork_dispatcher(
         &self,
     ) -> Option<coco_query::forked_agent::ForkDispatcherRef> {
-        self.fork_dispatcher.read().await.clone()
+        self.handle_resources.fork_dispatcher.read().await.clone()
     }
 
     /// Read the most recent turn's cache-safe params. `None` before the
     /// first turn finalises (or after `/clear`). The TUI `/btw` dispatch
     /// uses this when present and falls back to rebuilding from transcript.
     pub async fn last_cache_safe_params(&self) -> Option<coco_types::CacheSafeParams> {
-        let handle = self.last_engine_cache_handle.read().await.clone();
+        let handle = self
+            .handle_resources
+            .last_engine_cache_handle
+            .read()
+            .await
+            .clone();
         match handle {
             Some(h) => h.read().await.clone(),
             None => None,
@@ -242,7 +248,7 @@ impl SessionRuntime {
             .unwrap_or_default();
         let slot_effort = snapshot.and_then(|s| s.role_effort);
         let history = {
-            let guard = self.history.lock().await;
+            let guard = self.history_resources.history().lock().await;
             guard.snapshot()
         };
         coco_query::QueryEngine::cache_safe_params_from_parts(&cfg, provider, slot_effort, &history)
@@ -252,7 +258,7 @@ impl SessionRuntime {
     /// bootstrap; the same `Arc` flows into `SwarmAgentHandle` for
     /// the registration side. Idempotent - re-attaching replaces.
     pub async fn attach_task_runtime(&self, rt: Arc<crate::task_runtime::TaskRuntime>) {
-        *self.task_runtime.write().await = Some(rt);
+        *self.handle_resources.task_runtime.write().await = Some(rt);
     }
 
     /// Read the installed task runtime. `None` when no production
@@ -260,28 +266,32 @@ impl SessionRuntime {
     /// AgentTool). Used by `agent_handle_factory` to share the same
     /// instance with `SwarmAgentHandle`.
     pub async fn current_task_runtime(&self) -> Option<Arc<crate::task_runtime::TaskRuntime>> {
-        self.task_runtime.read().await.clone()
+        self.handle_resources.task_runtime.read().await.clone()
     }
 
     pub async fn attach_task_list(&self, handle: coco_tool_runtime::TaskListHandleRef) {
-        *self.task_list.write().await = Some(handle);
+        *self.handle_resources.task_list.write().await = Some(handle);
     }
 
     pub async fn attach_team_task_list_router(
         &self,
         router: coco_tool_runtime::TeamTaskListRouterRef,
     ) {
-        *self.team_task_list_router.write().await = Some(router);
+        *self.handle_resources.team_task_list_router.write().await = Some(router);
     }
 
     pub async fn current_task_list(&self) -> Option<coco_tool_runtime::TaskListHandleRef> {
-        self.task_list.read().await.clone()
+        self.handle_resources.task_list.read().await.clone()
     }
 
     pub async fn current_team_task_list_router(
         &self,
     ) -> Option<coco_tool_runtime::TeamTaskListRouterRef> {
-        self.team_task_list_router.read().await.clone()
+        self.handle_resources
+            .team_task_list_router
+            .read()
+            .await
+            .clone()
     }
 
     /// Install the per-agent transcript / metadata store used for
@@ -292,13 +302,17 @@ impl SessionRuntime {
         &self,
         store: coco_tool_runtime::AgentTranscriptStoreRef,
     ) {
-        *self.agent_transcript_store.write().await = Some(store);
+        *self.handle_resources.agent_transcript_store.write().await = Some(store);
     }
 
     /// Read the installed agent-transcript store.
     pub async fn current_agent_transcript_store(
         &self,
     ) -> Option<coco_tool_runtime::AgentTranscriptStoreRef> {
-        self.agent_transcript_store.read().await.clone()
+        self.handle_resources
+            .agent_transcript_store
+            .read()
+            .await
+            .clone()
     }
 }

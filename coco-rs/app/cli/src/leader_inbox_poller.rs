@@ -40,7 +40,6 @@ use coco_query::QueuedCommand;
 use coco_system_reminder::QueueOrigin;
 
 use crate::session_runtime::SessionHandle;
-use crate::session_runtime::SessionRuntime;
 
 /// Inbox poll interval: 1000 ms.
 const INBOX_POLL_INTERVAL: Duration = Duration::from_millis(1000);
@@ -53,13 +52,12 @@ const TEAM_LEAD_NAME: &str = "team-lead";
 /// each tick until the session has an active team (the implicit session
 /// team bootstrapped at startup) and a registered leader approval queue.
 pub fn spawn(session: SessionHandle) -> tokio::task::JoinHandle<()> {
-    let runtime = session.runtime().clone();
     tokio::spawn(async move {
         // tool_use_ids already dispatched to the leader UI — dedup so a
         // failed mark-read on a prior tick doesn't re-prompt the human.
         let mut dispatched: HashSet<String> = HashSet::new();
         loop {
-            poll_once(&runtime, &mut dispatched).await;
+            poll_once(&session, &mut dispatched).await;
             tokio::time::sleep(INBOX_POLL_INTERVAL).await;
         }
     })
@@ -86,8 +84,7 @@ pub async fn install_leader(
     session: SessionHandle,
     bridge: Option<coco_tool_runtime::ToolPermissionBridgeRef>,
 ) {
-    let runtime = session.runtime().clone();
-    if !runtime
+    if !session
         .runtime_config()
         .features
         .enabled(coco_types::Feature::AgentTeams)
@@ -98,12 +95,12 @@ pub async fn install_leader(
         // This session is itself a teammate, not the leader.
         return;
     }
-    let engine_config = runtime.current_engine_config().await;
+    let engine_config = session.current_engine_config().await;
     // Implicit-team bootstrap gate (CC `Sl() && !xr() && !agentId`): a
     // non-interactive (`-p`) session owns no implicit team. The AgentTeams
     // + teammate-identity gates above cover the other two predicates.
     if !engine_config.is_non_interactive {
-        bootstrap_session_team(&runtime, &engine_config).await;
+        bootstrap_session_team(&session, &engine_config).await;
     }
     if let Some(bridge) = bridge {
         crate::leader_permission::register(bridge).await;
@@ -116,13 +113,13 @@ pub async fn install_leader(
 /// failure is logged and swallowed so a swarm-init error never blocks
 /// REPL boot.
 async fn bootstrap_session_team(
-    runtime: &SessionRuntime,
+    session: &SessionHandle,
     engine_config: &coco_query::QueryEngineConfig,
 ) {
-    let Some(handle) = runtime.current_agent_handle().await else {
+    let Some(handle) = session.current_agent_handle().await else {
         return;
     };
-    let session_id = runtime.current_typed_session_id().await;
+    let session_id = session.current_typed_session_id().await;
     let team_name = coco_coordinator::session_team::session_team_name(&session_id);
     let leader_model = (!engine_config.model_id.is_empty()).then(|| engine_config.model_id.clone());
     let request = coco_tool_runtime::InitializeSessionTeamRequest {
@@ -130,17 +127,17 @@ async fn bootstrap_session_team(
         leader_session_id: session_id,
         leader_agent_type: None,
         leader_model,
-        cwd: runtime.original_cwd().clone(),
-        task_list_router: runtime.current_team_task_list_router().await,
+        cwd: session.original_cwd().clone(),
+        task_list_router: session.current_team_task_list_router().await,
     };
     if let Err(e) = handle.initialize_session_team(request).await {
         tracing::warn!(error = %e, "implicit session-team bootstrap failed (non-fatal)");
     }
 }
 
-async fn poll_once(runtime: &SessionRuntime, dispatched: &mut HashSet<String>) {
+async fn poll_once(session: &SessionHandle, dispatched: &mut HashSet<String>) {
     // Resolve the active team from the roster.
-    let Some(handle) = runtime.current_agent_handle().await else {
+    let Some(handle) = session.current_agent_handle().await else {
         return;
     };
     let Some(team) = handle.active_team_name().await else {
@@ -149,7 +146,7 @@ async fn poll_once(runtime: &SessionRuntime, dispatched: &mut HashSet<String>) {
     // Optional: regular/idle messages surface to the model via the command
     // queue and don't need an approval UI; only `PermissionRequest` does.
     let permission_setter = coco_coordinator::teammate::get_leader_permission_queue().await;
-    let queue = runtime.command_queue();
+    let queue = session.command_queue();
 
     let messages = mailbox::read_mailbox(TEAM_LEAD_NAME, &team).unwrap_or_default();
     for (idx, m) in messages.iter().enumerate() {
