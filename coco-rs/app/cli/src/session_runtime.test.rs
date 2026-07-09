@@ -7,13 +7,6 @@ use coco_config::RoleSlots;
 use coco_config::RuntimeOverrides;
 use coco_config::Settings;
 use coco_config::SettingsWithSource;
-use coco_query::QueuePriority;
-use coco_query::QueuedCommand;
-use coco_types::PermissionBehavior;
-use coco_types::PermissionMode;
-use coco_types::PermissionRule;
-use coco_types::PermissionRuleSource;
-use coco_types::PermissionRuleValue;
 use coco_types::ProviderModelSelection;
 use coco_types::ReasoningEffort;
 use coco_types::SessionId;
@@ -21,18 +14,13 @@ use coco_types::ThinkingLevel;
 use tempfile::TempDir;
 
 use super::SessionRuntime;
+use super::SessionRuntimeBootstrap;
+use super::SessionRuntimeBootstrapSource;
 use super::SessionRuntimeFactory;
 use super::SessionRuntimeFactoryOpts;
 use super::resolve_model_selection_from_runtime_config;
 use super::thinking_level_for_effort_from;
 use crate::Cli;
-
-fn test_session_id(value: &str) -> SessionId {
-    match SessionId::try_new(value) {
-        Ok(id) => id,
-        Err(_) => unreachable!("test session id should be valid"),
-    }
-}
 
 async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
     build_runtime_with_main(home, "anthropic", "claude-opus-4-7").await
@@ -81,12 +69,25 @@ async fn try_build_runtime_with_main(
 
     let factory = SessionRuntimeFactory::new(SessionRuntimeFactoryOpts {
         cli: Arc::new(cli),
-        runtime_config: Arc::new(runtime_config),
+        bootstrap_source: SessionRuntimeBootstrapSource::startup_snapshot(
+            SessionRuntimeBootstrap {
+                runtime_config: Arc::new(runtime_config),
+                model_id,
+                system_prompt: "test".to_string(),
+                permission_mode_availability: coco_types::PermissionModeAvailability::default(),
+                permission_mode: coco_types::PermissionMode::default(),
+                command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
+                    coco_commands::CommandRegistry::new(),
+                ))),
+                skill_manager: Arc::new(coco_skills::SkillManager::new()),
+                project_services: Arc::new(crate::project_services::ProjectServices::load(
+                    home.path(),
+                    home.path(),
+                )),
+                agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+            },
+        ),
         cwd: home.path().to_path_buf(),
-        model_id,
-        system_prompt: "test".to_string(),
-        permission_mode_availability: coco_types::PermissionModeAvailability::default(),
-        permission_mode: coco_types::PermissionMode::default(),
         model_runtimes: None,
         tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
         session_manager: Arc::new(coco_session::SessionManager::new(
@@ -94,16 +95,7 @@ async fn try_build_runtime_with_main(
         )),
         fast_model_spec: None,
         permission_bridge: None,
-        command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
-            coco_commands::CommandRegistry::new(),
-        ))),
-        skill_manager: Arc::new(coco_skills::SkillManager::new()),
         process_runtime: crate::process_runtime::ProcessRuntime::global(),
-        project_services: Arc::new(crate::project_services::ProjectServices::load(
-            home.path(),
-            home.path(),
-        )),
-        agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         is_non_interactive: false,
     });
@@ -144,24 +136,6 @@ async fn factory_fresh_builds_create_distinct_runtime_identities() {
         first.current_typed_session_id().await,
         second.current_typed_session_id().await
     );
-}
-
-#[tokio::test]
-async fn session_handle_keeps_immutable_session_id_snapshot() {
-    let home = TempDir::new().expect("home tempdir");
-    let runtime = try_build_runtime_with_main(&home, "anthropic", "claude-opus-4-7", None)
-        .await
-        .expect("build runtime");
-    let session = crate::session_runtime::SessionHandle::new(runtime);
-    let initial = session.session_id().clone();
-    let next = SessionId::try_new("sess-handle-retargeted").expect("valid session id");
-
-    session.retarget_for_loaded_session(next.clone()).await;
-
-    assert_eq!(session.session_id(), &initial);
-    assert_eq!(session.current_typed_session_id().await, next);
-    let refreshed = session.snapshot_current();
-    assert_eq!(refreshed.session_id(), &next);
 }
 
 #[tokio::test]
@@ -291,45 +265,6 @@ async fn orchestration_ctx_factory_can_run_inside_runtime_thread() {
     let updated_config = factory();
     assert!(updated_config.disable_all_hooks);
     assert!(updated_config.allow_managed_hooks_only);
-
-    runtime
-        .retarget_for_loaded_session(coco_types::SessionId::try_new("next-session").unwrap())
-        .await;
-    let updated_session = factory();
-    assert_eq!(
-        updated_session.session_id,
-        coco_types::SessionId::try_new("next-session").unwrap()
-    );
-}
-
-#[tokio::test]
-async fn todo_list_store_is_session_scoped_and_resets_on_new_session() {
-    let home = TempDir::new().expect("home tempdir");
-    let runtime = build_runtime(&home).await;
-    let item = coco_types::TodoRecord {
-        content: "write test".to_string(),
-        status: "pending".to_string(),
-        active_form: "Writing test".to_string(),
-    };
-
-    runtime
-        .seed_todo_list_snapshot("session-a".to_string(), vec![item.clone()])
-        .await;
-    assert_eq!(runtime.todo_list_snapshot("session-a").await, vec![item]);
-    assert!(
-        runtime
-            .app_state
-            .read()
-            .await
-            .todos_by_agent
-            .contains_key("session-a"),
-    );
-
-    runtime
-        .retarget_for_new_session(coco_types::SessionId::try_new("session-b").unwrap())
-        .await;
-    assert!(runtime.todo_list_snapshot("session-a").await.is_empty());
-    assert!(runtime.app_state.read().await.todos_by_agent.is_empty());
 }
 
 #[tokio::test]
@@ -358,144 +293,4 @@ async fn reload_plugin_mcp_servers_noops_without_manager_then_bumps_key_when_att
     // A second reload bumps again (idempotent re-register, monotonic key).
     runtime.reload_plugin_mcp_servers().await;
     assert_eq!(runtime.mcp_reconnect_key(), 2);
-}
-
-#[tokio::test]
-async fn retarget_for_loaded_session_loads_existing_usage_snapshot() {
-    let home = TempDir::new().expect("home tempdir");
-    let runtime = build_runtime(&home).await;
-    let snapshot = coco_types::SessionUsageSnapshot {
-        session_id: test_session_id("resume-session"),
-        totals: coco_types::SessionUsageTotals {
-            input_tokens: 123,
-            output_tokens: 45,
-            request_count: 1,
-            ..Default::default()
-        },
-        models: vec![coco_types::SessionModelUsageEntry {
-            provider: "anthropic".into(),
-            model_id: "claude-sonnet-4-5".into(),
-            input_tokens: 123,
-            output_tokens: 45,
-            request_count: 1,
-            priced: true,
-            ..Default::default()
-        }],
-        ..coco_types::SessionUsageSnapshot::empty(test_session_id("resume-session"))
-    };
-    runtime
-        .transcript_store
-        .write_usage_snapshot("resume-session", &snapshot)
-        .expect("usage snapshot should write");
-
-    runtime
-        .retarget_for_loaded_session(coco_types::SessionId::try_new("resume-session").unwrap())
-        .await;
-
-    assert_eq!(
-        runtime.session_usage_snapshot().await.totals.input_tokens,
-        123
-    );
-}
-
-#[tokio::test]
-async fn retarget_for_new_session_starts_with_empty_usage_snapshot() {
-    let home = TempDir::new().expect("home tempdir");
-    let runtime = build_runtime(&home).await;
-    let snapshot = coco_types::SessionUsageSnapshot {
-        session_id: test_session_id("fresh-session"),
-        totals: coco_types::SessionUsageTotals {
-            input_tokens: 123,
-            output_tokens: 45,
-            request_count: 1,
-            ..Default::default()
-        },
-        ..coco_types::SessionUsageSnapshot::empty(test_session_id("fresh-session"))
-    };
-    runtime
-        .transcript_store
-        .write_usage_snapshot("fresh-session", &snapshot)
-        .expect("usage snapshot should write");
-
-    runtime
-        .retarget_for_new_session(coco_types::SessionId::try_new("fresh-session").unwrap())
-        .await;
-
-    assert_eq!(
-        runtime.session_usage_snapshot().await.totals.input_tokens,
-        0
-    );
-}
-
-#[tokio::test]
-async fn clear_conversation_rotates_session_and_preserves_permission_grants() {
-    let home = TempDir::new().expect("home tempdir");
-    let runtime = build_runtime(&home).await;
-    let initial_session_id = runtime.current_typed_session_id().await;
-    let todo = coco_types::TodoRecord {
-        content: "clear me".to_string(),
-        status: "pending".to_string(),
-        active_form: "Clearing".to_string(),
-    };
-    let allow_rule = PermissionRule {
-        source: PermissionRuleSource::Session,
-        behavior: PermissionBehavior::Allow,
-        value: PermissionRuleValue {
-            tool_pattern: "Bash".to_string(),
-            rule_content: Some("git status".to_string()),
-        },
-    };
-
-    {
-        let mut app_state = runtime.app_state.write().await;
-        app_state.permissions.mode = Some(PermissionMode::Plan);
-        app_state
-            .permissions
-            .allow_rules
-            .entry(PermissionRuleSource::Session)
-            .or_default()
-            .push(allow_rule.clone());
-        app_state.has_exited_plan_mode = true;
-    }
-    runtime
-        .seed_todo_list_snapshot(initial_session_id.to_string(), vec![todo])
-        .await;
-    runtime
-        .command_queue()
-        .enqueue(QueuedCommand::new(
-            "queued before clear".into(),
-            QueuePriority::Next,
-        ))
-        .await;
-
-    runtime
-        .clear_conversation()
-        .await
-        .expect("clear should complete");
-
-    let new_session_id = runtime.current_typed_session_id().await;
-    assert_ne!(new_session_id, initial_session_id);
-    assert!(runtime.command_queue().is_empty().await);
-    assert!(
-        runtime
-            .todo_list_snapshot(initial_session_id.as_str())
-            .await
-            .is_empty()
-    );
-
-    let app_state = runtime.app_state.read().await;
-    assert!(!app_state.has_exited_plan_mode);
-    assert!(app_state.todos_by_agent.is_empty());
-    assert_eq!(app_state.permissions.mode, Some(PermissionMode::Plan));
-    let session_rules = app_state
-        .permissions
-        .allow_rules
-        .get(&PermissionRuleSource::Session)
-        .expect("session allow rule should survive clear");
-    assert_eq!(session_rules.len(), 1);
-    assert_eq!(session_rules[0].value.tool_pattern, "Bash");
-    assert_eq!(
-        session_rules[0].value.rule_content.as_deref(),
-        Some("git status")
-    );
 }

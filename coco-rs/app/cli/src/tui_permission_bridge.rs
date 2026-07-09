@@ -57,7 +57,7 @@ use coco_types::TuiOnlyEvent;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tracing::warn;
 
-use crate::session_runtime::SessionRuntime;
+use crate::session_runtime::SessionHandle;
 
 /// One pending approval: the oneshot sender for the resolution + the
 /// RAII guard that keeps `ToolAppState.pending_permission_count`
@@ -66,9 +66,9 @@ use crate::session_runtime::SessionRuntime;
 /// guard drops, decrementing the counter exactly once. Lock-free.
 pub struct PendingApprovalEntry {
     pub sender: oneshot::Sender<ToolPermissionResolution>,
-    /// `None` for entries created before the runtime weak-ref is
+    /// `None` for entries created before the session-owner weak-ref is
     /// installed (tests / very-early-bootstrap). Production runtimes
-    /// always have `Some` because `set_notification_runtime` lands
+    /// always have `Some` because `set_notification_session` lands
     /// before any tool can fire `request_permission`.
     pub _guard: Option<PendingPermissionGuard>,
 }
@@ -92,13 +92,13 @@ pub fn new_pending_map() -> PendingApprovals {
 pub struct TuiPermissionBridge {
     notification_tx: mpsc::Sender<CoreEvent>,
     pending: PendingApprovals,
-    /// Late-bound `Weak<SessionRuntime>` used to fire the
-    /// `Notification` hook when an `Ask` permission lands in front
+    /// Late-bound weak ref to the TUI's swappable current-session owner. Used
+    /// to fire the `Notification` hook when an `Ask` permission lands in front
     /// of the user. Set by
-    /// [`Self::set_notification_runtime`] from `tui_runner` after
-    /// `SessionRuntime::build` returns. Weak avoids extending the
-    /// runtime's lifetime through the bridge.
-    notification_runtime: RwLock<Option<Weak<SessionRuntime>>>,
+    /// [`Self::set_notification_session`] from `tui_runner` after the initial
+    /// runtime is installed. Weak avoids a reference cycle:
+    /// runtime -> bridge -> current-session owner -> runtime.
+    notification_session: RwLock<Option<Weak<RwLock<SessionHandle>>>>,
 }
 
 impl TuiPermissionBridge {
@@ -106,65 +106,61 @@ impl TuiPermissionBridge {
         Self {
             notification_tx,
             pending,
-            notification_runtime: RwLock::new(None),
+            notification_session: RwLock::new(None),
         }
     }
 
-    /// Install the runtime weak-ref used to fire `Notification` hooks
-    /// when prompting the user. Call once after `SessionRuntime::build`
-    /// returns. Safe to skip — bridge degrades to no hook fire.
-    pub async fn set_notification_runtime(&self, weak: Weak<SessionRuntime>) {
-        *self.notification_runtime.write().await = Some(weak);
+    /// Install the current-session weak-ref used to resolve the active runtime
+    /// for `Notification` hooks and permission prompt state. Safe to skip —
+    /// bridge degrades to no hook fire.
+    pub async fn set_notification_session(&self, weak: Weak<RwLock<SessionHandle>>) {
+        *self.notification_session.write().await = Some(weak);
+    }
+
+    async fn notification_runtime(&self) -> Option<Arc<crate::session_runtime::SessionRuntime>> {
+        let owner = self
+            .notification_session
+            .read()
+            .await
+            .as_ref()
+            .and_then(Weak::upgrade)?;
+        let session = owner.read().await.clone();
+        Some(session.runtime().clone())
     }
 
     /// Resolve the `Arc<AtomicU32>` counter on
     /// `ToolAppState.pending_permission_count` via the late-bound
-    /// runtime Weak. Returns `None` when the runtime hasn't been
+    /// current-session Weak. Returns `None` when the session owner hasn't been
     /// bound yet (test fixtures / startup race) — caller treats that
     /// as "no counter, skip the increment" so prompt-suggestion
     /// suppression degrades gracefully instead of panicking.
     async fn pending_permission_counter(
         &self,
     ) -> Option<std::sync::Arc<std::sync::atomic::AtomicU32>> {
-        let runtime = self
-            .notification_runtime
-            .read()
-            .await
-            .as_ref()
-            .and_then(Weak::upgrade)?;
-        let snap = runtime.app_state.read().await;
+        let runtime = self.notification_runtime().await?;
+        let snap = runtime.app_state().read().await;
         Some(snap.pending_permission_count.clone())
     }
 
     async fn show_always_allow_options(&self) -> bool {
-        let Some(runtime) = self
-            .notification_runtime
-            .read()
-            .await
-            .as_ref()
-            .and_then(Weak::upgrade)
-        else {
+        let Some(runtime) = self.notification_runtime().await else {
             return true;
         };
-        settings_allow_always_allow_options(&runtime.runtime_config.settings)
+        settings_allow_always_allow_options(&runtime.runtime_config().settings)
     }
 
     /// Generate an on-demand LLM risk explanation for a pending permission
     /// prompt. Delegates to
     /// [`SessionRuntime::explain_permission_risk`] (the single home for the
-    /// explainer call) via the late-bound runtime Weak; returns `None` when the
-    /// runtime isn't bound (tests / early bootstrap). The interactive Ctrl+E
-    /// path in `tui_runner` calls the `SessionRuntime` method directly.
+    /// explainer call) via the late-bound current-session Weak; returns `None`
+    /// when the session owner isn't bound (tests / early bootstrap). The
+    /// interactive Ctrl+E path in `tui_runner` calls the `SessionRuntime` method
+    /// directly.
     pub async fn explain_risk(
         &self,
         params: coco_permissions::ExplainerParams<'_>,
     ) -> Option<coco_types::PermissionExplanation> {
-        let runtime = self
-            .notification_runtime
-            .read()
-            .await
-            .as_ref()
-            .and_then(Weak::upgrade)?;
+        let runtime = self.notification_runtime().await?;
         runtime.explain_permission_risk(params).await
     }
 }
@@ -199,9 +195,9 @@ impl ToolPermissionBridge for TuiPermissionBridge {
         // at a permission prompt?". The guard drops when the entry
         // is removed from the map (resolve_pending path) OR when the
         // bridge's cleanup branches below remove it on channel close.
-        // Counter Arc is fetched via the late-bound Weak<SessionRuntime>
+        // Counter Arc is fetched via the late-bound current-session Weak
         // — `None` only in test / very-early-bootstrap paths where
-        // the runtime hasn't been bound yet.
+        // the session owner hasn't been bound yet.
         let pending_perm_counter = self.pending_permission_counter().await;
         let guard = pending_perm_counter.map(PendingPermissionGuard::acquire);
         let (tx, rx) = oneshot::channel();
@@ -217,15 +213,9 @@ impl ToolPermissionBridge for TuiPermissionBridge {
         }
 
         // Fire the Notification hook before the prompt is shown so
-        // user-defined notifiers run. Best-effort — no runtime installed
+        // user-defined notifiers run. Best-effort — no session owner installed
         // (e.g. tests) leaves the hook unfired.
-        if let Some(runtime) = self
-            .notification_runtime
-            .read()
-            .await
-            .as_ref()
-            .and_then(Weak::upgrade)
-        {
+        if let Some(runtime) = self.notification_runtime().await {
             let title = format!("Permission request: {}", request.tool_name);
             runtime
                 .fire_notification_hooks(

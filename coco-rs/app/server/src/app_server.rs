@@ -321,6 +321,16 @@ impl<H: Clone> AppServer<H> {
         summaries
     }
 
+    pub fn sole_interactive_session_for_connection(
+        &self,
+        connection: ConnectionKey,
+    ) -> Option<SessionId> {
+        self.routing
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .sole_interactive_session_for_connection(connection)
+    }
+
     pub fn route_server_request(
         &self,
         session_id: SessionId,

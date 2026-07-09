@@ -20,8 +20,22 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
 
+use super::SessionCatalogResources;
+use super::SessionCommandResources;
+use super::SessionConfigResources;
+use super::SessionEngineConfigResources;
+use super::SessionEngineStateResources;
+use super::SessionExecutionResources;
+use super::SessionHookResources;
+use super::SessionIntegrationResources;
+use super::SessionLifecycleResources;
+use super::SessionPersistenceResources;
+use super::SessionProjectResources;
 use super::SessionRuntime;
 use super::SessionRuntimeBuildOpts;
+use super::SessionTitleResources;
+use super::SessionTurnResources;
+use super::SessionWorkspaceResources;
 use super::build_sandbox_state;
 use super::hooks::populate_hook_registry;
 use super::live_permissions;
@@ -35,6 +49,7 @@ impl SessionRuntime {
         let SessionRuntimeBuildOpts {
             cli,
             runtime_config,
+            config_reloader,
             cwd,
             model_id,
             system_prompt,
@@ -626,7 +641,7 @@ impl SessionRuntime {
         // FileHistoryState — backed by JSONL transcript when enabled.
         // The sink reads session id from the same synchronized engine-config
         // mirror used by detached hook factories, so `/clear` regen propagates
-        // without a separate file-history id retarget.
+        // without a separate file-history identity slot.
         let file_history = if file_checkpointing_enabled(
             runtime_config.settings.merged.file_checkpointing_enabled,
             is_non_interactive,
@@ -641,53 +656,88 @@ impl SessionRuntime {
         } else {
             None
         };
-
-        Ok(Arc::new(Self {
-            original_cwd: session_original_cwd,
-            project_root,
-            project_paths,
-            current_cwd: session_current_cwd,
-            tools,
-            command_registry,
-            skill_manager,
-            config_home,
-            runtime_config,
-            process_runtime,
-            project_services,
+        let execution = SessionExecutionResources::new(tools, model_runtimes);
+        let hook_resources = SessionHookResources::new(
+            hook_registry,
+            hook_llm_handle,
+            coco_hooks::SyncHookEventBuffer::new(),
+            Arc::new(coco_hooks::async_registry::AsyncHookRegistry::new()),
+            Arc::new(RwLock::new(None)),
+        );
+        let persistence = SessionPersistenceResources::new(
             session_manager,
-            fast_model_spec,
-            // Disk-backed so `durable` cron tasks survive restarts;
-            // session tasks stay in-memory. The cron tick driver shares this store.
-            schedule_store: Arc::new(coco_tool_runtime::DiskBackedScheduleStore::new(
+            project_paths,
+            transcript_store,
+            persist_session,
+        );
+        let project_resources = SessionProjectResources::new(process_runtime, project_services);
+        let config_resources =
+            SessionConfigResources::new(config_home, runtime_config, config_reloader);
+        let catalog_resources = SessionCatalogResources::new(command_registry, skill_manager);
+        let turn_resources = SessionTurnResources::new(
+            Arc::new(coco_tool_runtime::DiskBackedScheduleStore::new(
                 cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
                     .join("scheduled_tasks.json"),
             )),
-            model_runtimes,
             side_query,
             usage_accounting,
-            auto_title_enabled,
             mailbox,
             permission_bridge,
-            cancel: CancellationToken::new(),
-            engine_config: Arc::new(RwLock::new(engine_config)),
+        );
+        let lifecycle_resources =
+            SessionLifecycleResources::new(CancellationToken::new(), pid_registry);
+        let command_resources = SessionCommandResources::new(
+            session_attachment_tx,
+            session_attachment_rx,
+            coco_query::CommandQueue::new(),
+        );
+        let title_resources = SessionTitleResources::new(fast_model_spec, auto_title_enabled);
+        let workspace_resources =
+            SessionWorkspaceResources::new(session_original_cwd, project_root, session_current_cwd);
+        let engine_config_resources = SessionEngineConfigResources::new(
+            Arc::new(RwLock::new(engine_config)),
             orchestration_engine_config,
-            role_overrides: Arc::new(RwLock::new(HashMap::new())),
-            sandbox_state,
+            Arc::new(RwLock::new(HashMap::new())),
+        );
+        let engine_state_resources = SessionEngineStateResources::new(
             file_read_state,
             file_history,
             app_state,
             loop_sentinel_state,
-            pending_message_store: Arc::new(coco_tool_runtime::InMemoryPendingMessageStore::new()),
+            Arc::new(coco_tool_runtime::InMemoryPendingMessageStore::new()),
             auto_mode_state,
             denial_tracker,
+            transcript_dedup,
+            Arc::new(tokio::sync::Mutex::new(None)),
+            terminal_goal_metadata_written,
+            tool_result_replacement_state,
+        );
+        let integration_resources = SessionIntegrationResources::new(
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            Arc::new(RwLock::new(None)),
+        );
+
+        Ok(Arc::new(Self {
+            execution,
+            catalog_resources,
+            config_resources,
+            project_resources,
+            persistence,
+            title_resources,
+            turn_resources,
+            command_resources,
+            lifecycle_resources,
+            workspace_resources,
+            engine_config_resources,
+            engine_state_resources,
+            integration_resources,
+            sandbox_state,
             memory_runtime,
             skill_review_runtime,
             swarm_agent_handle,
-            hook_registry,
-            hook_llm_handle,
-            sync_hook_buffer: coco_hooks::SyncHookEventBuffer::new(),
-            async_hook_registry: Arc::new(coco_hooks::async_registry::AsyncHookRegistry::new()),
-            file_changed_watcher: Arc::new(RwLock::new(None)),
+            hook_resources,
             history: Arc::new(Mutex::new({
                 let mut h = MessageHistory::new();
                 // Stamp F9 envelope onto history so every history_sync
@@ -714,24 +764,10 @@ impl SessionRuntime {
                 coco_tool_runtime::InMemoryTodoListHandle::new(),
             ))),
             agent_transcript_store: Arc::new(RwLock::new(None)),
-            mcp_handle: Arc::new(RwLock::new(None)),
-            mcp_manager: Arc::new(RwLock::new(None)),
-            mcp_reconnect_key: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            lsp_handle: Arc::new(RwLock::new(None)),
             agent_search_paths: Arc::new(RwLock::new(agent_search_paths)),
             builtin_agent_catalog,
             agent_catalog,
             sdk_supplied_agents: Arc::new(RwLock::new(Vec::new())),
-            session_attachment_tx,
-            session_attachment_rx,
-            transcript_store,
-            persist_session,
-            transcript_dedup,
-            clear_rewind_messages: Arc::new(tokio::sync::Mutex::new(None)),
-            terminal_goal_metadata_written,
-            tool_result_replacement_state,
-            command_queue: coco_query::CommandQueue::new(),
-            _pid_registry: pid_registry,
         }))
     }
 }

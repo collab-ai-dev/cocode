@@ -49,6 +49,10 @@ impl SdkBridgeControlHandler {
         Self { state }
     }
 
+    async fn current_session_id(&self) -> Option<coco_types::SessionId> {
+        self.state.runtime_or_active_session_id().await
+    }
+
     async fn set_permission_mode(
         &self,
         mode: coco_types::PermissionMode,
@@ -70,29 +74,28 @@ impl SdkBridgeControlHandler {
             ));
         }
 
-        let mut slot = self.state.session.write().await;
-        let Some(session) = slot.as_mut() else {
+        let Some(session_id) = self.current_session_id().await else {
             return Err(ControlError::new(
                 coco_types::error_codes::INVALID_REQUEST,
                 "no active session",
             ));
         };
-        let fallback_previous_mode = session
-            .permission_mode
-            .unwrap_or(coco_types::PermissionMode::Default);
-        session.permission_mode = Some(mode);
-
-        // Release the session lock before acquiring app_state — keeps
-        // lock order consistent with the SDK handler.
-        let app_state = session.app_state.clone();
-        drop(slot);
-        // Strip provenance from THIS session's live base (the per-SessionHandle
-        // base the engine runs against) — the same base `apply_to_app_state`
-        // writes, so strip/restore stay coherent.
+        let Some(handoff) = self.state.session_handoff_snapshot(&session_id) else {
+            return Err(ControlError::new(
+                coco_types::error_codes::INTERNAL_ERROR,
+                "session handoff state is missing",
+            ));
+        };
+        let app_state = handoff.app_state;
+        // Strip provenance from THIS session's live base — the same base
+        // `apply_to_app_state` writes, so strip/restore stay coherent.
         let (previous_mode, live_allow_rules) = {
             let guard = app_state.read().await;
             (
-                guard.permissions.mode.unwrap_or(fallback_previous_mode),
+                guard
+                    .permissions
+                    .mode
+                    .unwrap_or(coco_types::PermissionMode::Default),
                 guard.permissions.allow_rules.clone(),
             )
         };
@@ -123,9 +126,11 @@ impl SdkBridgeControlHandler {
         // here are single-shot controls/reads, while permission-mode changes
         // keep their explicit state-outbound path above.
         let (notif_tx, _notif_rx) = tokio::sync::mpsc::channel::<OutboundMessage>(16);
+        let scoped_session_id = self.current_session_id().await;
         let ctx = HandlerContext {
             notif_tx,
             state: self.state.clone(),
+            scoped_session_id,
         };
         match dispatch_client_request(request, ctx).await {
             HandlerResult::Ok(value) => Ok(value),

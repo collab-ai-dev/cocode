@@ -52,17 +52,18 @@ handler trait, so TUI/headless cut-over code can reuse the same exhaustive
 `ClientRequest` dispatcher without adding another runtime dispatch table.
 Local AppServer cut-over code must pair that handler with
 `spawn_app_server_local_outbound_forwarder`, which routes handler-emitted
-`CoreEvent`s back through `AppServer::route_envelope` using the current
-session id from `SdkServerState`.
+`CoreEvent`s back through `AppServer::route_envelope`. Scoped turn events can
+carry their routed session id on the outbound message; legacy local events fall
+back to the current session id from `SdkServerState`.
 `AppServerLocalBridge` is the preferred local entrypoint: it owns the local
 `AppServer`, `ServerClient`, shared handler, and outbound forwarder so
 TUI/headless code does not duplicate adapter wiring.
 Its AppServer registry stores `LocalAppSessionHandle` snapshots rather than
 empty `()` handles. Installed runtime snapshots carry the current app/cli
-`SessionHandle`, whose session id is an immutable snapshot; legacy retarget
-paths must call `SessionHandle::snapshot_current()` before re-installing. Close
-cascade logic remains retarget-safe until Phase B removes fused runtime
-in-place retargeting. Local `session/resume` uses `AppServer::spawn_replace`
+`SessionHandle`, whose session id is an immutable snapshot. Close cascade logic
+checks the registry snapshot before touching runtime-backed state, so stale
+registry handles from a replacement swap do not tear down the new live runtime.
+Local `session/resume` uses `AppServer::spawn_replace`
 when the previous live session has an interactive local surface, and uses
 `AppServer::spawn_replace_detached` plus a fresh requester surface when no
 replace caller surface exists. Re-installing a runtime-backed handle for an
@@ -70,11 +71,11 @@ already-live local session refreshes the registry handle without changing
 surface routing.
 AppServer close for local/SDK bridge handles now performs the bridge-owned
 cascade before archiving surfaces: if the closing session still matches the
-SDK active-session slot, it cancels the active turn, waits boundedly for the
-turn runner and forwarder to drain, clears the slot, then fires runtime
+SDK active-session state, it cancels the state-owned active turn, waits
+boundedly for the turn runner and forwarder to drain, clears the slot, then fires runtime
 SessionEnd hooks and cancels the runtime shutdown signal for matching
-runtime-backed handles. The retarget guard still skips fused-runtime shutdown
-when the runtime's current session id no longer matches the registry snapshot.
+runtime-backed handles. The registry snapshot guard skips fused-runtime
+shutdown when the runtime handle no longer matches the registry snapshot.
 SDK JSON-RPC mode also uses `LocalAppSessionHandle` in the AppServer registry.
 `session/start`, `session/resume`, and `session/archive` dispatched through
 `SdkServer::run_app_server_connection` apply the same lifecycle registration
@@ -140,10 +141,15 @@ build explicit-id handles. TUI/headless startup reserve the fresh/resume target
 id before runtime construction and SDK startup reserves a fresh startup id;
 all three load that initial runtime through an AppServer `spawn_load` owner
 task. Resume/fork therefore no longer creates a throwaway startup identity
-first. SDK `session/start` closes the startup placeholder slot before
-registering the client-started session. The shared `session/resume` handler
-skips loaded-session retargeting when the installed runtime already has that
-id.
+first. Production SDK `session/start` now builds the client-started runtime
+through the same factory inside the AppServer load/replace owner task, closes
+the startup placeholder slot, then swaps `SdkServerState.session_runtime` and
+installs scoped SDK state maps for the constructed handle without writing the
+process-global active identity; the legacy handler now rejects `session/start` when a
+runtime is already installed without the AppServer replacement context.
+The shared `session/resume` handler only hydrates an installed runtime that is
+already on the requested id; different-id runtime-backed resume must use the
+AppServer replacement path.
 The local bridge has runtime-backed `spawn_replace` /
 `spawn_replace_detached` helpers that return the constructed runtime handle to
 callers. The TUI driver now has a swappable current-session owner: each command
@@ -153,10 +159,111 @@ transcript state, commit the AppServer replacement, and install the returned
 handle into both the TUI owner and local bridge. SDK `session/resume` uses the
 same factory-backed replacement ordering in production: the AppServer bridge
 loads the persisted session, builds the target runtime inside the AppServer
-load/replace owner task, replays resume hydration plus SDK late binds, and
-swaps `SdkServerState.session_runtime` to the returned handle before the next
-turn. TUI long-lived side tasks still need to follow the swappable owner instead
-of holding startup-only runtime handles.
+load/replace owner task, replays resume hydration plus SDK late binds, commits
+the AppServer slot/surface switch, and only then swaps
+`SdkServerState.session_runtime` and installs scoped SDK state maps without
+writing process-global active identity. The state-owned SDK turn handoff carries the
+resumed transcript history and runtime app state so the next SDK `turn/start`
+continues from the loaded chain; construction failure leaves the prior
+SDK/AppServer live slot untouched. Runtime-backed SDK control
+paths now update/read model, permission mode, thinking level, and cwd from the
+installed runtime first; turn id counters, aggregate archive accounting, and
+active-turn handles/cancellation now live on `SdkServerState` keyed by
+`SessionId`. Legacy cwd/model metadata and session-scoped plan-mode
+instruction snapshots also live on `SdkServerState`, as do SDK turn handoff
+history and live app state. The SDK singleton active identity is deleted. Direct
+legacy start/resume install the same scoped SDK state maps; unscoped handlers
+resolve a sole scoped session when no AppServer surface or installed runtime
+identifies the session. AppServer-routed requests also
+carry an optional connection-scoped session id from the sole attached
+interactive surface; runtime controls, rewind, normal and shortcut turn setup,
+and other simple readers prefer that scope, then the installed runtime's scoped
+state, before falling back to a sole scoped state.
+Runtime-backed SDK session/start and session/resume, scoped archive, and
+AppServer close cleanup operate by routed session id instead of requiring the
+SDK active identity. The REPL bridge control handler also falls back to the
+installed runtime's current session id for bridge-origin
+controls. Per-turn `SessionResult` accounting for scoped turns folds while the
+routed session's scoped state is still live, so it also no longer requires the
+process-global active identity. SDK/AppServer fallback event stamping, unscoped runtime-backed
+turn cleanup, and live session-data overlay now prefer runtime/scoped state;
+process-level bridge fallbacks share
+`SdkServerState::runtime_or_active_session_id()`. AppServer runtime replacement
+and no-runtime-replacement `session/start` / `session/resume` install scoped
+SDK state and rely on AppServer registry/surface ownership instead of claiming
+a process-global identity. TUI, headless, and SDK runtime construction uses
+`SessionRuntimeFactory` with a `SessionRuntimeBootstrapSource`. Production
+factories use the per-session fold source: each target cwd rebuilds
+`RuntimeConfig` plus the derived model, system prompt, startup permission state,
+command registry, skill manager, project services, and agent search paths as
+one bundle, then stores the session-owned `RuntimeReloader` on the constructed
+runtime. TUI config-change hooks, sandbox reload, sandbox violation forwarding,
+sandbox approval bridging, model-runtime reload, TUI settings reload, and TUI
+skill-override writes use a runtime-reload subscription owner that reattaches
+to the session-owned publisher after startup, `/resume`, `/branch`, or
+`/clear` replacement. SDK sandbox reload and SDK sandbox approval bridging are
+installed through the shared SDK runtime-state installer, so AppServer-backed
+SDK `session/start` / `session/resume` replacement aborts the old runtime's
+reload subscriber and attaches the new runtime's session-owned publisher.
+Compatibility tests may still use
+`SessionRuntimeBootstrapSource::startup_snapshot(...)`. Factory builds can
+also receive an explicit target cwd, and TUI startup resume, TUI `/resume` /
+`/branch` / `/clear`, and SDK runtime replacement start/resume use that cwd for
+runtime construction and late binds. SDK `initialize` now prefers the installed
+runtime for command, agent, and output-style metadata, falling back to the
+bootstrap snapshot only before a runtime exists; account/auth and fast-mode
+state remain bootstrap-owned until runtime accessors land. SDK MCP manager
+construction now happens after the startup runtime is loaded and uses that
+runtime's MCP config; TUI/headless MCP bootstrap already builds or reuses
+managers from the session runtime. TUI, headless, and SDK event-hub connectors
+now spawn after their startup runtime loads and use that runtime's event-hub
+config plus session id. `SessionExecutionResources` now owns the shared tool
+registry plus model runtime registry instead of leaving them as flat
+`SessionRuntime` fields. `SessionHookResources` now owns the hook registry,
+hook LLM handle, hook event buffers, and FileChanged watcher instead of leaving
+hook orchestration handles as flat `SessionRuntime` fields.
+`SessionPersistenceResources` now owns the session manager, project storage
+paths, main transcript store, and persistence flag instead of leaving session
+storage as flat `SessionRuntime` fields.
+`SessionProjectResources` now owns the process runtime plus project-services
+snapshot instead of leaving project/process services as flat `SessionRuntime`
+fields.
+`SessionConfigResources` now owns the config home, per-session folded runtime
+config, and runtime reloader instead of leaving config/reload handles as flat
+`SessionRuntime` fields.
+`SessionCatalogResources` now owns the slash-command registry plus session
+skill manager instead of leaving command and skill catalogs as flat
+`SessionRuntime` fields.
+`SessionTurnResources` now owns the schedule store, side-query handle, usage
+accounting, mailbox, and optional permission bridge instead of leaving per-turn
+engine plumbing as flat `SessionRuntime` fields.
+`SessionLifecycleResources` now owns the session shutdown token plus
+PID-registry guard, and `SessionCommandResources` now owns the cross-turn
+command queue plus attachment channel, and `SessionTitleResources` now owns
+auto-title enablement plus the fast-model spec, and
+`SessionWorkspaceResources` now owns original cwd, project root, and live cwd
+and `SessionEngineConfigResources` now owns per-session engine config, the
+synchronous orchestration mirror, and model-role overrides, and
+`SessionEngineStateResources` now owns shared mutable engine state, file
+history/read state, app state, loop sentinel state, pending peer messages,
+auto-mode/denial state, transcript dedup, clear rewind snapshots, terminal-goal
+metadata flag, and tool-result replacement state, and
+`SessionIntegrationResources` now owns late-bound MCP/LSP handles, the live
+MCP manager slot, and the MCP reconnect key instead of leaving
+lifecycle/producer/title/workspace/config/engine-state/integration plumbing as
+flat `SessionRuntime` fields.
+`control/updateEnv` no longer stores an unused map on singleton session state; it
+remains an acknowledged control request until env control has a runtime/AppServer
+owner. The TUI skill watcher now uses the swappable current-session owner when
+handling debounced file changes, so skill ConfigChange hooks, catalog reload,
+and slash-command refresh target
+the post-resume / post-branch runtime. The TUI cron tick driver also reads the
+swappable owner on each tick, so scheduled prompts enqueue into the current
+runtime's command queue after startup resume, `/resume`, `/branch`, or
+`/clear`. The TUI ConfigChange watcher and permission notification bridge now
+resolve the same swappable owner before firing hooks, updating permission prompt
+state, or generating permission-risk explanations, so these paths no longer
+hold startup-only runtime handles.
 Local `session/start` and `session/resume` register the session in the local
 `AppServer` registry; resume first closes any previous local live slot for the
 single-session bridge so the resumed session can load without leaking registry
@@ -199,6 +306,14 @@ see current state.
 TUI `/cost` and `/status` route through local AppServer `session/cost` and
 `session/status`, so live usage/status observability uses the same handler
 boundary instead of direct TUI runtime reads.
+TUI `/compact` routes the existing compact sentinel through local AppServer
+`turn/start`, reusing the same handler-owned compaction shortcut as SDK mode
+and keeping interrupt/completion ownership on the AppServer turn path.
+TUI `/dream` and `/summary` do the same with their memory sentinels, so manual
+memory shortcuts no longer call `MemoryRuntime` directly from the TUI runner.
+TUI `/btw` also sends its sentinel through local AppServer `turn/start`, so the
+side-question fork and degraded no-dispatcher response live at the handler
+boundary instead of in the TUI runner.
 SDK `/cost`, `/status`, `/dream`, `/summary`, `/btw`, `/compact`, and
 `/goal` slash sentinels are intercepted in `turn/start` before a normal runner
 task is spawned. Cost/status reuse the same AppServer `session/cost` /
@@ -254,10 +369,10 @@ bridge installs the runtime's `FileHistoryState` and config home into
 In-session TUI `/resume <id>` and `/branch` route through local
 `ServerClient::session_resume`; the TUI keeps only target resolution/fork
 creation, coordinator-mode reconciliation, and UI reset/history hydration.
-TUI `/clear` still uses the runtime clear/retarget compatibility helper for
-id rotation, then closes the old local AppServer live slot and re-installs the
-post-clear runtime snapshot so local interactive/passive surfaces follow the
-new session id.
+TUI `/clear` now builds a fresh empty runtime through `SessionRuntimeFactory`,
+commits it through local AppServer replacement with a `Clear` close reason,
+copies only the live permission base plus the hidden pre-clear rewind prefix,
+and swaps the TUI current-session owner/local bridge to the returned handle.
 TUI `/rename`, `/tag`, `/branch` fork-title persistence, and post-plan
 auto-title persistence route session metadata writes through local AppServer
 `session/rename` and `session/toggleTag`; auto-rename still resolves the name

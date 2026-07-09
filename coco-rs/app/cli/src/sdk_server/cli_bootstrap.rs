@@ -223,7 +223,7 @@ impl InitializeBootstrap for CliInitializeBootstrap {
 /// Shared projection from a coco-rs [`AgentDefinition`] to the
 /// [`SdkAgentInfo`] wire shape. Missing descriptions become `""` to
 /// satisfy the required string field.
-fn def_to_sdk_agent_info(def: AgentDefinition) -> SdkAgentInfo {
+pub(crate) fn def_to_sdk_agent_info(def: AgentDefinition) -> SdkAgentInfo {
     SdkAgentInfo {
         name: def.name,
         description: def.description.unwrap_or_default(),

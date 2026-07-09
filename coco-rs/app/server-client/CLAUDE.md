@@ -149,8 +149,8 @@ transports.
 ## Pending
 
 Direct AppServer-owned persisted session-store listing/read semantics,
-runtime-backed replace semantics behind AppServer, and broader TUI/Hub cut-over
-remain pending follow-up work.
+public client-handle replace APIs beyond the CLI bridge, and broader TUI/Hub
+cut-over remain pending follow-up work.
 The client crate already exposes typed `session_list` / `session_read` request
 helpers; today the CLI's runtime-backed AppServer bridge layers live session
 visibility over the persisted handler response, while the CLI `SessionManager`

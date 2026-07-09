@@ -75,19 +75,19 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // Resolve the parent runtime config. The fork inherits the
         // parent's tool/sandbox/web_*/feature/role configuration so
         // the child engine sees the same world the parent does.
-        let runtime_config = self.session.runtime_config.as_ref();
+        let runtime_config = self.session.runtime_config().as_ref();
         let parent_engine_config = self.session.current_engine_config().await;
 
         // Forks inherit the parent's settings-driven permission rules via the
         // SHARED `ToolAppState.permissions` base (read-through each batch —
         // `build_fork_engine_from_config` passes `None`, so the engine shares
-        // `runtime.app_state`). The config no longer carries the rule maps, so
+        // `runtime.app_state()`). The config no longer carries the rule maps, so
         // there is nothing to re-resolve here; only the source roots stay on
         // the config for leading-`/` pattern resolution.
         let permission_rule_source_roots =
             crate::permission_rule_loader::permission_rule_source_roots(
                 &runtime_config.settings,
-                &self.session.original_cwd,
+                self.session.original_cwd(),
             );
 
         let sidechain_agent_id = (options.transcript_mode == ForkTranscriptMode::Sidechain)

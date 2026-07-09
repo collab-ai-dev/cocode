@@ -29,6 +29,9 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use super::ActiveTurnHandles;
+use super::SessionHandoffState;
+use super::SessionMetadata;
 use super::SessionStats;
 use super::TurnHandoff;
 use super::TurnRunner;
@@ -174,12 +177,27 @@ async fn build_sdk_test_runtime_with_session_id(
     let factory = crate::session_runtime::SessionRuntimeFactory::new(
         crate::session_runtime::SessionRuntimeFactoryOpts {
             cli: Arc::new(cli),
-            runtime_config: Arc::new(runtime_config),
+            bootstrap_source:
+                crate::session_runtime::SessionRuntimeBootstrapSource::startup_snapshot(
+                    crate::session_runtime::SessionRuntimeBootstrap {
+                        runtime_config: Arc::new(runtime_config),
+                        model_id,
+                        system_prompt: "test".to_string(),
+                        permission_mode_availability:
+                            coco_types::PermissionModeAvailability::default(),
+                        permission_mode: coco_types::PermissionMode::default(),
+                        command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
+                            coco_commands::CommandRegistry::default(),
+                        ))),
+                        skill_manager: Arc::new(coco_skills::SkillManager::new()),
+                        project_services: Arc::new(crate::project_services::ProjectServices::load(
+                            home, home,
+                        )),
+                        agent_search_paths:
+                            coco_subagent::definition_store::AgentSearchPaths::empty(),
+                    },
+                ),
             cwd: home.to_path_buf(),
-            model_id,
-            system_prompt: "test".to_string(),
-            permission_mode_availability: coco_types::PermissionModeAvailability::default(),
-            permission_mode: coco_types::PermissionMode::default(),
             model_runtimes: Some(coco_query::test_support::model_runtime_registry(Arc::new(
                 SdkStopTaskMockModel,
             ))),
@@ -187,13 +205,7 @@ async fn build_sdk_test_runtime_with_session_id(
             session_manager: Arc::new(coco_session::SessionManager::new(home.join("sessions"))),
             fast_model_spec: None,
             permission_bridge: None,
-            command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
-                coco_commands::CommandRegistry::default(),
-            ))),
-            skill_manager: Arc::new(coco_skills::SkillManager::new()),
             process_runtime: crate::process_runtime::ProcessRuntime::global(),
-            project_services: Arc::new(crate::project_services::ProjectServices::load(home, home)),
-            agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             is_non_interactive: false,
         },
@@ -227,6 +239,20 @@ async fn start_session(client: &InMemoryTransport) -> String {
             .to_string(),
         other => panic!("expected session/start response, got {other:?}"),
     }
+}
+
+async fn active_session_handoff(state: &Arc<SdkServerState>) -> SessionHandoffState {
+    let session_id = current_test_session_id(state).await;
+    state
+        .session_handoff_snapshot(&session_id)
+        .expect("session handoff installed")
+}
+
+async fn current_test_session_id(state: &Arc<SdkServerState>) -> coco_types::SessionId {
+    state
+        .sole_session_handoff_snapshot()
+        .map(|(session_id, _)| session_id)
+        .expect("session installed")
 }
 
 async fn drain_app_server_lifecycle(client: &InMemoryTransport) {
@@ -435,6 +461,40 @@ impl TurnRunner for PromptRecordingRunner {
     }
 }
 
+struct PlanInstructionRecordingRunner {
+    recorded: Arc<tokio::sync::Mutex<Option<Option<String>>>>,
+    completed: Arc<Notify>,
+}
+
+impl TurnRunner for PlanInstructionRecordingRunner {
+    fn run_turn<'a>(
+        &'a self,
+        _params: coco_types::TurnStartParams,
+        turn_id: coco_types::TurnId,
+        handoff: TurnHandoff,
+        event_tx: mpsc::Sender<CoreEvent>,
+        _cancel: CancellationToken,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        let recorded = Arc::clone(&self.recorded);
+        let completed = Arc::clone(&self.completed);
+        Box::pin(async move {
+            *recorded.lock().await = Some(handoff.plan_mode_instructions);
+            event_tx
+                .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
+                    TurnEndedParams::completed(
+                        turn_id,
+                        Some(coco_types::TokenUsage::default()),
+                        Some(coco_messages::StopReason::EndTurn),
+                    ),
+                )))
+                .await
+                .ok();
+            completed.notify_one();
+            Ok(())
+        })
+    }
+}
+
 /// Blocks until cancelled; sets a flag when it observes cancellation.
 struct BlockingRunner {
     cancelled: Arc<AtomicBool>,
@@ -621,6 +681,58 @@ async fn initialize_with_bootstrap_returns_real_commands() {
     server_task.await.unwrap();
 }
 
+#[tokio::test]
+async fn initialize_prefers_installed_runtime_metadata_over_bootstrap_snapshot() {
+    use crate::sdk_server::CliInitializeBootstrap;
+    use coco_commands::CommandRegistry;
+    use coco_commands::register_extended_builtins;
+
+    let (server_task, client, state) = spawn_server_with_state().await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+
+    let mut live_registry = CommandRegistry::new();
+    register_extended_builtins(&mut live_registry);
+    let live_command_count = live_registry.sdk_safe().len();
+    assert!(
+        live_command_count > 0,
+        "extended built-ins should expose SDK-safe commands"
+    );
+    *runtime.command_registry_slot().write().await = Arc::new(live_registry);
+    *state.session_runtime.write().await = Some(runtime);
+
+    let stale_bootstrap: Arc<dyn crate::sdk_server::InitializeBootstrap> = Arc::new(
+        CliInitializeBootstrap::new("Explanatory".into())
+            .with_available_output_styles(vec!["stale-only".into()]),
+    );
+    *state.initialize_bootstrap.write().await = Some(stale_bootstrap);
+
+    client
+        .send(req(1, "initialize", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Response(r) => {
+            let commands = r.result["commands"].as_array().expect("commands array");
+            assert_eq!(commands.len(), live_command_count);
+            assert_eq!(r.result["output_style"], "default");
+
+            let styles = r.result["available_output_styles"]
+                .as_array()
+                .expect("available_output_styles array");
+            assert!(styles.iter().any(|s| s == "default"));
+            assert!(styles.iter().any(|s| s == "Explanatory"));
+            assert!(styles.iter().any(|s| s == "Learning"));
+            assert!(!styles.iter().any(|s| s == "stale-only"));
+        }
+        other => panic!("expected Response, got {other:?}"),
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
 /// Mock [`InitializeBootstrap`] used to exercise the serialization
 /// round-trip for `fast_mode_state: Some(...)` — the `CliInitializeBootstrap`
 /// impl currently stubs this field to `None`, so a regression in the
@@ -749,14 +861,60 @@ async fn initialize_plan_mode_instructions_are_session_scoped() {
     let start_reply = client.recv().await.unwrap().unwrap();
     assert!(matches!(start_reply, JsonRpcMessage::Response(_)));
 
-    let slot = state.session.read().await;
-    let session = slot.as_ref().expect("session installed");
+    let session = current_test_session_id(&state).await;
     assert_eq!(
-        session.plan_mode_instructions.as_deref(),
+        state.session_plan_mode_instructions(&session).as_deref(),
         Some("Use the SDK custom workflow.")
     );
 
-    drop(slot);
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn turn_start_handoff_uses_session_scoped_plan_mode_instructions() {
+    let recorded = Arc::new(tokio::sync::Mutex::new(None));
+    let completed = Arc::new(Notify::new());
+    let runner = Arc::new(PlanInstructionRecordingRunner {
+        recorded: Arc::clone(&recorded),
+        completed: Arc::clone(&completed),
+    });
+    let (server_task, client) = spawn_server_with_runner(runner).await;
+
+    client
+        .send(req(
+            1,
+            "initialize",
+            serde_json::json!({
+                "planModeInstructions": "Use the SDK custom workflow."
+            }),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.recv().await.unwrap().unwrap(),
+        JsonRpcMessage::Response(_)
+    ));
+
+    start_session(&client).await;
+
+    client
+        .send(req(2, "turn/start", serde_json::json!({ "prompt": "hi" })))
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.recv().await.unwrap().unwrap(),
+        JsonRpcMessage::Response(_)
+    ));
+    tokio::time::timeout(Duration::from_secs(1), completed.notified())
+        .await
+        .expect("turn should complete");
+
+    assert_eq!(
+        recorded.lock().await.clone(),
+        Some(Some("Use the SDK custom workflow.".to_string()))
+    );
+
     drop(client);
     server_task.await.unwrap();
 }
@@ -794,7 +952,7 @@ async fn session_start_returns_session_id() {
 }
 
 #[tokio::test]
-async fn session_start_persists_permission_mode_to_session_state() {
+async fn session_start_seeds_permission_mode_to_live_app_state() {
     let (server_task, client, state) = spawn_server_with_state().await;
 
     client
@@ -812,14 +970,8 @@ async fn session_start_persists_permission_mode_to_session_state() {
     let reply = client.recv().await.unwrap().unwrap();
     assert!(matches!(reply, JsonRpcMessage::Response(_)));
 
-    let slot = state.session.read().await;
-    let session = slot.as_ref().expect("session installed");
-    assert_eq!(
-        session.permission_mode,
-        Some(coco_types::PermissionMode::Auto),
-        "session/start permission_mode must be visible to turn/start"
-    );
-    let app_state = session.app_state.read().await;
+    let handoff = active_session_handoff(&state).await;
+    let app_state = handoff.app_state.read().await;
     assert_eq!(
         app_state.permissions.mode,
         Some(coco_types::PermissionMode::Auto),
@@ -827,14 +979,13 @@ async fn session_start_persists_permission_mode_to_session_state() {
     );
 
     drop(app_state);
-    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }
 
 #[tokio::test]
-async fn session_start_rejects_second_concurrent_session() {
-    let (server_task, client) = spawn_server().await;
+async fn session_start_replaces_previous_appserver_session() {
+    let (server_task, client, state) = spawn_server_with_state().await;
 
     client
         .send(req(1, "session/start", serde_json::json!({})))
@@ -848,13 +999,38 @@ async fn session_start_rejects_second_concurrent_session() {
         .await
         .unwrap();
     let second = client.recv().await.unwrap().unwrap();
-    match second {
-        JsonRpcMessage::Error(e) => {
-            assert_eq!(e.error.code, error_codes::INVALID_REQUEST);
-            assert!(e.error.message.contains("already active"));
+    assert!(matches!(second, JsonRpcMessage::Response(_)));
+    assert!(state.sole_session_handoff_snapshot().is_some());
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn session_start_with_installed_runtime_requires_replacement_path() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    *state.session_runtime.write().await = Some(runtime);
+
+    client
+        .send(req(1, "session/start", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Error(error) => {
+            assert_eq!(error.error.code, error_codes::INVALID_REQUEST);
+            assert!(
+                error
+                    .error
+                    .message
+                    .contains("requires AppServer runtime replacement")
+            );
         }
         other => panic!("expected Error, got {other:?}"),
     }
+    assert!(state.sole_session_handoff_snapshot().is_none());
 
     drop(client);
     server_task.await.unwrap();
@@ -944,6 +1120,66 @@ async fn turn_start_returns_turn_id_and_forwards_notifications() {
 }
 
 #[tokio::test]
+async fn turn_start_without_surface_scope_prefers_runtime_scoped_state() {
+    let completed = Arc::new(Notify::new());
+    let state = Arc::new(SdkServerState::default());
+    {
+        let mut runner = state.turn_runner.write().await;
+        *runner = Arc::new(ScriptedRunner {
+            completed: completed.clone(),
+        });
+    }
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    let runtime_session_id = runtime.current_typed_session_id().await;
+    *state.session_runtime.write().await = Some(runtime);
+    state.set_session_handoff(runtime_session_id.clone(), SessionHandoffState::new());
+
+    let (notif_tx, _notif_rx) = mpsc::channel(8);
+    let ctx = super::HandlerContext {
+        notif_tx,
+        state: Arc::clone(&state),
+        scoped_session_id: None,
+    };
+    let result = super::turn::handle_turn_start(
+        coco_types::TurnStartParams {
+            prompt: "hi".to_string(),
+            history_override: Vec::new(),
+            images: Vec::new(),
+            slash_metadata: None,
+            model_selection: None,
+            permission_mode: None,
+            thinking_level: None,
+        },
+        &ctx,
+    )
+    .await;
+
+    let super::HandlerResult::Ok(value) = result else {
+        panic!("turn/start should succeed");
+    };
+    assert_eq!(
+        value["turn_id"],
+        serde_json::json!(format!("turn-{runtime_session_id}-1"))
+    );
+    tokio::time::timeout(Duration::from_secs(1), completed.notified())
+        .await
+        .expect("runner should complete");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while state.has_active_turn(&runtime_session_id) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("runtime-backed turn should clear keyed active-turn state");
+    assert!(
+        state
+            .session_handoff_snapshot(&runtime_session_id)
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn turn_start_cost_and_status_sentinels_use_appserver_observability_handlers() {
     let runner_called = Arc::new(AtomicBool::new(false));
     let runner = Arc::new(FlaggingRunner {
@@ -995,10 +1231,9 @@ async fn turn_start_cost_and_status_sentinels_use_appserver_observability_handle
         !runner_called.load(Ordering::SeqCst),
         "observability sentinels should not invoke the turn runner"
     );
-    let slot = state.session.read().await;
-    let session = slot.as_ref().expect("active session");
-    assert!(session.active_turn_cancel.is_none());
-    let history = session.history.lock().await;
+    assert!(!state.has_active_turn(&test_session_id(&session_id)));
+    let handoff = active_session_handoff(&state).await;
+    let history = handoff.history.lock().await;
     assert_eq!(history.len(), 2);
     let cost_text = coco_messages::wrapping::extract_text_from_message(&history[0]);
     let status_text = coco_messages::wrapping::extract_text_from_message(&history[1]);
@@ -1008,7 +1243,6 @@ async fn turn_start_cost_and_status_sentinels_use_appserver_observability_handle
     assert!(!status_text.contains(coco_commands::STATUS_SENTINEL));
 
     drop(history);
-    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }
@@ -1058,14 +1292,12 @@ async fn turn_start_rename_sentinel_uses_appserver_session_rename_handler() {
         !runner_called.load(Ordering::SeqCst),
         "rename sentinel should not invoke the turn runner"
     );
-    let slot = state.session.read().await;
-    let session = slot.as_ref().expect("active session");
-    assert!(session.active_turn_cancel.is_none());
-    assert!(session.history.lock().await.is_empty());
-    drop(slot);
+    assert!(!state.has_active_turn(&test_session_id(&session_id)));
+    let handoff = active_session_handoff(&state).await;
+    assert!(handoff.history.lock().await.is_empty());
 
     let persisted = runtime
-        .session_manager
+        .session_manager()
         .load(runtime_session_id.as_str())
         .expect("renamed session should load");
     assert_eq!(persisted.title.as_deref(), Some("fix-login"));
@@ -1095,14 +1327,36 @@ async fn turn_start_memory_sentinels_do_not_invoke_runner_when_memory_runtime_ab
         ))
         .await
         .unwrap();
-    let dream_reply = client.recv().await.unwrap().unwrap();
-    let JsonRpcMessage::Response(dream_response) = dream_reply else {
-        panic!("expected dream turn/start response");
-    };
-    let dream_turn_id = dream_response.result["turn_id"]
-        .as_str()
-        .expect("dream turn_id");
+    let mut dream_turn_id = None;
+    let mut dream_started = false;
+    let mut dream_ended = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline
+        && (dream_turn_id.is_none() || !dream_started || !dream_ended)
+    {
+        match tokio::time::timeout(Duration::from_millis(500), client.recv()).await {
+            Ok(Ok(Some(JsonRpcMessage::Response(response))))
+                if response.request_id == RequestId::Integer(2) =>
+            {
+                dream_turn_id = response.result["turn_id"].as_str().map(str::to_string);
+            }
+            Ok(Ok(Some(JsonRpcMessage::Notification(notification))))
+                if notification.method == NotificationMethod::TurnStarted.as_str() =>
+            {
+                dream_started = true;
+            }
+            Ok(Ok(Some(JsonRpcMessage::Notification(notification))))
+                if notification.method == NotificationMethod::TurnEnded.as_str() =>
+            {
+                dream_ended = true;
+            }
+            _ => {}
+        }
+    }
+    let dream_turn_id = dream_turn_id.expect("dream turn/start response");
     assert_eq!(dream_turn_id, format!("turn-{session_id}-1"));
+    assert!(dream_started, "dream shortcut should emit turn/started");
+    assert!(dream_ended, "dream shortcut should emit turn/ended");
 
     client
         .send(req(
@@ -1114,25 +1368,45 @@ async fn turn_start_memory_sentinels_do_not_invoke_runner_when_memory_runtime_ab
         ))
         .await
         .unwrap();
-    let summary_reply = client.recv().await.unwrap().unwrap();
-    let JsonRpcMessage::Response(summary_response) = summary_reply else {
-        panic!("expected summary turn/start response");
-    };
-    let summary_turn_id = summary_response.result["turn_id"]
-        .as_str()
-        .expect("summary turn_id");
+    let mut summary_turn_id = None;
+    let mut summary_started = false;
+    let mut summary_ended = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline
+        && (summary_turn_id.is_none() || !summary_started || !summary_ended)
+    {
+        match tokio::time::timeout(Duration::from_millis(500), client.recv()).await {
+            Ok(Ok(Some(JsonRpcMessage::Response(response))))
+                if response.request_id == RequestId::Integer(3) =>
+            {
+                summary_turn_id = response.result["turn_id"].as_str().map(str::to_string);
+            }
+            Ok(Ok(Some(JsonRpcMessage::Notification(notification))))
+                if notification.method == NotificationMethod::TurnStarted.as_str() =>
+            {
+                summary_started = true;
+            }
+            Ok(Ok(Some(JsonRpcMessage::Notification(notification))))
+                if notification.method == NotificationMethod::TurnEnded.as_str() =>
+            {
+                summary_ended = true;
+            }
+            _ => {}
+        }
+    }
+    let summary_turn_id = summary_turn_id.expect("summary turn/start response");
     assert_eq!(summary_turn_id, format!("turn-{session_id}-2"));
+    assert!(summary_started, "summary shortcut should emit turn/started");
+    assert!(summary_ended, "summary shortcut should emit turn/ended");
 
     assert!(
         !runner_called.load(Ordering::SeqCst),
         "memory sentinels should not invoke the turn runner"
     );
-    let slot = state.session.read().await;
-    let session = slot.as_ref().expect("active session");
-    assert!(session.active_turn_cancel.is_none());
-    assert!(session.history.lock().await.is_empty());
+    assert!(!state.has_active_turn(&test_session_id(&session_id)));
+    let handoff = active_session_handoff(&state).await;
+    assert!(handoff.history.lock().await.is_empty());
 
-    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }
@@ -1162,9 +1436,11 @@ async fn turn_start_btw_sentinel_uses_handler_shortcut_without_runner() {
 
     let mut turn_start_reply = None;
     let mut message_append_count = 0;
+    let mut turn_started = false;
+    let mut turn_ended = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while tokio::time::Instant::now() < deadline
-        && (turn_start_reply.is_none() || message_append_count < 2)
+        && (turn_start_reply.is_none() || message_append_count < 2 || !turn_started || !turn_ended)
     {
         match tokio::time::timeout(Duration::from_millis(500), client.recv()).await {
             Ok(Ok(Some(JsonRpcMessage::Response(response))))
@@ -1177,6 +1453,16 @@ async fn turn_start_btw_sentinel_uses_handler_shortcut_without_runner() {
             {
                 message_append_count += 1;
             }
+            Ok(Ok(Some(JsonRpcMessage::Notification(notification))))
+                if notification.method == NotificationMethod::TurnStarted.as_str() =>
+            {
+                turn_started = true;
+            }
+            Ok(Ok(Some(JsonRpcMessage::Notification(notification))))
+                if notification.method == NotificationMethod::TurnEnded.as_str() =>
+            {
+                turn_ended = true;
+            }
             _ => {}
         }
     }
@@ -1185,15 +1471,16 @@ async fn turn_start_btw_sentinel_uses_handler_shortcut_without_runner() {
     let turn_id = response.result["turn_id"].as_str().expect("turn_id");
     assert_eq!(turn_id, format!("turn-{session_id}-1"));
     assert_eq!(message_append_count, 2);
+    assert!(turn_started, "btw shortcut should emit turn/started");
+    assert!(turn_ended, "btw shortcut should emit turn/ended");
 
     assert!(
         !runner_called.load(Ordering::SeqCst),
         "btw sentinel should not invoke the turn runner"
     );
-    let slot = state.session.read().await;
-    let session = slot.as_ref().expect("active session");
-    assert!(session.active_turn_cancel.is_none());
-    let history = session.history.lock().await;
+    assert!(!state.has_active_turn(&test_session_id(&session_id)));
+    let handoff = active_session_handoff(&state).await;
+    let history = handoff.history.lock().await;
     assert_eq!(history.len(), 2);
     let echo = coco_messages::wrapping::extract_text_from_message(&history[0]);
     let result = coco_messages::wrapping::extract_text_from_message(&history[1]);
@@ -1204,7 +1491,6 @@ async fn turn_start_btw_sentinel_uses_handler_shortcut_without_runner() {
     assert!(!result.contains(coco_commands::handlers::btw::BTW_SENTINEL));
 
     drop(history);
-    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }
@@ -1263,12 +1549,7 @@ async fn turn_start_compact_sentinel_uses_handler_shortcut_without_runner() {
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while tokio::time::Instant::now() < deadline {
-        let active = state
-            .session
-            .read()
-            .await
-            .as_ref()
-            .is_some_and(|session| session.active_turn_cancel.is_some());
+        let active = state.has_active_turn(&test_session_id(&session_id));
         if !active {
             break;
         }
@@ -1279,10 +1560,9 @@ async fn turn_start_compact_sentinel_uses_handler_shortcut_without_runner() {
         !runner_called.load(Ordering::SeqCst),
         "compact sentinel should not invoke the turn runner"
     );
-    let slot = state.session.read().await;
-    let session = slot.as_ref().expect("active session");
-    assert!(session.active_turn_cancel.is_none());
-    let history = session.history.lock().await;
+    assert!(!state.has_active_turn(&test_session_id(&session_id)));
+    let handoff = active_session_handoff(&state).await;
+    let history = handoff.history.lock().await;
     assert_eq!(history.len(), 2);
     let echo = coco_messages::wrapping::extract_text_from_message(&history[0]);
     let result = coco_messages::wrapping::extract_text_from_message(&history[1]);
@@ -1297,7 +1577,6 @@ async fn turn_start_compact_sentinel_uses_handler_shortcut_without_runner() {
 
     drop(runtime_history);
     drop(history);
-    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }
@@ -1343,9 +1622,8 @@ async fn turn_start_goal_status_and_clear_sentinels_use_handler_shortcut_without
     assert_eq!(status_turn_id, format!("turn-{session_id}-1"));
 
     {
-        let slot = state.session.read().await;
-        let session = slot.as_ref().expect("active session");
-        session.app_state.write().await.active_goal = Some(crate::goal_command::active_goal(
+        let handoff = active_session_handoff(&state).await;
+        handoff.app_state.write().await.active_goal = Some(crate::goal_command::active_goal(
             "finish migration".to_string(),
             0,
         ));
@@ -1387,11 +1665,10 @@ async fn turn_start_goal_status_and_clear_sentinels_use_handler_shortcut_without
         !runner_called.load(Ordering::SeqCst),
         "goal status/clear sentinels should not invoke the turn runner"
     );
-    let slot = state.session.read().await;
-    let session = slot.as_ref().expect("active session");
-    assert!(session.active_turn_cancel.is_none());
-    assert!(session.app_state.read().await.active_goal.is_none());
-    let history = session.history.lock().await;
+    assert!(!state.has_active_turn(&test_session_id(&session_id)));
+    let handoff = active_session_handoff(&state).await;
+    assert!(handoff.app_state.read().await.active_goal.is_none());
+    let history = handoff.history.lock().await;
     let rendered = history
         .iter()
         .map(|message| coco_messages::wrapping::extract_text_from_message(message))
@@ -1402,7 +1679,6 @@ async fn turn_start_goal_status_and_clear_sentinels_use_handler_shortcut_without
     assert!(!rendered.contains(coco_commands::GOAL_SENTINEL));
 
     drop(history);
-    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }
@@ -1463,22 +1739,16 @@ async fn turn_start_goal_set_sentinel_rewrites_prompt_before_runner() {
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while tokio::time::Instant::now() < deadline {
-        let active = state
-            .session
-            .read()
-            .await
-            .as_ref()
-            .is_some_and(|session| session.active_turn_cancel.is_some());
+        let active = state.has_active_turn(&test_session_id(&session_id));
         if !active {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    let slot = state.session.read().await;
-    let session = slot.as_ref().expect("active session");
-    assert!(session.active_turn_cancel.is_none());
-    let active_goal = session
+    assert!(!state.has_active_turn(&test_session_id(&session_id)));
+    let handoff = active_session_handoff(&state).await;
+    let active_goal = handoff
         .app_state
         .read()
         .await
@@ -1486,7 +1756,7 @@ async fn turn_start_goal_set_sentinel_rewrites_prompt_before_runner() {
         .clone()
         .expect("active goal");
     assert_eq!(active_goal.condition, "finish the app-server migration");
-    let history = session.history.lock().await;
+    let history = handoff.history.lock().await;
     let rendered = history
         .iter()
         .map(|message| coco_messages::wrapping::extract_text_from_message(message))
@@ -1496,7 +1766,6 @@ async fn turn_start_goal_set_sentinel_rewrites_prompt_before_runner() {
     assert!(!rendered.contains(coco_commands::GOAL_SENTINEL));
 
     drop(history);
-    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }
@@ -1803,7 +2072,7 @@ async fn session_archive_clears_active_session() {
         .unwrap();
     let start_reply = client.recv().await.unwrap().unwrap();
     let session_id = match start_reply {
-        JsonRpcMessage::Response(r) => r.result["session_id"].as_str().unwrap().to_string(),
+        JsonRpcMessage::Response(r) => test_session_id(r.result["session_id"].as_str().unwrap()),
         other => panic!("expected Response, got {other:?}"),
     };
 
@@ -1821,7 +2090,7 @@ async fn session_archive_clears_active_session() {
     match client.recv().await.unwrap().unwrap() {
         JsonRpcMessage::Notification(n) => {
             assert_eq!(n.method, "session/result");
-            assert_eq!(n.params["session_id"], session_id);
+            assert_eq!(n.params["session_id"], session_id.as_str());
             assert_eq!(n.params["total_turns"], 0);
             assert_eq!(n.params["is_error"], false);
         }
@@ -1920,8 +2189,42 @@ async fn set_model_updates_session_model() {
     let reply = client.recv().await.unwrap().unwrap();
     assert!(matches!(reply, JsonRpcMessage::Response(_)));
 
-    let slot = state.session.read().await;
-    assert_eq!(slot.as_ref().unwrap().model, "claude-sonnet-4-6");
+    let session_id = current_test_session_id(&state).await;
+    assert_eq!(
+        state.session_metadata_snapshot(&session_id).unwrap().model,
+        "claude-sonnet-4-6"
+    );
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn set_model_updates_runtime_engine_config() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+    start_session(&client).await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    *state.session_runtime.write().await = Some(runtime.clone());
+
+    client
+        .send(req(
+            2,
+            "control/setModel",
+            serde_json::json!({ "model": "claude-sonnet-4-6" }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(reply, JsonRpcMessage::Response(_)));
+
+    let cfg = runtime.runtime().current_engine_config().await;
+    assert_eq!(cfg.model_id, "claude-sonnet-4-6");
+    let session_id = current_test_session_id(&state).await;
+    assert_eq!(
+        state.session_metadata_snapshot(&session_id).unwrap().model,
+        "claude-sonnet-4-6"
+    );
 
     drop(client);
     server_task.await.unwrap();
@@ -1939,8 +2242,11 @@ async fn set_model_with_null_reverts_to_default() {
         .unwrap();
     let _ = client.recv().await.unwrap().unwrap();
 
-    let slot = state.session.read().await;
-    assert_eq!(slot.as_ref().unwrap().model, "claude-opus-4-6");
+    let session_id = current_test_session_id(&state).await;
+    assert_eq!(
+        state.session_metadata_snapshot(&session_id).unwrap().model,
+        "claude-opus-4-6"
+    );
 
     drop(client);
     server_task.await.unwrap();
@@ -1979,7 +2285,7 @@ async fn set_model_role_without_session_runtime_errors() {
 }
 
 #[tokio::test]
-async fn set_permission_mode_updates_session_field() {
+async fn set_permission_mode_updates_live_app_state() {
     let (server_task, client, state) = spawn_server_with_state().await;
 
     start_session(&client).await;
@@ -2016,17 +2322,8 @@ async fn set_permission_mode_updates_session_field() {
         "permission/modeChanged notification must be emitted"
     );
 
-    let slot = state.session.read().await;
-    let session = slot.as_ref().unwrap();
-    assert!(matches!(
-        session.permission_mode,
-        Some(coco_types::PermissionMode::Plan)
-    ));
-    // Regression guard for G2: `control/setPermissionMode` must
-    // propagate to `app_state.permission_mode` — the engine's live
-    // source of truth. Before the wire-up, only the SessionHandle
-    // field was written (dead API, no reader).
-    let app_state_guard = session.app_state.read().await;
+    let handoff = active_session_handoff(&state).await;
+    let app_state_guard = handoff.app_state.read().await;
     assert_eq!(
         app_state_guard.permissions.mode,
         Some(coco_types::PermissionMode::Plan),
@@ -2049,6 +2346,42 @@ async fn set_permission_mode_updates_session_field() {
     drop(app_state_guard);
     drop(client);
     server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn set_permission_mode_updates_runtime_without_keyed_session_state() {
+    let state = Arc::new(SdkServerState::default());
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    let runtime_session_id = runtime.current_typed_session_id().await;
+    *state.session_runtime.write().await = Some(runtime.clone());
+    let (notif_tx, _notif_rx) = mpsc::channel(4);
+    let ctx = super::HandlerContext {
+        notif_tx,
+        state: Arc::clone(&state),
+        scoped_session_id: None,
+    };
+
+    let result = super::runtime::handle_set_permission_mode(
+        coco_types::SetPermissionModeParams {
+            mode: coco_types::PermissionMode::Plan,
+        },
+        &ctx,
+    )
+    .await;
+
+    assert!(matches!(result, super::HandlerResult::Ok(_)));
+    assert_eq!(
+        state.runtime_or_active_session_id().await,
+        Some(runtime_session_id)
+    );
+    let cfg = runtime.current_engine_config().await;
+    assert_eq!(cfg.permission_mode, coco_types::PermissionMode::Plan);
+    let app_state = runtime.app_state().read().await;
+    assert_eq!(
+        app_state.permissions.mode,
+        Some(coco_types::PermissionMode::Plan)
+    );
 }
 
 #[tokio::test]
@@ -2099,17 +2432,9 @@ async fn set_permission_mode_rejects_bypass_without_capability() {
         msg = err.error.message
     );
 
-    // Session mode was NOT mutated.
-    let slot = state.session.read().await;
-    let session = slot.as_ref().unwrap();
-    assert!(
-        !matches!(
-            session.permission_mode,
-            Some(coco_types::PermissionMode::BypassPermissions)
-        ),
-        "rejected request must not write session.permission_mode"
-    );
-    let app_state_guard = session.app_state.read().await;
+    // Live app-state mode was NOT mutated.
+    let handoff = active_session_handoff(&state).await;
+    let app_state_guard = handoff.app_state.read().await;
     assert!(
         !matches!(
             app_state_guard.permissions.mode,
@@ -2119,7 +2444,6 @@ async fn set_permission_mode_rejects_bypass_without_capability() {
     );
 
     drop(app_state_guard);
-    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }
@@ -2186,9 +2510,8 @@ async fn set_permission_mode_auto_to_default_clears_stripped_rules() {
 
     // Pre-populate app_state as if Auto was active.
     {
-        let slot = state.session.read().await;
-        let session = slot.as_ref().unwrap();
-        let mut guard = session.app_state.write().await;
+        let handoff = active_session_handoff(&state).await;
+        let mut guard = handoff.app_state.write().await;
         guard.permissions.mode = Some(coco_types::PermissionMode::Auto);
         guard.permissions.stripped_dangerous_rules =
             Some(coco_types::PermissionRulesBySource::default());
@@ -2205,9 +2528,8 @@ async fn set_permission_mode_auto_to_default_clears_stripped_rules() {
         .unwrap();
     let _ = client.recv().await.unwrap().unwrap();
 
-    let slot = state.session.read().await;
-    let session = slot.as_ref().unwrap();
-    let guard = session.app_state.read().await;
+    let handoff = active_session_handoff(&state).await;
+    let guard = handoff.app_state.read().await;
     assert_eq!(
         guard.permissions.mode,
         Some(coco_types::PermissionMode::Default)
@@ -2218,7 +2540,6 @@ async fn set_permission_mode_auto_to_default_clears_stripped_rules() {
     );
 
     drop(guard);
-    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }
@@ -2230,10 +2551,8 @@ async fn set_permission_mode_auto_to_plan_preserves_previous_mode() {
     start_session(&client).await;
 
     {
-        let mut slot = state.session.write().await;
-        let session = slot.as_mut().unwrap();
-        session.permission_mode = Some(coco_types::PermissionMode::Auto);
-        let mut guard = session.app_state.write().await;
+        let handoff = active_session_handoff(&state).await;
+        let mut guard = handoff.app_state.write().await;
         guard.permissions.mode = Some(coco_types::PermissionMode::Auto);
         guard.permissions.stripped_dangerous_rules =
             Some(coco_types::PermissionRulesBySource::default());
@@ -2257,13 +2576,8 @@ async fn set_permission_mode_auto_to_plan_preserves_previous_mode() {
         }
     }
 
-    let slot = state.session.read().await;
-    let session = slot.as_ref().unwrap();
-    assert_eq!(
-        session.permission_mode,
-        Some(coco_types::PermissionMode::Plan)
-    );
-    let guard = session.app_state.read().await;
+    let handoff = active_session_handoff(&state).await;
+    let guard = handoff.app_state.read().await;
     assert_eq!(
         guard.permissions.mode,
         Some(coco_types::PermissionMode::Plan)
@@ -2284,8 +2598,8 @@ async fn set_permission_mode_auto_to_plan_preserves_previous_mode() {
 }
 
 #[tokio::test]
-async fn set_thinking_updates_session_field() {
-    let (server_task, client, state) = spawn_server_with_state().await;
+async fn set_thinking_without_runtime_succeeds_without_slot_metadata() {
+    let (server_task, client, _state) = spawn_server_with_state().await;
 
     start_session(&client).await;
 
@@ -2304,11 +2618,6 @@ async fn set_thinking_updates_session_field() {
         .unwrap();
     let reply = client.recv().await.unwrap().unwrap();
     assert!(matches!(reply, JsonRpcMessage::Response(_)));
-
-    let slot = state.session.read().await;
-    let tl = slot.as_ref().unwrap().thinking_level.as_ref().unwrap();
-    assert_eq!(tl.effort, coco_types::ReasoningEffort::High);
-    assert_eq!(tl.budget_tokens, Some(4096));
 
     drop(client);
     server_task.await.unwrap();
@@ -2365,6 +2674,43 @@ async fn set_thinking_updates_runtime_and_emits_role_changed() {
 
     drop(client);
     server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn set_thinking_updates_runtime_without_keyed_session_state() {
+    let state = Arc::new(SdkServerState::default());
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    let runtime_session_id = runtime.current_typed_session_id().await;
+    *state.session_runtime.write().await = Some(runtime.clone());
+    let (notif_tx, _notif_rx) = mpsc::channel(4);
+    let ctx = super::HandlerContext {
+        notif_tx,
+        state: Arc::clone(&state),
+        scoped_session_id: None,
+    };
+
+    let result = super::runtime::handle_set_thinking(
+        coco_types::SetThinkingParams {
+            thinking_level: Some(coco_types::ThinkingLevel {
+                effort: coco_types::ReasoningEffort::High,
+                budget_tokens: Some(4096),
+                ..Default::default()
+            }),
+        },
+        &ctx,
+    )
+    .await;
+
+    assert!(matches!(result, super::HandlerResult::Ok(_)));
+    assert_eq!(
+        state.runtime_or_active_session_id().await,
+        Some(runtime_session_id)
+    );
+    let cfg = runtime.current_engine_config().await;
+    let thinking = cfg.thinking_level.expect("runtime thinking level");
+    assert_eq!(thinking.effort, coco_types::ReasoningEffort::High);
+    assert_eq!(thinking.budget_tokens, Some(4096));
 }
 
 #[tokio::test]
@@ -2452,7 +2798,7 @@ async fn set_agent_color_updates_live_app_state() {
     let reply = client.recv().await.unwrap().unwrap();
     assert!(matches!(reply, JsonRpcMessage::Response(_)));
     assert_eq!(
-        runtime.runtime().app_state.read().await.agent_color,
+        runtime.runtime().app_state().read().await.agent_color,
         Some(coco_types::AgentColorName::Blue)
     );
 
@@ -2462,7 +2808,7 @@ async fn set_agent_color_updates_live_app_state() {
         .unwrap();
     let reply = client.recv().await.unwrap().unwrap();
     assert!(matches!(reply, JsonRpcMessage::Response(_)));
-    assert_eq!(runtime.runtime().app_state.read().await.agent_color, None);
+    assert_eq!(runtime.runtime().app_state().read().await.agent_color, None);
 
     drop(client);
     server_task.await.unwrap();
@@ -2521,7 +2867,7 @@ async fn reset_session_permission_rules_clears_live_session_allow_and_deny_rules
     };
     {
         let session_runtime = runtime.runtime();
-        let mut app_state = session_runtime.app_state.write().await;
+        let mut app_state = session_runtime.app_state().write().await;
         app_state
             .permissions
             .allow_rules
@@ -2551,7 +2897,7 @@ async fn reset_session_permission_rules_clears_live_session_allow_and_deny_rules
     }
 
     let session_runtime = runtime.runtime();
-    let app_state = session_runtime.app_state.read().await;
+    let app_state = session_runtime.app_state().read().await;
     assert!(
         !app_state
             .permissions
@@ -2715,8 +3061,8 @@ async fn stop_task_with_runtime_but_no_task_runtime_does_not_cancel_active_turn(
 }
 
 #[tokio::test]
-async fn update_env_merges_and_clears() {
-    let (server_task, client, state) = spawn_server_with_state().await;
+async fn update_env_accepts_active_session_without_slot_storage() {
+    let (server_task, client, _state) = spawn_server_with_state().await;
 
     start_session(&client).await;
 
@@ -2730,14 +3076,8 @@ async fn update_env_merges_and_clears() {
         ))
         .await
         .unwrap();
-    let _ = client.recv().await.unwrap();
-
-    {
-        let slot = state.session.read().await;
-        let env = &slot.as_ref().unwrap().env_overrides;
-        assert_eq!(env.get("FOO").map(String::as_str), Some("1"));
-        assert_eq!(env.get("BAR").map(String::as_str), Some("2"));
-    }
+    let reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(reply, JsonRpcMessage::Response(_)));
 
     client
         .send(req(
@@ -2749,15 +3089,68 @@ async fn update_env_merges_and_clears() {
         ))
         .await
         .unwrap();
-    let _ = client.recv().await.unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(reply, JsonRpcMessage::Response(_)));
 
-    let slot = state.session.read().await;
-    let env = &slot.as_ref().unwrap().env_overrides;
-    assert!(!env.contains_key("FOO"));
-    assert_eq!(env.get("BAR").map(String::as_str), Some("2"));
-    assert_eq!(env.get("BAZ").map(String::as_str), Some("3"));
+    drop(client);
+    server_task.await.unwrap();
+}
 
-    drop(slot);
+#[tokio::test]
+async fn update_env_accepts_runtime_without_keyed_session_state() {
+    let state = Arc::new(SdkServerState::default());
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    let runtime_session_id = runtime.current_typed_session_id().await;
+    *state.session_runtime.write().await = Some(runtime);
+    let (notif_tx, _notif_rx) = mpsc::channel(4);
+    let ctx = super::HandlerContext {
+        notif_tx,
+        state: Arc::clone(&state),
+        scoped_session_id: None,
+    };
+
+    let result = super::runtime::handle_update_env(
+        coco_types::UpdateEnvParams {
+            env: std::collections::HashMap::from([
+                ("FOO".to_string(), "1".to_string()),
+                ("BAR".to_string(), String::new()),
+            ]),
+        },
+        &ctx,
+    )
+    .await;
+
+    assert!(matches!(result, super::HandlerResult::Ok(_)));
+    assert_eq!(
+        state.runtime_or_active_session_id().await,
+        Some(runtime_session_id)
+    );
+}
+
+#[tokio::test]
+async fn update_env_without_active_session_errors() {
+    let (server_task, client, _state) = spawn_server_with_state().await;
+
+    client
+        .send(req(
+            2,
+            "control/updateEnv",
+            serde_json::json!({
+                "env": { "FOO": "1" }
+            }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Error(error) => {
+            assert_eq!(error.error.code, error_codes::INVALID_REQUEST);
+            assert!(error.error.message.contains("no active session"));
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
     drop(client);
     server_task.await.unwrap();
 }
@@ -2879,7 +3272,7 @@ async fn session_archive_emits_aggregated_session_result() {
         .unwrap();
     let start_reply = client.recv().await.unwrap().unwrap();
     let session_id = match start_reply {
-        JsonRpcMessage::Response(r) => r.result["session_id"].as_str().unwrap().to_string(),
+        JsonRpcMessage::Response(r) => test_session_id(r.result["session_id"].as_str().unwrap()),
         other => panic!("expected Response, got {other:?}"),
     };
 
@@ -2893,8 +3286,8 @@ async fn session_archive_emits_aggregated_session_result() {
     }
 
     {
-        let slot = state.session.read().await;
-        let stats = &slot.as_ref().unwrap().stats;
+        let accounting = state.session_accounting_snapshot(&session_id);
+        let stats = &accounting.stats;
         assert_eq!(stats.total_turns, 2);
         assert_eq!(stats.usage.input_tokens.total, 400);
         assert_eq!(stats.usage.output_tokens.total, 160);
@@ -2908,7 +3301,7 @@ async fn session_archive_emits_aggregated_session_result() {
         .send(req(
             4,
             "session/archive",
-            serde_json::json!({ "session_id": session_id.clone() }),
+            serde_json::json!({ "session_id": session_id }),
         ))
         .await
         .unwrap();
@@ -2920,7 +3313,7 @@ async fn session_archive_emits_aggregated_session_result() {
         match msg {
             JsonRpcMessage::Notification(n) => {
                 assert_eq!(n.method, "session/result");
-                assert_eq!(n.params["session_id"], session_id);
+                assert_eq!(n.params["session_id"], session_id.as_str());
                 assert_eq!(n.params["total_turns"], 2);
                 assert_eq!(n.params["usage"]["input_tokens"]["total"], 400);
                 assert_eq!(n.params["usage"]["output_tokens"]["total"], 160);
@@ -3334,9 +3727,8 @@ async fn session_start_initializes_empty_history() {
     start_session(&client).await;
 
     {
-        let slot = state.session.read().await;
-        let history = &slot.as_ref().unwrap().history;
-        assert!(history.lock().await.is_empty());
+        let handoff = active_session_handoff(&state).await;
+        assert!(handoff.history.lock().await.is_empty());
     }
 
     drop(client);
@@ -3355,12 +3747,11 @@ async fn session_archive_is_atomic_under_concurrent_forwarder_updates() {
     // run `accumulate_session_result`, which silently added stats that
     // were never reflected in the emitted aggregate.
     //
-    // After the fix, archive holds the write lock for the entire
-    // operation — validate → build aggregate → clear slot — so no
-    // other mutation can interleave. This test verifies the aggregate
+    // Archive validates, builds the aggregate, and clears keyed state as one
+    // state transition. This test verifies the aggregate
     // reflects all stats accumulated up to the point where archive
     // acquires the lock, and that subsequent forwarder attempts are
-    // no-ops (session slot is None).
+    // no-ops because the keyed session state is gone.
 
     let runner = Arc::new(StatsEmittingRunner {
         cost_usd: 0.05,
@@ -3566,7 +3957,7 @@ impl TurnRunner for SlowRunner {
 async fn turn_cleanup_does_not_corrupt_successor_session_cancel_state() {
     // Regression test for Fix #A3: when session/archive + session/start
     // races with a turn's cleanup, the cleanup must NOT null out the
-    // new session's `active_turn_cancel`.
+    // new session's active-turn state.
     let started = Arc::new(Notify::new());
     let unblock = Arc::new(Notify::new());
     let runner = Arc::new(SlowRunner {
@@ -3628,29 +4019,32 @@ async fn turn_cleanup_does_not_corrupt_successor_session_cancel_state() {
         .send(req(4, "session/start", serde_json::json!({})))
         .await
         .unwrap();
-    let _ = client.recv().await.unwrap().unwrap();
+    let session_b = match client.recv().await.unwrap().unwrap() {
+        JsonRpcMessage::Response(r) => test_session_id(r.result["session_id"].as_str().unwrap()),
+        other => panic!("expected Response, got {other:?}"),
+    };
 
-    // Manually install a fresh cancel token on B's active_turn_cancel
+    // Manually install fresh active-turn state for B
     // so we can verify it survives T_A's cleanup.
-    {
-        let mut slot = state.session.write().await;
-        let session = slot.as_mut().unwrap();
-        session.active_turn_cancel = Some(CancellationToken::new());
-    }
+    state.install_active_turn(
+        session_b.clone(),
+        ActiveTurnHandles {
+            cancel_token: CancellationToken::new(),
+            turn_task: tokio::spawn(async {}),
+            forwarder_task: tokio::spawn(async {}),
+        },
+    );
 
     // Now unblock T_A so its cleanup runs.
     unblock.notify_one();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Verify session B's active_turn_cancel is still Some.
-    {
-        let slot = state.session.read().await;
-        let session = slot.as_ref().unwrap();
-        assert!(
-            session.active_turn_cancel.is_some(),
-            "session B's cancel token was wrongly cleared by session A's turn cleanup"
-        );
-    }
+    // Verify session B's active-turn state is still present.
+    assert!(
+        state.has_active_turn(&session_b),
+        "session B's active turn was wrongly cleared by session A's turn cleanup"
+    );
+    state.clear_active_turn(&session_b);
 
     drop(client);
     server_task.await.unwrap();
@@ -3714,13 +4108,17 @@ async fn forwarder_does_not_contaminate_successor_session_stats() {
     for _ in 0..2 {
         let _ = client.recv().await.unwrap().unwrap();
     }
+    drain_app_server_lifecycle(&client).await;
 
     // Start session B (fresh stats).
     client
         .send(req(4, "session/start", serde_json::json!({})))
         .await
         .unwrap();
-    let _ = client.recv().await.unwrap().unwrap();
+    let session_b = match client.recv().await.unwrap().unwrap() {
+        JsonRpcMessage::Response(r) => test_session_id(r.result["session_id"].as_str().unwrap()),
+        other => panic!("expected Response, got {other:?}"),
+    };
 
     // Unblock T_A — it emits its ghost SessionResult AFTER B is
     // active. Without Fix #F3, the forwarder would fold 9999 tokens
@@ -3731,8 +4129,8 @@ async fn forwarder_does_not_contaminate_successor_session_stats() {
 
     // B's stats must be pristine.
     {
-        let slot = state.session.read().await;
-        let stats = &slot.as_ref().unwrap().stats;
+        let accounting = state.session_accounting_snapshot(&session_b);
+        let stats = &accounting.stats;
         assert_eq!(stats.total_turns, 0, "B's total_turns contaminated");
         assert_eq!(
             stats.usage.input_tokens.total, 0,
@@ -3812,7 +4210,7 @@ async fn engine_error_is_recorded_in_session_stats() {
     // Second-round fix regression test: when the runner's engine.run
     // returns Err (not via make_result), the runner now emits a
     // synthetic SessionResult{is_error=true} so the forwarder folds
-    // the failure into session.stats.had_error. Without this, true
+    // the failure into state-level session accounting. Without this, true
     // engine-bail paths would silently produce an aggregated
     // SessionResult with `is_error=false`.
 
@@ -3834,7 +4232,7 @@ async fn engine_error_is_recorded_in_session_stats() {
         .unwrap();
     let start_reply = client.recv().await.unwrap().unwrap();
     let session_id = match start_reply {
-        JsonRpcMessage::Response(r) => r.result["session_id"].as_str().unwrap().to_string(),
+        JsonRpcMessage::Response(r) => test_session_id(r.result["session_id"].as_str().unwrap()),
         other => panic!("expected Response, got {other:?}"),
     };
 
@@ -3854,8 +4252,8 @@ async fn engine_error_is_recorded_in_session_stats() {
 
     // Verify stats reflect the engine error.
     {
-        let slot = state.session.read().await;
-        let stats = &slot.as_ref().unwrap().stats;
+        let accounting = state.session_accounting_snapshot(&session_id);
+        let stats = &accounting.stats;
         assert_eq!(stats.total_turns, 1);
         assert!(stats.had_error);
         assert_eq!(stats.errors.len(), 1);
@@ -3988,15 +4386,44 @@ async fn session_start_without_cwd_uses_startup_cwd() {
     assert!(matches!(reply, JsonRpcMessage::Response(_)));
 
     {
-        let session_slot = state.session.read().await;
-        let session = session_slot
-            .as_ref()
-            .expect("session/start should install active session");
-        assert_eq!(session.cwd, startup_cwd.to_string_lossy().as_ref());
+        let session_id = current_test_session_id(&state).await;
+        assert_eq!(
+            state.session_metadata_snapshot(&session_id).unwrap().cwd,
+            startup_cwd.to_string_lossy().as_ref()
+        );
     }
 
     drop(client);
     server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn workspace_cwd_prefers_runtime_live_cwd_over_keyed_session_state() {
+    let state = SdkServerState::default();
+    state
+        .install_test_session_state(
+            test_session_id("legacy-session"),
+            SessionMetadata {
+                cwd: "/tmp/stale-sdk-slot".to_string(),
+                model: "claude-opus-4-6".to_string(),
+            },
+        )
+        .await;
+
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    let live_cwd = home.path().join("live-cwd");
+    {
+        let mut cwd = runtime.current_cwd().write().await;
+        *cwd = live_cwd.clone();
+    }
+    *state.session_runtime.write().await = Some(runtime);
+
+    let cwd = match state.workspace_cwd().await {
+        Ok(cwd) => cwd,
+        Err(_) => panic!("workspace cwd should resolve from runtime"),
+    };
+    assert_eq!(cwd, live_cwd);
 }
 
 #[tokio::test]
@@ -4294,18 +4721,19 @@ async fn session_resume_installs_session_from_disk() {
     }
 
     // Verify the session is now the active SDK session.
-    let slot = state.session.read().await;
-    let session = slot.as_ref().expect("session should be installed");
-    assert_eq!(session.session_id.as_str(), "resume-test");
-    assert_eq!(session.cwd, "/tmp/resume");
+    let session = current_test_session_id(&state).await;
+    assert_eq!(session.as_str(), "resume-test");
+    assert_eq!(
+        state.session_metadata_snapshot(&session).unwrap().cwd,
+        "/tmp/resume"
+    );
 
-    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }
 
 #[tokio::test]
-async fn session_resume_same_runtime_id_skips_loaded_retarget() {
+async fn session_resume_same_runtime_id_hydrates_without_state_reset() {
     let (server_task, client, state, tmp) = spawn_server_with_session_manager().await;
     let session_id = test_session_id("resume-same-runtime-id");
     seed_session_transcript(
@@ -4343,8 +4771,53 @@ async fn session_resume_same_runtime_id_skips_loaded_retarget() {
     assert_eq!(
         runtime.todo_list_snapshot(session_id.as_str()).await,
         vec![todo],
-        "same-id resume should not run the loaded-session retarget reset"
+        "same-id resume should hydrate without resetting session-scoped runtime state"
     );
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn session_resume_different_runtime_id_requires_replacement_path() {
+    let (server_task, client, state, tmp) = spawn_server_with_session_manager().await;
+    let session_id = test_session_id("resume-needs-replacement");
+    seed_session_transcript(
+        &tmp.path,
+        session_id.as_str(),
+        tmp.path.to_string_lossy().as_ref(),
+        Some("claude-opus-4-6"),
+    );
+
+    let runtime = build_sdk_test_runtime_with_session_id(
+        &tmp.path,
+        Some(test_session_id("installed-runtime")),
+    )
+    .await;
+    *state.session_runtime.write().await = Some(runtime);
+
+    client
+        .send(req(
+            1,
+            "session/resume",
+            serde_json::json!({ "session_id": session_id }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Error(error) => {
+            assert_eq!(error.error.code, error_codes::INVALID_REQUEST);
+            assert!(
+                error
+                    .error
+                    .message
+                    .contains("requires AppServer runtime replacement")
+            );
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+    assert!(state.sole_session_handoff_snapshot().is_none());
 
     drop(client);
     server_task.await.unwrap();

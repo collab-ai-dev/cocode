@@ -19,8 +19,9 @@ impl SessionRuntime {
     /// currently-enabled plugin MCP servers.
     pub async fn reload_plugin_mcp_servers(&self) -> usize {
         let project_services = self
-            .process_runtime
-            .reload_project_services(&self.config_home, self.project_root.clone());
+            .project_resources
+            .process_runtime()
+            .reload_project_services(self.config_home(), self.project_root().clone());
         self.reload_plugin_mcp_servers_with(project_services).await
     }
 
@@ -28,7 +29,13 @@ impl SessionRuntime {
         &self,
         project_services: Arc<ProjectServices>,
     ) -> usize {
-        let Some(manager) = self.mcp_manager.read().await.clone() else {
+        let Some(manager) = self
+            .integration_resources
+            .mcp_manager()
+            .read()
+            .await
+            .clone()
+        else {
             return 0;
         };
         let scoped = project_services.plugin_mcp_servers();
@@ -65,7 +72,8 @@ impl SessionRuntime {
             )
             .await;
         }
-        self.mcp_reconnect_key
+        self.integration_resources
+            .mcp_reconnect_key()
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         count
     }
@@ -75,7 +83,7 @@ impl SessionRuntime {
     /// attached. Called from `/reload-plugins`.
     pub async fn reload_lsp_servers(&self) {
         if let Some(handle) = self.current_lsp_handle().await {
-            handle.reload(&self.project_root).await;
+            handle.reload(self.project_root()).await;
         }
     }
 
@@ -84,7 +92,11 @@ impl SessionRuntime {
     /// dispatch — a concurrent `/reload-plugins` may swap the inner
     /// Arc, but existing snapshots stay live until dropped.
     pub async fn current_command_registry(&self) -> Arc<coco_commands::CommandRegistry> {
-        self.command_registry.read().await.clone()
+        self.catalog_resources
+            .command_registry()
+            .read()
+            .await
+            .clone()
     }
 
     /// Rebuild the slash-command registry from disk and atomically
@@ -103,7 +115,7 @@ impl SessionRuntime {
     /// Returns the count of registered commands in the new registry
     /// so the caller can show the user a confirmation.
     pub async fn reload_plugins(&self, cwd: &std::path::Path) -> usize {
-        self.reload_plugins_with(cwd, &self.runtime_config).await
+        self.reload_plugins_with(cwd, self.runtime_config()).await
     }
 
     /// Variant of [`Self::reload_plugins`] that takes an explicit
@@ -125,26 +137,28 @@ impl SessionRuntime {
             &[],
         );
         let project_services = self
-            .process_runtime
-            .reload_project_services(&self.config_home, self.project_root.clone());
+            .project_resources
+            .process_runtime()
+            .reload_project_services(self.config_home(), self.project_root().clone());
         {
             let mut paths = self.agent_search_paths.write().await;
-            *paths = project_services.agent_search_paths(&self.config_home, cwd);
+            *paths = project_services.agent_search_paths(self.config_home(), cwd);
         }
-        let fresh = project_services.build_skill_manager(&self.config_home, cwd, &gates);
+        let fresh = project_services.build_skill_manager(self.config_home(), cwd, &gates);
         let fresh_skills: Vec<_> = fresh
             .all_including_conditional()
             .into_iter()
             .map(|skill| (*skill).clone())
             .collect();
-        self.skill_manager.reload_disk_skills(fresh_skills);
-        self.skill_manager.reset_announcements();
+        let skill_manager = self.catalog_resources.skill_manager();
+        skill_manager.reload_disk_skills(fresh_skills);
+        skill_manager.reset_announcements();
         let mut command_features = runtime_config.features.clone();
         if !runtime_config.memory_activation.active {
             command_features.disable(coco_types::Feature::AutoMemory);
         }
         let registry = project_services.build_command_registry(
-            &self.skill_manager,
+            skill_manager,
             coco_types::UserType::from_env(),
             command_features,
             runtime_config.loop_config.clone(),
@@ -157,7 +171,7 @@ impl SessionRuntime {
         let count = registry.len();
         let new_registry = Arc::new(registry);
         {
-            let mut slot = self.command_registry.write().await;
+            let mut slot = self.catalog_resources.command_registry().write().await;
             *slot = new_registry;
         }
         // Re-register plugin MCP servers with the live manager (if attached) so a
@@ -185,8 +199,12 @@ impl SessionRuntime {
     /// Returns the count of hooks now registered.
     pub async fn reload_hooks(&self) -> Result<usize> {
         let policy = coco_hooks::LoaderPolicy {
-            disable_all_hooks: self.runtime_config.settings.merged.disable_all_hooks,
-            allow_managed_hooks_only: self.runtime_config.settings.merged.allow_managed_hooks_only,
+            disable_all_hooks: self.runtime_config().settings.merged.disable_all_hooks,
+            allow_managed_hooks_only: self
+                .runtime_config()
+                .settings
+                .merged
+                .allow_managed_hooks_only,
         };
 
         // Build (scope, value) pairs for every active settings source.
@@ -200,7 +218,7 @@ impl SessionRuntime {
             coco_config::SettingSource::Flag,
             coco_config::SettingSource::Policy,
         ] {
-            let Some(value) = self.runtime_config.settings.per_source.get(&source) else {
+            let Some(value) = self.runtime_config().settings.per_source.get(&source) else {
                 continue;
             };
             let Some(hooks_value) = value.get("hooks") else {
@@ -218,18 +236,19 @@ impl SessionRuntime {
         }
 
         // Atomic settings-hook swap.
-        let settings_count = self
-            .hook_registry
+        let hook_registry = self.hook_resources.registry();
+        let settings_count = hook_registry
             .reload_from_runtime(&sources, policy)
             .map_err(|e| anyhow::anyhow!("hook reload failed: {e}"))?;
 
         // Re-layer plugin hooks on top — they aren't in settings.json
         // so `reload_from_runtime` doesn't see them. Unified V2 source.
         let project_services = self
-            .process_runtime
-            .reload_project_services(&self.config_home, self.project_root.clone());
-        project_services.register_plugin_hooks(&self.hook_registry);
+            .project_resources
+            .process_runtime()
+            .reload_project_services(self.config_home(), self.project_root().clone());
+        project_services.register_plugin_hooks(&hook_registry);
 
-        Ok(self.hook_registry.len().max(settings_count))
+        Ok(hook_registry.len().max(settings_count))
     }
 }

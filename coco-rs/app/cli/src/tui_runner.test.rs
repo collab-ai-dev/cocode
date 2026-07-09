@@ -211,6 +211,7 @@ mod goal_tests {
 use super::ActiveTurn;
 use super::ActiveTurnCancel;
 use super::ActiveTurnDrain;
+use super::LocalRuntimeControlContext;
 use super::PermissionsMutation;
 use super::SentinelTrigger;
 use super::add_dir_already_message;
@@ -231,10 +232,14 @@ use super::parse_permissions_mutation;
 use super::parse_slash_command;
 use super::process_idle_command_queue;
 use super::run_clear_conversation;
+use super::run_dream_consolidation;
+use super::run_manual_compact;
+use super::run_session_memory_force;
 use super::run_session_rename;
 use super::run_session_tag;
 use super::run_show_cost;
 use super::run_show_status;
+use super::run_side_question;
 use super::session_plan_file_path;
 use super::set_thinking_level_through_app_server;
 use super::should_prompt_mode_bash_respond;
@@ -552,6 +557,7 @@ async fn build_runtime_with_registry_and_settings(
     crate::session_runtime::SessionHandle::build(crate::session_runtime::SessionRuntimeBuildOpts {
         cli: &cli,
         runtime_config: Arc::new(runtime_config),
+        config_reloader: None,
         cwd: home.path().to_path_buf(),
         model_id,
         system_prompt: "test".to_string(),
@@ -593,31 +599,37 @@ async fn test_resume_context(
     let rt = runtime.runtime();
     let config = rt.current_engine_config().await;
     let cli = coco_cli::Cli::try_parse_from(["coco"]).expect("parse cli");
-    let process_runtime = rt.process_runtime.clone();
-    let cwd = rt.original_cwd.clone();
+    let process_runtime = Arc::clone(rt.process_runtime());
+    let cwd = rt.original_cwd().clone();
     let factory = crate::session_runtime::SessionRuntimeFactory::new(
         crate::session_runtime::SessionRuntimeFactoryOpts {
             cli: Arc::new(cli),
-            runtime_config: Arc::clone(&rt.runtime_config),
+            bootstrap_source:
+                crate::session_runtime::SessionRuntimeBootstrapSource::startup_snapshot(
+                    crate::session_runtime::SessionRuntimeBootstrap {
+                        runtime_config: Arc::clone(rt.runtime_config()),
+                        model_id: config.model_id,
+                        system_prompt: config.system_prompt.unwrap_or_default(),
+                        permission_mode_availability: config.permission_mode_availability,
+                        permission_mode: config.permission_mode,
+                        command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
+                            coco_commands::CommandRegistry::new(),
+                        ))),
+                        skill_manager: Arc::new(coco_skills::SkillManager::new()),
+                        project_services: Arc::clone(rt.project_services()),
+                        agent_search_paths:
+                            coco_subagent::definition_store::AgentSearchPaths::empty(),
+                    },
+                ),
             cwd: cwd.clone(),
-            model_id: config.model_id,
-            system_prompt: config.system_prompt.unwrap_or_default(),
-            permission_mode_availability: config.permission_mode_availability,
-            permission_mode: config.permission_mode,
             model_runtimes: Some(coco_query::test_support::model_runtime_registry(Arc::new(
                 QueuedTurnMockModel,
             ))),
             tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
-            session_manager: Arc::clone(&rt.session_manager),
-            fast_model_spec: rt.fast_model_spec.clone(),
+            session_manager: Arc::clone(rt.session_manager()),
+            fast_model_spec: rt.fast_model_spec().cloned(),
             permission_bridge: None,
-            command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
-                coco_commands::CommandRegistry::new(),
-            ))),
-            skill_manager: Arc::new(coco_skills::SkillManager::new()),
-            project_services: Arc::clone(&rt.project_services),
             process_runtime: Arc::clone(&process_runtime),
-            agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             is_non_interactive: false,
         },
@@ -637,8 +649,9 @@ async fn dispatch_slash_command_for_test(
     event_tx: &tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
     local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
 ) -> super::SlashOutcome {
-    let (current_session, runtime_factory, process_runtime, cwd) =
+    let (current_session, runtime_factory, process_runtime, _cwd) =
         test_resume_context(runtime).await;
+    let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, event_tx);
     super::dispatch_slash_command(
         name,
         args,
@@ -648,16 +661,28 @@ async fn dispatch_slash_command_for_test(
         local_app_server_bridge,
         &runtime_factory,
         &process_runtime,
-        &cwd,
+        &reload_subscriptions,
     )
     .await
+}
+
+fn test_runtime_reload_subscriptions(
+    current_session: &super::SharedSessionHandle,
+    event_tx: &tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+) -> Arc<Mutex<super::TuiRuntimeReloadSubscriptions>> {
+    let (subscriptions, _display_rx, _error_rx) = super::TuiRuntimeReloadSubscriptions::new(
+        Arc::clone(current_session),
+        event_tx.clone(),
+        coco_cli::tui_permission_bridge::new_pending_map(),
+    );
+    Arc::new(Mutex::new(subscriptions))
 }
 
 async fn seed_runtime_session_transcript(runtime: &crate::session_runtime::SessionHandle) {
     let rt = runtime.runtime();
     let session_id = rt.current_typed_session_id().await;
-    let cwd = rt.original_cwd.clone();
-    seed_session_transcript_for_cwd(rt.session_manager.memory_base(), &cwd, &session_id);
+    let cwd = rt.original_cwd().clone();
+    seed_session_transcript_for_cwd(rt.session_manager().memory_base(), &cwd, &session_id);
 }
 
 fn seed_session_transcript_for_cwd(
@@ -755,6 +780,7 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
         .await;
     let (current_session, runtime_factory, process_runtime, cwd) =
         test_resume_context(&runtime).await;
+    let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &event_tx);
 
     process_idle_command_queue(
         &runtime,
@@ -765,6 +791,7 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
         &mut pending_editor_requests,
         &title_gen_attempted,
         &turn_done_tx,
+        &reload_subscriptions,
         &runtime_factory,
         &process_runtime,
         &cwd,
@@ -851,6 +878,165 @@ async fn local_app_server_turn_writes_back_runtime_history() {
     assert_eq!(
         history.last_assistant_text().as_deref(),
         Some("queued turn complete")
+    );
+}
+
+#[tokio::test]
+async fn manual_compact_uses_local_app_server_turn_shortcut() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(32);
+    let active_turn = Arc::new(Mutex::new(None));
+    let (turn_done_tx, mut turn_done_rx) = tokio::sync::mpsc::channel(4);
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    run_manual_compact(
+        &runtime,
+        &event_tx,
+        &mut local_app_server_bridge,
+        Some("focus auth".to_string()),
+        &active_turn,
+        &turn_done_tx,
+    )
+    .await;
+
+    assert!(
+        active_turn.lock().await.is_some(),
+        "manual compact should start an AppServer-owned active turn"
+    );
+    let completed_turn = tokio::time::timeout(Duration::from_secs(3), turn_done_rx.recv())
+        .await
+        .expect("manual compact turn should finish")
+        .expect("turn_done channel should stay open");
+    assert!(drain_completed_turn(&active_turn, completed_turn).await);
+    let history = runtime.runtime().history.lock().await;
+    assert_eq!(history.len(), 2);
+    let messages = history.as_slice();
+    let echo = coco_messages::wrapping::extract_text_from_message(&messages[0]);
+    let result = coco_messages::wrapping::extract_text_from_message(&messages[1]);
+    assert!(echo.contains("/compact"));
+    assert!(echo.contains("focus auth"));
+    assert!(result.contains("No messages to compact."));
+    assert!(!echo.contains(coco_commands::handlers::compact::COMPACT_SENTINEL));
+    assert!(!result.contains(coco_commands::handlers::compact::COMPACT_SENTINEL));
+}
+
+#[tokio::test]
+async fn btw_uses_local_app_server_turn_shortcut() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(32);
+    let active_turn = Arc::new(Mutex::new(None));
+    let (turn_done_tx, mut turn_done_rx) = tokio::sync::mpsc::channel(4);
+    let state = Arc::new(coco_cli::sdk_server::SdkServerState::default());
+    let mut local_app_server_bridge =
+        coco_cli::sdk_server::AppServerLocalBridge::new(Arc::clone(&state));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    let question = "how does caching work?";
+    run_side_question(
+        &runtime,
+        &event_tx,
+        &mut local_app_server_bridge,
+        &active_turn,
+        &turn_done_tx,
+        coco_commands::handlers::btw::BtwRequest {
+            question: question.to_string(),
+        },
+    )
+    .await;
+
+    assert!(
+        active_turn.lock().await.is_some(),
+        "/btw should start an AppServer-owned active turn"
+    );
+    let completed_turn = tokio::time::timeout(Duration::from_secs(3), turn_done_rx.recv())
+        .await
+        .expect("/btw turn should finish")
+        .expect("turn_done channel should stay open");
+    assert!(drain_completed_turn(&active_turn, completed_turn).await);
+    let session_id = state
+        .runtime_or_active_session_id()
+        .await
+        .expect("active AppServer session");
+    let handoff = state
+        .session_handoff_snapshot(&session_id)
+        .expect("active AppServer handoff");
+    let history = handoff.history.lock().await;
+    assert_eq!(history.len(), 2);
+    let messages = history.as_slice();
+    let echo = coco_messages::wrapping::extract_text_from_message(&messages[0]);
+    let result = coco_messages::wrapping::extract_text_from_message(&messages[1]);
+    assert!(echo.contains("/btw"));
+    assert!(echo.contains(question));
+    assert!(result.contains("fork dispatcher not installed"));
+    assert!(!echo.contains(coco_commands::handlers::btw::BTW_SENTINEL));
+    assert!(!result.contains(coco_commands::handlers::btw::BTW_SENTINEL));
+}
+
+#[tokio::test]
+async fn memory_shortcuts_use_local_app_server_turn_shortcuts() {
+    let home = TempDir::new().unwrap();
+    let registry = coco_commands::CommandRegistry::new();
+    let runtime = build_runtime_with_registry(&home, registry).await;
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(32);
+    let active_turn = Arc::new(Mutex::new(None));
+    let (turn_done_tx, mut turn_done_rx) = tokio::sync::mpsc::channel(4);
+    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
+        coco_cli::sdk_server::SdkServerState::default(),
+    ));
+    local_app_server_bridge
+        .install_session_runtime(runtime.clone())
+        .await;
+
+    run_dream_consolidation(
+        &runtime,
+        &event_tx,
+        &mut local_app_server_bridge,
+        &active_turn,
+        &turn_done_tx,
+    )
+    .await;
+    assert!(
+        active_turn.lock().await.is_some(),
+        "/dream should start an AppServer-owned active turn"
+    );
+    let completed_turn = tokio::time::timeout(Duration::from_secs(3), turn_done_rx.recv())
+        .await
+        .expect("/dream turn should finish")
+        .expect("turn_done channel should stay open");
+    assert!(drain_completed_turn(&active_turn, completed_turn).await);
+
+    run_session_memory_force(
+        &runtime,
+        &event_tx,
+        &mut local_app_server_bridge,
+        &active_turn,
+        &turn_done_tx,
+    )
+    .await;
+    assert!(
+        active_turn.lock().await.is_some(),
+        "/summary should start an AppServer-owned active turn"
+    );
+    let completed_turn = tokio::time::timeout(Duration::from_secs(3), turn_done_rx.recv())
+        .await
+        .expect("/summary turn should finish")
+        .expect("turn_done channel should stay open");
+    assert!(drain_completed_turn(&active_turn, completed_turn).await);
+
+    assert!(
+        runtime.runtime().history.lock().await.is_empty(),
+        "memory shortcut no-op path should not append sentinel text"
     );
 }
 
@@ -966,13 +1152,13 @@ async fn startup_resume_plan_uses_local_app_server_session_resume() {
         coco_types::SessionId::try_new("sess-tui-startup-resume-target").expect("valid session id");
     let rt = runtime.runtime();
     seed_session_transcript_for_cwd(
-        rt.session_manager.memory_base(),
-        &rt.original_cwd,
+        rt.session_manager().memory_base(),
+        rt.original_cwd(),
         &target_session_id,
     );
     let project_store =
-        coco_session::TranscriptStore::new(coco_cli::paths::project_paths(&rt.original_cwd));
-    append_seed_transcript(&project_store, &rt.original_cwd, &target_session_id);
+        coco_session::TranscriptStore::new(coco_cli::paths::project_paths(rt.original_cwd()));
+    append_seed_transcript(&project_store, rt.original_cwd(), &target_session_id);
     let plan = load_resume_plan_for_target(&runtime, target_session_id.as_str())
         .await
         .expect("load resume plan");
@@ -987,8 +1173,9 @@ async fn startup_resume_plan_uses_local_app_server_session_resume() {
     local_app_server_bridge
         .ensure_interactive_surface(old_session_id)
         .expect("attach old surface");
-    let (current_session, runtime_factory, process_runtime, cwd) =
+    let (current_session, runtime_factory, process_runtime, _cwd) =
         test_resume_context(&runtime).await;
+    let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
 
     apply_resume_plan_through_app_server(
         &plan,
@@ -998,7 +1185,7 @@ async fn startup_resume_plan_uses_local_app_server_session_resume() {
         &mut local_app_server_bridge,
         &runtime_factory,
         &process_runtime,
-        &cwd,
+        &reload_subscriptions,
     )
     .await
     .expect("startup resume through AppServer");
@@ -1051,13 +1238,13 @@ async fn resume_slash_uses_local_app_server_session_resume() {
         coco_types::SessionId::try_new("sess-tui-resume-target").expect("valid session id");
     let rt = runtime.runtime();
     seed_session_transcript_for_cwd(
-        rt.session_manager.memory_base(),
-        &rt.original_cwd,
+        rt.session_manager().memory_base(),
+        rt.original_cwd(),
         &target_session_id,
     );
     let project_store =
-        coco_session::TranscriptStore::new(coco_cli::paths::project_paths(&rt.original_cwd));
-    append_seed_transcript(&project_store, &rt.original_cwd, &target_session_id);
+        coco_session::TranscriptStore::new(coco_cli::paths::project_paths(rt.original_cwd()));
+    append_seed_transcript(&project_store, rt.original_cwd(), &target_session_id);
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
@@ -1069,8 +1256,9 @@ async fn resume_slash_uses_local_app_server_session_resume() {
     local_app_server_bridge
         .ensure_interactive_surface(old_session_id)
         .expect("attach old surface");
-    let (current_session, runtime_factory, process_runtime, cwd) =
+    let (current_session, runtime_factory, process_runtime, _cwd) =
         test_resume_context(&runtime).await;
+    let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
 
     let outcome = dispatch_slash_command(
         "resume",
@@ -1081,7 +1269,7 @@ async fn resume_slash_uses_local_app_server_session_resume() {
         &mut local_app_server_bridge,
         &runtime_factory,
         &process_runtime,
-        &cwd,
+        &reload_subscriptions,
     )
     .await;
 
@@ -1147,8 +1335,9 @@ async fn branch_slash_switches_to_fork_through_local_app_server() {
     local_app_server_bridge
         .ensure_interactive_surface(old_session_id.clone())
         .expect("attach old surface");
-    let (current_session, runtime_factory, process_runtime, cwd) =
+    let (current_session, runtime_factory, process_runtime, _cwd) =
         test_resume_context(&runtime).await;
+    let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
 
     let outcome = dispatch_slash_command(
         "branch",
@@ -1159,7 +1348,7 @@ async fn branch_slash_switches_to_fork_through_local_app_server() {
         &mut local_app_server_bridge,
         &runtime_factory,
         &process_runtime,
-        &cwd,
+        &reload_subscriptions,
     )
     .await;
 
@@ -1172,7 +1361,7 @@ async fn branch_slash_switches_to_fork_through_local_app_server() {
     assert_eq!(live[0].session_id, new_session_id);
     let forked_session = new_session
         .runtime()
-        .session_manager
+        .session_manager()
         .load(new_session_id.as_str())
         .expect("branch title should persist through local AppServer session/rename");
     assert_eq!(forked_session.title.as_deref(), Some("test fork (Branch)"));
@@ -1214,7 +1403,10 @@ async fn clear_slash_refreshes_local_app_server_session() {
     let registry = coco_commands::CommandRegistry::new();
     let runtime = build_runtime_with_registry(&home, registry).await;
     let old_session_id = runtime.runtime().current_typed_session_id().await;
+    let (current_session, runtime_factory, process_runtime, cwd) =
+        test_resume_context(&runtime).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let reload_subscriptions = test_runtime_reload_subscriptions(&current_session, &tx);
     let active_turn = Arc::new(Mutex::new(None));
     let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
         coco_cli::sdk_server::SdkServerState::default(),
@@ -1226,10 +1418,32 @@ async fn clear_slash_refreshes_local_app_server_session() {
         .ensure_interactive_surface(old_session_id.clone())
         .expect("attach old surface");
 
-    run_clear_conversation(&runtime, &active_turn, &tx, &mut local_app_server_bridge).await;
+    let (turn_done_tx, _turn_done_rx) = tokio::sync::mpsc::channel(1);
+    let clear_context = LocalRuntimeControlContext {
+        current_session: &current_session,
+        runtime_reload_subscriptions: &reload_subscriptions,
+        runtime_factory: &runtime_factory,
+        process_runtime: &process_runtime,
+        cwd: &cwd,
+        turn_done_tx: &turn_done_tx,
+    };
+    run_clear_conversation(
+        &runtime,
+        &clear_context,
+        &active_turn,
+        &tx,
+        &mut local_app_server_bridge,
+    )
+    .await;
 
-    let new_session_id = runtime.runtime().current_typed_session_id().await;
+    let current = current_session.read().await.clone();
+    assert!(!Arc::ptr_eq(runtime.runtime(), current.runtime()));
+    let new_session_id = current.runtime().current_typed_session_id().await;
     assert_ne!(new_session_id, old_session_id);
+    assert_eq!(
+        runtime.runtime().current_typed_session_id().await,
+        old_session_id
+    );
     let live = local_app_server_bridge.app_server().list_live_sessions();
     assert_eq!(live.len(), 1);
     assert_eq!(live[0].session_id, new_session_id);
@@ -1274,7 +1488,7 @@ async fn rename_and_tag_slashes_use_local_app_server_session_metadata_controls()
 
     let session = runtime
         .runtime()
-        .session_manager
+        .session_manager()
         .load(session_id.as_str())
         .expect("metadata controls should persist session updates");
     assert_eq!(session.title.as_deref(), Some("phase-b-cleanup"));
@@ -1622,11 +1836,11 @@ async fn explicit_file_rewind_restores_files_through_local_app_server() {
     let session_id = rt.current_typed_session_id().await;
     let file = home.path().join("rewind.txt");
     tokio::fs::write(&file, "original\n").await.unwrap();
-    let file_history = rt.file_history.as_ref().expect("file history enabled");
+    let file_history = rt.file_history().expect("file history enabled");
     file_history
         .write()
         .await
-        .track_edit(&file, "msg-1", &rt.config_home, session_id.as_str())
+        .track_edit(&file, "msg-1", rt.config_home(), session_id.as_str())
         .await
         .expect("track file edit");
     tokio::fs::write(&file, "modified\n").await.unwrap();

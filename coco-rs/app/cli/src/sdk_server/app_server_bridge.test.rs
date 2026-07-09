@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use chrono::TimeZone;
+use clap::Parser;
 use coco_app_server::AppServer;
 use coco_app_server::AttachSurfaceOptions;
 use coco_app_server::JsonRpcAdapter;
@@ -14,6 +15,7 @@ use coco_app_server::JsonRpcRequestHandler;
 use coco_app_server::LocalClientAdapter;
 use coco_app_server::LocalClientRequestHandler;
 use coco_app_server::SurfaceRole;
+use coco_bridge::ControlRequestHandler;
 use coco_hub_connector::HubConnectorWorker;
 use coco_hub_connector::HubConnectorWorkerConfig;
 use coco_hub_connector::protocol::AnnounceAckFrame;
@@ -40,6 +42,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::*;
+use crate::sdk_server::handlers::ActiveTurnHandles;
+use crate::sdk_server::handlers::SessionMetadata;
 use crate::sdk_server::handlers::TurnHandoff;
 use crate::sdk_server::handlers::TurnRunner;
 use crate::sdk_server::transport::InMemoryTransport;
@@ -78,6 +82,142 @@ impl TurnRunner for EndingTurnRunner {
             Ok(())
         })
     }
+}
+
+struct AccountingTurnRunner;
+
+impl TurnRunner for AccountingTurnRunner {
+    fn run_turn<'a>(
+        &'a self,
+        _params: coco_types::TurnStartParams,
+        turn_id: coco_types::TurnId,
+        handoff: TurnHandoff,
+        event_tx: mpsc::Sender<CoreEvent>,
+        _cancel: CancellationToken,
+    ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            event_tx
+                .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
+                    coco_types::TurnStartedParams {
+                        turn_id: turn_id.clone(),
+                    },
+                )))
+                .await
+                .ok();
+            event_tx
+                .send(CoreEvent::Protocol(ServerNotification::SessionResult(
+                    Box::new(coco_types::SessionResultParams {
+                        session_id: handoff.session_id,
+                        total_turns: 1,
+                        duration_ms: 7,
+                        duration_api_ms: 3,
+                        is_error: false,
+                        stop_reason: "end_turn".to_string(),
+                        total_cost_usd: 0.0,
+                        usage: coco_types::TokenUsage {
+                            input_tokens: coco_types::InputTokens {
+                                total: 11,
+                                ..Default::default()
+                            },
+                            output_tokens: coco_types::OutputTokens {
+                                total: 5,
+                                ..Default::default()
+                            },
+                        },
+                        model_usage: std::collections::HashMap::new(),
+                        permission_denials: Vec::new(),
+                        result: Some("completed".to_string()),
+                        errors: Vec::new(),
+                        structured_output: None,
+                        fast_mode_state: None,
+                        num_api_calls: None,
+                    }),
+                )))
+                .await
+                .ok();
+            event_tx
+                .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
+                    coco_types::TurnEndedParams::completed(
+                        turn_id,
+                        Some(coco_types::TokenUsage::default()),
+                        Some(coco_messages::StopReason::EndTurn),
+                    ),
+                )))
+                .await
+                .ok();
+            Ok(())
+        })
+    }
+}
+
+fn test_runtime_config(home: &Path) -> coco_config::RuntimeConfig {
+    let settings = coco_config::SettingsWithSource {
+        merged: coco_config::Settings {
+            models: coco_config::ModelSelectionSettings {
+                main: Some(coco_config::RoleSlots::new(
+                    coco_types::ProviderModelSelection {
+                        provider: "anthropic".into(),
+                        model_id: "claude-opus-4-7".into(),
+                    },
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        per_source: HashMap::new(),
+        source_paths: HashMap::new(),
+    };
+    coco_config::build_runtime_config_with(
+        settings,
+        coco_config::EnvSnapshot::default(),
+        coco_config::RuntimeOverrides::default(),
+        coco_config::CatalogPaths::empty_in(home),
+        coco_config::parse_enabled_setting_sources(None),
+    )
+    .expect("runtime config")
+}
+
+fn test_runtime_factory(
+    home: &Path,
+    runtime_config: Arc<coco_config::RuntimeConfig>,
+    session_manager: Arc<coco_session::SessionManager>,
+) -> crate::session_runtime::SessionRuntimeFactory {
+    let cli = crate::Cli::try_parse_from(["coco"]).expect("parse cli");
+    let model_id = crate::headless::resolve_main_model(&runtime_config).model_id;
+    crate::session_runtime::SessionRuntimeFactory::new(
+        crate::session_runtime::SessionRuntimeFactoryOpts {
+            cli: Arc::new(cli),
+            bootstrap_source:
+                crate::session_runtime::SessionRuntimeBootstrapSource::startup_snapshot(
+                    crate::session_runtime::SessionRuntimeBootstrap {
+                        runtime_config,
+                        model_id,
+                        system_prompt: "test".to_string(),
+                        permission_mode_availability:
+                            coco_types::PermissionModeAvailability::default(),
+                        permission_mode: coco_types::PermissionMode::default(),
+                        command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(
+                            coco_commands::CommandRegistry::default(),
+                        ))),
+                        skill_manager: Arc::new(coco_skills::SkillManager::new()),
+                        project_services: Arc::new(crate::project_services::ProjectServices::load(
+                            home, home,
+                        )),
+                        agent_search_paths:
+                            coco_subagent::definition_store::AgentSearchPaths::empty(),
+                    },
+                ),
+            cwd: home.to_path_buf(),
+            model_runtimes: None,
+            tools: Arc::new(coco_tool_runtime::ToolRegistry::new()),
+            session_manager,
+            fast_model_spec: None,
+            permission_bridge: None,
+            process_runtime: crate::process_runtime::ProcessRuntime::global(),
+            builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
+            is_non_interactive: true,
+        },
+    )
 }
 
 #[tokio::test]
@@ -132,12 +272,18 @@ async fn app_server_local_bridge_dispatches_requests_and_reads_surface_events() 
         .await
         .expect("session/start succeeds");
 
-    {
-        let slot = state.session.read().await;
-        let session = slot.as_ref().expect("session installed");
-        assert_eq!(session.session_id, started.session_id);
-        assert_eq!(session.model, "test-model");
-    }
+    assert_eq!(
+        state
+            .session_metadata_snapshot(&started.session_id)
+            .unwrap()
+            .model,
+        "test-model"
+    );
+    assert!(
+        state
+            .session_handoff_snapshot(&started.session_id)
+            .is_some()
+    );
 
     let surface_id = started.surface_id.clone().expect("start surface id");
     let app_server = Arc::clone(bridge.app_server());
@@ -193,6 +339,186 @@ async fn app_server_local_bridge_session_start_replaces_startup_live_slot() {
 }
 
 #[tokio::test]
+async fn app_server_sdk_session_start_uses_runtime_replacement_context() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let runtime_config = Arc::new(test_runtime_config(home.path()));
+    let session_manager = Arc::new(coco_session::SessionManager::new(
+        home.path().join("sessions"),
+    ));
+    let factory = test_runtime_factory(
+        home.path(),
+        Arc::clone(&runtime_config),
+        Arc::clone(&session_manager),
+    );
+    let startup_session_id =
+        SessionId::try_new("sess-sdk-startup-placeholder").expect("valid startup session id");
+    let startup_runtime = factory
+        .build_with_session_id(startup_session_id.clone())
+        .await
+        .expect("startup runtime");
+
+    let state = Arc::new(SdkServerState::default());
+    {
+        *state.session_runtime.write().await = Some(startup_runtime.clone());
+        *state.runtime_replacement.write().await = Some(RuntimeReplacementContext {
+            runtime_factory: factory,
+            process_runtime: crate::process_runtime::ProcessRuntime::global(),
+            cwd: home.path().to_path_buf(),
+            requires_structured_output: false,
+        });
+    }
+
+    let app_server = Arc::new(AppServer::<LocalAppSessionHandle>::new(1, 8));
+    register_local_app_server_session(
+        &app_server,
+        LocalAppSessionHandle::from_runtime(startup_session_id.clone(), startup_runtime.clone()),
+    )
+    .await
+    .expect("register startup runtime");
+    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&app_server), 8);
+    let client = ServerClient::connect_local(&adapter);
+    let (notif_tx, _notif_rx) = mpsc::channel(8);
+    let handler =
+        AppServerSdkHandler::with_local_app_server(Arc::clone(&state), notif_tx, app_server);
+
+    let started = client
+        .session_start(
+            &handler,
+            coco_types::SessionStartParams {
+                cwd: Some(home.path().to_string_lossy().into_owned()),
+                model: Some("test-model".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("session/start succeeds");
+
+    assert_ne!(started.session_id, startup_session_id);
+    let current_runtime = state
+        .session_runtime
+        .read()
+        .await
+        .clone()
+        .expect("runtime replaced");
+    assert_eq!(
+        current_runtime.current_typed_session_id().await,
+        started.session_id
+    );
+    assert!(!Arc::ptr_eq(
+        startup_runtime.runtime(),
+        current_runtime.runtime()
+    ));
+    let handoff = state
+        .session_handoff_snapshot(&started.session_id)
+        .expect("SDK handoff installed");
+    assert!(Arc::ptr_eq(
+        &handoff.app_state,
+        current_runtime.runtime().app_state()
+    ));
+    crate::sdk_server::SdkBridgeControlHandler::new(Arc::clone(&state))
+        .handle(coco_bridge::ControlRequest::SetPermissionMode {
+            mode: coco_types::PermissionMode::AcceptEdits,
+        })
+        .await
+        .expect("bridge control uses runtime session id");
+    let app_state = handoff.app_state.read().await;
+    assert_eq!(
+        app_state.permissions.mode,
+        Some(coco_types::PermissionMode::AcceptEdits)
+    );
+}
+
+#[tokio::test]
+async fn app_server_sdk_session_resume_uses_scoped_runtime_replacement_state() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let runtime_config = Arc::new(test_runtime_config(home.path()));
+    let session_manager = Arc::new(coco_session::SessionManager::new(
+        home.path().join("sessions"),
+    ));
+    let factory = test_runtime_factory(
+        home.path(),
+        Arc::clone(&runtime_config),
+        Arc::clone(&session_manager),
+    );
+    let startup_session_id =
+        SessionId::try_new("sess-sdk-resume-startup").expect("valid startup session id");
+    let startup_runtime = factory
+        .build_with_session_id(startup_session_id.clone())
+        .await
+        .expect("startup runtime");
+    let resumed_session_id =
+        SessionId::try_new("sess-sdk-resume-target").expect("valid resumed session id");
+    append_bridge_transcript_message(
+        &session_manager,
+        &resumed_session_id,
+        home.path(),
+        1,
+        "user",
+        "resume me",
+    );
+
+    let state = Arc::new(SdkServerState::default());
+    {
+        *state.session_runtime.write().await = Some(startup_runtime.clone());
+        *state.session_manager.write().await = Some(Arc::clone(&session_manager));
+        *state.runtime_replacement.write().await = Some(RuntimeReplacementContext {
+            runtime_factory: factory,
+            process_runtime: crate::process_runtime::ProcessRuntime::global(),
+            cwd: home.path().to_path_buf(),
+            requires_structured_output: false,
+        });
+    }
+
+    let app_server = Arc::new(AppServer::<LocalAppSessionHandle>::new(1, 8));
+    register_local_app_server_session(
+        &app_server,
+        LocalAppSessionHandle::from_runtime(startup_session_id.clone(), startup_runtime.clone()),
+    )
+    .await
+    .expect("register startup runtime");
+    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&app_server), 8);
+    let client = ServerClient::connect_local(&adapter);
+    let (notif_tx, _notif_rx) = mpsc::channel(8);
+    let handler =
+        AppServerSdkHandler::with_local_app_server(Arc::clone(&state), notif_tx, app_server);
+
+    let resumed = client
+        .session_resume(
+            &handler,
+            coco_types::SessionResumeParams {
+                session_id: resumed_session_id.clone(),
+            },
+        )
+        .await
+        .expect("session/resume succeeds");
+
+    assert_eq!(resumed.session.session_id, resumed_session_id);
+    assert!(resumed.surface_id.is_some());
+    let current_runtime = state
+        .session_runtime
+        .read()
+        .await
+        .clone()
+        .expect("runtime replaced");
+    assert_eq!(
+        current_runtime.current_typed_session_id().await,
+        resumed_session_id
+    );
+    assert!(!Arc::ptr_eq(
+        startup_runtime.runtime(),
+        current_runtime.runtime()
+    ));
+    let handoff = state
+        .session_handoff_snapshot(&resumed_session_id)
+        .expect("resumed handoff installed");
+    assert_eq!(handoff.history.lock().await.len(), 1);
+    assert!(Arc::ptr_eq(
+        &handoff.app_state,
+        current_runtime.runtime().app_state()
+    ));
+}
+
+#[tokio::test]
 async fn app_server_local_bridge_archives_registered_surfaces() {
     let state = Arc::new(SdkServerState::default());
     let mut bridge = AppServerLocalBridge::with_channel_capacity(Arc::clone(&state), 8);
@@ -237,7 +563,11 @@ async fn app_server_local_bridge_archives_registered_surfaces() {
             session_id: started.session_id.clone(),
         }
     );
-    assert!(state.session.read().await.is_none());
+    assert!(
+        state
+            .session_handoff_snapshot(&started.session_id)
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -261,18 +591,23 @@ async fn local_app_server_close_cancels_and_drains_matching_sdk_session() {
         cancelled_for_task.store(true, Ordering::SeqCst);
     });
     let forwarder_task = tokio::spawn(async {});
-    let mut sdk_session = SdkSessionHandle::new(
+    state
+        .install_test_session_state(
+            session_id.clone(),
+            SessionMetadata {
+                cwd: "/tmp".to_string(),
+                model: "test-model".to_string(),
+            },
+        )
+        .await;
+    state.install_active_turn(
         session_id.clone(),
-        "/tmp".to_string(),
-        "test-model".to_string(),
+        ActiveTurnHandles {
+            cancel_token: cancel,
+            turn_task,
+            forwarder_task,
+        },
     );
-    sdk_session.active_turn_cancel = Some(cancel);
-    sdk_session.active_turn_task = Some(turn_task);
-    sdk_session.active_turn_forwarder = Some(forwarder_task);
-    {
-        let mut slot = state.session.write().await;
-        *slot = Some(sdk_session);
-    }
 
     close_local_app_server_session(
         Arc::clone(&app_server),
@@ -283,8 +618,34 @@ async fn local_app_server_close_cancels_and_drains_matching_sdk_session() {
     .expect("close local session");
 
     assert!(cancelled.load(Ordering::SeqCst));
-    assert!(state.session.read().await.is_none());
+    assert!(state.session_handoff_snapshot(&session_id).is_none());
     assert!(app_server.list_live_sessions().is_empty());
+}
+
+#[tokio::test]
+async fn local_app_server_close_clears_scoped_state_without_sdk_slot() {
+    let app_server = Arc::new(AppServer::<LocalAppSessionHandle>::new(1, 8));
+    let state = Arc::new(SdkServerState::default());
+    let session_id = SessionId::try_new("sess-local-close-scoped").expect("valid session id");
+    register_local_app_server_session(
+        &app_server,
+        LocalAppSessionHandle::snapshot(session_id.clone()),
+    )
+    .await
+    .expect("register local session");
+    state.set_session_handoff(session_id.clone(), SessionHandoffState::new());
+    assert!(state.session_handoff_snapshot(&session_id).is_some());
+
+    close_local_app_server_session(
+        Arc::clone(&app_server),
+        Arc::clone(&state),
+        session_id.clone(),
+    )
+    .await
+    .expect("close local session");
+
+    assert!(app_server.list_live_sessions().is_empty());
+    assert!(state.session_handoff_snapshot(&session_id).is_none());
 }
 
 #[tokio::test]
@@ -651,11 +1012,115 @@ async fn app_server_local_bridge_can_install_existing_session_snapshot() {
         )
         .await;
 
-    let slot = state.session.read().await;
-    let session = slot.as_ref().expect("session installed");
-    assert_eq!(session.session_id, session_id);
-    assert_eq!(session.cwd, "/tmp/existing-session");
-    assert_eq!(session.model, "existing-model");
+    let metadata = state.session_metadata_snapshot(&session_id).unwrap();
+    assert_eq!(metadata.cwd, "/tmp/existing-session");
+    assert_eq!(metadata.model, "existing-model");
+    assert!(state.session_handoff_snapshot(&session_id).is_some());
+}
+
+#[tokio::test]
+async fn current_session_result_prefers_interactive_surface_over_sdk_slot() {
+    let state = Arc::new(SdkServerState::default());
+    {
+        let mut runner = state.turn_runner.write().await;
+        *runner = Arc::new(AccountingTurnRunner);
+    }
+    let mut bridge = AppServerLocalBridge::with_channel_capacity(Arc::clone(&state), 8);
+    let old_session_id =
+        coco_types::SessionId::try_new("sess-result-old").expect("valid old session id");
+    let new_session_id =
+        coco_types::SessionId::try_new("sess-result-new").expect("valid new session id");
+    bridge
+        .install_session_snapshot(old_session_id.clone(), "/tmp/old-session", "old-model")
+        .await;
+    bridge
+        .ensure_interactive_surface(old_session_id.clone())
+        .expect("attach old interactive surface");
+    replace_local_app_server_session(
+        Arc::clone(bridge.app_server()),
+        Arc::clone(&state),
+        old_session_id.clone(),
+        LocalAppSessionHandle::snapshot(new_session_id.clone()),
+    )
+    .await
+    .expect("replace session")
+    .expect("calling surface replaced");
+
+    let stale_slot_session_id =
+        coco_types::SessionId::try_new("sess-result-stale-slot").expect("valid stale session id");
+    state
+        .install_test_session_state(
+            stale_slot_session_id.clone(),
+            SessionMetadata {
+                cwd: "/tmp/stale-slot".to_string(),
+                model: "stale-model".to_string(),
+            },
+        )
+        .await;
+    state.set_session_handoff(new_session_id.clone(), SessionHandoffState::new());
+    bridge
+        .client()
+        .update_env(
+            bridge.handler(),
+            coco_types::UpdateEnvParams {
+                env: HashMap::from([("SCOPED".to_string(), "1".to_string())]),
+            },
+        )
+        .await
+        .expect("scoped update env succeeds with stale current-session fallback");
+    bridge
+        .start_turn_and_wait_for_end(
+            new_session_id.clone(),
+            coco_types::TurnStartParams {
+                prompt: "scoped turn".into(),
+                history_override: Vec::new(),
+                images: Vec::new(),
+                slash_metadata: None,
+                model_selection: None,
+                permission_mode: None,
+                thinking_level: None,
+            },
+        )
+        .await
+        .expect("scoped turn succeeds with stale current-session fallback");
+    let result = bridge
+        .current_session_result()
+        .await
+        .expect("session result");
+    assert_eq!(result.session_id, new_session_id);
+    assert_eq!(result.total_turns, 1);
+    assert_eq!(result.usage.input_tokens.total, 11);
+    assert_eq!(result.usage.output_tokens.total, 5);
+
+    let surface = bridge
+        .interactive_surface
+        .as_ref()
+        .expect("interactive surface")
+        .clone();
+    bridge
+        .client()
+        .session_archive(
+            bridge.handler(),
+            coco_types::SessionArchiveParams {
+                session_id: new_session_id.clone(),
+            },
+        )
+        .await
+        .expect("scoped archive succeeds through keyed SDK state");
+    let archive_event = tokio::time::timeout(
+        Duration::from_secs(1),
+        bridge.client_mut().next_session_event(&surface),
+    )
+    .await
+    .expect("scoped archive event delivered")
+    .expect("session event channel open");
+    assert_eq!(archive_event.session_id, new_session_id);
+    assert!(matches!(
+        archive_event.event,
+        CoreEvent::Protocol(ServerNotification::SessionResult(params))
+            if params.session_id == new_session_id
+    ));
+    assert!(bridge.app_server().list_live_sessions().is_empty());
 }
 
 #[tokio::test]
@@ -772,14 +1237,15 @@ async fn local_outbound_forwarder_routes_core_events_through_app_server() {
     let state = Arc::new(SdkServerState::default());
     let session_id =
         coco_types::SessionId::try_new("sess-local-forwarder").expect("valid session id");
-    {
-        let mut slot = state.session.write().await;
-        *slot = Some(crate::sdk_server::handlers::SessionHandle::new(
+    state
+        .install_test_session_state(
             session_id.clone(),
-            ".".to_string(),
-            "test-model".to_string(),
-        ));
-    }
+            SessionMetadata {
+                cwd: ".".to_string(),
+                model: "test-model".to_string(),
+            },
+        )
+        .await;
 
     let server = Arc::new(AppServer::<LocalAppSessionHandle>::new(1, 8));
     let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
@@ -789,8 +1255,12 @@ async fn local_outbound_forwarder_routes_core_events_through_app_server() {
         .expect("attach surface");
 
     let (outbound_tx, outbound_rx) = mpsc::channel(8);
-    let forwarder =
-        spawn_app_server_local_outbound_forwarder(Arc::clone(&server), state, outbound_rx, None);
+    let forwarder = spawn_app_server_local_outbound_forwarder(
+        Arc::clone(&server),
+        state,
+        outbound_rx,
+        Arc::new(std::sync::RwLock::new(None)),
+    );
 
     outbound_tx
         .send(OutboundMessage::core_event(CoreEvent::Protocol(
@@ -864,10 +1334,11 @@ async fn app_server_bridge_syncs_json_rpc_session_lifecycle_to_registry() {
     let connection = adapter.connect();
     let (server_transport, client_transport) = InMemoryTransport::pair(8);
     let server_transport: Arc<dyn SdkTransport> = server_transport;
+    let state = Arc::new(SdkServerState::default());
     let bridge_task = tokio::spawn(run_app_server_sdk_state_over_sdk_transport(
         connection,
         server_transport,
-        Arc::new(SdkServerState::default()),
+        Arc::clone(&state),
     ));
 
     client_transport
@@ -886,6 +1357,7 @@ async fn app_server_bridge_syncs_json_rpc_session_lifecycle_to_registry() {
     let session_id: SessionId = serde_json::from_value(start_response.result["session_id"].clone())
         .expect("decode started session id");
     assert_eq!(server.list_live_sessions()[0].session_id, session_id);
+    assert!(state.session_handoff_snapshot(&session_id).is_some());
 
     client_transport
         .send(JsonRpcMessage::Request(JsonRpcRequest {
@@ -906,6 +1378,58 @@ async fn app_server_bridge_syncs_json_rpc_session_lifecycle_to_registry() {
         .await
         .expect("bridge task")
         .expect("bridge exits cleanly");
+}
+
+#[tokio::test]
+async fn app_server_no_replacement_resume_installs_scoped_state_without_sdk_slot() {
+    let tmp = tempfile::tempdir().expect("temp session dir");
+    let manager = Arc::new(coco_session::SessionManager::new(tmp.path().to_path_buf()));
+    let session_id = SessionId::try_new("bridge-scoped-resume").expect("valid session id");
+    let cwd = tmp.path().join("project");
+    std::fs::create_dir_all(&cwd).expect("create project dir");
+    manager
+        .save(&coco_session::Session {
+            id: session_id.to_string(),
+            created_at: "2026-01-15T10:00:00Z".to_string(),
+            updated_at: None,
+            model: "test-model".to_string(),
+            working_dir: cwd.clone(),
+            title: None,
+            message_count: 1,
+            total_tokens: 0,
+            tags: Vec::new(),
+        })
+        .expect("save session record");
+    append_bridge_transcript_message(&manager, &session_id, &cwd, 1, "user", "resume me");
+
+    let state = Arc::new(SdkServerState::default());
+    {
+        let mut slot = state.session_manager.write().await;
+        *slot = Some(Arc::clone(&manager));
+    }
+    let app_server = Arc::new(AppServer::<LocalAppSessionHandle>::new(1, 8));
+    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&app_server), 8);
+    let client = ServerClient::connect_local(&adapter);
+    let (notif_tx, _notif_rx) = mpsc::channel(8);
+    let handler =
+        AppServerSdkHandler::with_local_app_server(Arc::clone(&state), notif_tx, app_server);
+
+    let resumed = client
+        .session_resume(
+            &handler,
+            coco_types::SessionResumeParams {
+                session_id: session_id.clone(),
+            },
+        )
+        .await
+        .expect("session/resume succeeds");
+
+    assert_eq!(resumed.session.session_id, session_id);
+    assert!(resumed.surface_id.is_some());
+    let handoff = state
+        .session_handoff_snapshot(&session_id)
+        .expect("scoped resume handoff");
+    assert_eq!(handoff.history.lock().await.len(), 1);
 }
 
 #[tokio::test]
@@ -1075,6 +1599,29 @@ async fn app_server_bridge_lists_turns_for_unpersisted_live_session() {
         .await
         .expect("bridge task")
         .expect("bridge exits cleanly");
+}
+
+#[tokio::test]
+async fn live_sdk_session_data_uses_scoped_state_without_sdk_slot() {
+    let state = Arc::new(SdkServerState::default());
+    let session_id = SessionId::try_new("sess-scoped-live-session-data").expect("valid session id");
+    let prepared = session::PreparedStartSession {
+        session_id: session_id.clone(),
+        cwd: "/tmp/scoped-live-data".to_string(),
+        model: "test-model".to_string(),
+        permission_mode: None,
+        plan_mode_instructions: None,
+    };
+    session::install_scoped_started_session_state(&state, &prepared, None).await;
+    assert!(state.session_handoff_snapshot(&session_id).is_some());
+
+    let (summary, history) = live_sdk_session_summary_and_history(&state, &session_id)
+        .await
+        .expect("scoped live state");
+    assert_eq!(summary.session_id, session_id);
+    assert_eq!(summary.cwd, "/tmp/scoped-live-data");
+    assert_eq!(summary.model, "test-model");
+    assert!(history.is_empty());
 }
 
 #[tokio::test]
@@ -1620,14 +2167,15 @@ fn ack_for_batch(batch: &BatchFrame) -> BatchAckFrame {
 async fn local_outbound_forwarder_enqueues_stamped_events_to_hub_connector() {
     let state = Arc::new(SdkServerState::default());
     let session_id = SessionId::try_new("sess-local-hub-egress").expect("valid session id");
-    {
-        let mut slot = state.session.write().await;
-        *slot = Some(crate::sdk_server::handlers::SessionHandle::new(
+    state
+        .install_test_session_state(
             session_id.clone(),
-            ".".to_string(),
-            "test-model".to_string(),
-        ));
-    }
+            SessionMetadata {
+                cwd: ".".to_string(),
+                model: "test-model".to_string(),
+            },
+        )
+        .await;
 
     let (hub_url, mut batches) = spawn_collecting_hub_server().await;
     let worker = HubConnectorWorker::spawn(hub_worker_config(hub_url, vec![session_id.clone()]))
@@ -1645,7 +2193,7 @@ async fn local_outbound_forwarder_enqueues_stamped_events_to_hub_connector() {
         Arc::clone(&server),
         state,
         outbound_rx,
-        Some(worker.sender()),
+        Arc::new(std::sync::RwLock::new(Some(worker.sender()))),
     );
 
     outbound_tx
@@ -1683,14 +2231,15 @@ async fn local_outbound_forwarder_enqueues_stamped_events_to_hub_connector() {
 async fn sdk_bridge_enqueues_protocol_notifications_to_hub_connector() {
     let state = Arc::new(SdkServerState::default());
     let session_id = SessionId::try_new("sess-sdk-hub-egress").expect("valid session id");
-    {
-        let mut slot = state.session.write().await;
-        *slot = Some(crate::sdk_server::handlers::SessionHandle::new(
+    state
+        .install_test_session_state(
             session_id.clone(),
-            ".".to_string(),
-            "test-model".to_string(),
-        ));
-    }
+            SessionMetadata {
+                cwd: ".".to_string(),
+                model: "test-model".to_string(),
+            },
+        )
+        .await;
 
     let (hub_url, mut batches) = spawn_collecting_hub_server().await;
     let worker = HubConnectorWorker::spawn(hub_worker_config(hub_url, vec![session_id.clone()]))

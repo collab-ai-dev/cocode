@@ -75,9 +75,10 @@ pub struct EngineResources {
 
 /// Build the shared engine resources from a resolved `RuntimeConfig`.
 ///
-/// The `RuntimeConfig` itself is caller-built — TUI typically
-/// snapshots it from a hot-reload publisher, SDK / headless build it
-/// once via [`crate::headless::build_runtime_config_for_cli`].
+/// The `RuntimeConfig` itself is caller-built; production runtime construction
+/// goes through [`crate::session_runtime::SessionRuntimeBootstrapSource`] so
+/// config-derived resources are rebuilt with the same target cwd as the
+/// session.
 /// Build a real LSP handle when `Feature::Lsp` is enabled and the
 /// session has a project root + coco-home to load
 /// `lsp_servers.json` from. Returns `None` otherwise — callers thread
@@ -530,7 +531,7 @@ pub async fn bootstrap_session_mcp(
         Arc::new(tokio::sync::Mutex::new(
             coco_mcp::McpConnectionManager::new_with_runtime_config(
                 config_home.clone(),
-                &runtime.runtime_config.mcp,
+                &runtime.runtime_config().mcp,
             ),
         ))
     });
@@ -539,7 +540,7 @@ pub async fn bootstrap_session_mcp(
     // connect is deferred to the background pass below). Project MCP config and
     // plugin contributions are rooted at the ProjectServices key; local config
     // remains session-cwd scoped.
-    let project_services = runtime.project_services.clone();
+    let project_services = Arc::clone(runtime.project_services());
     let mcp_servers = project_services.mcp_servers(&config_home, cwd);
     {
         let mut mgr = manager.lock().await;
@@ -552,7 +553,7 @@ pub async fn bootstrap_session_mcp(
         coco_mcp::discovery::DiscoveryCache::default(),
     ));
     let elicit_counter = runtime
-        .app_state
+        .app_state()
         .read()
         .await
         .elicitation_pending_count
@@ -566,7 +567,7 @@ pub async fn bootstrap_session_mcp(
         .with_skill_bridge(
             runtime.skill_manager(),
             skill_cache.clone(),
-            runtime.runtime_config.clone(),
+            Arc::clone(runtime.runtime_config()),
         );
     runtime.attach_mcp_manager(manager.clone()).await;
     runtime.attach_mcp_handle(Arc::new(adapter)).await;
@@ -600,7 +601,7 @@ pub async fn bootstrap_session_mcp(
     //   - `false` (interactive / long-lived SDK): connect in the background so
     //     startup isn't blocked (codex-rs pattern); tools appear within seconds.
     let registry = runtime.tools().clone();
-    let features = runtime.runtime_config.features.clone();
+    let features = runtime.runtime_config().features.clone();
     let skills = runtime.skill_manager();
     let connect_task = async move {
         connect_and_register_mcp(manager.clone(), registry).await;

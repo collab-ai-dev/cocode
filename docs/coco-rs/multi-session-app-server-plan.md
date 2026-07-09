@@ -65,17 +65,37 @@ the seams this design must cut are concrete:
   `Arc<RuntimeConfig>`, session manager) with per-session mutable state in
   one struct. The split exists only as a comment
   (`session_runtime.rs:549` "mutable per-session state").
-- Session identity is still mutable:
-  `QueryEngineConfig.session_id` is still repointed in place through the
-  legacy `retarget_session_id_boundaries` helper on `/clear`
-  (`clear_conversation`, new UUID path) and on SDK `session/start`
-  / `session/resume` / TUI `/resume` (`retarget_for_loaded_session`). The
-  file-history sink now derives its session id from the synchronized engine
-  config mirror instead of maintaining its own retargeted identity.
-- The SDK server enforces a singleton: `SdkServerState.session:
-  RwLock<Option<SessionHandle>>` (`app/cli/src/sdk_server/handlers/mod.rs:236`,
-  "Only one concurrent session per server"). The wire vocabulary already
-  carries `session_id` on most requests; the state machine ignores it.
+- Session identity is no longer rotated through public fused-runtime retarget
+  helpers. The loaded-session and fresh-session retarget entrypoints are
+  deleted, and legacy SDK `session/start` now rejects an already-installed
+  runtime unless the AppServer replacement context intercepted the request:
+  production SDK `session/start`, SDK/TUI loaded resume, and TUI `/clear` now
+  build replacement runtimes and swap handles through AppServer/local-owner
+  paths instead of rotating the active runtime in place. The file-history sink
+  derives its session id from the synchronized
+  engine config mirror instead of maintaining its own mutable identity slot.
+- The SDK server no longer has a singleton active-session identity slot.
+  Runtime-backed SDK control paths source model, permission mode, thinking
+  level, and live cwd from the installed runtime, while turn id counters,
+  aggregate archive accounting, active-turn handles/cancellation, and legacy
+  cwd/model metadata live on `SdkServerState` keyed by `SessionId`.
+  Session-scoped plan-mode instruction snapshots also live on
+  `SdkServerState`, as do SDK turn handoff history and live app state. Direct
+  legacy start/resume now install those scoped SDK state maps instead of
+  claiming process-global identity; unscoped handlers resolve a sole scoped session
+  when no AppServer surface or installed runtime identifies the session.
+  AppServer-routed request handlers can now receive a
+  current-session scope from the connection's sole attached interactive surface;
+  runtime controls, rewind, normal turn setup, shortcut-turn minting, and other
+  simple readers prefer that scope before falling back to a sole scoped state
+  after the installed runtime. Scoped runtime-backed start/resume, archive, and
+  AppServer close cleanup also operate by routed session id instead of requiring
+  SDK active identity. The old `control/updateEnv` map had no consumer and no longer
+  lives on singleton session state;
+  the request remains acknowledged until env control has a runtime/AppServer
+  owner.
+  The wire vocabulary already carries `session_id` on most requests; the state
+  machine ignores it.
 - `CoreEvent` (`common/types/src/event.rs`) has no `session_id` /
   `turn_id` on the envelope. History `ServerNotification` variants now share
   a flattened `ServerNotificationIdentity` for `session_id` / `agent_id`
@@ -1639,9 +1659,10 @@ Implementation progress as of 2026-07-07:
   `turn/*` semantics through the same dispatcher without adding another runtime
   dispatch table or taking a dependency on runtime internals. The same bridge
   now has a local outbound forwarder that consumes handler-emitted `CoreEvent`s,
-  stamps them with the current session identity from `SdkServerState`, and
-  routes them through `AppServer::route_envelope` so local AppServer surfaces
-  can receive runtime events without SDK JSON-RPC serialization.
+  stamps them with an outbound-carried routed session id when present and
+  otherwise falls back to the current session identity from `SdkServerState`,
+  then routes them through `AppServer::route_envelope` so local AppServer
+  surfaces can receive runtime events without SDK JSON-RPC serialization.
   `AppServerLocalBridge` now packages that local wiring as the concrete
   TUI/headless entrypoint foundation: it owns the local `AppServer`,
   `LocalClientAdapter`/`ServerClient`, shared runtime-backed handler, and event
@@ -1656,12 +1677,10 @@ Implementation progress as of 2026-07-07:
   register live slots through `AppServer::spawn_load` with
   `LocalAppSessionHandle` registry snapshots instead of empty `()` handles.
   Installed runtime snapshots carry the fused app/cli `SessionHandle`, whose
-  session id is now an immutable handle snapshot; remaining legacy retarget
-  paths such as `/clear` and TUI `/resume` must create a fresh
-  `SessionHandle::snapshot_current()` before re-installing. The local close
-  cascade is retarget-safe and intentionally avoids tearing down that fused
-  runtime while `session/start` / `session/resume` can still retarget it in
-  place. Local `session/archive` runs the AppServer `spawn_close` path so
+  session id is now an immutable handle snapshot. The local close cascade
+  checks the registry snapshot before touching runtime-backed state, so stale
+  registry handles from a replacement swap do not tear down the new live
+  runtime. Local `session/archive` runs the AppServer `spawn_close` path so
   attached local surfaces receive `SessionEnded`; the local archive request
   waits for close completion before returning so the registry slot is removed
   when callers observe success.
@@ -1682,11 +1701,14 @@ Implementation progress as of 2026-07-07:
   per-turn engine and emits `TurnStarted` / `TurnEnded` with the same
   `TurnId` returned by the synchronous `TurnStartResult`, which lets
   `AppServerLocalBridge::start_turn_and_wait_for_end` correlate the matching
-  terminal event on its local interactive surface. The SDK/AppServer runner's
-  event forwarding now also preserves the TUI runner's context-compaction
-  metadata reappend behavior. Its tests cover local typed request dispatch,
-  existing-session snapshot installation, surface event delivery, passive event
-  pumping, and waiting for matching turn completion. The TUI and headless
+  terminal event on its local interactive surface. AppServer-scoped normal and
+  shortcut turn events now carry their routed session id through the local
+  outbound path, so they no longer depend on legacy SDK active identity
+  for envelope stamping. The SDK/AppServer runner's event forwarding now also
+  preserves the TUI runner's context-compaction metadata reappend behavior. Its
+  tests cover local typed request dispatch, existing-session snapshot
+  installation, surface event delivery, passive event pumping, and waiting for
+  matching turn completion. The TUI and headless
   bootstraps now instantiate
   this bridge, install their already-built `SessionRuntime`, and issue a local
   `keep_alive` through `ServerClient`. TUI normal submits and slash/palette
@@ -1699,9 +1721,19 @@ Implementation progress as of 2026-07-07:
   prebuilt-history turns now pass a serialized full-history override through
   local AppServer `turn/start`, so permission retries, queued prompts, and
   prompt-mode bash follow-up turns no longer call the engine directly from the
-  TUI runner. TUI `/reload-plugins` now routes through this local AppServer
-  client via `ServerClient::plugin_reload`, preserving the TUI toast and
-  command-palette refresh. TUI `/hooks reload` now routes through
+  TUI runner. TUI `/compact` now also sends the existing compact sentinel
+  through local AppServer `turn/start`, reusing the handler-owned manual
+  compaction shortcut and passive completion monitor instead of building a
+  compacting engine directly in the TUI runner. TUI `/dream` and `/summary`
+  now likewise send their sentinels through local AppServer `turn/start`, so
+  manual memory shortcut ownership and completion monitoring match the SDK
+  handler boundary instead of calling `MemoryRuntime` directly from the TUI
+  runner. TUI `/btw` now also sends its sentinel through local AppServer
+  `turn/start`, so side-question forks and no-dispatcher degraded responses use
+  the handler shortcut instead of a direct TUI runtime helper. TUI
+  `/reload-plugins` now routes through this local AppServer client via
+  `ServerClient::plugin_reload`, preserving the TUI toast and command-palette
+  refresh. TUI `/hooks reload` now routes through
   `ServerClient::hook_reload`, so hook registry reloads also use the local
   AppServer handler path instead of direct TUI runtime mutation. TUI `/context`
   now routes through `ServerClient::context_usage`
@@ -1765,12 +1797,11 @@ Implementation progress as of 2026-07-07:
   local AppServer `session/resume`, then reattach the bridge's
   interactive/passive local surfaces to the resumed/forked id and emit the TUI
   reset/history hydration events.
-  TUI `/clear` still rotates identity through the fused runtime's
-  compatibility retarget helper, but the TUI orchestration now closes the old
-  local AppServer live slot, installs the post-clear runtime snapshot under the
-  new id, and reattaches interactive/passive local surfaces before emitting the
-  reset event. The eventual full `session.replace` runtime factory remains the
-  demolition target.
+  TUI `/clear` now builds a fresh empty runtime through
+  `SessionRuntimeFactory`, commits it through local AppServer replacement with
+  a `Clear` close reason, carries forward only the live permission base plus
+  the hidden pre-clear rewind prefix, and swaps the TUI current-session
+  owner/local bridge before emitting the reset event.
   TUI `/rename`, `/tag`, `/branch` fork-title persistence, and post-plan
   auto-title persistence now route session metadata writes through local
   AppServer `session/rename` and `session/toggleTag` requests; bare
@@ -1925,11 +1956,11 @@ Implementation progress as of 2026-07-07:
   No named pipe is opened by default.
   AppServer-driven local close now has a concrete bridge cascade: the close
   owner task cancels and boundedly drains any matching SDK active turn state,
-  clears the SDK session slot, fires runtime SessionEnd hooks for matching
+  clears scoped SDK session state, fires runtime SessionEnd hooks for matching
   runtime-backed handles, cancels the runtime shutdown signal, then archives
-  AppServer surfaces and emits lifecycle end notifications. The retarget guard
-  still prevents a stale registry snapshot from shutting down a fused runtime
-  after `/clear` or resume has already moved the runtime to another session id.
+  AppServer surfaces and emits lifecycle end notifications. The registry
+  snapshot guard prevents a stale snapshot from shutting down a replacement
+  runtime after `/clear` or resume has already swapped handles.
   `RemoteConnectOptions` now names remote outbound/event channel capacities for
   generic NDJSON, Unix dialing, and WebSocket dialing. `RemoteJsonRpcClient` now also exposes typed
   session, turn, approval/user-input/elicitation resolution, initialize,
@@ -1985,17 +2016,43 @@ Implementation progress as of 2026-07-07:
   `SessionRuntimeFactory` now exists in `app/cli` as an owned construction
   boundary over cloneable startup inputs plus a target session id, and TUI,
   headless, and SDK bootstraps use it for their initial `SessionHandle`
-  construction. TUI, headless, and SDK startup now reserve the fresh/resume or
-  startup target id before building the runtime and construct that first
-  runtime through the AppServer `spawn_load` owner task; startup resume/fork
-  therefore enters the registry under the resolved target id without a
-  throwaway identity. SDK `session/start` closes the startup placeholder slot
-  before registering the client-started session so the single-session registry
-  limit is preserved. The shared `session/resume` handler skips
-  `retarget_for_loaded_session` when the installed runtime is already on that
-  id, eliminating the old throwaway-startup-id retarget step for those
-  launches. This extends direct `spawn_load` runtime factory handoff to local
-  TUI/headless and SDK startup. The local bridge also exposes runtime-backed
+  construction. `SessionRuntimeFactory` now receives a coherent
+  `SessionRuntimeBootstrapSource` and asks it for the bootstrap bundle at each
+  session build. Production TUI, headless, and SDK factories use the
+  per-session fold source: each target cwd rebuilds `RuntimeConfig` plus the
+  model id, system prompt, permission startup state, command registry, skill
+  manager, project services, and agent search paths as one bundle, and the
+  constructed `SessionRuntime` retains that session's `RuntimeReloader`.
+  TUI config-change hooks, sandbox reload, sandbox violation forwarding,
+  sandbox approval bridging, model-runtime reload, TUI settings reload, and TUI
+  skill-override writes now use a runtime-reload subscription owner that
+  reattaches to the session-owned publisher after startup, `/resume`,
+  `/branch`, or `/clear` replacement. SDK sandbox reload and SDK sandbox
+  approval bridging are installed through the shared SDK runtime-state
+  installer, so AppServer-backed SDK `session/start` / `session/resume`
+  replacement aborts the old runtime's reload subscriber and attaches the new
+  runtime's session-owned publisher. Compatibility tests still use
+  `SessionRuntimeBootstrapSource::startup_snapshot(...)`. The factory build
+  path also accepts an explicit target cwd: startup resume, TUI `/resume` /
+  `/branch`, TUI `/clear`, and SDK runtime replacement start/resume construct
+  the runtime with the persisted or requested session cwd instead of the
+  process startup cwd.
+  TUI, headless, and SDK startup now reserve the fresh/resume or startup target
+  id before building the runtime and construct that first runtime through the
+  AppServer `spawn_load` owner task; startup resume/fork therefore enters the
+  registry under the resolved target id without a throwaway identity.
+  Production SDK `session/start` now uses the same
+  replacement context to build the client-started runtime through the AppServer
+  load/replace owner task, close the startup placeholder slot, and swap
+  `SdkServerState.session_runtime` plus scoped SDK state maps only after the
+  AppServer live slot commits, without writing process-global active identity; the
+  legacy handler rejects `session/start` when a runtime is already installed
+  without the AppServer replacement context. The
+  legacy `session/resume` handler now only hydrates runtimes already on the
+  requested id; mismatched runtime-backed resume must use the AppServer
+  replacement path, so SDK fused-runtime retargeting is gone. This extends direct
+  `spawn_load` runtime factory handoff to local TUI/headless and SDK startup.
+  The local bridge also exposes runtime-backed
   `spawn_replace` /
   `spawn_replace_detached` helpers that build the replacement
   `LocalAppSessionHandle` inside the AppServer owner task, return the
@@ -2008,15 +2065,19 @@ Implementation progress as of 2026-07-07:
   `spawn_replace_detached`, then install the returned handle into the TUI owner
   and local bridge. SDK `session/resume` now follows the same ordering when
   the production runtime replacement context is installed: the AppServer bridge
-  loads the persisted session, installs the SDK session slot, builds a fresh
-  target-id runtime through `SessionRuntimeFactory` inside the AppServer
-  load/replace owner task, replays resume hydration plus SDK-specific late
-  binds (structured output, sandbox approval bridge, initialize hook callbacks,
-  MCP, leader inbox), swaps `SdkServerState.session_runtime` to the returned
-  handle, and injects the active surface id into the resume result. The legacy
-  SDK handler remains as the no-runtime-replacement fallback, but production
-  SDK turns already read the current runtime from state per turn, so resume no
-  longer needs to retarget the installed runtime in place.
+  loads the persisted session, builds a fresh target-id runtime through
+  `SessionRuntimeFactory` inside the AppServer load/replace owner task, replays
+  resume hydration plus SDK-specific late binds (structured output, sandbox
+  approval bridge, initialize hook callbacks, MCP, leader inbox), commits the
+  AppServer slot/surface switch, then swaps `SdkServerState.session_runtime`
+  and scoped SDK state maps to the returned handle without writing
+  process-global active identity. The rebuilt SDK state carries the resumed transcript handoff
+  history and runtime-backed app state, so the next SDK `turn/start` continues
+  from the loaded chain; factory failure leaves the prior SDK/AppServer live
+  slot untouched. The legacy SDK handler remains as the no-runtime-replacement
+  fallback, but production SDK turns already read
+  the current runtime from state per turn, so resume no longer needs to retarget
+  the installed runtime in place.
   The CLI bridge also centralizes persisted-response overlay plus live
   fallback in one local session-data view, preserving the `coco-app-server` /
   `coco-session` crate boundary until the final runtime/session-store facade
@@ -2025,14 +2086,26 @@ Implementation progress as of 2026-07-07:
   `SessionManager` directly for AppServer-routed `session/list`,
   `session/read`, and `session/turns/list`, so those read-only methods no
   longer bounce through the legacy SDK session-data handlers before live
-  overlay. Direct AppServer-owned runtime
-  factory invocation behind `spawn_load`, full immutable-runtime shutdown beyond
-  the bridge-owned close cascade, migration of TUI long-lived side tasks
-  (plugin/skill/cron watchers and permission notification weak refs) onto the
-  swappable runtime owner,
-  broader direct AppServer-owned persisted session-store listing/read/turn I/O,
-  and replacing the remaining in-session direct retarget helpers
-  once the immutable runtime factory lands. Transport owner loops now apply bounded
+  overlay. The TUI skill watcher now keeps its process-lifetime filesystem
+  guard but resolves the current `SessionHandle` on every debounced reload, so
+  skill ConfigChange hooks, catalog reload, and slash-command refresh mutate
+  the post-resume / post-branch runtime instead of the startup runtime. The TUI
+  cron tick driver is likewise TUI-lifetime and resolves the current session on
+  each tick, so scheduled prompts enqueue into the post-resume / post-branch
+  command queue; startup missed-task scanning runs after startup resume has
+  installed the final current session. The TUI ConfigChange watcher and
+  permission notification bridge now also resolve the current session before
+  firing hooks, updating permission prompt state, or generating permission-risk
+  explanations, so TUI long-lived side tasks no longer hold startup-only
+  runtime handles. TUI `/clear` now also constructs a replacement runtime
+  through `SessionRuntimeFactory` and commits the swap through local AppServer
+  replacement instead of rotating the fused runtime in place. Direct
+  AppServer-owned runtime factory invocation behind `spawn_load`, full
+  immutable-runtime shutdown beyond the bridge-owned close cascade, broader
+  direct AppServer-owned persisted session-store listing/read/turn I/O, and
+  deleting the fused `SessionRuntime` container once its remaining shared
+  process resources have owners. Transport
+  owner loops now apply bounded
   outbound write/send timeouts and disconnect slow consumers before returning
   the timeout error.
 - The staged compact ledger and `QueryEngine.staged_session_id` now use
@@ -2120,8 +2193,8 @@ Implementation progress as of 2026-07-07:
   prompt-mode shell commands, plugin reload, turn input @-mentions, plugin
   dialog loading, agent creation, the permissions editor, `/context` memory
   path display, and agent-dialog create finalization. SDK handlers now share
-  `SdkServerState::workspace_cwd()`, preferring the active SDK session cwd,
-  then the installed runtime cwd, then the SDK initialize/bootstrap cwd, and
+  `SdkServerState::workspace_cwd()`, preferring the installed runtime cwd, then
+  the legacy SDK session metadata cwd, then the SDK initialize/bootstrap cwd, and
   finally the startup cwd captured by `main.rs`.
 - TUI app construction now receives the session cwd from `app/cli` and uses
   it for the shared file index and git-index watcher; `app/tui/src` no longer
@@ -2247,10 +2320,10 @@ Implementation progress as of 2026-07-07:
   so command bootstrap/reload no longer passes the enabled plugin slice around
   outside the project-service container.
 - `UsageAccounting` now owns its mutable session id as `SessionId`; it no
-  longer shares the runtime identity lock. It exposes lifecycle-level
-  retarget methods for loading an existing session's usage or starting a
-  fresh empty usage ledger, so `SessionRuntime` no longer sequences raw
-  tracker load/reset operations. Usage snapshot load/read/flush now go
+  longer shares the runtime identity lock. It exposes lifecycle-level methods
+  for loading an existing session's usage or starting a fresh empty usage
+  ledger, so `SessionRuntime` no longer sequences raw tracker load/reset
+  operations. Usage snapshot load/read/flush now go
   through `UsageAccounting`, and `SessionRuntime` no longer stores duplicate
   usage tracker/write-lock handles, mutates the tracker lock directly, or
   owns the side-query usage event sink slot. String conversion happens only
@@ -2269,21 +2342,16 @@ Implementation progress as of 2026-07-07:
   snapshot persistence now uses that same synchronized engine config mirror,
   so the separate `session_identity.rs` helper module and file-history
   session-id mirror are gone.
-- The old `SessionRuntime::adopt_session_id` aggregation method is gone;
-  legacy identity retargeting now lives in `retarget_session_id_boundaries`,
-  while runtime-owned session-keyed state reset lives in the unified
-  `retarget_runtime_for_session` seam.
-- The `/clear` flow now separates pre-retarget conversation cleanup
-  (`reset_conversation_state_before_clear_retarget`) from the shared
-  empty-session retarget seam.
-- Post-clear SessionStart hook construction and execution now lives behind
-  `run_session_start_hooks_after_clear`, leaving `clear_conversation` as a
-  five-step orchestration path.
-- The `/clear` orchestration path now lives in the dedicated
-  `session_runtime::clear` child module, keeping pre-clear rewind capture,
-  conversation-local reset, empty-session retarget, and post-clear
-  SessionStart hooks isolated from plugin/hook reload and per-turn engine
-  wiring in the main runtime body.
+- The old `SessionRuntime::adopt_session_id` aggregation method is gone, and
+  the dedicated `session_runtime::retarget` module and final in-place helper
+  are gone.
+- Production TUI `/clear` now prepares the pre-clear rewind snapshot, constructs
+  a fresh empty runtime through `SessionRuntimeFactory`, commits it through the
+  local AppServer replacement path with `ExitReason::Clear`, and swaps the
+  current-session owner/local bridge to the new handle before emitting the TUI
+  reset event. The old direct `SessionRuntime::clear_conversation`
+  compatibility helper is deleted; `session_runtime::clear` now only keeps the
+  replacement path's pre-clear rewind capture helpers.
 - Session hook orchestration now lives in the dedicated
   `session_runtime::hooks` child module: SessionStart/End, Setup,
   UserPromptSubmit, Notification, CwdChanged, ConfigChange, and FileChanged
@@ -2367,8 +2435,10 @@ Implementation progress as of 2026-07-07:
   manual `/dream` and `/summary`, and `/add-dir` helpers now also sit behind the
   same handle boundary. TUI resume hydration, `/resume` target resolution, and
   current-session plan-file path helpers now take `SessionHandle` as well. TUI
-  fork-skill, manual compact, clear, `/btw`, export, tag, and provider
-  status/logout helpers have also moved to the handle boundary. TUI goal
+  fork-skill, clear, `/btw`, export, tag, and provider status/logout helpers
+  have also moved to the handle boundary. TUI manual compact, `/dream`,
+  `/summary`, and `/btw` now enter through local AppServer `turn/start` instead
+  of direct TUI runtime helpers. TUI goal
   command helpers, including status modal construction, goal-status transcript
   append, and active-goal snapshot persistence, now take `SessionHandle` too.
   TUI reload, permissions mutation, color, and context-inspection helpers now
@@ -2389,57 +2459,32 @@ Implementation progress as of 2026-07-07:
   transcript storage boundary. Coordinator-mode persistence now also receives
   typed `SessionId` from SDK/headless exit paths before converting at
   `SessionManager::save_mode`.
-- Public retarget entrypoints are now `retarget_for_new_session` and
-  `retarget_for_loaded_session`; `/clear` reuses the new-session entrypoint
-  after its pre-clear cleanup, while resume paths use the loaded-session
-  entrypoint.
-- `clear_conversation_rotates_session_and_preserves_permission_grants`
-  covers the current `/clear` compatibility behavior: session id rotates,
-  conversation-local state resets, and live permission grants survive.
+- Public fused-runtime retarget entrypoints are gone. Production SDK
+  start/resume, TUI resume, and TUI `/clear` use replacement runtimes.
 - Session-id read paths now snapshot a typed `SessionId` through
   `QueryEngineConfig.session_id`; file watcher registration also snapshots
   from that config instead of carrying a separate mutable session-id handle.
 - File-history snapshot persistence now derives its session id from the
-  synchronized engine config mirror, so it no longer participates in the
-  legacy retarget seam.
-- The legacy retarget seam now accepts a typed `SessionId`: callers convert at
-  the SDK/TUI compatibility boundary, `/clear` uses `SessionId::generate()`,
-  and engine config / usage accounting / memory / model-runtime retargeting
-  all derive from the typed id instead of passing raw strings through the
-  mutation path.
+  synchronized engine config mirror instead of a separate mutable identity
+  seam.
+- Runtime identity boundaries are typed at construction and replacement-call
+  sites instead of passing raw strings through mutation paths.
 - Memory runtime/session-memory/extract/dream services now store their active
-  session id as `SessionId`; `/clear` retargeting passes the typed id through
-  the runtime and converts to string only for session-memory paths and other
-  on-disk transcript/storage boundaries. The composed `MemoryRuntime` now
+  session id as `SessionId` and replacement construction passes the typed id
+  through the runtime, converting to string only for session-memory paths and
+  other on-disk transcript/storage boundaries. The composed `MemoryRuntime` now
   shares one session-id slot across extract, dream, and session-memory
   services, so memory retargeting performs one typed slot update instead of
   three independent service writes. `SessionRuntime` no longer stores a
   duplicate `session_memory_service` field; per-turn engine wiring derives the
   service handle from `memory_runtime.session_memory`.
-- The misleading `SessionRuntime::start_new_session` entrypoint is gone;
-  SDK `session/start` now calls an explicitly empty-session retarget seam,
-  while SDK `session/resume` and TUI `/resume` call the explicitly loaded-
-  session retarget seam.
-- Loaded-session resume and fresh-session retargets now enter the unified
-  `retarget_runtime_for_session` seam, with the lower
-  `retarget_session_id_boundaries` mutation kept as the identity-only shim.
-- `retarget_session_id_boundaries` now delegates to named sub-boundaries for
-  engine config, memory session id, and model-runtime session header
-  variables, so each remaining in-place mutation has a distinct demolition
-  point. The model-runtime header-var refresh now accepts typed `SessionId`
-  instead of reopening a raw string boundary at the inference layer; the
-  header-template snapshot stores `${SESSION_ID}` as `Option<SessionId>` and
-  converts to `&str` only during template expansion.
+- The misleading `SessionRuntime::start_new_session` entrypoint is gone. Legacy
+  fallback SDK `session/start` no longer retargets an installed runtime and
+  instead requires the AppServer replacement path; legacy fallback resume also
+  no longer retargets a mismatched fused runtime.
 - SDK `session/start`, SDK/TUI loaded-session resume, and TUI `/clear` now
-  converge on one `SessionRuntime::retarget_runtime_for_session` compatibility
-  seam with an explicit empty-vs-loaded usage-ledger mode; session-keyed
-  runtime caches, transcript dedup, tool-result replacement state, denial
-  tracking, and cache-break detectors reset from that single demolition point.
-- The fused-runtime retarget seam now lives in the dedicated
-  `session_runtime::retarget` child module instead of the main
-  `session_runtime.rs` body, leaving public callers on `retarget_for_new_session`
-  / `retarget_for_loaded_session` while isolating the eventual runtime-registry
-  demolition point.
+  converge on replacement-runtime construction for production paths; the
+  in-place fused-runtime retarget seam is deleted.
 - File-history sink session identity now comes from the synchronized
   engine-config mirror; normal runtime identity reads no longer have a
   separate mutable reader or wrapper module.
@@ -2649,10 +2694,11 @@ Implementation progress as of 2026-07-07:
   `From<String>` / `From<&str>` constructors; call sites now use checked
   constructors, canonical generators, or the documented `TaskId`→`AgentId`
   reinterpretation for BgAgent task routing.
-- SDK server `SessionHandle` / `TurnHandoff` now carry `SessionId` internally;
-  `session/start`, `session/resume`, per-turn stats forwarding, QueryEngine
-  handoff, rewind file-history calls, and SDK test runners convert to strings
-  only at protocol or legacy persistence boundaries.
+- SDK server `TurnHandoff` now carries `SessionId` internally, and SDK session
+  state uses typed session ids; `session/start`, `session/resume`, per-turn
+  stats forwarding, QueryEngine handoff, rewind file-history calls, and SDK
+  test runners convert to strings only at protocol or legacy persistence
+  boundaries.
 - Hook and analytics DTOs now type their session identity at the Rust boundary:
   `BaseHookInput.session_id`, `AnalyticsEvent.session_id`, and
   `AnalyticsLogger.session_id` use `SessionId` while hook JSON/env and
@@ -2662,27 +2708,88 @@ Implementation progress as of 2026-07-07:
   external/user-input seams: CLI subcommand args, app-query mock harness
   params, exec-server/bridge/hub/retrieval protocols, and the Google
   CodeAssist onboarding API DTO.
-- The fused-runtime retarget seam now distinguishes empty `session/start`
-  retargets from loaded `session/resume` / TUI `/resume` retargets; usage
-  accounting resets for new SDK sessions and loads persisted snapshots only
-  on resume-style paths.
-- Remaining identity work: remove in-place session id rotation entirely
-  during the runtime split.
+- SDK and direct-clear fused-runtime retarget paths are deleted. Production SDK
+  `session/start`, SDK/TUI resume, and TUI `/clear` now build replacement
+  runtimes instead of using in-place rotation.
+- Runtime-backed SDK control paths now update/read model, permission mode,
+  thinking level, and cwd through the installed runtime first. The legacy SDK
+  singleton active identity is deleted; model/cwd/permission/thinking handoff
+  metadata, turn id counters, aggregate archive accounting, active-turn
+  handles/cancellation, legacy cwd/model metadata, session-scoped plan-mode
+  instruction snapshots, SDK turn handoff history, and live app state now live
+  on `SdkServerState` keyed by `SessionId`. Direct legacy SDK start/resume now
+  install those scoped state maps, and unscoped handlers resolve a sole scoped
+  session when no AppServer surface or installed runtime identifies the session.
+  AppServer-routed request contexts now carry an optional current-session scope
+  derived from the connection's sole attached interactive surface, and runtime
+  controls, rewind, normal turn setup, shortcut-turn minting, and other simple
+  readers prefer that scope, then the installed runtime's scoped state, then a
+  sole scoped state.
+  Runtime-backed SDK session/start and session/resume, scoped archive, and
+  AppServer close cleanup also operate by routed session id instead of requiring
+  SDK active identity. The REPL bridge control handler also falls back to the
+  installed runtime's current session id for bridge-origin controls. Per-turn
+  `SessionResult` accounting for scoped turns folds while the routed session's
+  scoped state is still live, so it also no longer requires process-global identity.
+  SDK/AppServer fallback event stamping, unscoped runtime-backed turn cleanup,
+  and live session-data overlay now prefer runtime/scoped state; process-level
+  bridge fallbacks share `SdkServerState::runtime_or_active_session_id()`.
+  AppServer runtime replacement and no-runtime-replacement `session/start` /
+  `session/resume` install scoped SDK state and rely on AppServer
+  registry/surface ownership instead of claiming process-global identity.
+  `control/updateEnv`
+  no longer stores an unused map on singleton session state and remains an acknowledged no-op
+  until env control has a runtime/AppServer owner.
 
 **Phase B — atomic cut-over (single PR):**
 
 Route TUI and headless through `LocalClientAdapter`; route SDK through
 `JsonRpcAdapter`; delete the old stack. Remaining demolition list:
 
-- `retarget_for_loaded_session`, `retarget_session_id_boundaries`, and the
-  `/clear` id-rotation path.
-- The fused `SessionRuntime` struct itself, including its in-place
-  engine-config / memory / model-runtime session-id retarget seam.
-- `SdkServerState.session` singleton slot
-  (`sdk_server/handlers/mod.rs:236`) and the dispatcher's
-  archive→start session-cycling (`dispatcher.rs:194-206`).
-- The process-boot single fold of project/local settings into one
-  process-wide `RuntimeConfig` (replaced by the per-session fold, §6.5).
+- The fused `SessionRuntime` struct itself, after moving its remaining
+  process-lifetime resources behind dedicated owners.
+
+Completed side-channel cleanup: SDK `initialize` now prefers the installed
+runtime for command, agent, and output-style metadata, falling back to the
+bootstrap snapshot only before a runtime exists; account/auth and fast-mode
+state remain bootstrap-owned until runtime accessors land. SDK MCP manager
+construction now happens after the startup runtime is loaded and uses that
+runtime's MCP config; TUI/headless MCP bootstrap already builds or reuses
+managers from the session runtime. TUI, headless, and SDK event-hub connectors
+now spawn after their startup runtime loads and use that runtime's event-hub
+config plus session id. Runtime construction itself now uses the per-session
+fold source (§6.5), TUI plus SDK runtime-reload subscriber reattachment is
+wired, and `SessionExecutionResources` now owns the shared tool registry plus
+model runtime registry instead of leaving them as flat `SessionRuntime` fields.
+`SessionHookResources` now owns the hook registry, hook LLM handle, hook event
+buffers, and FileChanged watcher instead of leaving hook orchestration handles
+as flat `SessionRuntime` fields. `SessionPersistenceResources` now owns the
+session manager, project storage paths, main transcript store, and persistence
+flag instead of leaving session storage as flat `SessionRuntime` fields.
+`SessionProjectResources` now owns the process runtime plus project-services
+snapshot instead of leaving project/process services as flat `SessionRuntime`
+fields. `SessionConfigResources` now owns the config home, per-session folded
+runtime config, and runtime reloader instead of leaving config/reload handles
+as flat `SessionRuntime` fields. `SessionCatalogResources` now owns the
+slash-command registry plus session skill manager instead of leaving command
+and skill catalogs as flat `SessionRuntime` fields. `SessionTurnResources` now
+owns the schedule store, side-query handle, usage accounting, mailbox, and
+optional permission bridge instead of leaving per-turn engine plumbing as flat
+`SessionRuntime` fields. `SessionLifecycleResources` now owns the session
+shutdown token plus PID-registry guard, and `SessionCommandResources` now owns
+the cross-turn command queue plus attachment channel, and
+`SessionTitleResources` now owns auto-title enablement plus the fast-model spec
+and `SessionWorkspaceResources` now owns original cwd, project root, and live
+cwd, and `SessionEngineConfigResources` now owns per-session engine config,
+the synchronous orchestration mirror, and model-role overrides, and
+`SessionEngineStateResources` now owns shared mutable engine state, file
+history/read state, app state, loop sentinel state, pending peer messages,
+auto-mode/denial state, transcript dedup, clear rewind snapshots, terminal-goal
+metadata flag, and tool-result replacement state, and
+`SessionIntegrationResources` now owns late-bound MCP/LSP handles, the live
+MCP manager slot, and the MCP reconnect key instead of leaving
+lifecycle/producer/title/workspace/config/engine-state/integration plumbing as
+flat `SessionRuntime` fields.
 
 **Phase C — surfaces (multi-attach):** passive surfaces, multiple
 surfaces per connection, interactive-conflict rejection, replace/archive

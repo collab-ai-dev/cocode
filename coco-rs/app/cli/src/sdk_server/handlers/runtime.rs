@@ -3,6 +3,8 @@
 //! handlers (`context/usage`, `plugin/reload`, `hook/reload`,
 //! `config/applyFlags`).
 
+use std::sync::Arc;
+
 use tracing::info;
 
 use super::DEFAULT_SDK_MODEL;
@@ -27,25 +29,55 @@ pub(super) async fn handle_set_model(
     params: coco_types::SetModelParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let mut slot = ctx.state.session.write().await;
-    let Some(session) = slot.as_mut() else {
+    let new_model = params
+        .model
+        .clone()
+        .unwrap_or_else(|| DEFAULT_SDK_MODEL.into());
+
+    if let Some(runtime_handle) = ctx.state.session_runtime.read().await.clone() {
+        let session_id = runtime_handle.session_id().clone();
+        let old_model = runtime_handle
+            .runtime()
+            .current_engine_config()
+            .await
+            .model_id;
+        let model_for_config = new_model.clone();
+        runtime_handle
+            .runtime()
+            .update_engine_config(move |cfg| {
+                cfg.model_id = model_for_config;
+            })
+            .await;
+        if let Some(session_id) = ctx.active_session_id().await.as_ref() {
+            ctx.state
+                .update_session_model(session_id, new_model.clone());
+        }
+        info!(
+            session_id = %session_id,
+            old_model = %old_model,
+            new_model = %new_model,
+            "SdkServer: control/setModel"
+        );
+        return HandlerResult::ok_empty();
+    }
+
+    let Some(session_id) = ctx.active_session_id().await else {
         return HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
             message: "no active session".into(),
             data: None,
         };
     };
-    let new_model = params
-        .model
-        .clone()
+    let old_model = ctx
+        .state
+        .update_session_model(&session_id, new_model.clone())
         .unwrap_or_else(|| DEFAULT_SDK_MODEL.into());
     info!(
-        session_id = %session.session_id,
-        old_model = %session.model,
+        session_id = %session_id,
+        old_model = %old_model,
         new_model = %new_model,
         "SdkServer: control/setModel"
     );
-    session.model = new_model;
     HandlerResult::ok_empty()
 }
 
@@ -68,7 +100,7 @@ pub(super) async fn handle_set_model_role(
     let runtime = session_runtime.runtime();
     let moa_endpoint = if params.provider == "moa" {
         runtime
-            .runtime_config
+            .runtime_config()
             .model_roles
             .moa_preset(&params.model_id)
             .cloned()
@@ -92,7 +124,7 @@ pub(super) async fn handle_set_model_role(
             )
         };
     let display_name = runtime
-        .runtime_config
+        .runtime_config()
         .model_registry
         .resolve(&acting_provider, &acting_model_id)
         .map(|resolved| {
@@ -104,12 +136,12 @@ pub(super) async fn handle_set_model_role(
         })
         .unwrap_or_else(|| acting_model_id.clone());
     let context_window = runtime
-        .runtime_config
+        .runtime_config()
         .model_registry
         .resolve(&acting_provider, &acting_model_id)
         .map(|resolved| resolved.info.context_window.get() as i64);
     let api = runtime
-        .runtime_config
+        .runtime_config()
         .providers
         .get(&acting_provider)
         .map(|provider| provider.api)
@@ -176,15 +208,10 @@ pub(super) async fn handle_set_model_role(
 /// `control/setPermissionMode` — mutate the session's permission mode.
 ///
 /// Writes:
-/// 1. [`SessionHandle::permission_mode`] — session-scoped override read
-///    by `sdk_runner::run_turn` as a fallback when the turn params
-///    don't carry an explicit mode.
-/// 2. [`SessionHandle::app_state`] `permission_mode` — the engine's
-///    live mode source of truth. Updating it mid-session propagates
-///    to any in-flight engine's next `create_tool_context` read.
-///    Without this write, mid-session toggles are invisible to the
-///    plan-mode reminder + permission evaluator.
-/// 3. Applies the same plan/auto transition side effects as the TUI
+/// 1. Runtime `QueryEngineConfig.permission_mode` when a runtime is installed.
+/// 2. The live `ToolAppState.permission_mode` read by tool context creation.
+/// 3. The legacy SDK session's shared app state when no runtime is installed.
+/// 4. Applies the same plan/auto transition side effects as the TUI
 ///    path: entering Plan stashes `pre_plan_mode` and stamps
 ///    `plan_mode_entry_ms`; leaving Plan schedules the one-shot exit
 ///    banner; leaving Auto clears `stripped_dangerous_rules`.
@@ -214,28 +241,6 @@ pub(super) async fn handle_set_permission_mode(
         };
     }
 
-    let mut slot = ctx.state.session.write().await;
-    let Some(session) = slot.as_mut() else {
-        return HandlerResult::Err {
-            code: coco_types::error_codes::INVALID_REQUEST,
-            message: "no active session".into(),
-            data: None,
-        };
-    };
-    info!(
-        session_id = %session.session_id,
-        mode = ?params.mode,
-        "SdkServer: control/setPermissionMode"
-    );
-    let fallback_previous_mode = session
-        .permission_mode
-        .unwrap_or(coco_types::PermissionMode::Default);
-    session.permission_mode = Some(params.mode);
-
-    let app_state = session.app_state.clone();
-    // Drop the session write lock before taking app_state's lock to
-    // keep lock order consistent (session → app_state never inverted).
-    drop(slot);
     let runtime_arc = {
         let slot = ctx.state.session_runtime.read().await;
         slot.as_ref().cloned()
@@ -245,6 +250,8 @@ pub(super) async fn handle_set_permission_mode(
         runtime
             .update_engine_config(move |cfg| cfg.permission_mode = params.mode)
             .await;
+
+        let app_state = Arc::clone(runtime.runtime().app_state());
         let live_allow_rules = app_state.read().await.permissions.allow_rules.clone();
         let config = runtime.current_engine_config().await;
         let change = crate::live_permission_mode::apply_to_app_state(
@@ -265,16 +272,45 @@ pub(super) async fn handle_set_permission_mode(
             change.changed,
         )
         .await;
+        info!(
+            session_id = %runtime.session_id(),
+            mode = ?params.mode,
+            "SdkServer: control/setPermissionMode"
+        );
         return HandlerResult::ok_empty();
     }
+
+    let Some(session_id) = ctx.active_session_id().await else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "no active session".into(),
+            data: None,
+        };
+    };
+    info!(
+        session_id = %session_id,
+        mode = ?params.mode,
+        "SdkServer: control/setPermissionMode"
+    );
+    let Some(handoff) = ctx.state.session_handoff_snapshot(&session_id) else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INTERNAL_ERROR,
+            message: "session handoff state is missing".into(),
+            data: None,
+        };
+    };
+    let app_state = handoff.app_state;
     // Provenance for the Auto-entry dangerous-rule strip must come from the
-    // SAME live base the transition writes — this session's `app_state` (the
-    // per-SessionHandle base the engine runs against), NOT the SessionRuntime
-    // base. Reading the session's own base keeps strip/restore coherent.
+    // SAME live base the transition writes — this session's handoff
+    // `app_state`, NOT the SessionRuntime base. Reading the session's own base
+    // keeps strip/restore coherent.
     let (previous_mode, live_allow_rules) = {
         let guard = app_state.read().await;
         (
-            guard.permissions.mode.unwrap_or(fallback_previous_mode),
+            guard
+                .permissions
+                .mode
+                .unwrap_or(coco_types::PermissionMode::Default),
             guard.permissions.allow_rules.clone(),
         )
     };
@@ -305,17 +341,29 @@ pub(super) async fn handle_set_thinking(
     params: coco_types::SetThinkingParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let session_id = {
-        let mut slot = ctx.state.session.write().await;
-        let Some(session) = slot.as_mut() else {
-            return HandlerResult::Err {
-                code: coco_types::error_codes::INVALID_REQUEST,
-                message: "no active session".into(),
-                data: None,
-            };
+    if let Some(runtime) = ctx.state.session_runtime.read().await.clone() {
+        let session_id = runtime.session_id().clone();
+        let thinking_level = params.thinking_level.clone();
+        runtime
+            .update_engine_config(move |cfg| {
+                cfg.thinking_level = thinking_level;
+            })
+            .await;
+        info!(
+            session_id = %session_id,
+            level = ?params.thinking_level,
+            "SdkServer: control/setThinking"
+        );
+        publish_main_role_changed_for_thinking(ctx, &runtime, params.thinking_level).await;
+        return HandlerResult::ok_empty();
+    }
+
+    let Some(session_id) = ctx.active_session_id().await else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "no active session".into(),
+            data: None,
         };
-        session.thinking_level = params.thinking_level.clone();
-        session.session_id.clone()
     };
 
     info!(
@@ -323,16 +371,6 @@ pub(super) async fn handle_set_thinking(
         level = ?params.thinking_level,
         "SdkServer: control/setThinking"
     );
-
-    if let Some(runtime) = ctx.state.session_runtime.read().await.clone() {
-        let thinking_level = params.thinking_level.clone();
-        runtime
-            .update_engine_config(move |cfg| {
-                cfg.thinking_level = thinking_level;
-            })
-            .await;
-        publish_main_role_changed_for_thinking(ctx, &runtime, params.thinking_level).await;
-    }
 
     HandlerResult::ok_empty()
 }
@@ -356,7 +394,7 @@ pub(super) async fn handle_set_agent_color(
 
     session_runtime
         .runtime()
-        .app_state
+        .app_state()
         .write()
         .await
         .agent_color = params.color;
@@ -403,7 +441,7 @@ pub(super) async fn handle_reset_session_permission_rules(ctx: &HandlerContext) 
     };
 
     let runtime = session_runtime.runtime();
-    let mut guard = runtime.app_state.write().await;
+    let mut guard = runtime.app_state().write().await;
     let cleared_allow_rules = guard
         .permissions
         .allow_rules
@@ -436,7 +474,7 @@ async fn publish_main_role_changed_for_thinking(
         return;
     };
     let context_window = runtime
-        .runtime_config
+        .runtime_config()
         .model_registry
         .resolve(&resolved.spec.provider, &resolved.spec.model_id)
         .map(|model| model.info.context_window.get() as i64);
@@ -466,16 +504,12 @@ pub(super) async fn handle_stop_task(
     params: coco_types::StopTaskParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let session_id = {
-        let slot = ctx.state.session.read().await;
-        let Some(session) = slot.as_ref() else {
-            return HandlerResult::Err {
-                code: coco_types::error_codes::INVALID_REQUEST,
-                message: "no active session".into(),
-                data: None,
-            };
+    let Some(session_id) = ctx.active_session_id().await else {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::INVALID_REQUEST,
+            message: "no active session".into(),
+            data: None,
         };
-        session.session_id.clone()
     };
 
     if let Some(runtime) = ctx.state.session_runtime.read().await.clone() {
@@ -504,15 +538,14 @@ pub(super) async fn handle_stop_task(
     }
 
     let token = {
-        let slot = ctx.state.session.read().await;
-        let Some(session) = slot.as_ref() else {
+        let Some(session_id) = ctx.active_session_id().await else {
             return HandlerResult::Err {
                 code: coco_types::error_codes::INVALID_REQUEST,
                 message: "no active session".into(),
                 data: None,
             };
         };
-        session.active_turn_cancel.clone()
+        ctx.state.active_turn_cancel_token(&session_id)
     };
 
     match token {
@@ -533,41 +566,40 @@ pub(super) async fn handle_stop_task(
     }
 }
 
-/// `control/updateEnv` — merge environment variable updates into the
-/// session's override map.
+/// `control/updateEnv` — accept environment variable updates.
 ///
 /// Passing an empty string for a value is interpreted as "unset" and
-/// removes the key from the override map. The resulting map is passed
-/// to tool invocations when the shell executor is wired to read it.
+/// counted as a clear. The old SDK slot-only override map had no consumer;
+/// env control needs a runtime/AppServer owner before it can affect tools.
 pub(super) async fn handle_update_env(
     params: coco_types::UpdateEnvParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let mut slot = ctx.state.session.write().await;
-    let Some(session) = slot.as_mut() else {
-        return HandlerResult::Err {
-            code: coco_types::error_codes::INVALID_REQUEST,
-            message: "no active session".into(),
-            data: None,
+    let session_id = if let Some(runtime) = ctx.state.session_runtime.read().await.clone() {
+        runtime.current_typed_session_id().await
+    } else {
+        let Some(session_id) = ctx.active_session_id().await else {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INVALID_REQUEST,
+                message: "no active session".into(),
+                data: None,
+            };
         };
+        session_id
     };
-    let mut applied = 0;
-    let mut cleared = 0;
-    for (k, v) in params.env {
-        if v.is_empty() {
-            if session.env_overrides.remove(&k).is_some() {
-                cleared += 1;
-            }
+    let mut applied = 0_i32;
+    let mut cleared = 0_i32;
+    for (_key, value) in params.env {
+        if value.is_empty() {
+            cleared += 1;
         } else {
-            session.env_overrides.insert(k, v);
             applied += 1;
         }
     }
     info!(
-        session_id = %session.session_id,
+        session_id = %session_id,
         applied,
         cleared,
-        total = session.env_overrides.len(),
         "SdkServer: control/updateEnv"
     );
     HandlerResult::ok_empty()
@@ -720,15 +752,21 @@ pub(super) async fn handle_session_status(ctx: &HandlerContext) -> HandlerResult
 /// `context/usage` — return the active session's current Main context view.
 pub(super) async fn handle_context_usage(ctx: &HandlerContext) -> HandlerResult {
     let (history_handle, app_state) = {
-        let slot = ctx.state.session.read().await;
-        let Some(session) = slot.as_ref() else {
+        let Some(session_id) = ctx.active_session_id().await else {
             return HandlerResult::Err {
                 code: coco_types::error_codes::INVALID_REQUEST,
                 message: "no active session; call session/start first".into(),
                 data: None,
             };
         };
-        (session.history.clone(), session.app_state.clone())
+        let Some(handoff) = ctx.state.session_handoff_snapshot(&session_id) else {
+            return HandlerResult::Err {
+                code: coco_types::error_codes::INTERNAL_ERROR,
+                message: "session handoff state is missing".into(),
+                data: None,
+            };
+        };
+        (handoff.history, handoff.app_state)
     };
     let history_arcs = history_handle.lock().await.clone();
     let Some(runtime) = ctx.state.session_runtime.read().await.clone() else {
@@ -798,7 +836,7 @@ pub(super) async fn handle_plugin_reload(ctx: &HandlerContext) -> HandlerResult 
         .collect();
     let agent_catalog = runtime.current_agent_catalog().await;
     let agents: Vec<String> = agent_catalog.active().map(|a| a.name.clone()).collect();
-    let config_home = runtime.config_home.clone();
+    let config_home = runtime.config_home().clone();
     let project_dir = runtime
         .current_engine_config()
         .await

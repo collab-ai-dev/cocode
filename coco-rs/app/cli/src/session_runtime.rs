@@ -9,21 +9,21 @@
 //! history Mutex, …).
 //! 2. Per-turn, build a `QueryEngine` by chaining ~11 `.with_*` calls
 //! that install those subsystems on the engine.
-//! 3. On `/clear`, perform a full reset (SessionEnd hooks → drop
-//! caches → regen session id → SessionStart hooks).
+//! 3. For runtime replacement flows such as TUI `/clear`, construct a fresh
+//! target-id runtime and swap handles through the local AppServer bridge.
 //!
 //! Before this module existed, both runners had their own copies of
 //! steps 1+2+3 — the SDK copy had drifted to ~30% completeness and 7
 //! distinct bugs that all had the same shape ("TUI installed X, SDK
 //! forgot to install X"). [`SessionRuntime`] is the single owner of
-//! that state; both runners construct one at startup, then call
-//! [`SessionRuntime::build_engine`] per turn and
-//! [`SessionRuntime::clear_conversation`] on `/clear`.
+//! that state; both runners construct runtimes through the shared factory, then
+//! call [`SessionRuntime::build_engine`] per turn.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -62,14 +62,16 @@ mod handles;
 mod hooks;
 mod permissions;
 mod reload;
-mod retarget;
 mod roles;
 mod sandbox;
 mod session_handle;
 mod state;
 
+pub use factory::SessionRuntimeBootstrap;
+pub use factory::SessionRuntimeBootstrapSource;
 pub use factory::SessionRuntimeFactory;
 pub use factory::SessionRuntimeFactoryOpts;
+pub use hooks::spawn_current_session_config_change_watcher;
 pub(crate) use permissions::live_permissions;
 pub use roles::RoleOverride;
 pub(crate) use roles::resolve_model_selection_from_runtime_config;
@@ -97,6 +99,7 @@ fn write_std_rwlock<T>(lock: &std::sync::RwLock<T>, value: T) {
 pub struct SessionRuntimeBuildOpts<'a> {
     pub cli: &'a Cli,
     pub runtime_config: Arc<RuntimeConfig>,
+    pub config_reloader: Option<coco_config_reload::RuntimeReloader>,
     pub cwd: PathBuf,
     pub model_id: String,
     pub system_prompt: String,
@@ -159,74 +162,444 @@ enum EnginePersistenceMode {
 /// the runtime field that stores the latest one stays readable.
 type CacheParamsHandle = Arc<RwLock<Option<coco_types::CacheSafeParams>>>;
 
-/// All per-session state shared by both runners. Construction at startup
-/// is done once via [`SessionRuntime::build`]; per-turn engines are
-/// assembled via [`SessionRuntime::build_engine`].
-pub struct SessionRuntime {
-    // ── immutable resources (never change after build) ─────────────────
-    /// Tool registry shared by every engine instance. Read by
-    /// [`Self::build_engine`] / [`Self::build_engine_from_config`].
+/// Process/shared execution resources installed on every engine built for a
+/// session.
+///
+/// Kept separate from mutable per-session state so the runtime split can move
+/// these registries behind a dedicated owner without changing turn behavior.
+#[derive(Clone)]
+pub struct SessionExecutionResources {
     tools: Arc<ToolRegistry>,
-    /// Slash-command registry. Read by
-    /// [`crate::tui_runner::dispatch_slash_command`] to resolve every
-    /// `/foo` typed by the user or selected from the command palette.
-    /// Wrapped in `RwLock` so `/reload-plugins` can rebuild and swap
-    /// without restarting the session — consumers snapshot the inner
-    /// `Arc<CommandRegistry>` once per dispatch via
-    /// [`Self::current_command_registry`] so a concurrent swap can't
-    /// invalidate borrows.
-    pub command_registry: Arc<RwLock<Arc<CommandRegistry>>>,
-    /// Session-scoped skill catalog. Cloned into `ReminderSources`
-    /// (`SkillsSource`) on every per-turn engine so the model receives
-    /// the `skill_listing` reminder that gates on
-    /// `skill_manager.is_empty()`.
-    pub(crate) skill_manager: Arc<coco_skills::SkillManager>,
-    pub config_home: PathBuf,
-    pub runtime_config: Arc<RuntimeConfig>,
-    pub process_runtime: Arc<ProcessRuntime>,
-    pub project_services: Arc<ProjectServices>,
-    pub session_manager: Arc<SessionManager>,
-    pub fast_model_spec: Option<ModelSpec>,
-    schedule_store: coco_tool_runtime::ScheduleStoreRef,
     model_runtimes: Arc<coco_inference::ModelRuntimeRegistry>,
+}
+
+impl SessionExecutionResources {
+    pub fn new(
+        tools: Arc<ToolRegistry>,
+        model_runtimes: Arc<coco_inference::ModelRuntimeRegistry>,
+    ) -> Self {
+        Self {
+            tools,
+            model_runtimes,
+        }
+    }
+
+    pub fn tools(&self) -> &Arc<ToolRegistry> {
+        &self.tools
+    }
+
+    pub fn model_runtimes(&self) -> Arc<coco_inference::ModelRuntimeRegistry> {
+        self.model_runtimes.clone()
+    }
+}
+
+/// Session-owned configuration snapshot and reload publisher.
+///
+/// Runtime construction picks the config home and per-session folded
+/// `RuntimeConfig`; hot-reload paths subscribe through the paired reloader.
+pub struct SessionConfigResources {
+    config_home: PathBuf,
+    runtime_config: Arc<RuntimeConfig>,
+    config_reloader: Option<coco_config_reload::RuntimeReloader>,
+}
+
+impl SessionConfigResources {
+    pub fn new(
+        config_home: PathBuf,
+        runtime_config: Arc<RuntimeConfig>,
+        config_reloader: Option<coco_config_reload::RuntimeReloader>,
+    ) -> Self {
+        Self {
+            config_home,
+            runtime_config,
+            config_reloader,
+        }
+    }
+
+    pub fn config_home(&self) -> &PathBuf {
+        &self.config_home
+    }
+
+    pub fn runtime_config(&self) -> &Arc<RuntimeConfig> {
+        &self.runtime_config
+    }
+
+    pub fn runtime_publisher(&self) -> Option<Arc<coco_config::RuntimePublisher>> {
+        self.config_reloader
+            .as_ref()
+            .map(coco_config_reload::RuntimeReloader::publisher)
+    }
+
+    pub fn subscribe_config_changes(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<coco_config_reload::ConfigChange>> {
+        self.config_reloader
+            .as_ref()
+            .map(coco_config_reload::RuntimeReloader::subscribe_changes)
+    }
+
+    pub fn subscribe_config_reload_errors(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<coco_config_reload::ConfigReloadError>> {
+        self.config_reloader
+            .as_ref()
+            .map(coco_config_reload::RuntimeReloader::subscribe_errors)
+    }
+}
+
+/// Session command and skill catalog resources.
+///
+/// These are loaded from the same per-session project/config fold and reloaded
+/// together when plugin or skill settings change.
+#[derive(Clone)]
+pub struct SessionCatalogResources {
+    command_registry: Arc<RwLock<Arc<CommandRegistry>>>,
+    skill_manager: Arc<coco_skills::SkillManager>,
+}
+
+impl SessionCatalogResources {
+    pub fn new(
+        command_registry: Arc<RwLock<Arc<CommandRegistry>>>,
+        skill_manager: Arc<coco_skills::SkillManager>,
+    ) -> Self {
+        Self {
+            command_registry,
+            skill_manager,
+        }
+    }
+
+    pub fn command_registry(&self) -> &Arc<RwLock<Arc<CommandRegistry>>> {
+        &self.command_registry
+    }
+
+    pub fn skill_manager(&self) -> &Arc<coco_skills::SkillManager> {
+        &self.skill_manager
+    }
+}
+
+/// Per-turn engine plumbing shared by engines built for one session.
+#[derive(Clone)]
+pub struct SessionTurnResources {
+    schedule_store: coco_tool_runtime::ScheduleStoreRef,
     side_query: coco_tool_runtime::SideQueryHandle,
     usage_accounting: coco_query::usage_accounting::UsageAccounting,
-    pub auto_title_enabled: bool,
-    /// SwarmMailbox handle installed on every engine via `with_mailbox`.
     mailbox: MailboxHandleRef,
-    /// Optional SDK permission bridge (None for TUI). Installed via
-    /// `with_permission_bridge` when present.
     permission_bridge: Option<ToolPermissionBridgeRef>,
-    /// Long-lived parent token for runtime-level lifecycle (hook
-    /// orchestration shutdown). Per-turn engine cancels are
-    /// independent — see TUI `run_agent_driver` for per-iteration
-    /// `CancellationToken::new()`.
-    cancel: CancellationToken,
+}
 
+impl SessionTurnResources {
+    pub fn new(
+        schedule_store: coco_tool_runtime::ScheduleStoreRef,
+        side_query: coco_tool_runtime::SideQueryHandle,
+        usage_accounting: coco_query::usage_accounting::UsageAccounting,
+        mailbox: MailboxHandleRef,
+        permission_bridge: Option<ToolPermissionBridgeRef>,
+    ) -> Self {
+        Self {
+            schedule_store,
+            side_query,
+            usage_accounting,
+            mailbox,
+            permission_bridge,
+        }
+    }
+
+    pub fn schedule_store(&self) -> coco_tool_runtime::ScheduleStoreRef {
+        self.schedule_store.clone()
+    }
+
+    pub fn side_query(&self) -> coco_tool_runtime::SideQueryHandle {
+        self.side_query.clone()
+    }
+
+    pub fn usage_accounting(&self) -> coco_query::usage_accounting::UsageAccounting {
+        self.usage_accounting.clone()
+    }
+
+    pub fn mailbox(&self) -> MailboxHandleRef {
+        self.mailbox.clone()
+    }
+
+    pub fn permission_bridge(&self) -> Option<ToolPermissionBridgeRef> {
+        self.permission_bridge.clone()
+    }
+}
+
+type SessionAttachmentRx =
+    Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<coco_messages::AttachmentMessage>>>;
+
+/// Cross-turn command and attachment channels shared by rebuilt engines.
+#[derive(Clone)]
+pub struct SessionCommandResources {
+    attachment_tx: tokio::sync::mpsc::UnboundedSender<coco_messages::AttachmentMessage>,
+    attachment_rx: SessionAttachmentRx,
+    command_queue: CommandQueue,
+}
+
+impl SessionCommandResources {
+    pub fn new(
+        attachment_tx: tokio::sync::mpsc::UnboundedSender<coco_messages::AttachmentMessage>,
+        attachment_rx: SessionAttachmentRx,
+        command_queue: CommandQueue,
+    ) -> Self {
+        Self {
+            attachment_tx,
+            attachment_rx,
+            command_queue,
+        }
+    }
+
+    pub fn attachment_emitter(&self) -> coco_messages::AttachmentEmitter {
+        coco_messages::AttachmentEmitter::new(self.attachment_tx.clone())
+    }
+
+    pub fn attachment_channel(
+        &self,
+    ) -> (
+        tokio::sync::mpsc::UnboundedSender<coco_messages::AttachmentMessage>,
+        SessionAttachmentRx,
+    ) {
+        (self.attachment_tx.clone(), self.attachment_rx.clone())
+    }
+
+    pub fn command_queue(&self) -> &CommandQueue {
+        &self.command_queue
+    }
+}
+
+/// Project/process service resources used by a session.
+///
+/// `ProcessRuntime` owns the process-level project registry, while
+/// `ProjectServices` is the project-root snapshot selected for this session.
+#[derive(Clone)]
+pub struct SessionProjectResources {
+    process_runtime: Arc<ProcessRuntime>,
+    project_services: Arc<ProjectServices>,
+}
+
+impl SessionProjectResources {
+    pub fn new(
+        process_runtime: Arc<ProcessRuntime>,
+        project_services: Arc<ProjectServices>,
+    ) -> Self {
+        Self {
+            process_runtime,
+            project_services,
+        }
+    }
+
+    pub fn process_runtime(&self) -> &Arc<ProcessRuntime> {
+        &self.process_runtime
+    }
+
+    pub fn project_services(&self) -> &Arc<ProjectServices> {
+        &self.project_services
+    }
+}
+
+/// Session storage and transcript persistence resources.
+///
+/// These values are process-backed but scoped to the session's project/cwd
+/// choice at build time. Keeping them behind one owner is a step toward
+/// splitting the fused runtime into smaller lifetime-specific containers.
+#[derive(Clone)]
+pub struct SessionPersistenceResources {
+    session_manager: Arc<SessionManager>,
+    project_paths: Arc<coco_paths::ProjectPaths>,
+    transcript_store: Arc<dyn coco_session::SessionStore>,
+    persist_session: bool,
+}
+
+impl SessionPersistenceResources {
+    pub fn new(
+        session_manager: Arc<SessionManager>,
+        project_paths: Arc<coco_paths::ProjectPaths>,
+        transcript_store: Arc<dyn coco_session::SessionStore>,
+        persist_session: bool,
+    ) -> Self {
+        Self {
+            session_manager,
+            project_paths,
+            transcript_store,
+            persist_session,
+        }
+    }
+
+    pub fn session_manager(&self) -> &Arc<SessionManager> {
+        &self.session_manager
+    }
+
+    pub fn project_paths(&self) -> &Arc<coco_paths::ProjectPaths> {
+        &self.project_paths
+    }
+
+    pub fn transcript_store(&self) -> &Arc<dyn coco_session::SessionStore> {
+        &self.transcript_store
+    }
+
+    pub fn persist_session(&self) -> bool {
+        self.persist_session
+    }
+}
+
+/// Session lifecycle resources that should live and drop with the runtime.
+pub struct SessionLifecycleResources {
+    cancel: CancellationToken,
+    pid_registry: Option<coco_session::SessionRegistry>,
+}
+
+impl SessionLifecycleResources {
+    pub fn new(
+        cancel: CancellationToken,
+        pid_registry: Option<coco_session::SessionRegistry>,
+    ) -> Self {
+        Self {
+            cancel,
+            pid_registry,
+        }
+    }
+
+    pub fn cancel(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
+    pub fn update_session_registry_name(&self, name: &str) {
+        if let Some(reg) = self.pid_registry.as_ref() {
+            reg.update_session_name(name);
+        }
+    }
+}
+
+/// Hook orchestration resources installed on every engine and used by
+/// runtime-level hook firing.
+///
+/// Kept as a dedicated owner so the runtime split can move hook orchestration
+/// behind its own lifecycle without keeping these handles as flat runtime
+/// fields.
+#[derive(Clone)]
+pub struct SessionHookResources {
+    hook_registry: Arc<HookRegistry>,
+    hook_llm_handle: Arc<coco_query::hook_llm::QueryHookLlm>,
+    sync_hook_buffer: coco_hooks::SyncHookEventBuffer,
+    async_hook_registry: Arc<coco_hooks::async_registry::AsyncHookRegistry>,
+    file_changed_watcher: Arc<RwLock<Option<crate::file_changed_watcher::FileChangedHookWatcher>>>,
+}
+
+impl SessionHookResources {
+    pub fn new(
+        hook_registry: Arc<HookRegistry>,
+        hook_llm_handle: Arc<coco_query::hook_llm::QueryHookLlm>,
+        sync_hook_buffer: coco_hooks::SyncHookEventBuffer,
+        async_hook_registry: Arc<coco_hooks::async_registry::AsyncHookRegistry>,
+        file_changed_watcher: Arc<
+            RwLock<Option<crate::file_changed_watcher::FileChangedHookWatcher>>,
+        >,
+    ) -> Self {
+        Self {
+            hook_registry,
+            hook_llm_handle,
+            sync_hook_buffer,
+            async_hook_registry,
+            file_changed_watcher,
+        }
+    }
+
+    pub fn registry(&self) -> Arc<HookRegistry> {
+        self.hook_registry.clone()
+    }
+
+    pub fn llm_handle(&self) -> Arc<coco_query::hook_llm::QueryHookLlm> {
+        self.hook_llm_handle.clone()
+    }
+
+    pub fn sync_buffer(&self) -> coco_hooks::SyncHookEventBuffer {
+        self.sync_hook_buffer.clone()
+    }
+
+    pub fn async_registry(&self) -> Arc<coco_hooks::async_registry::AsyncHookRegistry> {
+        self.async_hook_registry.clone()
+    }
+
+    pub fn file_changed_watcher(
+        &self,
+    ) -> Arc<RwLock<Option<crate::file_changed_watcher::FileChangedHookWatcher>>> {
+        self.file_changed_watcher.clone()
+    }
+}
+
+#[derive(Clone)]
+pub struct SessionTitleResources {
+    fast_model_spec: Option<ModelSpec>,
+    auto_title_enabled: bool,
+}
+
+impl SessionTitleResources {
+    pub fn new(fast_model_spec: Option<ModelSpec>, auto_title_enabled: bool) -> Self {
+        Self {
+            fast_model_spec,
+            auto_title_enabled,
+        }
+    }
+
+    pub fn fast_model_spec(&self) -> Option<&ModelSpec> {
+        self.fast_model_spec.as_ref()
+    }
+
+    pub fn auto_title_enabled(&self) -> bool {
+        self.auto_title_enabled
+    }
+}
+
+#[derive(Clone)]
+pub struct SessionWorkspaceResources {
     /// Original CWD captured at session start. Frozen for the lifetime
-    /// of this [`SessionRuntime`] — never moves even if the user
+    /// of this [`SessionRuntime`] - never moves even if the user
     /// `cd`'s away inside a Bash command. Used as the anchor for
     /// `reset_cwd_if_outside_project` (when bash drifts out of the
     /// allowed working directory set, we snap it back here) and for
-    /// "Shell cwd was reset to …" stderr annotations.
-    pub original_cwd: PathBuf,
+    /// "Shell cwd was reset to ..." stderr annotations.
+    original_cwd: PathBuf,
     /// Git worktree root for project-scoped services, or
     /// [`Self::original_cwd`] when the session is outside git.
-    pub project_root: PathBuf,
-    /// Existing session storage layout anchor. This intentionally remains
-    /// separate from [`Self::project_root`] until transcript storage is
-    /// migrated to the ProjectServices root.
-    pub project_paths: Arc<coco_paths::ProjectPaths>,
-
-    // ── mutable per-session state (changes on /clear or mid-session) ──
-    /// Currently active CWD. Updated **across BashTool calls** so the
+    project_root: PathBuf,
+    /// Currently active CWD. Updated across BashTool calls so the
     /// model's `cd /tmp` in one turn survives into the next turn.
     /// Threaded into every `ToolUseContext` via the engine config so
     /// BashTool can read it as the spawn cwd and write back from
     /// `CommandResult.new_cwd`.
-    pub current_cwd: Arc<RwLock<PathBuf>>,
-    /// Engine config; mutated by [`Self::clear_conversation`] (session_id)
-    /// and [`Self::update_engine_config`]. Read by every per-turn build.
+    current_cwd: Arc<RwLock<PathBuf>>,
+}
+
+impl SessionWorkspaceResources {
+    pub fn new(
+        original_cwd: PathBuf,
+        project_root: PathBuf,
+        current_cwd: Arc<RwLock<PathBuf>>,
+    ) -> Self {
+        Self {
+            original_cwd,
+            project_root,
+            current_cwd,
+        }
+    }
+
+    pub fn original_cwd(&self) -> &PathBuf {
+        &self.original_cwd
+    }
+
+    pub fn project_root(&self) -> &PathBuf {
+        &self.project_root
+    }
+
+    pub fn current_cwd(&self) -> &Arc<RwLock<PathBuf>> {
+        &self.current_cwd
+    }
+}
+
+#[derive(Clone)]
+pub struct SessionEngineConfigResources {
+    /// Engine config; mutated by [`SessionRuntime::update_engine_config`] and
+    /// read by every per-turn build.
     engine_config: Arc<RwLock<QueryEngineConfig>>,
     /// Synchronous snapshot for detached hook factories. Those
     /// factories run from async tasks but expose a sync `Fn()`, so they
@@ -234,36 +607,211 @@ pub struct SessionRuntime {
     orchestration_engine_config: Arc<std::sync::RwLock<QueryEngineConfig>>,
     /// Per-session in-memory model-role overrides. Populated by the TUI
     /// model picker (`UserCommand::SetModelRole`) and Ctrl+T thinking
-    /// cycle (`UserCommand::SetThinkingLevel`). Layered ABOVE
-    /// `runtime_config.model_roles` — [`Self::resolve_role`] checks
-    /// overrides first, falls back to the runtime config map second.
-    /// **Not persisted.** Model-role changes via the TUI are session-local;
-    /// users who want a binding to survive across sessions edit
-    /// `the global config file::model_roles.<role>.primary` themselves.
-    /// Cleared on `Drop` (i.e. session end) via the natural `Arc`
-    /// lifecycle. `/clear` keeps overrides — the conversation reset is
-    /// orthogonal to model-role bindings.
+    /// cycle (`UserCommand::SetThinkingLevel`). Layered above
+    /// `runtime_config.model_roles`.
     role_overrides: Arc<RwLock<HashMap<ModelRole, RoleOverride>>>,
-    pub file_read_state: Arc<RwLock<FileReadState>>,
-    pub file_history: Option<Arc<RwLock<FileHistoryState>>>,
-    pub app_state: Arc<RwLock<ToolAppState>>,
+}
+
+impl SessionEngineConfigResources {
+    pub fn new(
+        engine_config: Arc<RwLock<QueryEngineConfig>>,
+        orchestration_engine_config: Arc<std::sync::RwLock<QueryEngineConfig>>,
+        role_overrides: Arc<RwLock<HashMap<ModelRole, RoleOverride>>>,
+    ) -> Self {
+        Self {
+            engine_config,
+            orchestration_engine_config,
+            role_overrides,
+        }
+    }
+
+    pub fn engine_config(&self) -> &Arc<RwLock<QueryEngineConfig>> {
+        &self.engine_config
+    }
+
+    pub fn orchestration_engine_config(&self) -> &Arc<std::sync::RwLock<QueryEngineConfig>> {
+        &self.orchestration_engine_config
+    }
+
+    pub fn role_overrides(&self) -> &Arc<RwLock<HashMap<ModelRole, RoleOverride>>> {
+        &self.role_overrides
+    }
+}
+
+#[derive(Clone)]
+pub struct SessionEngineStateResources {
+    file_read_state: Arc<RwLock<FileReadState>>,
+    file_history: Option<Arc<RwLock<FileHistoryState>>>,
+    app_state: Arc<RwLock<ToolAppState>>,
     /// `/loop` scheduled sentinel memory. Reset after compaction so the next
     /// sentinel delivery re-establishes full instructions in the transcript.
-    pub loop_sentinel_state: Arc<Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>>,
-    /// Session-scoped peer-message store, shared (one `Arc`) by every
-    /// per-turn engine built via `wire_engine` — including in-process
-    /// teammate engines. `SendMessage` pushes into it (`ToolUseContext.
-    /// pending_messages`) and the recipient drains it via the
-    /// `agent_pending_messages` system-reminder (`SwarmAdapter`). The two
-    /// sites MUST share this exact `Arc`, else messages vanish.
+    loop_sentinel_state: Arc<Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>>,
+    /// Session-scoped peer-message store shared by every per-turn engine.
     pending_message_store: coco_tool_runtime::PendingMessageStoreRef,
-    /// Session-scoped Auto mode classifier state. Installed on every
-    /// per-turn engine so `permission_mode = Auto` can auto-approve
-    /// safe/read-only tools before falling back to interactive approval.
+    /// Session-scoped Auto mode classifier state.
     auto_mode_state: Arc<coco_permissions::AutoModeState>,
-    /// Denial history for Auto mode classifier decisions. Shared across
-    /// per-turn engines and cleared when the session changes or compacts.
+    /// Denial history for Auto mode classifier decisions.
     denial_tracker: Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>,
+    /// Cross-engine dedup set of message UUIDs already persisted to JSONL.
+    transcript_dedup: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
+    /// Conversation snapshot captured immediately before `/clear`.
+    clear_rewind_messages: Arc<tokio::sync::Mutex<Option<Vec<Arc<Message>>>>>,
+    /// True after the engine writes a terminal `/goal` success snapshot.
+    terminal_goal_metadata_written: Arc<AtomicBool>,
+    /// Cross-engine tool-result replacement state.
+    tool_result_replacement_state:
+        coco_tool_runtime::tool_result_storage::ContentReplacementStateRef,
+}
+
+impl SessionEngineStateResources {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        file_read_state: Arc<RwLock<FileReadState>>,
+        file_history: Option<Arc<RwLock<FileHistoryState>>>,
+        app_state: Arc<RwLock<ToolAppState>>,
+        loop_sentinel_state: Arc<Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>>,
+        pending_message_store: coco_tool_runtime::PendingMessageStoreRef,
+        auto_mode_state: Arc<coco_permissions::AutoModeState>,
+        denial_tracker: Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>,
+        transcript_dedup: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
+        clear_rewind_messages: Arc<tokio::sync::Mutex<Option<Vec<Arc<Message>>>>>,
+        terminal_goal_metadata_written: Arc<AtomicBool>,
+        tool_result_replacement_state: coco_tool_runtime::tool_result_storage::ContentReplacementStateRef,
+    ) -> Self {
+        Self {
+            file_read_state,
+            file_history,
+            app_state,
+            loop_sentinel_state,
+            pending_message_store,
+            auto_mode_state,
+            denial_tracker,
+            transcript_dedup,
+            clear_rewind_messages,
+            terminal_goal_metadata_written,
+            tool_result_replacement_state,
+        }
+    }
+
+    pub fn file_read_state(&self) -> &Arc<RwLock<FileReadState>> {
+        &self.file_read_state
+    }
+
+    pub fn file_history(&self) -> Option<&Arc<RwLock<FileHistoryState>>> {
+        self.file_history.as_ref()
+    }
+
+    pub fn app_state(&self) -> &Arc<RwLock<ToolAppState>> {
+        &self.app_state
+    }
+
+    pub fn loop_sentinel_state(
+        &self,
+    ) -> &Arc<Mutex<coco_skills::bundled::loop_skill::LoopSentinelState>> {
+        &self.loop_sentinel_state
+    }
+
+    pub fn pending_message_store(&self) -> &coco_tool_runtime::PendingMessageStoreRef {
+        &self.pending_message_store
+    }
+
+    pub fn auto_mode_state(&self) -> &Arc<coco_permissions::AutoModeState> {
+        &self.auto_mode_state
+    }
+
+    pub fn denial_tracker(&self) -> &Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>> {
+        &self.denial_tracker
+    }
+
+    pub fn transcript_dedup(
+        &self,
+    ) -> &Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>> {
+        &self.transcript_dedup
+    }
+
+    pub fn clear_rewind_messages(&self) -> &Arc<tokio::sync::Mutex<Option<Vec<Arc<Message>>>>> {
+        &self.clear_rewind_messages
+    }
+
+    pub fn terminal_goal_metadata_written(&self) -> &Arc<AtomicBool> {
+        &self.terminal_goal_metadata_written
+    }
+
+    pub fn tool_result_replacement_state(
+        &self,
+    ) -> &coco_tool_runtime::tool_result_storage::ContentReplacementStateRef {
+        &self.tool_result_replacement_state
+    }
+}
+
+#[derive(Clone)]
+pub struct SessionIntegrationResources {
+    /// MCP handle installed on every per-turn engine via `wire_engine`.
+    mcp_handle: Arc<RwLock<Option<coco_tool_runtime::McpHandleRef>>>,
+    /// Concrete MCP manager used by reload paths when this session owns one.
+    mcp_manager: Arc<RwLock<Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>>>,
+    /// Monotonic "the MCP server set changed" signal.
+    mcp_reconnect_key: Arc<AtomicU64>,
+    /// Late-bound LSP handle installed on every per-turn engine.
+    lsp_handle: Arc<RwLock<Option<coco_tool_runtime::LspHandleRef>>>,
+}
+
+impl SessionIntegrationResources {
+    pub fn new(
+        mcp_handle: Arc<RwLock<Option<coco_tool_runtime::McpHandleRef>>>,
+        mcp_manager: Arc<RwLock<Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>>>,
+        mcp_reconnect_key: Arc<AtomicU64>,
+        lsp_handle: Arc<RwLock<Option<coco_tool_runtime::LspHandleRef>>>,
+    ) -> Self {
+        Self {
+            mcp_handle,
+            mcp_manager,
+            mcp_reconnect_key,
+            lsp_handle,
+        }
+    }
+
+    pub fn mcp_handle(&self) -> &Arc<RwLock<Option<coco_tool_runtime::McpHandleRef>>> {
+        &self.mcp_handle
+    }
+
+    pub fn mcp_manager(
+        &self,
+    ) -> &Arc<RwLock<Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>>> {
+        &self.mcp_manager
+    }
+
+    pub fn mcp_reconnect_key(&self) -> &Arc<AtomicU64> {
+        &self.mcp_reconnect_key
+    }
+
+    pub fn lsp_handle(&self) -> &Arc<RwLock<Option<coco_tool_runtime::LspHandleRef>>> {
+        &self.lsp_handle
+    }
+}
+
+/// All per-session state shared by both runners. Construction at startup
+/// is done once via [`SessionRuntime::build`]; per-turn engines are
+/// assembled via [`SessionRuntime::build_engine`].
+pub struct SessionRuntime {
+    // ── immutable resources (never change after build) ─────────────────
+    /// Shared tool + model registries installed on every engine instance.
+    execution: SessionExecutionResources,
+    /// Slash-command registry and skill catalog loaded for this session.
+    catalog_resources: SessionCatalogResources,
+    config_resources: SessionConfigResources,
+    project_resources: SessionProjectResources,
+    persistence: SessionPersistenceResources,
+    title_resources: SessionTitleResources,
+    turn_resources: SessionTurnResources,
+    command_resources: SessionCommandResources,
+    lifecycle_resources: SessionLifecycleResources,
+    workspace_resources: SessionWorkspaceResources,
+    engine_config_resources: SessionEngineConfigResources,
+    engine_state_resources: SessionEngineStateResources,
+    integration_resources: SessionIntegrationResources,
+
+    // ── mutable per-session state (changes within one runtime session) ──
     /// Auto-memory runtime — extraction / dream / 9-section session
     /// memory / recall ranker. `None` when `Feature::AutoMemory` is
     /// off; otherwise threaded into every engine via
@@ -280,36 +828,9 @@ pub struct SessionRuntime {
     /// agent ops work; sync subagent spawns work once the engine
     /// factory is wired (separately).
     swarm_agent_handle: coco_tool_runtime::AgentHandleRef,
-    /// Hook registry merged from settings + plugin manifests. Installed
-    /// on every engine + driven by SessionStart / SessionEnd in
-    /// [`Self::clear_conversation`].
-    pub(crate) hook_registry: Arc<HookRegistry>,
-    /// LLM-driven hook handler — implements
-    /// [`coco_hooks::HookLlmHandle`] for `Prompt` (full impl) and
-    /// `Agent` (stub returning Cancelled — silent fallback) hook
-    /// handlers. Threaded into every `OrchestrationContext` so settings
-    /// hooks of `type: "prompt"` / `type: "agent"` actually reach an
-    /// LLM instead of falling back to passthrough text.
-    pub(crate) hook_llm_handle: Arc<coco_query::hook_llm::QueryHookLlm>,
-    /// Shared sync-hook-event buffer. SessionStart and UserPromptSubmit
-    /// orchestration calls push `HookEvent`s here; the
-    /// [`coco_hooks::reminder_source::CombinedHookEventsSource`]
-    /// installed on every per-turn engine drains them into the
-    /// reminder pipeline. Lifetime spans the whole session — same
-    /// instance flows through `OrchestrationContext.sync_event_sink`
-    /// and `QueryEngine::sync_hook_buffer`.
-    pub(crate) sync_hook_buffer: coco_hooks::SyncHookEventBuffer,
-    /// Async hook bookkeeping. Currently no production code path
-    /// registers async hooks, but the slot is wired into the combined
-    /// reminder source so when async hook execution lands it surfaces
-    /// `async_hook_response` reminders without further plumbing.
-    pub(crate) async_hook_registry: Arc<coco_hooks::async_registry::AsyncHookRegistry>,
-    /// FileChanged hook watcher. Populated when the runtime's hook
-    /// registry has any handlers for the `FileChanged` event;
-    /// `None` otherwise. Paths are registered lazily from
-    /// `SessionStart` / `CwdChanged` hook output.
-    pub(crate) file_changed_watcher:
-        Arc<RwLock<Option<crate::file_changed_watcher::FileChangedHookWatcher>>>,
+    /// Hook registry, LLM hook handle, hook event buffers, and FileChanged
+    /// watcher installed on engines and used by runtime-level hook firing.
+    hook_resources: SessionHookResources,
     /// Multi-turn agent transcript. Each turn snapshots, appends, and
     /// rewrites this on success. Wrapped in `MessageHistory` (the same
     /// type the engine loop uses internally) so TUI-initiated pushes
@@ -352,7 +873,7 @@ pub struct SessionRuntime {
     /// when available; otherwise it rebuilds cache params from the current
     /// transcript.
     /// `None` until the first engine is built; the inner `Option` is `None`
-    /// until the first turn finalises (or after `/clear`).
+    /// until the first turn finalizes.
     last_engine_cache_handle: Arc<RwLock<Option<CacheParamsHandle>>>,
     /// Teammate-scoped live permission-rule overlay, injected onto every
     /// main-session engine's `QueryEngineConfig.live_permission_rules` (which
@@ -367,8 +888,8 @@ pub struct SessionRuntime {
     live_permission_rules: Arc<RwLock<Vec<coco_types::PermissionRule>>>,
     /// Session-scoped abort token for the in-flight prompt-suggestion
     /// fork. When a new suggestion fork starts, we cancel the previous
-    /// one so users rapidly cycling `/clear` don't accumulate fork tasks
-    /// burning tokens. `None` ⇒ no fork in flight.
+    /// one so repeated suggestion requests don't accumulate fork tasks burning
+    /// tokens. `None` ⇒ no fork in flight.
     pub current_suggestion_abort:
         Arc<tokio::sync::Mutex<Option<tokio_util::sync::CancellationToken>>>,
     /// Background task runtime (TaskHandle implementation) — owns
@@ -392,59 +913,6 @@ pub struct SessionRuntime {
     /// installs it onto the SwarmAgentHandle when wiring agent-
     /// team support.
     agent_transcript_store: Arc<RwLock<Option<coco_tool_runtime::AgentTranscriptStoreRef>>>,
-    /// Main-session transcript store. JSONL writes for the user /
-    /// assistant / attachment / tool_result chain land here, keyed
-    /// by the live session id (rotates on `/clear`). Cloned into
-    /// every per-turn engine via [`Self::wire_engine`]. Backend-agnostic
-    /// (`dyn SessionStore`) so it honors the configured `session.backend`.
-    transcript_store: Arc<dyn coco_session::SessionStore>,
-    /// When false, all transcript / usage / file-history persistence is
-    /// suppressed for this run.
-    persist_session: bool,
-    /// Cross-engine dedup set of message UUIDs already persisted to
-    /// the JSONL transcript. Lives on the runtime (not the engine)
-    /// so a fresh per-turn engine doesn't re-write history. Reset to
-    /// empty by [`Self::clear_conversation`] when the session id
-    /// regenerates.
-    transcript_dedup: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
-    /// Conversation snapshot captured immediately before `/clear`.
-    /// The fresh post-clear session keeps a hidden copy so `/rewind`
-    /// can recover a pre-clear prompt before any new turn is submitted.
-    clear_rewind_messages: Arc<tokio::sync::Mutex<Option<Vec<Arc<Message>>>>>,
-    /// True after the engine writes a terminal `/goal` success snapshot
-    /// to session metadata. The next main-session turn clears it, matching
-    /// the TS metadata observer lifecycle.
-    terminal_goal_metadata_written: Arc<AtomicBool>,
-    /// Cross-engine tool-result replacement state. QueryEngine is
-    /// rebuilt per user message, so this runtime-owned state preserves
-    /// Level 2 `seen_ids` / replacement strings across turns.
-    tool_result_replacement_state:
-        coco_tool_runtime::tool_result_storage::ContentReplacementStateRef,
-    /// MCP handle installed on every per-turn engine via `wire_engine`.
-    /// Late-bound so CLI bootstrap can construct the
-    /// `McpManagerAdapter` (or any other McpHandle impl) after
-    /// `SessionRuntime::build` returns. Without this the engine's
-    /// `mcp_handle` slot stays `None` and AgentTool's prompt-time
-    /// MCP filter degrades to fail-closed (hides MCP-required
-    /// agents).
-    mcp_handle: Arc<RwLock<Option<coco_tool_runtime::McpHandleRef>>>,
-    /// The live MCP connection manager, when one was built for this session.
-    /// Distinct from [`Self::mcp_handle`] (the opaque tool-facing handle): this
-    /// is the concrete manager so reload paths can re-register plugin-contributed
-    /// MCP servers after a `/reload-plugins` / install / delisting. `None` on
-    /// entry points that don't build a manager (e.g. the TUI today, headless);
-    /// reload then no-ops. Set via [`Self::attach_mcp_manager`].
-    mcp_manager: Arc<RwLock<Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>>>,
-    /// Monotonic "the MCP server set changed" signal, bumped by
-    /// [`Self::reload_plugin_mcp_servers`]. Consumers that own MCP
-    /// reconnection re-run their effect when it moves.
-    mcp_reconnect_key: Arc<std::sync::atomic::AtomicU64>,
-    /// Late-bind slot for the LSP handle. CLI / SDK installs a
-    /// `LspManagerAdapter` here when `Feature::Lsp` is on and at
-    /// least one language server is configured; `wire_engine` reads
-    /// the slot at engine-build time and installs it via
-    /// `with_lsp_handle`.
-    lsp_handle: Arc<RwLock<Option<coco_tool_runtime::LspHandleRef>>>,
     /// Where the agent loader looks for markdown agents. Cached so
     /// `/agents reload` and the file-watcher reload paths can rebuild
     /// the snapshot without re-resolving the paths from scratch. Plugin
@@ -478,38 +946,6 @@ pub struct SessionRuntime {
     /// hot-reloads via `update_config` are seen everywhere.
     /// `None` when sandbox is disabled.
     sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
-    /// Session-scoped attachment channel. Producers outside the per-turn
-    /// engine (slash commands via the TUI, future swarm / skill / hook
-    /// forwarders) emit typed silent `AttachmentMessage`s through
-    /// [`Self::attachment_emitter`]; the engine drains the receiver at the
-    /// head of every outer-loop turn via
-    /// [`coco_query::QueryEngine::drain_attachment_inbox`]. Lives across
-    /// engine rebuilds so cross-turn producers see a stable handle.
-    session_attachment_tx: tokio::sync::mpsc::UnboundedSender<coco_messages::AttachmentMessage>,
-    session_attachment_rx: Arc<
-        tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<coco_messages::AttachmentMessage>>,
-    >,
-    /// Session-scoped mid-turn command queue. Producers (the
-    /// TUI-while-busy bridge in `tui_runner`, future task / coordinator /
-    /// hook forwarders) push `QueuedCommand`s here at any time, and the
-    /// per-turn `QueryEngine` consumes them via [`Self::wire_engine`]
-    /// which calls [`QueryEngine::with_command_queue`]. Internally
-    /// `Arc`-backed so `Clone` is cheap — every engine instance shares
-    /// the same backing storage with the runtime and any other holder.
-    /// Teammate messages and task notifications also flow through this
-    /// queue (with `QueueOrigin::Coordinator` /
-    /// `QueueOrigin::TaskNotification`) — no separate `Inbox` type;
-    /// coordinator messages surface as `queued_command` attachments.
-    command_queue: CommandQueue,
-    /// Concurrent-sessions PID registry guard. Wraps
-    /// `<config_home>/sessions/{pid}.json`; the file is created at
-    /// build time and removed when this field is dropped (i.e. when
-    /// the last `Arc<SessionRuntime>` reference falls). `None` when
-    /// the registration was skipped (subagent context per
-    /// `COCO_AGENT_ID`) or the write failed (best-effort — we
-    /// `tracing::warn` and proceed without a registry entry rather
-    /// than block session startup).
-    _pid_registry: Option<coco_session::SessionRegistry>,
 }
 
 #[cfg(test)]

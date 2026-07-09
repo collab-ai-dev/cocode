@@ -731,7 +731,7 @@ pub async fn run_chat_with_options(
         "headless run starting"
     );
 
-    let (sandbox_reloader, runtime_config) = build_runtime_config_with_reloader(cli, &cwd)?;
+    let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
     crate::model_card_refresh::spawn_if_enabled(&runtime_config);
     // Reconcile coordinator mode to a resumed session. Flips the env flag
     // before the engine assembles its system prompt below.
@@ -743,21 +743,9 @@ pub async fn run_chat_with_options(
     }
     let settings = &runtime_config.settings;
 
-    // Load the project plugin set once and reuse for output styles + command/skill
-    // registration. Resolve the active output style here — fed into the system
-    // prompt builder + threaded onto `SessionBootstrap` for the per-turn
-    // reminder generator. Plugin-contributed styles are folded in alongside
-    // user / project / managed dirs.
-    let project_root = crate::paths::resolve_project_root(&cwd);
-    let project_services =
-        process_runtime.project_services(&coco_config::global_config::config_home(), project_root);
     // Startup marketplace maintenance (seed/reconcile/delist) on the headless
     // surface too; background + non-fatal, mirroring the TUI.
     crate::session_bootstrap::spawn_marketplace_startup(coco_config::global_config::config_home());
-    let plugin_style_sources = project_services.output_style_sources();
-    let output_style_manager =
-        build_output_style_manager(&runtime_config, &cwd, &plugin_style_sources);
-    let active_output_style = output_style_manager.active().cloned();
 
     let main_model = resolve_main_model(&runtime_config);
     let provider_api = main_model.provider_api;
@@ -811,40 +799,22 @@ pub async fn run_chat_with_options(
         "permissions + tools ready"
     );
 
-    let system_prompt = compose_system_prompt(
-        cli,
-        &cwd,
-        &runtime_config,
-        &main_model.provider,
-        &model_id,
-        active_output_style.as_ref(),
-    )?;
-
     // Build the one canonical SessionRuntime — same shape as TUI/SDK — so the
     // leader engine and every subagent share ONE config, ONE session id, and
     // ONE `wire_engine` install list (agent + task handles, memory_runtime,
     // file_read_state, transcript/usage). Print mode forks subagents from a
     // single context, not a second session container.
     let config_home = coco_config::global_config::config_home();
-    let (command_registry, skill_manager) =
-        crate::session_bootstrap::build_session_command_registry(
-            cli,
-            &runtime_config,
-            &cwd,
-            &project_services,
-        );
+    let runtime_factory_cli = Arc::new(cli.clone());
     let runtime_factory = crate::session_runtime::SessionRuntimeFactory::new(
         crate::session_runtime::SessionRuntimeFactoryOpts {
-            cli: Arc::new(cli.clone()),
-            runtime_config: Arc::new(runtime_config.clone()),
+            cli: Arc::clone(&runtime_factory_cli),
+            bootstrap_source:
+                crate::session_runtime::SessionRuntimeBootstrapSource::per_session_fold(
+                    Arc::clone(&runtime_factory_cli),
+                    process_runtime.clone(),
+                ),
             cwd: cwd.clone(),
-            model_id: model_id.clone(),
-            system_prompt,
-            permission_mode_availability: coco_types::PermissionModeAvailability::new(
-                bypass_permissions_available,
-                startup.auto_available,
-            ),
-            permission_mode,
             model_runtimes: Some(model_runtimes),
             tools: tools.clone(),
             session_manager: Arc::new(coco_session::SessionManager::with_backend(
@@ -853,31 +823,15 @@ pub async fn run_chat_with_options(
             )),
             fast_model_spec: None,
             permission_bridge: None,
-            command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry))),
-            skill_manager,
             process_runtime: process_runtime.clone(),
-            project_services: project_services.clone(),
-            agent_search_paths: project_services.agent_search_paths(&config_home, &cwd),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             // Headless / print: file-history checkpointing defaults OFF.
             is_non_interactive: true,
         },
     );
-    let event_hub_connector = crate::event_hub::RuntimeEventHubConnector::spawn_for_session(
-        &runtime_config,
-        session_id.clone(),
-        &cwd,
-    );
-    let mut local_app_server_bridge = if let Some(connector) = &event_hub_connector {
-        crate::sdk_server::AppServerLocalBridge::with_hub_connector_sender(
-            Arc::new(crate::sdk_server::SdkServerState::default()),
-            connector.sender(),
-        )
-    } else {
-        crate::sdk_server::AppServerLocalBridge::new(Arc::new(
-            crate::sdk_server::SdkServerState::default(),
-        ))
-    };
+    let mut local_app_server_bridge = crate::sdk_server::AppServerLocalBridge::new(Arc::new(
+        crate::sdk_server::SdkServerState::default(),
+    ));
     // Resume / continue / fork: key every runtime subsystem off the resumed id,
     // else task dirs + agent transcripts orphan. Resolved above (override or
     // freshly minted) and shared with the registry's header-template vars.
@@ -889,15 +843,25 @@ pub async fn run_chat_with_options(
         })
         .await?;
     let runtime = session_handle.runtime().clone();
+    let event_hub_connector = {
+        let session_id = runtime.current_typed_session_id().await;
+        crate::event_hub::RuntimeEventHubConnector::spawn_for_session(
+            runtime.runtime_config(),
+            session_id,
+            &cwd,
+        )
+    };
+    if let Some(connector) = &event_hub_connector {
+        local_app_server_bridge.set_hub_connector_sender(connector.sender());
+    }
 
     // Sandbox hot-reload: re-flow settings.json `sandbox.*` edits into the live
-    // SandboxState on the headless/print path too (same path as the TUI covers
-    // REPL and print/SDK alike). The task exits when the reloader drops at the
-    // end of this function. Held in `_sandbox_reload` for the session lifetime.
-    let _sandbox_reload = match (sandbox_reloader.as_ref(), runtime.sandbox_state()) {
-        (Some(reloader), Some(state)) => Some(crate::sandbox_reload::spawn_sandbox_reload(
+    // SandboxState on the headless/print path through the session-owned config
+    // publisher.
+    let _sandbox_reload = match (runtime.runtime_publisher(), runtime.sandbox_state()) {
+        (Some(publisher), Some(state)) => Some(crate::sandbox_reload::spawn_sandbox_reload(
             state,
-            &reloader.publisher(),
+            &publisher,
             cwd.clone(),
         )),
         _ => None,
@@ -979,7 +943,7 @@ pub async fn run_chat_with_options(
         let cfg = runtime.current_engine_config().await;
         let goal = crate::goal_command::restore_goal_from_history(
             &opts.prior_messages,
-            &runtime.app_state,
+            runtime.app_state(),
             &runtime.hook_registry(),
             runtime.session_usage_snapshot().await.totals.output_tokens,
             crate::goal_command::GoalGate {
@@ -1060,7 +1024,7 @@ pub async fn run_chat_with_options(
     // runtime's bootstrap seed used the un-overridden base). The engine built
     // below shares this `app_state` (app_state_override = None). The rules +
     // dirs live ONLY on the live base now — the config no longer carries them.
-    runtime.app_state.write().await.permissions = crate::session_runtime::live_permissions(
+    runtime.app_state().write().await.permissions = crate::session_runtime::live_permissions(
         permission_mode,
         allow_rules,
         deny_rules,
@@ -1114,7 +1078,7 @@ pub async fn run_chat_with_options(
                 let tokens_at_start = runtime.session_usage_snapshot().await.totals.output_tokens;
                 let outcome = crate::goal_command::resolve_goal_request(
                     request,
-                    &runtime.app_state,
+                    runtime.app_state(),
                     &runtime.hook_registry(),
                     &prior_messages,
                     tokens_at_start,
@@ -1181,7 +1145,7 @@ pub async fn run_chat_with_options(
                         kickoff,
                     } => {
                         append_headless_goal_status(&mut prefix_messages, status);
-                        let goal = runtime.app_state.read().await.active_goal.clone();
+                        let goal = runtime.app_state().read().await.active_goal.clone();
                         runtime
                             .persist_goal_metadata(goal.as_ref().map(|goal| {
                                 coco_session::GoalMetadata::from_active_goal(
@@ -1277,9 +1241,9 @@ pub async fn run_chat_with_options(
     {
         let session_id = runtime.current_typed_session_id().await;
         crate::coordinator_mode_resume::persist_session_mode(
-            &runtime.session_manager,
+            runtime.session_manager(),
             &session_id,
-            &runtime.runtime_config.features,
+            &runtime.runtime_config().features,
         );
     }
 
@@ -1486,52 +1450,6 @@ async fn persist_headless_local_transcript_messages(
     }
 }
 
-/// Compose the session's system prompt, honoring `--system-prompt`
-/// (full override), `--append-system-prompt` (text appended after the
-/// default), and `--append-system-prompt-file` (file contents appended).
-fn compose_system_prompt(
-    cli: &Cli,
-    cwd: &Path,
-    runtime_config: &coco_config::RuntimeConfig,
-    provider: &str,
-    model_id: &str,
-    output_style: Option<&coco_output_styles::OutputStyleConfig>,
-) -> Result<String> {
-    // 1. Base layer: `--system-prompt` wholly replaces the default
-    // identity + CLAUDE.md discovery. Otherwise build the default.
-    let additional_dirs = resolve_additional_dirs_display(cli, cwd);
-    let mut prompt = if let Some(custom) = cli.system_prompt.as_deref() {
-        custom.to_string()
-    } else {
-        build_system_prompt_for_model(
-            cwd,
-            runtime_config,
-            provider,
-            model_id,
-            output_style,
-            &additional_dirs,
-        )
-    };
-    // 2. Append from `--append-system-prompt` (verbatim).
-    if let Some(append) = cli.append_system_prompt.as_deref() {
-        if !prompt.ends_with('\n') {
-            prompt.push('\n');
-        }
-        prompt.push_str(append);
-    }
-    // 3. Append from `--append-system-prompt-file` (read once, fail
-    // fast if the file's missing rather than silently dropping).
-    if let Some(path) = cli.append_system_prompt_file.as_deref() {
-        let body = std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("--append-system-prompt-file {path:?}: {e}"))?;
-        if !prompt.ends_with('\n') {
-            prompt.push('\n');
-        }
-        prompt.push_str(&body);
-    }
-    Ok(prompt)
-}
-
 /// Translate `--allowed-tools` / `--disallowed-tools` into a
 /// [`coco_types::ToolFilter`]. Empty inputs ⇒ `unrestricted()`.
 fn build_tool_filter(cli: &Cli) -> coco_types::ToolFilter {
@@ -1559,9 +1477,8 @@ fn summarize_tool_filter(cli: &Cli) -> Option<ToolFilterSummary> {
 }
 
 /// Resolve `--add-dir` flag values to absolute paths anchored at `cwd`.
-/// Used internally by `compose_system_prompt` to anchor `--add-dir`
-/// paths for fence checks; callers that need the rendered display form
-/// for the env block should use [`resolve_additional_dirs_display`].
+/// Callers that need the rendered display form for the env block should use
+/// [`resolve_additional_dirs_display`].
 pub(crate) fn resolve_additional_dirs(cli: &Cli, cwd: &Path) -> Vec<PathBuf> {
     cli.add_dir
         .iter()

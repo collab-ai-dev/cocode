@@ -49,7 +49,7 @@ pub fn spawn_after_login(
 /// Query the provider's live model list, or `None` when the provider is not an
 /// OpenAI-family instance, isn't configured, or the call fails / times out.
 async fn discover(runtime: &SessionRuntime, instance: &str) -> Option<Vec<(String, Option<i64>)>> {
-    let cfg = runtime.runtime_config.providers.get(instance)?;
+    let cfg = runtime.runtime_config().providers.get(instance)?;
     // The `/models` listing is OpenAI-shaped (codex backend + platform). Other
     // APIs (Anthropic, Gemini, generic openai-compat) are out of scope.
     if cfg.api != ProviderApi::Openai {
