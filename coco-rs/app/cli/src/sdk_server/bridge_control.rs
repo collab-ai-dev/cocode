@@ -22,7 +22,6 @@
 //! session's startup capability gate is off.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use coco_bridge::ControlError;
 use coco_bridge::ControlRequest;
@@ -60,10 +59,7 @@ impl SdkBridgeControlHandler {
         // Same guard as the SDK handler + TUI runner — keep all three
         // bypass origins enforcing identical rules.
         if mode == coco_types::PermissionMode::BypassPermissions
-            && !self
-                .state
-                .bypass_permissions_available
-                .load(Ordering::Relaxed)
+            && !self.state.bypass_permissions_available()
         {
             return Err(ControlError::new(
                 coco_types::error_codes::PERMISSION_DENIED,

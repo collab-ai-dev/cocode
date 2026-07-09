@@ -842,11 +842,11 @@ pub async fn run_chat_with_options(
             async move { runtime_factory.build_with_session_id(session_id).await }
         })
         .await?;
-    let runtime = session_handle.runtime().clone();
+    let session = session_handle.clone();
     let event_hub_connector = {
-        let session_id = runtime.current_typed_session_id().await;
+        let session_id = session.current_typed_session_id().await;
         crate::event_hub::RuntimeEventHubConnector::spawn_for_session(
-            runtime.runtime_config(),
+            session.runtime_config(),
             session_id,
             &cwd,
         )
@@ -858,7 +858,7 @@ pub async fn run_chat_with_options(
     // Sandbox hot-reload: re-flow settings.json `sandbox.*` edits into the live
     // SandboxState on the headless/print path through the session-owned config
     // publisher.
-    let _sandbox_reload = match (runtime.runtime_publisher(), runtime.sandbox_state()) {
+    let _sandbox_reload = match (session.runtime_publisher(), session.sandbox_state()) {
         (Some(publisher), Some(state)) => Some(crate::sandbox_reload::spawn_sandbox_reload(
             state,
             &publisher,
@@ -870,7 +870,7 @@ pub async fn run_chat_with_options(
     // `StructuredOutput` tool + inline enforcement. The tool registers into
     // the shared `tools` Arc; the config flag drives the per-turn nudge.
     if inject_structured_output_tool_if_requested(cli, tools.as_ref())? {
-        runtime
+        session
             .update_engine_config(|cfg| cfg.requires_structured_output = true)
             .await;
     }
@@ -916,13 +916,13 @@ pub async fn run_chat_with_options(
         .keep_alive(local_app_server_bridge.handler())
         .await?;
 
-    let session_id = runtime.current_typed_session_id().await;
+    let session_id = session.current_typed_session_id().await;
     let session_start_source = if opts.session_id_override.is_some() {
         "resume"
     } else {
         "startup"
     };
-    runtime.fire_session_start_hooks(session_start_source).await;
+    session.fire_session_start_hooks(session_start_source).await;
 
     // Resume hydration: seed transcript dedup + tool-result replacement onto
     // the runtime so `wire_engine` installs them on the engine and the resumed
@@ -930,29 +930,29 @@ pub async fn run_chat_with_options(
     // resumed id is loaded by `SessionRuntime::build` and flushed by the
     // engine's per-turn finalize — no manual flush needed.
     if opts.session_id_override.is_some() {
-        runtime
+        session
             .seed_transcript_dedup(opts.prior_messages.iter().filter_map(|m| m.uuid().copied()))
             .await;
         let prior: Vec<coco_messages::Message> =
             opts.prior_messages.iter().map(|m| (**m).clone()).collect();
-        runtime
+        session
             .seed_tool_result_replacement_state(&prior, &session_id, None)
             .await;
     }
     if !opts.prior_messages.is_empty() {
-        let cfg = runtime.current_engine_config().await;
+        let cfg = session.current_engine_config().await;
         let goal = crate::goal_command::restore_goal_from_history(
             &opts.prior_messages,
-            runtime.app_state(),
-            &runtime.hook_registry(),
-            runtime.session_usage_snapshot().await.totals.output_tokens,
+            session.app_state(),
+            &session.hook_registry(),
+            session.session_usage_snapshot().await.totals.output_tokens,
             crate::goal_command::GoalGate {
                 hooks_restricted: cfg.disable_all_hooks || cfg.allow_managed_hooks_only,
                 trust_rejected: false,
             },
         )
         .await;
-        runtime
+        session
             .persist_goal_metadata(goal.as_ref().map(|goal| {
                 coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
             }))
@@ -972,7 +972,7 @@ pub async fn run_chat_with_options(
     // layer the CLI-specific overrides the runtime base doesn't carry,
     // mirroring the SDK runner. Built through the runtime so `wire_engine`
     // installs the full handle/subsystem set on the leader.
-    let mut config = runtime.current_engine_config().await;
+    let mut config = session.current_engine_config().await;
     // `coco -p` is a one-shot run with no interactive prompt.
     // `is_non_interactive` drives the session-level side effects (self-fork
     // suppression, "sdk" label, prompt assembly) — .
@@ -1024,7 +1024,7 @@ pub async fn run_chat_with_options(
     // runtime's bootstrap seed used the un-overridden base). The engine built
     // below shares this `app_state` (app_state_override = None). The rules +
     // dirs live ONLY on the live base now — the config no longer carries them.
-    runtime.app_state().write().await.permissions = crate::session_runtime::live_permissions(
+    session.app_state().write().await.permissions = crate::session_runtime::live_permissions(
         permission_mode,
         allow_rules,
         deny_rules,
@@ -1032,7 +1032,7 @@ pub async fn run_chat_with_options(
         session_additional_dirs,
         permission_rule_source_roots,
     );
-    runtime
+    session
         .update_engine_config(|cfg| *cfg = config.clone())
         .await;
 
@@ -1069,17 +1069,17 @@ pub async fn run_chat_with_options(
             }
             Ok(request) => {
                 let args = crate::goal_command::goal_display_args(&request).to_string();
-                let cfg = runtime.current_engine_config().await;
+                let cfg = session.current_engine_config().await;
                 let gate = crate::goal_command::GoalGate {
                     hooks_restricted: cfg.disable_all_hooks || cfg.allow_managed_hooks_only,
                     // Headless is non-interactive; the trust gate is deliberately skipped.
                     trust_rejected: false,
                 };
-                let tokens_at_start = runtime.session_usage_snapshot().await.totals.output_tokens;
+                let tokens_at_start = session.session_usage_snapshot().await.totals.output_tokens;
                 let outcome = crate::goal_command::resolve_goal_request(
                     request,
-                    runtime.app_state(),
-                    &runtime.hook_registry(),
+                    session.app_state(),
+                    &session.hook_registry(),
                     &prior_messages,
                     tokens_at_start,
                     gate,
@@ -1114,7 +1114,7 @@ pub async fn run_chat_with_options(
                     }
                     crate::goal_command::GoalOutcome::StatusThenText { status, text } => {
                         append_headless_goal_status(&mut prefix_messages, status);
-                        runtime.persist_goal_metadata(None).await;
+                        session.persist_goal_metadata(None).await;
                         append_headless_slash_text(&mut prefix_messages, "goal", &args, &text);
                         persist_headless_local_transcript_messages(
                             cli,
@@ -1145,8 +1145,8 @@ pub async fn run_chat_with_options(
                         kickoff,
                     } => {
                         append_headless_goal_status(&mut prefix_messages, status);
-                        let goal = runtime.app_state().read().await.active_goal.clone();
-                        runtime
+                        let goal = session.app_state().read().await.active_goal.clone();
+                        session
                             .persist_goal_metadata(goal.as_ref().map(|goal| {
                                 coco_session::GoalMetadata::from_active_goal(
                                     goal, /*met*/ false,
@@ -1162,7 +1162,7 @@ pub async fn run_chat_with_options(
     }
 
     {
-        let mut history = runtime.history.lock().await;
+        let mut history = session.history().lock().await;
         history.clear();
         for message in prior_messages.iter().chain(prefix_messages.iter()) {
             history.push_arc(message.clone());
@@ -1230,7 +1230,7 @@ pub async fn run_chat_with_options(
     // Wait for scheduled turn-end extraction/session-memory work before
     // returning so partial writes aren't dropped on process exit. Auto-dream
     // remains fire-and-forget like TS.
-    if let Some(memory_runtime) = runtime.memory_runtime() {
+    if let Some(memory_runtime) = session.memory_runtime() {
         let _ = memory_runtime
             .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
             .await;
@@ -1239,19 +1239,19 @@ pub async fn run_chat_with_options(
     // Persist coordinator mode at end-of-run so a later `--resume` re-derives
     // the role.
     {
-        let session_id = runtime.current_typed_session_id().await;
+        let session_id = session.current_typed_session_id().await;
         crate::coordinator_mode_resume::persist_session_mode(
-            runtime.session_manager(),
+            session.session_manager(),
             &session_id,
-            &runtime.runtime_config().features,
+            &session.runtime_config().features,
         );
     }
 
     let additional_dirs = resolve_additional_dirs(cli, &cwd);
     let tool_filter_summary = summarize_tool_filter(cli);
-    let usage_snapshot = runtime.session_usage_snapshot().await;
+    let usage_snapshot = session.session_usage_snapshot().await;
     let cost_tracker = CostTracker::from_snapshot(usage_snapshot);
-    let final_messages = runtime.history.lock().await.to_vec();
+    let final_messages = session.history().lock().await.to_vec();
     let response_text = session_result.result.clone().unwrap_or_else(|| {
         final_messages
             .iter()

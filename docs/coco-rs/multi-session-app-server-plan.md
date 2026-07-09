@@ -90,10 +90,12 @@ the seams this design must cut are concrete:
   simple readers prefer that scope before falling back to a sole scoped state
   after the installed runtime. Scoped runtime-backed start/resume, archive, and
   AppServer close cleanup also operate by routed session id instead of requiring
-  SDK active identity. The old `control/updateEnv` map had no consumer and no longer
-  lives on singleton session state;
-  the request remains acknowledged until env control has a runtime/AppServer
-  owner.
+  SDK active identity. `control/updateEnv` no longer stores an unused singleton
+  map; when a runtime is installed, updates apply to that session's shell env
+  store for future Bash/PowerShell spawns, while the no-runtime SDK fallback
+  remains acknowledgement-only. `context/usage` also reads the installed
+  runtime's history/app state directly instead of requiring SDK handoff state
+  when a runtime is present.
   The wire vocabulary already carries `session_id` on most requests; the state
   machine ignores it.
 - `CoreEvent` (`common/types/src/event.rs`) has no `session_id` /
@@ -1815,11 +1817,15 @@ Implementation progress as of 2026-07-07:
   `dispatch_client_request` table, while keeping the explicit bridge-side
   bypass guard for permission-mode changes.
   `coco-cli` also
-  has a tested compatibility bridge between
+  has tested compatibility conversion between
   the legacy `coco_types::JsonRpcMessage` SDK envelope and the new
   `coco-app-server-transport::JsonRpcFrame`, preserving string/integer ids and
-  rejecting null ids that the legacy SDK envelope cannot represent. A tested
-  SDK transport bridge now drives `JsonRpcAdapterConnection::run_frame_channels`
+  rejecting null ids that the legacy SDK envelope cannot represent. `SdkTransport`
+  now exposes frame-level `recv_frame` / `send_frame` methods for the AppServer
+  bridge; stdio decodes/encodes `JsonRpcFrame` directly. SDK hook/MCP
+  server requests are enqueued as frames and receive matching `Success`/`Error`
+  reply frames during the cut-over.
+  A tested SDK transport bridge now drives `JsonRpcAdapterConnection::run_frame_channels`
   over the existing `SdkTransport` trait, installs the same `SdkServerState`
   outbound queue used by the removed dispatcher loop, and feeds adapter replies plus
   handler-emitted notifications through the existing single-writer SDK
@@ -1839,12 +1845,43 @@ Implementation progress as of 2026-07-07:
   now stores `LocalAppSessionHandle` snapshots in that AppServer registry and
   applies the same `session/start` / `session/resume` / `session/archive`
   lifecycle registration used by local clients after the existing SDK handler
-  succeeds. Because SDK
-  server-request emission still flows through the legacy
-  `SdkServerState::send_server_request` pending map, the bridge reader first
-  routes inbound legacy `Response`/`Error` messages through
-  `SdkServerState::resolve_server_request`; unmatched responses still continue
-  into AppServer adapter response handling for adapter-owned server requests.
+  succeeds. SDK server-request emission now resolves through the
+  `SdkServerState::send_server_request` pending map with frame-shaped replies:
+  the bridge reader reads AppServer frames first and routes matching
+  `Success`/`Error` frames through
+  `SdkServerState::resolve_server_request_frame`; unmatched responses still
+  continue into AppServer adapter response handling for adapter-owned server
+  requests. The waiter map and issued-id counter for these SDK server requests
+  now sit behind `ServerRequestState`, with callers continuing through
+  `SdkServerState` methods. The installed SDK `TurnRunner` now sits behind
+  `TurnRunnerState`, so builder setup, runtime-bridge replacement, turn
+  dispatch, and tests use `SdkServerState` install/snapshot methods instead
+  of raw runner locks. The installed SDK `SessionHandle` now sits behind
+  `SessionRuntimeState`, so SDK startup, AppServer replacement, runtime
+  controls, approval/MCP bridges, and tests use `SdkServerState`
+  install/snapshot methods instead of raw runtime locks. The SDK transport
+  handle and ordered outbound writer queue now sit behind `ConnectionState`,
+  so approval, hook, MCP, and bridge code use `SdkServerState` accessors
+  instead of raw transport slots.
+  The SDK handler request context, result type, and exhaustive
+  `ClientRequest` dispatcher now live in `sdk_server::handlers::dispatch`,
+  leaving `handlers/mod.rs` as the shared state and module wiring hub.
+  The optional SDK `McpConnectionManager` now sits behind `McpManagerState`,
+  so startup, bridge bootstrap, SDK-hosted MCP registration, and MCP handlers
+  install/read it through `SdkServerState` methods.
+  The SDK production runtime replacement context now sits behind
+  `RuntimeReplacementState`, so SDK startup installs it and AppServer
+  start/resume interception reads it through `SdkServerState` methods.
+  The SDK runtime reload subscriber now sits behind `RuntimeReloadState`, so
+  runtime install aborts and replaces the sandbox reload task through
+  `SdkServerState` methods instead of a raw task slot.
+  MCP tool-registration reports now sit behind
+  `McpRegistrationState`; `mcp/status` reads only a status projection through
+  `SdkServerState`. SDK file-history state plus config home now sit behind
+  `FileHistoryStateSlot`, with rewind handlers and runtime install paths using
+  `SdkServerState` methods. Pre-runtime initialize bootstrap data, startup
+  cwd, the SDK agent-progress opt-in flag, and startup-authorized bypass
+  capability now sit behind `BootstrapState`.
   The SDK handler, dispatcher, and approval-bridge tests now run through
   `SdkServer::run_app_server_connection`, so the existing session, turn,
   config, MCP, approval, user-input, server-request, routing, and permission
@@ -2079,9 +2116,14 @@ Implementation progress as of 2026-07-07:
   the current runtime from state per turn, so resume no longer needs to retarget
   the installed runtime in place.
   The CLI bridge also centralizes persisted-response overlay plus live
-  fallback in one local session-data view, preserving the `coco-app-server` /
-  `coco-session` crate boundary until the final runtime/session-store facade
-  lands. `coco-app-server` owns the shared pure cursor, pagination, and
+  fallback in `sdk_server::session_data`, preserving the `coco-app-server` /
+  `coco-session` crate boundary and keeping that overlay out of the bridge
+  transport/lifecycle loop.
+  `SdkServerState` now keeps persisted-session storage behind install and
+  snapshot methods backed by `sdk_server::session_store`, so
+  persisted-session reads/writes no longer reach through a raw handler-state
+  field.
+  `coco-app-server` owns the shared pure cursor, pagination, and
   turn-span projection helpers, and that local view now reads the installed
   `SessionManager` directly for AppServer-routed `session/list`,
   `session/read`, and `session/turns/list`, so those read-only methods no
@@ -2385,9 +2427,9 @@ Implementation progress as of 2026-07-07:
   live in the dedicated `session_runtime::permissions` child module, along
   with the live-permission base constructor used by session bootstrap and
   headless/SDK entrypoints. Engine config mutation, cache-break reset, todo
-  snapshots, generic runtime accessors, the file-history transcript sink, the
-  file-history checkpointing gate, and the orchestration context factory have
-  moved under `session_runtime::state`.
+  snapshots, generic runtime accessors, and the orchestration context factory
+  have moved under `session_runtime::state`; the file-history transcript sink
+  and checkpointing gate now live in `session_runtime::state::file_history`.
 - Model-role override state, thinking-level construction, configured-model
   lookup, and SDK/user model selection parsing now live in
   `session_runtime::roles`, with the existing `RoleOverride` and test helper
@@ -2412,13 +2454,19 @@ Implementation progress as of 2026-07-07:
   the runtime `Arc`. Startup-owned background session consumers
   (cron tick, leader inbox poller, skill watcher, and post-login OpenAI model
   refresh) now accept `SessionHandle` at their public spawn/install
-  boundary. Shared post-build late-bind installation now also enters through
-  `SessionHandle`, and the agent-team wiring factory, fork dispatcher, and
-  hook-agent runner installers sit behind that boundary. The agent-team wiring
+  boundary, and the cron tick plus skill watcher no longer clone the raw
+  runtime internally while processing the swappable current-session owner.
+  Shared post-build late-bind installation now also enters through
+  `SessionHandle` and wires task runtime, task lists, transcript stores, MCP,
+  and LSP through that handle. The unified MCP bootstrap exposes the hook
+  orchestration context through `SessionHandle`, so config-driven MCP startup
+  no longer needs to escape to raw runtime ownership either. The agent-team
+  wiring factory, fork dispatcher, and hook-agent runner installers sit behind
+  that boundary. The agent-team wiring
   factory and the fork/hook implementations now also retain `SessionHandle`
-  internally instead of capturing raw runtime `Arc`s. Unified MCP bootstrap now
-  also takes `SessionHandle` instead of a raw runtime `Arc`, so the shared TUI /
-  SDK / headless startup helpers are moving behind the same boundary. The SDK
+  internally instead of capturing raw runtime `Arc`s. SDK turn execution and
+  headless print-mode setup now call runtime services through `SessionHandle`
+  instead of cloning the raw runtime out of the handle. The SDK
   server state now stores the process session as `SessionHandle` and installs
   it through `with_session_handle`, leaving raw runtime access as an explicit
   compatibility escape hatch. SDK hook callback installation and initialize hook
@@ -2446,10 +2494,27 @@ Implementation progress as of 2026-07-07:
   summarize-rewind helpers now use `SessionHandle` as their runtime boundary.
   TUI skill-override writes, plugin dialog payloads, permissions-editor payloads
   and persisted edits, agent create/open/delete refresh flows, and model role /
-  thinking-effort updates have also moved to `SessionHandle`. Production
-  `app/cli` call sites no longer expose raw `Arc<SessionRuntime>` in TUI helper
-  signatures; raw runtime `Arc` ownership remains contained in `SessionHandle`
-  itself, test fixtures, and documented compatibility escape hatches. SDK
+  thinking-effort updates have also moved to `SessionHandle`. TUI resume UI
+  hydration, file-history diff helpers, permission notification bridge
+  resolution, post-login OpenAI model refresh, leader inbox polling,
+  hook-agent scoped registry construction, and prompt-mode bash response
+  checks now also take `SessionHandle` rather than direct `SessionRuntime`
+  references. The TUI runner now uses the handle directly for event-hub startup,
+  reload subscriptions, command-loop waits, resume/clear hydration, goal state,
+  rewind, plugin/agent/permission payload builders, and model/thinking updates,
+  leaving no `SessionHandle::runtime()` escape calls in `tui_runner.rs`.
+  SDK startup MCP/event-hub setup, structured-output enablement, setup/start
+  hooks, and file-history handoff now also call through the startup
+  `SessionHandle`, and the current-session config-change watcher fires hooks
+  through the swappable handle directly. SDK turn/runtime/session handlers now
+  use installed `SessionHandle`s directly for memory shortcuts, goal state,
+  manual compact, model/permission/color updates, tag toggling, and resume
+  hydration; remaining production `.runtime()` calls are local AppServer
+  registry snapshot extraction points (`LocalAppSessionHandle`) or tests.
+  Production `app/cli` call sites no longer expose raw
+  `Arc<SessionRuntime>` in helper signatures; raw runtime `Arc` ownership
+  remains contained in `SessionHandle` itself, test fixtures, and documented
+  compatibility escape hatches. SDK
   goal-status persistence helpers now likewise accept `SessionHandle` instead
   of raw runtime access. TUI-local plan-file and rewind helpers now keep
   `SessionId` typed through their signatures, converting to `&str` only at
@@ -2714,10 +2779,14 @@ Implementation progress as of 2026-07-07:
 - Runtime-backed SDK control paths now update/read model, permission mode,
   thinking level, and cwd through the installed runtime first. The legacy SDK
   singleton active identity is deleted; model/cwd/permission/thinking handoff
-  metadata, turn id counters, aggregate archive accounting, active-turn
-  handles/cancellation, legacy cwd/model metadata, session-scoped plan-mode
-  instruction snapshots, SDK turn handoff history, and live app state now live
-  on `SdkServerState` keyed by `SessionId`. Direct legacy SDK start/resume now
+  metadata, turn id counters, aggregate archive accounting, and active-turn
+  handles/cancellation now sit behind `TurnState`. Legacy cwd/model metadata,
+  session-scoped plan-mode instruction snapshots, SDK turn handoff history, and
+  live app state now sit behind `ScopedSessionState`, with callers still
+  entering through `SdkServerState` methods. Approval, user-input, and
+  elicitation waiter maps now sit behind `PendingClientRequestState`, with
+  turn resolve/cancel handlers entering through `SdkServerState` methods.
+  Direct legacy SDK start/resume now
   install those scoped state maps, and unscoped handlers resolve a sole scoped
   session when no AppServer surface or installed runtime identifies the session.
   AppServer-routed request contexts now carry an optional current-session scope
@@ -2738,21 +2807,25 @@ Implementation progress as of 2026-07-07:
   `session/resume` install scoped SDK state and rely on AppServer
   registry/surface ownership instead of claiming process-global identity.
   `control/updateEnv`
-  no longer stores an unused map on singleton session state and remains an acknowledged no-op
-  until env control has a runtime/AppServer owner.
+  no longer stores an unused map on singleton session state; installed runtimes
+  apply updates to their session-owned shell env store and the no-runtime
+  fallback remains acknowledgement-only. `context/usage` now uses the installed
+  runtime's main-context analyzer directly, so runtime-backed sessions no
+  longer need SDK handoff state for that request.
 
 **Phase B — atomic cut-over (single PR):**
 
 Route TUI and headless through `LocalClientAdapter`; route SDK through
-`JsonRpcAdapter`; delete the old stack. Remaining demolition list:
-
-- The fused `SessionRuntime` struct itself, after moving its remaining
-  process-lifetime resources behind dedicated owners.
+`JsonRpcAdapter`; delete the old stack.
 
 Completed side-channel cleanup: SDK `initialize` now prefers the installed
 runtime for command, agent, and output-style metadata, falling back to the
-bootstrap snapshot only before a runtime exists; account/auth and fast-mode
-state remain bootstrap-owned until runtime accessors land. SDK MCP manager
+bootstrap snapshot only before a runtime exists; live fast-mode state is now
+read from the installed runtime's engine config, while account/auth remains
+bootstrap-owned until those sources grow runtime accessors. SDK-supplied
+agents, initialize hook callbacks, and plan-mode instructions now sit behind
+`InitializeState` and replay into session start/resume replacement paths
+through `SdkServerState` methods. SDK MCP manager
 construction now happens after the startup runtime is loaded and uses that
 runtime's MCP config; TUI/headless MCP bootstrap already builds or reuses
 managers from the session runtime. TUI, headless, and SDK event-hub connectors
@@ -2789,7 +2862,31 @@ metadata flag, and tool-result replacement state, and
 `SessionIntegrationResources` now owns late-bound MCP/LSP handles, the live
 MCP manager slot, and the MCP reconnect key instead of leaving
 lifecycle/producer/title/workspace/config/engine-state/integration plumbing as
-flat `SessionRuntime` fields.
+flat `SessionRuntime` fields. Engine wiring and reload paths now use
+`SessionRuntime` accessors for those slots instead of reaching through the
+resource owner directly. `SessionHandleResources` now owns the
+late-bound agent, skill, fork-dispatch, cache-params, task, task-list,
+todo-list, team-task-list-router, and agent-transcript handles instead of
+leaving those runtime/engine wiring handles as flat `SessionRuntime` fields.
+`SessionAgentCatalogResources` now owns agent search paths, built-in catalog
+selection, the live catalog snapshot, and SDK-supplied agent definitions
+instead of leaving agent-catalog reload state as flat `SessionRuntime` fields.
+`SessionPermissionResources` now owns the teammate live permission overlay, and
+the prompt-suggestion abort handle moved under `SessionHandleResources`.
+`SessionMemoryResources` now owns the auto-memory and skill-review runtimes,
+and `SessionSandboxResources` now owns the session sandbox state instead of
+leaving those optional runtime services as flat `SessionRuntime` fields.
+`SessionHistoryResources` now owns the shared multi-turn `MessageHistory`;
+runtime, TUI, SDK, and headless call sites go through the runtime history
+accessor instead of a public flat field. The wrapper-only fused
+`SessionRuntime` shell has been removed: `SessionRuntime` is now the
+resource-owner struct itself instead of containing a separate
+`SessionRuntimeResources` field.
+The resource owner type definitions now live under the dedicated
+`session_runtime::resources` child module, split into focused resource groups
+for folded config/catalog inputs, project services, engine state, late-bound
+handles, and the runtime container. The parent runtime file is now the build
+options and module wiring rather than the owner-type dumping ground.
 
 **Phase C — surfaces (multi-attach):** passive surfaces, multiple
 surfaces per connection, interactive-conflict rejection, replace/archive

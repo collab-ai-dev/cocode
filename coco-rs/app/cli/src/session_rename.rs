@@ -231,7 +231,7 @@ fn map_persist_error(error: anyhow::Error) -> RenamePersistenceError {
 /// concatenating text from User / Assistant messages.
 /// Non-text content (tool calls, attachments, etc.) is skipped.
 async fn snapshot_conversation_text(session: &SessionHandle) -> String {
-    let history = session.history.lock().await;
+    let history = session.history().lock().await;
     coco_session::title_generator::extract_conversation_text(history.as_slice())
 }
 

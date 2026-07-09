@@ -5,7 +5,6 @@
 //! observes the same order the server produced them.
 
 use coco_types::CoreEvent;
-use coco_types::JsonRpcMessage;
 use coco_types::SessionId;
 
 #[derive(Debug)]
@@ -15,7 +14,7 @@ pub enum OutboundMessage {
         session_id: SessionId,
         event: Box<CoreEvent>,
     },
-    JsonRpc(JsonRpcMessage),
+    JsonRpcFrame(coco_app_server_transport::JsonRpcFrame),
 }
 
 impl OutboundMessage {

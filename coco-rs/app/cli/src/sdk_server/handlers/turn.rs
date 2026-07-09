@@ -1,5 +1,5 @@
 //! Turn lifecycle (`turn/*`) plus per-category resolve handlers that
-//! drain entries from the pending_* maps back into the awaiting agent
+//! drain pending client requests back into the awaiting agent
 //! task (approval, user input, elicitation, hook callback, mcp route),
 //! and the `cancelRequest` handler that evicts pending entries
 //! without delivery.
@@ -74,7 +74,7 @@ pub(super) async fn handle_turn_start(
         return handle_turn_start_observability_shortcut(shortcut, ctx).await;
     }
 
-    let runner = ctx.state.turn_runner.read().await.clone();
+    let runner = ctx.state.turn_runner_snapshot().await;
     let Some((turn_session_id, _session_source)) = ctx.active_session_resolution().await else {
         return active_turn_start_error(ActiveTurnStartError::NoActiveSession);
     };
@@ -261,10 +261,7 @@ async fn handle_turn_start_rename_shortcut(
     let name = match rename {
         coco_commands::ParsedRename::Explicit(name) => name,
         coco_commands::ParsedRename::Auto => {
-            let runtime = {
-                let slot = ctx.state.session_runtime.read().await;
-                slot.as_ref().cloned()
-            };
+            let runtime = ctx.state.session_runtime_snapshot().await;
             let Some(runtime) = runtime else {
                 warn!("SDK rename auto-gen ignored: no active session runtime");
                 return HandlerResult::ok(coco_types::TurnStartResult { turn_id });
@@ -301,10 +298,7 @@ async fn handle_turn_start_memory_shortcut(
         Err(error) => return error,
     };
 
-    let runtime = {
-        let slot = ctx.state.session_runtime.read().await;
-        slot.as_ref().cloned()
-    };
+    let runtime = ctx.state.session_runtime_snapshot().await;
     let Some(runtime) = runtime else {
         match shortcut {
             TurnStartMemoryShortcut::Dream => {
@@ -319,7 +313,7 @@ async fn handle_turn_start_memory_shortcut(
             turn_id: shortcut_turn.turn_id,
         });
     };
-    let Some(memory_runtime) = runtime.runtime().memory_runtime().cloned() else {
+    let Some(memory_runtime) = runtime.memory_runtime().cloned() else {
         match shortcut {
             TurnStartMemoryShortcut::Dream => {
                 info!("SDK /dream: no MemoryRuntime (Feature::AutoMemory off); skipping");
@@ -377,7 +371,7 @@ async fn handle_turn_start_btw_shortcut(
         Err(error) => return error,
     };
 
-    let response_text = match ctx.state.session_runtime.read().await.clone() {
+    let response_text = match ctx.state.session_runtime_snapshot().await {
         None => "(fork dispatcher not installed — /btw requires CLI bootstrap)".to_string(),
         Some(runtime) => {
             let cache = match runtime.last_cache_safe_params().await {
@@ -432,7 +426,7 @@ async fn handle_turn_start_goal_shortcut(
     request: coco_commands::GoalCommandRequest,
     ctx: &HandlerContext,
 ) -> Result<TurnStartGoalShortcut, HandlerResult> {
-    let runtime_handle = match ctx.state.session_runtime.read().await.clone() {
+    let runtime_handle = match ctx.state.session_runtime_snapshot().await {
         Some(runtime) => runtime,
         None => {
             return Err(HandlerResult::Err {
@@ -467,7 +461,7 @@ async fn handle_turn_start_goal_shortcut(
         (handoff.history, handoff.app_state)
     };
 
-    let runtime = runtime_handle.runtime();
+    let runtime = &runtime_handle;
     let current_engine_config = runtime.current_engine_config().await;
     let args = crate::goal_command::goal_display_args(&request).to_string();
     let gate = crate::goal_command::GoalGate {
@@ -533,7 +527,7 @@ async fn handle_turn_start_compact_shortcut(
     request: coco_commands::handlers::compact::CompactRequest,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let runtime = match ctx.state.session_runtime.read().await.clone() {
+    let runtime = match ctx.state.session_runtime_snapshot().await {
         Some(runtime) => runtime,
         None => {
             return HandlerResult::Err {
@@ -611,7 +605,7 @@ async fn run_manual_compact_shortcut(
             }),
         ))
         .await;
-    let runtime = session.runtime();
+    let runtime = &session;
     let engine = runtime.build_engine(cancel).await;
     let combined = history_handle.lock().await.clone();
     let mut history = coco_messages::MessageHistory::new();
@@ -640,7 +634,7 @@ async fn run_manual_compact_shortcut(
         *sdk_history = compacted;
     }
     {
-        let mut runtime_history = runtime.history.lock().await;
+        let mut runtime_history = runtime.history().lock().await;
         *runtime_history = history;
     }
 
@@ -702,10 +696,7 @@ async fn sdk_append_goal_status_and_slash_text(
         "goal", args, text, /*is_sensitive*/ false,
     ));
     sdk_append_messages(history_handle, notif_tx, messages.clone()).await;
-    session
-        .runtime()
-        .persist_local_transcript_messages(&messages)
-        .await;
+    session.persist_local_transcript_messages(&messages).await;
 }
 
 async fn sdk_emit_active_goal_snapshot(
@@ -720,7 +711,6 @@ async fn sdk_emit_active_goal_snapshot(
         )))
         .await;
     session
-        .runtime()
         .persist_goal_metadata(goal.as_ref().map(|goal| {
             coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
         }))
@@ -866,8 +856,7 @@ pub(super) async fn handle_turn_interrupt(ctx: &HandlerContext) -> HandlerResult
 /// `approval/resolve` — resolve a pending `approval/askForApproval`
 /// ServerRequest with the client's decision.
 ///
-/// The dispatcher holds a map of pending approvals keyed by `request_id`
-/// (see [`super::SdkServerState::pending_approvals`]). When the agent's
+/// The dispatcher holds pending approvals keyed by `request_id`. When the agent's
 /// tool executor hits a gate that needs SDK approval, it registers a
 /// oneshot via [`super::SdkServerState::register_approval`], sends an
 /// `AskForApproval` ServerRequest on the wire, and awaits the receiver.
@@ -886,8 +875,7 @@ pub(super) async fn handle_approval_resolve(
     let decision = params.decision;
     let outcome = ctx
         .state
-        .pending_approvals
-        .resolve(&request_id, params)
+        .resolve_pending_approval(&request_id, params)
         .await;
     handle_resolve_outcome(outcome, "approval", &request_id, |state| {
         info!(request_id = %state, decision = ?decision, "SdkServer: approval/resolve");
@@ -916,8 +904,7 @@ pub(super) async fn handle_elicitation_resolve(
     let approved = params.approved;
     let outcome = ctx
         .state
-        .pending_elicitations
-        .resolve(&request_id, params)
+        .resolve_pending_elicitation(&request_id, params)
         .await;
     handle_resolve_outcome(outcome, "elicitation", &request_id, |id| {
         info!(
@@ -938,8 +925,7 @@ pub(super) async fn handle_user_input_resolve(
     let request_id = params.request_id.clone();
     let outcome = ctx
         .state
-        .pending_user_input
-        .resolve(&request_id, params)
+        .resolve_pending_user_input(&request_id, params)
         .await;
     handle_resolve_outcome(outcome, "user input", &request_id, |id| {
         info!(request_id = %id, "SdkServer: input/resolveUserInput");
@@ -967,15 +953,7 @@ pub(super) async fn handle_cancel_request(
     // one hits. Hook and MCP-route requests are no longer pending-tracked
     // — they ride the synchronous JSON-RPC reply path on `pending_server_requests`
     // and the outer dispatcher cancels via that path.
-    let cancelled_kind = if ctx.state.pending_approvals.remove(&request_id).await {
-        Some("approval")
-    } else if ctx.state.pending_user_input.remove(&request_id).await {
-        Some("user_input")
-    } else if ctx.state.pending_elicitations.remove(&request_id).await {
-        Some("elicitation")
-    } else {
-        None
-    };
+    let cancelled_kind = ctx.state.cancel_pending_client_request(&request_id).await;
     match cancelled_kind {
         Some(kind) => info!(
             request_id = %request_id,

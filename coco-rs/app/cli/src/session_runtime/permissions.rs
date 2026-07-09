@@ -39,7 +39,7 @@ impl SessionRuntime {
     /// mid-cycle approvals / team-rule updates here; every main-session engine
     /// reads it each tool batch.
     pub fn live_permission_rules(&self) -> Arc<RwLock<Vec<coco_types::PermissionRule>>> {
-        self.live_permission_rules.clone()
+        self.permission_resources.live_permission_rules.clone()
     }
 
     /// Inject the live permission-rule overlay onto a main-session engine
@@ -52,7 +52,8 @@ impl SessionRuntime {
     /// in-cycle approval mechanism is uniform across transports. NOT called for
     /// subagents/forks - they keep their own isolated config-cloned rules.
     pub(super) async fn prepare_live_permission_overlay(&self, config: &mut QueryEngineConfig) {
-        config.live_permission_rules = Some(self.live_permission_rules.clone());
+        config.live_permission_rules =
+            Some(self.permission_resources.live_permission_rules.clone());
     }
 
     /// Single source of truth for applying user-approved permission updates,

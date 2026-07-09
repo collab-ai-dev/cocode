@@ -18,6 +18,7 @@
 
 use std::sync::Arc;
 
+use coco_app_server_transport::JsonRpcFrame;
 use tracing::warn;
 
 use crate::sdk_server::handlers::SdkServerState;
@@ -73,11 +74,9 @@ async fn route_hook_callback(
     state: Arc<SdkServerState>,
     request: coco_hooks::SdkHookCallbackRequest,
 ) -> coco_hooks::Result<coco_types::SdkHookOutput> {
-    let transport = {
-        let guard = state.transport.read().await;
-        guard.as_ref().cloned()
-    }
-    .ok_or_else(|| coco_hooks::HooksError::generic("SDK hook bridge transport not initialized"))?;
+    let transport = state.sdk_transport_snapshot().await.ok_or_else(|| {
+        coco_hooks::HooksError::generic("SDK hook bridge transport not initialized")
+    })?;
 
     let params = coco_types::ServerHookCallbackParams {
         callback_id: request.callback_id,
@@ -95,7 +94,7 @@ async fn route_hook_callback(
         .map_err(|e| coco_hooks::HooksError::generic(format!("send hook/callback: {e}")))?;
 
     match reply {
-        coco_types::JsonRpcMessage::Response(response) => {
+        JsonRpcFrame::Success(response) => {
             // Strict typed parse — bad payload fails here instead of
             // getting silently re-interpreted by the legacy
             // `parse_hook_output` permissive parser. The typed output
@@ -108,7 +107,7 @@ async fn route_hook_callback(
                 })?;
             Ok(result.output)
         }
-        coco_types::JsonRpcMessage::Error(error) => Err(coco_hooks::HooksError::generic(format!(
+        JsonRpcFrame::Error(error) => Err(coco_hooks::HooksError::generic(format!(
             "SDK client returned hook/callback error: {} ({})",
             error.error.message, error.error.code
         ))),

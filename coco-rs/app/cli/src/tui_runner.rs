@@ -61,7 +61,7 @@ type SharedSessionHandle = Arc<RwLock<crate::session_runtime::SessionHandle>>;
 /// Spawns agent_driver as background task, runs TUI in foreground.
 /// `resume_plan`: resolved by the binary entry from
 /// `--resume` / `--continue` / `--fork-session` flags. When `Some`,
-/// the runtime is repointed at the source session id and `runtime.history`
+/// the runtime is repointed at the source session id and `runtime.history()`
 /// is seeded with the loaded messages so the first turn picks up where
 /// the prior session left off. Pre-populating the transcript dedup set
 /// prevents the per-turn append from re-writing already-persisted
@@ -270,11 +270,10 @@ pub async fn run_tui(
             }
         })
         .await?;
-    let runtime = session_handle.runtime().clone();
     let event_hub_connector = {
-        let session_id = runtime.current_typed_session_id().await;
+        let session_id = session_handle.current_typed_session_id().await;
         coco_cli::event_hub::RuntimeEventHubConnector::spawn_for_session(
-            runtime.runtime_config(),
+            session_handle.runtime_config(),
             session_id,
             &initial_runtime_cwd,
         )
@@ -282,6 +281,7 @@ pub async fn run_tui(
     if let Some(connector) = &event_hub_connector {
         local_app_server_bridge.set_hub_connector_sender(connector.sender());
     }
+    let runtime = &session_handle;
     let current_session = Arc::new(RwLock::new(session_handle.clone()));
     let (mut runtime_reload_subscriptions, display_settings_rx, config_reload_errors_rx) =
         TuiRuntimeReloadSubscriptions::new(
@@ -897,7 +897,7 @@ impl TuiRuntimeReloadSubscriptions {
 
     async fn install_for_session(&mut self, session: &crate::session_runtime::SessionHandle) {
         self.abort_current();
-        let runtime = session.runtime();
+        let runtime = session;
 
         if let Some(rx) = runtime.subscribe_config_changes() {
             self.handles.push(
@@ -993,10 +993,7 @@ async fn run_agent_driver(
 ) {
     {
         let session = current_session.read().await.clone();
-        session
-            .runtime()
-            .install_side_query_event_tx(event_tx.clone())
-            .await;
+        session.install_side_query_event_tx(event_tx.clone()).await;
     }
     // Per-session one-shot gate: title gen runs at most once per
     // session id, never the process. After `/resume` or `/clear` the
@@ -1048,8 +1045,8 @@ async fn run_agent_driver(
                 continue;
             }
             _ = {
-                let runtime = current_session.read().await.runtime().clone();
-                async move { runtime.command_queue().wait_for_change().await }
+                let session = current_session.read().await.clone();
+                async move { session.command_queue().wait_for_change().await }
             } => {
                 let session = current_session.read().await.clone();
                 process_idle_command_queue(
@@ -1072,7 +1069,7 @@ async fn run_agent_driver(
         };
         // Re-read each turn so `/clear` regen picks up the new id.
         let session = current_session.read().await.clone();
-        let runtime = session.runtime().clone();
+        let runtime = &session;
         let session_id = runtime.current_typed_session_id().await;
         match command {
             UserCommand::SubmitInput {
@@ -1568,7 +1565,7 @@ async fn run_agent_driver(
 
             UserCommand::Rewind { message_id, mode } => {
                 // Drain first — rewind reads file_history snapshots
-                // and rewrites runtime.history; an in-flight turn that
+                // and rewrites runtime.history(); an in-flight turn that
                 // mutates either would race.
                 drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                 match mode {
@@ -2360,7 +2357,7 @@ async fn run_agent_driver(
                 // engine-pushed content. See
                 // `engine-tui-unified-transcript-plan.md` §3 Commit 2.
                 let msg = build_system_message_from_push_kind(kind);
-                let mut h = runtime.history.lock().await;
+                let mut h = runtime.history().lock().await;
                 let event_tx_opt = Some(event_tx.clone());
                 coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;
             }
@@ -2371,7 +2368,7 @@ async fn run_agent_driver(
                     let msg = build_system_message_from_push_kind(
                         coco_tui::SystemPushKind::PermissionRetry { tool_name, message },
                     );
-                    let mut h = runtime.history.lock().await;
+                    let mut h = runtime.history().lock().await;
                     let event_tx_opt = Some(event_tx.clone());
                     coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt)
                         .await;
@@ -2387,7 +2384,7 @@ async fn run_agent_driver(
                 // transcript view, SDK, and JSONL converge — and so the
                 // per-message `is_visible_in_transcript_only` gate is the
                 // single source of truth for model visibility.
-                let mut h = runtime.history.lock().await;
+                let mut h = runtime.history().lock().await;
                 let event_tx_opt = Some(event_tx.clone());
                 for msg in messages {
                     coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt)
@@ -2432,7 +2429,7 @@ async fn run_agent_driver(
     // don't propagate out of the driver.
     {
         let session = current_session.read().await.clone();
-        let runtime = session.runtime();
+        let runtime = &session;
         let session_id = runtime.current_typed_session_id().await;
         let session_id_string = session_id.to_string();
         let mgr = Arc::clone(runtime.session_manager());
@@ -2464,16 +2461,14 @@ async fn run_agent_driver(
         }
     }
     let session = current_session.read().await.clone();
-    let runtime = session.runtime();
-    runtime.flush_session_usage_snapshot().await;
+    session.flush_session_usage_snapshot().await;
     info!("Agent driver stopped");
 }
 
 /// Wait for scheduled turn-end extraction/session-memory work before
 /// shutdown. Silently no-ops when auto-memory is inactive.
 async fn drain_pending_memory_extraction(session: &crate::session_runtime::SessionHandle) {
-    let runtime = session.runtime();
-    let Some(memory_runtime) = runtime.memory_runtime() else {
+    let Some(memory_runtime) = session.memory_runtime() else {
         return;
     };
     if !memory_runtime
@@ -2641,11 +2636,11 @@ fn create_slash_metadata_message(metadata: &str) -> coco_messages::Message {
 
 async fn emit_resume_plan_ui_state(
     plan: &ResumePlan,
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     restored_v1_todos: Option<Vec<coco_types::TodoRecord>>,
 ) {
-    let cfg = runtime.current_engine_config().await;
+    let cfg = session.current_engine_config().await;
     let goal = goal_command::restore_goal_from_history(
         &plan
             .prior_messages
@@ -2653,9 +2648,9 @@ async fn emit_resume_plan_ui_state(
             .cloned()
             .map(std::sync::Arc::new)
             .collect::<Vec<_>>(),
-        runtime.app_state(),
-        &runtime.hook_registry(),
-        runtime.session_usage_snapshot().await.totals.output_tokens,
+        session.app_state(),
+        &session.hook_registry(),
+        session.session_usage_snapshot().await.totals.output_tokens,
         goal_command::GoalGate {
             hooks_restricted: cfg.disable_all_hooks || cfg.allow_managed_hooks_only,
             trust_rejected: workspace_trust_rejected(),
@@ -2717,7 +2712,7 @@ async fn emit_resume_plan_ui_state(
     let _ = event_tx
         .send(CoreEvent::Protocol(
             coco_types::ServerNotification::SessionUsageUpdated(Box::new(
-                runtime.session_usage_snapshot().await,
+                session.session_usage_snapshot().await,
             )),
         ))
         .await;
@@ -2726,7 +2721,7 @@ async fn emit_resume_plan_ui_state(
             goal_command::active_goal_changed_notification(goal.clone()),
         ))
         .await;
-    runtime
+    session
         .persist_goal_metadata(goal.as_ref().map(|goal| {
             coco_session::GoalMetadata::from_active_goal(goal, /*met*/ false)
         }))
@@ -2738,8 +2733,7 @@ async fn emit_resume_plan_ui_state_for_runtime(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    let runtime = session.runtime();
-    let restored_v1_todos = if runtime
+    let restored_v1_todos = if session
         .runtime_config()
         .features
         .enabled(coco_types::Feature::TaskV2)
@@ -2749,11 +2743,11 @@ async fn emit_resume_plan_ui_state_for_runtime(
         latest_todo_write_todos(&plan.prior_messages)
     };
     if let Some(todos) = restored_v1_todos.clone() {
-        runtime
+        session
             .seed_todo_list_snapshot(plan.session_id.to_string(), todos)
             .await;
     }
-    emit_resume_plan_ui_state(plan, runtime, event_tx, restored_v1_todos).await;
+    emit_resume_plan_ui_state(plan, session, event_tx, restored_v1_todos).await;
 }
 
 #[derive(serde::Deserialize)]
@@ -2807,7 +2801,7 @@ async fn dispatch_resume(
     process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> SlashOutcome {
-    let runtime = session.runtime();
+    let runtime = session;
     let target = args.trim();
     if target.is_empty() {
         let manager = Arc::clone(runtime.session_manager());
@@ -2945,7 +2939,7 @@ async fn apply_resume_plan_through_app_server(
     process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> anyhow::Result<()> {
-    let old_session_id = session.runtime().current_typed_session_id().await;
+    let old_session_id = session.current_typed_session_id().await;
     if old_session_id == plan.session_id {
         local_app_server_bridge
             .install_session_runtime(session.clone())
@@ -3031,7 +3025,7 @@ async fn build_runtime_for_resume_plan(
     let session = runtime_factory
         .build_with_session_id_and_cwd(session_id.clone(), cwd.clone())
         .await?;
-    let runtime = session.runtime().clone();
+    let runtime = &session;
     runtime.install_side_query_event_tx(event_tx.clone()).await;
     hydrate_runtime_for_resume_plan(&session, &session_id, &prior_messages).await;
 
@@ -3072,7 +3066,7 @@ async fn build_runtime_for_clear(
     let session = runtime_factory
         .build_with_session_id_and_cwd(session_id.clone(), cwd.clone())
         .await?;
-    let runtime = session.runtime().clone();
+    let runtime = &session;
     runtime.install_side_query_event_tx(event_tx.clone()).await;
     {
         let mut app_state = runtime.app_state().write().await;
@@ -3111,9 +3105,9 @@ async fn hydrate_runtime_for_resume_plan(
     session_id: &coco_types::SessionId,
     prior_messages: &[coco_messages::Message],
 ) {
-    let runtime = session.runtime();
+    let runtime = &session;
     {
-        let mut history = runtime.history.lock().await;
+        let mut history = runtime.history().lock().await;
         history.clear();
         for message in prior_messages.iter().cloned() {
             history.push(message);
@@ -3170,7 +3164,7 @@ async fn dispatch_branch(
     process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> SlashOutcome {
-    let runtime = session.runtime();
+    let runtime = session;
     let custom_title = args.trim().to_string();
     let source_id = runtime.current_typed_session_id().await;
     if source_id.as_str().is_empty() {
@@ -3305,7 +3299,7 @@ async fn load_resume_plan_for_target(
     session: &crate::session_runtime::SessionHandle,
     target: &str,
 ) -> anyhow::Result<ResumePlan> {
-    let runtime = session.runtime();
+    let runtime = session;
     let manager = Arc::clone(runtime.session_manager());
     let target = target.to_string();
     // Project root for THIS runtime. Resume targets whose project root differs
@@ -3450,7 +3444,7 @@ fn session_plan_file_path(
 async fn runtime_session_plan_file_path(
     session: &crate::session_runtime::SessionHandle,
 ) -> std::path::PathBuf {
-    let runtime = session.runtime();
+    let runtime = session;
     let session_id = runtime.current_typed_session_id().await;
     session_plan_file_path(
         runtime.config_home(),
@@ -3845,7 +3839,7 @@ async fn drain_queued_slash_commands(
     process_runtime: &Arc<ProcessRuntime>,
     cwd: &std::path::Path,
 ) {
-    let runtime = session.runtime();
+    let runtime = &session;
     while let Some(cmd) = runtime
         .command_queue()
         .dequeue_first_matching(|c| c.is_slash_command && c.agent_id.is_none())
@@ -4053,7 +4047,7 @@ async fn spawn_command_queue_turn(
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     let Some(first) = runtime
         .command_queue()
         .dequeue_first_matching(|c| !c.is_slash_command && c.agent_id.is_none())
@@ -4077,7 +4071,7 @@ async fn spawn_command_queue_turn(
 
     let ids: Vec<String> = queued.iter().map(|cmd| cmd.id.to_string()).collect();
     let messages = {
-        let mut h = runtime.history.lock().await;
+        let mut h = runtime.history().lock().await;
         let event_tx_opt = Some(event_tx.clone());
         for cmd in &queued {
             coco_query::history_sync::history_push_and_emit(
@@ -4112,7 +4106,7 @@ async fn spawn_history_turn(
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
 ) {
-    let session_id = session.runtime().current_typed_session_id().await;
+    let session_id = session.current_typed_session_id().await;
     let history_override = match messages
         .iter()
         .map(|message| serde_json::to_value(message.as_ref()))
@@ -4338,7 +4332,7 @@ async fn dispatch_slash_command(
     process_runtime: &Arc<ProcessRuntime>,
     runtime_reload_subscriptions: &Arc<Mutex<TuiRuntimeReloadSubscriptions>>,
 ) -> SlashOutcome {
-    let runtime = session.runtime();
+    let runtime = session;
     // Runtime-state-aware commands intercepted before registry lookup:
     // their behavior depends on per-session state (session_id, plan
     // file, app_state) that the static registry can't carry.
@@ -4521,7 +4515,7 @@ async fn dispatch_slash_command(
         return SlashOutcome::Handled;
     }
     if name == "diff" && matches!(args.split_whitespace().next(), Some("session" | "turn")) {
-        run_file_history_diff_command(runtime, event_tx, args).await;
+        run_file_history_diff_command(session, event_tx, args).await;
         return SlashOutcome::Handled;
     }
 
@@ -4728,7 +4722,7 @@ async fn dispatch_slash_command(
                 // goes through history_push_and_emit so the TUI
                 // TranscriptView and SDK observers see the new
                 // boundary marker, not just the slash text echo.
-                let mut h = runtime.history.lock().await;
+                let mut h = runtime.history().lock().await;
                 let event_tx_opt = Some(event_tx.clone());
                 coco_query::history_sync::history_push_and_emit(
                     &mut h,
@@ -4928,11 +4922,11 @@ async fn dispatch_slash_command(
 const MAX_FILE_HISTORY_DIFF_CHARS: usize = 6000;
 
 async fn run_file_history_diff_command(
-    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
     args: &str,
 ) {
-    let Some(file_history) = runtime.file_history() else {
+    let Some(file_history) = session.file_history() else {
         emit_slash_text(
             event_tx,
             "diff",
@@ -4946,11 +4940,11 @@ async fn run_file_history_diff_command(
     let mut parts = args.split_whitespace();
     match parts.next() {
         Some("session") => {
-            let session_id = runtime.current_typed_session_id().await.to_string();
+            let session_id = session.current_typed_session_id().await.to_string();
             let rendered = {
                 let file_history = file_history.read().await;
                 file_history
-                    .render_session_diff(runtime.config_home(), &session_id)
+                    .render_session_diff(session.config_home(), &session_id)
                     .await
             };
             let text = match rendered {
@@ -4964,7 +4958,7 @@ async fn run_file_history_diff_command(
                 emit_slash_text(event_tx, "diff", args, "Usage: /diff turn <message-id>").await;
                 return;
             };
-            let session_id = runtime.current_typed_session_id().await.to_string();
+            let session_id = session.current_typed_session_id().await.to_string();
             let rendered = {
                 let file_history = file_history.read().await;
                 let Some(next_message_id) =
@@ -4978,7 +4972,7 @@ async fn run_file_history_diff_command(
                     .render_diff_between(
                         message_id,
                         next_message_id.as_deref(),
-                        runtime.config_home(),
+                        session.config_home(),
                         &session_id,
                     )
                     .await
@@ -5170,7 +5164,7 @@ async fn toggle_fast_mode_through_app_server(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     let cfg = runtime.current_engine_config().await;
     let requested = !cfg.fast_mode;
     let active = requested && coco_config::is_fast_mode_supported_by_model(&cfg.model_id);
@@ -5212,7 +5206,7 @@ async fn set_thinking_level_through_app_server(
             return;
         }
     };
-    let runtime = session.runtime();
+    let runtime = session;
     local_app_server_bridge
         .install_session_runtime(session.clone())
         .await;
@@ -5313,7 +5307,7 @@ async fn dispatch_plan(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
-    let runtime = session.runtime();
+    let runtime = session;
     let args = args.trim();
 
     // Plan mode opted out via `features.plan_mode = false`: don't flip into
@@ -5650,7 +5644,7 @@ async fn run_local_app_server_shortcut_turn(
     prompt: String,
     log_label: &'static str,
 ) {
-    let session_id = session.runtime().current_typed_session_id().await;
+    let session_id = session.current_typed_session_id().await;
     local_app_server_bridge
         .install_session_runtime(session.clone())
         .await;
@@ -5732,7 +5726,7 @@ async fn run_fork_skill(
     args: &str,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
 
     let body = match runtime.invoke_skill_fork(name, args).await {
@@ -5744,7 +5738,7 @@ async fn run_fork_skill(
     };
     // Persist the command marker + result via history_push_and_emit so the
     // TUI transcript renders them and the next turn's model sees what ran.
-    let mut h = runtime.history.lock().await;
+    let mut h = runtime.history().lock().await;
     let event_tx_opt = Some(event_tx.clone());
     coco_query::history_sync::history_push_and_emit(
         &mut h,
@@ -5773,7 +5767,7 @@ async fn run_clear_conversation(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &mut coco_cli::sdk_server::AppServerLocalBridge,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     drain_active_turn(active_turn, ActiveTurnDrain::Wait).await;
     let old_session_id = runtime.current_typed_session_id().await;
     if let Err(error) = local_app_server_bridge.ensure_interactive_surface(old_session_id.clone()) {
@@ -5829,10 +5823,7 @@ async fn run_clear_conversation(
             return;
         }
     };
-    new_session
-        .runtime()
-        .fire_session_start_hooks("clear")
-        .await;
+    new_session.fire_session_start_hooks("clear").await;
     local_app_server_bridge
         .install_session_runtime(new_session.clone())
         .await;
@@ -5866,7 +5857,7 @@ async fn run_clear_conversation(
         identity: coco_types::ServerNotificationIdentity::new(Some(new_session_id), None),
     };
     let _ = event_tx.send(CoreEvent::Protocol(notif)).await;
-    if let Some(messages) = new_session.runtime().pre_clear_rewind_messages().await {
+    if let Some(messages) = new_session.pre_clear_rewind_messages().await {
         let _ = event_tx
             .send(CoreEvent::Tui(TuiOnlyEvent::RewindPreClearSnapshot {
                 messages,
@@ -5978,7 +5969,7 @@ async fn run_export(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
-    let runtime = session.runtime();
+    let runtime = session;
     use crate::conversation_export::ExportFormat;
     let arg = args.trim();
     // A bare format keyword comes from the modal → timestamped default name;
@@ -6001,7 +5992,7 @@ async fn run_export(
     };
     // Render under the lock, then drop it before the file write / await.
     let body = {
-        let history = runtime.history.lock().await;
+        let history = runtime.history().lock().await;
         format.render(history.as_slice())
     };
     let path = runtime.original_cwd().join(&filename);
@@ -6083,7 +6074,7 @@ async fn run_reload_plugins(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_cli::sdk_server::AppServerLocalBridge,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     let result = match local_app_server_bridge
         .client()
         .plugin_reload(local_app_server_bridge.handler())
@@ -6181,7 +6172,7 @@ async fn run_goal_command(
     event_tx: &mpsc::Sender<CoreEvent>,
     request: coco_commands::GoalCommandRequest,
 ) -> SlashFollowup {
-    let runtime = session.runtime();
+    let runtime = session;
     let is_status = matches!(request, coco_commands::GoalCommandRequest::Status);
     let args = goal_command::goal_display_args(&request).to_string();
     let gate = goal_command::GoalGate {
@@ -6193,7 +6184,7 @@ async fn run_goal_command(
         trust_rejected: workspace_trust_rejected(),
     };
     let tokens_at_start = runtime.session_usage_snapshot().await.totals.output_tokens;
-    let history_snapshot = runtime.history.lock().await.to_vec();
+    let history_snapshot = runtime.history().lock().await.to_vec();
     let outcome = goal_command::resolve_goal_request(
         request,
         runtime.app_state(),
@@ -6247,7 +6238,7 @@ async fn build_goal_status_modal(
     current_output_tokens: i64,
     fallback_text: String,
 ) -> (String, String) {
-    let runtime = session.runtime();
+    let runtime = session;
     if let Some(goal) = runtime.app_state().read().await.active_goal.clone() {
         return (
             "Goal active".to_string(),
@@ -6358,9 +6349,9 @@ async fn append_goal_status(
     event_tx: &mpsc::Sender<CoreEvent>,
     payload: coco_types::GoalStatusPayload,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     let message = goal_status_message(payload);
-    let mut history = runtime.history.lock().await;
+    let mut history = runtime.history().lock().await;
     let event_tx_opt = Some(event_tx.clone());
     coco_query::history_sync::history_push_and_emit(&mut history, message, &event_tx_opt).await;
 }
@@ -6372,13 +6363,13 @@ async fn append_goal_status_and_slash_text(
     args: &str,
     text: &str,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     let mut messages = vec![goal_status_message(payload)];
     messages.extend(coco_messages::build_slash_command_messages(
         "goal", args, text, /*is_sensitive*/ false,
     ));
     {
-        let mut history = runtime.history.lock().await;
+        let mut history = runtime.history().lock().await;
         let event_tx_opt = Some(event_tx.clone());
         for message in messages.iter().cloned() {
             coco_query::history_sync::history_push_and_emit(&mut history, message, &event_tx_opt)
@@ -6398,7 +6389,7 @@ async fn emit_active_goal_snapshot(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     let goal = runtime.app_state().read().await.active_goal.clone();
     let _ = event_tx
         .send(CoreEvent::Protocol(
@@ -6434,7 +6425,7 @@ async fn dispatch_add_dir(
     event_tx: &mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_cli::sdk_server::AppServerLocalBridge,
 ) -> SlashOutcome {
-    let runtime = session.runtime();
+    let runtime = session;
     let raw_path = args.trim();
     let current_cwd = runtime.current_cwd().read().await.clone();
     let candidate = if Path::new(raw_path).is_absolute() {
@@ -6845,7 +6836,7 @@ async fn emit_provider_statuses_refresh(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     let statuses = build_provider_statuses(runtime.runtime_config())
         .into_iter()
         .map(|(provider, status)| coco_types::ProviderStatusInfo {
@@ -6866,7 +6857,7 @@ async fn dispatch_provider_login(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
-    let runtime = session.runtime();
+    let runtime = session;
     let provider = slash_provider_arg(args);
     let tx = event_tx.clone();
     let url_sink: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(move |url| {
@@ -6965,7 +6956,7 @@ async fn maybe_spawn_auto_title(
     client: coco_app_server_client::ServerClient<coco_cli::sdk_server::LocalAppSessionHandle>,
     handler: coco_cli::sdk_server::AppServerSdkHandler,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     let plan_exited = runtime.app_state().read().await.has_exited_plan_mode;
     let plans_dir = coco_context::resolve_plans_directory(
         runtime.config_home(),
@@ -7011,8 +7002,8 @@ async fn handle_auto_truncate(
     event_tx: &mpsc::Sender<CoreEvent>,
     session: &crate::session_runtime::SessionHandle,
 ) {
-    let runtime = session.runtime();
-    let mut h = runtime.history.lock().await;
+    let runtime = session;
+    let mut h = runtime.history().lock().await;
     let Some(idx) = h.as_slice().iter().position(|m| match m.as_ref() {
         coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
         _ => false,
@@ -7070,7 +7061,7 @@ async fn handle_rewind(
     session: &crate::session_runtime::SessionHandle,
     local_app_server_bridge: &coco_cli::sdk_server::AppServerLocalBridge,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     use coco_tui::state::RestoreType;
 
     let mut files_changed = 0i32;
@@ -7146,7 +7137,7 @@ async fn handle_rewind(
     );
 
     if should_truncate {
-        let mut h = runtime.history.lock().await;
+        let mut h = runtime.history().lock().await;
         match h.as_slice().iter().position(|m| match m.as_ref() {
             coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
             _ => false,
@@ -7254,7 +7245,7 @@ async fn handle_summarize_rewind(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     use coco_messages::PartialCompactDirection;
     use coco_tui::state::RestoreType;
 
@@ -7265,7 +7256,7 @@ async fn handle_summarize_rewind(
     };
 
     let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
-        let h = runtime.history.lock().await;
+        let h = runtime.history().lock().await;
         h.as_slice().to_vec()
     };
 
@@ -7314,7 +7305,7 @@ async fn handle_summarize_rewind(
     match outcome {
         coco_compact::CompactOutcome::Applied => {
             {
-                let mut h = runtime.history.lock().await;
+                let mut h = runtime.history().lock().await;
                 *h = history;
             }
             // Emit a RewindCompleted with empty target so the TUI
@@ -7436,7 +7427,7 @@ async fn handle_write_skill_overrides(
     cwd: &std::path::Path,
     flag_settings: Option<&std::path::Path>,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     let result = match runtime_publisher {
         Some(publisher) => {
             let catalogs = coco_config::CatalogPaths::default();
@@ -7562,7 +7553,7 @@ async fn refresh_plugin_dialog_payload(
 async fn build_plugin_dialog_payload(
     session: &crate::session_runtime::SessionHandle,
 ) -> coco_types::PluginDialogPayload {
-    let runtime = session.runtime();
+    let runtime = session;
     let cfg = runtime.current_engine_config().await;
     let project_dir = cfg.workspace_cwd();
     let config_home = runtime.config_home().clone();
@@ -7841,7 +7832,7 @@ async fn run_prompt_mode_bash(
     active_turn: Arc<Mutex<Option<ActiveTurn>>>,
     turn_done_tx: mpsc::Sender<uuid::Uuid>,
 ) {
-    let runtime = session.runtime();
+    let runtime = &session;
     const MAX_OUTPUT_BYTES: usize = 8 * 1024;
     const MAX_OUTPUT_LINES: usize = 200;
 
@@ -7871,7 +7862,7 @@ async fn run_prompt_mode_bash(
         }
     };
 
-    let should_respond = should_prompt_mode_bash_respond(runtime) && !command_failed_to_run;
+    let should_respond = should_prompt_mode_bash_respond(&session) && !command_failed_to_run;
 
     // Push the local command into engine MessageHistory so the chat transcript
     // (TUI + SDK consumers + JSONL) records the bash invocation via the
@@ -7879,7 +7870,7 @@ async fn run_prompt_mode_bash(
     // prepend the carryover "DO NOT respond" caveat so a later model turn does
     // not comment on stale shell output.
     {
-        let mut h = runtime.history.lock().await;
+        let mut h = runtime.history().lock().await;
         let event_tx_opt = Some(event_tx.clone());
         if !should_respond {
             let caveat = coco_messages::create_meta_message(
@@ -7907,15 +7898,15 @@ async fn run_prompt_mode_bash(
 
     if should_respond {
         let messages = {
-            let h = runtime.history.lock().await;
+            let h = runtime.history().lock().await;
             h.to_vec()
         };
         spawn_history_turn(messages, &session, &event_tx, &active_turn, &turn_done_tx).await;
     }
 }
 
-fn should_prompt_mode_bash_respond(runtime: &crate::session_runtime::SessionRuntime) -> bool {
-    runtime
+fn should_prompt_mode_bash_respond(session: &crate::session_runtime::SessionHandle) -> bool {
+    session
         .runtime_config()
         .settings
         .merged
@@ -8075,7 +8066,7 @@ async fn prepare_agent_create(
     description: &str,
     source: coco_types::AgentSource,
 ) -> Result<std::path::PathBuf, CreateAgentError> {
-    let runtime = session.runtime();
+    let runtime = session;
     // Snapshot the catalog ONCE — the colour picker reads it, and
     // the post-write reload supersedes it on its own. Repeated
     // `agent_catalog_snapshot().await` calls add lock churn for no
@@ -8228,7 +8219,7 @@ async fn refresh_agents_dialog(
     session: &crate::session_runtime::SessionHandle,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     let snapshot = runtime.agent_catalog_snapshot().await;
 
     let active_source: std::collections::BTreeMap<String, coco_types::AgentSource> = snapshot
@@ -8268,7 +8259,7 @@ async fn refresh_agents_dialog(
 async fn build_permissions_editor_payload(
     session: &crate::session_runtime::SessionHandle,
 ) -> coco_types::PermissionsEditorPayload {
-    let runtime = session.runtime();
+    let runtime = session;
     use coco_permissions::permissions_store::PermissionStore;
 
     let cwd = runtime.current_engine_config().await.workspace_cwd();
@@ -8826,7 +8817,7 @@ async fn apply_role_through_app_server(
     event_tx: &tokio::sync::mpsc::Sender<CoreEvent>,
     local_app_server_bridge: &coco_cli::sdk_server::AppServerLocalBridge,
 ) {
-    let runtime = session.runtime();
+    let runtime = session;
     let result = match local_app_server_bridge
         .client()
         .set_model_role(
@@ -8896,7 +8887,7 @@ async fn apply_role_through_app_server(
     let messages = coco_messages::build_slash_command_messages(
         "model", /*args*/ "", &output, /*is_sensitive*/ false,
     );
-    let mut h = runtime.history.lock().await;
+    let mut h = runtime.history().lock().await;
     let event_tx_opt = Some(event_tx.clone());
     for msg in messages {
         coco_query::history_sync::history_push_and_emit(&mut h, msg, &event_tx_opt).await;

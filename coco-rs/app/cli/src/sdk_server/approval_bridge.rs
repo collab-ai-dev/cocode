@@ -15,13 +15,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use coco_app_server_transport::JsonRpcFrame;
 use coco_tool_runtime::ToolPermissionBridge;
 use coco_tool_runtime::ToolPermissionDecision;
 use coco_tool_runtime::ToolPermissionRequest;
 use coco_tool_runtime::ToolPermissionResolution;
 use coco_types::ApprovalDecision;
 use coco_types::ApprovalResolveParams;
-use coco_types::JsonRpcMessage;
 use coco_types::ServerAskForApprovalParams;
 use tracing::debug;
 use tracing::warn;
@@ -58,16 +58,13 @@ impl ToolPermissionBridge for SdkPermissionBridge {
         crate::leader_permission::enrich_in_process_worker_badge(&mut request);
 
         // Read the transport handle the dispatcher published at startup.
-        let transport = {
-            let guard = self.state.transport.read().await;
-            match guard.as_ref() {
-                Some(t) => t.clone(),
-                None => {
-                    return Err("SdkPermissionBridge: transport not initialized; \
-                         SdkServer::run_app_server_connection() must be running before the bridge \
-                         is consulted"
-                        .into());
-                }
+        let transport = match self.state.sdk_transport_snapshot().await {
+            Some(t) => t,
+            None => {
+                return Err("SdkPermissionBridge: transport not initialized; \
+                     SdkServer::run_app_server_connection() must be running before the bridge \
+                     is consulted"
+                    .into());
             }
         };
 
@@ -104,7 +101,7 @@ impl ToolPermissionBridge for SdkPermissionBridge {
         // Fire the Notification hook before blocking on the client's reply.
         // Best-effort — a runtime not yet installed (e.g. tests) leaves
         // the hook unfired.
-        if let Some(runtime) = self.state.session_runtime.read().await.clone() {
+        if let Some(runtime) = self.state.session_runtime_snapshot().await {
             let title = format!("Permission request: {}", request.tool_name);
             runtime
                 .fire_notification_hooks(
@@ -124,8 +121,8 @@ impl ToolPermissionBridge for SdkPermissionBridge {
 
         // Interpret the reply — parse the `ApprovalResolveParams` shape.
         match reply {
-            JsonRpcMessage::Response(r) => {
-                let parsed: ApprovalResolveParams = serde_json::from_value(r.result)
+            JsonRpcFrame::Success(success) => {
+                let parsed: ApprovalResolveParams = serde_json::from_value(success.result)
                     .map_err(|e| format!("invalid approval response: {e}"))?;
                 let approved = matches!(parsed.decision, ApprovalDecision::Allow);
                 let decision = if approved {
@@ -141,7 +138,7 @@ impl ToolPermissionBridge for SdkPermissionBridge {
                 // the next build. `applied_updates` echoes it for audit.
                 let applied_updates = match (approved, parsed.permission_update) {
                     (true, Some(update)) => {
-                        match self.state.session_runtime.read().await.clone() {
+                        match self.state.session_runtime_snapshot().await {
                             Some(runtime) => {
                                 runtime
                                     .apply_permission_updates_everywhere(std::slice::from_ref(
@@ -174,7 +171,7 @@ impl ToolPermissionBridge for SdkPermissionBridge {
                     detail: None,
                 })
             }
-            JsonRpcMessage::Error(e) => {
+            JsonRpcFrame::Error(e) => {
                 warn!(
                     request_id = %request.id,
                     code = e.error.code,

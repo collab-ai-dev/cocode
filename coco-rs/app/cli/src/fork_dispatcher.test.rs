@@ -177,7 +177,7 @@ async fn runtime_fallback_cache_params_use_current_transcript() {
     let home = TempDir::new().expect("home tempdir");
     let runtime = build_runtime(&home).await;
     {
-        let mut history = runtime.history.lock().await;
+        let mut history = runtime.history().lock().await;
         history.push(coco_messages::create_user_message("fresh transcript"));
     }
 

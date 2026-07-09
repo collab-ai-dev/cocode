@@ -117,15 +117,14 @@ impl TuiPermissionBridge {
         *self.notification_session.write().await = Some(weak);
     }
 
-    async fn notification_runtime(&self) -> Option<Arc<crate::session_runtime::SessionRuntime>> {
+    async fn notification_session(&self) -> Option<SessionHandle> {
         let owner = self
             .notification_session
             .read()
             .await
             .as_ref()
             .and_then(Weak::upgrade)?;
-        let session = owner.read().await.clone();
-        Some(session.runtime().clone())
+        Some(owner.read().await.clone())
     }
 
     /// Resolve the `Arc<AtomicU32>` counter on
@@ -137,16 +136,16 @@ impl TuiPermissionBridge {
     async fn pending_permission_counter(
         &self,
     ) -> Option<std::sync::Arc<std::sync::atomic::AtomicU32>> {
-        let runtime = self.notification_runtime().await?;
-        let snap = runtime.app_state().read().await;
+        let session = self.notification_session().await?;
+        let snap = session.app_state().read().await;
         Some(snap.pending_permission_count.clone())
     }
 
     async fn show_always_allow_options(&self) -> bool {
-        let Some(runtime) = self.notification_runtime().await else {
+        let Some(session) = self.notification_session().await else {
             return true;
         };
-        settings_allow_always_allow_options(&runtime.runtime_config().settings)
+        settings_allow_always_allow_options(&session.runtime_config().settings)
     }
 
     /// Generate an on-demand LLM risk explanation for a pending permission
@@ -154,14 +153,14 @@ impl TuiPermissionBridge {
     /// [`SessionRuntime::explain_permission_risk`] (the single home for the
     /// explainer call) via the late-bound current-session Weak; returns `None`
     /// when the session owner isn't bound (tests / early bootstrap). The
-    /// interactive Ctrl+E path in `tui_runner` calls the `SessionRuntime` method
+    /// interactive Ctrl+E path in `tui_runner` calls through `SessionHandle`
     /// directly.
     pub async fn explain_risk(
         &self,
         params: coco_permissions::ExplainerParams<'_>,
     ) -> Option<coco_types::PermissionExplanation> {
-        let runtime = self.notification_runtime().await?;
-        runtime.explain_permission_risk(params).await
+        let session = self.notification_session().await?;
+        session.explain_permission_risk(params).await
     }
 }
 
@@ -215,9 +214,9 @@ impl ToolPermissionBridge for TuiPermissionBridge {
         // Fire the Notification hook before the prompt is shown so
         // user-defined notifiers run. Best-effort — no session owner installed
         // (e.g. tests) leaves the hook unfired.
-        if let Some(runtime) = self.notification_runtime().await {
+        if let Some(session) = self.notification_session().await {
             let title = format!("Permission request: {}", request.tool_name);
-            runtime
+            session
                 .fire_notification_hooks(
                     "permission_prompt",
                     "Coco needs your permission to use a tool",

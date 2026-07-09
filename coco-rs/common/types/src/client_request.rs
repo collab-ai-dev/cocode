@@ -155,7 +155,12 @@ pub struct InitializeParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_suggestions: Option<bool>,
     /// Enable agent progress summaries.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "agentProgressSummaries",
+        alias = "agent_progress_summaries",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub agent_progress_summaries: Option<bool>,
 }
 

@@ -20,19 +20,25 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
 
+use super::SessionAgentCatalogResources;
 use super::SessionCatalogResources;
 use super::SessionCommandResources;
 use super::SessionConfigResources;
 use super::SessionEngineConfigResources;
 use super::SessionEngineStateResources;
 use super::SessionExecutionResources;
+use super::SessionHandleResources;
+use super::SessionHistoryResources;
 use super::SessionHookResources;
 use super::SessionIntegrationResources;
 use super::SessionLifecycleResources;
+use super::SessionMemoryResources;
+use super::SessionPermissionResources;
 use super::SessionPersistenceResources;
 use super::SessionProjectResources;
 use super::SessionRuntime;
 use super::SessionRuntimeBuildOpts;
+use super::SessionSandboxResources;
 use super::SessionTitleResources;
 use super::SessionTurnResources;
 use super::SessionWorkspaceResources;
@@ -412,7 +418,10 @@ impl SessionRuntime {
         // resolved shell binary and session-scoped `/env` store across all
         // shell-tool invocations. Bash additionally keeps snapshot watch +
         // session-env reader state.
-        let shell_provider: Option<Arc<dyn coco_shell::ShellProvider>> = match active_shell_tool {
+        let (shell_provider, session_env_vars): (
+            Option<Arc<dyn coco_shell::ShellProvider>>,
+            Option<coco_shell::SessionEnvVars>,
+        ) = match active_shell_tool {
             coco_types::ActiveShellTool::Bash => {
                 let mut shell = coco_shell::shell_from_config(&runtime_config.shell);
                 let snap_cfg = coco_shell::SnapshotConfig::new(&config_home);
@@ -452,12 +461,13 @@ impl SessionRuntime {
                 // value but apply it independently.
                 let shell_prefix = std::env::var("COCO_SHELL_PREFIX").ok();
                 let session_env_vars = coco_shell::SessionEnvVars::new();
-                Some(Arc::new(coco_shell::BashProvider::new(
+                let shell_provider = Arc::new(coco_shell::BashProvider::new(
                     shell,
                     session_env_reader,
-                    session_env_vars,
+                    session_env_vars.clone(),
                     shell_prefix,
-                )) as Arc<dyn coco_shell::ShellProvider>)
+                )) as Arc<dyn coco_shell::ShellProvider>;
+                (Some(shell_provider), Some(session_env_vars))
             }
             coco_types::ActiveShellTool::PowerShell => {
                 let shell = crate::shell_tool_selection::require_shell(
@@ -465,12 +475,13 @@ impl SessionRuntime {
                     "PowerShell tool selected, but neither `pwsh` nor `powershell` was found",
                 )?;
                 let session_env_vars = coco_shell::SessionEnvVars::new();
-                Some(
-                    Arc::new(coco_shell::PowerShellProvider::new(shell, session_env_vars))
-                        as Arc<dyn coco_shell::ShellProvider>,
-                )
+                let shell_provider = Arc::new(coco_shell::PowerShellProvider::new(
+                    shell,
+                    session_env_vars.clone(),
+                )) as Arc<dyn coco_shell::ShellProvider>;
+                (Some(shell_provider), Some(session_env_vars))
             }
-            coco_types::ActiveShellTool::Disabled => None,
+            coco_types::ActiveShellTool::Disabled => (None, None),
         };
 
         // Seed --add-dir + settings additionalDirectories into the session
@@ -703,6 +714,7 @@ impl SessionRuntime {
             file_read_state,
             file_history,
             app_state,
+            session_env_vars,
             loop_sentinel_state,
             Arc::new(coco_tool_runtime::InMemoryPendingMessageStore::new()),
             auto_mode_state,
@@ -718,8 +730,26 @@ impl SessionRuntime {
             Arc::new(std::sync::atomic::AtomicU64::new(0)),
             Arc::new(RwLock::new(None)),
         );
+        let handle_resources = SessionHandleResources::new(swarm_agent_handle);
+        let permission_resources = SessionPermissionResources::new();
+        let agent_catalog_resources = SessionAgentCatalogResources::new(
+            agent_search_paths,
+            builtin_agent_catalog,
+            agent_catalog,
+        );
+        let memory_resources = SessionMemoryResources::new(memory_runtime, skill_review_runtime);
+        let sandbox_resources = SessionSandboxResources::new(sandbox_state);
+        let history_resources = SessionHistoryResources::new(Arc::new(Mutex::new({
+            let mut h = MessageHistory::new();
+            // Stamp F9 envelope onto history so every history_sync
+            // emit carries session_id automatically. agent_id is
+            // None for the main session; subagents stamp their own
+            // via a separate construction site in `engine_session`.
+            h.set_envelope(typed_session_id.clone(), None);
+            h
+        })));
 
-        Ok(Arc::new(Self {
+        let runtime = Self {
             execution,
             catalog_resources,
             config_resources,
@@ -733,41 +763,15 @@ impl SessionRuntime {
             engine_config_resources,
             engine_state_resources,
             integration_resources,
-            sandbox_state,
-            memory_runtime,
-            skill_review_runtime,
-            swarm_agent_handle,
+            handle_resources,
+            permission_resources,
+            agent_catalog_resources,
+            memory_resources,
+            sandbox_resources,
+            history_resources,
             hook_resources,
-            history: Arc::new(Mutex::new({
-                let mut h = MessageHistory::new();
-                // Stamp F9 envelope onto history so every history_sync
-                // emit carries session_id automatically. agent_id is
-                // None for the main session; subagents stamp their own
-                // via a separate construction site in `engine_session`.
-                h.set_envelope(typed_session_id.clone(), None);
-                h
-            })),
-            // Late-bound — `attach_agent_handle()` installs after the
-            // Arc<SessionRuntime> is constructed so the
-            // QueryEngineAdapter factory can close over Arc<Self>.
-            agent_handle: Arc::new(RwLock::new(None)),
-            skill_handle: Arc::new(RwLock::new(None)),
-            skill_bash_cell: Arc::new(std::sync::RwLock::new(None)),
-            fork_dispatcher: Arc::new(RwLock::new(None)),
-            last_engine_cache_handle: Arc::new(RwLock::new(None)),
-            live_permission_rules: Arc::new(RwLock::new(Vec::new())),
-            current_suggestion_abort: Arc::new(tokio::sync::Mutex::new(None)),
-            task_runtime: Arc::new(RwLock::new(None)),
-            task_list: Arc::new(RwLock::new(None)),
-            team_task_list_router: Arc::new(RwLock::new(None)),
-            todo_list: Arc::new(RwLock::new(Arc::new(
-                coco_tool_runtime::InMemoryTodoListHandle::new(),
-            ))),
-            agent_transcript_store: Arc::new(RwLock::new(None)),
-            agent_search_paths: Arc::new(RwLock::new(agent_search_paths)),
-            builtin_agent_catalog,
-            agent_catalog,
-            sdk_supplied_agents: Arc::new(RwLock::new(Vec::new())),
-        }))
+        };
+
+        Ok(Arc::new(runtime))
     }
 }

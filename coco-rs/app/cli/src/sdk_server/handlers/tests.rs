@@ -14,6 +14,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use clap::Parser;
+use coco_app_server_transport::JsonRpcFrame;
 use coco_types::CoreEvent;
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcRequest;
@@ -699,13 +700,13 @@ async fn initialize_prefers_installed_runtime_metadata_over_bootstrap_snapshot()
         "extended built-ins should expose SDK-safe commands"
     );
     *runtime.command_registry_slot().write().await = Arc::new(live_registry);
-    *state.session_runtime.write().await = Some(runtime);
+    state.install_session_runtime(runtime).await;
 
     let stale_bootstrap: Arc<dyn crate::sdk_server::InitializeBootstrap> = Arc::new(
         CliInitializeBootstrap::new("Explanatory".into())
             .with_available_output_styles(vec!["stale-only".into()]),
     );
-    *state.initialize_bootstrap.write().await = Some(stale_bootstrap);
+    state.install_initialize_bootstrap_for_startup(stale_bootstrap);
 
     client
         .send(req(1, "initialize", serde_json::json!({})))
@@ -806,6 +807,49 @@ async fn initialize_fast_mode_state_some_serializes_to_wire() {
 }
 
 #[tokio::test]
+async fn initialize_prefers_installed_runtime_fast_mode_state_over_bootstrap() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    state.install_session_runtime(runtime.clone()).await;
+    state.install_initialize_bootstrap_for_startup(Arc::new(MockFastModeBootstrap {
+        state: coco_types::FastModeState::Cooldown,
+    }));
+
+    client
+        .send(req(1, "initialize", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Response(r) => {
+            assert_eq!(r.result["fast_mode_state"], "off");
+        }
+        other => panic!("expected Response, got {other:?}"),
+    }
+
+    runtime
+        .update_engine_config(|cfg| {
+            cfg.fast_mode = true;
+        })
+        .await;
+    client
+        .send(req(2, "initialize", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Response(r) => {
+            assert_eq!(r.result["fast_mode_state"], "on");
+        }
+        other => panic!("expected Response, got {other:?}"),
+    }
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn initialize_then_session_start_sequence() {
     let (server_task, client) = spawn_server().await;
 
@@ -850,7 +894,7 @@ async fn initialize_plan_mode_instructions_are_session_scoped() {
     let init_reply = client.recv().await.unwrap().unwrap();
     assert!(matches!(init_reply, JsonRpcMessage::Response(_)));
     assert_eq!(
-        state.pending_plan_mode_instructions.read().await.as_deref(),
+        state.pending_plan_mode_instructions().await.as_deref(),
         Some("Use the SDK custom workflow.")
     );
 
@@ -865,6 +909,47 @@ async fn initialize_plan_mode_instructions_are_session_scoped() {
     assert_eq!(
         state.session_plan_mode_instructions(&session).as_deref(),
         Some("Use the SDK custom workflow.")
+    );
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn initialize_agent_progress_summaries_apply_to_started_session() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+
+    client
+        .send(req(
+            1,
+            "initialize",
+            serde_json::json!({
+                "agentProgressSummaries": true
+            }),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.recv().await.unwrap().unwrap(),
+        JsonRpcMessage::Response(_)
+    ));
+
+    client
+        .send(req(2, "session/start", serde_json::json!({})))
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.recv().await.unwrap().unwrap(),
+        JsonRpcMessage::Response(_)
+    ));
+
+    let handoff = active_session_handoff(&state).await;
+    assert!(
+        handoff
+            .app_state
+            .read()
+            .await
+            .agent_progress_summaries_enabled
     );
 
     drop(client);
@@ -1011,7 +1096,7 @@ async fn session_start_with_installed_runtime_requires_replacement_path() {
     let (server_task, client, state) = spawn_server_with_state().await;
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
-    *state.session_runtime.write().await = Some(runtime);
+    state.install_session_runtime(runtime).await;
 
     client
         .send(req(1, "session/start", serde_json::json!({})))
@@ -1123,16 +1208,15 @@ async fn turn_start_returns_turn_id_and_forwards_notifications() {
 async fn turn_start_without_surface_scope_prefers_runtime_scoped_state() {
     let completed = Arc::new(Notify::new());
     let state = Arc::new(SdkServerState::default());
-    {
-        let mut runner = state.turn_runner.write().await;
-        *runner = Arc::new(ScriptedRunner {
+    state
+        .install_turn_runner(Arc::new(ScriptedRunner {
             completed: completed.clone(),
-        });
-    }
+        }))
+        .await;
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
     let runtime_session_id = runtime.current_typed_session_id().await;
-    *state.session_runtime.write().await = Some(runtime);
+    state.install_session_runtime(runtime).await;
     state.set_session_handoff(runtime_session_id.clone(), SessionHandoffState::new());
 
     let (notif_tx, _notif_rx) = mpsc::channel(8);
@@ -1186,12 +1270,12 @@ async fn turn_start_cost_and_status_sentinels_use_appserver_observability_handle
         called: Arc::clone(&runner_called),
     });
     let (server_task, client, state) = spawn_server_with_state().await;
-    *state.turn_runner.write().await = runner;
+    state.install_turn_runner(runner).await;
 
     let session_id = start_session(&client).await;
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
-    *state.session_runtime.write().await = Some(runtime);
+    state.install_session_runtime(runtime).await;
 
     client
         .send(req(
@@ -1254,7 +1338,7 @@ async fn turn_start_rename_sentinel_uses_appserver_session_rename_handler() {
         called: Arc::clone(&runner_called),
     });
     let (server_task, client, state) = spawn_server_with_state().await;
-    *state.turn_runner.write().await = runner;
+    state.install_turn_runner(runner).await;
 
     let session_id = start_session(&client).await;
     let home = tempfile::tempdir().expect("temp home");
@@ -1269,7 +1353,7 @@ async fn turn_start_rename_sentinel_uses_appserver_session_rename_handler() {
         1,
         "please fix the login bug",
     );
-    *state.session_runtime.write().await = Some(runtime.clone());
+    state.install_session_runtime(runtime.clone()).await;
 
     client
         .send(req(
@@ -1313,7 +1397,7 @@ async fn turn_start_memory_sentinels_do_not_invoke_runner_when_memory_runtime_ab
         called: Arc::clone(&runner_called),
     });
     let (server_task, client, state) = spawn_server_with_state().await;
-    *state.turn_runner.write().await = runner;
+    state.install_turn_runner(runner).await;
 
     let session_id = start_session(&client).await;
 
@@ -1418,7 +1502,7 @@ async fn turn_start_btw_sentinel_uses_handler_shortcut_without_runner() {
         called: Arc::clone(&runner_called),
     });
     let (server_task, client, state) = spawn_server_with_state().await;
-    *state.turn_runner.write().await = runner;
+    state.install_turn_runner(runner).await;
 
     let session_id = start_session(&client).await;
     let question = "what changed?";
@@ -1502,12 +1586,12 @@ async fn turn_start_compact_sentinel_uses_handler_shortcut_without_runner() {
         called: Arc::clone(&runner_called),
     });
     let (server_task, client, state) = spawn_server_with_state().await;
-    *state.turn_runner.write().await = runner;
+    state.install_turn_runner(runner).await;
 
     let session_id = start_session(&client).await;
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
-    *state.session_runtime.write().await = Some(runtime.clone());
+    state.install_session_runtime(runtime.clone()).await;
     let prompt = coco_commands::handlers::compact::handler("focus auth".to_string())
         .await
         .expect("compact handler output");
@@ -1572,7 +1656,7 @@ async fn turn_start_compact_sentinel_uses_handler_shortcut_without_runner() {
     assert!(!echo.contains(coco_commands::handlers::compact::COMPACT_SENTINEL));
     assert!(!result.contains(coco_commands::handlers::compact::COMPACT_SENTINEL));
 
-    let runtime_history = runtime.history.lock().await;
+    let runtime_history = runtime.history().lock().await;
     assert_eq!(runtime_history.len(), 2);
 
     drop(runtime_history);
@@ -1588,12 +1672,12 @@ async fn turn_start_goal_status_and_clear_sentinels_use_handler_shortcut_without
         called: Arc::clone(&runner_called),
     });
     let (server_task, client, state) = spawn_server_with_state().await;
-    *state.turn_runner.write().await = runner;
+    state.install_turn_runner(runner).await;
 
     let session_id = start_session(&client).await;
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
-    *state.session_runtime.write().await = Some(runtime.clone());
+    state.install_session_runtime(runtime.clone()).await;
 
     client
         .send(req(
@@ -1692,12 +1776,12 @@ async fn turn_start_goal_set_sentinel_rewrites_prompt_before_runner() {
         completed: Arc::clone(&completed),
     });
     let (server_task, client, state) = spawn_server_with_state().await;
-    *state.turn_runner.write().await = runner;
+    state.install_turn_runner(runner).await;
 
     let session_id = start_session(&client).await;
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
-    *state.session_runtime.write().await = Some(runtime);
+    state.install_session_runtime(runtime).await;
 
     client
         .send(req(
@@ -2205,7 +2289,7 @@ async fn set_model_updates_runtime_engine_config() {
     start_session(&client).await;
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
-    *state.session_runtime.write().await = Some(runtime.clone());
+    state.install_session_runtime(runtime.clone()).await;
 
     client
         .send(req(
@@ -2354,7 +2438,7 @@ async fn set_permission_mode_updates_runtime_without_keyed_session_state() {
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
     let runtime_session_id = runtime.current_typed_session_id().await;
-    *state.session_runtime.write().await = Some(runtime.clone());
+    state.install_session_runtime(runtime.clone()).await;
     let (notif_tx, _notif_rx) = mpsc::channel(4);
     let ctx = super::HandlerContext {
         notif_tx,
@@ -2394,11 +2478,7 @@ async fn set_permission_mode_rejects_bypass_without_capability() {
 
     // Startup capability defaults to `false` — spawn_server_with_state
     // does not set it, matching a session launched without the flags.
-    assert!(
-        !state
-            .bypass_permissions_available
-            .load(std::sync::atomic::Ordering::Relaxed)
-    );
+    assert!(!state.bypass_permissions_available());
 
     start_session(&client).await;
 
@@ -2455,9 +2535,7 @@ async fn set_permission_mode_allows_bypass_when_capability_on() {
     // guard keys on the runtime AtomicBool, not on the request
     // payload.
     let (server_task, client, state) = spawn_server_with_state().await;
-    state
-        .bypass_permissions_available
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    state.set_bypass_permissions_available(true);
 
     start_session(&client).await;
 
@@ -2629,7 +2707,7 @@ async fn set_thinking_updates_runtime_and_emits_role_changed() {
     start_session(&client).await;
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
-    *state.session_runtime.write().await = Some(runtime.clone());
+    state.install_session_runtime(runtime.clone()).await;
 
     client
         .send(req(
@@ -2682,7 +2760,7 @@ async fn set_thinking_updates_runtime_without_keyed_session_state() {
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
     let runtime_session_id = runtime.current_typed_session_id().await;
-    *state.session_runtime.write().await = Some(runtime.clone());
+    state.install_session_runtime(runtime.clone()).await;
     let (notif_tx, _notif_rx) = mpsc::channel(4);
     let ctx = super::HandlerContext {
         notif_tx,
@@ -2785,7 +2863,7 @@ async fn set_agent_color_updates_live_app_state() {
 
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
-    *state.session_runtime.write().await = Some(runtime.clone());
+    state.install_session_runtime(runtime.clone()).await;
 
     client
         .send(req(
@@ -2877,7 +2955,7 @@ async fn reset_session_permission_rules_clears_live_session_allow_and_deny_rules
             .deny_rules
             .insert(coco_types::PermissionRuleSource::Session, vec![deny_rule]);
     }
-    *state.session_runtime.write().await = Some(runtime.clone());
+    state.install_session_runtime(runtime.clone()).await;
 
     client
         .send(req(
@@ -2980,7 +3058,7 @@ async fn stop_task_uses_installed_task_runtime() {
         )
         .await;
     runtime.attach_task_runtime(Arc::clone(&task_runtime)).await;
-    *state.session_runtime.write().await = Some(runtime);
+    state.install_session_runtime(runtime).await;
 
     client
         .send(req(
@@ -3007,12 +3085,12 @@ async fn stop_task_with_runtime_but_no_task_runtime_does_not_cancel_active_turn(
         started: started.clone(),
     });
     let (server_task, client, state) = spawn_server_with_state().await;
-    *state.turn_runner.write().await = runner;
+    state.install_turn_runner(runner).await;
 
     start_session(&client).await;
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
-    *state.session_runtime.write().await = Some(runtime);
+    state.install_session_runtime(runtime).await;
 
     client
         .send(req(2, "turn/start", serde_json::json!({ "prompt": "hi" })))
@@ -3097,12 +3175,16 @@ async fn update_env_accepts_active_session_without_slot_storage() {
 }
 
 #[tokio::test]
-async fn update_env_accepts_runtime_without_keyed_session_state() {
+async fn update_env_applies_to_runtime_session_env_store() {
     let state = Arc::new(SdkServerState::default());
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
     let runtime_session_id = runtime.current_typed_session_id().await;
-    *state.session_runtime.write().await = Some(runtime);
+    runtime.apply_session_env_updates(std::collections::HashMap::from([
+        ("BAR".to_string(), "old".to_string()),
+        ("KEEP".to_string(), "1".to_string()),
+    ]));
+    state.install_session_runtime(runtime.clone()).await;
     let (notif_tx, _notif_rx) = mpsc::channel(4);
     let ctx = super::HandlerContext {
         notif_tx,
@@ -3125,6 +3207,15 @@ async fn update_env_accepts_runtime_without_keyed_session_state() {
     assert_eq!(
         state.runtime_or_active_session_id().await,
         Some(runtime_session_id)
+    );
+    let snapshot = runtime
+        .session_env_snapshot()
+        .expect("test runtime should install a shell env store");
+    assert_eq!(snapshot.get("FOO").map(String::as_str), Some("1"));
+    assert_eq!(snapshot.get("KEEP").map(String::as_str), Some("1"));
+    assert!(
+        !snapshot.contains_key("BAR"),
+        "empty update value should unset the variable"
     );
 }
 
@@ -3513,13 +3604,13 @@ async fn send_server_request_roundtrips_success() {
 
     let reply = send_task.await.unwrap().expect("server request succeeded");
     match reply {
-        JsonRpcMessage::Response(r) => {
-            assert_eq!(r.result["decision"], "allow");
+        JsonRpcFrame::Success(success) => {
+            assert_eq!(success.result["decision"], "allow");
         }
-        other => panic!("expected Response, got {other:?}"),
+        other => panic!("expected Success, got {other:?}"),
     }
 
-    assert!(state.pending_server_requests.lock().await.is_empty());
+    assert!(state.pending_server_requests_is_empty().await);
 
     drop(client_end);
     server_task.await.unwrap();
@@ -3565,11 +3656,11 @@ async fn send_server_request_returns_error_on_error_reply() {
 
     let reply = send_task.await.unwrap().expect("send returned");
     match reply {
-        JsonRpcMessage::Error(e) => {
+        JsonRpcFrame::Error(e) => {
             assert_eq!(e.error.code, error_codes::INTERNAL_ERROR);
             assert!(e.error.message.contains("client says no"));
         }
-        other => panic!("expected Error, got {other:?}"),
+        other => panic!("expected Error frame, got {other:?}"),
     }
 
     drop(client_end);
@@ -3628,8 +3719,8 @@ async fn send_server_request_unique_ids() {
 
     let reply_a = a.await.unwrap().unwrap();
     let reply_b = b.await.unwrap().unwrap();
-    assert!(matches!(reply_a, JsonRpcMessage::Response(_)));
-    assert!(matches!(reply_b, JsonRpcMessage::Response(_)));
+    assert!(matches!(reply_a, JsonRpcFrame::Success(_)));
+    assert!(matches!(reply_b, JsonRpcFrame::Success(_)));
 
     drop(client_end);
     server_task.await.unwrap();
@@ -3649,7 +3740,7 @@ fn session_stats_default_is_zero() {
 
 // ----- Phase 2.C.10: multi-turn context persistence -------------------
 
-/// Runner that observes `session.history.len()` before mutating, then
+/// Runner that observes `session.history().len()` before mutating, then
 /// appends two synthetic messages (a user + an assistant). If history
 /// is correctly threaded across turn/start calls, successive runs will
 /// observe monotonically growing lengths.
@@ -4152,7 +4243,7 @@ async fn send_server_request_cleans_up_pending_on_receiver_drop() {
     // Regression test for Fix #L: if the caller wraps
     // `send_server_request` in a `tokio::select!` and the cancel
     // branch fires before a reply arrives, the pending_server_requests
-    // entry must be removed by the PendingRequestGuard. Without the
+    // entry must be removed by the PendingServerRequestGuard. Without the
     // guard, the entry would leak in the map until state drop.
     let (server_end, client_end) = InMemoryTransport::pair(32);
     let server = SdkServer::new(server_end).with_startup_cwd(test_startup_cwd());
@@ -4182,8 +4273,11 @@ async fn send_server_request_cleans_up_pending_on_receiver_drop() {
 
     // Verify the entry exists.
     {
-        let map = state.pending_server_requests.lock().await;
-        assert_eq!(map.len(), 1, "expected one pending entry before cancel");
+        assert_eq!(
+            state.pending_server_request_count().await,
+            1,
+            "expected one pending entry before cancel"
+        );
     }
 
     // Cancel the send (simulate the outer select!'s cancel branch).
@@ -4194,10 +4288,9 @@ async fn send_server_request_cleans_up_pending_on_receiver_drop() {
     // Drop guard should have removed the entry.
     tokio::time::sleep(Duration::from_millis(20)).await;
     {
-        let map = state.pending_server_requests.lock().await;
         assert!(
-            map.is_empty(),
-            "PendingRequestGuard must clean up the pending entry on cancel"
+            state.pending_server_requests_is_empty().await,
+            "PendingServerRequestGuard must clean up the pending entry on cancel"
         );
     }
 
@@ -4340,7 +4433,7 @@ async fn session_list_returns_persisted_sessions() {
     // assert that this write changes list ordering: filesystem mtime
     // granularity varies, so the title append may share a timestamp
     // bucket with the newer seed on fast test machines.
-    let manager = state.session_manager.read().await.clone().unwrap();
+    let manager = state.session_manager_snapshot().await.unwrap();
     manager.set_title("pre-existing-a", "first").unwrap();
 
     client
@@ -4417,7 +4510,7 @@ async fn workspace_cwd_prefers_runtime_live_cwd_over_keyed_session_state() {
         let mut cwd = runtime.current_cwd().write().await;
         *cwd = live_cwd.clone();
     }
-    *state.session_runtime.write().await = Some(runtime);
+    state.install_session_runtime(runtime).await;
 
     let cwd = match state.workspace_cwd().await {
         Ok(cwd) => cwd,
@@ -4478,7 +4571,7 @@ async fn session_start_returns_session_id_without_eager_persist() {
 
     // Nothing on disk yet — `load` walks the JSONL tree and finds
     // no transcript for this id.
-    let manager = state.session_manager.read().await.clone().unwrap();
+    let manager = state.session_manager_snapshot().await.unwrap();
     assert!(
         manager.load(&session_id).is_err(),
         "session/start must not eagerly create a transcript",
@@ -4500,7 +4593,7 @@ async fn session_read_returns_metadata_for_persisted_session() {
         "/tmp/read",
         Some("claude-opus-4-6"),
     );
-    let manager = state.session_manager.read().await.clone().unwrap();
+    let manager = state.session_manager_snapshot().await.unwrap();
     manager.set_title("read-test", "my session").unwrap();
 
     client
@@ -4752,7 +4845,7 @@ async fn session_resume_same_runtime_id_hydrates_without_state_reset() {
     runtime
         .seed_todo_list_snapshot(session_id.to_string(), vec![todo.clone()])
         .await;
-    *state.session_runtime.write().await = Some(runtime.clone());
+    state.install_session_runtime(runtime.clone()).await;
 
     client
         .send(req(
@@ -4794,7 +4887,7 @@ async fn session_resume_different_runtime_id_requires_replacement_path() {
         Some(test_session_id("installed-runtime")),
     )
     .await;
-    *state.session_runtime.write().await = Some(runtime);
+    state.install_session_runtime(runtime).await;
 
     client
         .send(req(
@@ -4875,7 +4968,7 @@ async fn session_archive_deletes_persisted_session() {
         Some("claude-opus-4-6"),
     );
 
-    let manager = state.session_manager.read().await.clone().unwrap();
+    let manager = state.session_manager_snapshot().await.unwrap();
     assert!(manager.load(&session_id).is_ok());
 
     client
@@ -5266,7 +5359,7 @@ async fn config_write_then_read_roundtrip() {
     server_task.await.unwrap();
 }
 
-// ----- Phase 2.C.13: batched stubs + observability -------------------
+// ----- Phase 2.C.13: batched runtime handlers + observability --------
 
 #[tokio::test]
 async fn mcp_status_returns_empty_list_when_no_manager_wired() {
@@ -5371,7 +5464,7 @@ async fn config_apply_flags_updates_runtime_fast_mode() {
     start_session(&client).await;
     let home = tempfile::tempdir().expect("temp home");
     let runtime = build_sdk_test_runtime(home.path()).await;
-    *state.session_runtime.write().await = Some(runtime.clone());
+    state.install_session_runtime(runtime.clone()).await;
 
     client
         .send(req(
@@ -5435,6 +5528,27 @@ async fn context_usage_errors_without_active_session() {
 
     drop(client);
     server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn context_usage_uses_installed_runtime_without_sdk_handoff_state() {
+    let state = Arc::new(SdkServerState::default());
+    let home = tempfile::tempdir().expect("temp home");
+    let runtime = build_sdk_test_runtime(home.path()).await;
+    state.install_session_runtime(runtime).await;
+    let (notif_tx, _notif_rx) = mpsc::channel(4);
+    let ctx = super::HandlerContext {
+        notif_tx,
+        state,
+        scoped_session_id: None,
+    };
+
+    let result = super::runtime::handle_context_usage(&ctx).await;
+
+    assert!(
+        matches!(result, super::HandlerResult::Ok(_)),
+        "installed runtime should be sufficient for context/usage"
+    );
 }
 
 #[tokio::test]
@@ -5720,7 +5834,7 @@ async fn mcp_set_servers_registers_stdio_config() {
     }
 
     // Verify the manager has the server registered.
-    let manager = state.mcp_manager.read().await.clone().unwrap();
+    let manager = state.mcp_manager_snapshot().await.unwrap();
     let manager = manager.lock().await;
     let names = manager.registered_server_names();
     assert!(names.contains(&"github".to_string()));

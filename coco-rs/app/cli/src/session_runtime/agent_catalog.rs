@@ -16,14 +16,23 @@ impl SessionRuntime {
     /// Uses the `RwLock<Arc<...>>` pattern to make `reload_agent_catalog`
     /// an atomic swap with no observer drift.
     pub async fn agent_catalog_snapshot(&self) -> Arc<coco_subagent::AgentCatalogSnapshot> {
-        self.agent_catalog.read().await.clone()
+        self.agent_catalog_resources
+            .agent_catalog
+            .read()
+            .await
+            .clone()
     }
 
     /// Triggered by `/agents reload`, `/reload-plugins`, and the
     /// future agent-dir file watcher.
     pub async fn reload_agent_catalog(&self) {
-        let catalog = self.builtin_agent_catalog;
-        let paths = self.agent_search_paths.read().await.clone();
+        let catalog = self.agent_catalog_resources.builtin_agent_catalog;
+        let paths = self
+            .agent_catalog_resources
+            .agent_search_paths
+            .read()
+            .await
+            .clone();
         let cwd = self.current_cwd().read().await.clone();
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
         let auto_memory_enabled = self.runtime_config().memory_activation.active;
@@ -33,7 +42,12 @@ impl SessionRuntime {
         // The Vec lives across `session/start` → `session/archive`
         // cycles so a single SDK connection's `initialize` payload
         // survives the whole connection lifetime.
-        let sdk_agents = self.sdk_supplied_agents.read().await.clone();
+        let sdk_agents = self
+            .agent_catalog_resources
+            .sdk_supplied_agents
+            .read()
+            .await
+            .clone();
         let snapshot = tokio::task::spawn_blocking(move || {
             let mut store = coco_subagent::AgentDefinitionStore::new(catalog, paths);
             store.set_snapshot_inspector(Some(
@@ -55,7 +69,7 @@ impl SessionRuntime {
         .await
         .ok();
         if let Some(snapshot) = snapshot {
-            *self.agent_catalog.write().await = snapshot;
+            *self.agent_catalog_resources.agent_catalog.write().await = snapshot;
         }
     }
 
@@ -68,7 +82,11 @@ impl SessionRuntime {
     pub async fn set_sdk_supplied_agents(&self, agents: Vec<coco_types::AgentDefinition>) {
         let count = agents.len();
         {
-            let mut slot = self.sdk_supplied_agents.write().await;
+            let mut slot = self
+                .agent_catalog_resources
+                .sdk_supplied_agents
+                .write()
+                .await;
             *slot = agents;
         }
         self.reload_agent_catalog().await;
@@ -84,7 +102,11 @@ impl SessionRuntime {
     /// reload swaps the inner `Arc` but doesn't invalidate handles
     /// previously taken.
     pub async fn current_agent_catalog(&self) -> Arc<coco_subagent::AgentCatalogSnapshot> {
-        self.agent_catalog.read().await.clone()
+        self.agent_catalog_resources
+            .agent_catalog
+            .read()
+            .await
+            .clone()
     }
 
     /// The live catalog handle (shared `Arc<RwLock<..>>`), for consumers that
@@ -93,6 +115,6 @@ impl SessionRuntime {
     pub fn agent_catalog_handle(
         &self,
     ) -> Arc<tokio::sync::RwLock<Arc<coco_subagent::AgentCatalogSnapshot>>> {
-        self.agent_catalog.clone()
+        self.agent_catalog_resources.agent_catalog.clone()
     }
 }

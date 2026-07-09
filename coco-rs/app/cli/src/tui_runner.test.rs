@@ -812,7 +812,7 @@ async fn idle_queue_processor_starts_pending_prompt_turn() {
         .expect("queued follow-up turn should finish")
         .expect("turn_done channel should stay open");
     assert!(drain_completed_turn(&active_turn, completed_turn).await);
-    let history = runtime.runtime().history.lock().await;
+    let history = runtime.runtime().history().lock().await;
     assert_eq!(
         history.last_assistant_text().as_deref(),
         Some("queued turn complete"),
@@ -874,7 +874,7 @@ async fn local_app_server_turn_writes_back_runtime_history() {
         .expect("local AppServer turn completes");
 
     assert_eq!(completion.ended.turn_id, completion.started.turn_id);
-    let history = runtime.runtime().history.lock().await;
+    let history = runtime.runtime().history().lock().await;
     assert_eq!(
         history.last_assistant_text().as_deref(),
         Some("queued turn complete")
@@ -915,7 +915,7 @@ async fn manual_compact_uses_local_app_server_turn_shortcut() {
         .expect("manual compact turn should finish")
         .expect("turn_done channel should stay open");
     assert!(drain_completed_turn(&active_turn, completed_turn).await);
-    let history = runtime.runtime().history.lock().await;
+    let history = runtime.runtime().history().lock().await;
     assert_eq!(history.len(), 2);
     let messages = history.as_slice();
     let echo = coco_messages::wrapping::extract_text_from_message(&messages[0]);
@@ -1035,7 +1035,7 @@ async fn memory_shortcuts_use_local_app_server_turn_shortcuts() {
     assert!(drain_completed_turn(&active_turn, completed_turn).await);
 
     assert!(
-        runtime.runtime().history.lock().await.is_empty(),
+        runtime.runtime().history().lock().await.is_empty(),
         "memory shortcut no-op path should not append sentinel text"
     );
 }
@@ -1116,7 +1116,7 @@ async fn local_app_server_bridge_reads_live_runtime_handle_history() {
         .await;
 
     {
-        let mut history = runtime.runtime().history.lock().await;
+        let mut history = runtime.runtime().history().lock().await;
         history.push(coco_messages::create_user_message("live runtime only"));
     }
 

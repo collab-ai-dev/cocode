@@ -979,10 +979,7 @@ async fn run_sdk_mode(
         .with_initialize_bootstrap(bootstrap)
         .with_external_notifications(plugin_notif_rx);
     let state = server.state();
-    state.bypass_permissions_available.store(
-        bypass_permissions_available,
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    state.set_bypass_permissions_available(bypass_permissions_available);
 
     let bridge: Arc<dyn coco_tool_runtime::ToolPermissionBridge> = Arc::new(
         coco_cli::sdk_server::SdkPermissionBridge::new(state.clone()),
@@ -1055,21 +1052,17 @@ async fn run_sdk_mode(
             loaded_handle.session_id()
         )
     })?;
-    let session_runtime = session_handle.runtime().clone();
     let mcp_manager = Arc::new(tokio::sync::Mutex::new(
         coco_mcp::McpConnectionManager::new_with_runtime_config(
             global_config::config_home(),
-            &session_runtime.runtime_config().mcp,
+            &session_handle.runtime_config().mcp,
         ),
     ));
-    {
-        let mut slot = state.mcp_manager.write().await;
-        *slot = Some(mcp_manager.clone());
-    }
+    state.install_mcp_manager(mcp_manager.clone()).await;
     let sdk_event_hub_connector = {
-        let session_id = session_runtime.current_typed_session_id().await;
+        let session_id = session_handle.current_typed_session_id().await;
         coco_cli::event_hub::RuntimeEventHubConnector::spawn_for_session(
-            session_runtime.runtime_config(),
+            session_handle.runtime_config(),
             session_id,
             &cwd,
         )
@@ -1081,10 +1074,10 @@ async fn run_sdk_mode(
     let requires_structured_output =
         coco_cli::headless::inject_structured_output_tool_if_requested(
             cli,
-            session_runtime.tools(),
+            session_handle.tools(),
         )?;
     if requires_structured_output {
-        session_runtime
+        session_handle
             .update_engine_config(|cfg| cfg.requires_structured_output = true)
             .await;
     }
@@ -1093,9 +1086,9 @@ async fn run_sdk_mode(
     // persistence, agent-team wiring, fork dispatcher.
     let lsp_handle = coco_cli::session_bootstrap::build_lsp_handle_if_enabled(
         process_runtime.clone(),
-        session_runtime.runtime_config(),
+        session_handle.runtime_config(),
         &global_config::config_home(),
-        session_runtime.project_root(),
+        session_handle.project_root(),
     )
     .await;
     install_session_late_binds(session_handle.clone(), &cwd, None, lsp_handle, None).await?;
@@ -1123,33 +1116,32 @@ async fn run_sdk_mode(
     // SessionStart hooks fire once at session bootstrap; output queues
     // onto the shared sync-hook buffer and surfaces as `hook_*` reminders
     // on the first turn's reminder pass.
-    session_runtime.fire_session_start_hooks("startup").await;
+    session_handle.fire_session_start_hooks("startup").await;
 
     // Setup hooks fire at every interactive bootstrap to give project
     // setup hooks a chance to refresh state (env files, build artefacts,
     // …). The 'init' trigger is reserved for the explicit `coco init`
     // flow. Failure is logged + tolerated.
-    session_runtime
+    session_handle
         .fire_setup_hooks(coco_hooks::orchestration::SetupTrigger::Maintenance)
         .await;
 
     coco_cli::sdk_server::install_sdk_session_runtime_state(state.clone(), session_handle.clone())
         .await;
 
-    let file_history_for_server = session_runtime.file_history().cloned().unwrap_or_else(|| {
+    let file_history_for_server = session_handle.file_history().cloned().unwrap_or_else(|| {
         Arc::new(tokio::sync::RwLock::new(
             coco_context::FileHistoryState::new(),
         ))
     });
-    {
-        let mut replacement = state.runtime_replacement.write().await;
-        *replacement = Some(coco_cli::sdk_server::RuntimeReplacementContext {
+    state
+        .install_runtime_replacement(coco_cli::sdk_server::RuntimeReplacementContext {
             runtime_factory: runtime_replacement_factory,
             process_runtime: process_runtime.clone(),
             cwd: cwd.clone(),
             requires_structured_output,
-        });
-    }
+        })
+        .await;
     let server = server.with_file_history(file_history_for_server, global_config::config_home());
     let server = if let Some(connector) = &sdk_event_hub_connector {
         server.with_hub_connector_sender(connector.sender())
@@ -1216,8 +1208,8 @@ async fn run_sdk_mode(
     // we exit so partial writes aren't dropped on process shutdown. Done
     // after the SDK AppServer bridge exits so the dispatch loop has
     // already stopped accepting new turns.
-    let session_runtime_guard = state.session_runtime.read().await;
-    if let Some(session_runtime) = session_runtime_guard.as_ref() {
+    let session_runtime = state.session_runtime_snapshot().await;
+    if let Some(session_runtime) = session_runtime.as_ref() {
         // Persist coordinator mode at exit so a later `--resume` re-derives the
         // role (R2). The SDK leader path previously never wrote it, silently
         // dropping the coordinator role on resume.
@@ -1228,14 +1220,13 @@ async fn run_sdk_mode(
             &session_runtime.runtime_config().features,
         );
     }
-    if let Some(session_runtime) = session_runtime_guard.as_ref()
+    if let Some(session_runtime) = session_runtime.as_ref()
         && let Some(memory_runtime) = session_runtime.memory_runtime()
     {
         let _ = memory_runtime
             .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
             .await;
     }
-    drop(session_runtime_guard);
 
     if let Some(connector) = sdk_event_hub_connector {
         connector.shutdown_and_flush().await;

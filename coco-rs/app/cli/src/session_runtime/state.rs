@@ -21,68 +21,10 @@ use super::hooks::async_rewake_sink;
 use super::resolve_model_selection_from_runtime_config;
 use super::write_std_rwlock;
 
-/// `FileHistorySnapshotSink` that writes via [`coco_session::TranscriptStore`].
-/// Lives here because both runners need to install it on `FileHistoryState`.
-/// **Deliberately bypasses the `SessionStore` backend trait** and constructs a
-/// concrete disk store directly: file-history checkpoints are a low-frequency,
-/// local-only convenience (rewind / disk backup), not authoritative session
-/// state - they are not needed to recover a conversation and are explicitly
-/// declared local-cache (`docs/coco-rs/session-storage-backend-design.md`
-/// §3.4). So even under a non-`Disk` `session.backend` they stay on disk;
-/// there's nothing to gain from routing them through the swappable boundary.
-/// Reads the current session id from the synchronized engine-config mirror so
-/// file-history does not need a separate mutable identity mirror.
-pub(super) struct TranscriptFileHistorySink {
-    store: coco_session::TranscriptStore,
-    engine_config: Arc<std::sync::RwLock<QueryEngineConfig>>,
-}
+mod file_history;
 
-impl TranscriptFileHistorySink {
-    pub(super) fn new(
-        project_paths: Arc<coco_paths::ProjectPaths>,
-        engine_config: Arc<std::sync::RwLock<QueryEngineConfig>>,
-    ) -> Self {
-        Self {
-            store: coco_session::TranscriptStore::new(project_paths),
-            engine_config,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl coco_context::FileHistorySnapshotSink for TranscriptFileHistorySink {
-    async fn record(
-        &self,
-        message_id: &str,
-        snapshot_json: serde_json::Value,
-        is_snapshot_update: bool,
-    ) {
-        let id = clone_std_rwlock(&self.engine_config).session_id.to_string();
-        if let Err(e) = self.store.insert_file_history_snapshot(
-            &id,
-            message_id,
-            snapshot_json,
-            is_snapshot_update,
-        ) {
-            warn!(error = %e, message_id, "failed to persist file-history snapshot");
-        }
-    }
-}
-
-/// File-history checkpointing gate. Interactive sessions default ON
-/// (settings flag, unless the disable env is set); non-interactive
-/// (SDK / headless) default OFF and require the SDK-enable env. The
-/// disable env always wins.
-pub(super) fn file_checkpointing_enabled(settings_enabled: bool, is_non_interactive: bool) -> bool {
-    if coco_config::env::is_env_truthy(coco_config::EnvKey::CocoFileCheckpointingDisable) {
-        return false;
-    }
-    if is_non_interactive {
-        coco_config::env::is_env_truthy(coco_config::EnvKey::CocoFileCheckpointingSdkEnable)
-    } else {
-        settings_enabled
-    }
-}
+pub(super) use file_history::TranscriptFileHistorySink;
+pub(super) use file_history::file_checkpointing_enabled;
 
 impl SessionRuntime {
     /// Session-scoped attachment emitter for producers outside the
@@ -108,7 +50,12 @@ impl SessionRuntime {
     /// (fork dispatch, SDK handler) inherit the same instance so
     /// `SandboxState::update_config` hot-reloads propagate everywhere.
     pub fn sandbox_state(&self) -> Option<Arc<coco_sandbox::SandboxState>> {
-        self.sandbox_state.clone()
+        self.sandbox_resources.sandbox_state.clone()
+    }
+
+    /// Shared multi-turn transcript for this runtime.
+    pub fn history(&self) -> &Arc<Mutex<coco_messages::MessageHistory>> {
+        self.history_resources.history()
     }
 
     /// Install the MCP handle that every per-turn engine receives via
@@ -122,6 +69,16 @@ impl SessionRuntime {
     /// Snapshot the installed MCP handle. `None` => no handle wired.
     pub async fn current_mcp_handle(&self) -> Option<coco_tool_runtime::McpHandleRef> {
         self.integration_resources.mcp_handle().read().await.clone()
+    }
+
+    pub(super) async fn current_mcp_manager(
+        &self,
+    ) -> Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>> {
+        self.integration_resources
+            .mcp_manager()
+            .read()
+            .await
+            .clone()
     }
 
     /// Install the live `McpConnectionManager` so reload paths can re-register
@@ -140,7 +97,13 @@ impl SessionRuntime {
     pub fn mcp_reconnect_key(&self) -> u64 {
         self.integration_resources
             .mcp_reconnect_key()
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(Ordering::Relaxed)
+    }
+
+    pub(super) fn bump_mcp_reconnect_key(&self) {
+        self.integration_resources
+            .mcp_reconnect_key()
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Install or replace the late-bound LSP handle. Same semantics as
@@ -226,6 +189,44 @@ impl SessionRuntime {
 
     pub fn app_state(&self) -> &Arc<RwLock<coco_types::ToolAppState>> {
         self.engine_state_resources.app_state()
+    }
+
+    /// Apply SDK `/env` updates to the session-scoped shell environment.
+    ///
+    /// Empty values mean "unset", matching the historical SDK
+    /// `control/updateEnv` convention. When shell tools are disabled there is
+    /// no consumer, but we still count the accepted update for telemetry and
+    /// protocol compatibility.
+    pub fn apply_session_env_updates(
+        &self,
+        env: std::collections::HashMap<String, String>,
+    ) -> (i32, i32) {
+        let mut applied = 0_i32;
+        let mut cleared = 0_i32;
+        let session_env_vars = self.engine_state_resources.session_env_vars();
+
+        for (key, value) in env {
+            if value.is_empty() {
+                if let Some(store) = session_env_vars {
+                    store.delete(&key);
+                }
+                cleared += 1;
+            } else {
+                if let Some(store) = session_env_vars {
+                    store.set(key, value);
+                }
+                applied += 1;
+            }
+        }
+
+        (applied, cleared)
+    }
+
+    #[cfg(test)]
+    pub fn session_env_snapshot(&self) -> Option<std::collections::HashMap<String, String>> {
+        self.engine_state_resources
+            .session_env_vars()
+            .map(coco_shell::SessionEnvVars::snapshot)
     }
 
     pub fn loop_sentinel_state(
@@ -355,7 +356,7 @@ impl SessionRuntime {
             .collect();
         let messages_removed = (pre_count - idx as i32).max(0);
         {
-            let mut history = self.history.lock().await;
+            let mut history = self.history_resources.history().lock().await;
             let replacement = kept.iter().cloned().map(Arc::new).collect();
             let no_event_tx = None;
             coco_query::history_sync::history_replace_and_emit(
@@ -515,7 +516,7 @@ impl SessionRuntime {
     /// `Feature::AutoMemory` is off. Callers (e.g. the slash dispatcher's
     /// `/dream` and `/summary` triggers) clone the inner `Arc`.
     pub fn memory_runtime(&self) -> Option<&Arc<coco_memory::MemoryRuntime>> {
-        self.memory_runtime.as_ref()
+        self.memory_resources.memory_runtime.as_ref()
     }
 
     /// The production swarm `AgentHandle` once `attach_agent_handle` has
@@ -523,7 +524,7 @@ impl SessionRuntime {
     /// `None` before attach / in non-swarm sessions. Used by the leader
     /// inbox poller to resolve the active team via `active_team_name`.
     pub async fn current_agent_handle(&self) -> Option<AgentHandleRef> {
-        self.agent_handle.read().await.clone()
+        self.handle_resources.agent_handle.read().await.clone()
     }
 
     /// Public accessor for the hook registry. Same `Arc` as the one
@@ -645,7 +646,7 @@ impl SessionRuntime {
     }
 
     pub async fn seed_todo_list_snapshot(&self, key: String, items: Vec<coco_types::TodoRecord>) {
-        let handle = self.todo_list.read().await.clone();
+        let handle = self.handle_resources.todo_list.read().await.clone();
         handle.write(&key, items.clone()).await;
         let mut app_state = self.engine_state_resources.app_state().write().await;
         if items.is_empty() {
@@ -656,6 +657,6 @@ impl SessionRuntime {
     }
 
     pub async fn todo_list_snapshot(&self, key: &str) -> Vec<coco_types::TodoRecord> {
-        self.todo_list.read().await.read(key).await
+        self.handle_resources.todo_list.read().await.read(key).await
     }
 }

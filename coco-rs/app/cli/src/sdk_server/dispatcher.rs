@@ -1,8 +1,8 @@
 //! SDK server dispatch loop.
 //!
-//! The `SdkServer` reads `JsonRpcMessage` requests from a transport,
-//! dispatches them to per-method handlers, and writes responses +
-//! forwarded CoreEvent notifications back to the transport.
+//! The `SdkServer` routes AppServer JSON-RPC frames from a transport,
+//! dispatches them to per-method handlers, and writes responses plus
+//! forwarded CoreEvent notifications back through the ordered writer.
 //!
 //! The dispatch loop reads stdin, routes control requests, and enqueues
 //! messages to stdout.
@@ -59,7 +59,7 @@ pub struct SdkServer {
 impl SdkServer {
     /// Create a new SDK server bound to a transport.
     ///
-    /// The transport is published onto `state.transport` immediately so
+    /// The transport is published onto SDK connection state immediately so
     /// code paths that read it (e.g. [`crate::sdk_server::SdkPermissionBridge`])
     /// see a populated slot without waiting for
     /// [`Self::run_app_server_connection`] to start.
@@ -67,16 +67,7 @@ impl SdkServer {
     /// `new()` and `run_app_server_connection()` would erroneously see `None`.
     pub fn new(transport: Arc<dyn SdkTransport>) -> Self {
         let state = Arc::new(SdkServerState::default());
-        // Pre-populate the transport slot. At construction time nothing
-        // else has a lock on the state, so `try_write` is guaranteed to
-        // succeed. We panic if it doesn't — that would indicate a
-        // programmer error (e.g. the state was pre-shared).
-        {
-            let Ok(mut slot) = state.transport.try_write() else {
-                panic!("SdkServer::new: state was already locked at construction time");
-            };
-            *slot = Some(transport.clone());
-        }
+        state.install_sdk_transport_for_startup(transport.clone());
         Self {
             transport,
             state,
@@ -114,15 +105,11 @@ impl SdkServer {
     /// runner in tests. Without this, `turn/start` fails with
     /// `NotImplementedRunner`.
     ///
-    /// Panics if the `turn_runner` lock is already held — that would
+    /// Panics if the turn-runner slot is already held — that would
     /// indicate a programmer error (the state was pre-shared and a
     /// reader is active during construction).
     pub fn with_turn_runner(self, runner: Arc<dyn TurnRunner>) -> Self {
-        let Ok(mut slot) = self.state.turn_runner.try_write() else {
-            panic!("with_turn_runner: state was already locked at construction time");
-        };
-        *slot = runner;
-        drop(slot);
+        self.state.install_turn_runner_for_startup(runner);
         self
     }
 
@@ -131,11 +118,7 @@ impl SdkServer {
     /// browse and resume historical sessions. Without this, those
     /// handlers reply with `METHOD_NOT_FOUND`.
     pub fn with_session_manager(self, manager: Arc<coco_session::SessionManager>) -> Self {
-        let Ok(mut slot) = self.state.session_manager.try_write() else {
-            panic!("with_session_manager: state was already locked at construction time");
-        };
-        *slot = Some(manager);
-        drop(slot);
+        self.state.install_session_manager_for_startup(manager);
         self
     }
 
@@ -148,18 +131,8 @@ impl SdkServer {
         history: Arc<tokio::sync::RwLock<coco_context::FileHistoryState>>,
         config_home: std::path::PathBuf,
     ) -> Self {
-        {
-            let Ok(mut slot) = self.state.file_history.try_write() else {
-                panic!("with_file_history: state was already locked at construction time");
-            };
-            *slot = Some(history);
-        }
-        {
-            let Ok(mut slot) = self.state.file_history_config_home.try_write() else {
-                panic!("with_file_history: state was already locked at construction time");
-            };
-            *slot = Some(config_home);
-        }
+        self.state
+            .install_file_history_for_startup(history, config_home);
         self
     }
 
@@ -172,11 +145,7 @@ impl SdkServer {
         self,
         manager: Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>,
     ) -> Self {
-        let Ok(mut slot) = self.state.mcp_manager.try_write() else {
-            panic!("with_mcp_manager: state was already locked at construction time");
-        };
-        *slot = Some(manager);
-        drop(slot);
+        self.state.install_mcp_manager_for_startup(manager);
         self
     }
 
@@ -188,22 +157,15 @@ impl SdkServer {
         self,
         bootstrap: Arc<dyn crate::sdk_server::handlers::InitializeBootstrap>,
     ) -> Self {
-        let Ok(mut slot) = self.state.initialize_bootstrap.try_write() else {
-            panic!("with_initialize_bootstrap: state was already locked at construction time");
-        };
-        *slot = Some(bootstrap);
-        drop(slot);
+        self.state
+            .install_initialize_bootstrap_for_startup(bootstrap);
         self
     }
 
     /// Install the cwd captured by the process entrypoint before requests
     /// arrive. SDK handlers use it when no active session/runtime exists yet.
     pub fn with_startup_cwd(self, cwd: std::path::PathBuf) -> Self {
-        let Ok(mut slot) = self.state.startup_cwd.try_write() else {
-            panic!("with_startup_cwd: state was already locked at construction time");
-        };
-        *slot = Some(cwd);
-        drop(slot);
+        self.state.install_startup_cwd(cwd);
         self
     }
 
@@ -213,11 +175,7 @@ impl SdkServer {
     /// build replacement runtimes instead of rotating this one in place.
     pub fn with_session_handle(self, session: crate::session_runtime::SessionHandle) -> Self {
         crate::sdk_server::sdk_hooks::install_runtime_callback(self.state.clone(), &session);
-        let Ok(mut slot) = self.state.session_runtime.try_write() else {
-            panic!("with_session_handle: state was already locked at construction time");
-        };
-        *slot = Some(session);
-        drop(slot);
+        self.state.install_session_runtime_for_startup(session);
         self
     }
 
@@ -227,8 +185,7 @@ impl SdkServer {
     /// `run_sdk_mode`, where the bridge needs a reference to live
     /// state before the runner exists).
     pub async fn set_turn_runner(&self, runner: Arc<dyn TurnRunner>) {
-        let mut slot = self.state.turn_runner.write().await;
-        *slot = runner;
+        self.state.install_turn_runner(runner).await;
     }
 
     /// Access the underlying transport — used by code paths that need
@@ -393,9 +350,9 @@ pub(crate) fn spawn_sdk_outbound_writer(
                     OutboundMessage::SessionCoreEvent { session_id, event } => {
                         (event, Some(session_id))
                     }
-                    OutboundMessage::JsonRpc(msg) => {
-                        if let Err(e) = transport.send(msg).await {
-                            warn!(error = %e, "json-rpc forward failed");
+                    OutboundMessage::JsonRpcFrame(frame) => {
+                        if let Err(e) = transport.send_frame(frame).await {
+                            warn!(error = %e, "json-rpc frame forward failed");
                             break;
                         }
                         continue;

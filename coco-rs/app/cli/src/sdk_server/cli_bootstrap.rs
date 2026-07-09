@@ -209,9 +209,9 @@ impl InitializeBootstrap for CliInitializeBootstrap {
     }
 
     async fn fast_mode_state(&self) -> Option<FastModeState> {
-        // Fast-mode state is runtime-tracked by the rate limiter and
-        // not currently exposed. Advertise `None` until an accessor
-        // lands.
+        // Runtime-backed initialize reads the live session state directly.
+        // Before a runtime exists, this bootstrap has no rate-limit state to
+        // advertise.
         None
     }
 

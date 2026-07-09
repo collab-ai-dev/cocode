@@ -165,7 +165,7 @@ fn dropped_marker_flushes_after_older_ready_envelopes() {
     let session_id = session_id();
     tx.try_send(durable_envelope(session_id.clone(), 1))
         .expect("queue older event");
-    record_dropped_envelope(&dropped, &durable_envelope(session_id.clone(), 2));
+    record_dropped_envelope(&dropped, &durable_envelope(session_id, 2));
 
     let mut pending = VecDeque::new();
     let mut stats = HubConnectorWorkerStats::default();
