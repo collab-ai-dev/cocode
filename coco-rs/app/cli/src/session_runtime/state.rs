@@ -492,7 +492,7 @@ impl SessionRuntime {
             .load_content_replacements_for_chain(session_id.as_str(), agent_id)
             .unwrap_or_default();
         let mut next =
-            coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX);
+            coco_tool_runtime::tool_result_offload::ContentReplacementState::new(i64::MAX);
         for msg in messages {
             if let Message::ToolResult(tr) = msg {
                 next.seen_ids.insert(tr.tool_use_id.clone());

@@ -57,24 +57,10 @@ impl AttachmentGenerator for OutputTokenUsageGenerator {
 }
 
 /// Format `n` with comma-separated thousands (e.g. 1234567 → "1,234,567").
+/// Delegates to the shared workspace formatter; kept as a named local so the
+/// three call sites and the byte-format regression test read naturally.
 fn format_number(n: i64) -> String {
-    let digits = n.unsigned_abs().to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
-    if n < 0 {
-        out.push('-');
-    }
-    let len = digits.len();
-    let first_group = match len % 3 {
-        0 => 3,
-        r => r,
-    };
-    for (idx, ch) in digits.chars().enumerate() {
-        if idx == first_group || (idx > first_group && (idx - first_group) % 3 == 0) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
+    coco_utils_string::format_thousands(n)
 }
 
 #[cfg(test)]

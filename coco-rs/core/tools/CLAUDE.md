@@ -83,23 +83,28 @@ the edited file are not suppressed by cross-turn dedup.
 
 ## Per-tool Result Persistence Thresholds
 
-`Tool::max_result_size_chars()` overrides — read by the query tool outcome
-builder per Level 1 of the
-[Tool Result Budget plan](../../../docs/coco-rs/tool-result-budget-plan.md):
+`Tool::max_result_size_bound()` overrides (`ResultSizeBound::{Bytes, Unbounded}`)
+— read by the query tool outcome builder per Level 1 of the
+[Tool Result Offload design](../../../docs/coco-rs/tool-result-offload-v2-design.md).
+Over-threshold results are windowed (head+tail) and the complete output is
+persisted with a recoverable `<persisted-output>` pointer.
+**Declared bounds are authoritative — no hidden global clamp.**
 
 | Tool | Value | Note |
 |---|---|---|
-| BashTool | 30_000 | bursty shell output |
-| PowerShellTool | 30_000 | same as Bash |
-| GrepTool | 20_000 | match dumps grow superlinearly |
-| GlobTool | 100_000 | path lists tolerate larger windows |
-| FileReadTool | trait default `i64::MAX` | opt-out sentinel |
-| Most other static tools | trait default `i64::MAX` ⚠️ | upstream uses 100_000 (clamped to 50_000); not yet mirrored |
+| BashTool | `Bytes(30_000)` | bursty shell output; also overrides `inline_window_budget()` = 30K so tail errors survive the window |
+| PowerShellTool | `Bytes(30_000)` | same as Bash |
+| GrepTool | `Bytes(20_000)` | match dumps grow superlinearly |
+| GlobTool | `Bytes(100_000)` | path lists tolerate larger windows |
+| WebFetchTool | `Bytes(102_000)` | self-bounds every arm via the offload seam; declared above the default so the preapproved-docs verbatim window (100K) passes Level 1 whole |
+| FileReadTool | `Unbounded` | canonical content — opt out of persistence |
+| Most other static tools | trait default `Bytes(50_000)` | |
 
-`bash.rs::maybe_persist_oversized_output` is a stub of Level 1 (Bash-only,
-`temp_dir()` storage, parallel JSON fields instead of `<persisted-output>`
-content replacement before the query-level renderer turns it into an envelope).
-It should be replaced by the generic session-scoped persistence path.
+Bash no longer persists to `temp_dir()`: `decode_capped` keeps the complete
+output (up to `bash.max_output_bytes`, the RETAIN cap — default 2 MB) and the
+generic offload seam windows it inline + persists it under the session
+`tool-results/` directory. WebFetch offloads through the same seam with a
+content-addressed `ArtifactKey::Named`.
 
 ## Divergences from upstream behavior
 

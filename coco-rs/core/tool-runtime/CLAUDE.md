@@ -32,26 +32,54 @@ Tool trait, concurrent executor, tool registry, callback handles. Defines the in
 - All cross-subsystem interaction (tasks, agents, hooks, MCP, mailbox) goes through callback handle traits — `coco-tool-runtime` does NOT depend on `coco-tools`, `coco-tasks`, `coco-commands`, etc. Implementations are injected via `ToolUseContext` at runtime.
 - `ToolUseContext` is the typed payload carried across tool invocations (see main CLAUDE.md "Typed Structs over JSON Values" for the `ToolAppState` migration story).
 
-## Tool Result Budget (Level 1 + state types for Level 2)
+## Tool Result Budget (Level 1/2) + Recoverable Offload
 
-Owner of the `tool_result_storage` module (planned: `src/tool_result_storage/`).
-Plan: [`docs/coco-rs/tool-result-budget-plan.md`](../../../docs/coco-rs/tool-result-budget-plan.md).
+Module DAG (strict, no cycles): `coco_types::persisted_output` (tags + the two
+string predicates) ← `tool_result_storage` (write mechanics) ←
+`tool_result_offload` (policy: window + budgets + Level 2). Design:
+[`docs/coco-rs/tool-result-offload-v2-design.md`](../../../docs/coco-rs/tool-result-offload-v2-design.md).
 
-- **Level 1** — per-tool persistence helpers: `persist_to_disk` and
-  `render_persisted_reference` live in `tool_result_storage.rs`; `coco-query`
-  invokes them after `Tool::execute()` for singleton text results when
-  `Tool::max_result_size_chars()` opts in. Known gaps: overwrite rather than
-  `create_new`, no empty-content guard here, and Bash still has a tool-local
-  `temp_dir()` persistence path for shell stdout.
-- **Level 2** — aggregate budget state and decision logic:
-  `ContentReplacementState` + `apply_tool_result_budget`. `coco-query` owns the
-  message projection/wiring. Known gap: currently replaces selected IDs with
-  `[Old tool result content cleared]`; the intended behavior is to persist
-  selected fresh candidates and replay the exact `<persisted-output>` preview
-  string from replacement state/transcript records.
-
-`Tool::max_result_size_chars()` uses `i64::MAX` as the Rust sentinel for
-"unbounded" opt-out.
+- **`tool_result_storage`** — write mechanics only:
+  - `ToolOutputStore::write_artifact(key, content)` — `ToolUse` keys use
+    `create_new` (first write wins); `Named` keys (caller-computed,
+    content-addressed) publish atomically (tmp + rename). Validates `Named`
+    names (`[A-Za-z0-9._-]`, ≤100 bytes, no leading dot); owns no URL semantics.
+  - `ToolOutputStore::persist_binary` — MIME-extension binary spill
+    (`extension_for_mime_type` is the single MIME table, shared with WebFetch's
+    store-less fallback).
+  - `ResultSizeBound::{Bytes(i64), Unbounded}` — per-tool Level-1 declaration.
+    **Declarations are authoritative — there is no hidden global clamp.** Trait
+    default `Bytes(50_000)`; WebFetch declares `Bytes(102_000)` so preapproved
+    docs pages pass verbatim; Glob's declared 100K is real.
+- **`tool_result_offload`** — policy:
+  - `WindowedView::compute` — pure 75%/25% head+tail window (zero I/O, zero
+    alloc), snapped to line boundaries. Line accounting is CONSERVATIVE on both
+    sides: a partial head line is re-read via `omitted_start_line`; a partial
+    tail line is INCLUDED in `omitted_end_line` (and `tail_start_line` equals
+    it) — the reported omitted range may overlap what is shown but never
+    leaves an unreported gap.
+  - `offload_windowed(store: Option<&ToolOutputStore>, key, content, budget)` —
+    hard-wraps at 400 bytes (Read-navigability), windows, persists the complete
+    wrapped text, renders head + omission marker + `<persisted-output>` footer.
+    The tag wraps ONLY the trailing footer (never append text after it — that
+    breaks `is_pointer_bearing` and lets micro-compact destroy the pointer). A
+    missing store or failed write (warn-logged) degrades to a pointerless
+    window — NEVER a tool error.
+  - `InlineBudget` (i64 newtype): `try_new` for config (reject `<=0`),
+    `from_request` for model params (clamp), `.capped_to(threshold)` binds it
+    under a tool's declared threshold so a windowed render never re-persists.
+  - `scaled_per_message_bytes(window_tokens)` — the window-scaled Level-2 cap.
+  - `apply_tool_result_budget` + `ContentReplacementState { per_message_bytes }`
+    — Level 2 offloads the largest fresh candidates until the group fits.
+    Pointer-bearing (windowed) results COUNT toward the trigger but are never
+    re-offloaded (a re-render under the same `ToolUse` id would point footer
+    numbers at the wrong artifact bytes).
+- **Level 1** — the query tool-outcome builder routes every over-threshold text
+  result through `offload_windowed` with `ArtifactKey::ToolUse`. Window budget =
+  `REFERENCE_BUDGET` (4K) by default, or the tool's `inline_window_budget()`
+  (Bash keeps a larger window so tail errors survive), always capped by the
+  threshold. Non-MCP PostToolUse hooks receive a string-capped (≤50K/value)
+  view of the data envelope; MCP keeps the full envelope (hooks may rewrite it).
 
 ## Deferred refactors (pure code-quality)
 

@@ -440,7 +440,7 @@ async fn test_grep_mtime_sorting() {
 async fn test_grep_max_result_size_bound() {
     assert_eq!(
         <GrepTool as DynTool>::max_result_size_bound(&GrepTool,),
-        coco_tool_runtime::ResultSizeBound::Chars(20_000),
+        coco_tool_runtime::ResultSizeBound::Bytes(20_000),
     );
 }
 

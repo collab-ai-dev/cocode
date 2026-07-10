@@ -289,9 +289,16 @@ impl Tool for PowerShellTool {
         })
     }
 
-    /// `maxResultSizeChars: 30_000`.
+    /// Persistence threshold: 30_000 bytes (same as Bash).
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
-        coco_tool_runtime::ResultSizeBound::Chars(30_000)
+        coco_tool_runtime::ResultSizeBound::Bytes(30_000)
+    }
+
+    /// Same rationale as Bash: shell output's tail carries the errors, so the
+    /// inline window matches the persistence threshold instead of the shared
+    /// 4K reference budget (which would show only ~1K of tail).
+    fn inline_window_budget(&self) -> Option<i64> {
+        Tool::max_result_size_bound(self).as_bytes()
     }
 
     fn validate_input(&self, input: &PowerShellInput, _ctx: &ToolUseContext) -> ValidationResult {

@@ -236,9 +236,22 @@ impl QueryEngine {
             return;
         };
 
+        // `None` = scale the per-message cap to the live model window
+        // (small-window models get proportional protection); `Some(n)` pins a
+        // fixed cap. The window comes from the same runtime snapshot that
+        // serves the request via the NON-PANICKING accessor —
+        // `scaled_per_message_bytes` maps an unknown window (`None` → 0) to
+        // the fixed default, so this purely protective pass can never abort
+        // a turn.
+        let per_message_bytes = match budget.per_message_bytes {
+            Some(n) => n,
+            None => coco_tool_runtime::scaled_per_message_bytes(
+                self.try_resolved_context_window().unwrap_or(0),
+            ),
+        };
         {
             let mut state = self.tool_result_replacement_state.write().await;
-            state.per_message_chars = budget.per_message_chars;
+            state.per_message_bytes = per_message_bytes;
         }
 
         for group in collect_api_user_tool_result_groups::<Arc<Message>>(messages.as_slice()) {
@@ -255,9 +268,9 @@ impl QueryEngine {
                     .get(&tr.tool_id)
                     .is_some_and(|tool| tool.max_result_size_bound().is_unbounded());
                 candidates.push(
-                    coco_tool_runtime::tool_result_storage::ToolResultCandidate {
+                    coco_tool_runtime::tool_result_offload::ToolResultCandidate {
                         tool_use_id: tr.tool_use_id.clone(),
-                        content_chars: projected.content.len() as i64,
+                        content_bytes: projected.content.len() as i64,
                         content: projected.content,
                         tool_name: Some(tr.tool_id.to_string()),
                         persistence_opted_out,
@@ -269,9 +282,12 @@ impl QueryEngine {
                 continue;
             }
 
-            let outcome = tool_output_store
-                .apply_budget(&candidates, &self.tool_result_replacement_state)
-                .await;
+            let outcome = coco_tool_runtime::tool_result_offload::apply_tool_result_budget(
+                &candidates,
+                &self.tool_result_replacement_state,
+                tool_output_store.session_dir(),
+            )
+            .await;
 
             let mut persist_records_failed = false;
             if budget.persist_records

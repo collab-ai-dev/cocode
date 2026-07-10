@@ -278,6 +278,7 @@ pub trait DynTool: Send + Sync + 'static {
     fn is_lsp(&self) -> bool;
     fn interrupt_behavior(&self) -> InterruptBehavior;
     fn max_result_size_bound(&self) -> crate::tool_result_storage::ResultSizeBound;
+    fn inline_window_budget(&self) -> Option<i64>;
     fn mcp_info(&self) -> Option<&McpToolInfo>;
     fn requires_user_interaction(&self) -> bool;
     fn is_open_world(&self, input: &Value) -> bool;
@@ -647,11 +648,22 @@ pub trait Tool: Send + Sync + 'static {
     /// output is canonical (e.g. `Read` on a tracked file the model
     /// will read again) opt out so persistence isn't circular.
     ///
-    /// Default `100_000`, clamped by `DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000`.
-    /// Override per-tool to declare opt-out ([`ResultSizeBound::Unbounded`])
-    /// or a tighter cap ([`ResultSizeBound::Chars`]).
+    /// Default `Bytes(50_000)`. Declarations are AUTHORITATIVE — no hidden
+    /// clamp. Override per-tool to declare opt-out
+    /// ([`ResultSizeBound::Unbounded`]), a tighter cap, or a larger one
+    /// (WebFetch declares 102_000 so preapproved docs pages pass verbatim).
     fn max_result_size_bound(&self) -> crate::tool_result_storage::ResultSizeBound {
         crate::tool_result_storage::DEFAULT_TOOL_MAX_RESULT_SIZE_BOUND
+    }
+
+    /// Optional inline head+tail window budget (bytes) for Level-1 spill.
+    /// `None` (default) uses the shared small
+    /// [`crate::tool_result_offload::REFERENCE_BUDGET`]; tools with bursty
+    /// output whose tail matters (Bash — build/test errors live at the end)
+    /// override this to keep a larger visible window. Always further capped by
+    /// the persistence threshold so the windowed render never re-persists.
+    fn inline_window_budget(&self) -> Option<i64> {
+        None
     }
 
     /// MCP server/tool info (for MCP-wrapped tools).
@@ -983,6 +995,9 @@ impl<T: Tool> DynTool for T {
     }
     fn max_result_size_bound(&self) -> crate::tool_result_storage::ResultSizeBound {
         Tool::max_result_size_bound(self)
+    }
+    fn inline_window_budget(&self) -> Option<i64> {
+        Tool::inline_window_budget(self)
     }
     fn mcp_info(&self) -> Option<&McpToolInfo> {
         Tool::mcp_info(self)

@@ -167,11 +167,11 @@ pub struct QueryEngine {
     /// Tool-result budget replacement state. Threaded through every
     /// per-turn `apply_tool_result_budget` call so seen_ids freeze
     /// across turns (a result, once seen, is never re-evaluated for
-    /// replacement). The `per_message_chars` field is overwritten per
-    /// call from the live `compact.tool_result_budget` so the budget
-    /// reflects hot-reloaded config.
+    /// replacement). The `per_message_bytes` field is overwritten per
+    /// call from the live `compact.tool_result_budget` (fixed or
+    /// window-scaled) so the budget reflects hot-reloaded config.
     pub(crate) tool_result_replacement_state:
-        coco_tool_runtime::tool_result_storage::ContentReplacementStateRef,
+        coco_tool_runtime::tool_result_offload::ContentReplacementStateRef,
     /// Skill-runtime handle for `SkillTool`. Phase 7 routed skills
     /// off `AgentHandle::resolve_skill` onto this dedicated trait.
     /// `None` resolves to `NoOpSkillHandle` in the factory, which

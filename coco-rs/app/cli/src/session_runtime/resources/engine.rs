@@ -135,7 +135,7 @@ pub(in crate::session_runtime) struct SessionEngineStateResources {
     pub(in crate::session_runtime) terminal_goal_metadata_written: Arc<AtomicBool>,
     /// Cross-engine tool-result replacement state.
     pub(in crate::session_runtime) tool_result_replacement_state:
-        coco_tool_runtime::tool_result_storage::ContentReplacementStateRef,
+        coco_tool_runtime::tool_result_offload::ContentReplacementStateRef,
 }
 
 impl SessionEngineStateResources {
@@ -152,7 +152,7 @@ impl SessionEngineStateResources {
         transcript_dedup: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
         clear_rewind_messages: Arc<tokio::sync::Mutex<Option<Vec<Arc<Message>>>>>,
         terminal_goal_metadata_written: Arc<AtomicBool>,
-        tool_result_replacement_state: coco_tool_runtime::tool_result_storage::ContentReplacementStateRef,
+        tool_result_replacement_state: coco_tool_runtime::tool_result_offload::ContentReplacementStateRef,
     ) -> Self {
         Self {
             file_read_state,
@@ -232,7 +232,7 @@ impl SessionEngineStateResources {
 
     pub(in crate::session_runtime) fn tool_result_replacement_state(
         &self,
-    ) -> &coco_tool_runtime::tool_result_storage::ContentReplacementStateRef {
+    ) -> &coco_tool_runtime::tool_result_offload::ContentReplacementStateRef {
         &self.tool_result_replacement_state
     }
 }

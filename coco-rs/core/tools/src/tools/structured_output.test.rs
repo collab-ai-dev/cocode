@@ -46,7 +46,7 @@ fn metadata_matches_ts_structured_output_tool_contract() {
     let tool = StructuredOutputTool::new(person_schema()).unwrap();
     assert_eq!(
         tool.max_result_size_bound(),
-        coco_tool_runtime::ResultSizeBound::Chars(100_000)
+        coco_tool_runtime::ResultSizeBound::Bytes(50_000)
     );
     assert!(!tool.is_open_world(&json!({ "name": "Alice" })));
     assert_eq!(

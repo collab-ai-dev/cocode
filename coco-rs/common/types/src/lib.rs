@@ -34,6 +34,7 @@ pub mod messages;
 // re-export in `coco-messages`.
 pub use messages::*;
 mod permission;
+pub mod persisted_output;
 mod plugin;
 mod provider;
 mod provider_auth_status;

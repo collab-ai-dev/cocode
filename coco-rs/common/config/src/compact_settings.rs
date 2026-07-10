@@ -22,8 +22,6 @@ const DEFAULT_HISTORY_SNIP_AUTO_PCT: f64 = 0.7;
 const DEFAULT_STAGED_COMPACT_STAGE_PCT: f64 = 0.6;
 /// Default percentage of context window to commit staged collapse ranges.
 const DEFAULT_STAGED_COMPACT_COMMIT_PCT: f64 = 0.85;
-/// Default per-message aggregate char cap for Tool Result Budget Level 2.
-const DEFAULT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS: i64 = 200_000;
 /// Default number of recently read files restored after full compaction.
 const DEFAULT_POST_COMPACT_MAX_FILES_TO_RESTORE: i32 = 5;
 
@@ -145,7 +143,9 @@ pub struct PartialDisplayCollapseSettings {
 #[serde(default)]
 pub struct PartialToolResultBudgetSettings {
     pub enabled: Option<bool>,
-    pub per_message_chars: Option<i64>,
+    /// `None` (omitted) = scale by the model window at runtime; `Some(n)` =
+    /// fixed byte cap.
+    pub per_message_bytes: Option<i64>,
     pub persist_records: Option<bool>,
 }
 
@@ -380,29 +380,26 @@ impl Default for DisplayCollapseConfig {
 /// | Field | TS gate / GrowthBook | Default |
 /// |---|---|---|
 /// | `enabled` | `tengu_hawthorn_steeple` (Level 2 enable) | `true` |
-/// | `per_message_chars` | `tengu_hawthorn_window` (per-message override) | `200_000` |
+/// | `per_message_bytes` | `tengu_hawthorn_window` (per-message override) | `None` (scaled) |
 /// | `persist_records` | — (transcript record write toggle for fork agents) | `true` |
 ///
 /// **Deliberate divergence from TS:** TS gates Level 2 behind GrowthBook
-/// `tengu_hawthorn_steeple` (code fallback `false`). coco-rs enables the
-/// per-message aggregate budget by default as a context-window safety guard;
-/// opt out via `compact.tool_result_budget.enabled = false` in settings.json.
-/// Per-tool persistence threshold overrides belong on
-/// `Tool::max_result_size_bound()`; they are intentionally not surfaced as
-/// compact config.
-/// **Status**: config is live for the query-level aggregate budget. Level 1
-/// helpers live in `coco-tool-runtime::tool_result_storage` and are called by
-/// `coco-query`'s tool outcome builder when a tool opts in via
-/// `max_result_size_bound()`. Remaining gaps are tracked in
-/// `docs/coco-rs/tool-result-budget-plan.md`.
+/// `tengu_hawthorn_steeple` (code fallback `false`) with a fixed 200_000 cap.
+/// coco-rs enables the per-message aggregate budget by default as a
+/// context-window safety guard, and the default cap scales with the model
+/// window (`coco_tool_runtime::scaled_per_message_bytes`) so small-window
+/// models get proportional protection. Opt out via
+/// `compact.tool_result_budget.enabled = false`; pin a fixed cap via
+/// `per_message_bytes`. Per-tool persistence threshold overrides belong on
+/// `Tool::max_result_size_bound()`; they are intentionally not surfaced here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultBudgetConfig {
     /// Enable Level 2 per-message budget. `tengu_hawthorn_steeple`.
     pub enabled: bool,
-    /// Per-API-message aggregate char cap. TS
-    /// `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS` (200_000); overridable via
-    /// `tengu_hawthorn_window`.
-    pub per_message_chars: i64,
+    /// Per-API-message aggregate byte cap. `None` (default) = scale by the
+    /// model window at runtime; `Some(n)` = fixed cap (explicit config).
+    /// Overridable via `tengu_hawthorn_window`.
+    pub per_message_bytes: Option<i64>,
     /// Whether `ContentReplacementRecord`s persist to the session
     /// transcript. Off for ephemeral fork agents that share a parent
     /// transcript.
@@ -415,7 +412,7 @@ impl Default for ToolResultBudgetConfig {
             // Product policy: keep the context-window safety guard on by
             // default even though TS's GrowthBook-off fallback is false.
             enabled: true,
-            per_message_chars: DEFAULT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS,
+            per_message_bytes: None,
             persist_records: true,
         }
     }
@@ -611,8 +608,8 @@ impl CompactConfig {
         if let Some(v) = trb.enabled {
             config.tool_result_budget.enabled = v;
         }
-        if let Some(v) = trb.per_message_chars.filter(|v| *v > 0) {
-            config.tool_result_budget.per_message_chars = v;
+        if let Some(v) = trb.per_message_bytes.filter(|v| *v > 0) {
+            config.tool_result_budget.per_message_bytes = Some(v);
         }
         if let Some(v) = trb.persist_records {
             config.tool_result_budget.persist_records = v;
@@ -621,10 +618,10 @@ impl CompactConfig {
             config.tool_result_budget.enabled = true;
         }
         if let Some(v) = env
-            .get_i64(EnvKey::CocoCompactToolResultBudgetPerMessageChars)
+            .get_i64(EnvKey::CocoCompactToolResultBudgetPerMessageBytes)
             .filter(|v| *v > 0)
         {
-            config.tool_result_budget.per_message_chars = v;
+            config.tool_result_budget.per_message_bytes = Some(v);
         }
 
         config.finalize();

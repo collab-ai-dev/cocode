@@ -134,9 +134,11 @@ impl Tool for GlobTool {
         true
     }
 
-    /// Result persistence threshold — 100_000 chars.
+    /// Result persistence threshold — 100_000 bytes. Declarations are
+    /// authoritative (no hidden clamp): path lists tolerate larger windows,
+    /// so this deliberately exceeds the 50K default.
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
-        coco_tool_runtime::ResultSizeBound::Chars(100_000)
+        coco_tool_runtime::ResultSizeBound::Bytes(100_000)
     }
 
     /// `Self::Output = String` — render emits the prebuilt text directly.

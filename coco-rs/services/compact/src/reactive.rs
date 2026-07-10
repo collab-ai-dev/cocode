@@ -20,7 +20,6 @@
 use coco_config::AutoCompactConfig;
 use coco_messages::Message;
 
-use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
 use crate::types::MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES;
 use crate::types::RAPID_REFILL_BREAKER_COUNT;
 use crate::types::RAPID_REFILL_TURN_WINDOW;
@@ -345,22 +344,15 @@ pub fn api_microcompact(messages: &mut [Message], tokens_to_free: i64) {
         if let Message::ToolResult(tr) = msg {
             let est = coco_messages::estimate_tool_result_message_tokens(tr);
             if est > 50 {
-                tr.message = coco_messages::LlmMessage::Tool {
-                    content: vec![coco_messages::ToolContent::ToolResult(
-                        coco_messages::ToolResultContent {
-                            tool_call_id: tr.tool_use_id.clone(),
-                            tool_name: String::new(),
-                            output: coco_llm_types::ToolResultContent::text(
-                                CLEARED_TOOL_RESULT_MESSAGE,
-                            ),
-                            is_error: false,
-                            provider_metadata: None,
-                        },
-                    )],
-                    provider_options: None,
+                // Pointer-preserving clear even under PTL pressure: a windowed
+                // result is reduced to its recovery footer (bulk freed, the
+                // only pointer to the offloaded data survives).
+                let Some(freed_now) = crate::types::clear_tool_result_preserving_pointers(tr)
+                else {
+                    continue;
                 };
                 cleared += 1;
-                freed += est;
+                freed += freed_now;
             }
         }
     }

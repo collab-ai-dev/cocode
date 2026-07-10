@@ -426,7 +426,7 @@ async fn test_bash_pwd() {
 fn test_bash_max_result_size_bound_matches_ts() {
     assert_eq!(
         <BashTool as DynTool>::max_result_size_bound(&BashTool,),
-        coco_tool_runtime::ResultSizeBound::Chars(30_000),
+        coco_tool_runtime::ResultSizeBound::Bytes(30_000),
     );
 }
 
@@ -436,7 +436,8 @@ fn test_bash_max_result_size_bound_matches_ts() {
 #[test]
 fn test_bash_max_output_bytes_pass_through() {
     let mut config = coco_config::ToolConfig::default();
-    assert_eq!(super::max_output_bytes(&config), 30_000);
+    // Default is the retain cap (memory bound), not the old 30K truncation.
+    assert_eq!(super::max_output_bytes(&config), 2_000_000);
 
     config.bash.max_output_bytes = 50_000;
     assert_eq!(super::max_output_bytes(&config), 50_000);
@@ -1457,31 +1458,32 @@ mod render_for_model_tests {
             "default branch must not say 'manually backgrounded', got: {text}"
         );
     }
-
-    // `format_byte_size` lives in `shell_render.rs`; its byte-identity
-    // contract test lives in `shell_render.test.rs` next to the implementation.
 }
 
 // ---------------------------------------------------------------------------
-// #34 — head-only output truncation with a lines marker
+// Output decode: full retain under cap, memory-capped decode over it
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_truncate_output_is_head_only_with_lines_marker() {
-    use super::truncate_output;
-    // 10 lines "L0".."L9", each 3 bytes incl newline → 30 bytes total.
+fn test_decode_capped_returns_full_output_under_cap() {
+    use super::decode_capped;
+    // Under the cap, the COMPLETE output flows through (the offload seam does
+    // the head+tail windowing, not this decode).
     let content: String = (0..10).map(|i| format!("L{i}\n")).collect();
-    let out = truncate_output(content.as_bytes(), 9); // keep ~first 3 lines
-    // Head retained from the start.
-    assert!(out.starts_with("L0\n"), "head should be kept: {out}");
-    // No tail half preserved (old behavior kept the end too).
-    assert!(
-        !out.contains("L9"),
-        "tail must be dropped (head-only): {out}"
-    );
-    // Lines marker, not chars.
-    assert!(out.contains("lines truncated"), "got: {out}");
-    assert!(!out.contains("chars truncated"), "got: {out}");
+    let out = decode_capped(content.as_bytes(), 1_000);
+    assert_eq!(out, content);
+    // Tail lines survive — no head-only truncation.
+    assert!(out.contains("L9"));
+    assert!(!out.contains("capped"));
+}
+
+#[test]
+fn test_decode_capped_bounds_pathological_output() {
+    use super::decode_capped;
+    let content = "x".repeat(100);
+    let out = decode_capped(content.as_bytes(), 30);
+    assert!(out.starts_with(&"x".repeat(30)));
+    assert!(out.contains("output capped: retained 30 of 100 bytes"));
 }
 
 // ---------------------------------------------------------------------------

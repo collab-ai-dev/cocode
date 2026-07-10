@@ -355,7 +355,7 @@ impl Tool for GrepTool {
 
     /// Result persistence threshold: 20 000 chars.
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
-        coco_tool_runtime::ResultSizeBound::Chars(20_000)
+        coco_tool_runtime::ResultSizeBound::Bytes(20_000)
     }
 
     /// `Self::Output = String` — emit unwrapped (no JSON escape).

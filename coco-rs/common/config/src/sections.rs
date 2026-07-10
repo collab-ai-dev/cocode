@@ -20,12 +20,15 @@ const DEFAULT_MAX_RESULT_SIZE: i32 = 400_000;
 const DEFAULT_RESULT_PREVIEW_SIZE: i32 = 2_000;
 const DEFAULT_BASH_TIMEOUT_MS: i64 = 120_000;
 const DEFAULT_BASH_MAX_TIMEOUT_MS: i64 = 600_000;
-const DEFAULT_BASH_MAX_OUTPUT_BYTES: i64 = 30_000;
-/// Upper cap on Bash output length — larger configured values are clamped
-/// down at `finalize()` time. TS: `utils/shell/outputLimits.ts` —
-/// `BASH_MAX_OUTPUT_UPPER_LIMIT = 150_000`.
-/// Crate-internal: this is a config-resolution detail, not a public API.
-pub(crate) const BASH_MAX_OUTPUT_BYTES_UPPER: i64 = 150_000;
+/// Bash output RETAIN cap (memory bound). Output up to this many bytes is
+/// captured and — when it exceeds the tool's 30K persistence threshold —
+/// windowed inline + persisted whole to disk for recovery. Larger than the
+/// old head-only 30K truncation because the offload seam keeps the complete
+/// output; the inline window itself stays ~30K (`BashTool::inline_window_budget`).
+const DEFAULT_BASH_MAX_OUTPUT_BYTES: i64 = 2_000_000;
+/// Upper cap on the Bash retain budget — larger configured values are clamped
+/// down at `finalize()` time.
+pub(crate) const BASH_MAX_OUTPUT_BYTES_UPPER: i64 = 10_000_000;
 const DEFAULT_GLOB_TIMEOUT_SECONDS: i32 = 10;
 // DEFAULT_MAX_RETRIES = 10, base delay 500ms.
 const DEFAULT_MAX_RETRIES: i32 = 10;
@@ -46,9 +49,19 @@ const DEFAULT_SERVER_OUTBOUND_QUEUE_FRAMES: i64 = 1024;
 const DEFAULT_SERVER_TURN_DRAIN_TIMEOUT_SECS: i64 = 10;
 const DEFAULT_SERVER_SHUTDOWN_TIMEOUT_SECS: i64 = 30;
 const DEFAULT_SERVER_PROJECT_SERVICES_IDLE_TTL_SECS: i64 = 3600;
-/// 100K-char extraction budget.
-/// `MAX_MARKDOWN_LENGTH = 100_000`. Guards side-query token cost.
-const DEFAULT_WEB_FETCH_MAX_CONTENT_LENGTH: i64 = 100_000;
+/// Retained full-text cap: the fetched page is truncated to this many bytes
+/// before windowing + persisting, so the persisted artifact (and every footer
+/// number derived from it) is bounded. Larger than the old 100K side-query
+/// budget because the windowed path stores the whole retained copy for
+/// recovery, not a lossy summary. The HTTP-level 10MB hard cap is separate.
+const DEFAULT_WEB_FETCH_MAX_CONTENT_LENGTH: i64 = 2_000_000;
+/// Inline byte budget for a windowed fetch: content at or below this is
+/// returned verbatim (zero side-query, zero persistence); over it gets a
+/// head+tail window + recoverable pointer.
+const DEFAULT_WEB_FETCH_INLINE_BYTE_BUDGET: i64 = 15_000;
+/// Larger verbatim window for preapproved documentation hosts serving clean
+/// markdown — the flagship docs-reading case must not regress to a 15K window.
+const DEFAULT_WEB_FETCH_PREAPPROVED_VERBATIM_BUDGET: i64 = 100_000;
 static MAX_RETRIES_CLAMP_WARNED: AtomicBool = AtomicBool::new(false);
 /// Default user agent — so robots.txt
 /// rules targeting Claude-Code's fetcher apply identically to coco-rs.
@@ -1200,6 +1213,30 @@ pub struct PartialWebFetchSettings {
     pub timeout_secs: Option<i64>,
     pub max_content_length: Option<i64>,
     pub user_agent: Option<String>,
+    pub inline_byte_budget: Option<i64>,
+    pub preapproved_verbatim_budget: Option<i64>,
+    pub extraction: Option<WebFetchExtraction>,
+}
+
+/// How WebFetch turns a fetched page into a model-visible result.
+///
+/// Owned here (config layer) and consumed by `coco-tools`, mirroring the other
+/// config enums — the tool reads the resolved value, it does not define policy.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WebFetchExtraction {
+    /// Default: [`Windowed`](Self::Windowed) for content that is already clean
+    /// (markdown / plain text / JSON and other non-HTML passthrough);
+    /// [`Llm`](Self::Llm) for `text/html`. Rationale: the head+tail window
+    /// evidence was measured on clean-markdown backends; scraped HTML keeps
+    /// nav/footer chrome that clusters in the head window, so the side-model
+    /// extract stays the HTML default until a main-content pass exists.
+    #[default]
+    Auto,
+    /// Deterministic head+tail window + persisted pointer for ALL content types.
+    Windowed,
+    /// Side-query LLM extraction for everything non-preapproved (v0 behavior).
+    Llm,
 }
 
 /// 1 MiB default cap per persisted request/response body.
@@ -1312,8 +1349,17 @@ pub struct PartialDiagnosticsSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebFetchConfig {
     pub timeout_secs: i64,
+    /// Retained full-text cap: the page is truncated to this before windowing
+    /// + persisting (default 2_000_000). The persisted artifact never exceeds
+    /// it, so all footer numbers describe the same bounded text.
     pub max_content_length: i64,
     pub user_agent: String,
+    /// Verbatim inline budget for a windowed fetch (default 15_000).
+    pub inline_byte_budget: i64,
+    /// Larger verbatim budget for preapproved docs hosts (default 100_000).
+    pub preapproved_verbatim_budget: i64,
+    /// Extraction strategy dispatch.
+    pub extraction: WebFetchExtraction,
 }
 
 impl Default for WebFetchConfig {
@@ -1322,6 +1368,9 @@ impl Default for WebFetchConfig {
             timeout_secs: DEFAULT_WEB_FETCH_TIMEOUT_SECS,
             max_content_length: DEFAULT_WEB_FETCH_MAX_CONTENT_LENGTH,
             user_agent: DEFAULT_WEB_FETCH_USER_AGENT.to_string(),
+            inline_byte_budget: DEFAULT_WEB_FETCH_INLINE_BYTE_BUDGET,
+            preapproved_verbatim_budget: DEFAULT_WEB_FETCH_PREAPPROVED_VERBATIM_BUDGET,
+            extraction: WebFetchExtraction::Auto,
         }
     }
 }
@@ -1337,6 +1386,19 @@ impl WebFetchConfig {
         }
         if let Some(v) = &settings.web_fetch.user_agent {
             config.user_agent.clone_from(v);
+        }
+        if let Some(v) = settings.web_fetch.inline_byte_budget.filter(|v| *v > 0) {
+            config.inline_byte_budget = v;
+        }
+        if let Some(v) = settings
+            .web_fetch
+            .preapproved_verbatim_budget
+            .filter(|v| *v > 0)
+        {
+            config.preapproved_verbatim_budget = v;
+        }
+        if let Some(v) = settings.web_fetch.extraction {
+            config.extraction = v;
         }
         config.timeout_secs = config.timeout_secs.max(1);
         config.max_content_length = config.max_content_length.max(0);

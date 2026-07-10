@@ -204,7 +204,7 @@ fn test_powershell_destructive_classification() {
 fn test_powershell_max_result_size_matches_ts() {
     assert_eq!(
         <PowerShellTool as DynTool>::max_result_size_bound(&PowerShellTool,),
-        coco_tool_runtime::ResultSizeBound::Chars(30_000),
+        coco_tool_runtime::ResultSizeBound::Bytes(30_000),
     );
 }
 

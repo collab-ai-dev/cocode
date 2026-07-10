@@ -16,7 +16,6 @@ use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_types::ToolName;
 
-use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
 use crate::types::MicrocompactResult;
 
 /// Configuration for budget-aware micro-compaction.
@@ -78,21 +77,14 @@ pub fn micro_compact_with_budget(
             continue;
         }
 
-        // Replace with cleared placeholder
-        tr.message = coco_messages::LlmMessage::Tool {
-            content: vec![coco_messages::ToolContent::ToolResult(
-                coco_messages::ToolResultContent {
-                    tool_call_id: tr.tool_use_id.clone(),
-                    tool_name: String::new(),
-                    output: coco_llm_types::ToolResultContent::text(CLEARED_TOOL_RESULT_MESSAGE),
-                    is_error: false,
-                    provider_metadata: None,
-                },
-            )],
-            provider_options: None,
+        // Pointer-preserving clear: windowed results are reduced to their
+        // recovery footer (bulk freed, pointer survives); minimal persisted
+        // references and already-cleared results are skipped.
+        let Some(freed) = crate::types::clear_tool_result_preserving_pointers(tr) else {
+            continue;
         };
 
-        tokens_freed += est_tokens;
+        tokens_freed += freed;
         cleared += 1;
     }
 
@@ -121,6 +113,13 @@ pub fn clear_file_unchanged_stubs(messages: &mut [Message]) -> MicrocompactResul
         };
 
         if !tool_result_contains_text(tr, FILE_UNCHANGED_STUB) {
+            continue;
+        }
+
+        // Substring match can hit a windowed result that merely CONTAINS the
+        // stub text (e.g. `cat` of a file with that literal); a genuine stub
+        // is tiny and never pointer-bearing — never destroy a pointer here.
+        if tool_result_contains_text(tr, coco_types::persisted_output::PERSISTED_OUTPUT_TAG) {
             continue;
         }
 
