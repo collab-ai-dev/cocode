@@ -90,6 +90,10 @@ pub struct Session {
     /// session browsing/filtering.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Durable `session_seq` high-water mark recovered from transcript
+    /// metadata, used to skip-ahead the seq counter on resume (plan D-47).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_seq_watermark: Option<i64>,
 }
 
 impl Session {
@@ -111,6 +115,7 @@ impl Session {
             message_count: meta.message_count,
             total_tokens: 0,
             tags: meta.tag.map(|t| vec![t]).unwrap_or_default(),
+            session_seq_watermark: meta.session_seq_watermark,
         }
     }
 }
@@ -190,6 +195,7 @@ impl SessionManager {
             message_count: 0,
             total_tokens: 0,
             tags: Vec::new(),
+            session_seq_watermark: None,
         })
     }
 
@@ -290,6 +296,28 @@ impl SessionManager {
     /// callers don't need rewriting.
     pub fn save(&self, _session: &Session) -> crate::Result<()> {
         Ok(())
+    }
+
+    /// Append a durable `session_seq` high-water mark to the transcript
+    /// (multi-session plan D-47). Called at bounded intervals from the seq
+    /// allocator's persist hook and once at session close, so a restarted
+    /// process can skip-ahead its seq counter above anything the prior epoch
+    /// emitted. Best-effort: a missing transcript is not an error here (a
+    /// brand-new unsaved session has nothing to anchor to yet).
+    pub fn persist_session_seq_watermark(&self, id: &str, session_seq: i64) -> crate::Result<()> {
+        let session = match self.load(id) {
+            Ok(session) => session,
+            Err(SessionError::TranscriptNotFound { .. }) => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        let store = self.store_for(&session.working_dir);
+        store.append_metadata(
+            id,
+            &storage::MetadataEntry::SessionSeqWatermark {
+                session_id: checked_session_id(id)?,
+                session_seq,
+            },
+        )
     }
 
     /// Load a session by id by locating its transcript under

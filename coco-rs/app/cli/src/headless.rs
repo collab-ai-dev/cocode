@@ -1205,12 +1205,19 @@ pub async fn run_chat_with_options(
         .install_session_runtime(session_handle.clone())
         .await;
 
+    // Interrupt the print-mode turn on caller cancellation OR an OS signal
+    // (SIGINT/SIGTERM). Without the signal arm, `kill <pid>` during a print
+    // turn hits the default terminate action instead of a graceful interrupt
+    // (multi-session plan §7.7 remainder).
     let cancel_monitor = {
         let cancel = cancel.clone();
         let client = local_app_server_bridge.connect_local_client();
         let handler = local_app_server_bridge.handler().clone();
         tokio::spawn(async move {
-            cancel.cancelled().await;
+            tokio::select! {
+                () = cancel.cancelled() => {}
+                () = crate::shutdown::os_interrupt_signal() => {}
+            }
             let _ = client.turn_interrupt(&handler).await;
         })
     };

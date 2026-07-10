@@ -975,9 +975,29 @@ pub struct SessionEnvelope {
 The router stamps `session_id` (it knows which sink fired — emitters
 cannot forget or lie), copies `agent_id`/`turn_id` from the payload where
 present, and assigns `session_seq` to durable events. One write site,
-mirroring the "single `ProviderOptions` write site" convention. The
-per-variant `session_id` fields on history notifications (`event.rs:379`
-…) are subsumed by the envelope and removed.
+mirroring the "single `ProviderOptions` write site" convention.
+
+The per-variant `session_id`/`agent_id` fields on history notifications
+are consolidated into one shared flattened `ServerNotificationIdentity`
+(the per-variant Rust field duplication is gone), but the *wire* fields are
+**deliberately retained** — flattened, `#[serde(default, skip_serializing_if
+= "Option::is_none")]` — rather than removed outright as an earlier draft of
+this section said. They forward-compat the AgentTeams merged-timeline demux
+(`(session_id, agent_id)`) and single-session SDK consumers that read
+identity off the notification body. Identity therefore travels twice on the
+AppServer wire (in the payload where populated, and on the envelope); the
+envelope is the authoritative routing key.
+
+Durable `session_seq` is assigned once per session by a process-shared
+`SessionSeqAllocator` (`coco-app-server`), not a per-forwarder-task counter —
+so the union of the local-forwarder, sidecar-forwarder, and SDK Hub-egress
+paths stays strictly monotonic per session. The allocator persists a
+high-water mark to transcript metadata (`SessionSeqWatermark`) at bounded
+intervals and at close, and resume skip-aheads the counter above it (D-47),
+so a restart never re-issues a seq at or below one already shipped. The hub
+additionally rejects a per-session seq regression (a *different* event under
+a stored `(instance, session, seq)`) as corruption instead of silently
+dropping it.
 
 **Durable vs ephemeral.** Not every event is worth replaying, and a seq
 on a non-replayable event is a hole a reconnecting client stalls on. Two
@@ -2934,6 +2954,59 @@ Implementation progress as of 2026-07-07:
   fallback remains acknowledgement-only. `context/usage` now uses the installed
   runtime's main-context analyzer directly, so runtime-backed sessions no
   longer need SDK handoff state for that request.
+
+Parity-fix pass (2026-07-10, after a full 12-area code verification):
+
+- **Durable `session_seq` (D-39/D-47) — implemented.** The per-forwarder-task
+  `HashMap<SessionId,i64>` counters are gone; a process-shared
+  `coco_app_server::SessionSeqAllocator` (installed on `SdkServerState`) is the
+  single seq source for the local forwarder, sidecar forwarders, and the SDK
+  Hub egress, so per-session seqs are strictly monotonic across delivery paths
+  within a process. The allocator persists a high-water mark to transcript
+  metadata (`MetadataEntry::SessionSeqWatermark`) at bounded intervals
+  (`WATERMARK_PERSIST_INTERVAL`) via a best-effort hook and exactly at session
+  close; resume skip-aheads the counter to `watermark + retention + interval`
+  before the runtime emits, so a restart never re-issues a seq at or below one
+  already shipped. The hub's `SqliteEventStore` now distinguishes a byte-identical
+  retry (benign duplicate) from a *different* event under a stored
+  `(instance, session, seq)` (a regression) and rejects the latter as corruption
+  (`IngestStats.rejected_conflicts`) rather than silently dropping it. Tests:
+  allocator unit tests, forwarder-respawn continuity, hub regression rejection.
+- **MCP name-collision now project-wins** (§16.1): `McpConfigLoader` loads the
+  user catalog *before* the project scope so a project definition overrides a
+  same-named user server; the test that pinned user-wins was corrected.
+- **§17 config keys wired.** `server.project_services_idle_ttl_secs` (default
+  3600) and `server.idle_session_timeout_secs` (default off) now have
+  settings fields, `COCO_SERVER_*` `EnvKey` variants, and `ServerConfig`
+  resolution. The idle TTL feeds `ProjectRegistry` eviction (read live so a
+  post-startup config value applies); `idle_session_timeout_secs`, when set,
+  spawns `spawn_idle_session_sweep`, which auto-archives a session with zero
+  attached surfaces AND no active turn continuously past the timeout.
+- **`ProjectServices` fingerprint refresh is now effective.** A stale project
+  settings file rebuilds the whole registry entry on the next `get_or_load`
+  (fresh config snapshot AND plugin catalog), so a later session in the same
+  project sees newly enabled/disabled plugins; running sessions keep their own
+  `Arc` (the inert in-place snapshot refresh is removed).
+- **Signal-initiated turn interruption** (§7.7 remainder): the headless
+  print-mode cancel monitor and the TUI agent-driver loop now race an
+  `os_interrupt_signal()` future, so SIGINT/SIGTERM mid-turn interrupts the
+  active turn and initiates the graceful drain instead of the default terminate
+  action (the TUI runs raw-mode, so this is the SIGTERM path).
+- **SDK client `ClientError`** gained the §14 `Connect` and `Timeout` variants
+  plus an optional per-request timeout on `RemoteJsonRpcClient`; the remote
+  dialers map connect failures into `ClientError::Connect`.
+- **Hub connector consumes `resume_from`**: after a reconnect
+  `HubConnectorWorker` drops pending events at or below the hub's per-session
+  cursor instead of re-shipping the whole backlog.
+- **Lint gap closed**: the `hooks/` codegen example's `env::current_dir` now
+  carries `#[allow(clippy::disallowed_methods)]`.
+
+Not changed this pass (accurately deferred, not regressions): the §8.3 AppServer
+server-request bridge stays reserved for Phase C multi-surface — v1 approvals
+flow through the legacy single-writer pending map (correct for one interactive
+surface); the A3 `SessionRuntime`/`SessionHandle` core extraction and the §6.3
+actor mailbox remain the cohesive move tracked in §5.1; §16.2/§16.3 `McpScope`
+Shared/PerSession instance model + PID-file reaping are unbuilt.
 
 **Phase B — atomic cut-over (single PR):**
 

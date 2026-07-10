@@ -1261,6 +1261,7 @@ async fn remote_json_rpc_client_connects_over_websocket() {
         RemoteConnectOptions {
             outbound_channel_capacity: 8,
             event_channel_capacity: 8,
+            request_timeout: None,
         },
     )
     .await
@@ -1310,6 +1311,7 @@ async fn remote_json_rpc_client_connects_over_unix_socket() {
         RemoteConnectOptions {
             outbound_channel_capacity: 8,
             event_channel_capacity: 8,
+            request_timeout: None,
         },
     )
     .await
@@ -1355,6 +1357,79 @@ async fn remote_json_rpc_client_connects_over_unix_socket() {
     assert!(matches!(
         client.request("after/disconnect", None).await,
         Err(ClientError::ClientInvalid)
+    ));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn connect_unix_to_missing_socket_returns_connect_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket_path = dir.path().join("missing.sock");
+
+    let error = RemoteJsonRpcClient::connect_unix(&socket_path)
+        .await
+        .err()
+        .expect("connect to missing socket fails");
+
+    assert!(error.to_string().starts_with("connection failed: "));
+    let ClientError::Connect(message) = error else {
+        panic!("expected ClientError::Connect");
+    };
+    assert!(!message.is_empty(), "underlying error text is preserved");
+}
+
+#[tokio::test]
+async fn remote_request_timeout_returns_timeout_and_clears_pending() {
+    let (client_stream, server_stream) = tokio::io::duplex(1024);
+    let (client_read, client_write) = split(client_stream);
+    let (server_read, server_write) = split(server_stream);
+    let client_transport = NdjsonDuplexConnection::new(BufReader::new(client_read), client_write);
+    let mut server_transport =
+        NdjsonDuplexConnection::new(BufReader::new(server_read), server_write);
+    let (client, connection, _events) = RemoteJsonRpcClient::connect_ndjson_with_options(
+        client_transport,
+        RemoteConnectOptions {
+            outbound_channel_capacity: 8,
+            event_channel_capacity: 8,
+            request_timeout: Some(Duration::from_millis(25)),
+        },
+    );
+    let connection_task = tokio::spawn(connection.run());
+    let request_client = client.clone();
+
+    let request_task =
+        tokio::spawn(async move { request_client.request("control/keepAlive", None).await });
+    let Some(JsonRpcFrame::Request(request)) = server_transport
+        .recv_frame()
+        .await
+        .expect("server reads request")
+    else {
+        panic!("expected request frame");
+    };
+
+    // The server never responds: the request must resolve with Timeout.
+    assert!(matches!(
+        request_task.await.expect("request task"),
+        Err(ClientError::Timeout)
+    ));
+    // The timed-out id must be removed from the correlation map.
+    assert!(client.pending.lock().await.is_empty());
+
+    // A late response for the timed-out id must not panic or resolve any other
+    // request; per the unknown-response-id contract it invalidates the
+    // connection instead of being delivered.
+    server_transport
+        .send_frame(&JsonRpcFrame::Success(JsonRpcSuccess::new(
+            request.id,
+            serde_json::json!({ "late": true }),
+        )))
+        .await
+        .expect("server writes late response");
+    assert!(matches!(
+        connection_task.await.expect("connection task"),
+        Err(RemoteTransportError::Client {
+            source: ClientError::InvalidArgument(_),
+        })
     ));
 }
 

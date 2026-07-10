@@ -6,6 +6,7 @@
 //! that shares them across sessions in the same process.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,6 +14,8 @@ use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::sync::RwLockReadGuard;
 use std::sync::RwLockWriteGuard;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -20,7 +23,7 @@ use std::time::SystemTime;
 use crate::workspace::git_root_for;
 
 const PROJECT_SERVICES_IDLE_TTL: Duration = Duration::from_secs(60 * 60);
-const PROJECT_SERVICES_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+pub(crate) const PROJECT_SERVICES_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// Backing singleton for the interim app/cli `ProcessRuntime`.
 ///
@@ -55,7 +58,8 @@ impl ProjectRegistryManager {
         idle_for: Duration,
         sweep_interval: Duration,
     ) -> Self {
-        let idle_eviction_task = spawn_idle_eviction_loop(registry, idle_for, sweep_interval);
+        registry.set_idle_ttl(idle_for);
+        let idle_eviction_task = spawn_idle_eviction_loop(registry, sweep_interval);
         Self {
             registry,
             idle_eviction_task,
@@ -75,7 +79,6 @@ impl Drop for ProjectRegistryManager {
 
 fn spawn_idle_eviction_loop(
     registry: &'static ProjectRegistry,
-    idle_for: Duration,
     sweep_interval: Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -84,7 +87,9 @@ fn spawn_idle_eviction_loop(
         interval.tick().await;
         loop {
             interval.tick().await;
-            let evicted = registry.evict_idle(idle_for);
+            // Read the TTL live so a config value applied after startup
+            // (`ProcessRuntime::set_project_services_idle_ttl`) takes effect.
+            let evicted = registry.evict_idle(registry.effective_idle_ttl());
             if evicted > 0 {
                 tracing::debug!(
                     target: "coco::project_services",
@@ -116,14 +121,41 @@ impl ProjectRegistryKey {
 /// Loading is intentionally synchronous today, so holding the write lock during
 /// a miss gives a simple single-flight guarantee: concurrent callers for the
 /// same key share the first loaded `Arc<ProjectServices>`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ProjectRegistry {
     projects: RwLock<HashMap<ProjectRegistryKey, ProjectRegistryEntry>>,
+    /// Idle-eviction grace period in seconds, from
+    /// `server.project_services_idle_ttl_secs`. `-1` means "not configured"
+    /// (resolution falls back to [`PROJECT_SERVICES_IDLE_TTL`]); `0` is a
+    /// valid configured value meaning "evict as soon as unattached".
+    idle_ttl_secs: AtomicI64,
+}
+
+impl Default for ProjectRegistry {
+    fn default() -> Self {
+        Self {
+            projects: RwLock::new(HashMap::new()),
+            idle_ttl_secs: AtomicI64::new(-1),
+        }
+    }
 }
 
 impl ProjectRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Configure the idle-eviction grace period (from resolved config).
+    pub fn set_idle_ttl(&self, idle_for: Duration) {
+        self.idle_ttl_secs
+            .store(idle_for.as_secs() as i64, Ordering::Relaxed);
+    }
+
+    fn effective_idle_ttl(&self) -> Duration {
+        match self.idle_ttl_secs.load(Ordering::Relaxed) {
+            secs if secs < 0 => PROJECT_SERVICES_IDLE_TTL,
+            secs => Duration::from_secs(secs as u64),
+        }
     }
 
     pub fn get_or_load(
@@ -132,24 +164,37 @@ impl ProjectRegistry {
         project_root: impl Into<PathBuf>,
     ) -> Arc<ProjectServices> {
         let key = ProjectRegistryKey::new(config_home, project_root);
-        if let Some(project) = self.read_projects().get(&key) {
-            project.services.refresh_project_config_if_changed();
+        // Fast path: a cached entry whose project settings file is unchanged is
+        // served as-is. If the file changed since the entry was built, fall
+        // through to rebuild it under the write lock so the next session in this
+        // project observes the current settings AND a freshly-loaded plugin
+        // catalog (plugin enable/disable is a project-settings concern). Sessions
+        // already holding the old `Arc` keep their own fold snapshot.
+        if let Some(project) = self.read_projects().get(&key)
+            && !project.services.config_is_stale()
+        {
             return project.services.clone();
         }
 
         let mut projects = self.write_projects();
-        Self::evict_idle_locked(&mut projects, PROJECT_SERVICES_IDLE_TTL, Instant::now());
-        let entry = projects
-            .entry(key.clone())
-            .and_modify(|entry| {
-                entry.services.refresh_project_config_if_changed();
-            })
-            .or_insert_with(|| {
-                ProjectRegistryEntry::new(Arc::new(ProjectServices::load(
-                    &key.config_home,
-                    key.project_root.clone(),
-                )))
-            });
+        Self::evict_idle_locked(&mut projects, self.effective_idle_ttl(), Instant::now());
+        // Re-check under the write lock: another caller may have rebuilt it, or
+        // the entry may still be fresh (the read-lock window raced an insert).
+        let config_home = key.config_home.clone();
+        let project_root = key.project_root.clone();
+        let entry = match projects.entry(key) {
+            Entry::Occupied(mut occupied) => {
+                if occupied.get().services.config_is_stale() {
+                    *occupied.get_mut() = ProjectRegistryEntry::new(Arc::new(
+                        ProjectServices::load(&config_home, project_root),
+                    ));
+                }
+                occupied.into_mut()
+            }
+            Entry::Vacant(vacant) => vacant.insert(ProjectRegistryEntry::new(Arc::new(
+                ProjectServices::load(&config_home, project_root),
+            ))),
+        };
         entry.idle_since = None;
         entry.services.clone()
     }
@@ -265,17 +310,15 @@ impl ProjectServices {
         }
     }
 
-    fn refresh_project_config_if_changed(&self) -> bool {
-        let mut snapshot = match self.config_snapshot.write() {
+    /// Whether the project settings file backing this entry has changed on
+    /// disk since the entry was built. Drives the [`ProjectRegistry`] rebuild
+    /// decision so a stale plugin catalog is refreshed for the next session.
+    fn config_is_stale(&self) -> bool {
+        let snapshot = match self.config_snapshot.read() {
             Ok(snapshot) => snapshot,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if !snapshot.has_changed() {
-            return false;
-        }
-
-        *snapshot = ProjectConfigSnapshot::load(self.project_root().to_path_buf());
-        true
+        snapshot.has_changed()
     }
 
     pub fn output_style_sources(&self) -> Vec<coco_output_styles::PluginOutputStyleSource> {

@@ -216,6 +216,14 @@ pub enum MetadataEntry {
         #[serde(default)]
         model_usage: std::collections::HashMap<String, ModelCostEntry>,
     },
+    /// Durable `session_seq` high-water mark (multi-session plan D-39/D-47).
+    /// Appended at bounded intervals from the seq allocator's persist hook and
+    /// at session close; resume restores the counter with skip-ahead so a
+    /// restarted process never re-issues a seq at or below any emitted one.
+    SessionSeqWatermark {
+        session_id: SessionId,
+        session_seq: i64,
+    },
     /// File-history snapshot recorded by the rewind subsystem. Replayed
     /// on resume by [`build_file_history_snapshot_chain`] to rebuild
     /// the rewind picker and the disk-backup mapping.
@@ -493,6 +501,10 @@ pub struct TranscriptMetadata {
     pub git_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// Durable `session_seq` high-water mark recovered from the newest
+    /// `SessionSeqWatermark` metadata entry, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_seq_watermark: Option<i64>,
     pub is_sidechain: bool,
     pub created_at: String,
     pub modified_at: String,
@@ -1761,6 +1773,7 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
     let mut last_prompt: Option<String> = None;
     let mut git_branch: Option<String> = None;
     let mut cwd: Option<String> = None;
+    let mut session_seq_watermark: Option<i64> = None;
     let mut is_sidechain = false;
     let mut first_message_seen = false;
     let mut message_count: i32 = 0;
@@ -1863,6 +1876,15 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
                 } if entry_session_id == session_id => {
                     goal.clone_from(next_goal);
                 }
+                MetadataEntry::SessionSeqWatermark {
+                    session_id: entry_session_id,
+                    session_seq,
+                } if entry_session_id == session_id => {
+                    // Max, not last: interval-persisted entries always grow,
+                    // but a close-time append can race a hook append.
+                    session_seq_watermark =
+                        Some(session_seq_watermark.unwrap_or(0).max(*session_seq));
+                }
                 MetadataEntry::Summary { .. }
                 | MetadataEntry::CostSummary { .. }
                 | MetadataEntry::FileHistorySnapshot { .. }
@@ -1877,7 +1899,8 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
                 | MetadataEntry::PrLink { .. }
                 | MetadataEntry::WorktreeState { .. }
                 | MetadataEntry::Mode { .. }
-                | MetadataEntry::Goal { .. } => {}
+                | MetadataEntry::Goal { .. }
+                | MetadataEntry::SessionSeqWatermark { .. } => {}
             },
             Entry::Unknown(_) => {}
         }
@@ -1900,6 +1923,7 @@ pub fn fold_transcript_metadata(entries: &[Entry], session_id: &SessionId) -> Tr
         last_prompt,
         git_branch,
         cwd,
+        session_seq_watermark,
         is_sidechain,
         created_at: String::new(),
         modified_at: String::new(),

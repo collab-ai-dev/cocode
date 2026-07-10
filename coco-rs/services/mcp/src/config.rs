@@ -69,7 +69,12 @@ impl McpConfigLoader {
         // 3. Claude.ai scope: fetched at startup (not from file, loaded via register)
         //    Callers use `register_claudeai_configs()` to add these dynamically.
 
-        // 4. Project scope: .mcp.json in project directory
+        // 4. User scope — below project so a project definition wins a name
+        //    collision (more-local-wins layering, multi-session plan §16.1).
+        let user_mcp = config_home.join("mcp.json");
+        load_mcp_json(&user_mcp, ConfigScope::User, &mut configs_by_name);
+
+        // 5. Project scope: .mcp.json in project directory
         load_mcp_json(
             &roots.project_root.join(".mcp.json"),
             ConfigScope::Project,
@@ -82,11 +87,7 @@ impl McpConfigLoader {
             .join("mcp.json");
         load_mcp_json(&project_mcp, ConfigScope::Project, &mut configs_by_name);
 
-        // 6. User scope
-        let user_mcp = config_home.join("mcp.json");
-        load_mcp_json(&user_mcp, ConfigScope::User, &mut configs_by_name);
-
-        // 7. Local scope
+        // 6. Local scope
         let local_dir = format!("{}.local", coco_utils_common::COCO_CONFIG_DIR_NAME);
         let local_mcp = roots.session_cwd.join(local_dir).join("mcp.json");
         load_mcp_json(&local_mcp, ConfigScope::Local, &mut configs_by_name);

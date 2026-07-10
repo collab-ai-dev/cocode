@@ -236,12 +236,19 @@ pub struct UpsertInstanceOutcome {
     pub previous_last_seen_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct IngestStats {
     pub accepted: usize,
+    /// Byte-identical retries of an already-stored `(instance, session, seq)`.
+    /// Expected and benign — the connector re-sends unacked batches.
     pub duplicates: usize,
     pub parse_failures: usize,
+    /// A different event arriving under an already-stored
+    /// `(instance, session, seq)` — a per-session seq regression. Rejected as
+    /// corruption rather than overwriting (multi-session plan D-47). Non-zero
+    /// here means a producer re-issued a seq without skip-ahead.
+    pub rejected_conflicts: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

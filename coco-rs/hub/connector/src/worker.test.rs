@@ -411,6 +411,108 @@ async fn worker_retries_after_failed_batch_without_dropping_pending_events() {
     assert_eq!(delivered[0].events[0].session_seq, 1);
 }
 
+#[tokio::test]
+async fn worker_trims_pending_at_or_below_announce_resume_cursors() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let delivered = Arc::new(Mutex::new(Vec::<BatchFrame>::new()));
+    let delivered_for_task = Arc::clone(&delivered);
+    let session_a = session_id();
+    let session_b = SessionId::try_new("session-2").expect("valid session id");
+    let resumed_session = session_a.clone();
+    tokio::spawn(async move {
+        // First connection: read the announce, then drop without acking so the
+        // worker only ships once its full backlog is pending on the retry.
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = accept_hub_socket(stream).await;
+        let Some(Ok(WsMessage::Text(_))) = socket.next().await else {
+            panic!("expected announce on first connection");
+        };
+        drop(socket);
+
+        // Second connection: announce_ack reports session A durable through seq 3.
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = accept_hub_socket(stream).await;
+        while let Some(message) = socket.next().await {
+            let WsMessage::Text(text) = message.unwrap() else {
+                continue;
+            };
+            match serde_json::from_str::<HubFrame>(&text).unwrap() {
+                HubFrame::Announce(_) => {
+                    socket
+                        .send(WsMessage::Text(
+                            serde_json::to_string(&HubFrame::AnnounceAck(AnnounceAckFrame {
+                                first_seen: false,
+                                hub_version: "test".to_string(),
+                                resume_from: HashMap::from([(resumed_session.clone(), 3)]),
+                            }))
+                            .unwrap()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+                HubFrame::Batch(batch) => {
+                    let ack = ack_for_batch(&batch);
+                    delivered_for_task.lock().await.push(batch);
+                    socket
+                        .send(WsMessage::Text(
+                            serde_json::to_string(&HubFrame::BatchAck(ack))
+                                .unwrap()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+                _ => panic!("unexpected hub frame"),
+            }
+        }
+    });
+
+    let mut config = worker_config(format!("ws://{addr}/v1/connect"));
+    config.channel_capacity = 8;
+    let worker = HubConnectorWorker::spawn(config).unwrap();
+    let sender = worker.sender();
+    for seq in 1..=5 {
+        sender
+            .enqueue(durable_envelope(session_a.clone(), seq))
+            .await
+            .unwrap();
+    }
+    for seq in 1..=3 {
+        sender
+            .enqueue(durable_envelope(session_b.clone(), seq))
+            .await
+            .unwrap();
+    }
+
+    let stats = timeout(Duration::from_secs(2), worker.shutdown_and_flush())
+        .await
+        .unwrap()
+        .unwrap();
+    let delivered = delivered.lock().await;
+    let shipped: Vec<(SessionId, i64)> = delivered
+        .iter()
+        .flat_map(|batch| &batch.events)
+        .map(|event| (event.session_id.clone(), event.session_seq))
+        .collect();
+
+    assert_eq!(
+        shipped,
+        vec![
+            (session_a.clone(), 4),
+            (session_a, 5),
+            (session_b.clone(), 1),
+            (session_b.clone(), 2),
+            (session_b, 3),
+        ],
+        "worker must skip session A events at or below the resume cursor and keep all of session B"
+    );
+    assert_eq!(stats.shipped_events, 5);
+    assert_eq!(stats.trimmed_resumed_events, 3);
+    assert_eq!(stats.dropped_durable_events, 0);
+}
+
 async fn ack_announce(socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) {
     while let Some(message) = socket.next().await {
         let WsMessage::Text(text) = message.unwrap() else {

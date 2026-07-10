@@ -1144,6 +1144,7 @@ dependencies = [
  "coco-error",
  "coco-types",
  "futures",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "snafu",

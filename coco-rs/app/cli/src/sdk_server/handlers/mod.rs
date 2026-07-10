@@ -281,9 +281,23 @@ pub struct SdkServerState {
 
     /// Last MCP tool-registration reports used by `mcp/status`.
     mcp_registration: McpRegistrationState,
+
+    /// Process-shared durable `session_seq` allocator (multi-session plan
+    /// §10.1 / D-47). Every durable-envelope producer — the local AppServer
+    /// forwarder, sidecar forwarders, and the SDK Hub egress — draws from
+    /// these counters so per-session seqs stay strictly monotonic across
+    /// delivery paths, and watermark persistence + skip-ahead keep them
+    /// monotonic across process epochs.
+    session_seq: std::sync::Arc<coco_app_server::SessionSeqAllocator>,
 }
 
 impl SdkServerState {
+    pub(crate) fn session_seq_allocator(
+        &self,
+    ) -> &std::sync::Arc<coco_app_server::SessionSeqAllocator> {
+        &self.session_seq
+    }
+
     pub(crate) fn install_turn_runner_for_startup(&self, runner: Arc<dyn TurnRunner>) {
         self.turn_runner.install_for_startup(runner);
     }

@@ -44,6 +44,48 @@ fn registry_separates_project_roots() {
 }
 
 #[test]
+fn different_project_roots_resolve_independent_mcp_servers() {
+    // Two sessions in different projects must see only their own project's MCP
+    // servers — project config is per-project, never cross-contaminated
+    // (multi-session plan §6.2 / §16.1).
+    let temp = tempdir().unwrap();
+    let config_home = temp.path().join("home");
+    let project_a = temp.path().join("repo-a");
+    let project_b = temp.path().join("repo-b");
+    std::fs::create_dir_all(&config_home).unwrap();
+    std::fs::create_dir_all(&project_a).unwrap();
+    std::fs::create_dir_all(&project_b).unwrap();
+    std::fs::write(
+        project_a.join(".mcp.json"),
+        r#"{"mcpServers":{"only-in-a":{"command":"server-a","args":[]}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project_b.join(".mcp.json"),
+        r#"{"mcpServers":{"only-in-b":{"command":"server-b","args":[]}}}"#,
+    )
+    .unwrap();
+    let registry = ProjectRegistry::new();
+
+    let services_a = registry.get_or_load(&config_home, project_a.clone());
+    let services_b = registry.get_or_load(&config_home, project_b.clone());
+
+    let names_a: Vec<String> = services_a
+        .mcp_servers(&config_home, &project_a)
+        .into_iter()
+        .map(|server| server.name)
+        .collect();
+    let names_b: Vec<String> = services_b
+        .mcp_servers(&config_home, &project_b)
+        .into_iter()
+        .map(|server| server.name)
+        .collect();
+
+    assert_eq!(names_a, vec!["only-in-a".to_string()]);
+    assert_eq!(names_b, vec!["only-in-b".to_string()]);
+}
+
+#[test]
 fn registry_reload_replaces_cached_entry() {
     let temp = tempdir().unwrap();
     let config_home = temp.path().join("home");
@@ -94,12 +136,17 @@ fn registry_refreshes_entry_when_project_settings_change() {
     std::fs::write(&settings_path, "{}").unwrap();
     assert!(first.project_config_snapshot().has_changed());
 
+    // A stale project settings file rebuilds the entry: the next lookup returns
+    // a fresh `ProjectServices` (new `Arc`, freshly-loaded plugin catalog) so a
+    // later session sees the current settings, while `first`'s snapshot — held
+    // by an already-running session — is left untouched.
     let second = registry.get_or_load(&config_home, project_root.clone());
-    let third = registry.get_or_load(&config_home, project_root);
-
-    assert!(Arc::ptr_eq(&first, &second));
-    assert!(Arc::ptr_eq(&second, &third));
+    assert!(!Arc::ptr_eq(&first, &second));
     assert!(!second.project_config_snapshot().has_changed());
+
+    // With no further change, subsequent lookups reuse the rebuilt entry.
+    let third = registry.get_or_load(&config_home, project_root);
+    assert!(Arc::ptr_eq(&second, &third));
 }
 
 #[test]

@@ -44,6 +44,9 @@ pub struct HubConnectorWorkerStats {
     pub shipped_events: i64,
     pub skipped_ephemeral_events: i64,
     pub dropped_durable_events: i64,
+    /// Pending events skipped at announce time because `announce_ack.resume_from`
+    /// showed the hub already durably stored them (not data loss).
+    pub trimmed_resumed_events: i64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -414,7 +417,8 @@ async fn deliver_once(
 ) -> Result<(), HubConnectorError> {
     if client.is_none() {
         let mut connected = HubConnectorClient::connect(&config.url).await?;
-        connected.announce(config.announce.clone()).await?;
+        let ack = connected.announce(config.announce.clone()).await?;
+        trim_pending_already_stored(pending, &ack.resume_from, stats);
         *client = Some(connected);
     }
 
@@ -457,6 +461,30 @@ fn batch_events_within_limits(
         }
     }
     Ok(events)
+}
+
+/// Drop pending events the hub already durably stored per `announce_ack.resume_from`.
+///
+/// Replay is `seq > cursor`: an event at or below its session cursor was
+/// persisted by a previous connection, so re-sending it only burns bandwidth on
+/// hub-side dedup. Sessions absent from the map keep all their events. These
+/// drops are not data loss and must never produce `events_dropped` markers.
+fn trim_pending_already_stored(
+    pending: &mut VecDeque<EventEnvelope>,
+    resume_from: &HashMap<SessionId, i64>,
+    stats: &mut HubConnectorWorkerStats,
+) {
+    if resume_from.is_empty() || pending.is_empty() {
+        return;
+    }
+    let before = pending.len();
+    pending.retain(|event| {
+        resume_from
+            .get(&event.session_id)
+            .is_none_or(|cursor| event.session_seq > *cursor)
+    });
+    let trimmed = (before - pending.len()) as i64;
+    stats.trimmed_resumed_events = stats.trimmed_resumed_events.saturating_add(trimmed);
 }
 
 fn pop_acked_front(pending: &mut VecDeque<EventEnvelope>, ack: &BatchAckFrame) -> usize {

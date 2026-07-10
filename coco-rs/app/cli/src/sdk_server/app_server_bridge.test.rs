@@ -1375,6 +1375,68 @@ async fn local_outbound_forwarder_routes_core_events_through_app_server() {
     forwarder.await.expect("forwarder task");
 }
 
+/// The durable `session_seq` counter lives on the shared per-process allocator,
+/// not on the forwarder task. A forwarder respawn (e.g. a sidecar reconnect)
+/// therefore continues numbering instead of restarting at 1 (plan D-47).
+#[tokio::test]
+async fn session_seq_continues_across_forwarder_respawn() {
+    let state = Arc::new(SdkServerState::default());
+    let session_id = coco_types::SessionId::try_new("sess-seq-respawn").expect("valid session id");
+    state
+        .install_test_session_state(
+            session_id.clone(),
+            SessionMetadata {
+                cwd: ".".to_string(),
+                model: "test-model".to_string(),
+            },
+        )
+        .await;
+
+    let server = Arc::new(AppServer::<LocalAppSessionHandle>::new(1, 8));
+    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
+    let mut connection = adapter.connect();
+    connection
+        .attach_surface(session_id.clone(), AttachSurfaceOptions::default())
+        .expect("attach surface");
+
+    let running = || {
+        OutboundMessage::core_event(CoreEvent::Protocol(
+            ServerNotification::SessionStateChanged {
+                state: SessionState::Running,
+            },
+        ))
+    };
+
+    // First forwarder: stamps seq 1, then is dropped.
+    let (tx1, rx1) = mpsc::channel(8);
+    let forwarder1 = spawn_app_server_local_outbound_forwarder(
+        Arc::clone(&server),
+        Arc::clone(&state),
+        rx1,
+        Arc::new(std::sync::RwLock::new(None)),
+    );
+    tx1.send(running()).await.expect("send via forwarder 1");
+    let first = connection.events_mut().recv().await.expect("delivery 1");
+    assert_eq!(first.envelope.session_seq, Some(1));
+    drop(tx1);
+    forwarder1.await.expect("forwarder 1 task");
+
+    // A fresh forwarder over the SAME state continues at seq 2, proving the
+    // counter is process-shared rather than per-forwarder.
+    let (tx2, rx2) = mpsc::channel(8);
+    let forwarder2 = spawn_app_server_local_outbound_forwarder(
+        Arc::clone(&server),
+        Arc::clone(&state),
+        rx2,
+        Arc::new(std::sync::RwLock::new(None)),
+    );
+    tx2.send(running()).await.expect("send via forwarder 2");
+    let second = connection.events_mut().recv().await.expect("delivery 2");
+    assert_eq!(second.envelope.session_seq, Some(2));
+    drop(tx2);
+    forwarder2.await.expect("forwarder 2 task");
+}
+
 #[tokio::test]
 async fn app_server_bridge_runs_json_rpc_adapter_over_sdk_transport() {
     let server = Arc::new(AppServer::<LocalAppSessionHandle>::new(1, 8));
@@ -1487,6 +1549,7 @@ async fn app_server_no_replacement_resume_installs_scoped_state_without_sdk_slot
             message_count: 1,
             total_tokens: 0,
             tags: Vec::new(),
+            session_seq_watermark: None,
         })
         .expect("save session record");
     append_bridge_transcript_message(&manager, &session_id, &cwd, 1, "user", "resume me");

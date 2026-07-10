@@ -9,6 +9,7 @@ mod json_rpc_adapter;
 mod local_client_adapter;
 mod registry;
 mod session_data;
+mod session_seq;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -84,6 +85,9 @@ pub use session_data::page_session_items;
 pub use session_data::parse_session_data_cursor;
 pub use session_data::parse_session_data_limit;
 pub use session_data::session_data_page;
+pub use session_seq::SessionSeqAllocator;
+pub use session_seq::SessionSeqPersistHook;
+pub use session_seq::WATERMARK_PERSIST_INTERVAL;
 
 static NEXT_CONNECTION_KEY: AtomicI64 = AtomicI64::new(1);
 static NEXT_SERVER_REQUEST_ID: AtomicI64 = AtomicI64::new(1);

@@ -1,0 +1,140 @@
+//! Process-wide durable `session_seq` allocation.
+//!
+//! One allocator per process is the multi-session plan's "single stamping
+//! seam" (§10.1): every durable-envelope producer draws from the same
+//! per-session counters, so the union of all forwarder paths stays strictly
+//! monotonic per session. Restart continuity (plan D-39/D-47) comes from two
+//! halves owned here:
+//!
+//! - a persist hook fired at bounded intervals so a crash loses at most
+//!   [`WATERMARK_PERSIST_INTERVAL`] seqs of watermark staleness, and
+//! - skip-ahead initialization on resume: the counter restarts at
+//!   `watermark + skip_ahead_window + 1`, which is strictly above anything
+//!   the previous process epoch can have emitted. Replay is `seq > cursor`
+//!   everywhere, so the resulting hole is benign.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::PoisonError;
+
+use coco_types::SessionId;
+
+/// Persist a session's seq watermark. Invoked outside the allocator lock;
+/// implementations must not block (spawn their own IO).
+pub type SessionSeqPersistHook = Arc<dyn Fn(&SessionId, i64) + Send + Sync>;
+
+/// Persist the watermark at least every this many allocated seqs. The first
+/// allocation for a session always persists, so watermark staleness is
+/// bounded by this interval plus in-flight writes.
+pub const WATERMARK_PERSIST_INTERVAL: i64 = 32;
+
+const DEFAULT_SKIP_AHEAD_WINDOW: i64 = 1024 + WATERMARK_PERSIST_INTERVAL;
+
+/// Shared per-process allocator for durable `session_seq` values.
+pub struct SessionSeqAllocator {
+    inner: Mutex<AllocatorState>,
+}
+
+struct AllocatorState {
+    next: HashMap<SessionId, i64>,
+    last_persisted: HashMap<SessionId, i64>,
+    persist_hook: Option<SessionSeqPersistHook>,
+    skip_ahead_window: i64,
+}
+
+impl Default for SessionSeqAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SessionSeqAllocator {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(AllocatorState {
+                next: HashMap::new(),
+                last_persisted: HashMap::new(),
+                persist_hook: None,
+                skip_ahead_window: DEFAULT_SKIP_AHEAD_WINDOW,
+            }),
+        }
+    }
+
+    /// Lock the state, recovering the guard through a poisoned mutex. The
+    /// allocator only ever holds counters, so a prior panic can't leave a
+    /// torn invariant — continuing past the poison is the correct behavior.
+    fn state(&self) -> std::sync::MutexGuard<'_, AllocatorState> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Bind the skip-ahead window to the configured retention ring size.
+    /// Clamped so it always exceeds the persist interval — the safety proof
+    /// (`emitted_max <= watermark + staleness < watermark + window`) needs it.
+    pub fn set_skip_ahead_window(&self, event_retention_per_session: i64) {
+        let mut inner = self.state();
+        inner.skip_ahead_window = event_retention_per_session.max(WATERMARK_PERSIST_INTERVAL)
+            + WATERMARK_PERSIST_INTERVAL;
+    }
+
+    pub fn set_persist_hook(&self, hook: SessionSeqPersistHook) {
+        let mut inner = self.state();
+        inner.persist_hook = Some(hook);
+    }
+
+    /// Allocate the next durable seq for `session_id`, firing the persist
+    /// hook when the watermark is due (first allocation, then every
+    /// [`WATERMARK_PERSIST_INTERVAL`]).
+    pub fn next(&self, session_id: &SessionId) -> i64 {
+        let (seq, persist) = {
+            let mut inner = self.state();
+            let next = inner.next.entry(session_id.clone()).or_insert(1);
+            let seq = *next;
+            *next += 1;
+            let due = match inner.last_persisted.get(session_id) {
+                Some(last) => seq - *last >= WATERMARK_PERSIST_INTERVAL,
+                None => true,
+            };
+            if due {
+                inner.last_persisted.insert(session_id.clone(), seq);
+            }
+            (seq, due.then(|| inner.persist_hook.clone()).flatten())
+        };
+        if let Some(hook) = persist {
+            hook(session_id, seq);
+        }
+        seq
+    }
+
+    /// Restore counter state for a resumed session from its persisted
+    /// watermark: the next allocated seq is at least
+    /// `watermark + skip_ahead_window + 1`. Never moves a counter backwards.
+    pub fn initialize_after_watermark(&self, session_id: &SessionId, watermark: i64) {
+        let mut inner = self.state();
+        let floor = watermark
+            .saturating_add(inner.skip_ahead_window)
+            .saturating_add(1);
+        let next = inner.next.entry(session_id.clone()).or_insert(floor);
+        if *next < floor {
+            *next = floor;
+        }
+        // Force a persist on the first post-resume allocation so the new
+        // epoch's watermark lands quickly.
+        inner.last_persisted.remove(session_id);
+    }
+
+    /// Current high-water mark (last allocated seq) for close-time persistence.
+    ///
+    /// Counter state is deliberately kept for the process lifetime — a
+    /// close-then-resume in one process continues the in-memory counter with
+    /// no hole, and dropping it would risk a same-process seq restart when a
+    /// resumed transcript predates watermark persistence.
+    pub fn high_water(&self, session_id: &SessionId) -> Option<i64> {
+        let inner = self.state();
+        inner.next.get(session_id).map(|next| next - 1)
+    }
+}
+
+#[cfg(test)]
+#[path = "session_seq.test.rs"]
+mod tests;

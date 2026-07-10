@@ -148,6 +148,7 @@ async fn sqlite_store_ingests_events_with_session_seq_deduplication() {
     assert_eq!(stats.accepted, 2);
     assert_eq!(stats.duplicates, 1);
     assert_eq!(stats.parse_failures, 0);
+    assert_eq!(stats.rejected_conflicts, 0);
 
     let events = store
         .list_events(EventQuery {
@@ -177,6 +178,71 @@ async fn sqlite_store_ingests_events_with_session_seq_deduplication() {
     assert_eq!(session_row.last_seq, 2);
     assert_eq!(session_row.model.as_deref(), Some("claude-test"));
     assert_eq!(session_row.message_count, 2);
+}
+
+#[tokio::test]
+async fn sqlite_store_rejects_session_seq_regression_without_overwriting() {
+    let store = SqliteEventStore::open_in_memory().unwrap();
+    let session = session_id("session-a");
+    store
+        .upsert_instance(&announce(vec![session.clone()]))
+        .await
+        .unwrap();
+
+    // Original event at seq 1.
+    let first = store
+        .ingest_batch(
+            &instance_id().to_string(),
+            BatchFrame {
+                events: vec![tool_event(session.clone(), 1)],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.accepted, 1);
+    assert_eq!(first.rejected_conflicts, 0);
+
+    // A *different* event re-uses seq 1 (a regression a restarted process
+    // would emit without skip-ahead). It must be rejected, not stored.
+    let regression = store
+        .ingest_batch(
+            &instance_id().to_string(),
+            BatchFrame {
+                events: vec![protocol_event(session.clone(), 1)],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(regression.accepted, 0);
+    assert_eq!(regression.duplicates, 0);
+    assert_eq!(regression.rejected_conflicts, 1);
+
+    // A byte-identical retry of the original is still a benign duplicate.
+    let retry = store
+        .ingest_batch(
+            &instance_id().to_string(),
+            BatchFrame {
+                events: vec![tool_event(session.clone(), 1)],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry.duplicates, 1);
+    assert_eq!(retry.rejected_conflicts, 0);
+
+    // The stored event is still the original tool event, not the regression.
+    let events = store
+        .list_events(EventQuery {
+            instance_id: instance_id().to_string(),
+            session_id: Some(session.clone()),
+            before: None,
+            limit: 100,
+            filter: EventFilter::default(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(events.items.len(), 1);
+    assert_eq!(events.items[0].tool_name.as_deref(), Some("Read"));
 }
 
 #[tokio::test]

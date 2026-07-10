@@ -159,13 +159,14 @@ fn test_load_deduplicates_by_name() {
     .unwrap();
 
     let configs = McpConfigLoader::load(&project_dir, &config_home);
-    // User scope loads after project, so user wins (later overrides earlier)
+    // Project scope loads after user, so the project definition wins a name
+    // collision (more-local-wins layering, multi-session plan §16.1).
     assert_eq!(configs.len(), 1);
     let server = &configs[0];
     assert_eq!(server.name, "server1");
-    assert_eq!(server.scope, ConfigScope::User);
+    assert_eq!(server.scope, ConfigScope::Project);
     if let McpServerConfig::Stdio(stdio) = &server.config {
-        assert_eq!(stdio.command, "user-server");
+        assert_eq!(stdio.command, "project-server");
     }
 }
 

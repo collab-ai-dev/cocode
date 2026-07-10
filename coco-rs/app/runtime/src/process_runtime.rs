@@ -31,6 +31,16 @@ impl ProcessRuntime {
         }
     }
 
+    /// Apply the resolved `server.project_services_idle_ttl_secs` after config
+    /// resolution (which happens after `global()` is first taken). The idle
+    /// eviction loop reads the TTL live, so a post-startup update takes effect
+    /// on the next sweep. A non-positive value keeps the built-in default.
+    pub fn set_project_services_idle_ttl(&self, idle_for: Duration) {
+        if idle_for.as_secs() > 0 {
+            self.project_registry.registry().set_idle_ttl(idle_for);
+        }
+    }
+
     pub fn start(
         registry: &'static ProjectRegistry,
         idle_for: Duration,

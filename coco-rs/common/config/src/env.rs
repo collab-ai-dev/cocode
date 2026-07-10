@@ -75,6 +75,12 @@ pub enum EnvKey {
     /// Process shutdown drain timeout for AppServer sessions, in seconds.
     /// Non-positive values are ignored by config resolution.
     CocoServerShutdownTimeoutSecs,
+    /// Idle TTL before an unattached cached `ProjectServices` entry is
+    /// evicted, in seconds. Non-positive values are ignored.
+    CocoServerProjectServicesIdleTtlSecs,
+    /// Optional auto-archive timeout for a session with zero surfaces and no
+    /// active/queued turn, in seconds. Unset or non-positive = off.
+    CocoServerIdleSessionTimeoutSecs,
     /// SessionKind override for the concurrent-sessions PID registry.
     /// Accepted values: `bg`, `daemon`, `daemon-worker`. Anything else
     /// (or unset) means the session registers as `interactive`.
@@ -390,6 +396,10 @@ impl EnvKey {
             Self::CocoServerOutboundQueueFrames => "COCO_SERVER_OUTBOUND_QUEUE_FRAMES",
             Self::CocoServerTurnDrainTimeoutSecs => "COCO_SERVER_TURN_DRAIN_TIMEOUT_SECS",
             Self::CocoServerShutdownTimeoutSecs => "COCO_SERVER_SHUTDOWN_TIMEOUT_SECS",
+            Self::CocoServerProjectServicesIdleTtlSecs => {
+                "COCO_SERVER_PROJECT_SERVICES_IDLE_TTL_SECS"
+            }
+            Self::CocoServerIdleSessionTimeoutSecs => "COCO_SERVER_IDLE_SESSION_TIMEOUT_SECS",
             Self::CocoSessionKind => "COCO_SESSION_KIND",
             Self::CocoBashAutoBackgroundOnTimeout => "COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT",
             Self::CocoBashMaintainProjectWorkingDir => "COCO_BASH_MAINTAIN_PROJECT_WORKING_DIR",
