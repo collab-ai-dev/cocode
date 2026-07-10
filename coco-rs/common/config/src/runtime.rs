@@ -1245,8 +1245,14 @@ impl RuntimePublisher {
 
     /// Publish a fresh snapshot. Subscribers see the new `Arc`
     /// at their next `borrow().clone()`.
+    ///
+    /// Uses `send_replace` rather than `send`: the latter no-ops and
+    /// returns `Err` when there are zero live receivers (and `new`
+    /// drops its own receiver), which would silently leave `current()`
+    /// returning the stale snapshot. `send_replace` always stores the
+    /// value and still wakes any subscribers.
     pub fn publish(&self, runtime: Arc<RuntimeConfig>) {
-        let _ = self.sender.send(runtime);
+        self.sender.send_replace(runtime);
     }
 
     /// Subscribe to runtime updates. Each subscriber gets its own

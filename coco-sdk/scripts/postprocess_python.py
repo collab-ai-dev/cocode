@@ -434,6 +434,33 @@ def is_enum_schema(schema: dict) -> bool:
     return schema.get("type") == "string" and has_enum_or_const(schema)
 
 
+# Scalar newtype primitive → Python type. A Rust `#[serde(transparent)]
+# struct X(T)` where T is one of these serializes to a bare
+# `{"type": "<scalar>"}` schema with no further constraints.
+SCALAR_PY_TYPE = {
+    "string": "str",
+    "integer": "int",
+    "number": "float",
+    "boolean": "bool",
+}
+
+
+def is_scalar_newtype_schema(schema: dict) -> bool:
+    """Check if a schema is a transparent scalar newtype (`X = str` etc.).
+
+    Matches `{"type": "<scalar>"}` with no `enum` / `properties` / `oneOf`.
+    These become `Name = <pytype>` aliases so classes referencing them by
+    name resolve their Pydantic forward refs at import.
+    """
+    return (
+        isinstance(schema.get("type"), str)
+        and schema["type"] in SCALAR_PY_TYPE
+        and "enum" not in schema
+        and "properties" not in schema
+        and "oneOf" not in schema
+    )
+
+
 def is_union_alias_schema(schema: dict) -> bool:
     """Check if a schema defines a top-level union type alias.
 
@@ -806,11 +833,16 @@ def collect_definitions(schema_dir: Path) -> dict[str, dict]:
             #   * `anyOf: [...]` (no `type`) → union type alias
             #     (e.g. `RequestId = int | str` from
             #     `pub enum RequestId { Int(i64), String(String) }`)
+            #   * `type: string|integer|number|boolean` (no constraints)
+            #     → transparent scalar newtype alias (e.g. `SurfaceId =
+            #     str`). Bundle-only scalars must be kept or classes that
+            #     reference them fail Pydantic forward-ref resolution.
             if (
                 entry.get("type") == "object"
                 or "oneOf" in entry
                 or is_enum_schema(entry)
                 or is_union_alias_schema(entry)
+                or is_scalar_newtype_schema(entry)
             ):
                 defs[name] = entry
 
@@ -1127,12 +1159,6 @@ def main() -> None:
     # at module import. Each becomes `Name = <pytype>` so the wire
     # shape (transparent passthrough) is preserved.
     scalar_alias_names: dict[str, str] = {}
-    _SCALAR_PY_TYPE = {
-        "string": "str",
-        "integer": "int",
-        "number": "float",
-        "boolean": "bool",
-    }
     for name, defn in all_defs.items():
         if name in SKIP_TYPES or name in explicitly_handled:
             continue
@@ -1144,14 +1170,8 @@ def main() -> None:
             union_alias_names.add(name)
         elif defn.get("type") == "object":
             model_names.add(name)
-        elif (
-            isinstance(defn.get("type"), str)
-            and defn["type"] in _SCALAR_PY_TYPE
-            and "enum" not in defn
-            and "properties" not in defn
-            and "oneOf" not in defn
-        ):
-            scalar_alias_names[name] = _SCALAR_PY_TYPE[defn["type"]]
+        elif is_scalar_newtype_schema(defn):
+            scalar_alias_names[name] = SCALAR_PY_TYPE[defn["type"]]
 
     ENUM_TYPES.update(enum_names)
 

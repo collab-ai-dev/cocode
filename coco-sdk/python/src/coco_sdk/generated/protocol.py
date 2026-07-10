@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 SessionId = str
+SurfaceId = str
 TurnId = str
 
 
@@ -902,6 +903,22 @@ class ClientRequestSessionRead(BaseModel):
     params: SessionReadParams
 
 
+class ClientRequestSessionTurnsList(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/turns/list"] = Field(
+        default="session/turns/list", alias="method"
+    )
+    params: SessionTurnsListParams
+
+
+class ClientRequestSessionSubscribe(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/subscribe"] = Field(
+        default="session/subscribe", alias="method"
+    )
+    params: SessionSubscribeParams
+
+
 class ClientRequestSessionArchive(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal["session/archive"] = Field(
@@ -1155,6 +1172,8 @@ ClientRequest = Annotated[
         ClientRequestSessionResume,
         ClientRequestSessionList,
         ClientRequestSessionRead,
+        ClientRequestSessionTurnsList,
+        ClientRequestSessionSubscribe,
         ClientRequestSessionArchive,
         ClientRequestSessionRename,
         ClientRequestSessionToggleTag,
@@ -4147,7 +4166,9 @@ class ElicitationResolveParams(BaseModel):
 
 
 class InitializeParams(BaseModel):
-    agent_progress_summaries: bool | None = None
+    agent_progress_summaries: bool | None = Field(
+        default=None, alias="agentProgressSummaries"
+    )
     agents: dict[str, SdkAgentDefinition] | None = None
     append_system_prompt: str | None = None
     hooks: dict[str, list[HookCallbackMatcher]] | None = None
@@ -4207,8 +4228,19 @@ class SessionStartParams(BaseModel):
     system_prompt: str | None = None
 
 
+class SessionSubscribeParams(BaseModel):
+    session_id: SessionId
+    after_seq: int | None = None
+
+
 class SessionToggleTagParams(BaseModel):
     tag: str
+
+
+class SessionTurnsListParams(BaseModel):
+    session_id: SessionId
+    cursor: str | None = None
+    limit: int | None = None
 
 
 class SetAgentColorParams(BaseModel):
@@ -4274,6 +4306,8 @@ class ClientRequestMethod(str, Enum):
     SESSION_RESUME = "session/resume"
     SESSION_LIST = "session/list"
     SESSION_READ = "session/read"
+    SESSION_TURNS_LIST = "session/turns/list"
+    SESSION_SUBSCRIBE = "session/subscribe"
     SESSION_ARCHIVE = "session/archive"
     SESSION_RENAME = "session/rename"
     SESSION_TOGGLE_TAG = "session/toggleTag"
@@ -4375,6 +4409,30 @@ class SessionReadRequest(BaseModel):
 
 
 SessionReadRequestParams = SessionReadRequest.SessionReadRequestParams
+
+
+class SessionTurnsListRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/turns/list"] = Field(default="session/turns/list")
+    params: SessionTurnsListRequestParams
+
+    class SessionTurnsListRequestParams(SessionTurnsListParams):
+        pass
+
+
+SessionTurnsListRequestParams = SessionTurnsListRequest.SessionTurnsListRequestParams
+
+
+class SessionSubscribeRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    method: Literal["session/subscribe"] = Field(default="session/subscribe")
+    params: SessionSubscribeRequestParams
+
+    class SessionSubscribeRequestParams(SessionSubscribeParams):
+        pass
+
+
+SessionSubscribeRequestParams = SessionSubscribeRequest.SessionSubscribeRequestParams
 
 
 class SessionArchiveRequest(BaseModel):
@@ -4835,6 +4893,8 @@ ClientRequest = Annotated[
         SessionResumeRequest,
         SessionListRequest,
         SessionReadRequest,
+        SessionTurnsListRequest,
+        SessionSubscribeRequest,
         SessionArchiveRequest,
         SessionRenameRequest,
         SessionToggleTagRequest,
@@ -5846,6 +5906,7 @@ class SessionReadResult(BaseModel):
 
 class SessionResumeResult(BaseModel):
     session: SdkSessionSummary
+    surface_id: SurfaceId | None = None
 
 
 class SessionStartInput(BaseModel):
@@ -5862,6 +5923,7 @@ class SessionStartInput(BaseModel):
 
 class SessionStartResult(BaseModel):
     session_id: SessionId
+    surface_id: SurfaceId | None = None
 
 
 class SessionUsageSourceEntry(BaseModel):

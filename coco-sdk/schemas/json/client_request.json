@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ClientRequest",
-  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the base variants and §5.4 for gap additions. 43 total.",
+  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the base variants and §5.4 for gap additions. 45 total.",
   "oneOf": [
     {
       "type": "object",
@@ -72,6 +72,38 @@
         },
         "params": {
           "$ref": "#/$defs/SessionReadParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/turns/list"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionTurnsListParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "session/subscribe"
+        },
+        "params": {
+          "$ref": "#/$defs/SessionSubscribeParams"
         }
       },
       "required": [
@@ -837,7 +869,7 @@
       "description": "Sent once at session start for capability negotiation. Carries hooks,\nSDK MCP servers, output format, system prompt, and agent definitions\nso the agent can construct its registries before the first turn.",
       "type": "object",
       "properties": {
-        "agent_progress_summaries": {
+        "agentProgressSummaries": {
           "description": "Enable agent progress summaries.",
           "type": [
             "boolean",
@@ -1727,6 +1759,26 @@
         }
       }
     },
+    "SessionSubscribeParams": {
+      "description": "Params for passive `session/subscribe`.",
+      "type": "object",
+      "properties": {
+        "after_seq": {
+          "description": "Last durable envelope sequence the client already has.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id"
+      ]
+    },
     "SessionToggleTagParams": {
       "description": "Params for `session/toggleTag`.",
       "type": "object",
@@ -1737,6 +1789,32 @@
       },
       "required": [
         "tag"
+      ]
+    },
+    "SessionTurnsListParams": {
+      "description": "Params for `session/turns/list`.",
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "description": "Optional pagination cursor.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id"
       ]
     },
     "SetAgentColorParams": {

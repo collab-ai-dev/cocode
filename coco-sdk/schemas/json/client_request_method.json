@@ -9,6 +9,8 @@
     "session/resume",
     "session/list",
     "session/read",
+    "session/turns/list",
+    "session/subscribe",
     "session/archive",
     "session/rename",
     "session/toggleTag",
