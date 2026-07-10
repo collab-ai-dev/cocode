@@ -51,7 +51,7 @@ members = [
     "tests/live",
     "tests/cassette",
 
-    # ─── vercel-ai/ (9) ───
+    # ─── vercel-ai/ (10) ───
     "vercel-ai/provider",
     "vercel-ai/provider-utils",
     "vercel-ai/ai",
@@ -61,6 +61,7 @@ members = [
     "vercel-ai/google-codeassist",
     "vercel-ai/anthropic",
     "vercel-ai/bytedance",
+    "vercel-ai/groq",
 
     # ─── services/ (9) ───
     "services/inference",
@@ -193,6 +194,7 @@ vercel-ai-google = { path = "vercel-ai/google" }
 vercel-ai-google-codeassist = { path = "vercel-ai/google-codeassist" }
 vercel-ai-anthropic = { path = "vercel-ai/anthropic" }
 vercel-ai-bytedance = { path = "vercel-ai/bytedance" }
+vercel-ai-groq = { path = "vercel-ai/groq" }
 
 # Internal - services
 coco-inference = { path = "services/inference" }

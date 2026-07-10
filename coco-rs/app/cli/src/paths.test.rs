@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use super::*;
+use coco_config::EnvKey;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 

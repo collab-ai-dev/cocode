@@ -673,7 +673,7 @@ fn create_chat_stream(
 
 struct ChatStreamState {
     byte_stream: vercel_ai_provider_utils::ByteStream,
-    buffer: String,
+    decoder: vercel_ai_provider_utils::SseDecoder,
     pending: std::collections::VecDeque<LanguageModelV4StreamPart>,
     /// Per-index buffer for deltas that arrive before `function.name`.
     pending_tool_calls: HashMap<usize, PendingToolCall>,
@@ -734,7 +734,7 @@ impl ChatStreamState {
 
         Self {
             byte_stream,
-            buffer: String::new(),
+            decoder: vercel_ai_provider_utils::SseDecoder::new(),
             pending,
             pending_tool_calls: HashMap::new(),
             forwarded_tool_call_indices: std::collections::HashSet::new(),
@@ -755,42 +755,21 @@ impl ChatStreamState {
         }
     }
 
-    /// Read from byte_stream, parse SSE lines, produce events.
+    /// Read from byte_stream, decode complete SSE `data:` lines, produce events.
     /// Returns Ok(true) if the stream is still open, Ok(false) if the stream ended.
     async fn next_events(&mut self) -> Result<bool, AISdkError> {
         use futures::StreamExt;
 
         match self.byte_stream.next().await {
             Some(Ok(bytes)) => {
-                let text = String::from_utf8_lossy(&bytes);
-                self.buffer.push_str(&text);
-                self.process_buffer();
+                self.decoder.push(&bytes);
+                while let Some(data) = self.decoder.next_data_line() {
+                    self.process_data_line(&data);
+                }
                 Ok(true)
             }
             Some(Err(e)) => Err(AISdkError::new(format!("Stream read error: {e}"))),
             None => Ok(false),
-        }
-    }
-
-    /// Process accumulated buffer, extracting complete SSE data lines.
-    fn process_buffer(&mut self) {
-        while let Some(line_end) = self.buffer.find('\n') {
-            let line = self.buffer[..line_end].trim_end_matches('\r').to_string();
-            self.buffer = self.buffer[line_end + 1..].to_string();
-
-            if line.is_empty() {
-                continue;
-            }
-
-            if let Some(data) = line
-                .strip_prefix("data: ")
-                .or_else(|| line.strip_prefix("data:"))
-            {
-                if data == "[DONE]" {
-                    continue;
-                }
-                self.process_data_line(data);
-            }
         }
     }
 

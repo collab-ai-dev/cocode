@@ -629,7 +629,7 @@ fn create_chat_stream(
 
 struct ChatStreamState {
     byte_stream: vercel_ai_provider_utils::ByteStream,
-    buffer: String,
+    decoder: vercel_ai_provider_utils::SseDecoder,
     pending: std::collections::VecDeque<LanguageModelV4StreamPart>,
     /// Shared tool-call accumulator.
     /// OpenAI Chat is strict — id + function.name on first delta —
@@ -666,7 +666,7 @@ impl ChatStreamState {
 
         Self {
             byte_stream,
-            buffer: String::new(),
+            decoder: vercel_ai_provider_utils::SseDecoder::new(),
             pending,
             tool_call_tracker,
             text_started: false,
@@ -697,33 +697,14 @@ impl ChatStreamState {
 
         match self.byte_stream.next().await {
             Some(Ok(bytes)) => {
-                let text = String::from_utf8_lossy(&bytes);
-                self.buffer.push_str(&text);
-                self.process_buffer();
+                self.decoder.push(&bytes);
+                while let Some(data) = self.decoder.next_data_line() {
+                    self.process_data_line(&data);
+                }
                 Ok(true)
             }
             Some(Err(e)) => Err(AISdkError::new(format!("Stream read error: {e}"))),
             None => Ok(false),
-        }
-    }
-
-    /// Process accumulated buffer, extracting complete SSE data lines.
-    fn process_buffer(&mut self) {
-        while let Some(line_end) = self.buffer.find('\n') {
-            let line_len = line_end + 1;
-            let line = self.buffer[..line_end].trim_end_matches('\r');
-            if let Some(data) = line
-                .strip_prefix("data: ")
-                .or_else(|| line.strip_prefix("data:"))
-                && !data.is_empty()
-                && data != "[DONE]"
-            {
-                let data = data.to_string();
-                self.buffer.drain(..line_len);
-                self.process_data_line(&data);
-                continue;
-            }
-            self.buffer.drain(..line_len);
         }
     }
 
