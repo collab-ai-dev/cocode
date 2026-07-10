@@ -52,6 +52,8 @@ pub use app_server_bridge::AppServerSdkHandler;
 pub use app_server_bridge::LocalAppSessionHandle;
 pub use app_server_bridge::SdkAppServerBridgeError;
 pub use app_server_bridge::install_sdk_session_runtime_state;
+pub use app_server_bridge::load_local_app_server_session_runtime;
+pub use app_server_bridge::shutdown_local_app_server_sessions;
 pub use app_server_bridge::spawn_app_server_local_outbound_forwarder;
 pub use approval_bridge::SdkPermissionBridge;
 pub use bridge_control::SdkBridgeControlHandler;

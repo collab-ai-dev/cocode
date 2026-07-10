@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ use coco_app_server::LocalClientRequestContext;
 use coco_app_server::LocalClientRequestFuture;
 use coco_app_server::LocalClientRequestHandler;
 use coco_app_server::SubscribeReplay;
+use coco_app_server::SurfaceLimits;
 use coco_app_server::SurfaceRole;
 use coco_app_server_client::ClientError;
 use coco_app_server_client::ServerClient;
@@ -64,7 +66,38 @@ use crate::sdk_server::transport::TransportError;
 
 const APP_SERVER_SDK_FRAME_CHANNEL_CAPACITY: usize = 128;
 const APP_SERVER_LOCAL_CHANNEL_CAPACITY: usize = 128;
-const APP_SERVER_CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const APP_SERVER_LOCAL_RETENTION_PER_SESSION: usize = 128;
+const APP_SERVER_MAX_SURFACES_PER_CONNECTION: usize = 8;
+const APP_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION: usize = 16;
+pub(crate) const APP_SERVER_TURN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn server_config_usize(value: i64, fallback: usize) -> usize {
+    usize::try_from(value)
+        .ok()
+        .filter(|value| *value > 0)
+        .unwrap_or(fallback)
+}
+
+fn server_config_surface_limits(server_config: &coco_config::ServerConfig) -> SurfaceLimits {
+    SurfaceLimits {
+        max_surfaces_per_connection: server_config_usize(
+            server_config.max_surfaces_per_connection,
+            APP_SERVER_MAX_SURFACES_PER_CONNECTION,
+        ),
+        max_passive_surfaces_per_session: server_config_usize(
+            server_config.max_passive_surfaces_per_session,
+            APP_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION,
+        ),
+    }
+}
+
+fn server_config_duration_secs(value: i64, fallback: Duration) -> Duration {
+    u64::try_from(value)
+        .ok()
+        .filter(|value| *value > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(fallback)
+}
 
 #[derive(Debug, Clone)]
 pub struct AppServerLocalTurnCompletion {
@@ -78,6 +111,7 @@ pub struct AppServerSdkHandler {
     state: Arc<SdkServerState>,
     notif_tx: mpsc::Sender<OutboundMessage>,
     local_app_server: Option<Arc<AppServer<LocalAppSessionHandle>>>,
+    turn_drain_timeout: Duration,
 }
 
 /// Local AppServer registry handle for the current app/cli bridge.
@@ -158,6 +192,7 @@ impl AppServerSdkHandler {
             state,
             notif_tx,
             local_app_server: None,
+            turn_drain_timeout: APP_SERVER_TURN_DRAIN_TIMEOUT,
         }
     }
 
@@ -166,10 +201,25 @@ impl AppServerSdkHandler {
         notif_tx: mpsc::Sender<OutboundMessage>,
         app_server: Arc<AppServer<LocalAppSessionHandle>>,
     ) -> Self {
+        Self::with_local_app_server_and_turn_drain_timeout(
+            state,
+            notif_tx,
+            app_server,
+            APP_SERVER_TURN_DRAIN_TIMEOUT,
+        )
+    }
+
+    pub fn with_local_app_server_and_turn_drain_timeout(
+        state: Arc<SdkServerState>,
+        notif_tx: mpsc::Sender<OutboundMessage>,
+        app_server: Arc<AppServer<LocalAppSessionHandle>>,
+        turn_drain_timeout: Duration,
+    ) -> Self {
         Self {
             state,
             notif_tx,
             local_app_server: Some(app_server),
+            turn_drain_timeout,
         }
     }
 }
@@ -217,6 +267,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                 .map(|summary| summary.session_id)
                 .collect::<Vec<_>>();
             let state = Arc::clone(&self.state);
+            let turn_drain_timeout = self.turn_drain_timeout;
             return Box::pin(async move {
                 let replacement = state.runtime_replacement_snapshot().await;
                 if let Some(replacement) = replacement {
@@ -227,6 +278,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                         live_before,
                         params,
                         replacement,
+                        turn_drain_timeout,
                     )
                     .await;
                 }
@@ -236,6 +288,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                     connection,
                     live_before,
                     params,
+                    turn_drain_timeout,
                 )
                 .await
             });
@@ -251,6 +304,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                 .map(|summary| summary.session_id)
                 .collect::<Vec<_>>();
             let state = Arc::clone(&self.state);
+            let turn_drain_timeout = self.turn_drain_timeout;
             return Box::pin(async move {
                 let replacement = state.runtime_replacement_snapshot().await;
                 if let Some(replacement) = replacement {
@@ -261,6 +315,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                         live_before,
                         params,
                         replacement,
+                        turn_drain_timeout,
                     )
                     .await;
                 }
@@ -270,6 +325,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                     connection,
                     live_before,
                     params,
+                    turn_drain_timeout,
                 )
                 .await
             });
@@ -282,6 +338,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
             }),
         };
         let state = Arc::clone(&self.state);
+        let turn_drain_timeout = self.turn_drain_timeout;
         Box::pin(async move {
             let dispatch_result = dispatch_sdk_client_request(request, ctx).await;
             let mut result = dispatch_result?;
@@ -292,6 +349,7 @@ impl JsonRpcRequestHandler for AppServerSdkHandler {
                     Arc::clone(&state),
                     lifecycle_request,
                     &result,
+                    turn_drain_timeout,
                 )
                 .await?
             {
@@ -349,6 +407,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                 .map(|summary| summary.session_id)
                 .collect::<Vec<_>>();
             let state = Arc::clone(&self.state);
+            let turn_drain_timeout = self.turn_drain_timeout;
             return Box::pin(async move {
                 let replacement = state.runtime_replacement_snapshot().await;
                 if let Some(replacement) = replacement {
@@ -359,6 +418,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                         live_before,
                         params,
                         replacement,
+                        turn_drain_timeout,
                     )
                     .await;
                 }
@@ -368,6 +428,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                     connection,
                     live_before,
                     params,
+                    turn_drain_timeout,
                 )
                 .await
             });
@@ -383,6 +444,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                 .map(|summary| summary.session_id)
                 .collect::<Vec<_>>();
             let state = Arc::clone(&self.state);
+            let turn_drain_timeout = self.turn_drain_timeout;
             return Box::pin(async move {
                 let replacement = state.runtime_replacement_snapshot().await;
                 if let Some(replacement) = replacement {
@@ -393,6 +455,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                         live_before,
                         params,
                         replacement,
+                        turn_drain_timeout,
                     )
                     .await;
                 }
@@ -402,6 +465,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                     connection,
                     live_before,
                     params,
+                    turn_drain_timeout,
                 )
                 .await
             });
@@ -414,6 +478,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
             }),
         };
         let state = Arc::clone(&self.state);
+        let turn_drain_timeout = self.turn_drain_timeout;
         Box::pin(async move {
             let dispatch_result = dispatch_sdk_client_request(request, ctx).await;
             let mut result = dispatch_result?;
@@ -424,6 +489,7 @@ impl LocalClientRequestHandler for AppServerSdkHandler {
                     Arc::clone(&state),
                     lifecycle_request,
                     &result,
+                    turn_drain_timeout,
                 )
                 .await?
             {
@@ -482,6 +548,7 @@ async fn start_sdk_session_with_scoped_state(
     connection: ConnectionKey,
     live_before: Vec<SessionId>,
     params: coco_types::SessionStartParams,
+    turn_drain_timeout: Duration,
 ) -> Result<serde_json::Value, JsonRpcDispatchError> {
     if state.has_session_runtime().await {
         return Err(JsonRpcDispatchError {
@@ -514,6 +581,7 @@ async fn start_sdk_session_with_scoped_state(
             live_before,
         },
         &result,
+        turn_drain_timeout,
     )
     .await?
     {
@@ -528,6 +596,7 @@ async fn resume_sdk_session_with_scoped_state(
     connection: ConnectionKey,
     live_before: Vec<SessionId>,
     params: coco_types::SessionResumeParams,
+    turn_drain_timeout: Duration,
 ) -> Result<serde_json::Value, JsonRpcDispatchError> {
     let loaded = session::load_resume_session(params, &state)
         .await
@@ -582,6 +651,7 @@ async fn resume_sdk_session_with_scoped_state(
             live_before,
         },
         &result,
+        turn_drain_timeout,
     )
     .await?
     {
@@ -597,6 +667,7 @@ async fn start_sdk_session_with_runtime_replacement(
     live_before: Vec<SessionId>,
     params: coco_types::SessionStartParams,
     replacement: RuntimeReplacementContext,
+    turn_drain_timeout: Duration,
 ) -> Result<serde_json::Value, JsonRpcDispatchError> {
     let prepared = session::prepare_session_start(params, &state, false)
         .await
@@ -632,6 +703,7 @@ async fn start_sdk_session_with_runtime_replacement(
                 previous_session_id.clone(),
                 started_session_id.clone(),
                 make_factory(),
+                turn_drain_timeout,
             )
             .await?
             {
@@ -645,6 +717,7 @@ async fn start_sdk_session_with_runtime_replacement(
                         previous_session_id,
                         started_session_id.clone(),
                         make_factory(),
+                        turn_drain_timeout,
                     )
                     .await?,
                 );
@@ -655,6 +728,7 @@ async fn start_sdk_session_with_runtime_replacement(
                 Arc::clone(&app_server),
                 Arc::clone(&state),
                 previous_session_id,
+                turn_drain_timeout,
             )
             .await?;
         }
@@ -714,6 +788,7 @@ async fn resume_sdk_session_with_runtime_replacement(
     live_before: Vec<SessionId>,
     params: coco_types::SessionResumeParams,
     replacement: RuntimeReplacementContext,
+    turn_drain_timeout: Duration,
 ) -> Result<serde_json::Value, JsonRpcDispatchError> {
     let loaded = session::load_resume_session(params, &state)
         .await
@@ -783,6 +858,7 @@ async fn resume_sdk_session_with_runtime_replacement(
                 previous_session_id.clone(),
                 resumed_session_id.clone(),
                 make_factory(),
+                turn_drain_timeout,
             )
             .await?
             {
@@ -796,6 +872,7 @@ async fn resume_sdk_session_with_runtime_replacement(
                         previous_session_id,
                         resumed_session_id.clone(),
                         make_factory(),
+                        turn_drain_timeout,
                     )
                     .await?,
                 );
@@ -806,6 +883,7 @@ async fn resume_sdk_session_with_runtime_replacement(
                 Arc::clone(&app_server),
                 Arc::clone(&state),
                 previous_session_id,
+                turn_drain_timeout,
             )
             .await?;
         }
@@ -1053,6 +1131,47 @@ where
         .map_err(|error| local_lifecycle_error("load session", error))
 }
 
+pub async fn load_local_app_server_session_runtime(
+    app_server: &Arc<AppServer<LocalAppSessionHandle>>,
+    session_id: SessionId,
+    runtime_factory: crate::session_runtime::SessionRuntimeFactory,
+) -> Result<LocalAppSessionHandle, JsonRpcDispatchError> {
+    let registry_session_id = session_id.clone();
+    let build_session_id = session_id.clone();
+    load_local_app_server_session_with_factory(app_server, session_id, async move {
+        let runtime = runtime_factory
+            .build_with_session_id(build_session_id)
+            .await
+            .map_err(|error| coco_app_server::RegistryError::load_failed(error.to_string()))?;
+        Ok(LocalAppSessionHandle::from_runtime(
+            registry_session_id,
+            runtime,
+        ))
+    })
+    .await
+}
+
+pub async fn load_local_app_server_session_runtime_with_cwd(
+    app_server: &Arc<AppServer<LocalAppSessionHandle>>,
+    session_id: SessionId,
+    runtime_factory: crate::session_runtime::SessionRuntimeFactory,
+    cwd: PathBuf,
+) -> Result<LocalAppSessionHandle, JsonRpcDispatchError> {
+    let registry_session_id = session_id.clone();
+    let build_session_id = session_id.clone();
+    load_local_app_server_session_with_factory(app_server, session_id, async move {
+        let runtime = runtime_factory
+            .build_with_session_id_and_cwd(build_session_id, cwd)
+            .await
+            .map_err(|error| coco_app_server::RegistryError::load_failed(error.to_string()))?;
+        Ok(LocalAppSessionHandle::from_runtime(
+            registry_session_id,
+            runtime,
+        ))
+    })
+    .await
+}
+
 fn encode_session_resume_result(
     session: &coco_session::Session,
     surface_id: Option<SurfaceId>,
@@ -1098,6 +1217,7 @@ async fn apply_local_lifecycle_request(
     state: Arc<SdkServerState>,
     request: LocalLifecycleRequest,
     result: &serde_json::Value,
+    turn_drain_timeout: Duration,
 ) -> Result<Option<SurfaceId>, JsonRpcDispatchError> {
     match request {
         LocalLifecycleRequest::Start {
@@ -1117,6 +1237,7 @@ async fn apply_local_lifecycle_request(
                         Arc::clone(&app_server),
                         Arc::clone(&state),
                         previous_session_id,
+                        turn_drain_timeout,
                     )
                     .await?;
                 }
@@ -1150,6 +1271,7 @@ async fn apply_local_lifecycle_request(
                             Arc::clone(&state),
                             previous_session_id.clone(),
                             LocalAppSessionHandle::snapshot(resumed_session_id.clone()),
+                            turn_drain_timeout,
                         )
                         .await?;
                         if let Some(surface_id) = replacement {
@@ -1161,6 +1283,7 @@ async fn apply_local_lifecycle_request(
                                 Arc::clone(&state),
                                 previous_session_id,
                                 LocalAppSessionHandle::snapshot(resumed_session_id.clone()),
+                                turn_drain_timeout,
                             )
                             .await?;
                             replaced_existing = true;
@@ -1170,6 +1293,7 @@ async fn apply_local_lifecycle_request(
                             Arc::clone(&app_server),
                             Arc::clone(&state),
                             previous_session_id,
+                            turn_drain_timeout,
                         )
                         .await?;
                     }
@@ -1193,7 +1317,8 @@ async fn apply_local_lifecycle_request(
             }
         }
         LocalLifecycleRequest::Archive(session_id) => {
-            close_local_app_server_session(app_server, state, session_id).await?;
+            close_local_app_server_session(app_server, state, session_id, turn_drain_timeout)
+                .await?;
             Ok(None)
         }
     }
@@ -1313,6 +1438,7 @@ async fn replace_local_app_server_session(
     state: Arc<SdkServerState>,
     old_session_id: SessionId,
     new_handle: LocalAppSessionHandle,
+    turn_drain_timeout: Duration,
 ) -> Result<Option<SurfaceId>, JsonRpcDispatchError> {
     let new_session_id = new_handle.session_id.clone();
     replace_local_app_server_session_with_factory(
@@ -1321,6 +1447,7 @@ async fn replace_local_app_server_session(
         old_session_id,
         new_session_id,
         async { Ok::<LocalAppSessionHandle, coco_app_server::RegistryError>(new_handle) },
+        turn_drain_timeout,
     )
     .await
     .map(|replacement| replacement.map(|(_, surface)| surface))
@@ -1332,6 +1459,7 @@ async fn replace_local_app_server_session_with_factory<F>(
     old_session_id: SessionId,
     new_session_id: SessionId,
     factory: F,
+    turn_drain_timeout: Duration,
 ) -> Result<Option<(LocalAppSessionHandle, SurfaceId)>, JsonRpcDispatchError>
 where
     F: Future<Output = Result<LocalAppSessionHandle, coco_app_server::RegistryError>>
@@ -1345,6 +1473,7 @@ where
         new_session_id,
         factory,
         coco_hooks::orchestration::ExitReason::Other,
+        turn_drain_timeout,
     )
     .await
 }
@@ -1356,6 +1485,7 @@ async fn replace_local_app_server_session_with_factory_and_close_reason<F>(
     new_session_id: SessionId,
     factory: F,
     close_reason: coco_hooks::orchestration::ExitReason,
+    turn_drain_timeout: Duration,
 ) -> Result<Option<(LocalAppSessionHandle, SurfaceId)>, JsonRpcDispatchError>
 where
     F: Future<Output = Result<LocalAppSessionHandle, coco_app_server::RegistryError>>
@@ -1374,7 +1504,12 @@ where
             calling_surface,
             factory,
             move |handle| async move {
-                close_sdk_session_state_for_app_server(&close_state, handle.session_id()).await;
+                close_sdk_session_state_for_app_server(
+                    &close_state,
+                    handle.session_id(),
+                    turn_drain_timeout,
+                )
+                .await;
                 close_local_session_handle_with_reason(handle, close_reason).await;
             },
         )
@@ -1394,6 +1529,7 @@ async fn replace_detached_local_app_server_session(
     state: Arc<SdkServerState>,
     old_session_id: SessionId,
     new_handle: LocalAppSessionHandle,
+    turn_drain_timeout: Duration,
 ) -> Result<(), JsonRpcDispatchError> {
     let new_session_id = new_handle.session_id.clone();
     replace_detached_local_app_server_session_with_factory(
@@ -1402,6 +1538,7 @@ async fn replace_detached_local_app_server_session(
         old_session_id,
         new_session_id,
         async { Ok::<LocalAppSessionHandle, coco_app_server::RegistryError>(new_handle) },
+        turn_drain_timeout,
     )
     .await
     .map(|_| ())
@@ -1413,6 +1550,7 @@ async fn replace_detached_local_app_server_session_with_factory<F>(
     old_session_id: SessionId,
     new_session_id: SessionId,
     factory: F,
+    turn_drain_timeout: Duration,
 ) -> Result<LocalAppSessionHandle, JsonRpcDispatchError>
 where
     F: Future<Output = Result<LocalAppSessionHandle, coco_app_server::RegistryError>>
@@ -1426,7 +1564,12 @@ where
             new_session_id,
             factory,
             move |handle| async move {
-                close_sdk_session_state_for_app_server(&close_state, handle.session_id()).await;
+                close_sdk_session_state_for_app_server(
+                    &close_state,
+                    handle.session_id(),
+                    turn_drain_timeout,
+                )
+                .await;
                 close_local_session_handle(handle).await;
             },
         )
@@ -1488,6 +1631,7 @@ async fn close_local_app_server_session(
     app_server: Arc<AppServer<LocalAppSessionHandle>>,
     state: Arc<SdkServerState>,
     session_id: SessionId,
+    turn_drain_timeout: Duration,
 ) -> Result<(), JsonRpcDispatchError> {
     if !app_server
         .list_live_sessions()
@@ -1499,7 +1643,12 @@ async fn close_local_app_server_session(
     let close_state = Arc::clone(&state);
     let mut completion = match app_server
         .spawn_close(session_id, move |handle| async move {
-            close_sdk_session_state_for_app_server(&close_state, handle.session_id()).await;
+            close_sdk_session_state_for_app_server(
+                &close_state,
+                handle.session_id(),
+                turn_drain_timeout,
+            )
+            .await;
             close_local_session_handle(handle).await;
         })
         .map_err(|error| local_lifecycle_error("archive session", error))?
@@ -1514,6 +1663,45 @@ async fn close_local_app_server_session(
         .map_err(|error| local_lifecycle_error("archive session", error))
 }
 
+pub async fn shutdown_local_app_server_sessions(
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    state: Arc<SdkServerState>,
+    turn_drain_timeout: Duration,
+) -> Result<(), JsonRpcDispatchError> {
+    let close_state = Arc::clone(&state);
+    let shutdown = app_server.spawn_shutdown(move |handle| {
+        let close_state = Arc::clone(&close_state);
+        async move {
+            close_sdk_session_state_for_app_server(
+                &close_state,
+                handle.session_id(),
+                turn_drain_timeout,
+            )
+            .await;
+            close_local_session_handle(handle).await;
+        }
+    });
+
+    let mut first_error = shutdown
+        .errors
+        .into_iter()
+        .next()
+        .map(|(_, error)| local_lifecycle_error("shutdown sessions", error));
+    for session in shutdown.sessions {
+        let mut completion = session.completion;
+        if let Err(error) = completion.wait().await
+            && first_error.is_none()
+        {
+            first_error = Some(local_lifecycle_error("shutdown sessions", error));
+        }
+    }
+
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
 async fn close_local_session_handle(handle: LocalAppSessionHandle) {
     close_local_session_handle_with_reason(handle, coco_hooks::orchestration::ExitReason::Other)
         .await;
@@ -1525,18 +1713,18 @@ async fn close_local_session_handle_with_reason(
 ) {
     let has_runtime = handle.runtime.is_some();
     if let Some(runtime) = handle.runtime() {
-        let current = runtime.current_typed_session_id().await;
-        if current != *handle.session_id() {
+        if let Some(current_session_id) = runtime
+            .close_if_current_session(handle.session_id(), reason)
+            .await
+        {
             debug!(
                 target: "coco::app_server_local",
                 registry_session_id = %handle.session_id(),
-                current_session_id = %current,
+                current_session_id = %current_session_id,
                 "skipping local AppServer close cascade for stale registry snapshot"
             );
             return;
         }
-        runtime.fire_session_end_hooks(reason).await;
-        runtime.shutdown_signal().cancel();
     }
     debug!(
         target: "coco::app_server_local",
@@ -1546,7 +1734,11 @@ async fn close_local_session_handle_with_reason(
     );
 }
 
-async fn close_sdk_session_state_for_app_server(state: &SdkServerState, session_id: &SessionId) {
+async fn close_sdk_session_state_for_app_server(
+    state: &SdkServerState,
+    session_id: &SessionId,
+    turn_drain_timeout: Duration,
+) {
     let active_turn = state.clear_scoped_session_state(session_id).await;
 
     if let Some(active_turn) = &active_turn {
@@ -1554,7 +1746,7 @@ async fn close_sdk_session_state_for_app_server(state: &SdkServerState, session_
     }
 
     if let Some(active_turn) = active_turn {
-        match tokio::time::timeout(APP_SERVER_CLOSE_DRAIN_TIMEOUT, active_turn.turn_task).await {
+        match tokio::time::timeout(turn_drain_timeout, active_turn.turn_task).await {
             Ok(Ok(())) => {}
             Ok(Err(join_err)) => warn!(
                 session_id = %session_id,
@@ -1563,12 +1755,11 @@ async fn close_sdk_session_state_for_app_server(state: &SdkServerState, session_
             ),
             Err(_) => warn!(
                 session_id = %session_id,
-                timeout_secs = APP_SERVER_CLOSE_DRAIN_TIMEOUT.as_secs(),
+                timeout_secs = turn_drain_timeout.as_secs(),
                 "local AppServer close: turn task did not drain before timeout"
             ),
         }
-        match tokio::time::timeout(APP_SERVER_CLOSE_DRAIN_TIMEOUT, active_turn.forwarder_task).await
-        {
+        match tokio::time::timeout(turn_drain_timeout, active_turn.forwarder_task).await {
             Ok(Ok(())) => {}
             Ok(Err(join_err)) => warn!(
                 session_id = %session_id,
@@ -1577,7 +1768,7 @@ async fn close_sdk_session_state_for_app_server(state: &SdkServerState, session_
             ),
             Err(_) => warn!(
                 session_id = %session_id,
-                timeout_secs = APP_SERVER_CLOSE_DRAIN_TIMEOUT.as_secs(),
+                timeout_secs = turn_drain_timeout.as_secs(),
                 "local AppServer close: forwarder task did not drain before timeout"
             ),
         }
@@ -1612,6 +1803,28 @@ impl AppServerLocalBridge {
         Self::with_channel_capacity(state, APP_SERVER_LOCAL_CHANNEL_CAPACITY)
     }
 
+    pub fn with_server_config(
+        state: Arc<SdkServerState>,
+        server_config: &coco_config::ServerConfig,
+    ) -> Self {
+        Self::with_capacity_and_retention(
+            state,
+            server_config_usize(
+                server_config.outbound_queue_frames,
+                APP_SERVER_LOCAL_CHANNEL_CAPACITY,
+            ),
+            server_config_usize(
+                server_config.event_retention_per_session,
+                APP_SERVER_LOCAL_RETENTION_PER_SESSION,
+            ),
+            server_config_surface_limits(server_config),
+            server_config_duration_secs(
+                server_config.turn_drain_timeout_secs,
+                APP_SERVER_TURN_DRAIN_TIMEOUT,
+            ),
+        )
+    }
+
     pub fn with_hub_connector_sender(
         state: Arc<SdkServerState>,
         hub_connector: HubConnectorSender,
@@ -1624,7 +1837,31 @@ impl AppServerLocalBridge {
     }
 
     pub fn with_channel_capacity(state: Arc<SdkServerState>, channel_capacity: usize) -> Self {
-        Self::with_channel_capacity_and_hub_connector(state, channel_capacity, None)
+        Self::with_capacity_retention_and_hub_connector(
+            state,
+            channel_capacity,
+            channel_capacity,
+            SurfaceLimits::default(),
+            APP_SERVER_TURN_DRAIN_TIMEOUT,
+            None,
+        )
+    }
+
+    fn with_capacity_and_retention(
+        state: Arc<SdkServerState>,
+        channel_capacity: usize,
+        event_retention_per_session: usize,
+        surface_limits: SurfaceLimits,
+        turn_drain_timeout: Duration,
+    ) -> Self {
+        Self::with_capacity_retention_and_hub_connector(
+            state,
+            channel_capacity,
+            event_retention_per_session,
+            surface_limits,
+            turn_drain_timeout,
+            None,
+        )
     }
 
     fn with_channel_capacity_and_hub_connector(
@@ -1632,22 +1869,46 @@ impl AppServerLocalBridge {
         channel_capacity: usize,
         hub_connector: Option<HubConnectorSender>,
     ) -> Self {
+        Self::with_capacity_retention_and_hub_connector(
+            state,
+            channel_capacity,
+            channel_capacity,
+            SurfaceLimits::default(),
+            APP_SERVER_TURN_DRAIN_TIMEOUT,
+            hub_connector,
+        )
+    }
+
+    fn with_capacity_retention_and_hub_connector(
+        state: Arc<SdkServerState>,
+        channel_capacity: usize,
+        event_retention_per_session: usize,
+        surface_limits: SurfaceLimits,
+        turn_drain_timeout: Duration,
+        hub_connector: Option<HubConnectorSender>,
+    ) -> Self {
         assert!(
             channel_capacity > 0,
             "local AppServer bridge channel capacity must be non-zero"
         );
-        let app_server = Arc::new(AppServer::<LocalAppSessionHandle>::new(
+        assert!(
+            event_retention_per_session > 0,
+            "local AppServer bridge event retention must be non-zero"
+        );
+        let app_server = Arc::new(AppServer::<LocalAppSessionHandle>::new_with_surface_limits(
             /*max_sessions*/ 1,
-            channel_capacity,
+            event_retention_per_session,
+            surface_limits,
         ));
         let adapter =
             LocalClientAdapter::with_channel_capacity(Arc::clone(&app_server), channel_capacity);
         let client = ServerClient::connect_local(&adapter);
         let (outbound_tx, outbound_rx) = mpsc::channel(channel_capacity);
-        let handler = AppServerSdkHandler::with_local_app_server(
+        let handler = AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
             Arc::clone(&state),
             outbound_tx,
             Arc::clone(&app_server),
+            turn_drain_timeout,
         );
         let hub_connector = Arc::new(std::sync::RwLock::new(hub_connector));
         let outbound_forwarder = spawn_app_server_local_outbound_forwarder(
@@ -1705,6 +1966,21 @@ impl AppServerLocalBridge {
             Arc::clone(&self.app_server),
             Arc::clone(&self.handler.state),
             session_id,
+            self.handler.turn_drain_timeout,
+        )
+        .await
+        .map_err(|error| ClientError::Server {
+            code: error.code,
+            message: error.message,
+            data: error.data,
+        })
+    }
+
+    pub async fn shutdown_registered_sessions(&self) -> Result<(), ClientError> {
+        shutdown_local_app_server_sessions(
+            Arc::clone(&self.app_server),
+            Arc::clone(&self.handler.state),
+            self.handler.turn_drain_timeout,
         )
         .await
         .map_err(|error| ClientError::Server {
@@ -1723,29 +1999,61 @@ impl AppServerLocalBridge {
         F: Future<Output = anyhow::Result<crate::session_runtime::SessionHandle>> + Send + 'static,
     {
         let registry_session_id = session_id.clone();
-        let mut completion = match self.app_server.spawn_load(session_id.clone(), async move {
-            let runtime = factory
-                .await
-                .map_err(|error| coco_app_server::RegistryError::load_failed(error.to_string()))?;
-            Ok::<LocalAppSessionHandle, coco_app_server::RegistryError>(
-                LocalAppSessionHandle::from_runtime(registry_session_id, runtime),
-            )
-        })? {
-            AppLoadStart::Started { completion } | AppLoadStart::Loading(completion) => completion,
-            AppLoadStart::Live(handle) => {
-                return handle.runtime().cloned().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "local AppServer session {session_id} is live without a runtime handle"
-                    )
-                });
-            }
-            AppLoadStart::Closing(_) => {
-                anyhow::bail!("local AppServer session {session_id} is closing")
-            }
-        };
-        let handle = completion.wait().await?;
+        let handle = load_local_app_server_session_with_factory(
+            &self.app_server,
+            session_id.clone(),
+            async move {
+                let runtime = factory.await.map_err(|error| {
+                    coco_app_server::RegistryError::load_failed(error.to_string())
+                })?;
+                Ok::<LocalAppSessionHandle, coco_app_server::RegistryError>(
+                    LocalAppSessionHandle::from_runtime(registry_session_id, runtime),
+                )
+            },
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("{}", error.message))?;
         handle.runtime().cloned().ok_or_else(|| {
             anyhow::anyhow!("local AppServer session {session_id} loaded without a runtime handle")
+        })
+    }
+
+    pub async fn load_session_runtime_from_factory(
+        &self,
+        session_id: SessionId,
+        runtime_factory: crate::session_runtime::SessionRuntimeFactory,
+    ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
+        let handle =
+            load_local_app_server_session_runtime(&self.app_server, session_id, runtime_factory)
+                .await
+                .map_err(|error| anyhow::anyhow!("{}", error.message))?;
+        handle.runtime().cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "local AppServer session {} loaded without a runtime handle",
+                handle.session_id()
+            )
+        })
+    }
+
+    pub async fn load_session_runtime_from_factory_with_cwd(
+        &self,
+        session_id: SessionId,
+        runtime_factory: crate::session_runtime::SessionRuntimeFactory,
+        cwd: PathBuf,
+    ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
+        let handle = load_local_app_server_session_runtime_with_cwd(
+            &self.app_server,
+            session_id,
+            runtime_factory,
+            cwd,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("{}", error.message))?;
+        handle.runtime().cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "local AppServer session {} loaded without a runtime handle",
+                handle.session_id()
+            )
         })
     }
 
@@ -1773,6 +2081,7 @@ impl AppServerLocalBridge {
                     runtime,
                 ))
             },
+            self.handler.turn_drain_timeout,
         )
         .await
         .and_then(|replacement| {
@@ -1820,6 +2129,7 @@ impl AppServerLocalBridge {
                     runtime,
                 ))
             },
+            self.handler.turn_drain_timeout,
         )
         .await
         .and_then(|handle| {
@@ -2003,6 +2313,7 @@ impl AppServerLocalBridge {
                 ))
             },
             coco_hooks::orchestration::ExitReason::Clear,
+            self.handler.turn_drain_timeout,
         )
         .await
         .map_err(|error| anyhow::anyhow!("{}", error.message))?;
@@ -2320,6 +2631,7 @@ async fn run_app_server_sdk_state_over_sdk_transport_with_external_notifications
         state,
         external_notifications,
         None,
+        APP_SERVER_TURN_DRAIN_TIMEOUT,
     )
     .await
 }
@@ -2330,6 +2642,7 @@ pub async fn run_app_server_sdk_state_over_sdk_transport_with_external_notificat
     state: Arc<SdkServerState>,
     external_notifications: Vec<mpsc::Receiver<CoreEvent>>,
     hub_connector: Option<HubConnectorSender>,
+    turn_drain_timeout: Duration,
 ) -> Result<DisconnectOutcome, SdkAppServerBridgeError> {
     let app_server = connection.app_server();
     let (outbound_tx, outbound_rx) = mpsc::channel::<OutboundMessage>(256);
@@ -2364,11 +2677,14 @@ pub async fn run_app_server_sdk_state_over_sdk_transport_with_external_notificat
 
     let hub_egress = hub_connector.map(|sender| SdkHubEgress::new(Arc::clone(&state), sender));
     let writer_task = spawn_sdk_outbound_writer(Arc::clone(&transport), outbound_rx, hub_egress);
-    let handler = Arc::new(AppServerSdkHandler::with_local_app_server(
-        Arc::clone(&state),
-        outbound_tx.clone(),
-        app_server,
-    ));
+    let handler = Arc::new(
+        AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
+            Arc::clone(&state),
+            outbound_tx.clone(),
+            app_server,
+            turn_drain_timeout,
+        ),
+    );
     let result = run_app_server_connection_over_sdk_transport_inner(
         connection,
         transport,

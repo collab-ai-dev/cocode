@@ -48,10 +48,11 @@ transports.
   `LocalClientRequestHandler`. This is the typed local TUI/headless seam; it
   must stay in-process and avoid JSON-RPC framing.
 - `ServerClient::query_session`, `interrupt_session`, `close_session`,
+  `replace_session_with_start`, `replace_session_with_resume`,
   `read_passive_session`, and `list_passive_session_turns` are the local
   handle-oriented facade over those helpers while `ServerClient` still owns the
-  shared connection receivers. `close_session` consumes the interactive handle
-  and returns it on failure.
+  shared connection receivers. Replace and close consume the interactive handle
+  and return it on failure.
 - `ServerClient::stop_task` is the local runtime-control helper for
   task/subagent cancellation. Handler implementations should target a real task
   registry when one is installed instead of treating it only as a turn
@@ -83,8 +84,8 @@ transports.
 - `RemoteSessionClient` and `RemotePassiveSessionClient` are immutable handles
   for remote surface attachments. They expose typed identity and read
   events/lifecycle through `RemoteEventDemux`; `RemoteSessionClient` owns
-  query/interrupt/archive helpers, while `RemotePassiveSessionClient` only
-  reads snapshots and events. Remote start/resume handle helpers must mint
+  query/interrupt/replace/archive helpers, while `RemotePassiveSessionClient`
+  only reads snapshots and events. Remote start/resume handle helpers must mint
   handles from a server-provided `SurfaceId`: prefer the optional
   `surface_id` on the result DTO and fall back to the matching lifecycle
   activation for older streams.
@@ -93,8 +94,10 @@ transports.
   only after AppServer attaches the passive surface, preserves replayed
   envelopes on the handle, and maps snapshot-required replies to
   `ClientError::SnapshotRequired`.
-- `RemoteSessionClient::close` consumes the handle and returns the original
-  handle on failure so callers cannot silently orphan a still-live session.
+- `RemoteSessionClient::replace_with_start`,
+  `RemoteSessionClient::replace_with_resume`, and `RemoteSessionClient::close`
+  consume the handle and return the original handle on failure so callers cannot
+  silently orphan a still-live session.
 - `RemoteConnectOptions` names outbound and event channel capacities for
   remote NDJSON/Unix/WebSocket connections. Defaults match the original fixed
   capacities.
@@ -148,9 +151,8 @@ transports.
 
 ## Pending
 
-Direct AppServer-owned persisted session-store listing/read semantics,
-public client-handle replace APIs beyond the CLI bridge, and broader TUI/Hub
-cut-over remain pending follow-up work.
+Direct AppServer-owned persisted session-store listing/read semantics and
+broader TUI/Hub cut-over remain pending follow-up work.
 The client crate already exposes typed `session_list` / `session_read` request
 helpers; today the CLI's runtime-backed AppServer bridge layers live session
 visibility over the persisted handler response, while the CLI `SessionManager`

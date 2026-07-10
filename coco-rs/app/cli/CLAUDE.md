@@ -96,6 +96,11 @@ back to the current session id from `SdkServerState`.
 `AppServerLocalBridge` is the preferred local entrypoint: it owns the local
 `AppServer`, `ServerClient`, shared handler, and outbound forwarder so
 TUI/headless code does not duplicate adapter wiring.
+Startup runtime construction now passes `SessionRuntimeFactory` into the
+local AppServer bridge load helpers (or the equivalent SDK stdio bridge helper),
+so `SessionRuntimeFactory` to `LocalAppSessionHandle` conversion happens inside
+the bridge-owned `spawn_load` path instead of in TUI/headless/main startup
+callers.
 Its AppServer registry stores `LocalAppSessionHandle` snapshots rather than
 empty `()` handles. Installed runtime snapshots carry the current app/cli
 `SessionHandle`, whose session id is an immutable snapshot. Close cascade logic
@@ -110,9 +115,9 @@ surface routing.
 AppServer close for local/SDK bridge handles now performs the bridge-owned
 cascade before archiving surfaces: if the closing session still matches the
 SDK active-session state, it cancels the state-owned active turn, waits
-boundedly for the turn runner and forwarder to drain, clears the slot, then fires runtime
-SessionEnd hooks and cancels the runtime shutdown signal for matching
-runtime-backed handles. The registry snapshot guard skips fused-runtime
+boundedly for the turn runner and forwarder to drain, clears the slot, then
+asks the matching `SessionHandle` to fire runtime SessionEnd hooks and cancel
+the runtime shutdown signal. The registry snapshot guard skips fused-runtime
 shutdown when the runtime handle no longer matches the registry snapshot.
 SDK JSON-RPC mode also uses `LocalAppSessionHandle` in the AppServer registry.
 `session/start`, `session/resume`, and `session/archive` dispatched through
@@ -138,16 +143,44 @@ JSON-RPC `session/subscribe` is handled directly by the AppServer bridge: it
 attaches a passive surface to the request connection, returns the passive
 `SurfaceId` plus replayed envelopes, and rejects missing/stale cursors with
 the snapshot-required marker.
+Local TUI/headless AppServer bridges and SDK stdio AppServer startup now size
+event retention and outbound queues from `RuntimeConfig.server`
+(`server.event_retention_per_session` and `server.outbound_queue_frames`,
+with matching `COCO_SERVER_*` env overrides). SDK stdio AppServer startup also
+uses `server.max_sessions` / `COCO_SERVER_MAX_SESSIONS` for the process-level
+multi-session slot limit; the TUI/headless local bridge remains capped at one
+active session for v1. SDK stdio and config-aware local bridge startup pass
+`server.max_surfaces_per_connection` /
+`COCO_SERVER_MAX_SURFACES_PER_CONNECTION` and
+`server.max_passive_surfaces_per_session` /
+`COCO_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION` into AppServer routing limits.
 AppServer-routed `session/list`, `session/read`, and `session/turns/list` layer
 live AppServer state over the persisted `SessionManager` response, so a started
 session is visible before its transcript has been written. Persisted data
-remains canonical when available. The composition lives in
-`sdk_server::session_data`, which reads the installed `SessionManager` through
-`sdk_server::session_store` instead of routing these read-only methods through
-the legacy SDK session-data handlers. `coco-app-server` stays independent of
-`coco-session` and owns the shared pure cursor, pagination, and turn-span
-projection helpers used by both the local bridge and legacy SDK session-data
-handlers.
+remains canonical when available. `coco-app-server` owns the request
+composition over `AppSessionDataSource` / `AppSessionDataHandle`, while
+`sdk_server::session_data` supplies the concrete `SessionManager` callbacks and
+live-handle snapshots. The persisted list/read/turn loaders in
+`sdk_server::session_data` are shared by that AppServer local view and the
+remaining legacy SDK handlers, so the live-overlay path has one owner while
+the JSONL `SessionManager` boundary remains in `coco-cli`.
+The local AppServer bridge exposes `shutdown_registered_sessions`, which
+drains all registered AppServer slots through the same concrete close cascade
+used by `session/archive`: scoped SDK active-turn state is cancelled and
+boundedly drained using `RuntimeConfig.server.turn_drain_timeout_secs`
+(`server.turn_drain_timeout_secs`, env
+`COCO_SERVER_TURN_DRAIN_TIMEOUT_SECS`; default 10) before AppServer close
+completions resolve. The TUI driver invokes that drain on exit before its
+final best-effort metadata append, headless invokes it before hub flush, and
+SDK stdio mode invokes it after sidecar listener shutdown before memory/hub
+flush. SDK sidecar listener joins and whole-process AppServer shutdown waits
+are bounded by
+`RuntimeConfig.server.shutdown_timeout_secs` (`server.shutdown_timeout_secs`,
+env `COCO_SERVER_SHUTDOWN_TIMEOUT_SECS`; default 30). Headless, TUI, and SDK
+stdio convert local AppServer shutdown drain and Event Hub connector flush
+failures or timeouts into a nonzero process result after their ordinary cleanup
+has run. Both bounded waits also observe OS interrupt signals and return a
+non-clean shutdown result instead of continuing to wait for the timeout.
 `SdkServerState` keeps persisted-session storage behind install/snapshot
 methods backed by `sdk_server::session_store`, so the remaining `coco-session`
 boundary is localized outside the broad handler state.

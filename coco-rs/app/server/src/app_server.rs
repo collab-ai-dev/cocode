@@ -47,6 +47,7 @@ use crate::SurfaceCapability;
 use crate::SurfaceLifecycleEffect;
 use crate::SurfaceLifecycleEffectKind;
 use crate::SurfaceLifecycleSender;
+use crate::SurfaceLimits;
 use crate::registry::CloseState;
 use crate::registry::ClosingState;
 use crate::registry::RegistryError;
@@ -64,9 +65,24 @@ pub struct AppServer<H> {
 
 impl<H: Clone> AppServer<H> {
     pub fn new(max_sessions: usize, retention_per_session: usize) -> Self {
+        Self::new_with_surface_limits(
+            max_sessions,
+            retention_per_session,
+            SurfaceLimits::default(),
+        )
+    }
+
+    pub fn new_with_surface_limits(
+        max_sessions: usize,
+        retention_per_session: usize,
+        surface_limits: SurfaceLimits,
+    ) -> Self {
         Self {
             registry: LiveSessionRegistry::new(max_sessions),
-            routing: RwLock::new(RoutingState::new(retention_per_session)),
+            routing: RwLock::new(RoutingState::new_with_limits(
+                retention_per_session,
+                surface_limits,
+            )),
         }
     }
 
@@ -569,6 +585,25 @@ where
             completion: new_completion,
         })
     }
+
+    pub fn spawn_shutdown<C, Fut>(self: &Arc<Self>, close: C) -> AppShutdownStart
+    where
+        C: Fn(H) -> Fut + Clone + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let mut sessions = Vec::new();
+        let mut errors = Vec::new();
+        for session_id in self.registry.list_closable() {
+            match self.spawn_close(session_id.clone(), close.clone()) {
+                Ok(start) => sessions.push(AppShutdownSession {
+                    session_id,
+                    completion: start.completion(),
+                }),
+                Err(error) => errors.push((session_id, error)),
+            }
+        }
+        AppShutdownStart { sessions, errors }
+    }
 }
 
 fn replace_lifecycle_effects(outcome: &ReplaceSurfaceOutcome) -> Vec<SurfaceLifecycleEffect> {
@@ -643,9 +678,31 @@ pub enum AppCloseStart {
     Closing(CloseCompletion),
 }
 
+impl AppCloseStart {
+    pub fn completion(&self) -> CloseCompletion {
+        match self {
+            Self::Started { completion }
+            | Self::Loading(completion)
+            | Self::Closing(completion) => completion.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum AppReplaceStart<H> {
     Started { completion: LoadCompletion<H> },
+}
+
+#[derive(Debug)]
+pub struct AppShutdownStart {
+    pub sessions: Vec<AppShutdownSession>,
+    pub errors: Vec<(SessionId, AppServerError)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppShutdownSession {
+    pub session_id: SessionId,
+    pub completion: CloseCompletion,
 }
 
 #[derive(Debug, Clone)]
@@ -787,6 +844,7 @@ mod tests {
     use crate::ConnectionKey;
     use crate::SurfaceCapabilities;
     use crate::SurfaceCapability;
+    use crate::SurfaceLimits;
     use crate::SurfaceRole;
 
     fn test_session_id(value: &str) -> SessionId {
@@ -804,6 +862,48 @@ mod tests {
             choices: Vec::new(),
             default: None,
         })
+    }
+
+    #[test]
+    fn new_with_surface_limits_configures_routing_limits() {
+        let server = AppServer::<TestHandle>::new_with_surface_limits(
+            4,
+            8,
+            SurfaceLimits {
+                max_surfaces_per_connection: 1,
+                max_passive_surfaces_per_session: 16,
+            },
+        );
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(8);
+        let (request_tx, _request_rx) = tokio::sync::mpsc::channel(8);
+        let (lifecycle_tx, _lifecycle_rx) = tokio::sync::mpsc::channel(8);
+        let connection = ConnectionKey::for_test(1);
+        let session_id = test_session_id("sess-1");
+        server.connect_with_request_and_lifecycle_senders(
+            connection,
+            event_tx,
+            request_tx,
+            lifecycle_tx,
+        );
+        server
+            .attach_surface_with_options(
+                connection,
+                SurfaceId::from("surface-1"),
+                session_id.clone(),
+                AttachSurfaceOptions::default(),
+            )
+            .expect("attach first surface");
+
+        let err = server
+            .attach_surface_with_options(
+                connection,
+                SurfaceId::from("surface-2"),
+                session_id,
+                AttachSurfaceOptions::default(),
+            )
+            .expect_err("second surface should exceed configured connection limit");
+
+        assert!(matches!(err, AttachError::SurfaceLimit { .. }));
     }
 
     #[tokio::test]
@@ -1019,6 +1119,133 @@ mod tests {
             routing.surface_attachment(&surface_id).map(|a| a.state),
             Some(crate::SurfaceState::SessionClosed)
         );
+    }
+
+    #[tokio::test]
+    async fn spawn_shutdown_closes_live_sessions_concurrently() {
+        let server = Arc::new(AppServer::<TestHandle>::new(2, 8));
+        let session_id_1 = test_session_id("sess-1");
+        let session_id_2 = test_session_id("sess-2");
+        for (session_id, handle) in [
+            (session_id_1.clone(), TestHandle("handle-1")),
+            (session_id_2.clone(), TestHandle("handle-2")),
+        ] {
+            server
+                .registry()
+                .begin_load(session_id.clone())
+                .expect("reserve session");
+            server
+                .registry()
+                .complete_load_success(&session_id, handle)
+                .expect("session live");
+        }
+
+        let close_runs = Arc::new(AtomicUsize::new(0));
+        let close_runs_for_shutdown = Arc::clone(&close_runs);
+        let shutdown = server.spawn_shutdown(move |handle| {
+            let close_runs = Arc::clone(&close_runs_for_shutdown);
+            async move {
+                match handle {
+                    TestHandle("handle-1") => {
+                        close_runs.fetch_add(1, Ordering::SeqCst);
+                    }
+                    TestHandle("handle-2") => {
+                        close_runs.fetch_add(10, Ordering::SeqCst);
+                    }
+                    other => panic!("unexpected handle: {other:?}"),
+                }
+            }
+        });
+
+        assert!(shutdown.errors.is_empty());
+        let mut closed_session_ids = shutdown
+            .sessions
+            .iter()
+            .map(|session| session.session_id.clone())
+            .collect::<Vec<_>>();
+        closed_session_ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        assert_eq!(closed_session_ids, vec![session_id_1, session_id_2]);
+
+        for session in shutdown.sessions {
+            let mut completion = session.completion;
+            completion.wait().await.expect("shutdown close");
+        }
+
+        assert_eq!(close_runs.load(Ordering::SeqCst), 11);
+        assert_eq!(server.registry().slot_count(), 0);
+        assert_eq!(server.registry().live_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn spawn_shutdown_includes_loading_and_observes_closing_sessions() {
+        let server = Arc::new(AppServer::<TestHandle>::new(2, 8));
+        let loading_session_id = test_session_id("sess-loading");
+        let closing_session_id = test_session_id("sess-closing");
+        let (release_load_tx, release_load_rx) = tokio::sync::oneshot::channel();
+        let AppLoadStart::Started { .. } = server
+            .spawn_load(loading_session_id.clone(), async move {
+                release_load_rx.await.expect("release load");
+                Ok(TestHandle("loaded"))
+            })
+            .expect("start load")
+        else {
+            panic!("expected started load");
+        };
+
+        server
+            .registry()
+            .begin_load(closing_session_id.clone())
+            .expect("reserve closing session");
+        server
+            .registry()
+            .complete_load_success(&closing_session_id, TestHandle("closing"))
+            .expect("closing session live");
+        let (release_close_tx, release_close_rx) = tokio::sync::oneshot::channel();
+        let AppCloseStart::Started { completion, .. } = server
+            .spawn_close(closing_session_id.clone(), move |_| async move {
+                release_close_rx.await.expect("release close");
+            })
+            .expect("start close")
+        else {
+            panic!("expected started close");
+        };
+        drop(completion);
+
+        let shutdown_close_runs = Arc::new(AtomicUsize::new(0));
+        let close_runs_for_shutdown = Arc::clone(&shutdown_close_runs);
+        let shutdown = server.spawn_shutdown(move |handle| {
+            let shutdown_close_runs = Arc::clone(&close_runs_for_shutdown);
+            async move {
+                match handle {
+                    TestHandle("loaded") => {
+                        shutdown_close_runs.fetch_add(1, Ordering::SeqCst);
+                    }
+                    other => panic!("unexpected shutdown close handle: {other:?}"),
+                }
+            }
+        });
+
+        assert!(shutdown.errors.is_empty());
+        let mut closed_session_ids = shutdown
+            .sessions
+            .iter()
+            .map(|session| session.session_id.clone())
+            .collect::<Vec<_>>();
+        closed_session_ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        assert_eq!(
+            closed_session_ids,
+            vec![closing_session_id.clone(), loading_session_id.clone()]
+        );
+
+        release_load_tx.send(()).expect("release load");
+        release_close_tx.send(()).expect("release close");
+        for session in shutdown.sessions {
+            let mut completion = session.completion;
+            completion.wait().await.expect("shutdown close");
+        }
+
+        assert_eq!(shutdown_close_runs.load(Ordering::SeqCst), 1);
+        assert_eq!(server.registry().slot_count(), 0);
     }
 
     #[tokio::test]

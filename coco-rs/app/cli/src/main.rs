@@ -59,14 +59,49 @@ use coco_cli::session_runtime;
 const TOKIO_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
 #[cfg(unix)]
 const SDK_UNIX_LISTENER_CHANNEL_CAPACITY: usize = 256;
-#[cfg(unix)]
-const SDK_UNIX_LISTENER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const SDK_WEBSOCKET_LISTENER_CHANNEL_CAPACITY: usize = 256;
-const SDK_WEBSOCKET_LISTENER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(windows)]
 const SDK_NAMED_PIPE_LISTENER_CHANNEL_CAPACITY: usize = 256;
-#[cfg(windows)]
-const SDK_NAMED_PIPE_LISTENER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn server_config_usize(value: i64, fallback: usize) -> usize {
+    usize::try_from(value)
+        .ok()
+        .filter(|value| *value > 0)
+        .unwrap_or(fallback)
+}
+
+fn server_config_duration_secs(value: i64, fallback: Duration) -> Duration {
+    u64::try_from(value)
+        .ok()
+        .filter(|value| *value > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(fallback)
+}
+
+fn shutdown_drain_result(
+    component: &str,
+    outcome: &coco_cli::shutdown::ShutdownDrainOutcome,
+) -> Result<()> {
+    if outcome.is_clean() {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!("{component} shutdown drain {outcome}"))
+}
+
+fn server_config_surface_limits(
+    server_config: &coco_config::ServerConfig,
+) -> coco_app_server::SurfaceLimits {
+    coco_app_server::SurfaceLimits {
+        max_surfaces_per_connection: server_config_usize(
+            server_config.max_surfaces_per_connection,
+            8,
+        ),
+        max_passive_surfaces_per_session: server_config_usize(
+            server_config.max_passive_surfaces_per_session,
+            16,
+        ),
+    }
+}
 
 #[cfg(unix)]
 struct SdkUnixListenerTask {
@@ -130,6 +165,7 @@ fn start_sdk_unix_listener(
     app_server: Arc<coco_app_server::AppServer<coco_cli::sdk_server::LocalAppSessionHandle>>,
     state: Arc<coco_cli::sdk_server::SdkServerState>,
     hub_connector: Option<HubConnectorSender>,
+    turn_drain_timeout: Duration,
 ) -> Result<Option<SdkUnixListenerTask>> {
     let Some(socket_path) = socket_path else {
         return Ok(None);
@@ -144,10 +180,11 @@ fn start_sdk_unix_listener(
         })?;
     let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(SDK_UNIX_LISTENER_CHANNEL_CAPACITY);
     let handler = Arc::new(
-        coco_cli::sdk_server::AppServerSdkHandler::with_local_app_server(
+        coco_cli::sdk_server::AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
             Arc::clone(&state),
             outbound_tx,
             Arc::clone(&app_server),
+            turn_drain_timeout,
         ),
     );
     let outbound_forwarder = spawn_app_server_local_outbound_forwarder(
@@ -192,6 +229,7 @@ async fn start_sdk_websocket_listener(
     app_server: Arc<coco_app_server::AppServer<coco_cli::sdk_server::LocalAppSessionHandle>>,
     state: Arc<coco_cli::sdk_server::SdkServerState>,
     hub_connector: Option<HubConnectorSender>,
+    turn_drain_timeout: Duration,
 ) -> Result<Option<SdkWebSocketListenerTask>> {
     let Some(bind_addr) = bind_addr else {
         return Ok(None);
@@ -209,10 +247,11 @@ async fn start_sdk_websocket_listener(
     let (outbound_tx, outbound_rx) =
         tokio::sync::mpsc::channel(SDK_WEBSOCKET_LISTENER_CHANNEL_CAPACITY);
     let handler = Arc::new(
-        coco_cli::sdk_server::AppServerSdkHandler::with_local_app_server(
+        coco_cli::sdk_server::AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
             Arc::clone(&state),
             outbound_tx,
             Arc::clone(&app_server),
+            turn_drain_timeout,
         ),
     );
     let outbound_forwarder = spawn_app_server_local_outbound_forwarder(
@@ -259,6 +298,7 @@ fn start_sdk_named_pipe_listener(
     app_server: Arc<coco_app_server::AppServer<coco_cli::sdk_server::LocalAppSessionHandle>>,
     state: Arc<coco_cli::sdk_server::SdkServerState>,
     hub_connector: Option<HubConnectorSender>,
+    turn_drain_timeout: Duration,
 ) -> Result<Option<SdkNamedPipeListenerTask>> {
     let Some(pipe_name) = pipe_name else {
         return Ok(None);
@@ -271,10 +311,11 @@ fn start_sdk_named_pipe_listener(
     let (outbound_tx, outbound_rx) =
         tokio::sync::mpsc::channel(SDK_NAMED_PIPE_LISTENER_CHANNEL_CAPACITY);
     let handler = Arc::new(
-        coco_cli::sdk_server::AppServerSdkHandler::with_local_app_server(
+        coco_cli::sdk_server::AppServerSdkHandler::with_local_app_server_and_turn_drain_timeout(
             Arc::clone(&state),
             outbound_tx,
             Arc::clone(&app_server),
+            turn_drain_timeout,
         ),
     );
     let outbound_forwarder = spawn_app_server_local_outbound_forwarder(
@@ -315,18 +356,16 @@ fn start_sdk_named_pipe_listener(
 }
 
 #[cfg(unix)]
-async fn shutdown_sdk_unix_listener(listener: Option<SdkUnixListenerTask>) {
+async fn shutdown_sdk_unix_listener(
+    listener: Option<SdkUnixListenerTask>,
+    shutdown_timeout: Duration,
+) {
     let Some(mut listener) = listener else {
         return;
     };
 
     let _ = listener.shutdown_tx.send(());
-    match tokio::time::timeout(
-        SDK_UNIX_LISTENER_SHUTDOWN_TIMEOUT,
-        &mut listener.listener_task,
-    )
-    .await
-    {
+    match tokio::time::timeout(shutdown_timeout, &mut listener.listener_task).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => {
             tracing::warn!(
@@ -348,7 +387,7 @@ async fn shutdown_sdk_unix_listener(listener: Option<SdkUnixListenerTask>) {
             tracing::warn!(
                 target: "coco_cli::sdk",
                 socket_path = %listener.socket_path.display(),
-                timeout_secs = SDK_UNIX_LISTENER_SHUTDOWN_TIMEOUT.as_secs(),
+                timeout_secs = shutdown_timeout.as_secs(),
                 "aborting SDK AppServer Unix listener after shutdown timeout"
             );
             listener.listener_task.abort();
@@ -360,18 +399,16 @@ async fn shutdown_sdk_unix_listener(listener: Option<SdkUnixListenerTask>) {
     let _ = listener.outbound_forwarder.await;
 }
 
-async fn shutdown_sdk_websocket_listener(listener: Option<SdkWebSocketListenerTask>) {
+async fn shutdown_sdk_websocket_listener(
+    listener: Option<SdkWebSocketListenerTask>,
+    shutdown_timeout: Duration,
+) {
     let Some(mut listener) = listener else {
         return;
     };
 
     let _ = listener.shutdown_tx.send(());
-    match tokio::time::timeout(
-        SDK_WEBSOCKET_LISTENER_SHUTDOWN_TIMEOUT,
-        &mut listener.listener_task,
-    )
-    .await
-    {
+    match tokio::time::timeout(shutdown_timeout, &mut listener.listener_task).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => {
             tracing::warn!(
@@ -393,7 +430,7 @@ async fn shutdown_sdk_websocket_listener(listener: Option<SdkWebSocketListenerTa
             tracing::warn!(
                 target: "coco_cli::sdk",
                 bind_addr = %listener.bind_addr,
-                timeout_secs = SDK_WEBSOCKET_LISTENER_SHUTDOWN_TIMEOUT.as_secs(),
+                timeout_secs = shutdown_timeout.as_secs(),
                 "aborting SDK AppServer WebSocket listener after shutdown timeout"
             );
             listener.listener_task.abort();
@@ -406,18 +443,16 @@ async fn shutdown_sdk_websocket_listener(listener: Option<SdkWebSocketListenerTa
 }
 
 #[cfg(windows)]
-async fn shutdown_sdk_named_pipe_listener(listener: Option<SdkNamedPipeListenerTask>) {
+async fn shutdown_sdk_named_pipe_listener(
+    listener: Option<SdkNamedPipeListenerTask>,
+    shutdown_timeout: Duration,
+) {
     let Some(mut listener) = listener else {
         return;
     };
 
     let _ = listener.shutdown_tx.send(());
-    match tokio::time::timeout(
-        SDK_NAMED_PIPE_LISTENER_SHUTDOWN_TIMEOUT,
-        &mut listener.listener_task,
-    )
-    .await
-    {
+    match tokio::time::timeout(shutdown_timeout, &mut listener.listener_task).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => {
             tracing::warn!(
@@ -439,7 +474,7 @@ async fn shutdown_sdk_named_pipe_listener(listener: Option<SdkNamedPipeListenerT
             tracing::warn!(
                 target: "coco_cli::sdk",
                 pipe_name = %listener.pipe_name,
-                timeout_secs = SDK_NAMED_PIPE_LISTENER_SHUTDOWN_TIMEOUT.as_secs(),
+                timeout_secs = shutdown_timeout.as_secs(),
                 "aborting SDK AppServer named-pipe listener after shutdown timeout"
             );
             listener.listener_task.abort();
@@ -873,7 +908,8 @@ async fn run_chat(
         outcome.total_usage.input_tokens.total,
         outcome.total_usage.output_tokens.total
     );
-    Ok(())
+    shutdown_drain_result("headless AppServer", &outcome.app_server_shutdown)?;
+    shutdown_drain_result("headless Event Hub", &outcome.event_hub_shutdown)
 }
 
 /// Run in SDK mode: NDJSON-over-stdio JSON-RPC control protocol.
@@ -964,6 +1000,10 @@ async fn run_sdk_mode(
     let permission_mode = resources.startup.mode;
 
     let transport = StdioTransport::new();
+    let app_server_turn_drain_timeout = server_config_duration_secs(
+        runtime_config.server.turn_drain_timeout_secs,
+        Duration::from_secs(10),
+    );
     // Plugin file watcher → SDK NDJSON: mirrors TUI so SDK clients
     // receive `plugins/changed` notifications.
     let (plugin_notif_tx, plugin_notif_rx) = tokio::sync::mpsc::channel(16);
@@ -977,7 +1017,8 @@ async fn run_sdk_mode(
         .with_startup_cwd(cwd.clone())
         .with_session_manager(session_manager)
         .with_initialize_bootstrap(bootstrap)
-        .with_external_notifications(plugin_notif_rx);
+        .with_external_notifications(plugin_notif_rx)
+        .with_app_server_turn_drain_timeout(app_server_turn_drain_timeout);
     let state = server.state();
     state.set_bypass_permissions_available(bypass_permissions_available);
 
@@ -992,9 +1033,15 @@ async fn run_sdk_mode(
     let sdk_named_pipe_name = sdk_named_pipe_name(&runtime_config);
     let app_server = Arc::new(coco_app_server::AppServer::<
         coco_cli::sdk_server::LocalAppSessionHandle,
-    >::new(/*max_sessions*/ 1, /*channel_capacity*/ 256));
-    let adapter =
-        coco_app_server::JsonRpcAdapter::with_channel_capacity(Arc::clone(&app_server), 256);
+    >::new_with_surface_limits(
+        server_config_usize(runtime_config.server.max_sessions, 32),
+        server_config_usize(runtime_config.server.event_retention_per_session, 1024),
+        server_config_surface_limits(&runtime_config.server),
+    ));
+    let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(
+        Arc::clone(&app_server),
+        server_config_usize(runtime_config.server.outbound_queue_frames, 256),
+    );
 
     let runtime_factory_cli = Arc::new(cli.clone());
     let runtime_factory = crate::session_runtime::SessionRuntimeFactory::new(
@@ -1021,31 +1068,13 @@ async fn run_sdk_mode(
     );
     let startup_session_id = coco_types::SessionId::generate();
     let runtime_replacement_factory = runtime_factory.clone();
-    let registry_session_id = startup_session_id.clone();
-    let build_session_id = startup_session_id.clone();
-    let mut load_completion =
-        match app_server.spawn_load(startup_session_id.clone(), async move {
-            let runtime = runtime_factory
-                .build_with_session_id(build_session_id)
-                .await
-                .map_err(|error| coco_app_server::RegistryError::load_failed(error.to_string()))?;
-            Ok::<coco_cli::sdk_server::LocalAppSessionHandle, coco_app_server::RegistryError>(
-                coco_cli::sdk_server::LocalAppSessionHandle::from_runtime(
-                    registry_session_id,
-                    runtime,
-                ),
-            )
-        })? {
-            coco_app_server::AppLoadStart::Started { completion }
-            | coco_app_server::AppLoadStart::Loading(completion) => completion,
-            coco_app_server::AppLoadStart::Live(_) => {
-                anyhow::bail!("SDK startup AppServer session {startup_session_id} was already live")
-            }
-            coco_app_server::AppLoadStart::Closing(_) => {
-                anyhow::bail!("SDK startup AppServer session {startup_session_id} is closing")
-            }
-        };
-    let loaded_handle = load_completion.wait().await?;
+    let loaded_handle = coco_cli::sdk_server::load_local_app_server_session_runtime(
+        &app_server,
+        startup_session_id.clone(),
+        runtime_factory,
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{}", error.message))?;
     let session_handle = loaded_handle.runtime().cloned().ok_or_else(|| {
         anyhow::anyhow!(
             "SDK startup AppServer session {} loaded without a runtime handle",
@@ -1171,6 +1200,7 @@ async fn run_sdk_mode(
         sdk_event_hub_connector
             .as_ref()
             .map(coco_cli::event_hub::RuntimeEventHubConnector::sender),
+        app_server_turn_drain_timeout,
     )?;
     let sdk_websocket_listener = start_sdk_websocket_listener(
         sdk_websocket_bind,
@@ -1180,6 +1210,7 @@ async fn run_sdk_mode(
         sdk_event_hub_connector
             .as_ref()
             .map(coco_cli::event_hub::RuntimeEventHubConnector::sender),
+        app_server_turn_drain_timeout,
     )
     .await?;
     #[cfg(windows)]
@@ -1191,6 +1222,7 @@ async fn run_sdk_mode(
         sdk_event_hub_connector
             .as_ref()
             .map(coco_cli::event_hub::RuntimeEventHubConnector::sender),
+        app_server_turn_drain_timeout,
     )?;
     let connection = adapter.connect();
     let dispatch_result = server
@@ -1198,11 +1230,46 @@ async fn run_sdk_mode(
         .await
         .map(|_| ());
 
+    let app_server_shutdown_timeout =
+        Duration::from_secs(runtime_config.server.shutdown_timeout_secs as u64);
     #[cfg(unix)]
-    shutdown_sdk_unix_listener(sdk_unix_listener).await;
-    shutdown_sdk_websocket_listener(sdk_websocket_listener).await;
+    shutdown_sdk_unix_listener(sdk_unix_listener, app_server_shutdown_timeout).await;
+    shutdown_sdk_websocket_listener(sdk_websocket_listener, app_server_shutdown_timeout).await;
     #[cfg(windows)]
-    shutdown_sdk_named_pipe_listener(sdk_named_pipe_listener).await;
+    shutdown_sdk_named_pipe_listener(sdk_named_pipe_listener, app_server_shutdown_timeout).await;
+    let app_server_for_shutdown = Arc::clone(&app_server);
+    let state_for_shutdown = state.clone();
+    let app_server_shutdown = coco_cli::shutdown::drain_with_timeout_or_signal(
+        app_server_shutdown_timeout,
+        async move {
+            coco_cli::sdk_server::shutdown_local_app_server_sessions(
+                app_server_for_shutdown,
+                state_for_shutdown,
+                app_server_turn_drain_timeout,
+            )
+            .await
+            .map_err(|error| format!("{}: {}", error.code, error.message))
+        },
+        coco_cli::shutdown::os_interrupt_signal(),
+    )
+    .await;
+    match &app_server_shutdown {
+        coco_cli::shutdown::ShutdownDrainOutcome::Clean => {}
+        coco_cli::shutdown::ShutdownDrainOutcome::Failed { message } => tracing::warn!(
+            target: "coco_cli::sdk",
+            message = %message,
+            "SDK AppServer shutdown drain failed"
+        ),
+        coco_cli::shutdown::ShutdownDrainOutcome::TimedOut { timeout_secs } => tracing::warn!(
+            target: "coco_cli::sdk",
+            timeout_secs,
+            "SDK AppServer shutdown drain timed out"
+        ),
+        coco_cli::shutdown::ShutdownDrainOutcome::Interrupted => tracing::warn!(
+            target: "coco_cli::sdk",
+            "SDK AppServer shutdown drain interrupted by signal"
+        ),
+    }
 
     // Wait for any in-flight auto-memory extraction to complete before
     // we exit so partial writes aren't dropped on process shutdown. Done
@@ -1228,9 +1295,13 @@ async fn run_sdk_mode(
             .await;
     }
 
-    if let Some(connector) = sdk_event_hub_connector {
-        connector.shutdown_and_flush().await;
-    }
+    let event_hub_shutdown = if let Some(connector) = sdk_event_hub_connector {
+        connector
+            .shutdown_and_flush_with_timeout(app_server_shutdown_timeout)
+            .await
+    } else {
+        coco_cli::shutdown::ShutdownDrainOutcome::Clean
+    };
 
     if let Err(e) = dispatch_result {
         tracing::error!(
@@ -1241,7 +1312,8 @@ async fn run_sdk_mode(
         eprintln!("sdk mode: dispatch loop exited with error: {e}");
         return Err(anyhow::anyhow!("sdk dispatch failed: {e}"));
     }
-    Ok(())
+    shutdown_drain_result("SDK AppServer", &app_server_shutdown)?;
+    shutdown_drain_result("SDK Event Hub", &event_hub_shutdown)
 }
 
 #[cfg(test)]

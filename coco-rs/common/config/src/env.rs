@@ -59,6 +59,22 @@ pub enum EnvKey {
     /// Windows named-pipe path for the SDK AppServer NDJSON listener.
     /// Opt-in only; ignored by non-SDK entrypoints and unsupported on Unix.
     CocoServerNamedPipe,
+    /// Maximum live AppServer session slots for multi-session SDK mode.
+    CocoServerMaxSessions,
+    /// Maximum AppServer surfaces that one connection may attach.
+    CocoServerMaxSurfacesPerConnection,
+    /// Maximum passive AppServer surfaces attached to one session.
+    CocoServerMaxPassiveSurfacesPerSession,
+    /// Per-session AppServer event retention ring size.
+    CocoServerEventRetentionPerSession,
+    /// Per-connection AppServer outbound queue capacity in frames.
+    CocoServerOutboundQueueFrames,
+    /// Active-turn drain timeout during AppServer close cascade, in seconds.
+    /// Non-positive values are ignored by config resolution.
+    CocoServerTurnDrainTimeoutSecs,
+    /// Process shutdown drain timeout for AppServer sessions, in seconds.
+    /// Non-positive values are ignored by config resolution.
+    CocoServerShutdownTimeoutSecs,
     /// SessionKind override for the concurrent-sessions PID registry.
     /// Accepted values: `bg`, `daemon`, `daemon-worker`. Anything else
     /// (or unset) means the session registers as `interactive`.
@@ -365,6 +381,15 @@ impl EnvKey {
             Self::CocoServerUnixSocketPath => "COCO_SERVER_UNIX_SOCKET_PATH",
             Self::CocoServerWebSocketBind => "COCO_SERVER_WEBSOCKET_BIND",
             Self::CocoServerNamedPipe => "COCO_SERVER_NAMED_PIPE",
+            Self::CocoServerMaxSessions => "COCO_SERVER_MAX_SESSIONS",
+            Self::CocoServerMaxSurfacesPerConnection => "COCO_SERVER_MAX_SURFACES_PER_CONNECTION",
+            Self::CocoServerMaxPassiveSurfacesPerSession => {
+                "COCO_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION"
+            }
+            Self::CocoServerEventRetentionPerSession => "COCO_SERVER_EVENT_RETENTION_PER_SESSION",
+            Self::CocoServerOutboundQueueFrames => "COCO_SERVER_OUTBOUND_QUEUE_FRAMES",
+            Self::CocoServerTurnDrainTimeoutSecs => "COCO_SERVER_TURN_DRAIN_TIMEOUT_SECS",
+            Self::CocoServerShutdownTimeoutSecs => "COCO_SERVER_SHUTDOWN_TIMEOUT_SECS",
             Self::CocoSessionKind => "COCO_SESSION_KIND",
             Self::CocoBashAutoBackgroundOnTimeout => "COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT",
             Self::CocoBashMaintainProjectWorkingDir => "COCO_BASH_MAINTAIN_PROJECT_WORKING_DIR",

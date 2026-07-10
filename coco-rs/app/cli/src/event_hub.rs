@@ -10,6 +10,7 @@ use coco_types::SessionId;
 use uuid::Uuid;
 
 use crate::BUILD_PACKAGE_VERSION;
+use crate::shutdown::ShutdownDrainOutcome;
 
 const CHANNEL_CAPACITY: usize = 1024;
 const RING_CAPACITY: usize = 10_000;
@@ -53,15 +54,38 @@ impl RuntimeEventHubConnector {
         self.worker.sender()
     }
 
-    pub async fn shutdown_and_flush(self) {
-        match self.worker.shutdown_and_flush().await {
-            Ok(stats) => tracing::info!(
-                shipped_events = stats.shipped_events,
-                skipped_ephemeral_events = stats.skipped_ephemeral_events,
-                dropped_durable_events = stats.dropped_durable_events,
-                "event hub connector flushed"
-            ),
-            Err(error) => tracing::warn!(%error, "event hub connector shutdown flush failed"),
+    pub async fn shutdown_and_flush_with_timeout(self, timeout: Duration) -> ShutdownDrainOutcome {
+        tokio::select! {
+            result = tokio::time::timeout(timeout, self.worker.shutdown_and_flush()) => {
+                match result {
+                    Ok(Ok(stats)) => {
+                        tracing::info!(
+                            shipped_events = stats.shipped_events,
+                            skipped_ephemeral_events = stats.skipped_ephemeral_events,
+                            dropped_durable_events = stats.dropped_durable_events,
+                            "event hub connector flushed"
+                        );
+                        ShutdownDrainOutcome::Clean
+                    }
+                    Ok(Err(error)) => {
+                        let message = error.to_string();
+                        tracing::warn!(error = %message, "event hub connector shutdown flush failed");
+                        ShutdownDrainOutcome::Failed { message }
+                    }
+                    Err(_) => {
+                        let timeout_secs = timeout.as_secs();
+                        tracing::warn!(
+                            timeout_secs,
+                            "event hub connector shutdown flush timed out"
+                        );
+                        ShutdownDrainOutcome::TimedOut { timeout_secs }
+                    }
+                }
+            }
+            () = crate::shutdown::os_interrupt_signal() => {
+                tracing::warn!("event hub connector shutdown flush interrupted by signal");
+                ShutdownDrainOutcome::Interrupted
+            }
         }
     }
 }

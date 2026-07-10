@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use coco_hub_connector::HubConnectorSender;
 use coco_query::StreamAccumulator;
@@ -54,6 +55,7 @@ pub struct SdkServer {
     /// events into the notification system.
     external_notifications: std::sync::Mutex<Vec<mpsc::Receiver<CoreEvent>>>,
     hub_connector: Option<HubConnectorSender>,
+    app_server_turn_drain_timeout: Duration,
 }
 
 impl SdkServer {
@@ -73,6 +75,8 @@ impl SdkServer {
             state,
             external_notifications: std::sync::Mutex::new(Vec::new()),
             hub_connector: None,
+            app_server_turn_drain_timeout:
+                crate::sdk_server::app_server_bridge::APP_SERVER_TURN_DRAIN_TIMEOUT,
         }
     }
 
@@ -95,6 +99,11 @@ impl SdkServer {
     /// session id for Hub egress without changing SDK wire behavior.
     pub fn with_hub_connector_sender(mut self, sender: HubConnectorSender) -> Self {
         self.hub_connector = Some(sender);
+        self
+    }
+
+    pub fn with_app_server_turn_drain_timeout(mut self, timeout: Duration) -> Self {
+        self.app_server_turn_drain_timeout = timeout;
         self
     }
 
@@ -228,6 +237,7 @@ impl SdkServer {
             self.state.clone(),
             external_notifications,
             self.hub_connector.clone(),
+            self.app_server_turn_drain_timeout,
         )
         .await
     }

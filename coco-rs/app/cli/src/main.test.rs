@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use coco_cli::headless::build_system_prompt_for_model;
+use coco_cli::shutdown::ShutdownDrainOutcome;
 use coco_config::CatalogPaths;
 use coco_config::EnvSnapshot;
 use coco_config::RoleSlots;
@@ -74,6 +75,52 @@ fn build_system_prompt_falls_back_when_model_has_no_instructions() {
 
     assert!(prompt.starts_with(&coco_config::default_base_instructions()));
     assert!(prompt.contains("<env>"));
+}
+
+#[test]
+fn shutdown_drain_result_accepts_clean_outcome() {
+    assert!(super::shutdown_drain_result("test", &ShutdownDrainOutcome::Clean).is_ok());
+}
+
+#[test]
+fn shutdown_drain_result_errors_on_failed_outcome() {
+    let error = super::shutdown_drain_result(
+        "test AppServer",
+        &ShutdownDrainOutcome::Failed {
+            message: "driver failed".to_string(),
+        },
+    )
+    .expect_err("failed shutdown should produce process error");
+
+    assert_eq!(
+        error.to_string(),
+        "test AppServer shutdown drain failed: driver failed"
+    );
+}
+
+#[test]
+fn shutdown_drain_result_errors_on_timeout_outcome() {
+    let error = super::shutdown_drain_result(
+        "test AppServer",
+        &ShutdownDrainOutcome::TimedOut { timeout_secs: 30 },
+    )
+    .expect_err("timed-out shutdown should produce process error");
+
+    assert_eq!(
+        error.to_string(),
+        "test AppServer shutdown drain timed out after 30s"
+    );
+}
+
+#[test]
+fn shutdown_drain_result_errors_on_interrupted_outcome() {
+    let error = super::shutdown_drain_result("test AppServer", &ShutdownDrainOutcome::Interrupted)
+        .expect_err("interrupted shutdown should produce process error");
+
+    assert_eq!(
+        error.to_string(),
+        "test AppServer shutdown drain interrupted by signal"
+    );
 }
 
 #[cfg(unix)]

@@ -419,6 +419,100 @@ async fn local_close_session_returns_handle_on_failure() {
 }
 
 #[tokio::test]
+async fn local_replace_session_helpers_return_new_handle_or_original_on_failure() {
+    let server = Arc::new(AppServer::<TestHandle>::new(2, 8));
+    let old_session_id = test_session_id("sess-replace-old");
+    server
+        .registry()
+        .begin_load(old_session_id.clone())
+        .expect("reserve old session");
+    server
+        .registry()
+        .complete_load_success(&old_session_id, TestHandle("handle"))
+        .expect("old session live");
+    let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
+    let client = ServerClient::connect_local(&adapter);
+    let interactive = client
+        .attach_interactive_session(old_session_id.clone(), AttachSurfaceOptions::default())
+        .expect("attach interactive");
+
+    let start_handler = RecordingClientRequestHandler::ok(serde_json::json!({
+        "session_id": "sess-replace-started",
+        "surface_id": "surface-replace-started"
+    }));
+    let started = client
+        .replace_session_with_start(&start_handler, interactive, SessionStartParams::default())
+        .await
+        .expect("replace with start succeeds");
+    assert_eq!(
+        started.session_id(),
+        &test_session_id("sess-replace-started")
+    );
+    assert_eq!(
+        started.surface_id(),
+        &SurfaceId::from("surface-replace-started")
+    );
+    {
+        let calls = start_handler.calls.lock().expect("calls lock");
+        assert!(matches!(&calls[0], ClientRequest::SessionStart(_)));
+    }
+
+    let resume_handler = RecordingClientRequestHandler::ok(serde_json::json!({
+        "session": {
+            "session_id": "sess-replace-resumed",
+            "model": "gpt-test",
+            "cwd": "/tmp",
+            "created_at": "2026-07-08T00:00:00Z",
+            "message_count": 0,
+            "total_tokens": 0
+        }
+    }));
+    let resumed = client
+        .replace_session_with_resume(
+            &resume_handler,
+            started,
+            SessionResumeParams {
+                session_id: test_session_id("sess-replace-resumed"),
+            },
+        )
+        .await
+        .expect("replace with resume succeeds");
+    assert_eq!(
+        resumed.session_id(),
+        &test_session_id("sess-replace-resumed")
+    );
+    assert_eq!(
+        resumed.surface_id(),
+        &SurfaceId::from("surface-replace-started")
+    );
+
+    let failing_handler = RecordingClientRequestHandler::error(
+        LocalClientDispatchError::invalid_params("resume failed"),
+    );
+    let Err((returned, ClientError::Server { message, .. })) = client
+        .replace_session_with_resume(
+            &failing_handler,
+            resumed,
+            SessionResumeParams {
+                session_id: test_session_id("sess-replace-fail"),
+            },
+        )
+        .await
+    else {
+        panic!("expected replace failure");
+    };
+    assert_eq!(
+        returned.session_id(),
+        &test_session_id("sess-replace-resumed")
+    );
+    assert_eq!(
+        returned.surface_id(),
+        &SurfaceId::from("surface-replace-started")
+    );
+    assert_eq!(message, "resume failed");
+}
+
+#[tokio::test]
 async fn local_server_client_maps_dispatch_errors_to_server_errors() {
     let server = Arc::new(AppServer::<TestHandle>::new(1, 8));
     let adapter = LocalClientAdapter::with_channel_capacity(Arc::clone(&server), 8);
@@ -1526,6 +1620,110 @@ async fn remote_session_resume_handle_accepts_replaced_lifecycle() {
         remote_session.surface_id(),
         &SurfaceId::from("surface-remote-resume-handle")
     );
+}
+
+#[tokio::test]
+async fn remote_session_replace_resume_uses_lifecycle_fallback() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, events) = RemoteJsonRpcClient::new(outbound_tx);
+    let mut demux = RemoteEventDemux::new(events);
+    let old_session = client.session_handle(
+        test_session_id("sess-remote-replace-old"),
+        SurfaceId::from("surface-remote-replace-old"),
+    );
+    let replace_task = tokio::spawn(async move {
+        old_session
+            .replace_with_resume(
+                &mut demux,
+                SessionResumeParams {
+                    session_id: test_session_id("sess-remote-replace-new"),
+                },
+            )
+            .await
+    });
+
+    let JsonRpcFrame::Request(resume_request) = outbound_rx.recv().await.expect("resume request")
+    else {
+        panic!("expected resume request");
+    };
+    assert_eq!(resume_request.method, "session/resume");
+    let new_session_id = test_session_id("sess-remote-replace-new");
+    incoming
+        .handle_frame(JsonRpcFrame::Success(JsonRpcSuccess::new(
+            resume_request.id,
+            serde_json::json!({
+                "session": {
+                    "session_id": new_session_id,
+                    "model": "gpt-test",
+                    "cwd": "/tmp",
+                    "created_at": "2026-07-08T00:00:00Z",
+                    "message_count": 0,
+                    "total_tokens": 0
+                }
+            }),
+        )))
+        .await
+        .expect("handle resume response");
+    incoming
+        .handle_frame(JsonRpcFrame::Notification(JsonRpcNotification::new(
+            "session/lifecycle",
+            Some(serde_json::json!({
+                "surface_id": "surface-remote-replace-new",
+                "effect": {
+                    "type": "session_replaced",
+                    "old_session_id": "sess-remote-replace-old",
+                    "new_session_id": new_session_id,
+                },
+            })),
+        )))
+        .await
+        .expect("handle replace lifecycle");
+
+    let Ok(replaced) = replace_task.await.expect("replace task") else {
+        panic!("expected replace success");
+    };
+    assert_eq!(replaced.session_id(), &new_session_id);
+    assert_eq!(
+        replaced.surface_id(),
+        &SurfaceId::from("surface-remote-replace-new")
+    );
+}
+
+#[tokio::test]
+async fn remote_session_replace_start_returns_original_handle_on_failure() {
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let (client, incoming, events) = RemoteJsonRpcClient::new(outbound_tx);
+    let mut demux = RemoteEventDemux::new(events);
+    let old_session_id = test_session_id("sess-remote-replace-fail-old");
+    let old_surface_id = SurfaceId::from("surface-remote-replace-fail-old");
+    let old_session = client.session_handle(old_session_id.clone(), old_surface_id.clone());
+    let replace_task = tokio::spawn(async move {
+        old_session
+            .replace_with_start(&mut demux, SessionStartParams::default())
+            .await
+    });
+
+    let JsonRpcFrame::Request(start_request) = outbound_rx.recv().await.expect("start request")
+    else {
+        panic!("expected start request");
+    };
+    assert_eq!(start_request.method, "session/start");
+    incoming
+        .handle_frame(JsonRpcFrame::Error(JsonRpcErrorResponse::new(
+            start_request.id,
+            JsonRpcErrorObject::new(-32602, "start failed", None),
+        )))
+        .await
+        .expect("handle start error");
+
+    let Err((returned, ClientError::InvalidParams { message, .. })) =
+        replace_task.await.expect("replace task")
+    else {
+        panic!("expected replace failure");
+    };
+    assert_eq!(returned.session_id(), &old_session_id);
+    assert_eq!(returned.surface_id(), &old_surface_id);
+    assert_eq!(message, "start failed");
 }
 
 #[tokio::test]
