@@ -38,6 +38,13 @@ const DEFAULT_RETRY_JITTER: f64 = 0.25;
 /// `FETCH_TIMEOUT_MS = 60_000`. Long enough for slow origins, short
 /// enough that the model doesn't stall forever on a stuck fetch.
 const DEFAULT_WEB_FETCH_TIMEOUT_SECS: i64 = 60;
+const DEFAULT_SERVER_MAX_SESSIONS: i64 = 32;
+const DEFAULT_SERVER_MAX_SURFACES_PER_CONNECTION: i64 = 8;
+const DEFAULT_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION: i64 = 16;
+const DEFAULT_SERVER_EVENT_RETENTION_PER_SESSION: i64 = 1024;
+const DEFAULT_SERVER_OUTBOUND_QUEUE_FRAMES: i64 = 1024;
+const DEFAULT_SERVER_TURN_DRAIN_TIMEOUT_SECS: i64 = 10;
+const DEFAULT_SERVER_SHUTDOWN_TIMEOUT_SECS: i64 = 30;
 /// 100K-char extraction budget.
 /// `MAX_MARKDOWN_LENGTH = 100_000`. Guards side-query token cost.
 const DEFAULT_WEB_FETCH_MAX_CONTENT_LENGTH: i64 = 100_000;
@@ -76,13 +83,51 @@ pub struct PartialServerSettings {
     pub websocket_bind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub named_pipe_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_sessions: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_surfaces_per_connection: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_passive_surfaces_per_session: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_retention_per_session: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outbound_queue_frames: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_drain_timeout_secs: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shutdown_timeout_secs: Option<i64>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerConfig {
     pub unix_socket_path: Option<String>,
     pub websocket_bind: Option<String>,
     pub named_pipe_name: Option<String>,
+    pub max_sessions: i64,
+    pub max_surfaces_per_connection: i64,
+    pub max_passive_surfaces_per_session: i64,
+    pub event_retention_per_session: i64,
+    pub outbound_queue_frames: i64,
+    pub turn_drain_timeout_secs: i64,
+    pub shutdown_timeout_secs: i64,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            unix_socket_path: None,
+            websocket_bind: None,
+            named_pipe_name: None,
+            max_sessions: DEFAULT_SERVER_MAX_SESSIONS,
+            max_surfaces_per_connection: DEFAULT_SERVER_MAX_SURFACES_PER_CONNECTION,
+            max_passive_surfaces_per_session: DEFAULT_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION,
+            event_retention_per_session: DEFAULT_SERVER_EVENT_RETENTION_PER_SESSION,
+            outbound_queue_frames: DEFAULT_SERVER_OUTBOUND_QUEUE_FRAMES,
+            turn_drain_timeout_secs: DEFAULT_SERVER_TURN_DRAIN_TIMEOUT_SECS,
+            shutdown_timeout_secs: DEFAULT_SERVER_SHUTDOWN_TIMEOUT_SECS,
+        }
+    }
 }
 
 impl ServerConfig {
@@ -100,6 +145,41 @@ impl ServerConfig {
                 .get_string(EnvKey::CocoServerNamedPipe)
                 .or_else(|| settings.server.named_pipe_name.clone())
                 .filter(|name| !name.trim().is_empty()),
+            max_sessions: env
+                .get_i64(EnvKey::CocoServerMaxSessions)
+                .or(settings.server.max_sessions)
+                .filter(|count| *count > 0)
+                .unwrap_or(DEFAULT_SERVER_MAX_SESSIONS),
+            max_surfaces_per_connection: env
+                .get_i64(EnvKey::CocoServerMaxSurfacesPerConnection)
+                .or(settings.server.max_surfaces_per_connection)
+                .filter(|count| *count > 0)
+                .unwrap_or(DEFAULT_SERVER_MAX_SURFACES_PER_CONNECTION),
+            max_passive_surfaces_per_session: env
+                .get_i64(EnvKey::CocoServerMaxPassiveSurfacesPerSession)
+                .or(settings.server.max_passive_surfaces_per_session)
+                .filter(|count| *count > 0)
+                .unwrap_or(DEFAULT_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION),
+            event_retention_per_session: env
+                .get_i64(EnvKey::CocoServerEventRetentionPerSession)
+                .or(settings.server.event_retention_per_session)
+                .filter(|count| *count > 0)
+                .unwrap_or(DEFAULT_SERVER_EVENT_RETENTION_PER_SESSION),
+            outbound_queue_frames: env
+                .get_i64(EnvKey::CocoServerOutboundQueueFrames)
+                .or(settings.server.outbound_queue_frames)
+                .filter(|count| *count > 0)
+                .unwrap_or(DEFAULT_SERVER_OUTBOUND_QUEUE_FRAMES),
+            turn_drain_timeout_secs: env
+                .get_i64(EnvKey::CocoServerTurnDrainTimeoutSecs)
+                .or(settings.server.turn_drain_timeout_secs)
+                .filter(|secs| *secs > 0)
+                .unwrap_or(DEFAULT_SERVER_TURN_DRAIN_TIMEOUT_SECS),
+            shutdown_timeout_secs: env
+                .get_i64(EnvKey::CocoServerShutdownTimeoutSecs)
+                .or(settings.server.shutdown_timeout_secs)
+                .filter(|secs| *secs > 0)
+                .unwrap_or(DEFAULT_SERVER_SHUTDOWN_TIMEOUT_SECS),
         }
     }
 }

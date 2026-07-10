@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::Result;
 use coco_inference::AISdkError;
@@ -37,6 +38,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::Cli;
 use crate::process_runtime::ProcessRuntime;
+use crate::shutdown::ShutdownDrainOutcome;
 
 /// Fallback base instructions used when a resolved `ModelInfo`
 /// declares no `base_instructions` (e.g. Claude built-ins and any
@@ -593,6 +595,10 @@ pub struct RunChatOutcome {
     /// Tool filter built from `--allowed-tools` / `--disallowed-tools`.
     /// `None` ⇒ both flags were empty (engine uses `unrestricted()`).
     pub tool_filter_summary: Option<ToolFilterSummary>,
+    /// Result of the local AppServer shutdown drain after the print-mode turn.
+    pub app_server_shutdown: ShutdownDrainOutcome,
+    /// Result of the Event Hub connector shutdown flush after the print-mode turn.
+    pub event_hub_shutdown: ShutdownDrainOutcome,
 }
 
 /// Lightweight surface of [`coco_types::ToolFilter`] for tests — the
@@ -829,18 +835,15 @@ pub async fn run_chat_with_options(
             is_non_interactive: true,
         },
     );
-    let mut local_app_server_bridge = crate::sdk_server::AppServerLocalBridge::new(Arc::new(
-        crate::sdk_server::SdkServerState::default(),
-    ));
+    let mut local_app_server_bridge = crate::sdk_server::AppServerLocalBridge::with_server_config(
+        Arc::new(crate::sdk_server::SdkServerState::default()),
+        &runtime_config.server,
+    );
     // Resume / continue / fork: key every runtime subsystem off the resumed id,
     // else task dirs + agent transcripts orphan. Resolved above (override or
     // freshly minted) and shared with the registry's header-template vars.
     let session_handle = local_app_server_bridge
-        .load_session_runtime(session_id.clone(), {
-            let runtime_factory = runtime_factory.clone();
-            let session_id = session_id.clone();
-            async move { runtime_factory.build_with_session_id(session_id).await }
-        })
+        .load_session_runtime_from_factory(session_id.clone(), runtime_factory)
         .await?;
     let session = session_handle.clone();
     let event_hub_connector = {
@@ -1278,14 +1281,40 @@ pub async fn run_chat_with_options(
         completion.ended.outcome,
         coco_types::TurnOutcome::Interrupted(_)
     );
-    if let Some(connector) = event_hub_connector {
-        connector.shutdown_and_flush().await;
+    let app_server_shutdown_timeout =
+        Duration::from_secs(runtime_config.server.shutdown_timeout_secs as u64);
+    let app_server_shutdown = crate::shutdown::drain_with_timeout_or_signal(
+        app_server_shutdown_timeout,
+        local_app_server_bridge.shutdown_registered_sessions(),
+        crate::shutdown::os_interrupt_signal(),
+    )
+    .await;
+    match &app_server_shutdown {
+        ShutdownDrainOutcome::Clean => {}
+        ShutdownDrainOutcome::Failed { message } => {
+            tracing::warn!(error = %message, "headless AppServer shutdown drain failed");
+        }
+        ShutdownDrainOutcome::TimedOut { timeout_secs } => {
+            tracing::warn!(timeout_secs, "headless AppServer shutdown drain timed out");
+        }
+        ShutdownDrainOutcome::Interrupted => {
+            tracing::warn!("headless AppServer shutdown drain interrupted by signal");
+        }
     }
+    let event_hub_shutdown = if let Some(connector) = event_hub_connector {
+        connector
+            .shutdown_and_flush_with_timeout(app_server_shutdown_timeout)
+            .await
+    } else {
+        ShutdownDrainOutcome::Clean
+    };
 
     Ok(RunChatOutcome {
         effective_cwd: cwd.clone(),
         additional_dirs,
         tool_filter_summary,
+        app_server_shutdown,
+        event_hub_shutdown,
         response_text,
         turns: session_result.total_turns,
         total_usage: session_result.usage,
@@ -1406,6 +1435,8 @@ fn headless_text_outcome(
         effective_cwd: cwd.to_path_buf(),
         additional_dirs: resolve_additional_dirs(cli, cwd),
         tool_filter_summary: summarize_tool_filter(cli),
+        app_server_shutdown: ShutdownDrainOutcome::Clean,
+        event_hub_shutdown: ShutdownDrainOutcome::Clean,
     }
 }
 

@@ -235,9 +235,11 @@ pub async fn run_tui(
         .as_ref()
         .map(|plan| plan.cwd.clone())
         .unwrap_or_else(|| cwd.clone());
-    let mut local_app_server_bridge = coco_cli::sdk_server::AppServerLocalBridge::new(Arc::new(
-        coco_cli::sdk_server::SdkServerState::default(),
-    ));
+    let mut local_app_server_bridge =
+        coco_cli::sdk_server::AppServerLocalBridge::with_server_config(
+            Arc::new(coco_cli::sdk_server::SdkServerState::default()),
+            &runtime_config.server,
+        );
     let runtime_factory_cli = Arc::new(cli.clone());
     let runtime_factory = crate::session_runtime::SessionRuntimeFactory::new(
         crate::session_runtime::SessionRuntimeFactoryOpts {
@@ -260,15 +262,11 @@ pub async fn run_tui(
         },
     );
     let session_handle = local_app_server_bridge
-        .load_session_runtime(initial_session_id.clone(), {
-            let runtime_factory = runtime_factory.clone();
-            let initial_runtime_cwd = initial_runtime_cwd.clone();
-            async move {
-                runtime_factory
-                    .build_with_session_id_and_cwd(initial_session_id, initial_runtime_cwd)
-                    .await
-            }
-        })
+        .load_session_runtime_from_factory_with_cwd(
+            initial_session_id.clone(),
+            runtime_factory.clone(),
+            initial_runtime_cwd.clone(),
+        )
         .await?;
     let event_hub_connector = {
         let session_id = session_handle.current_typed_session_id().await;
@@ -727,6 +725,8 @@ pub async fn run_tui(
 
     // Spawn agent driver — owns the session handle + transports.
     let flag_settings_path = cli.settings.as_deref().map(std::path::PathBuf::from);
+    let app_server_shutdown_timeout =
+        Duration::from_secs(runtime_config.server.shutdown_timeout_secs as u64);
     let driver_handle = tokio::spawn(run_agent_driver(
         command_rx,
         notification_tx,
@@ -738,6 +738,7 @@ pub async fn run_tui(
         process_runtime.clone(),
         cwd.clone(),
         flag_settings_path,
+        app_server_shutdown_timeout,
         teammate_turn_done_tx,
     ));
 
@@ -792,12 +793,28 @@ pub async fn run_tui(
     }
 
     // Wait for agent driver to finish its own teardown.
-    let _ = driver_handle.await;
-    if let Some(connector) = event_hub_connector {
-        connector.shutdown_and_flush().await;
-    }
+    let app_server_shutdown = match driver_handle.await {
+        Ok(outcome) => outcome,
+        Err(error) => coco_cli::shutdown::ShutdownDrainOutcome::Failed {
+            message: error.to_string(),
+        },
+    };
+    let event_hub_shutdown = if let Some(connector) = event_hub_connector {
+        connector
+            .shutdown_and_flush_with_timeout(app_server_shutdown_timeout)
+            .await
+    } else {
+        coco_cli::shutdown::ShutdownDrainOutcome::Clean
+    };
 
-    tui_result.map_err(|e| anyhow::anyhow!("TUI error: {e}"))
+    tui_result.map_err(|e| anyhow::anyhow!("TUI error: {e}"))?;
+    if !app_server_shutdown.is_clean() {
+        anyhow::bail!("local AppServer shutdown drain {app_server_shutdown}");
+    }
+    if !event_hub_shutdown.is_clean() {
+        anyhow::bail!("local Event Hub shutdown flush {event_hub_shutdown}");
+    }
+    Ok(())
 }
 
 fn spawn_display_settings_reload_to(
@@ -985,12 +1002,13 @@ async fn run_agent_driver(
     process_runtime: Arc<ProcessRuntime>,
     cwd: std::path::PathBuf,
     flag_settings: Option<std::path::PathBuf>,
+    app_server_shutdown_timeout: Duration,
     // Cross-process teammate inbox pump (gap 1) completion handshake. When
     // `Some`, each spawned top-level turn fires its `user_message_id` here on
     // completion so the pump can serialize on its own injected turn. `None`
     // for leader / standalone sessions.
     teammate_turn_done_tx: Option<mpsc::Sender<String>>,
-) {
+) -> coco_cli::shutdown::ShutdownDrainOutcome {
     {
         let session = current_session.read().await.clone();
         session.install_side_query_event_tx(event_tx.clone()).await;
@@ -2423,6 +2441,24 @@ async fn run_agent_driver(
         let session = current_session.read().await.clone();
         drain_pending_memory_extraction(&session).await;
     }
+    let app_server_shutdown = coco_cli::shutdown::drain_with_timeout_or_signal(
+        app_server_shutdown_timeout,
+        local_app_server_bridge.shutdown_registered_sessions(),
+        coco_cli::shutdown::os_interrupt_signal(),
+    )
+    .await;
+    match &app_server_shutdown {
+        coco_cli::shutdown::ShutdownDrainOutcome::Clean => {}
+        coco_cli::shutdown::ShutdownDrainOutcome::Failed { message } => {
+            warn!(error = %message, "local AppServer shutdown drain failed")
+        }
+        coco_cli::shutdown::ShutdownDrainOutcome::TimedOut { timeout_secs } => {
+            warn!(timeout_secs, "local AppServer shutdown drain timed out")
+        }
+        coco_cli::shutdown::ShutdownDrainOutcome::Interrupted => {
+            warn!("local AppServer shutdown drain interrupted by signal")
+        }
+    }
     // Re-append metadata one more time at process-exit so the tail window
     // of the final transcript JSONL definitely carries the user's
     // title/tag/agent-name. Best-effort — IO errors here are logged but
@@ -2463,6 +2499,7 @@ async fn run_agent_driver(
     let session = current_session.read().await.clone();
     session.flush_session_usage_snapshot().await;
     info!("Agent driver stopped");
+    app_server_shutdown
 }
 
 /// Wait for scheduled turn-end extraction/session-memory work before

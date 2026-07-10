@@ -41,6 +41,7 @@ pub mod session_bootstrap;
 pub mod session_rename;
 pub mod session_runtime;
 pub mod shell_tool_selection;
+pub mod shutdown;
 pub mod side_query_impl;
 pub mod side_question;
 pub mod skill_watch;

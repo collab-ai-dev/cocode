@@ -136,6 +136,298 @@ fn test_server_config_env_overrides_settings_named_pipe_name() {
 }
 
 #[test]
+fn test_server_config_defaults_max_sessions() {
+    let config = ServerConfig::resolve(&Settings::default(), &EnvSnapshot::default());
+
+    assert_eq!(config.max_sessions, 32);
+}
+
+#[test]
+fn test_server_config_resolves_max_sessions_from_settings() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            max_sessions: Some(64),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let config = ServerConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.max_sessions, 64);
+}
+
+#[test]
+fn test_server_config_env_overrides_settings_max_sessions() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            max_sessions: Some(64),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoServerMaxSessions, "16")]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(config.max_sessions, 16);
+}
+
+#[test]
+fn test_server_config_ignores_non_positive_max_sessions() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            max_sessions: Some(64),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoServerMaxSessions, "0")]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(config.max_sessions, 32);
+}
+
+#[test]
+fn test_server_config_defaults_surface_limits() {
+    let config = ServerConfig::resolve(&Settings::default(), &EnvSnapshot::default());
+
+    assert_eq!(config.max_surfaces_per_connection, 8);
+    assert_eq!(config.max_passive_surfaces_per_session, 16);
+}
+
+#[test]
+fn test_server_config_resolves_surface_limits_from_settings() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            max_surfaces_per_connection: Some(4),
+            max_passive_surfaces_per_session: Some(10),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let config = ServerConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.max_surfaces_per_connection, 4);
+    assert_eq!(config.max_passive_surfaces_per_session, 10);
+}
+
+#[test]
+fn test_server_config_env_overrides_settings_surface_limits() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            max_surfaces_per_connection: Some(4),
+            max_passive_surfaces_per_session: Some(10),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoServerMaxSurfacesPerConnection, "6"),
+        (EnvKey::CocoServerMaxPassiveSurfacesPerSession, "12"),
+    ]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(config.max_surfaces_per_connection, 6);
+    assert_eq!(config.max_passive_surfaces_per_session, 12);
+}
+
+#[test]
+fn test_server_config_ignores_non_positive_surface_limits() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            max_surfaces_per_connection: Some(4),
+            max_passive_surfaces_per_session: Some(10),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoServerMaxSurfacesPerConnection, "0"),
+        (EnvKey::CocoServerMaxPassiveSurfacesPerSession, "-1"),
+    ]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(config.max_surfaces_per_connection, 8);
+    assert_eq!(config.max_passive_surfaces_per_session, 16);
+}
+
+#[test]
+fn test_server_config_defaults_retention_and_outbound_queue() {
+    let config = ServerConfig::resolve(&Settings::default(), &EnvSnapshot::default());
+
+    assert_eq!(config.event_retention_per_session, 1024);
+    assert_eq!(config.outbound_queue_frames, 1024);
+}
+
+#[test]
+fn test_server_config_resolves_retention_and_outbound_queue_from_settings() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            event_retention_per_session: Some(2048),
+            outbound_queue_frames: Some(512),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let config = ServerConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.event_retention_per_session, 2048);
+    assert_eq!(config.outbound_queue_frames, 512);
+}
+
+#[test]
+fn test_server_config_env_overrides_settings_retention_and_outbound_queue() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            event_retention_per_session: Some(2048),
+            outbound_queue_frames: Some(512),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoServerEventRetentionPerSession, "4096"),
+        (EnvKey::CocoServerOutboundQueueFrames, "768"),
+    ]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(config.event_retention_per_session, 4096);
+    assert_eq!(config.outbound_queue_frames, 768);
+}
+
+#[test]
+fn test_server_config_ignores_non_positive_retention_and_outbound_queue() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            event_retention_per_session: Some(-1),
+            outbound_queue_frames: Some(0),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let config = ServerConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.event_retention_per_session, 1024);
+    assert_eq!(config.outbound_queue_frames, 1024);
+}
+
+#[test]
+fn test_server_config_defaults_turn_drain_timeout() {
+    let config = ServerConfig::resolve(&Settings::default(), &EnvSnapshot::default());
+
+    assert_eq!(config.turn_drain_timeout_secs, 10);
+}
+
+#[test]
+fn test_server_config_resolves_turn_drain_timeout_from_settings() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            turn_drain_timeout_secs: Some(15),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let config = ServerConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.turn_drain_timeout_secs, 15);
+}
+
+#[test]
+fn test_server_config_env_overrides_settings_turn_drain_timeout() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            turn_drain_timeout_secs: Some(15),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoServerTurnDrainTimeoutSecs, "20")]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(config.turn_drain_timeout_secs, 20);
+}
+
+#[test]
+fn test_server_config_ignores_non_positive_turn_drain_timeout() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            turn_drain_timeout_secs: Some(15),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoServerTurnDrainTimeoutSecs, "0")]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(config.turn_drain_timeout_secs, 10);
+}
+
+#[test]
+fn test_server_config_defaults_shutdown_timeout() {
+    let config = ServerConfig::resolve(&Settings::default(), &EnvSnapshot::default());
+
+    assert_eq!(config.shutdown_timeout_secs, 30);
+}
+
+#[test]
+fn test_server_config_resolves_shutdown_timeout_from_settings() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            shutdown_timeout_secs: Some(45),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let config = ServerConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.shutdown_timeout_secs, 45);
+}
+
+#[test]
+fn test_server_config_env_overrides_settings_shutdown_timeout() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            shutdown_timeout_secs: Some(45),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoServerShutdownTimeoutSecs, "60")]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(config.shutdown_timeout_secs, 60);
+}
+
+#[test]
+fn test_server_config_ignores_non_positive_shutdown_timeout() {
+    let settings = Settings {
+        server: PartialServerSettings {
+            shutdown_timeout_secs: Some(45),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoServerShutdownTimeoutSecs, "0")]);
+
+    let config = ServerConfig::resolve(&settings, &env);
+
+    assert_eq!(config.shutdown_timeout_secs, 30);
+}
+
+#[test]
 fn test_teammate_mode_accepts_iterm2() {
     let mode: TeammateMode = serde_json::from_str("\"iterm2\"").unwrap();
     assert_eq!(mode, TeammateMode::Iterm2);

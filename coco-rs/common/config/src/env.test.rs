@@ -43,6 +43,22 @@ fn test_env_key_as_str() {
         EnvKey::CocoServerNamedPipe.as_str(),
         "COCO_SERVER_NAMED_PIPE"
     );
+    assert_eq!(
+        EnvKey::CocoServerMaxSessions.as_str(),
+        "COCO_SERVER_MAX_SESSIONS"
+    );
+    assert_eq!(
+        EnvKey::CocoServerMaxSurfacesPerConnection.as_str(),
+        "COCO_SERVER_MAX_SURFACES_PER_CONNECTION"
+    );
+    assert_eq!(
+        EnvKey::CocoServerMaxPassiveSurfacesPerSession.as_str(),
+        "COCO_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION"
+    );
+    assert_eq!(
+        EnvKey::CocoServerTurnDrainTimeoutSecs.as_str(),
+        "COCO_SERVER_TURN_DRAIN_TIMEOUT_SECS"
+    );
     assert_eq!(EnvKey::OtelLogUserPrompts.as_str(), "OTEL_LOG_USER_PROMPTS");
     assert_eq!(
         EnvKey::OtelLogAssistantResponses.as_str(),

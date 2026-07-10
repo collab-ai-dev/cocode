@@ -32,6 +32,8 @@ use super::StartedSessionState;
 use crate::headless::build_output_style_manager;
 use crate::sdk_server::cli_bootstrap::def_to_sdk_agent_info;
 use crate::sdk_server::outbound::OutboundMessage;
+use crate::sdk_server::session_data;
+use crate::sdk_server::session_data::PersistedSessionDataError;
 use crate::session_runtime::SessionHandle;
 
 pub(crate) struct LoadedResumeSession {
@@ -870,16 +872,7 @@ pub(crate) fn build_aggregated_session_result(
 pub(crate) fn session_to_summary(
     s: &coco_session::Session,
 ) -> Result<coco_types::SdkSessionSummary, String> {
-    Ok(coco_types::SdkSessionSummary {
-        session_id: coco_types::SessionId::try_new(s.id.clone()).map_err(|e| e.to_string())?,
-        model: s.model.clone(),
-        cwd: s.working_dir.to_string_lossy().into_owned(),
-        created_at: s.created_at.clone(),
-        updated_at: s.updated_at.clone(),
-        title: s.title.clone(),
-        message_count: s.message_count,
-        total_tokens: s.total_tokens,
-    })
+    session_data::session_record_to_summary(s)
 }
 
 /// `session/list` — enumerate persisted sessions, newest first.
@@ -890,49 +883,16 @@ pub(crate) fn session_to_summary(
 /// Errors:
 /// - `INTERNAL_ERROR` if `SessionManager::list()` fails (e.g. filesystem error)
 pub(super) async fn handle_session_list(ctx: &HandlerContext) -> HandlerResult {
-    // `list()` walks the session directory with `read_dir` and reads every
-    // JSON blob synchronously — offload to the blocking pool so a session-
-    // browser client polling this endpoint can't stall the tokio worker.
-    // Snapshot the manager before the blocking call.
-    let manager = match ctx.state.session_manager_snapshot().await {
-        Some(manager) => manager,
-        None => {
-            info!("SdkServer: session/list (no session manager installed, returning empty)");
-            return HandlerResult::ok(coco_types::SessionListResult::default());
+    let manager = ctx.state.session_manager_snapshot().await;
+    if manager.is_none() {
+        info!("SdkServer: session/list (no session manager installed, returning empty)");
+    }
+    match session_data::persisted_session_list(manager).await {
+        Ok(result) => {
+            info!(count = result.sessions.len(), "SdkServer: session/list");
+            HandlerResult::ok(result)
         }
-    };
-    let list_result = tokio::task::spawn_blocking(move || manager.list()).await;
-    match list_result {
-        Ok(Ok(sessions)) => {
-            let summaries = match sessions
-                .iter()
-                .map(session_to_summary)
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(summaries) => summaries,
-                Err(e) => {
-                    return HandlerResult::Err {
-                        code: coco_types::error_codes::INTERNAL_ERROR,
-                        message: format!("session/list returned invalid session id: {e}"),
-                        data: None,
-                    };
-                }
-            };
-            info!(count = summaries.len(), "SdkServer: session/list");
-            HandlerResult::ok(coco_types::SessionListResult {
-                sessions: summaries,
-            })
-        }
-        Ok(Err(e)) => HandlerResult::Err {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: format!("session/list failed: {e}"),
-            data: None,
-        },
-        Err(join_err) => HandlerResult::Err {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: format!("session/list task panicked: {join_err}"),
-            data: None,
-        },
+        Err(error) => persisted_session_data_error(error),
     }
 }
 
@@ -947,71 +907,14 @@ pub(super) async fn handle_session_read(
     params: coco_types::SessionReadParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let cursor = match coco_app_server::parse_session_data_cursor(
-        "session/read",
-        params.cursor.as_deref(),
-    ) {
-        Ok(cursor) => cursor,
-        Err(error) => return session_data_projection_error(error),
-    };
-    let limit = match coco_app_server::parse_session_data_limit("session/read", params.limit) {
-        Ok(limit) => limit,
-        Err(error) => return session_data_projection_error(error),
-    };
-    // Snapshot the manager before the blocking call.
-    let manager = match ctx.state.session_manager_snapshot().await {
-        Some(manager) => manager,
-        None => {
-            return HandlerResult::Err {
-                code: coco_types::error_codes::INVALID_REQUEST,
-                message: "session persistence is not enabled on this server".into(),
-                data: None,
-            };
-        }
-    };
-    let session_id = params.session_id.as_str().to_string();
-    let read_result = tokio::task::spawn_blocking(move || {
-        let session = manager.load(&session_id)?;
-        let store = manager.store_for(&session.working_dir);
-        let transcript_messages = store.load_transcript_messages(&session_id)?;
-        let page = coco_app_server::session_data_page(transcript_messages.len(), cursor, limit);
-        let messages = transcript_messages[page.start..page.end]
-            .iter()
-            .map(serde_json::to_value)
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok::<_, anyhow::Error>((session, messages, page.next_cursor(), page.has_more))
-    })
-    .await;
-    match read_result {
-        Ok(Ok((session, messages, next_cursor, has_more))) => {
+    match session_data::persisted_session_read(ctx.state.session_manager_snapshot().await, &params)
+        .await
+    {
+        Ok(result) => {
             info!(session_id = %params.session_id, "SdkServer: session/read");
-            let summary = match session_to_summary(&session) {
-                Ok(summary) => summary,
-                Err(e) => {
-                    return HandlerResult::Err {
-                        code: coco_types::error_codes::INTERNAL_ERROR,
-                        message: format!("session/read returned invalid session id: {e}"),
-                        data: None,
-                    };
-                }
-            };
-            HandlerResult::ok(coco_types::SessionReadResult {
-                session: summary,
-                messages,
-                next_cursor,
-                has_more,
-            })
+            HandlerResult::ok(result)
         }
-        Ok(Err(e)) => HandlerResult::Err {
-            code: coco_types::error_codes::INVALID_REQUEST,
-            message: format!("session/read: {e}"),
-            data: None,
-        },
-        Err(join_err) => HandlerResult::Err {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: format!("session/read task panicked: {join_err}"),
-            data: None,
-        },
+        Err(error) => persisted_session_data_error(error),
     }
 }
 
@@ -1025,83 +928,24 @@ pub(super) async fn handle_session_turns_list(
     params: coco_types::SessionTurnsListParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    let cursor = match coco_app_server::parse_session_data_cursor(
-        "session/turns/list",
-        params.cursor.as_deref(),
-    ) {
-        Ok(cursor) => cursor,
-        Err(error) => return session_data_projection_error(error),
-    };
-    let limit = match coco_app_server::parse_session_data_limit("session/turns/list", params.limit)
+    match session_data::persisted_session_turns_list(
+        ctx.state.session_manager_snapshot().await,
+        &params,
+    )
+    .await
     {
-        Ok(limit) => limit,
-        Err(error) => return session_data_projection_error(error),
-    };
-    let manager = match ctx.state.session_manager_snapshot().await {
-        Some(manager) => manager,
-        None => {
-            return HandlerResult::Err {
-                code: coco_types::error_codes::INVALID_REQUEST,
-                message: "session persistence is not enabled on this server".into(),
-                data: None,
-            };
-        }
-    };
-    let session_id = params.session_id.as_str().to_string();
-    let list_result = tokio::task::spawn_blocking(move || {
-        let session = manager.load(&session_id)?;
-        let store = manager.store_for(&session.working_dir);
-        let transcript_messages = store.load_transcript_messages(&session_id)?;
-        let turns = coco_app_server::derive_session_turn_summaries(transcript_messages.iter().map(
-            |entry| coco_app_server::TranscriptTurnEntry {
-                is_user: entry.entry_type == "user",
-                timestamp: Some(entry.timestamp.as_str()),
-            },
-        ));
-        let (turns, next_cursor, has_more) =
-            coco_app_server::page_session_items(&turns, cursor, limit);
-        Ok::<_, anyhow::Error>((session, turns, next_cursor, has_more))
-    })
-    .await;
-    match list_result {
-        Ok(Ok((session, turns, next_cursor, has_more))) => {
+        Ok(result) => {
             info!(session_id = %params.session_id, "SdkServer: session/turns/list");
-            let summary = match session_to_summary(&session) {
-                Ok(summary) => summary,
-                Err(e) => {
-                    return HandlerResult::Err {
-                        code: coco_types::error_codes::INTERNAL_ERROR,
-                        message: format!("session/turns/list returned invalid session id: {e}"),
-                        data: None,
-                    };
-                }
-            };
-            HandlerResult::ok(coco_types::SessionTurnsListResult {
-                session: summary,
-                turns,
-                next_cursor,
-                has_more,
-            })
+            HandlerResult::ok(result)
         }
-        Ok(Err(e)) => HandlerResult::Err {
-            code: coco_types::error_codes::INVALID_REQUEST,
-            message: format!("session/turns/list: {e}"),
-            data: None,
-        },
-        Err(join_err) => HandlerResult::Err {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: format!("session/turns/list task panicked: {join_err}"),
-            data: None,
-        },
+        Err(error) => persisted_session_data_error(error),
     }
 }
 
-fn session_data_projection_error(
-    error: coco_app_server::SessionDataProjectionError,
-) -> HandlerResult {
+fn persisted_session_data_error(error: PersistedSessionDataError) -> HandlerResult {
     HandlerResult::Err {
-        code: coco_types::error_codes::INVALID_REQUEST,
-        message: error.message(),
+        code: error.code,
+        message: error.message,
         data: None,
     }
 }

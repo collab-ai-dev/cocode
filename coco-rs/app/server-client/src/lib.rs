@@ -194,6 +194,30 @@ impl<H: Clone> ServerClient<H> {
             .await
     }
 
+    pub async fn session_start_handle<Handler>(
+        &self,
+        handler: &Handler,
+        params: SessionStartParams,
+    ) -> Result<SessionClient, ClientError>
+    where
+        Handler: LocalClientRequestHandler,
+    {
+        let started = self.session_start(handler, params).await?;
+        let surface_id = match started.surface_id {
+            Some(surface_id) => surface_id,
+            None => {
+                return self.attach_interactive_session(
+                    started.session_id,
+                    AttachSurfaceOptions::default(),
+                );
+            }
+        };
+        Ok(SessionClient {
+            session_id: started.session_id,
+            surface_id,
+        })
+    }
+
     pub async fn session_resume<Handler>(
         &self,
         handler: &Handler,
@@ -204,6 +228,29 @@ impl<H: Clone> ServerClient<H> {
     {
         self.send_typed_client_request(handler, ClientRequest::SessionResume(params))
             .await
+    }
+
+    pub async fn session_resume_handle<Handler>(
+        &self,
+        handler: &Handler,
+        params: SessionResumeParams,
+    ) -> Result<SessionClient, ClientError>
+    where
+        Handler: LocalClientRequestHandler,
+    {
+        let resumed = self.session_resume(handler, params).await?;
+        let session_id = resumed.session.session_id;
+        let surface_id = match resumed.surface_id {
+            Some(surface_id) => surface_id,
+            None => {
+                return self
+                    .attach_interactive_session(session_id, AttachSurfaceOptions::default());
+            }
+        };
+        Ok(SessionClient {
+            session_id,
+            surface_id,
+        })
     }
 
     pub async fn session_list<Handler>(
@@ -367,6 +414,44 @@ impl<H: Clone> ServerClient<H> {
         };
         match self.session_archive(handler, params).await {
             Ok(()) => Ok(()),
+            Err(error) => Err((session, error)),
+        }
+    }
+
+    pub async fn replace_session_with_start<Handler>(
+        &self,
+        handler: &Handler,
+        session: SessionClient,
+        params: SessionStartParams,
+    ) -> Result<SessionClient, (SessionClient, ClientError)>
+    where
+        Handler: LocalClientRequestHandler,
+    {
+        let old_surface_id = session.surface_id.clone();
+        match self.session_start(handler, params).await {
+            Ok(started) => Ok(SessionClient {
+                session_id: started.session_id,
+                surface_id: started.surface_id.unwrap_or(old_surface_id),
+            }),
+            Err(error) => Err((session, error)),
+        }
+    }
+
+    pub async fn replace_session_with_resume<Handler>(
+        &self,
+        handler: &Handler,
+        session: SessionClient,
+        params: SessionResumeParams,
+    ) -> Result<SessionClient, (SessionClient, ClientError)>
+    where
+        Handler: LocalClientRequestHandler,
+    {
+        let old_surface_id = session.surface_id.clone();
+        match self.session_resume(handler, params).await {
+            Ok(resumed) => Ok(SessionClient {
+                session_id: resumed.session.session_id,
+                surface_id: resumed.surface_id.unwrap_or(old_surface_id),
+            }),
             Err(error) => Err((session, error)),
         }
     }
@@ -2263,6 +2348,54 @@ impl RemoteSessionClient {
 
     pub async fn interrupt(&self) -> Result<(), ClientError> {
         self.client.turn_interrupt().await
+    }
+
+    pub async fn replace_with_start(
+        self,
+        demux: &mut RemoteEventDemux,
+        params: SessionStartParams,
+    ) -> Result<Self, (Self, ClientError)> {
+        match self.client.session_start(params).await {
+            Ok(started) => {
+                let surface_id = match started.surface_id {
+                    Some(surface_id) => surface_id,
+                    None => {
+                        let Some(delivery) =
+                            demux.next_session_activation(&started.session_id).await
+                        else {
+                            return Err((self, ClientError::Disconnected));
+                        };
+                        delivery.surface_id
+                    }
+                };
+                Ok(self.client.session_handle(started.session_id, surface_id))
+            }
+            Err(error) => Err((self, error)),
+        }
+    }
+
+    pub async fn replace_with_resume(
+        self,
+        demux: &mut RemoteEventDemux,
+        params: SessionResumeParams,
+    ) -> Result<Self, (Self, ClientError)> {
+        match self.client.session_resume(params).await {
+            Ok(resumed) => {
+                let session_id = resumed.session.session_id;
+                let surface_id = match resumed.surface_id {
+                    Some(surface_id) => surface_id,
+                    None => {
+                        let Some(delivery) = demux.next_session_activation(&session_id).await
+                        else {
+                            return Err((self, ClientError::Disconnected));
+                        };
+                        delivery.surface_id
+                    }
+                };
+                Ok(self.client.session_handle(session_id, surface_id))
+            }
+            Err(error) => Err((self, error)),
+        }
     }
 
     pub async fn close(self) -> Result<(), (Self, ClientError)> {

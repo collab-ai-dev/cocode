@@ -13,6 +13,7 @@ construction or transports.
 | `AppLoadStart` | Result of starting/observing a load owner task. |
 | `AppCloseStart` | Result of starting/observing a close owner task. |
 | `AppReplaceStart` | Result of starting a replace owner task. |
+| `AppShutdownStart` / `AppShutdownSession` | Process-shutdown close orchestration result plus per-session close completion. |
 | `AppArchiveCommit` | Result of completing close and archiving surfaces in one commit section. |
 | `AppLiveSessionSummary` | Live registry session id plus current routing surface counts. |
 | `SurfaceLifecycleEffect` | Internal lifecycle effect targeted to a surface after commit. |
@@ -29,6 +30,7 @@ construction or transports.
 | `LoadCompletion` / `CloseCompletion` | Cloneable completion signals; owner tasks do the work and update slots. |
 | `ReplaceStart` / `ReplaceCommit` | Registry-side replace reservation and commit results. |
 | `SessionDataProjectionError` / `SessionPage` / `TranscriptTurnEntry` | Pure cursor, pagination, and turn-span projection helpers for session-data reads. |
+| `AppSessionDataRequest` / `AppSessionDataSource` / `AppSessionDataHandle` | AppServer-owned `session/list` / `session/read` / `session/turns/list` composition over persisted storage callbacks plus live registry handles. |
 | `ConnectionKey` | Private in-process transport key. Never serialize or persist it. |
 | `RoutingState` | Single-lock state for connection/surface indexes and per-session durable rings. |
 | `SurfaceAttachment` | Server-owned attachment metadata: role, capabilities, notification prefs, delivery cursor, state. |
@@ -70,6 +72,14 @@ construction or transports.
 - `AppServer::spawn_replace_detached` is the same owner-task lifecycle without
   caller-surface routing. Use it only when the caller will attach a fresh
   surface after the replacement commits.
+- `AppServer::spawn_shutdown` snapshots every closable registry slot and starts
+  or observes `spawn_close` for each one. `Loading` slots close after load;
+  already-`Closing` slots reuse their existing completion signal. Higher layers
+  still own the process-wide shutdown timeout, transport stop, hub flush, and
+  exit code policy.
+- `SurfaceLimits` controls per-connection and per-session passive-surface
+  guards. `AppServer::new` uses the default limits; callers with resolved
+  runtime config must use `AppServer::new_with_surface_limits`.
 - Owner tasks route lifecycle effects through `route_lifecycle_effects` after
   commit locks are released: replace emits started/replaced before the old close
   cascade, and close/archive emits ended after archive commit.
@@ -201,12 +211,16 @@ construction or transports.
   `session/list` plumbing. It snapshots registry live slots with routing
   surface counts under registry-then-routing lock order; persistent transcript
   summaries still belong to the future runtime/session-store bridge.
+- `AppServer::handle_session_data_request` owns `session/list` /
+  `session/read` / `session/turns/list` composition: it asks an
+  `AppSessionDataSource` for persisted data, layers live registry handles over
+  list results, and falls back to live snapshots for unpersisted reads. It does
+  not read transcripts or depend on `coco-session`; higher layers provide
+  storage callbacks and adapt live handles through `AppSessionDataHandle`.
 - `parse_session_data_cursor`, `parse_session_data_limit`,
   `session_data_page`, `page_session_items`, and
-  `derive_session_turn_summaries` are pure projection helpers for
-  `session/read` / `session/turns/list`. They do not read transcripts or depend
-  on `coco-session`; higher layers adapt their storage records into
-  `TranscriptTurnEntry`.
+  `derive_session_turn_summaries` remain pure projection helpers for
+  `session/read` / `session/turns/list`.
 - Keep pending-request indexes in sync by request, session, surface, and turn.
   Surface detach, connection close, turn transition, replace, and archive must
   cancel the precise affected request ids.
@@ -222,10 +236,10 @@ construction or transports.
 ## Pending
 
 Concrete runtime factory implementation behind every `AppServer::spawn_load`
-caller, concrete close cascade implementation behind `spawn_close`, concrete
-replace runtime factory and old-session close cascade behind `spawn_replace`,
-interactive takeover, production listener lifecycle wiring beyond the SDK
-sidecars, and broader persisted transcript/session-store
+caller, concrete close cascade implementation behind `spawn_close` /
+`spawn_shutdown`, concrete replace runtime factory and old-session close cascade
+behind `spawn_replace`, interactive takeover, production listener lifecycle
+wiring beyond the SDK sidecars, and broader persisted transcript/session-store
 integration are not implemented here yet. The CLI bridge now constructs the
 initial TUI/headless/SDK runtime through `AppServer::spawn_load`, registers
 remaining `LocalAppSessionHandle` snapshots through `spawn_load`, exposes

@@ -91,6 +91,15 @@ impl<H: Clone> LiveSessionRegistry<H> {
             .collect()
     }
 
+    pub fn list_closable(&self) -> Vec<SessionId> {
+        self.sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     pub fn begin_load(&self, session_id: SessionId) -> Result<LoadStart<H>, RegistryError> {
         let mut sessions = self
             .sessions

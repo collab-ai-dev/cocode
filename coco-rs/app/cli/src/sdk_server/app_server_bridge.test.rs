@@ -627,6 +627,7 @@ async fn local_app_server_close_cancels_and_drains_matching_sdk_session() {
         Arc::clone(&app_server),
         Arc::clone(&state),
         session_id.clone(),
+        APP_SERVER_TURN_DRAIN_TIMEOUT,
     )
     .await
     .expect("close local session");
@@ -634,6 +635,79 @@ async fn local_app_server_close_cancels_and_drains_matching_sdk_session() {
     assert!(cancelled.load(Ordering::SeqCst));
     assert!(state.session_handoff_snapshot(&session_id).is_none());
     assert!(app_server.list_live_sessions().is_empty());
+}
+
+#[tokio::test]
+async fn local_app_server_shutdown_drains_all_registered_sessions() {
+    let app_server = Arc::new(AppServer::<LocalAppSessionHandle>::new(2, 8));
+    let state = Arc::new(SdkServerState::default());
+    let session_a = SessionId::try_new("sess-local-shutdown-a").expect("valid session id");
+    let session_b = SessionId::try_new("sess-local-shutdown-b").expect("valid session id");
+    for session_id in [session_a.clone(), session_b.clone()] {
+        register_local_app_server_session(
+            &app_server,
+            LocalAppSessionHandle::snapshot(session_id.clone()),
+        )
+        .await
+        .expect("register local session");
+        state
+            .install_test_session_state(
+                session_id,
+                SessionMetadata {
+                    cwd: "/tmp".to_string(),
+                    model: "test-model".to_string(),
+                },
+            )
+            .await;
+    }
+
+    let cancel_a = CancellationToken::new();
+    let cancelled_a = Arc::new(AtomicBool::new(false));
+    let cancelled_a_for_task = Arc::clone(&cancelled_a);
+    let cancel_a_for_task = cancel_a.clone();
+    let turn_task_a = tokio::spawn(async move {
+        cancel_a_for_task.cancelled().await;
+        cancelled_a_for_task.store(true, Ordering::SeqCst);
+    });
+    state.install_active_turn(
+        session_a.clone(),
+        ActiveTurnHandles {
+            cancel_token: cancel_a,
+            turn_task: turn_task_a,
+            forwarder_task: tokio::spawn(async {}),
+        },
+    );
+
+    let cancel_b = CancellationToken::new();
+    let cancelled_b = Arc::new(AtomicBool::new(false));
+    let cancelled_b_for_task = Arc::clone(&cancelled_b);
+    let cancel_b_for_task = cancel_b.clone();
+    let turn_task_b = tokio::spawn(async move {
+        cancel_b_for_task.cancelled().await;
+        cancelled_b_for_task.store(true, Ordering::SeqCst);
+    });
+    state.install_active_turn(
+        session_b.clone(),
+        ActiveTurnHandles {
+            cancel_token: cancel_b,
+            turn_task: turn_task_b,
+            forwarder_task: tokio::spawn(async {}),
+        },
+    );
+
+    shutdown_local_app_server_sessions(
+        Arc::clone(&app_server),
+        Arc::clone(&state),
+        APP_SERVER_TURN_DRAIN_TIMEOUT,
+    )
+    .await
+    .expect("shutdown local sessions");
+
+    assert!(cancelled_a.load(Ordering::SeqCst));
+    assert!(cancelled_b.load(Ordering::SeqCst));
+    assert!(state.session_handoff_snapshot(&session_a).is_none());
+    assert!(state.session_handoff_snapshot(&session_b).is_none());
+    assert_eq!(app_server.registry().slot_count(), 0);
 }
 
 #[tokio::test]
@@ -654,6 +728,7 @@ async fn local_app_server_close_clears_scoped_state_without_sdk_slot() {
         Arc::clone(&app_server),
         Arc::clone(&state),
         session_id.clone(),
+        APP_SERVER_TURN_DRAIN_TIMEOUT,
     )
     .await
     .expect("close local session");
@@ -780,6 +855,7 @@ async fn local_bridge_replace_factory_returns_constructed_handle() {
                 )
             }
         },
+        APP_SERVER_TURN_DRAIN_TIMEOUT,
     )
     .await
     .expect("replace succeeds")
@@ -879,6 +955,7 @@ async fn local_lifecycle_resume_replaces_detached_live_session_before_attaching_
             live_before: vec![old_session_id.clone()],
         },
         &result,
+        APP_SERVER_TURN_DRAIN_TIMEOUT,
     )
     .await
     .expect("apply resume lifecycle")
@@ -975,6 +1052,7 @@ async fn local_lifecycle_resume_replaces_interactive_live_session() {
             live_before: vec![old_session_id.clone()],
         },
         &result,
+        APP_SERVER_TURN_DRAIN_TIMEOUT,
     )
     .await
     .expect("apply resume lifecycle");
@@ -1054,6 +1132,7 @@ async fn current_session_result_prefers_interactive_surface_over_sdk_slot() {
         Arc::clone(&state),
         old_session_id.clone(),
         LocalAppSessionHandle::snapshot(new_session_id.clone()),
+        APP_SERVER_TURN_DRAIN_TIMEOUT,
     )
     .await
     .expect("replace session")
@@ -2269,6 +2348,7 @@ async fn sdk_bridge_enqueues_protocol_notifications_to_hub_connector() {
             state,
             vec![external_rx],
             Some(worker.sender()),
+            APP_SERVER_TURN_DRAIN_TIMEOUT,
         ),
     );
 

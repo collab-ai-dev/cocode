@@ -24,9 +24,9 @@ use crate::session_bootstrap::build_engine_resources;
 
 /// Owned construction inputs for one family of session runtimes.
 ///
-/// This is the compatibility shape that AppServer owner tasks can later hold
-/// and call from `spawn_load` / replace. Entry points still own their
-/// surface-specific late-binds after the handle is built.
+/// AppServer bridge owner tasks pass this through `spawn_load` / replace while
+/// entry points retain their surface-specific late-binds after the handle is
+/// built.
 #[derive(Clone)]
 pub struct SessionRuntimeFactory {
     opts: Arc<SessionRuntimeFactoryOpts>,

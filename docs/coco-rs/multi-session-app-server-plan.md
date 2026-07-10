@@ -1603,8 +1603,13 @@ Implementation progress as of 2026-07-07:
   owner tasks now also route lifecycle effects through the in-memory lifecycle
   delivery channel after commit locks are released: replace emits
   started/replaced before the old close cascade, and close/archive emits ended
-  after archive commit. `AppServer` now owns the first
-  combined registry+routing commit skeleton:
+  after archive commit. `AppServer` now owns the first process-shutdown close
+  orchestration primitive: `spawn_shutdown` snapshots every closable registry
+  slot, starts or observes `spawn_close` for each one, returns per-session close
+  completions to the caller, and therefore covers `Live`, close-after-load
+  `Loading`, and already-`Closing` slots while leaving the process-wide timeout,
+  transport stop, hub flush, and exit code policy to the higher layer.
+  `AppServer` now owns the first combined registry+routing commit skeleton:
   `commit_replace_for_surface` takes the registry lock before the routing lock,
   validates that the calling surface is still attached to old, commits new
   `Loading → Live` plus old `Live → Closing`, then re-points the caller surface
@@ -1924,11 +1929,14 @@ Implementation progress as of 2026-07-07:
   before a concrete runtime-backed handler is wired into the entrypoints. It
   also exposes local handle-oriented query, interrupt, archive, and passive
   snapshot-read helpers over the same request seam, with archive failure
-  returning the original interactive handle. It also exposes a client-side
-  live-session list projection with current surface counts, covering the live
-  half of §14 `list_sessions`; persisted transcript reads are currently
-  available through the CLI runtime-backed local handler, while broader
-  client/store pagination remains pending. The client crate now
+  returning the original interactive handle. Local handle-oriented start/resume
+  replacement helpers now consume the old interactive handle and return it on
+  failure, so the §14 failed-replace recovery contract is available outside the
+  CLI bridge. It also exposes a client-side live-session list projection with
+  current surface counts, covering the live half of §14 `list_sessions`;
+  persisted transcript reads are currently available through the CLI
+  runtime-backed local handler, while broader client/store pagination remains
+  pending. The client crate now
   also has a
   transport-agnostic `RemoteJsonRpcClient` foundation for future SDK UDS/WS
   transports: it mints JSON-RPC request ids, records pending response
@@ -1960,6 +1968,9 @@ Implementation progress as of 2026-07-07:
   mint `RemoteSessionClient` handles from the optional `surface_id` carried by
   the SDK result DTO after AppServer lifecycle sync attaches the real surface,
   with matching `session/lifecycle` activation as a compatibility fallback.
+  Remote interactive handles now also expose start/resume replacement helpers
+  that consume the old handle and return it on failure, using the same
+  `surface_id` / lifecycle-activation recovery path when replacement succeeds.
   Remote JSON-RPC failures now map to typed public client errors for invalid
   requests, invalid params, missing methods, internal server failures, and
   stable domain kinds (`snapshot_required`, `surface_limit`), while preserving
@@ -1997,7 +2008,35 @@ Implementation progress as of 2026-07-07:
   runtime-backed handles, cancels the runtime shutdown signal, then archives
   AppServer surfaces and emits lifecycle end notifications. The registry
   snapshot guard prevents a stale snapshot from shutting down a replacement
-  runtime after `/clear` or resume has already swapped handles.
+  runtime after `/clear` or resume has already swapped handles. The local
+  bridge now also exposes a shutdown drain that runs that same cascade through
+  `AppServer::spawn_shutdown` for every registered slot and waits on the
+  returned close completions; the TUI driver calls it on exit before its final
+  metadata append, headless calls it before hub flush, and SDK stdio calls it
+  after sidecar listener shutdown before memory/hub flush. Active-turn drain
+  waits inside the close cascade are now bounded by
+  `server.turn_drain_timeout_secs` /
+  `COCO_SERVER_TURN_DRAIN_TIMEOUT_SECS` (default 10), while whole-shutdown waits,
+  including SDK sidecar listener joins, are now bounded by
+  `server.shutdown_timeout_secs` / `COCO_SERVER_SHUTDOWN_TIMEOUT_SECS` (default
+  30). Event Hub connector flushes now also use that bound. Headless, TUI, and
+  SDK stdio now convert local AppServer shutdown drain and Event Hub connector
+  flush failures or timeouts into a nonzero process result after ordinary
+  cleanup has run; both bounded waits also observe an OS interrupt signal and
+  stop waiting instead of consuming the full timeout. Full top-level process
+  signal orchestration remains higher-layer work.
+  Local TUI/headless bridges and SDK stdio AppServer startup now also consume
+  `server.event_retention_per_session` / `COCO_SERVER_EVENT_RETENTION_PER_SESSION`
+  and `server.outbound_queue_frames` / `COCO_SERVER_OUTBOUND_QUEUE_FRAMES` for
+  AppServer retention rings and outbound queue capacities instead of hard-coded
+  local constants. SDK stdio AppServer startup now also uses
+  `server.max_sessions` / `COCO_SERVER_MAX_SESSIONS` for the process-level
+  multi-session slot limit; the TUI/headless local bridge remains capped at one
+  active session for v1. SDK stdio and config-aware local bridge startup now
+  pass `server.max_surfaces_per_connection` /
+  `COCO_SERVER_MAX_SURFACES_PER_CONNECTION` and
+  `server.max_passive_surfaces_per_session` /
+  `COCO_SERVER_MAX_PASSIVE_SURFACES_PER_SESSION` into AppServer routing limits.
   `RemoteConnectOptions` now names remote outbound/event channel capacities for
   generic NDJSON, Unix dialing, and WebSocket dialing. `RemoteJsonRpcClient` now also exposes typed
   session, turn, approval/user-input/elicitation resolution, initialize,
@@ -2089,6 +2128,10 @@ Implementation progress as of 2026-07-07:
   requested id; mismatched runtime-backed resume must use the AppServer
   replacement path, so SDK fused-runtime retargeting is gone. This extends direct
   `spawn_load` runtime factory handoff to local TUI/headless and SDK startup.
+  The CLI AppServer bridge now also owns the `SessionRuntimeFactory` to
+  `LocalAppSessionHandle` wrapping for startup loads, so TUI/headless and SDK
+  stdio startup pass the factory into bridge helpers instead of constructing
+  registry handles around ad hoc `spawn_load` futures themselves.
   The local bridge also exposes runtime-backed
   `spawn_replace` /
   `spawn_replace_detached` helpers that build the replacement
@@ -2122,13 +2165,22 @@ Implementation progress as of 2026-07-07:
   `SdkServerState` now keeps persisted-session storage behind install and
   snapshot methods backed by `sdk_server::session_store`, so
   persisted-session reads/writes no longer reach through a raw handler-state
-  field.
+  field. `coco-app-server` now owns the read-only session-data request
+  composition layer via `AppSessionDataRequest`, `AppSessionDataSource`, and
+  `AppSessionDataHandle`: it asks higher layers for persisted data, overlays
+  live registry handles for `session/list`, and serves unpersisted live
+  `session/read` / `session/turns/list` snapshots when persisted reads miss,
+  while `coco-cli` keeps the concrete JSONL-backed `SessionManager` I/O.
   `coco-app-server` owns the shared pure cursor, pagination, and
   turn-span projection helpers, and that local view now reads the installed
   `SessionManager` directly for AppServer-routed `session/list`,
   `session/read`, and `session/turns/list`, so those read-only methods no
   longer bounce through the legacy SDK session-data handlers before live
-  overlay. The TUI skill watcher now keeps its process-lifetime filesystem
+  overlay. Persisted `session/list` / `session/read` / `session/turns/list`
+  loading is now shared by the AppServer local view and the remaining legacy
+  SDK handlers, leaving the AppServer path as the single live-overlay owner
+  while preserving the existing JSONL-backed `SessionManager` boundary. The
+  TUI skill watcher now keeps its process-lifetime filesystem
   guard but resolves the current `SessionHandle` on every debounced reload, so
   skill ConfigChange hooks, catalog reload, and slash-command refresh mutate
   the post-resume / post-branch runtime instead of the startup runtime. The TUI
@@ -2141,12 +2193,17 @@ Implementation progress as of 2026-07-07:
   explanations, so TUI long-lived side tasks no longer hold startup-only
   runtime handles. TUI `/clear` now also constructs a replacement runtime
   through `SessionRuntimeFactory` and commits the swap through local AppServer
-  replacement instead of rotating the fused runtime in place. Direct
-  AppServer-owned runtime factory invocation behind `spawn_load`, full
-  immutable-runtime shutdown beyond the bridge-owned close cascade, broader
-  direct AppServer-owned persisted session-store listing/read/turn I/O, and
-  deleting the fused `SessionRuntime` container once its remaining shared
-  process resources have owners. Transport
+  replacement instead of rotating the fused runtime in place. Local AppServer
+  close cascades now ask `SessionHandle` to own the matching-session
+  `SessionEnd` hook plus runtime shutdown-signal boundary, so the bridge no
+  longer reaches into the fused runtime for that sequence. Startup
+  `spawn_load` runtime construction now routes through bridge-owned
+  `SessionRuntimeFactory` helpers instead of entrypoint-local load futures.
+  Full process signal orchestration around shutdown, full immutable-runtime
+  shutdown beyond the bridge-owned close cascade, broader
+  remaining concrete persisted session-store I/O, and deleting the fused
+  `SessionRuntime` container once its remaining shared process resources have
+  owners. Transport
   owner loops now apply bounded
   outbound write/send timeouts and disconnect slow consumers before returning
   the timeout error.
@@ -2928,9 +2985,10 @@ Registry and lifecycle:
   on its own (§7.2).
 - A wedged active turn: close proceeds after `turn_drain_timeout_secs`
   and the slot leaves `Closing` (§7.4 step 3).
-- Process shutdown drains all live sessions concurrently within
-  `shutdown_timeout_secs`; a timeout forces abort with transcripts
-  already flushed; the exit code distinguishes drain from abort (§7.7).
+- Process shutdown drains all live sessions concurrently and awaits
+  `Loading` slots before close within `shutdown_timeout_secs`; a timeout
+  forces abort with transcripts already flushed; the exit code distinguishes
+  drain from abort (§7.7).
 
 Concurrency and events:
 
