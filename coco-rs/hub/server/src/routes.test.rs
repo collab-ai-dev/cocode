@@ -207,3 +207,102 @@ async fn hub_frame_handler_does_not_republish_duplicate_batch_events() {
         "duplicate retry batch should not publish a second live event"
     );
 }
+
+#[tokio::test]
+async fn hub_frame_handler_resumes_multi_session_cursors_independently() {
+    let store = SqliteEventStore::open_in_memory().unwrap();
+    let state = AppState::new(store.clone());
+    let session_a = session_id("session-a");
+    let session_b = session_id("session-b");
+    let mut announced = None;
+
+    let response = handle_hub_frame(
+        &state,
+        &mut announced,
+        HubFrame::Announce(announce(vec![session_a.clone(), session_b.clone()])),
+    )
+    .await;
+    let HubFrame::AnnounceAck(ack) = response else {
+        panic!("expected announce ack");
+    };
+    assert_eq!(ack.resume_from.get(&session_a), Some(&0));
+    assert_eq!(ack.resume_from.get(&session_b), Some(&0));
+
+    // Ingest different amounts per session.
+    let response = handle_hub_frame(
+        &state,
+        &mut announced,
+        HubFrame::Batch(BatchFrame {
+            events: vec![
+                event(session_a.clone(), 4),
+                event(session_a.clone(), 5),
+                event(session_b.clone(), 2),
+            ],
+        }),
+    )
+    .await;
+    assert!(matches!(response, HubFrame::BatchAck(_)));
+
+    // Re-announcing both sessions reports independent per-session cursors.
+    let response = handle_hub_frame(
+        &state,
+        &mut announced,
+        HubFrame::Announce(announce(vec![session_a.clone(), session_b.clone()])),
+    )
+    .await;
+    let HubFrame::AnnounceAck(ack) = response else {
+        panic!("expected announce ack");
+    };
+    assert_eq!(ack.resume_from.get(&session_a), Some(&5));
+    assert_eq!(ack.resume_from.get(&session_b), Some(&2));
+
+    // A follow-up batch at or below session A's cursor is deduplicated for A
+    // only; session B's fresh event is stored and published.
+    let mut live_a = state.subscribe_session(instance_id().to_string(), session_a.clone());
+    let mut live_b = state.subscribe_session(instance_id().to_string(), session_b.clone());
+    let response = handle_hub_frame(
+        &state,
+        &mut announced,
+        HubFrame::Batch(BatchFrame {
+            events: vec![event(session_a.clone(), 5), event(session_b.clone(), 3)],
+        }),
+    )
+    .await;
+    let HubFrame::BatchAck(ack) = response else {
+        panic!("expected batch ack");
+    };
+    assert_eq!(ack.up_to_seq.get(&session_a), Some(&5));
+    assert_eq!(ack.up_to_seq.get(&session_b), Some(&3));
+    assert!(
+        store
+            .get_event(&instance_id().to_string(), session_b.as_str(), 3)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let fresh = timeout(Duration::from_secs(1), live_b.recv())
+        .await
+        .expect("new session-b event should be published")
+        .expect("live channel should remain open");
+    assert_eq!(fresh.session_id, session_b);
+    assert_eq!(fresh.session_seq, 3);
+    let duplicate = timeout(Duration::from_millis(50), live_a.recv()).await;
+    assert!(
+        duplicate.is_err(),
+        "duplicate session-a event should not be republished"
+    );
+
+    // Cursors advance independently after the mixed batch.
+    let response = handle_hub_frame(
+        &state,
+        &mut announced,
+        HubFrame::Announce(announce(vec![session_a.clone(), session_b.clone()])),
+    )
+    .await;
+    let HubFrame::AnnounceAck(ack) = response else {
+        panic!("expected announce ack");
+    };
+    assert_eq!(ack.resume_from.get(&session_a), Some(&5));
+    assert_eq!(ack.resume_from.get(&session_b), Some(&3));
+}

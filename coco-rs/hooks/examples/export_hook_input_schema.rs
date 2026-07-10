@@ -51,6 +51,8 @@ fn main() -> ExitCode {
 }
 
 fn relative_to_cwd(path: &Path) -> String {
+    // Codegen example binary; display-only shortening at the process boundary.
+    #[allow(clippy::disallowed_methods)]
     std::env::current_dir()
         .ok()
         .and_then(|cwd| path.strip_prefix(&cwd).ok().map(Path::to_path_buf))

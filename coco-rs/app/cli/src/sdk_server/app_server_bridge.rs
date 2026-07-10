@@ -8,6 +8,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use coco_app_server::AppCloseStart;
 use coco_app_server::AppLoadStart;
@@ -1718,6 +1719,81 @@ pub async fn shutdown_local_app_server_sessions(
     }
 }
 
+/// Optional idle-session auto-archive sweep (plan §7.6). When
+/// `server.idle_session_timeout_secs` is set, this task archives any session
+/// that has had zero attached surfaces AND no active turn continuously for the
+/// configured duration. Off by default because unattended background work is a
+/// supported pattern; the caller only spawns this when the timeout is `Some`.
+///
+/// Idleness is tracked per session across ticks (the `ProjectRegistry`
+/// eviction pattern): a session that regains a surface or starts a turn clears
+/// its idle stamp, so only a *continuously* idle session is archived.
+pub fn spawn_idle_session_sweep(
+    app_server: Arc<AppServer<LocalAppSessionHandle>>,
+    state: Arc<SdkServerState>,
+    idle_timeout: Duration,
+    turn_drain_timeout: Duration,
+) -> JoinHandle<()> {
+    // Check frequently enough to honor the timeout without busy-looping.
+    let tick = idle_timeout
+        .min(Duration::from_secs(30))
+        .max(Duration::from_secs(1));
+    tokio::spawn(async move {
+        let mut idle_since: HashMap<SessionId, Instant> = HashMap::new();
+        let mut interval = tokio::time::interval(tick);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let now = Instant::now();
+            let live = app_server.list_live_sessions();
+            let live_ids: std::collections::HashSet<SessionId> = live
+                .iter()
+                .map(|summary| summary.session_id.clone())
+                .collect();
+            idle_since.retain(|session_id, _| live_ids.contains(session_id));
+
+            let mut to_archive: Vec<SessionId> = Vec::new();
+            for summary in &live {
+                let session_id = &summary.session_id;
+                let idle_now =
+                    summary.surface_counts.attached == 0 && !state.has_active_turn(session_id);
+                if !idle_now {
+                    idle_since.remove(session_id);
+                    continue;
+                }
+                let since = *idle_since.entry(session_id.clone()).or_insert(now);
+                if now.duration_since(since) >= idle_timeout {
+                    to_archive.push(session_id.clone());
+                }
+            }
+
+            for session_id in to_archive {
+                idle_since.remove(&session_id);
+                tracing::info!(
+                    session_id = %session_id,
+                    idle_timeout_secs = idle_timeout.as_secs(),
+                    "auto-archiving idle session with no surfaces and no active turn"
+                );
+                if let Err(error) = close_local_app_server_session(
+                    Arc::clone(&app_server),
+                    Arc::clone(&state),
+                    session_id.clone(),
+                    turn_drain_timeout,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        ?error,
+                        "idle-session auto-archive failed"
+                    );
+                }
+            }
+        }
+    })
+}
+
 async fn close_local_session_handle(handle: LocalAppSessionHandle) {
     close_local_session_handle_with_reason(handle, coco_hooks::orchestration::ExitReason::Other)
         .await;
@@ -1754,6 +1830,8 @@ async fn close_sdk_session_state_for_app_server(
     session_id: &SessionId,
     turn_drain_timeout: Duration,
 ) {
+    persist_session_seq_watermark_on_close(state, session_id).await;
+
     let active_turn = state.clear_scoped_session_state(session_id).await;
 
     if let Some(active_turn) = &active_turn {
@@ -1788,6 +1866,26 @@ async fn close_sdk_session_state_for_app_server(
             ),
         }
     }
+}
+
+/// Persist the exact `session_seq` high-water mark before a session closes so a
+/// later resume skips ahead from the true final value rather than a stale
+/// interval watermark (plan D-47). Awaited (not best-effort) so a clean
+/// shutdown always records an exact anchor.
+async fn persist_session_seq_watermark_on_close(state: &SdkServerState, session_id: &SessionId) {
+    let Some(high_water) = state.session_seq_allocator().high_water(session_id) else {
+        return;
+    };
+    let Some(manager) = state.session_manager_snapshot().await else {
+        return;
+    };
+    let id = session_id.as_str().to_string();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Err(error) = manager.persist_session_seq_watermark(&id, high_water) {
+            tracing::debug!(%error, "failed to persist session_seq watermark at close");
+        }
+    })
+    .await;
 }
 
 fn local_lifecycle_error(
@@ -1915,6 +2013,7 @@ impl AppServerLocalBridge {
             event_retention_per_session,
             surface_limits,
         ));
+        install_session_seq_durability(&state, event_retention_per_session as i64);
         let adapter =
             LocalClientAdapter::with_channel_capacity(Arc::clone(&app_server), channel_capacity);
         let client = ServerClient::connect_local(&adapter);
@@ -2448,7 +2547,7 @@ where
     H: Clone + Send + Sync + 'static,
 {
     tokio::spawn(async move {
-        let mut next_session_seq: HashMap<SessionId, i64> = HashMap::new();
+        let session_seq = Arc::clone(state.session_seq_allocator());
         while let Some(outbound) = outbound_rx.recv().await {
             match outbound {
                 OutboundMessage::CoreEvent(event) => {
@@ -2460,7 +2559,7 @@ where
                     route_local_outbound_event(
                         &server,
                         hub_connector.as_ref(),
-                        &mut next_session_seq,
+                        &session_seq,
                         session_id,
                         *event,
                     );
@@ -2470,7 +2569,7 @@ where
                     route_local_outbound_event(
                         &server,
                         hub_connector.as_ref(),
-                        &mut next_session_seq,
+                        &session_seq,
                         session_id,
                         *event,
                     );
@@ -2481,6 +2580,39 @@ where
             }
         }
     })
+}
+
+/// Configure the process-shared durable `session_seq` allocator (plan D-47):
+/// bind the skip-ahead window to the retention ring size and install a
+/// best-effort persist hook that appends each due watermark to the session's
+/// transcript. Idempotent — repeated setup only re-binds the window and hook.
+pub fn install_session_seq_durability(state: &Arc<SdkServerState>, event_retention: i64) {
+    let allocator = state.session_seq_allocator();
+    allocator.set_skip_ahead_window(event_retention);
+    // Weak reference so the hook never keeps `SdkServerState` (which owns the
+    // allocator) alive — otherwise state -> allocator -> hook -> state leaks.
+    let weak_state = Arc::downgrade(state);
+    allocator.set_persist_hook(Arc::new(move |session_id, session_seq| {
+        let Some(state) = weak_state.upgrade() else {
+            return;
+        };
+        let session_id = session_id.clone();
+        // The hook fires from inside the forwarder task (a Tokio context), so
+        // resolving the manager and writing the transcript can be deferred off
+        // the routing path.
+        tokio::spawn(async move {
+            let Some(manager) = state.session_manager_snapshot().await else {
+                return;
+            };
+            let id = session_id.as_str().to_string();
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Err(error) = manager.persist_session_seq_watermark(&id, session_seq) {
+                    tracing::debug!(%error, "failed to persist session_seq watermark");
+                }
+            })
+            .await;
+        });
+    }));
 }
 
 fn clone_hub_connector_sender(
@@ -2495,7 +2627,7 @@ fn clone_hub_connector_sender(
 fn route_local_outbound_event<H>(
     server: &AppServer<H>,
     hub_connector: Option<&HubConnectorSender>,
-    next_session_seq: &mut HashMap<SessionId, i64>,
+    session_seq: &coco_app_server::SessionSeqAllocator,
     session_id: SessionId,
     event: CoreEvent,
 ) where
@@ -2503,10 +2635,7 @@ fn route_local_outbound_event<H>(
 {
     let seq_session_id = session_id.clone();
     let envelope = SessionEnvelope::stamp(session_id, None, event, || {
-        let next = next_session_seq.entry(seq_session_id).or_insert(1);
-        let seq = *next;
-        *next += 1;
-        seq
+        session_seq.next(&seq_session_id)
     });
     let hub_envelope = envelope.clone();
     server.route_envelope(envelope);

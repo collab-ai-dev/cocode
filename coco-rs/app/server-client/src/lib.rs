@@ -1,8 +1,9 @@
 //! Typed AppServer client handles.
 //!
-//! This Phase A slice provides the local in-process shape of the two-level
-//! client contract plus the transport-agnostic remote JSON-RPC core. Concrete
-//! dialing and runtime-driving methods land later.
+//! Provides the local in-process shape of the two-level client contract, the
+//! transport-agnostic remote JSON-RPC core, and concrete remote dialing over
+//! caller-owned NDJSON streams, Unix domain sockets, Windows named pipes, and
+//! WebSockets (`connect_unix` / `connect_named_pipe` / `connect_websocket`).
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -10,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use coco_app_server::AttachError;
 use coco_app_server::AttachSurfaceOptions;
@@ -120,6 +122,9 @@ const DEFAULT_REMOTE_OUTBOUND_CHANNEL_CAPACITY: usize = 128;
 pub struct RemoteConnectOptions {
     pub outbound_channel_capacity: usize,
     pub event_channel_capacity: usize,
+    /// Per-request timeout for remote JSON-RPC requests. `None` (the default)
+    /// waits indefinitely for a response.
+    pub request_timeout: Option<Duration>,
 }
 
 impl Default for RemoteConnectOptions {
@@ -127,6 +132,7 @@ impl Default for RemoteConnectOptions {
         Self {
             outbound_channel_capacity: DEFAULT_REMOTE_OUTBOUND_CHANNEL_CAPACITY,
             event_channel_capacity: DEFAULT_REMOTE_EVENT_CHANNEL_CAPACITY,
+            request_timeout: None,
         }
     }
 }
@@ -1114,6 +1120,7 @@ pub struct RemoteJsonRpcClient {
     pending: Arc<Mutex<HashMap<JsonRpcId, PendingRemoteRequest>>>,
     invalid: Arc<AtomicBool>,
     next_request_id: Arc<AtomicI64>,
+    request_timeout: Option<Duration>,
 }
 
 pub struct RemoteJsonRpcIncoming {
@@ -1615,6 +1622,22 @@ impl RemoteJsonRpcClient {
         RemoteJsonRpcIncoming,
         mpsc::Receiver<RemoteJsonRpcEvent>,
     ) {
+        Self::with_event_channel_capacity_and_timeout(
+            outbound,
+            event_channel_capacity,
+            /*request_timeout*/ None,
+        )
+    }
+
+    fn with_event_channel_capacity_and_timeout(
+        outbound: mpsc::Sender<JsonRpcFrame>,
+        event_channel_capacity: usize,
+        request_timeout: Option<Duration>,
+    ) -> (
+        Self,
+        RemoteJsonRpcIncoming,
+        mpsc::Receiver<RemoteJsonRpcEvent>,
+    ) {
         assert!(
             event_channel_capacity > 0,
             "remote event channel capacity must be non-zero"
@@ -1627,6 +1650,7 @@ impl RemoteJsonRpcClient {
             pending: Arc::clone(&pending),
             invalid: Arc::clone(&invalid),
             next_request_id: Arc::new(AtomicI64::new(1)),
+            request_timeout,
         };
         let incoming = RemoteJsonRpcIncoming {
             pending,
@@ -1654,11 +1678,22 @@ impl RemoteJsonRpcClient {
         RemoteNdjsonConnection<R, W>,
         mpsc::Receiver<RemoteJsonRpcEvent>,
     ) {
-        Self::connect_ndjson_with_channel_capacity(
-            transport,
-            options.outbound_channel_capacity,
+        assert!(
+            options.outbound_channel_capacity > 0,
+            "remote outbound channel capacity must be non-zero"
+        );
+        let (outbound_tx, outbound_rx) = mpsc::channel(options.outbound_channel_capacity);
+        let (client, incoming, events) = Self::with_event_channel_capacity_and_timeout(
+            outbound_tx,
             options.event_channel_capacity,
-        )
+            options.request_timeout,
+        );
+        let connection = RemoteNdjsonConnection {
+            incoming,
+            outbound: outbound_rx,
+            transport,
+        };
+        (client, connection, events)
     }
 
     pub fn connect_ndjson_with_channel_capacity<R, W>(
@@ -1670,19 +1705,14 @@ impl RemoteJsonRpcClient {
         RemoteNdjsonConnection<R, W>,
         mpsc::Receiver<RemoteJsonRpcEvent>,
     ) {
-        assert!(
-            outbound_channel_capacity > 0,
-            "remote outbound channel capacity must be non-zero"
-        );
-        let (outbound_tx, outbound_rx) = mpsc::channel(outbound_channel_capacity);
-        let (client, incoming, events) =
-            Self::with_event_channel_capacity(outbound_tx, event_channel_capacity);
-        let connection = RemoteNdjsonConnection {
-            incoming,
-            outbound: outbound_rx,
+        Self::connect_ndjson_with_options(
             transport,
-        };
-        (client, connection, events)
+            RemoteConnectOptions {
+                outbound_channel_capacity,
+                event_channel_capacity,
+                request_timeout: None,
+            },
+        )
     }
 
     #[cfg(unix)]
@@ -1694,7 +1724,7 @@ impl RemoteJsonRpcClient {
             RemoteNdjsonUnixConnection,
             mpsc::Receiver<RemoteJsonRpcEvent>,
         ),
-        TransportFrameError,
+        ClientError,
     > {
         Self::connect_unix_with_options(path, RemoteConnectOptions::default()).await
     }
@@ -1709,14 +1739,12 @@ impl RemoteJsonRpcClient {
             RemoteNdjsonUnixConnection,
             mpsc::Receiver<RemoteJsonRpcEvent>,
         ),
-        TransportFrameError,
+        ClientError,
     > {
-        Self::connect_unix_with_channel_capacity(
-            path,
-            options.outbound_channel_capacity,
-            options.event_channel_capacity,
-        )
-        .await
+        let transport = coco_app_server_transport::connect_ndjson_unix(path)
+            .await
+            .map_err(|error| ClientError::Connect(error.to_string()))?;
+        Ok(Self::connect_ndjson_with_options(transport, options))
     }
 
     #[cfg(unix)]
@@ -1730,14 +1758,17 @@ impl RemoteJsonRpcClient {
             RemoteNdjsonUnixConnection,
             mpsc::Receiver<RemoteJsonRpcEvent>,
         ),
-        TransportFrameError,
+        ClientError,
     > {
-        let transport = coco_app_server_transport::connect_ndjson_unix(path).await?;
-        Ok(Self::connect_ndjson_with_channel_capacity(
-            transport,
-            outbound_channel_capacity,
-            event_channel_capacity,
-        ))
+        Self::connect_unix_with_options(
+            path,
+            RemoteConnectOptions {
+                outbound_channel_capacity,
+                event_channel_capacity,
+                request_timeout: None,
+            },
+        )
+        .await
     }
 
     #[cfg(windows)]
@@ -1749,7 +1780,7 @@ impl RemoteJsonRpcClient {
             RemoteNdjsonNamedPipeConnection,
             mpsc::Receiver<RemoteJsonRpcEvent>,
         ),
-        TransportFrameError,
+        ClientError,
     > {
         Self::connect_named_pipe_with_options(pipe_name, RemoteConnectOptions::default()).await
     }
@@ -1764,14 +1795,11 @@ impl RemoteJsonRpcClient {
             RemoteNdjsonNamedPipeConnection,
             mpsc::Receiver<RemoteJsonRpcEvent>,
         ),
-        TransportFrameError,
+        ClientError,
     > {
-        Self::connect_named_pipe_with_channel_capacity(
-            pipe_name,
-            options.outbound_channel_capacity,
-            options.event_channel_capacity,
-        )
-        .await
+        let transport = coco_app_server_transport::connect_ndjson_named_pipe(pipe_name)
+            .map_err(|error| ClientError::Connect(error.to_string()))?;
+        Ok(Self::connect_ndjson_with_options(transport, options))
     }
 
     #[cfg(windows)]
@@ -1785,14 +1813,17 @@ impl RemoteJsonRpcClient {
             RemoteNdjsonNamedPipeConnection,
             mpsc::Receiver<RemoteJsonRpcEvent>,
         ),
-        TransportFrameError,
+        ClientError,
     > {
-        let transport = coco_app_server_transport::connect_ndjson_named_pipe(pipe_name)?;
-        Ok(Self::connect_ndjson_with_channel_capacity(
-            transport,
-            outbound_channel_capacity,
-            event_channel_capacity,
-        ))
+        Self::connect_named_pipe_with_options(
+            pipe_name,
+            RemoteConnectOptions {
+                outbound_channel_capacity,
+                event_channel_capacity,
+                request_timeout: None,
+            },
+        )
+        .await
     }
 
     pub async fn connect_websocket(
@@ -1803,7 +1834,7 @@ impl RemoteJsonRpcClient {
             RemoteDefaultWebSocketConnection,
             mpsc::Receiver<RemoteJsonRpcEvent>,
         ),
-        tokio_tungstenite::tungstenite::Error,
+        ClientError,
     > {
         Self::connect_websocket_with_options(url, RemoteConnectOptions::default()).await
     }
@@ -1817,14 +1848,27 @@ impl RemoteJsonRpcClient {
             RemoteDefaultWebSocketConnection,
             mpsc::Receiver<RemoteJsonRpcEvent>,
         ),
-        tokio_tungstenite::tungstenite::Error,
+        ClientError,
     > {
-        Self::connect_websocket_with_channel_capacity(
-            url,
-            options.outbound_channel_capacity,
+        assert!(
+            options.outbound_channel_capacity > 0,
+            "remote outbound channel capacity must be non-zero"
+        );
+        let (websocket, _) = connect_async(url)
+            .await
+            .map_err(|error| ClientError::Connect(error.to_string()))?;
+        let (outbound_tx, outbound_rx) = mpsc::channel(options.outbound_channel_capacity);
+        let (client, incoming, events) = Self::with_event_channel_capacity_and_timeout(
+            outbound_tx,
             options.event_channel_capacity,
-        )
-        .await
+            options.request_timeout,
+        );
+        let connection = RemoteWebSocketConnection {
+            incoming,
+            outbound: outbound_rx,
+            websocket,
+        };
+        Ok((client, connection, events))
     }
 
     pub async fn connect_websocket_with_channel_capacity(
@@ -1837,22 +1881,17 @@ impl RemoteJsonRpcClient {
             RemoteDefaultWebSocketConnection,
             mpsc::Receiver<RemoteJsonRpcEvent>,
         ),
-        tokio_tungstenite::tungstenite::Error,
+        ClientError,
     > {
-        let (websocket, _) = connect_async(url).await?;
-        assert!(
-            outbound_channel_capacity > 0,
-            "remote outbound channel capacity must be non-zero"
-        );
-        let (outbound_tx, outbound_rx) = mpsc::channel(outbound_channel_capacity);
-        let (client, incoming, events) =
-            Self::with_event_channel_capacity(outbound_tx, event_channel_capacity);
-        let connection = RemoteWebSocketConnection {
-            incoming,
-            outbound: outbound_rx,
-            websocket,
-        };
-        Ok((client, connection, events))
+        Self::connect_websocket_with_options(
+            url,
+            RemoteConnectOptions {
+                outbound_channel_capacity,
+                event_channel_capacity,
+                request_timeout: None,
+            },
+        )
+        .await
     }
 
     pub async fn send_client_request(
@@ -2263,7 +2302,17 @@ impl RemoteJsonRpcClient {
             return Err(ClientError::Disconnected);
         }
 
-        match rx.await {
+        let outcome = match self.request_timeout {
+            None => rx.await,
+            Some(request_timeout) => match tokio::time::timeout(request_timeout, rx).await {
+                Ok(outcome) => outcome,
+                Err(_elapsed) => {
+                    self.pending.lock().await.remove(&id);
+                    return Err(ClientError::Timeout);
+                }
+            },
+        };
+        match outcome {
             Ok(result) => result,
             Err(_) => Err(ClientError::Disconnected),
         }
@@ -2879,6 +2928,8 @@ pub enum RemoteTransportError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
+    #[error("connection failed: {0}")]
+    Connect(String),
     #[error("transport disconnected")]
     Disconnected,
     #[error("client invalid (reconnect and resume)")]
@@ -2921,6 +2972,8 @@ pub enum ClientError {
         message: String,
         data: Option<serde_json::Value>,
     },
+    #[error("request timed out")]
+    Timeout,
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
     #[error("snapshot required before subscribing")]

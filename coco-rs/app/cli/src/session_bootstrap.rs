@@ -155,6 +155,12 @@ pub fn build_engine_resources(
         "building engine resources"
     );
 
+    // Apply the resolved project-services idle-eviction TTL now that config is
+    // available (the process runtime was taken before config resolution).
+    process_runtime.set_project_services_idle_ttl(std::time::Duration::from_secs(
+        runtime_config.server.project_services_idle_ttl_secs.max(0) as u64,
+    ));
+
     let main_model = resolve_main_model(runtime_config);
     let provider_api = main_model.provider_api;
     let model_id = main_model.model_id.clone();

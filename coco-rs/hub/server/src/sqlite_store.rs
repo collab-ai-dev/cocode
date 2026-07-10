@@ -17,6 +17,7 @@ use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use rusqlite::params;
 use tokio::task;
+use tracing::warn;
 
 use crate::store::AgentEdge;
 use crate::store::EventQuery;
@@ -391,17 +392,34 @@ fn mark_instance_gone_sync(
     Ok(())
 }
 
+/// Whether an already-stored event at `incoming`'s `(instance, session, seq)`
+/// carries *different content* than `incoming` — i.e. a seq regression rather
+/// than a benign retry. Compares event identity while ignoring the two
+/// receive-time-derived fields (`received_at`, `ts_display`), which legitimately
+/// differ between an original send and its retry.
+fn stored_event_conflicts(conn: &Connection, incoming: &EventRow) -> Result<bool, EventStoreError> {
+    let Some(mut stored) = get_event_sync(
+        conn,
+        &incoming.instance_id,
+        incoming.session_id.as_str(),
+        incoming.session_seq,
+    )?
+    else {
+        // Raced away between the failed insert and this read; treat as duplicate.
+        return Ok(false);
+    };
+    stored.received_at = incoming.received_at;
+    stored.ts_display.clone_from(&incoming.ts_display);
+    Ok(&stored != incoming)
+}
+
 fn ingest_batch_sync(
     conn: &mut Connection,
     instance_id: &str,
     batch: BatchFrame,
 ) -> Result<IngestStats, EventStoreError> {
     let tx = conn.transaction()?;
-    let mut stats = IngestStats {
-        accepted: 0,
-        duplicates: 0,
-        parse_failures: 0,
-    };
+    let mut stats = IngestStats::default();
     let received_at = Utc::now().timestamp_millis();
     for event in batch.events {
         if event.instance_id.to_string() != instance_id {
@@ -440,7 +458,22 @@ fn ingest_batch_sync(
             ],
         )?;
         if inserted == 0 {
-            stats.duplicates += 1;
+            // PK collision. A byte-identical retry is benign (the connector
+            // re-sends unacked batches); a *different* event under the same
+            // `(instance, session, seq)` is a per-session seq regression —
+            // reject it as corruption rather than overwriting (plan D-47).
+            if stored_event_conflicts(&tx, &row)? {
+                stats.rejected_conflicts += 1;
+                warn!(
+                    instance_id = %row.instance_id,
+                    session_id = %row.session_id.as_str(),
+                    session_seq = row.session_seq,
+                    "rejecting session_seq regression: a different event already \
+                     occupies this (session, seq); skip-ahead likely failed upstream"
+                );
+            } else {
+                stats.duplicates += 1;
+            }
             continue;
         }
         stats.accepted += 1;

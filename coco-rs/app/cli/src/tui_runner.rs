@@ -1033,8 +1033,32 @@ async fn run_agent_driver(
     let mut explicit_shutdown = false;
     let (turn_done_tx, mut turn_done_rx) = mpsc::channel::<uuid::Uuid>(16);
 
+    // Observe SIGINT/SIGTERM for the whole driver lifetime. The TUI runs in raw
+    // mode, so Ctrl+C never arrives as SIGINT (it is a key event); this arm is
+    // what makes `kill <pid>` mid-turn initiate a graceful drain instead of the
+    // default terminate action (multi-session plan §7.7 remainder). Created
+    // once so a signal between loop iterations is not missed.
+    let mut os_signal = std::pin::pin!(coco_cli::shutdown::os_interrupt_signal());
+
     loop {
         let command = tokio::select! {
+            () = &mut os_signal => {
+                info!("OS interrupt signal received; draining active turn and shutting down TUI");
+                drain_active_turn(
+                    &active_turn,
+                    ActiveTurnDrain::AbortAfter(TUI_SHUTDOWN_ACTIVE_TURN_DRAIN_TIMEOUT),
+                )
+                .await;
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(ServerNotification::SessionEnded(
+                        coco_types::SessionEndedParams {
+                            reason: "OS signal".into(),
+                        },
+                    )))
+                    .await;
+                explicit_shutdown = true;
+                break;
+            }
             command = command_rx.recv() => {
                 let Some(command) = command else {
                     break;

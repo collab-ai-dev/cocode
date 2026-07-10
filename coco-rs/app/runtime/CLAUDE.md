@@ -19,10 +19,13 @@ runtime construction is the remaining extraction from `coco-cli`.
 
 ## Invariants
 
-- Project settings refresh in place. It must not replace project-heavy service
-  ownership or change already-built session config snapshots.
-- Explicit project reload may replace the whole `ProjectServices` entry because
-  it is used for plugin/catalog reload.
+- A stale project settings file (fingerprint mismatch) rebuilds the whole
+  `ProjectServices` entry on the next `get_or_load`, so a later session in the
+  same project observes current settings AND a freshly-loaded plugin catalog.
+  This never mutates an already-built session's config snapshot: sessions hold
+  their own `Arc<ProjectServices>` from their fold and keep it.
+- Explicit project reload also replaces the whole `ProjectServices` entry
+  (plugin/catalog reload).
 - Registry entries remain alive while a session owns their `Arc`; idle eviction
   only removes entries owned solely by the registry after the grace period.
 - Project roots are worktree roots, not shared git-common-directory roots.

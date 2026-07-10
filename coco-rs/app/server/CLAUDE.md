@@ -10,6 +10,7 @@ construction or transports.
 | Type | Purpose |
 |------|---------|
 | `AppServer` | Owns registry + routing locks and combined no-await commit sections. |
+| `SessionSeqAllocator` | Process-shared durable `session_seq` allocator: strictly monotonic per session across every forwarder path, with a watermark persist hook + `initialize_after_watermark` skip-ahead for cross-restart continuity (D-47). |
 | `AppLoadStart` | Result of starting/observing a load owner task. |
 | `AppCloseStart` | Result of starting/observing a close owner task. |
 | `AppReplaceStart` | Result of starting a replace owner task. |
@@ -143,7 +144,18 @@ construction or transports.
 - `AppServer::route_server_request` and
   `pending_server_request_replays_for_surface` are the adapter-facing request
   bridge: adapters should not split request delivery/replay ownership outside
-  the AppServer layer.
+  the AppServer layer. **Status:** this bridge is built and unit-tested but is
+  not yet the v1 production path. v1 SDK server-initiated requests (approval /
+  user-input / elicitation / MCP-route / hook-callback) still flow through the
+  legacy `SdkServerState` pending-waiter map, which is ordered through the same
+  single-writer serializer as notifications, so single-interactive-surface
+  ordering is already correct. Routing production requests through this bridge
+  (with per-surface capability declaration and a typed reply-delivery seam back
+  to the awaiting caller) lands with Phase C multi-surface, where routing to a
+  *specific* surface actually matters. `cancel_turn_server_requests` is the
+  turn-scoped cancellation hook for that cut-over; it is exercised by tests and
+  wired into the precise-cancellation set, but cancels nothing until requests
+  are routed with a `turn_id`.
 - `LocalClientAdapter` is typed and in-process only. It registers a real
   `ConnectionKey`, event sender, request sender, and lifecycle sender through
   AppServer and then attaches/subscribes surfaces through the same routing

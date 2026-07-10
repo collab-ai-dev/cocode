@@ -1024,6 +1024,13 @@ async fn run_sdk_mode(
         .with_app_server_turn_drain_timeout(app_server_turn_drain_timeout);
     let state = server.state();
     state.set_bypass_permissions_available(bypass_permissions_available);
+    // Durable session_seq: bind skip-ahead to the retention ring and install
+    // the transcript watermark persist hook (plan D-47). SDK stdio shares the
+    // same allocator across its stdio and sidecar forwarders.
+    coco_cli::sdk_server::install_session_seq_durability(
+        &state,
+        server_config_usize(runtime_config.server.event_retention_per_session, 1024) as i64,
+    );
 
     let bridge: Arc<dyn coco_tool_runtime::ToolPermissionBridge> = Arc::new(
         coco_cli::sdk_server::SdkPermissionBridge::new(state.clone()),
@@ -1045,6 +1052,22 @@ async fn run_sdk_mode(
         Arc::clone(&app_server),
         server_config_usize(runtime_config.server.outbound_queue_frames, 256),
     );
+
+    // Optional idle-session auto-archive (plan §7.6), off unless
+    // `server.idle_session_timeout_secs` is set. SDK multi-session mode is the
+    // only place surfaceless sessions accumulate.
+    let _idle_session_sweep = runtime_config
+        .server
+        .idle_session_timeout_secs
+        .filter(|secs| *secs > 0)
+        .map(|secs| {
+            coco_cli::sdk_server::spawn_idle_session_sweep(
+                Arc::clone(&app_server),
+                Arc::clone(&state),
+                Duration::from_secs(secs as u64),
+                app_server_turn_drain_timeout,
+            )
+        });
 
     let runtime_factory_cli = Arc::new(cli.clone());
     let runtime_factory = crate::session_runtime::SessionRuntimeFactory::new(

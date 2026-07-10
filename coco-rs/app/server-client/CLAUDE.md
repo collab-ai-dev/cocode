@@ -99,8 +99,19 @@ transports.
   consume the handle and return the original handle on failure so callers cannot
   silently orphan a still-live session.
 - `RemoteConnectOptions` names outbound and event channel capacities for
-  remote NDJSON/Unix/WebSocket connections. Defaults match the original fixed
-  capacities.
+  remote NDJSON/Unix/WebSocket connections plus an optional `request_timeout`
+  applied to every remote JSON-RPC request. Defaults match the original fixed
+  capacities with no timeout.
+- Remote dialing failures are typed: `connect_unix`, `connect_named_pipe`,
+  `connect_websocket`, and their `_with_options` / `_with_channel_capacity`
+  variants return `ClientError::Connect` with the underlying transport error
+  text preserved in the message.
+- When `RemoteConnectOptions.request_timeout` is set,
+  `RemoteJsonRpcClient::request` races the pending response against the
+  timeout; on expiry it removes the pending correlation entry and returns
+  `ClientError::Timeout`. A response arriving after the timeout hits the
+  unknown-response-id contract and invalidates the connection; it is never
+  delivered to another request.
 - `RemoteJsonRpcIncoming` decodes known `session/event` and
   `session/lifecycle` notifications into typed surface deliveries, preserves
   unknown notifications as raw JSON-RPC notifications, and surfaces inbound
@@ -114,7 +125,9 @@ transports.
 - Remote JSON-RPC standard error codes map to typed public `ClientError`
   variants: `INVALID_REQUEST` -> `InvalidRequest`, `INVALID_PARAMS` ->
   `InvalidParams`, `METHOD_NOT_FOUND` -> `MethodNotFound`, and
-  `INTERNAL_ERROR` -> `InternalServerError`. Stable domain payloads with
+  `INTERNAL_ERROR` -> `InternalServerError`. Connect-phase dialing failures
+  are `ClientError::Connect`; a configured per-request timeout expiring is
+  `ClientError::Timeout`. Stable domain payloads with
   `data.kind` map to narrower variants (`snapshot_required` ->
   `ClientError::SnapshotRequired`, `surface_limit` ->
   `ClientError::SurfaceLimit`); unknown domain kinds stay preserved as

@@ -390,6 +390,7 @@ pub(crate) async fn prepare_session_start(
             message_count: 0,
             total_tokens: 0,
             tags: Vec::new(),
+            session_seq_watermark: None,
         };
         let save_result = tokio::task::spawn_blocking(move || manager.save(&record)).await;
         match save_result {
@@ -1078,6 +1079,16 @@ pub(crate) async fn load_resume_session(
             });
         }
     };
+
+    // Skip-ahead the durable `session_seq` counter above the prior epoch's
+    // watermark before the resumed runtime emits any durable event, so a
+    // restarted process never re-issues a seq at or below one already shipped
+    // to the hub (multi-session plan D-47).
+    if let Some(watermark) = session.session_seq_watermark {
+        state
+            .session_seq_allocator()
+            .initialize_after_watermark(&session_id, watermark);
+    }
 
     // Load the JSONL transcript so the resumed run sees its own
     // history. Resume must fail if the transcript cannot be loaded;

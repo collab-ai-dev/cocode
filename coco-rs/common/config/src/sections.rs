@@ -45,6 +45,7 @@ const DEFAULT_SERVER_EVENT_RETENTION_PER_SESSION: i64 = 1024;
 const DEFAULT_SERVER_OUTBOUND_QUEUE_FRAMES: i64 = 1024;
 const DEFAULT_SERVER_TURN_DRAIN_TIMEOUT_SECS: i64 = 10;
 const DEFAULT_SERVER_SHUTDOWN_TIMEOUT_SECS: i64 = 30;
+const DEFAULT_SERVER_PROJECT_SERVICES_IDLE_TTL_SECS: i64 = 3600;
 /// 100K-char extraction budget.
 /// `MAX_MARKDOWN_LENGTH = 100_000`. Guards side-query token cost.
 const DEFAULT_WEB_FETCH_MAX_CONTENT_LENGTH: i64 = 100_000;
@@ -97,6 +98,10 @@ pub struct PartialServerSettings {
     pub turn_drain_timeout_secs: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shutdown_timeout_secs: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_services_idle_ttl_secs: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_session_timeout_secs: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +116,13 @@ pub struct ServerConfig {
     pub outbound_queue_frames: i64,
     pub turn_drain_timeout_secs: i64,
     pub shutdown_timeout_secs: i64,
+    /// Evict a cached `ProjectServices` entry with zero attached sessions after
+    /// this many seconds (multi-session plan §6.2 / §17).
+    pub project_services_idle_ttl_secs: i64,
+    /// Optional auto-archive of a session with zero surfaces AND no active or
+    /// queued turn after this many seconds. `None` = off (the default);
+    /// unattended background work is legitimate (plan §7.6 / §17).
+    pub idle_session_timeout_secs: Option<i64>,
 }
 
 impl Default for ServerConfig {
@@ -126,6 +138,8 @@ impl Default for ServerConfig {
             outbound_queue_frames: DEFAULT_SERVER_OUTBOUND_QUEUE_FRAMES,
             turn_drain_timeout_secs: DEFAULT_SERVER_TURN_DRAIN_TIMEOUT_SECS,
             shutdown_timeout_secs: DEFAULT_SERVER_SHUTDOWN_TIMEOUT_SECS,
+            project_services_idle_ttl_secs: DEFAULT_SERVER_PROJECT_SERVICES_IDLE_TTL_SECS,
+            idle_session_timeout_secs: None,
         }
     }
 }
@@ -180,6 +194,15 @@ impl ServerConfig {
                 .or(settings.server.shutdown_timeout_secs)
                 .filter(|secs| *secs > 0)
                 .unwrap_or(DEFAULT_SERVER_SHUTDOWN_TIMEOUT_SECS),
+            project_services_idle_ttl_secs: env
+                .get_i64(EnvKey::CocoServerProjectServicesIdleTtlSecs)
+                .or(settings.server.project_services_idle_ttl_secs)
+                .filter(|secs| *secs > 0)
+                .unwrap_or(DEFAULT_SERVER_PROJECT_SERVICES_IDLE_TTL_SECS),
+            idle_session_timeout_secs: env
+                .get_i64(EnvKey::CocoServerIdleSessionTimeoutSecs)
+                .or(settings.server.idle_session_timeout_secs)
+                .filter(|secs| *secs > 0),
         }
     }
 }

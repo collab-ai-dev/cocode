@@ -7,7 +7,6 @@
 //! The dispatch loop reads stdin, routes control requests, and enqueues
 //! messages to stdout.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -256,7 +255,6 @@ impl SdkHubEgress {
 
     async fn enqueue_notification(
         &self,
-        next_session_seq: &mut HashMap<SessionId, i64>,
         session_id: Option<&SessionId>,
         notification: &ServerNotification,
     ) {
@@ -271,16 +269,12 @@ impl SdkHubEgress {
             }
         };
         let seq_session_id = session_id.clone();
+        let session_seq = Arc::clone(self.state.session_seq_allocator());
         let envelope = SessionEnvelope::stamp(
             session_id,
             None,
             CoreEvent::Protocol(notification.clone()),
-            || {
-                let next = next_session_seq.entry(seq_session_id).or_insert(1);
-                let seq = *next;
-                *next += 1;
-                seq
-            },
+            || session_seq.next(&seq_session_id),
         );
         if let Err(error) = self.sender.try_enqueue(envelope) {
             warn!(%error, "dropping SDK Event Hub notification from connector queue");
@@ -318,19 +312,15 @@ pub(crate) fn spawn_sdk_outbound_writer(
             // Buffer stream events that arrive before TurnStarted.
             const PRE_TURN_BUFFER_CAP: usize = 64;
             let mut pre_turn_buffer: Vec<AgentStreamEvent> = Vec::new();
-            let mut next_session_seq: HashMap<SessionId, i64> = HashMap::new();
 
             async fn send_notif(
                 transport: &dyn SdkTransport,
                 hub_egress: Option<&SdkHubEgress>,
-                next_session_seq: &mut HashMap<SessionId, i64>,
                 session_id: Option<&SessionId>,
                 notif: &ServerNotification,
             ) -> bool {
                 if let Some(hub_egress) = hub_egress {
-                    hub_egress
-                        .enqueue_notification(next_session_seq, session_id, notif)
-                        .await;
+                    hub_egress.enqueue_notification(session_id, notif).await;
                 }
                 if let Err(e) = transport.send_notification(notif).await {
                     warn!(error = %e, "notification forward failed");
@@ -342,12 +332,11 @@ pub(crate) fn spawn_sdk_outbound_writer(
             async fn send_accumulated(
                 transport: &dyn SdkTransport,
                 hub_egress: Option<&SdkHubEgress>,
-                next_session_seq: &mut HashMap<SessionId, i64>,
                 session_id: Option<&SessionId>,
                 notifications: Vec<ServerNotification>,
             ) -> bool {
                 for sn in notifications {
-                    if !send_notif(transport, hub_egress, next_session_seq, session_id, &sn).await {
+                    if !send_notif(transport, hub_egress, session_id, &sn).await {
                         return false;
                     }
                 }
@@ -381,7 +370,6 @@ pub(crate) fn spawn_sdk_outbound_writer(
                                 if !send_accumulated(
                                     &*transport,
                                     hub_egress.as_ref(),
-                                    &mut next_session_seq,
                                     event_session_id.as_ref(),
                                     buffered,
                                 )
@@ -397,7 +385,6 @@ pub(crate) fn spawn_sdk_outbound_writer(
                                     if !send_accumulated(
                                         &*transport,
                                         hub_egress.as_ref(),
-                                        &mut next_session_seq,
                                         event_session_id.as_ref(),
                                         flushed,
                                     )
@@ -414,7 +401,6 @@ pub(crate) fn spawn_sdk_outbound_writer(
                         if !send_notif(
                             &*transport,
                             hub_egress.as_ref(),
-                            &mut next_session_seq,
                             event_session_id.as_ref(),
                             &notif,
                         )
@@ -442,7 +428,6 @@ pub(crate) fn spawn_sdk_outbound_writer(
                         if !send_accumulated(
                             &*transport,
                             hub_egress.as_ref(),
-                            &mut next_session_seq,
                             event_session_id.as_ref(),
                             notifications,
                         )
