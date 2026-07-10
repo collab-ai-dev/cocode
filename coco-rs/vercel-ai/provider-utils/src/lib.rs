@@ -63,6 +63,7 @@ pub mod resolve_full_media_type;
 pub mod resolve_provider_reference;
 pub mod response_handler;
 pub mod schema;
+pub mod sse;
 pub mod streaming_tool_call_tracker;
 pub mod strip_extension;
 pub mod tool_execution;
@@ -137,8 +138,10 @@ pub use response_handler::TextResponseHandler;
 
 pub use schema::Schema;
 pub use schema::ValidationError;
+
 pub use schema::as_schema;
 pub use schema::json_schema;
+pub use sse::SseDecoder;
 
 pub use url::is_url_supported;
 pub use url::parse_data_url;

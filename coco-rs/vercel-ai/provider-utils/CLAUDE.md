@@ -10,6 +10,8 @@ Implements the `@ai-sdk/provider-utils` v4 specification.
 
 API / fetch: `post_json_to_api[_with_client][_and_headers]`, `post_stream_to_api[_with_client][_and_headers]`, `get_from_api[_with_client]`, `ApiError`, `ApiResponse`, `ByteStream`, `DefaultErrorHandler`, `ErrorHandler`, `Fetch`, `FetchOptions`.
 
+SSE framing: `SseDecoder` — UTF-8-safe byte→`data:`-line accumulator for OpenAI-wire chat streams. Buffers raw bytes and decodes only complete lines, so a multi-byte char split across a network chunk boundary is never corrupted. Shared by the `openai` / `openai-compatible` / `groq` chat models (each keeps its own event state machine but pumps bytes through this one decoder). Distinct from the blocking `parse_json_event_stream` (a `std::io::Read` iterator used off the async path).
+
 Response handlers: `ResponseHandler`, `JsonResponseHandler`, `StreamResponseHandler`, `TextResponseHandler`.
 
 Headers / URL / media: `combine_headers`, `extract_header`, `normalize_headers`, `is_url_supported`, `parse_data_url`, `DataUri`, `parse_data_uri`, `MediaType`, `media_type_from_extension`, `without_trailing_slash`, `with_trailing_slash`, `normalize_url`, `build_user_agent`, `FormData`, `strip_extension`, `strip_specific_extension`.
