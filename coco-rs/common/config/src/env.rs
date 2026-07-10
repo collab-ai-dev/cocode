@@ -285,8 +285,9 @@ pub enum EnvKey {
     /// Enable Tool Result Budget Level 2 (per-message aggregate cap).
     /// Default off. See `docs/coco-rs/tool-result-budget-plan.md`.
     CocoCompactToolResultBudgetEnable,
-    /// Per-message char cap for Tool Result Budget Level 2 (default 200_000).
-    CocoCompactToolResultBudgetPerMessageChars,
+    /// Per-message byte cap for Tool Result Budget Level 2. Overrides the
+    /// window-scaled default with a fixed cap.
+    CocoCompactToolResultBudgetPerMessageBytes,
     /// 1h-TTL allowlist for prompt-cache (comma-separated `query_source`
     /// patterns, exact match or `prefix*` glob).
     /// See `docs/coco-rs/prompt-cache-design.md` §16a.
@@ -489,8 +490,8 @@ impl EnvKey {
             }
             Self::CocoCompactToolResultBudgetEnable => "COCO_COMPACT_TOOL_RESULT_BUDGET_ENABLE",
             Self::CocoPromptCacheAllowlist => "COCO_PROMPT_CACHE_ALLOWLIST",
-            Self::CocoCompactToolResultBudgetPerMessageChars => {
-                "COCO_COMPACT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS"
+            Self::CocoCompactToolResultBudgetPerMessageBytes => {
+                "COCO_COMPACT_TOOL_RESULT_BUDGET_PER_MESSAGE_BYTES"
             }
             Self::CocoCoordinatorMode => "COCO_COORDINATOR_MODE",
             Self::CocoForkSubagent => "COCO_FORK_SUBAGENT",

@@ -19,10 +19,18 @@ use serde_json::Value;
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct WebFetchInput {
     /// The URL to fetch content from. Required — the runtime schema declares
-    /// `required: ["url", "prompt"]`.
+    /// `required: ["url"]`.
     pub url: String,
-    /// The prompt to run on the fetched content. Required (see `url`).
-    pub prompt: String,
+    /// Optional extraction prompt. Only consulted under `extraction = llm`
+    /// (or `Auto` for `text/html`); inert on the windowed path, so it is not
+    /// required by the schema.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// Optional per-call inline byte budget (windowed path). Clamped into
+    /// `[InlineBudget::MIN_REQUEST, InlineBudget::MAX_REQUEST]` and further
+    /// capped by the tool's persistence threshold.
+    #[serde(default)]
+    pub inline_bytes: Option<i64>,
 }
 
 /// Typed input for [`WebSearchTool`].
@@ -67,26 +75,25 @@ from the provided content. \
 If the content does not contain enough information to answer the prompt, \
 say so clearly rather than guessing. Be concise.";
 
-/// Model-facing WebFetch tool description body. Includes the MCP-
-/// preference hint, the 15-minute cache note, and the cross-origin
-/// redirect handling guidance — all of which inform model behavior when
-/// the fetch encounters edge cases. Surfaced to the model via
-/// [`WebFetchTool::prompt`] (prepended with the auth-warning prefix).
+/// Model-facing WebFetch tool description body. Describes the WINDOWED
+/// contract (verbatim / head+tail window + saved full text), the optional
+/// prompt (only used when a side model summarizes), the MCP-preference hint,
+/// the 15-minute cache note, and the cross-origin redirect handling guidance.
+/// Surfaced to the model via [`WebFetchTool::prompt`] (prepended with the
+/// auth-warning prefix).
 const WEB_FETCH_DESCRIPTION: &str = "
-- Fetches content from a specified URL and processes it using an AI model
-- Takes a URL and a prompt as input
-- Fetches the URL content, converts HTML to markdown
-- Processes the content with the prompt using a small, fast model
-- Returns the model's response about the content
+- Fetches content from a specified URL and converts HTML to markdown
+- Small or clean content (markdown, plain text, JSON) is returned verbatim
+- Large content is returned as a head+tail window; the complete text is saved to a file, and the result footer includes a ready-to-run Read call (offset/limit) to page through the omitted middle
+- Scraped HTML pages may instead be summarized by a small fast model; the optional `prompt` guides that summary and is ignored otherwise
+- The optional `inline_bytes` parameter adjusts how much is shown inline before windowing kicks in
 - Use this tool when you need to retrieve and analyze web content
 
 Usage notes:
   - IMPORTANT: If an MCP-provided web fetch tool is available, prefer using that tool instead of this one, as it may have fewer restrictions.
   - The URL must be a fully-formed valid URL
   - HTTP URLs will be automatically upgraded to HTTPS
-  - The prompt should describe what information you want to extract from the page
   - This tool is read-only and does not modify any files
-  - Results may be summarized if the content is very large
   - Includes a self-cleaning 15-minute cache for faster responses when repeatedly accessing the same URL
   - When a URL redirects to a different host, the tool will inform you and provide the redirect URL in a special format. You should then make a new WebFetch request with the redirect URL to fetch the content.
   - For GitHub URLs, prefer using the gh CLI via Bash instead (e.g., gh pr view, gh issue view, gh api).
@@ -120,61 +127,106 @@ const MAX_HTTP_CONTENT_LENGTH: u64 = 10 * 1024 * 1024;
 /// WebFetch URL cache TTL: 15 minutes.
 const WEB_FETCH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
-/// WebFetch URL cache max entries. Uses entry count rather than byte
-/// budget: 128 entries at up to 100K chars each gives a ~12.8MB upper
-/// bound on cache content.
+/// WebFetch cache max entries. Uses entry count rather than byte budget:
+/// `Rendered` entries are ≤ ~100K (the preapproved verbatim ceiling) and
+/// `LlmSource` entries are ≤ [`LLM_EXTRACT_INPUT_CAP`] (100K), so 128 entries
+/// give a ~12.8MB upper bound — the same bound the pre-offload cache had.
 const WEB_FETCH_CACHE_MAX_ENTRIES: usize = 128;
 
-/// Cached WebFetch entry. Stores the extracted markdown + its freshness
-/// timestamp.
+/// Cached WebFetch entry, split by what the result depends on:
+///
+/// - [`Self::Rendered`] — windowed / verbatim results are PROMPT-INDEPENDENT:
+///   the final data envelope is served on any hit.
+/// - [`Self::LlmSource`] — llm-arm results depend on the caller's `prompt`,
+///   so caching the rendered answer would serve prompt A's extraction to
+///   prompt B. Instead the bounded extraction INPUT is cached and the
+///   side-model extraction re-runs per call with the live prompt (the
+///   pre-offload cache had exactly these economics: refetch avoided,
+///   extraction always fresh).
 #[derive(Clone)]
-struct CachedWebFetch {
-    /// Extracted markdown (after turndown conversion).
-    markdown: String,
-    /// Content-Type from the upstream response.
-    content_type: String,
-    /// Whether the markdown was truncated at `web_fetch.max_content_length`.
-    was_truncated: bool,
-    /// When the entry was inserted — used for TTL check.
+enum CachedWebFetch {
+    Rendered(Value),
+    LlmSource {
+        /// Bounded markdown slice fed to the extractor (≤ `LLM_EXTRACT_INPUT_CAP`).
+        extract_input: String,
+        /// Page-cap + binary-spill notes, re-appended per render.
+        notes: String,
+        /// Whether the retained copy was capped at `max_content_length`.
+        page_capped: bool,
+    },
+}
+
+struct CachedWebFetchEntry {
+    value: CachedWebFetch,
     inserted_at: std::time::Instant,
 }
 
-/// In-process WebFetch URL cache. Parallel to the `SEARCH_CACHE` used
-/// by WebSearch — same `LazyLock<Mutex<Vec<...>>>` LRU pattern.
-/// Session-scoped only.
-static WEB_FETCH_CACHE: std::sync::LazyLock<std::sync::Mutex<Vec<(String, CachedWebFetch)>>> =
+/// In-process WebFetch cache. Parallel to the `SEARCH_CACHE` used by
+/// WebSearch — same `LazyLock<Mutex<Vec<...>>>` LRU pattern. The key is
+/// `(session, url, effective_inline_budget)` so a budget-mismatched call is a
+/// cache miss and a footer path from one session never leaks into another.
+static WEB_FETCH_CACHE: std::sync::LazyLock<std::sync::Mutex<Vec<(String, CachedWebFetchEntry)>>> =
     std::sync::LazyLock::new(|| {
         std::sync::Mutex::new(Vec::with_capacity(WEB_FETCH_CACHE_MAX_ENTRIES))
     });
 
-fn web_fetch_cache_get(url: &str) -> Option<CachedWebFetch> {
+fn web_fetch_cache_key(session: &str, url: &str, effective_budget: i64) -> String {
+    format!("{session}\u{0}{url}\u{0}{effective_budget}")
+}
+
+fn web_fetch_cache_get(key: &str) -> Option<CachedWebFetch> {
     let mut cache = WEB_FETCH_CACHE.lock().ok()?;
     // Expire old entries on every access (cheap since the cache is small).
     let now = std::time::Instant::now();
     cache.retain(|(_, entry)| now.duration_since(entry.inserted_at) < WEB_FETCH_CACHE_TTL);
-    cache
-        .iter()
-        .find_map(|(k, v)| if k == url { Some(v.clone()) } else { None })
+    cache.iter().find_map(|(k, v)| {
+        if k == key {
+            Some(v.value.clone())
+        } else {
+            None
+        }
+    })
 }
 
-fn web_fetch_cache_set(url: String, entry: CachedWebFetch) {
+fn web_fetch_cache_set(key: String, value: CachedWebFetch) {
     if let Ok(mut cache) = WEB_FETCH_CACHE.lock() {
         // LRU eviction: if at capacity, drop the oldest entry.
         if cache.len() >= WEB_FETCH_CACHE_MAX_ENTRIES {
             cache.remove(0);
         }
-        // Deduplicate: if an entry for the same URL exists, remove it
+        // Deduplicate: if an entry for the same key exists, remove it
         // so the refreshed entry is the newest.
-        cache.retain(|(k, _)| k != &url);
-        cache.push((url, entry));
+        cache.retain(|(k, _)| k != &key);
+        cache.push((
+            key,
+            CachedWebFetchEntry {
+                value,
+                inserted_at: std::time::Instant::now(),
+            },
+        ));
     }
 }
 
-/// Test-only cache reset. Isolates cached fixtures between tests.
+/// Test-only insert with an explicit insertion time (to exercise TTL eviction).
 #[cfg(test)]
-pub(super) fn clear_web_fetch_cache() {
+pub(super) fn web_fetch_cache_insert_at(key: String, data: Value, inserted_at: std::time::Instant) {
     if let Ok(mut cache) = WEB_FETCH_CACHE.lock() {
-        cache.clear();
+        cache.push((
+            key,
+            CachedWebFetchEntry {
+                value: CachedWebFetch::Rendered(data),
+                inserted_at,
+            },
+        ));
+    }
+}
+
+/// Test-only rendered-envelope lookup.
+#[cfg(test)]
+pub(super) fn web_fetch_cache_get_rendered(key: &str) -> Option<Value> {
+    match web_fetch_cache_get(key)? {
+        CachedWebFetch::Rendered(data) => Some(data),
+        CachedWebFetch::LlmSource { .. } => None,
     }
 }
 
@@ -634,10 +686,11 @@ impl Tool for WebFetchTool {
                 "additionalProperties": false,
                 "properties": {
                     "url": {"type": "string", "description": "The URL to fetch content from"},
-                    "prompt": {"type": "string", "description": "The prompt to run on the fetched content"}
+                    "prompt": {"type": "string", "description": "Optional: what to extract. Only used when the page is summarized by a side model; ignored on the windowed path."},
+                    "inline_bytes": {"type": "integer", "description": "Optional: inline byte budget before the page is windowed and saved to disk."}
                 },
-                // Both keys are mandatory.
-                "required": ["url", "prompt"]
+                // Only the URL is mandatory; extraction prompt is optional.
+                "required": ["url"]
             }))
         })
     }
@@ -649,10 +702,9 @@ impl Tool for WebFetchTool {
     fn to_auto_classifier_input(&self, input: &WebFetchInput) -> Option<String> {
         // The fetch prompt can carry injected extraction instructions, so the
         // gate sees it when present.
-        Some(if input.prompt.is_empty() {
-            input.url.clone()
-        } else {
-            format!("{}: {}", input.url, input.prompt)
+        Some(match input.prompt.as_deref().filter(|p| !p.is_empty()) {
+            Some(prompt) => format!("{}: {}", input.url, prompt),
+            None => input.url.clone(),
         })
     }
 
@@ -698,6 +750,15 @@ impl Tool for WebFetchTool {
     }
     fn search_hint(&self) -> Option<&str> {
         Some("fetch and extract content from a URL")
+    }
+
+    /// Declared HIGH deliberately (declarations are authoritative — no hidden
+    /// clamp): the tool self-bounds every arm through the offload seam, and
+    /// the preapproved-docs verbatim window (`preapproved_verbatim_budget`,
+    /// default 100_000) must pass Level 1 untouched. All inline budgets are
+    /// `capped_to` this threshold, so nothing this tool emits can exceed it.
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        coco_tool_runtime::ResultSizeBound::Bytes(102_000)
     }
 
     /// Per-domain matcher so persisted `domain:<host>` rules apply to the
@@ -837,202 +898,537 @@ impl Tool for WebFetchTool {
             url.to_string()
         };
 
-        let prompt = input.prompt.trim();
-
-        if prompt.is_empty() {
-            return Err(ToolError::InvalidInput {
-                message: "prompt parameter is required".into(),
-                error_code: None,
-            });
-        }
-
-        // Resolve the per-fetch config once so Stage 1 + Stage 3 see
-        // the same values.
         let fetch_config = &ctx.web_fetch_config;
-        let max_fetch_len = fetch_config.max_content_length.max(0) as usize;
-
-        // Stage 0: cache lookup. Short-circuits if a fresh entry exists,
-        // preventing redundant network + LLM extraction work when the model
-        // re-fetches the same URL within 15 minutes (e.g. revisiting a docs
-        // page after a tool-use loop).
-        //
-        // Note: the cache key is the ORIGINAL url parameter, not the
-        // post-redirect URL.
-        let (extraction_input, was_truncated, content_type, binary_note) = if let Some(cached) =
-            web_fetch_cache_get(url)
-        {
-            // Cache hit: skip Stage 1+2+3 and use the stored markdown.
-            tracing::debug!("WebFetch cache hit for {url}");
-            (
-                cached.markdown,
-                cached.was_truncated,
-                cached.content_type,
-                None,
-            )
-        } else {
-            // Cache miss: run the full fetch → markdown → truncate pipeline.
-            //
-            // Stage 1: HTTP fetch. `fetch_url` returns one of:
-            //   - `Body { body, content_type }` — normal 2xx response
-            //   - `CrossOriginRedirect { new_url }` — the origin
-            //     redirected somewhere outside the same-origin
-            //     allowlist; we surface this to the model so it can
-            //     decide whether to fetch the new URL.
-            let (body, content_type, binary_note) =
-                match fetch_url(&fetch_target, fetch_config).await {
-                    Ok(FetchOutcome::Body {
-                        body,
-                        content_type,
-                        binary_note,
-                    }) => (body, content_type, binary_note),
-                    Ok(FetchOutcome::CrossOriginRedirect { new_url }) => {
-                        return Ok(ToolResult {
-                            data: serde_json::json!({
-                                "url": url,
-                                "prompt": prompt,
-                                "redirect_blocked": true,
-                                "new_url": new_url,
-                                "message": format!(
-                                    "The URL redirected to a different origin ({new_url}). \
-                                     For security, WebFetch does not automatically follow cross-\
-                                     origin redirects. If you want the redirected content, issue \
-                                     a new WebFetch call with url={new_url}."
-                                ),
-                            }),
-                            new_messages: vec![],
-                            app_state_patch: None,
-                            permission_updates: Vec::new(),
-                            display_data: None,
-                        });
-                    }
-                    Err(e) => {
-                        return Err(ToolError::ExecutionFailed {
-                            message: format!("Failed to fetch {url}: {e}"),
-                            display_data: None,
-                            source: None,
-                        });
-                    }
-                };
-
-            // Stage 2: HTML → markdown via `html2text`. Plain-text bodies
-            // (JSON, text/plain, unknown) bypass the conversion and are
-            // passed through as-is.
-            let markdown = if is_html_content_type(&content_type) {
-                html_to_markdown(&body)
-            } else {
-                body
-            };
-
-            // Stage 3: truncate to the extraction budget (100K chars
-            // by default; configurable via `web_fetch.max_content_length`).
-            let (extraction_input, was_truncated) = if markdown.len() > max_fetch_len {
-                // char_indices-safe truncation to avoid splitting mid-UTF-8.
-                let cut = markdown
-                    .char_indices()
-                    .take(max_fetch_len)
-                    .last()
-                    .map(|(i, c)| i + c.len_utf8())
-                    .unwrap_or(markdown.len());
-                (markdown[..cut].to_string(), true)
-            } else {
-                (markdown, false)
-            };
-
-            // Populate the cache so subsequent fetches of the same
-            // URL within the 15-min TTL are zero-cost. We cache the
-            // POST-truncation markdown so we don't waste bytes on
-            // content we'd only throw away again.
-            web_fetch_cache_set(
-                url.to_string(),
-                CachedWebFetch {
-                    markdown: extraction_input.clone(),
-                    content_type: content_type.clone(),
-                    was_truncated,
-                    inserted_at: std::time::Instant::now(),
-                },
-            );
-
-            (extraction_input, was_truncated, content_type, binary_note)
-        };
-
-        // A preapproved docs host serving raw markdown that fits the budget
-        // is returned VERBATIM — the main model reads the real page instead
-        // of a lossy side-model summary. `!was_truncated` means content is
-        // within the budget threshold.
-        // The binary-saved note is appended verbatim to whatever content the
-        // model ultimately receives.
-        let binary_note_str = binary_note.unwrap_or_default();
-
+        let store = ctx.tool_output_store.as_ref();
         let is_preapproved = is_preapproved_url(url);
-        if is_preapproved && content_type.to_lowercase().contains("text/markdown") && !was_truncated
-        {
-            return Ok(ToolResult {
-                data: serde_json::json!({
-                    "url": url,
-                    "prompt": prompt,
-                    "content": format!("{extraction_input}{binary_note_str}"),
-                    "truncated": false,
-                    "extraction_mode": "preapproved_verbatim",
-                }),
-                new_messages: vec![],
-                app_state_patch: None,
-                permission_updates: Vec::new(),
-                display_data: None,
-            });
+        let live_prompt = input
+            .prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty());
+
+        // Inline budgets. Config values resolve via `try_new` (reject garbage,
+        // keep the default — the config convention); only the model-supplied
+        // `inline_bytes` param goes through the clamping `from_request`. Every
+        // budget is `capped_to` the tool's declared Level-1 threshold, so no
+        // arm can emit text Level 1 would re-persist.
+        let threshold = Tool::max_result_size_bound(self)
+            .as_bytes()
+            .unwrap_or(i64::MAX);
+        let configured_budget =
+            coco_tool_runtime::InlineBudget::try_new(fetch_config.inline_byte_budget)
+                .unwrap_or(DEFAULT_INLINE_BUDGET);
+        let requested_budget = input
+            .inline_bytes
+            .map(coco_tool_runtime::InlineBudget::from_request)
+            .unwrap_or(configured_budget)
+            .capped_to(threshold);
+
+        // Cache keyed by (session, url, budget) — a budget-mismatched call is
+        // a miss, and a footer path never leaks across sessions.
+        let session_key = store
+            .map(|s| s.session_dir().to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let cache_key = web_fetch_cache_key(&session_key, url, requested_budget.get());
+        match web_fetch_cache_get(&cache_key) {
+            // Windowed / verbatim results are prompt-independent — serve as-is.
+            Some(CachedWebFetch::Rendered(data)) => {
+                tracing::debug!("WebFetch cache hit (rendered) for {url}");
+                return Ok(web_fetch_result(data));
+            }
+            // Llm-arm results depend on the live prompt: re-run the extraction
+            // over the cached bounded input (refetch avoided, answer fresh —
+            // serving a cached answer would hand prompt A's extraction to
+            // prompt B).
+            Some(CachedWebFetch::LlmSource {
+                extract_input,
+                notes,
+                page_capped,
+            }) => {
+                tracing::debug!("WebFetch cache hit (llm source) for {url}");
+                let data = llm_extract_data(
+                    ctx,
+                    store,
+                    LlmExtract {
+                        url,
+                        live_prompt,
+                        extract_input: &extract_input,
+                        fallback_text: &extract_input,
+                        notes: &notes,
+                        page_capped,
+                        fallback_budget: requested_budget,
+                        is_preapproved,
+                    },
+                )
+                .await;
+                return Ok(web_fetch_result(data));
+            }
+            None => {}
         }
 
-        // Stage 4: LLM extraction pass via side-query. Delegates to
-        // `ctx.side_query` so the extraction works with whichever provider
-        // the user configured.
-        //
-        // When side_query is the `NoOpSideQuery` stub (e.g. unit tests),
-        // the extraction call errors out. We fall back to returning the
-        // markdown directly with the user prompt attached to keep tests green.
-        let user_message = format!(
-            "{prompt}\n\n---\n\nWeb page content (markdown):\n\n{extraction_input}\n\n{guidelines}",
-            guidelines = extract_guidelines(is_preapproved)
-        );
-        let request =
-            SideQueryRequest::simple(WEB_FETCH_EXTRACT_SYSTEM, &user_message, "web_fetch_extract");
-
-        let extracted = match ctx.side_query.query(request).await {
-            Ok(response) => response.text.unwrap_or_default(),
+        // Stage 1: HTTP fetch.
+        let fetched = match fetch_url(&fetch_target, fetch_config).await {
+            Ok(FetchOutcome::Body {
+                body,
+                content_type,
+                binary,
+            }) => FetchedBody {
+                body,
+                content_type,
+                binary,
+            },
+            Ok(FetchOutcome::CrossOriginRedirect { new_url }) => {
+                return Ok(web_fetch_result(serde_json::json!({
+                    "url": url,
+                    "redirect_blocked": true,
+                    "new_url": new_url,
+                    "message": format!(
+                        "The URL redirected to a different origin ({new_url}). For security, \
+                         WebFetch does not automatically follow cross-origin redirects. If you \
+                         want the redirected content, issue a new WebFetch call with url={new_url}."
+                    ),
+                })));
+            }
             Err(e) => {
-                tracing::debug!(
-                    "WebFetch extraction side-query unavailable ({e}); returning raw markdown"
-                );
-                // Fallback: surface the raw markdown so the main model can
-                // do the extraction itself. No information is lost.
-                return Ok(ToolResult {
-                    data: serde_json::json!({
-                        "url": url,
-                        "prompt": prompt,
-                        "content": format!("{extraction_input}{binary_note_str}"),
-                        "truncated": was_truncated,
-                        "extraction_mode": "raw",
-                    }),
-                    new_messages: vec![],
-                    app_state_patch: None,
-                    permission_updates: Vec::new(),
+                return Err(ToolError::ExecutionFailed {
+                    message: format!("Failed to fetch {url}: {e}"),
                     display_data: None,
+                    source: None,
                 });
             }
         };
 
-        Ok(ToolResult {
-            data: serde_json::json!({
-                "url": url,
-                "prompt": prompt,
-                "extracted": format!("{extracted}{binary_note_str}"),
-                "truncated": was_truncated,
-                "extraction_mode": "llm",
-            }),
-            new_messages: vec![],
-            app_state_patch: None,
-            permission_updates: Vec::new(),
-            display_data: None,
-        })
+        // Stages 2-4 (markdown → defuse → wrap → dispatch/persist/cache) live
+        // in `render_fetched` so the offload pipeline is integration-testable
+        // without a live HTTP fetch.
+        let data = render_fetched(
+            ctx,
+            fetched,
+            RenderInputs {
+                url,
+                live_prompt,
+                is_preapproved,
+                requested_budget,
+                threshold,
+                cache_key: &cache_key,
+            },
+        )
+        .await;
+        Ok(web_fetch_result(data))
     }
+}
+
+/// Wrap a WebFetch `data` envelope in the standard side-effect-free
+/// `ToolResult` shell.
+fn web_fetch_result(data: Value) -> ToolResult<Value> {
+    ToolResult {
+        data,
+        new_messages: vec![],
+        app_state_patch: None,
+        permission_updates: Vec::new(),
+        display_data: None,
+    }
+}
+
+/// The successful fetch outputs handed to the post-fetch render stage.
+struct FetchedBody {
+    body: String,
+    content_type: String,
+    /// Raw bytes when the response was binary (persisted; a note is appended).
+    binary: Option<Vec<u8>>,
+}
+
+/// Per-call inputs `execute` derives (URL, prompt, preapproval, budgets, cache
+/// key) and threads into [`render_fetched`].
+struct RenderInputs<'a> {
+    url: &'a str,
+    /// Live per-call prompt (Llm arm only) — the reason llm answers are never
+    /// cached.
+    live_prompt: Option<&'a str>,
+    is_preapproved: bool,
+    /// Inline budget for non-preapproved arms, already `capped_to` the tool's
+    /// declared Level-1 threshold.
+    requested_budget: coco_tool_runtime::InlineBudget,
+    /// The tool's declared Level-1 threshold (caps the preapproved window too).
+    threshold: i64,
+    cache_key: &'a str,
+}
+
+/// Post-fetch render: binary spill → HTML→markdown → data-URI defuse →
+/// hard-wrap → retained-cap → config-dispatched verbatim / windowed / llm,
+/// plus artifact persistence and the cache write. Extracted from `execute`
+/// (which owns validation, the http→https upgrade, the cache short-circuit,
+/// and the fetch) so this whole pipeline is integration-testable with
+/// synthetic bodies — no live HTTP required.
+async fn render_fetched(
+    ctx: &ToolUseContext,
+    fetched: FetchedBody,
+    inputs: RenderInputs<'_>,
+) -> Value {
+    let RenderInputs {
+        url,
+        live_prompt,
+        is_preapproved,
+        requested_budget,
+        threshold,
+        cache_key,
+    } = inputs;
+    let fetch_config = &ctx.web_fetch_config;
+    let retained_cap = fetch_config.max_content_length.max(0) as usize;
+    let store = ctx.tool_output_store.as_ref();
+    let FetchedBody {
+        body,
+        content_type,
+        binary,
+    } = fetched;
+
+    // Binary spill folded into the session-scoped store (temp-dir fallback
+    // only when no store is wired).
+    let binary_note_str = match binary {
+        Some(bytes) => persist_web_binary(store, &bytes, &content_type)
+            .await
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+
+    // Stage 2: HTML → markdown; then defuse inline data-URI images so a
+    // single base64 blob can't flood context.
+    let markdown = if is_html_content_type(&content_type) {
+        html_to_markdown(&body)
+    } else {
+        body
+    };
+    let defused = defuse_data_uris(&markdown);
+
+    // Stage 3: hard-wrap → canonical retained text, capped at the retained
+    // byte cap so the artifact + every footer number describe one text.
+    let wrapped = coco_tool_runtime::tool_result_offload::hard_wrap(
+        &defused,
+        coco_tool_runtime::tool_result_offload::HARD_WRAP_WIDTH,
+    );
+    let page_bytes = wrapped.len();
+    let (retained, page_capped) = if page_bytes > retained_cap {
+        let cut = wrapped.floor_char_boundary(retained_cap);
+        (wrapped[..cut].to_string(), true)
+    } else {
+        (wrapped.into_owned(), false)
+    };
+    let page_note = if page_capped {
+        format!(
+            "\n\n[Note: page was {page_bytes} bytes; retained the first {} bytes.]",
+            retained.len()
+        )
+    } else {
+        String::new()
+    };
+    // Notes travel INSIDE the text handed to the offload seam (windowed arms)
+    // or appended to footer-less arms — text must never be appended AFTER a
+    // `</persisted-output>` footer, or the pointer-bearing suffix predicate
+    // stops matching and micro-compaction would destroy the pointer.
+    let notes = format!("{page_note}{binary_note_str}");
+
+    // Preapproved docs hosts serving clean markdown keep a larger verbatim
+    // window (config via `try_new`; still capped by the Level-1 threshold,
+    // which the tool declares ABOVE the default precisely so this window
+    // survives Level 1 whole).
+    let is_markdownish = content_type.to_lowercase().contains("text/markdown");
+    let effective_budget = if is_preapproved && is_markdownish {
+        coco_tool_runtime::InlineBudget::try_new(fetch_config.preapproved_verbatim_budget)
+            .unwrap_or(DEFAULT_PREAPPROVED_BUDGET)
+            .capped_to(threshold)
+    } else {
+        requested_budget
+    };
+
+    // Config-dispatched extraction: clean content windows; scraped HTML keeps
+    // the side-model extract under `Auto` (see WebFetchExtraction).
+    let use_windowed = match fetch_config.extraction {
+        coco_config::WebFetchExtraction::Windowed => true,
+        coco_config::WebFetchExtraction::Llm => false,
+        coco_config::WebFetchExtraction::Auto => !is_html_content_type(&content_type),
+    };
+
+    if (retained.len() + notes.len()) as i64 <= effective_budget.get() {
+        // Fits inline: verbatim, zero side-query, zero persistence.
+        let data = serde_json::json!({
+            "url": url,
+            "content": format!("{retained}{notes}"),
+            "truncated": page_capped,
+            "extraction_mode": if is_preapproved && is_markdownish {
+                "preapproved_verbatim"
+            } else {
+                "verbatim"
+            },
+        });
+        web_fetch_cache_set(
+            cache_key.to_string(),
+            CachedWebFetch::Rendered(data.clone()),
+        );
+        return data;
+    }
+
+    if use_windowed {
+        let text = format!("{retained}{notes}");
+        let data = windowed_data(store, url, &text, effective_budget, "windowed").await;
+        web_fetch_cache_set(
+            cache_key.to_string(),
+            CachedWebFetch::Rendered(data.clone()),
+        );
+        return data;
+    }
+
+    // Llm arm: cache the bounded extraction SOURCE (valid regardless of the
+    // side model's availability), never the prompt-dependent answer. A
+    // transient side-query outage therefore isn't pinned for the TTL — the
+    // next call retries extraction over the cached source.
+    let extract_input = retained[..retained.floor_char_boundary(LLM_EXTRACT_INPUT_CAP)].to_string();
+    web_fetch_cache_set(
+        cache_key.to_string(),
+        CachedWebFetch::LlmSource {
+            extract_input: extract_input.clone(),
+            notes: notes.clone(),
+            page_capped,
+        },
+    );
+    llm_extract_data(
+        ctx,
+        store,
+        LlmExtract {
+            url,
+            live_prompt,
+            extract_input: &extract_input,
+            // On the miss path the FULL retained text is available for a
+            // better-quality fallback window.
+            fallback_text: &retained,
+            notes: &notes,
+            page_capped,
+            fallback_budget: effective_budget,
+            is_preapproved,
+        },
+    )
+    .await
+}
+
+/// Build the windowed data envelope: content-addressed artifact + head/tail
+/// window whose `<persisted-output>` footer is the trailing block. Shared by
+/// the windowed arm and the llm fallback so the two can never drift.
+async fn windowed_data(
+    store: Option<&coco_tool_runtime::ToolOutputStore>,
+    url: &str,
+    text_with_notes: &str,
+    budget: coco_tool_runtime::InlineBudget,
+    mode: &str,
+) -> Value {
+    let key = content_addressed_key(url, text_with_notes);
+    let offloaded = coco_tool_runtime::offload_windowed(store, &key, text_with_notes, budget).await;
+    serde_json::json!({
+        "url": url,
+        "content": offloaded.model_text,
+        "truncated": true,
+        "extraction_mode": mode,
+    })
+}
+
+/// Inputs for [`llm_extract_data`].
+struct LlmExtract<'a> {
+    url: &'a str,
+    /// Live per-call prompt — the reason llm answers are never cached.
+    live_prompt: Option<&'a str>,
+    /// Bounded markdown slice fed to the extractor.
+    extract_input: &'a str,
+    /// Windowed-fallback source when the side model is unavailable: the full
+    /// retained text on the miss path, the bounded slice on cache hits.
+    fallback_text: &'a str,
+    notes: &'a str,
+    page_capped: bool,
+    fallback_budget: coco_tool_runtime::InlineBudget,
+    is_preapproved: bool,
+}
+
+/// Run the side-model extraction with the live prompt; on side-query failure,
+/// degrade to a windowed render of `fallback_text` (not cached separately).
+async fn llm_extract_data(
+    ctx: &ToolUseContext,
+    store: Option<&coco_tool_runtime::ToolOutputStore>,
+    args: LlmExtract<'_>,
+) -> Value {
+    let prompt = args.live_prompt.unwrap_or(DEFAULT_EXTRACT_PROMPT);
+    let user_message = format!(
+        "{prompt}\n\n---\n\nWeb page content (markdown):\n\n{extract_input}\n\n{guidelines}",
+        extract_input = args.extract_input,
+        guidelines = extract_guidelines(args.is_preapproved)
+    );
+    let request =
+        SideQueryRequest::simple(WEB_FETCH_EXTRACT_SYSTEM, &user_message, "web_fetch_extract");
+    match ctx.side_query.query(request).await {
+        Ok(response) => serde_json::json!({
+            "url": args.url,
+            "extracted": format!("{}{}", response.text.unwrap_or_default(), args.notes),
+            "truncated": args.page_capped,
+            "extraction_mode": "llm",
+        }),
+        Err(e) => {
+            tracing::debug!(
+                "WebFetch extraction side-query unavailable ({e}); windowing raw markdown"
+            );
+            let text = format!("{}{}", args.fallback_text, args.notes);
+            windowed_data(
+                store,
+                args.url,
+                &text,
+                args.fallback_budget,
+                "windowed_fallback",
+            )
+            .await
+        }
+    }
+}
+
+/// Fallback extraction prompt when the model supplied none (Llm path only).
+const DEFAULT_EXTRACT_PROMPT: &str = "Summarize the key information on this page.";
+
+/// Cap on the markdown fed to the side-query extractor. The retained text can
+/// reach the multi-MB `max_content_length`; the extractor only ever sees this
+/// much so a huge page can't drive an unbounded side-model call.
+const LLM_EXTRACT_INPUT_CAP: usize = 100_000;
+
+/// Fallback inline budget when config is invalid; mirrors
+/// `DEFAULT_WEB_FETCH_INLINE_BYTE_BUDGET` in coco-config.
+const DEFAULT_INLINE_BUDGET: coco_tool_runtime::InlineBudget =
+    coco_tool_runtime::InlineBudget::new(15_000);
+
+/// Fallback preapproved verbatim budget when config is invalid; mirrors
+/// `DEFAULT_WEB_FETCH_PREAPPROVED_VERBATIM_BUDGET` in coco-config.
+const DEFAULT_PREAPPROVED_BUDGET: coco_tool_runtime::InlineBudget =
+    coco_tool_runtime::InlineBudget::new(100_000);
+
+/// Content-addressed artifact key for a windowed fetch:
+/// `url-<host-slug>-<sha256(url)[..10]>-<sha256(content)[..8]>.md`. Same URL +
+/// same content dedups to one file; changed content gets a NEW file, so
+/// pointers frozen into earlier turns keep referencing the bytes they were
+/// computed from. The runtime only validates the name (§3).
+fn content_addressed_key(url: &str, retained: &str) -> coco_tool_runtime::ArtifactKey {
+    let host_slug = slugify_host(&extract_host(url));
+    let url_hash = sha256_hex(url.as_bytes());
+    let content_hash = sha256_hex(retained.as_bytes());
+    let file_name = format!(
+        "url-{host_slug}-{}-{}.md",
+        &url_hash[..10],
+        &content_hash[..8]
+    );
+    coco_tool_runtime::ArtifactKey::Named { file_name }
+}
+
+/// Reduce a hostname to the `[a-z0-9.-]` charset (≤ 30 bytes) so the fixed
+/// `url-` prefix + slug always satisfy [`coco_tool_runtime::ArtifactKey`]
+/// validation.
+fn slugify_host(host: &str) -> String {
+    let slug: String = host
+        .chars()
+        .take(30)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if slug.is_empty() {
+        "host".to_string()
+    } else {
+        slug
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    coco_utils_string::bytes_to_hex(sha2::Sha256::digest(bytes).as_slice())
+}
+
+/// Persist a binary WebFetch body. Uses the session-scoped
+/// [`coco_tool_runtime::ToolOutputStore`] when available (unified lifecycle),
+/// falling back to the temp dir only when no store is wired. Returns the
+/// model-visible "also saved to …" note.
+async fn persist_web_binary(
+    store: Option<&coco_tool_runtime::ToolOutputStore>,
+    bytes: &[u8],
+    content_type: &str,
+) -> Option<String> {
+    let written = match store {
+        Some(store) => {
+            let id = format!("webfetch-{}", &sha256_hex(bytes)[..16]);
+            store
+                .persist_binary(&id, bytes, Some(content_type))
+                .await
+                .map(|persisted| persisted.filepath.display().to_string())
+        }
+        None => persist_binary_content(bytes, content_type),
+    };
+    match written {
+        Ok(path) => Some(format!(
+            "\n\n[Binary content ({content_type}, {} bytes) also saved to {path}]",
+            bytes.len()
+        )),
+        Err(e) => {
+            tracing::debug!("WebFetch binary persist failed ({e}); continuing without note");
+            None
+        }
+    }
+}
+
+/// Defuse inline `data:image/…;base64,…` URIs so a single embedded image (tens
+/// of thousands of chars) can't enter context verbatim. Markdown image form
+/// `![alt](data:image/…)` collapses to `[IMAGE: alt]`; a bare `data:image/…`
+/// run collapses to `[IMAGE]`. Real http(s) image links are preserved. Linear
+/// scan (no backtracking regex over multi-MB strings).
+fn defuse_data_uris(s: &str) -> String {
+    const NEEDLE: &str = "data:image/";
+    if !s.contains(NEEDLE) {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find(NEEDLE) {
+        let run_end = rest[pos..]
+            .find(|c: char| c == ')' || c == ']' || c == '"' || c == '\'' || c.is_whitespace())
+            .map_or(rest.len(), |r| pos + r);
+        match split_markdown_image_open(&rest[..pos]) {
+            Some((prefix, alt)) => {
+                out.push_str(prefix);
+                if alt.is_empty() {
+                    out.push_str("[IMAGE]");
+                } else {
+                    out.push_str(&format!("[IMAGE: {alt}]"));
+                }
+                // Consume the closing ')' of the markdown image too.
+                let mut consumed = run_end;
+                if rest[consumed..].starts_with(')') {
+                    consumed += 1;
+                }
+                rest = &rest[consumed..];
+            }
+            None => {
+                out.push_str(&rest[..pos]);
+                out.push_str("[IMAGE]");
+                rest = &rest[run_end..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// If `before` ends with a markdown image opener `![alt](`, return
+/// `(text_before_opener, alt)`.
+fn split_markdown_image_open(before: &str) -> Option<(&str, &str)> {
+    let open = before.strip_suffix('(')?;
+    let bracket = open.rfind("![")?;
+    let alt = open[bracket + 2..].strip_suffix(']')?;
+    if alt.contains('[') || alt.contains(']') {
+        return None;
+    }
+    Some((&before[..bracket], alt))
 }
 
 /// Check whether a Content-Type header indicates HTML.
@@ -1055,14 +1451,15 @@ pub(super) fn html_to_markdown(html: &str) -> String {
 
 /// Result of a WebFetch network call — `(body, content_type)` on success,
 /// or a structured redirect notice when the response redirects cross-origin.
+#[cfg_attr(test, derive(Debug))]
 enum FetchOutcome {
     Body {
         body: String,
         content_type: String,
-        /// When the body was binary, the note "[Binary content (…) also
-        /// saved to <path>]" is appended to the final result so the model
-        /// knows the real bytes are on disk. `None` for normal text responses.
-        binary_note: Option<String>,
+        /// Raw bytes when the response was binary — the caller persists them
+        /// through the session store (or temp-dir fallback) and appends a
+        /// "also saved to …" note. `None` for normal text responses.
+        binary: Option<Vec<u8>>,
     },
     /// Cross-origin redirect was blocked. The caller should surface this
     /// to the model so it can issue a new fetch with the new URL.
@@ -1197,29 +1594,15 @@ async fn fetch_url(
             }
             buffer.extend_from_slice(&chunk);
         }
-        // #57: persist binary bodies before the lossy decode so the model
-        // can reference the real bytes on disk.
-        let binary_note = if is_binary {
-            match persist_binary_content(&buffer, &content_type) {
-                Ok((path, size)) => Some(format!(
-                    "\n\n[Binary content ({content_type}, {size} bytes) also saved to {path}]"
-                )),
-                Err(e) => {
-                    tracing::debug!(
-                        "WebFetch binary persist failed ({e}); continuing without note"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        // #57: keep the raw binary bytes so the caller can persist them
+        // through the session store before the lossy decode.
         let body = String::from_utf8_lossy(&buffer).into_owned();
+        let binary = is_binary.then_some(buffer);
 
         return Ok(FetchOutcome::Body {
             body,
             content_type,
-            binary_note,
+            binary,
         });
     }
 
@@ -1227,9 +1610,10 @@ async fn fetch_url(
 }
 
 /// Persist a binary WebFetch body to a temp file with a mime-derived
-/// extension. Returns `(absolute_path, byte_len)`.
-fn persist_binary_content(bytes: &[u8], content_type: &str) -> std::io::Result<(String, usize)> {
-    let ext = mime_to_extension(content_type);
+/// extension (store-less fallback only). Returns the absolute path.
+fn persist_binary_content(bytes: &[u8], content_type: &str) -> std::io::Result<String> {
+    // Single MIME→extension table, shared with the session store.
+    let ext = coco_tool_runtime::tool_result_storage::extension_for_mime_type(Some(content_type));
     // A content-addressed name avoids `Math.random`/clock use (forbidden
     // in some build contexts) while staying collision-resistant.
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -1241,25 +1625,7 @@ fn persist_binary_content(bytes: &[u8], content_type: &str) -> std::io::Result<(
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{hash:016x}.{ext}"));
     std::fs::write(&path, bytes)?;
-    Ok((path.to_string_lossy().into_owned(), bytes.len()))
-}
-
-/// Map a binary content-type to a file extension. Falls back to `bin`.
-fn mime_to_extension(content_type: &str) -> &'static str {
-    let ct = content_type.split(';').next().unwrap_or("").trim();
-    match ct {
-        "image/png" => "png",
-        "image/jpeg" => "jpg",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/svg+xml" => "svg",
-        "application/pdf" => "pdf",
-        "application/zip" => "zip",
-        "audio/mpeg" => "mp3",
-        "audio/wav" => "wav",
-        "video/mp4" => "mp4",
-        _ => "bin",
-    }
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Resolve a possibly-relative Location header against the base URL.

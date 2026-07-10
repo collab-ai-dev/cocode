@@ -589,7 +589,7 @@ impl SessionRuntime {
         >::new()));
         let terminal_goal_metadata_written = Arc::new(AtomicBool::new(false));
         let tool_result_replacement_state = Arc::new(tokio::sync::RwLock::new(
-            coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX),
+            coco_tool_runtime::tool_result_offload::ContentReplacementState::new(i64::MAX),
         ));
 
         // ── Agent definition catalog ──

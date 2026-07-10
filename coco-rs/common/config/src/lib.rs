@@ -152,6 +152,7 @@ pub use sections::TranscriptMode;
 pub use sections::VoiceBackend;
 pub use sections::VoiceConfig;
 pub use sections::WebFetchConfig;
+pub use sections::WebFetchExtraction;
 pub use sections::WebSearchConfig;
 pub use sections::WebSearchProvider;
 pub use sections::WireDumpLevel;

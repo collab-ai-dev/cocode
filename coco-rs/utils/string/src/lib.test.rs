@@ -127,3 +127,14 @@ fn truncate_utf16_units_with_ellipsis_uses_utf16_units() {
         format!("{}…", "😀".repeat(39))
     );
 }
+
+#[test]
+fn test_format_thousands() {
+    use super::format_thousands;
+    assert_eq!(format_thousands(0), "0");
+    assert_eq!(format_thousands(999), "999");
+    assert_eq!(format_thousands(1_000), "1,000");
+    assert_eq!(format_thousands(1_234_567), "1,234,567");
+    assert_eq!(format_thousands(-1_234_567), "-1,234,567");
+    assert_eq!(format_thousands(i64::MIN), "-9,223,372,036,854,775,808");
+}

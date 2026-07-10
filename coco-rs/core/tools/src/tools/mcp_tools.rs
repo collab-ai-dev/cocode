@@ -56,7 +56,7 @@ impl Tool for McpAuthTool {
         ToolName::McpAuth.as_str()
     }
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
-        coco_tool_runtime::ResultSizeBound::Chars(10_000)
+        coco_tool_runtime::ResultSizeBound::Bytes(10_000)
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::Mcp)
@@ -194,7 +194,7 @@ impl Tool for McpAuthServerTool {
         Some(&self.info)
     }
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
-        coco_tool_runtime::ResultSizeBound::Chars(10_000)
+        coco_tool_runtime::ResultSizeBound::Bytes(10_000)
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::Mcp)
@@ -515,8 +515,10 @@ impl Tool for ReadMcpResourceDirTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::Mcp)
     }
+    /// Declarations are authoritative (no hidden clamp): third-party resource
+    /// listings keep the pre-offload effective threshold.
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
-        coco_tool_runtime::ResultSizeBound::Chars(100_000)
+        coco_tool_runtime::ResultSizeBound::Bytes(50_000)
     }
     fn description(
         &self,

@@ -1,6 +1,86 @@
 # Tool Result Offload v2 — Unified Recoverable Offload (Design)
 
-> Status: **draft v2 — adversarial review incorporated** (2026-07-10; review record in §13)
+> Status: **IMPLEMENTED** (2026-07-10). New module `core/tool-runtime/src/tool_result_offload.rs`
+> (`WindowedView` / `ArtifactKey` / `InlineBudget` / `offload_windowed` /
+> `scaled_per_message_bytes` / `hard_wrap` / `is_pointer_bearing`);
+> `tool_result_storage` renamed `Chars→Bytes` + atomic `write_artifact` +
+> offload-based Level 2; WebFetch re-railed (data-URI defuse, content-addressed
+> `Named` artifacts, config-dispatched `WebFetchExtraction`, store-folded binary
+> spill); Bash routed through the seam (`decode_capped`, `inline_window_budget`);
+> micro-compact skips pointer-bearing results; window-scaled Level-2 budget wired
+> in `engine_prompt`.
+>
+> **Post-implementation adversarial review (same day) — deviations from this
+> design, each deliberate (the doc is not authoritative where it contradicted
+> itself or reality):**
+> 1. **The global 50K clamp is DELETED** (`resolve_persistence_threshold`
+>    removed). This design's §4.3 (100K preapproved verbatim) and §9 (clamped
+>    50K Level-1 threshold) were mutually unsatisfiable — any verbatim return
+>    over 50K would have been re-windowed by Level 1 to a 4K reference.
+>    Declarations are now authoritative: trait default `Bytes(50_000)` (the
+>    previously *effective* value — default tools unchanged), WebFetch declares
+>    `Bytes(102_000)`, and the 100K preapproved verbatim genuinely survives.
+>    Side effect: explicit declarations above 50K (Glob 100K) become real.
+> 2. **Llm-arm caching is source-based**: §4.6's "(url, budget)"-keyed rendered
+>    cache would serve prompt A's extraction to prompt B. The cache now stores
+>    `Rendered` (windowed/verbatim, prompt-independent) or `LlmSource` (the
+>    ≤100K extraction input; extraction re-runs per call with the live prompt —
+>    the pre-offload economics). Worst-case cache bound returns to ~12.8MB.
+> 3. **Notes never trail the footer**: page-cap/binary notes are folded into
+>    the text BEFORE offload — text after `</persisted-output>` would defeat
+>    the pointer-bearing suffix predicate and let micro-compact destroy the
+>    pointer.
+> 4. **Level-2 eviction skips pointer-bearing results** (answers OQ4 = yes):
+>    re-offloading a Level-1-windowed result under the same `ToolUse` id keeps
+>    the original artifact (`create_new`) while the new footer's numbers
+>    describe the windowed text — a pointer to the wrong bytes. They still
+>    count toward the trigger total.
+> 5. **Tail line accounting is conservative**: a tail starting mid-line INCLUDES
+>    that partial line in the omitted range (`omitted_end_line`), mirroring the
+>    head side — the reported gap may overlap what is shown, never undershoot.
+> 6. **Budget scaling uses a non-panicking window accessor**
+>    (`try_resolved_context_window`); §5's fallback contract is now real.
+> 7. Hook payloads: non-MCP PostToolUse hooks receive a string-capped (≤50K per
+>    value) view of the data envelope, since Bash's retain cap (2MB) would
+>    otherwise widen the hook payload contract ~67×.
+> 8. Tags + predicates (`is_content_already_persisted` / `is_pointer_bearing`)
+>    are canonical in `coco_types::persisted_output` (no cross-crate literal
+>    duplication); Level-2 budget moved into `tool_result_offload` so the
+>    module DAG is strictly types ← storage ← offload.
+> 9. **ALL clearing paths are pointer-preserving, and stronger than §6's
+>    "skip"**: `micro_compact`, `micro_compact_with_budget`, and the reactive
+>    `api_microcompact` share one `clearing_decision` (compact `types.rs`) —
+>    a windowed result is REDUCED to `[cleared] + <persisted-output> footer`
+>    (`coco_types::persisted_output::pointer_footer`): the bulk is freed AND
+>    the recovery pointer survives, which dominates §6's skip for 30K Bash
+>    windows. Minimal references and already-cleared forms are skipped
+>    (idempotent). `clear_file_unchanged_stubs`' substring match also skips
+>    pointer-bearing results.
+> 10. PowerShell mirrors Bash's `inline_window_budget()` (30K tail-preserving
+>    window). Explicit 100K declarations that had merely copied the old
+>    clamped default were realigned to the effective 50K
+>    (`ReadMcpResourceDir`, `StructuredOutput`); Glob's documented 100K intent
+>    is kept (now real). `McpTool` proper uses the trait default (50K).
+>
+> 11. **§10 WebFetch integration tests landed** as two layers (execute's
+>    http→https upgrade makes a plain-HTTP wiremock server unreachable through
+>    the full path): the offload pipeline is extracted into `render_fetched`
+>    and driven with synthetic bodies (verbatim / windowed + artifact +
+>    navigable Read offset / changed-body→new-artifact / data-URI defuse /
+>    300KB single-line JSON / preapproved verbatim / model `inline_bytes` /
+>    llm arm caches source-not-answer / side-model-down fallback / store-absent
+>    pointerless window), and `fetch_url` is driven against wiremock (html /
+>    json passthrough / binary detection / same-origin follow / cross-origin
+>    block / non-2xx / timeout). 17 integration tests in `web.test.rs::integ`.
+>
+> **Known remaining work (tracked, not blocking):** §12 OQ2 telemetry
+> ship-gate for flipping `Auto`'s HTML arm; §12 OQ1 (30%→25%) product decision;
+> optional session-artifact GC (non-goal §8, but the 2MB Bash / 2MB WebFetch
+> retain caps make disk growth worth a bounded-directory sweep eventually).
+>
+> Design record below retained for provenance.
+>
+> Status (original): **draft v2 — adversarial review incorporated** (2026-07-10; review record in §13)
 > Baseline: [tool-result-budget-plan.md](tool-result-budget-plan.md) (Level 1/2 landed per that plan, enabled by default)
 > Inspiration: Hermes Agent's `web_extract` truncate-and-store rework (their repo #54843; measured
 > 11.7x speedup, equal quality, 4/4 truncated answers recoverable from the stored full text) plus

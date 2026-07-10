@@ -8,7 +8,6 @@ use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_types::ToolName;
 
-use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
 use crate::types::MicrocompactResult;
 
 /// Tools whose results can be cleared during micro-compaction.
@@ -84,25 +83,14 @@ pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> Microcompa
             continue;
         }
 
-        if is_already_cleared(tr) {
+        // Pointer-preserving clear: windowed results are reduced to their
+        // recovery footer (bulk freed, pointer survives); minimal persisted
+        // references and already-cleared results are skipped.
+        let Some(freed) = crate::types::clear_tool_result_preserving_pointers(tr) else {
             continue;
-        }
-
-        let est_tokens = coco_messages::estimate_tool_result_message_tokens(tr);
-        tr.message = LlmMessage::Tool {
-            content: vec![coco_messages::ToolContent::ToolResult(
-                coco_messages::ToolResultContent {
-                    tool_call_id: tr.tool_use_id.clone(),
-                    tool_name: String::new(),
-                    output: coco_llm_types::ToolResultContent::text(CLEARED_TOOL_RESULT_MESSAGE),
-                    is_error: false,
-                    provider_metadata: None,
-                },
-            )],
-            provider_options: None,
         };
 
-        tokens_freed += est_tokens;
+        tokens_freed += freed;
         cleared += 1;
     }
 
@@ -150,18 +138,6 @@ pub fn time_based_microcompact(
         tokens_saved_estimate: result.tokens_saved_estimate,
         was_time_triggered: true,
     })
-}
-
-/// Check if a tool result has already been cleared.
-fn is_already_cleared(tr: &coco_messages::ToolResultMessage) -> bool {
-    if let LlmMessage::Tool { content, .. } = &tr.message
-        && content.len() == 1
-        && let coco_messages::ToolContent::ToolResult(part) = &content[0]
-        && let coco_llm_types::ToolResultContent::Text { value, .. } = &part.output
-    {
-        return value == CLEARED_TOOL_RESULT_MESSAGE;
-    }
-    false
 }
 
 #[cfg(test)]

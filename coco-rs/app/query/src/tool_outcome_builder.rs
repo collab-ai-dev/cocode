@@ -61,6 +61,47 @@ pub(crate) struct RunOneTail<'a> {
     pub approval_content_message: Option<Message>,
 }
 
+/// Max bytes for any single string value forwarded to hook processes. Matches
+/// the Level-1 default bound: hooks never previously saw more than a bounded
+/// tool result, and the offload seam's multi-MB retained outputs (Bash) must
+/// not silently widen that contract.
+const HOOK_STRING_VALUE_CAP: usize = 50_000;
+
+/// Return a copy of `value` with every string longer than `cap` truncated at a
+/// char boundary (with a marker), or `None` when nothing exceeds the cap (the
+/// common case — zero allocation).
+fn cap_value_strings(value: &Value, cap: usize) -> Option<Value> {
+    match value {
+        Value::String(s) if s.len() > cap => {
+            let cut = s.floor_char_boundary(cap);
+            Some(Value::String(format!(
+                "{}\n[... truncated {} bytes for hook payload ...]",
+                &s[..cut],
+                s.len() - cut
+            )))
+        }
+        Value::Array(items) => {
+            let mut replaced: Option<Vec<Value>> = None;
+            for (i, item) in items.iter().enumerate() {
+                if let Some(new_item) = cap_value_strings(item, cap) {
+                    replaced.get_or_insert_with(|| items.clone())[i] = new_item;
+                }
+            }
+            replaced.map(Value::Array)
+        }
+        Value::Object(map) => {
+            let mut replaced: Option<serde_json::Map<String, Value>> = None;
+            for (k, v) in map {
+                if let Some(new_v) = cap_value_strings(v, cap) {
+                    replaced.get_or_insert_with(|| map.clone())[k.as_str()] = new_v;
+                }
+            }
+            replaced.map(Value::Object)
+        }
+        _ => None,
+    }
+}
+
 fn plain_text_parts(parts: &[ToolResultContentPart]) -> Option<String> {
     let mut rendered = Vec::with_capacity(parts.len());
     for part in parts {
@@ -75,50 +116,51 @@ fn plain_text_parts(parts: &[ToolResultContentPart]) -> Option<String> {
     Some(rendered.join("\n\n"))
 }
 
+/// Level-1 per-tool bounding: window + persist an over-threshold text result
+/// through the shared offload seam. Infallible — a missing store or a failed
+/// write degrades to a pointer-less window (model-visible in the footer),
+/// never a tool error. Declared bounds are authoritative (no hidden clamp).
 async fn bound_text_for_model(
     store: Option<&coco_tool_runtime::ToolOutputStore>,
     persistence_id: &str,
-    tool_name: &str,
     content: String,
     is_json: bool,
     declared_bound: coco_tool_runtime::ResultSizeBound,
-) -> Result<String, ToolError> {
-    let threshold =
-        match coco_tool_runtime::tool_result_storage::resolve_persistence_threshold(declared_bound)
-        {
-            coco_tool_runtime::ResultSizeBound::Unbounded => return Ok(content),
-            coco_tool_runtime::ResultSizeBound::Chars(threshold) => threshold,
-        };
+    inline_window_budget: Option<i64>,
+) -> String {
+    let Some(threshold) = declared_bound.as_bytes() else {
+        return content; // Unbounded — tool opted out.
+    };
     if (content.len() as i64) <= threshold
         || coco_tool_runtime::tool_result_storage::is_content_already_persisted(&content)
     {
-        return Ok(content);
+        return content;
     }
 
-    let Some(store) = store else {
-        return Err(ToolError::execution_failed(format!(
-            "tool output from {tool_name} exceeded the inline limit and no output store is configured"
-        )));
+    let key = coco_tool_runtime::ArtifactKey::ToolUse {
+        id: persistence_id.to_string(),
+        is_json,
     };
-    store
-        .persist_text_if_over_bound(persistence_id, &content, is_json, declared_bound)
+    // Tools override `inline_window_budget()` to keep a larger visible window;
+    // everything else uses the shared small reference budget. Both are capped
+    // by the threshold so the windowed render never re-persists.
+    let budget = inline_window_budget
+        .map(coco_tool_runtime::InlineBudget::from_request)
+        .unwrap_or(coco_tool_runtime::tool_result_offload::REFERENCE_BUDGET)
+        .capped_to(threshold);
+    coco_tool_runtime::offload_windowed(store, &key, &content, budget)
         .await
-        .map(|replacement| replacement.unwrap_or(content))
-        .map_err(|e| {
-            ToolError::execution_failed(format!(
-                "tool output from {tool_name} exceeded the inline limit but could not be saved: {e}"
-            ))
-        })
+        .model_text
 }
 
 async fn bound_parts_for_model(
     store: Option<&coco_tool_runtime::ToolOutputStore>,
     tool_use_id: &str,
-    tool_name: &str,
     output_data: &Value,
     parts: Vec<ToolResultContentPart>,
     declared_bound: coco_tool_runtime::ResultSizeBound,
-) -> Result<Vec<ToolResultContentPart>, ToolError> {
+    inline_window_budget: Option<i64>,
+) -> Vec<ToolResultContentPart> {
     let is_json = output_data.is_object() || output_data.is_array();
     let total_text_len = parts
         .iter()
@@ -127,14 +169,13 @@ async fn bound_parts_for_model(
             _ => None,
         })
         .sum::<usize>();
-    let threshold =
-        match coco_tool_runtime::tool_result_storage::resolve_persistence_threshold(declared_bound)
-        {
-            coco_tool_runtime::ResultSizeBound::Unbounded => return Ok(parts),
-            coco_tool_runtime::ResultSizeBound::Chars(threshold) => threshold as usize,
-        };
-    if total_text_len <= threshold {
-        return Ok(parts);
+    // Cheap size pre-check only; the real gate (persisted-check, budget,
+    // offload) lives in `bound_text_for_model`.
+    let Some(threshold) = declared_bound.as_bytes() else {
+        return parts;
+    };
+    if total_text_len as i64 <= threshold {
+        return parts;
     }
 
     let combined_text = parts
@@ -148,15 +189,15 @@ async fn bound_parts_for_model(
     let replacement = bound_text_for_model(
         store,
         &format!("{tool_use_id}-parts-text"),
-        tool_name,
         combined_text,
         is_json,
         declared_bound,
+        inline_window_budget,
     )
-    .await?;
+    .await;
 
     let mut inserted_replacement = false;
-    Ok(parts
+    parts
         .into_iter()
         .filter_map(|part| match part {
             ToolResultContentPart::Text {
@@ -171,7 +212,7 @@ async fn bound_parts_for_model(
             ToolResultContentPart::Text { .. } => None,
             other => Some(other),
         })
-        .collect())
+        .collect()
 }
 
 /// Build an `UnstampedToolCallOutcome` from a completed tool call.
@@ -213,10 +254,23 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             } = tool_result;
             let mut output_data = data;
 
-            // PostToolUse runs on the success branch. Output rewrite
-            // is MCP-only.
+            // PostToolUse runs on the success branch. Output rewrite is
+            // MCP-only, so MCP tools must receive the full envelope; for
+            // everything else, bound huge string fields (the offload seam
+            // lets Bash retain multi-MB output for artifact recovery) so
+            // hook processes keep the pre-offload ≤50K payload contract.
+            let hook_output = if is_mcp {
+                None
+            } else {
+                cap_value_strings(&output_data, HOOK_STRING_VALUE_CAP)
+            };
             let post = HookController::new(hooks, orchestration_ctx, hook_tx)
-                .run_post_tool_use(&tool_name, &tool_use_id, &effective_input, &output_data)
+                .run_post_tool_use(
+                    &tool_name,
+                    &tool_use_id,
+                    &effective_input,
+                    hook_output.as_ref().unwrap_or(&output_data),
+                )
                 .await;
             if is_mcp && let Some(updated) = post.updated_mcp_tool_output {
                 output_data = updated;
@@ -261,28 +315,15 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                     };
 
                     let is_json = output_data.is_object() || output_data.is_array();
-                    let rendered_output = match bound_text_for_model(
+                    let rendered_output = bound_text_for_model(
                         tool_output_store.as_ref(),
                         &tool_use_id,
-                        &tool_name,
                         rendered_output_raw,
                         is_json,
                         tool.max_result_size_bound(),
+                        tool.inline_window_budget(),
                     )
-                    .await
-                    {
-                        Ok(output) => output,
-                        Err(error) => {
-                            return build_bounding_failure_outcome(
-                                tool_use_id,
-                                tool_id,
-                                tool_name,
-                                model_index,
-                                order,
-                                error,
-                            );
-                        }
-                    };
+                    .await;
 
                     create_tool_result_message(
                         &tool_use_id,
@@ -293,28 +334,15 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                     )
                 }
                 None => {
-                    let parts = match bound_parts_for_model(
+                    let parts = bound_parts_for_model(
                         tool_output_store.as_ref(),
                         &tool_use_id,
-                        &tool_name,
                         &output_data,
                         parts,
                         tool.max_result_size_bound(),
+                        tool.inline_window_budget(),
                     )
-                    .await
-                    {
-                        Ok(parts) => parts,
-                        Err(error) => {
-                            return build_bounding_failure_outcome(
-                                tool_use_id,
-                                tool_id,
-                                tool_name,
-                                model_index,
-                                order,
-                                error,
-                            );
-                        }
-                    };
+                    .await;
                     create_tool_result_message_with_parts(
                         &tool_use_id,
                         &tool_name,
@@ -478,41 +506,6 @@ fn display_data_from_tool_error(error: &ToolError) -> Option<&ToolDisplayData> {
         | ToolError::PermissionDenied { .. }
         | ToolError::Timeout { .. }
         | ToolError::Cancelled => None,
-    }
-}
-
-fn build_bounding_failure_outcome(
-    tool_use_id: String,
-    tool_id: ToolId,
-    tool_name: String,
-    model_index: usize,
-    order: ToolMessageOrder,
-    error: ToolError,
-) -> UnstampedToolCallOutcome {
-    warn!(tool = %tool_name, error = %error, "tool output bounding failed");
-    let rendered_error = format!("Error: {error}");
-    let tool_result_msg =
-        create_error_tool_result(&tool_use_id, &tool_name, tool_id.clone(), &rendered_error);
-    let buckets = ToolMessageBuckets {
-        pre_hook: Vec::new(),
-        tool_result: Some(tool_result_msg),
-        new_messages: Vec::new(),
-        post_hook: Vec::new(),
-        prevent_continuation_attachment: None,
-        path: RunnerMessagePath::Failure,
-    };
-    let ordered_messages = buckets.flatten(order);
-    UnstampedToolCallOutcome {
-        tool_use_id,
-        tool_id,
-        model_index,
-        ordered_messages,
-        message_path: ToolMessagePath::Failure,
-        error_kind: Some(ToolCallErrorKind::ExecutionFailed),
-        permission_denial: None,
-        prevent_continuation: None,
-        structured_output: None,
-        effects: ToolSideEffects::none(),
     }
 }
 

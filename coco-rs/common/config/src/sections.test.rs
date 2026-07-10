@@ -498,7 +498,7 @@ fn test_bash_config_finalize_clamps_max_output_bytes() {
     let settings = Settings {
         tool: PartialToolSettings {
             bash: Some(PartialBashSettings {
-                max_output_bytes: Some(999_999),
+                max_output_bytes: Some(50_000_000),
                 ..Default::default()
             }),
             ..Default::default()

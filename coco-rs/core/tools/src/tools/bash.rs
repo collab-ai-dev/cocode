@@ -642,11 +642,20 @@ impl Tool for BashTool {
         !Tool::is_read_only(self, input)
     }
 
-    /// Tool-result persistence threshold: `maxResultSizeChars: 30_000`.
-    /// When Bash output exceeds this budget, the executor persists the full
-    /// output to a tool-results file and only keeps a truncated snippet inline.
+    /// Tool-result persistence threshold: 30_000 bytes. When the rendered
+    /// output exceeds this, the offload seam windows it (head+tail) and
+    /// persists the COMPLETE output (captured up to `bash.max_output_bytes`)
+    /// to a tool-results file with a recoverable pointer.
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
-        coco_tool_runtime::ResultSizeBound::Chars(30_000)
+        coco_tool_runtime::ResultSizeBound::Bytes(30_000)
+    }
+
+    /// Bash keeps a larger inline window than the shared 4K reference budget
+    /// so build/test errors at the TAIL survive the window (head-only
+    /// truncation used to drop them). Equal to the persistence threshold, so
+    /// the windowed render is still bounded under it (never re-persists).
+    fn inline_window_budget(&self) -> Option<i64> {
+        Tool::max_result_size_bound(self).as_bytes()
     }
 
     /// Render the structured `data` envelope into model-visible content parts.
@@ -1106,8 +1115,8 @@ async fn execute_via_task_runtime(
                     source: None,
                 })?;
             let max_bytes = max_output_bytes(&ctx.tool_config);
-            let stdout = truncate_output(outputs.stdout.as_bytes(), max_bytes);
-            let stderr = truncate_output(outputs.stderr.as_bytes(), max_bytes);
+            let stdout = decode_capped(outputs.stdout.as_bytes(), max_bytes);
+            let stderr = decode_capped(outputs.stderr.as_bytes(), max_bytes);
             // Strip + record Claude Code hints so the model never sees the tag.
             let stdout = maybe_strip_and_record_hints(stdout, command);
             let mut result_obj = serde_json::json!({
@@ -1318,7 +1327,7 @@ async fn execute_foreground(
     // The `stdout` String field comes from `cmd_result.stdout`, which
     // the executor has already cleaned up (CWD-marker stripped via
     // `extract_cwd_from_output`). Truncate that for the inline view.
-    let stdout = truncate_output(cmd_result.stdout.as_bytes(), max_bytes);
+    let stdout = decode_capped(cmd_result.stdout.as_bytes(), max_bytes);
 
     // Hints protocol: CLIs/SDKs emit a `<coco-hint />`
     // tag to stderr (merged into stdout here). Scan, record for the TUI's
@@ -1327,7 +1336,7 @@ async fn execute_foreground(
     // (subagent output must stay clean too); recording is best-effort and
     // never affects the tool result.
     let stdout = maybe_strip_and_record_hints(stdout, command);
-    let stderr = truncate_output(cmd_result.stderr.as_bytes(), max_bytes);
+    let stderr = decode_capped(cmd_result.stderr.as_bytes(), max_bytes);
     let exit_code = cmd_result.exit_code;
     // R7-T18: image detection inspects the executor's raw stdout bytes
     // (pre-UTF-8-lossy) when available so the magic-byte signature
@@ -1586,25 +1595,24 @@ async fn apply_sed_edit(
     })
 }
 
-/// Truncate output head-only: keep the first `max_bytes` chars and append
-/// `\n\n... [N lines truncated] ...` where N counts the lines dropped from
-/// the tail (newlines after the cut, +1).
-/// Char boundaries are respected so truncation never yields invalid UTF-8.
-fn truncate_output(bytes: &[u8], max_bytes: usize) -> String {
-    let s = String::from_utf8_lossy(bytes);
-    if s.len() <= max_bytes {
-        return s.to_string();
+/// Decode captured shell output, capping the RETAINED text at `max_bytes` for
+/// memory safety. This is NOT the inline budget — the retained text flows into
+/// the offload seam, which shows a head+tail window and persists the complete
+/// (retained) output for recovery. Only a pathologically huge stream is capped
+/// here, with a byte-count note so the model knows the raw stream was larger.
+/// Char boundaries are respected so the decode never yields invalid UTF-8.
+fn decode_capped(bytes: &[u8], max_bytes: usize) -> String {
+    if bytes.len() <= max_bytes {
+        return String::from_utf8_lossy(bytes).into_owned();
     }
-
-    // Snap the cut to the nearest preceding char boundary.
-    let mut cut = max_bytes.min(s.len());
-    while cut > 0 && !s.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    let head = &s[..cut];
-    // Count newlines after cut, +1 for the final (possibly unterminated) line.
-    let remaining_lines = s[cut..].matches('\n').count() + 1;
-    format!("{head}\n\n... [{remaining_lines} lines truncated] ...")
+    // Bound the allocation: decode only the retained prefix (a partial
+    // trailing UTF-8 sequence becomes a replacement char — harmless).
+    let mut out = String::from_utf8_lossy(&bytes[..max_bytes]).into_owned();
+    out.push_str(&format!(
+        "\n\n[output capped: retained {max_bytes} of {} bytes]",
+        bytes.len()
+    ));
+    out
 }
 
 #[cfg(test)]

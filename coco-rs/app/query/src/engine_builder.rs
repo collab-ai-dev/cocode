@@ -109,7 +109,7 @@ impl QueryEngine {
             current_suggestion_abort: None,
             task_handle: None,
             tool_result_replacement_state: Arc::new(tokio::sync::RwLock::new(
-                coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX),
+                coco_tool_runtime::tool_result_offload::ContentReplacementState::new(i64::MAX),
             )),
             task_list: None,
             team_task_list_router: None,
@@ -232,6 +232,15 @@ impl QueryEngine {
         i64::from(self.resolved_model_info().context_window)
     }
 
+    /// Non-panicking window accessor for purely protective passes (e.g. the
+    /// tool-result budget scaling), which must never abort a turn: `None`
+    /// when the snapshot or its `ModelInfo` is unavailable.
+    pub(crate) fn try_resolved_context_window(&self) -> Option<i64> {
+        self.runtime_snapshot()?
+            .model_info
+            .map(|info| i64::from(info.context_window))
+    }
+
     /// Runtime model-card max output from the same runtime snapshot that
     /// serves the request.
     pub(crate) fn resolved_max_output_tokens(&self) -> i64 {
@@ -337,7 +346,7 @@ impl QueryEngine {
 
     pub fn with_tool_result_replacement_state(
         mut self,
-        state: coco_tool_runtime::tool_result_storage::ContentReplacementStateRef,
+        state: coco_tool_runtime::tool_result_offload::ContentReplacementStateRef,
     ) -> Self {
         self.tool_result_replacement_state = state;
         self

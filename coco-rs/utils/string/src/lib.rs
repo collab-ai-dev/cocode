@@ -171,6 +171,23 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
         })
 }
 
+/// Format an integer with `,` thousands separators (1234567 → "1,234,567").
+pub fn format_thousands(n: i64) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let len = digits.len();
+    let mut out = String::with_capacity(len + len / 3 + 1);
+    if n < 0 {
+        out.push('-');
+    }
+    for (i, ch) in digits.chars().enumerate() {
+        if i != 0 && (len - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 #[cfg(test)]
 #[path = "lib.test.rs"]
 mod tests;

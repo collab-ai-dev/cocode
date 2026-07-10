@@ -5,14 +5,13 @@ Context compaction strategies: full LLM-summarized, micro (tool-result clearing)
 **Inert by default — features staged but not yet active:**
 
 - `Tool Result Budget` (Level 1 + 2) — **the first line of defense** before any
-  compaction strategy runs. Phase 0 config staged on
-  `coco_config::CompactConfig.tool_result_budget` (`enabled` / `per_message_chars` /
-  `persist_records`); runtime owners are `coco-tool-runtime::tool_result_storage`
-  (Level 1 — pending) and `coco-query` (Level 2 wiring — pending).
-  `coco-tools::BashTool` carries a Bash-only stub (`temp_dir()`, no
-  `<persisted-output>` wrapper). See `docs/coco-rs/tool-result-budget-plan.md`.
-  Feature gates: `tengu_satin_quoll` (per-tool override), `tengu_hawthorn_window`
-  (per-message char cap), `tengu_hawthorn_steeple` (Level 2 enable).
+  compaction strategy runs, live by default. Config on
+  `coco_config::CompactConfig.tool_result_budget` (`enabled` / `per_message_bytes`
+  [`None` = scale by model window] / `persist_records`); runtime owners are
+  `coco-tool-runtime::{tool_result_storage,tool_result_offload}` (Level 1 +
+  windowed offload) and `coco-query` (Level 2 wiring + window scaling). Over-cap
+  results are windowed (head+tail) with a recoverable `<persisted-output>`
+  pointer. See `docs/coco-rs/tool-result-offload-v2-design.md`.
 - `HISTORY_SNIP` — no runtime caller reads `compact.experimental.history_snip.enabled`;
   the field is staged for a future implementation.
 - `CONTEXT_COLLAPSE` (`marble_origami`) — data types in `staged.rs` (kept for
@@ -29,7 +28,7 @@ Four opt-in flag groups on `CompactConfig` track the future implementations:
 - `compact.experimental.history_snip.{enabled, auto_pct, model_invocable}` — default off
 - `compact.experimental.staged_compact.{enabled, stage_at_pct, commit_at_pct, persist_to_transcript}` — default off
 - `compact.experimental.display_collapses.{read_search, hook_summaries, background_bash, teammate_shutdowns}` — default on (gates pending reducers)
-- `compact.tool_result_budget.{enabled, per_message_chars, persist_records}` — default `(false, 200_000, true)`. Feature gates: `tengu_hawthorn_steeple` (enable) + `tengu_hawthorn_window` (cap override). Per-tool override (`tengu_satin_quoll`) maps to `Tool::max_result_size_chars()` after the Phase 1.B `ResultSizeBound` migration.
+- `compact.tool_result_budget.{enabled, per_message_bytes, persist_records}` — default `(true, None, true)`. `per_message_bytes = None` scales the cap to the model window (`coco_tool_runtime::scaled_per_message_bytes`); `Some(n)` pins a fixed cap. Per-tool thresholds live on `Tool::max_result_size_bound()`.
 
 `compact.micro` carries two additional opt-ins:
 
@@ -192,7 +191,7 @@ Layering inside `coco_config::CompactConfig`:
 | `experimental.staged_compact.*` | `false`/`0.6`/`0.85`/`false` | `compact.experimental.staged_compact.*` | — |
 | `experimental.display_collapses.*` | all `true` | `compact.experimental.display_collapses.*` | — |
 | `tool_result_budget.enabled` | `false` | `compact.tool_result_budget.enabled` | `COCO_COMPACT_TOOL_RESULT_BUDGET_ENABLE` |
-| `tool_result_budget.per_message_chars` | `200_000` | `compact.tool_result_budget.per_message_chars` | `COCO_COMPACT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS` |
+| `tool_result_budget.per_message_bytes` | `None` (scale by window) | `compact.tool_result_budget.per_message_bytes` | `COCO_COMPACT_TOOL_RESULT_BUDGET_PER_MESSAGE_BYTES` |
 | `tool_result_budget.persist_records` | `true` | `compact.tool_result_budget.persist_records` | — |
 
 `AutoCompactConfig::is_active()` is the canonical predicate that fuses
@@ -205,8 +204,11 @@ Three layers, picked at runtime based on provider capability:
 1. **Client-side micro-compact** (`micro::micro_compact`,
    `micro_advanced::*`). Provider-agnostic: rewrites old tool result
    content to `[Old tool result content cleared]` placeholders.
-   Invalidates the prompt cache because it mutates messages, but works
-   with any provider.
+   **Pointer-bearing results are skipped** (`is_pointer_bearing`): a
+   persisted/windowed `<persisted-output>` reference is already small and
+   self-describing, so clearing it frees almost nothing while destroying the
+   only pointer to the offloaded data. Invalidates the prompt cache because it
+   mutates messages, but works with any provider.
 
 2. **API-native server-side editing** (`api_compact::get_api_context_management`
    + `serialize::encode_anthropic_context_management`). Anthropic-only.

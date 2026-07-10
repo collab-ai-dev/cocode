@@ -550,98 +550,101 @@ async fn test_webfetch_rejects_empty_url() {
     assert!(result.is_err());
 }
 
-#[tokio::test]
-async fn test_webfetch_rejects_empty_prompt() {
-    let ctx = ToolUseContext::test_default();
-    let result = <WebFetchTool as DynTool>::execute(
-        &WebFetchTool,
-        json!({"url": "https://example.com", "prompt": ""}),
-        &ctx,
-    )
-    .await;
-    assert!(result.is_err());
-}
-
 // ---------------------------------------------------------------------------
 // D10: WebFetch URL cache (15-min TTL, session-scoped)
 // ---------------------------------------------------------------------------
 
 use super::CachedWebFetch;
-use super::clear_web_fetch_cache;
 use super::web_fetch_cache_get;
+use super::web_fetch_cache_get_rendered;
+use super::web_fetch_cache_insert_at;
+use super::web_fetch_cache_key;
 use super::web_fetch_cache_set;
 use std::time::Instant;
 
-/// Cache miss on a URL not in the cache returns None.
+// NOTE: the cache is a process-global static; these tests share it and run in
+// parallel. Each uses a UNIQUE URL/session so entries never collide, and none
+// clears the shared cache (which would race-wipe a sibling's entry).
+
+/// Cache miss on a key not in the cache returns None.
 #[test]
 fn test_web_fetch_cache_miss() {
-    clear_web_fetch_cache();
-    assert!(web_fetch_cache_get("https://not-cached.example/").is_none());
+    let key = web_fetch_cache_key("miss-sess", "https://not-cached.example/", 15_000);
+    assert!(web_fetch_cache_get(&key).is_none());
 }
 
-/// Cache hit returns the stored entry.
+/// Cache hit returns the stored rendered envelope.
 #[test]
 fn test_web_fetch_cache_hit() {
-    clear_web_fetch_cache();
-    let entry = CachedWebFetch {
-        markdown: "cached body".into(),
-        content_type: "text/html".into(),
-        was_truncated: false,
-        inserted_at: Instant::now(),
-    };
-    web_fetch_cache_set("https://cached.example/".into(), entry);
+    let key = web_fetch_cache_key("hit-sess", "https://cached.example/", 15_000);
+    web_fetch_cache_set(
+        key.clone(),
+        CachedWebFetch::Rendered(json!({ "content": "cached body" })),
+    );
 
-    let hit = web_fetch_cache_get("https://cached.example/").expect("cache hit");
-    assert_eq!(hit.markdown, "cached body");
-    assert_eq!(hit.content_type, "text/html");
-    assert!(!hit.was_truncated);
+    let hit = web_fetch_cache_get_rendered(&key).expect("cache hit");
+    assert_eq!(hit["content"], "cached body");
 }
 
-/// Writing the same URL twice updates the entry (LRU dedupe).
+/// Llm-arm entries cache the extraction SOURCE, not a rendered answer — a hit
+/// must yield the source so the extraction re-runs with the live prompt.
+#[test]
+fn test_web_fetch_cache_llm_source_round_trips() {
+    let key = web_fetch_cache_key("llm-sess", "https://llm.example/", 15_000);
+    web_fetch_cache_set(
+        key.clone(),
+        CachedWebFetch::LlmSource {
+            extract_input: "bounded markdown".into(),
+            notes: String::new(),
+            page_capped: false,
+        },
+    );
+    match web_fetch_cache_get(&key) {
+        Some(CachedWebFetch::LlmSource { extract_input, .. }) => {
+            assert_eq!(extract_input, "bounded markdown");
+        }
+        other => panic!("expected LlmSource hit, got {:?}", other.is_some()),
+    }
+    // And the rendered-view accessor must NOT serve it as a final answer.
+    assert!(web_fetch_cache_get_rendered(&key).is_none());
+}
+
+/// A budget-mismatched call is a cache miss (part of the key).
+#[test]
+fn test_web_fetch_cache_budget_mismatch_is_miss() {
+    let k1 = web_fetch_cache_key("budget-sess", "https://u.example/", 15_000);
+    web_fetch_cache_set(k1, CachedWebFetch::Rendered(json!({ "content": "a" })));
+    let k2 = web_fetch_cache_key("budget-sess", "https://u.example/", 4_000);
+    assert!(web_fetch_cache_get(&k2).is_none());
+}
+
+/// Writing the same key twice updates the entry (LRU dedupe).
 #[test]
 fn test_web_fetch_cache_dedupes_on_rewrite() {
-    clear_web_fetch_cache();
+    let key = web_fetch_cache_key("dedup-sess", "https://dedup.example/", 15_000);
     web_fetch_cache_set(
-        "https://dedup.example/".into(),
-        CachedWebFetch {
-            markdown: "v1".into(),
-            content_type: "text/html".into(),
-            was_truncated: false,
-            inserted_at: Instant::now(),
-        },
+        key.clone(),
+        CachedWebFetch::Rendered(json!({ "content": "v1" })),
     );
     web_fetch_cache_set(
-        "https://dedup.example/".into(),
-        CachedWebFetch {
-            markdown: "v2".into(),
-            content_type: "text/html".into(),
-            was_truncated: false,
-            inserted_at: Instant::now(),
-        },
+        key.clone(),
+        CachedWebFetch::Rendered(json!({ "content": "v2" })),
     );
-    let hit = web_fetch_cache_get("https://dedup.example/").unwrap();
-    assert_eq!(hit.markdown, "v2", "rewrite must replace the old entry");
+    let hit = web_fetch_cache_get_rendered(&key).unwrap();
+    assert_eq!(hit["content"], "v2", "rewrite must replace the old entry");
 }
 
-/// Expired entries (older than TTL) are skipped on lookup. We simulate
-/// this by setting `inserted_at` to Instant::now() minus a long duration.
+/// Expired entries (older than TTL) are skipped on lookup.
 #[test]
 fn test_web_fetch_cache_expires_stale_entries() {
-    clear_web_fetch_cache();
+    let key = web_fetch_cache_key("stale-sess", "https://stale.example/", 15_000);
     // Subtract 20 minutes so the entry is past the 15-min TTL.
     let stale_time = Instant::now() - std::time::Duration::from_secs(20 * 60);
-    web_fetch_cache_set(
-        "https://stale.example/".into(),
-        CachedWebFetch {
-            markdown: "expired body".into(),
-            content_type: "text/html".into(),
-            was_truncated: false,
-            inserted_at: stale_time,
-        },
+    web_fetch_cache_insert_at(key.clone(), json!({ "content": "expired" }), stale_time);
+    assert!(
+        web_fetch_cache_get(&key).is_none(),
+        "stale entries must be evicted on lookup"
     );
-    // Next lookup should prune the stale entry and return None.
-    let hit = web_fetch_cache_get("https://stale.example/");
-    assert!(hit.is_none(), "stale entries must be evicted on lookup");
 }
 
 // ---------------------------------------------------------------------------
@@ -1210,21 +1213,14 @@ fn webfetch_render_emits_redirect_blocked_message() {
 // #57 — binary content persistence helpers
 // ---------------------------------------------------------------------------
 
-#[test]
-fn test_mime_to_extension() {
-    use super::mime_to_extension;
-    assert_eq!(mime_to_extension("image/png"), "png");
-    assert_eq!(mime_to_extension("image/jpeg; charset=binary"), "jpg");
-    assert_eq!(mime_to_extension("application/zip"), "zip");
-    assert_eq!(mime_to_extension("application/octet-stream"), "bin");
-}
+// MIME→extension mapping is shared with the session store; its table test
+// lives in `coco_tool_runtime::tool_result_storage`.
 
 #[test]
 fn test_persist_binary_content_writes_file() {
     use super::persist_binary_content;
     let bytes = b"\x89PNG\r\n\x1a\nfake-image-bytes";
-    let (path, size) = persist_binary_content(bytes, "image/png").unwrap();
-    assert_eq!(size, bytes.len());
+    let path = persist_binary_content(bytes, "image/png").unwrap();
     assert!(path.ends_with(".png"), "path should have png ext: {path}");
     let on_disk = std::fs::read(&path).unwrap();
     assert_eq!(on_disk, bytes);
@@ -1236,10 +1232,12 @@ fn test_persist_binary_content_writes_file() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn webfetch_schema_requires_url_and_prompt() {
+fn webfetch_schema_requires_only_url_prompt_optional() {
     let schema = coco_tool_runtime::Tool::runtime_validation_schema(&WebFetchTool);
+    // Only the URL is mandatory now; the extraction prompt is optional and
+    // inert on the windowed path (schema honesty).
     assert!(schema.validate(&json!({"prompt": "summarize"})).is_err());
-    assert!(schema.validate(&json!({"url": "https://x"})).is_err());
+    assert!(schema.validate(&json!({"url": "https://x"})).is_ok());
     assert!(
         schema
             .validate(&json!({"url": "https://x", "prompt": "y"}))
@@ -1251,4 +1249,652 @@ fn webfetch_schema_requires_url_and_prompt() {
             .validate(&json!({"url": "https://x", "prompt": "y", "extra": 1}))
             .is_err()
     );
+}
+
+// ===========================================================================
+// Integration tests — the WebFetch offload pipeline end-to-end.
+//
+// Two layers, because `execute()` force-upgrades `http://`→`https://` and a
+// plain-HTTP wiremock server is unreachable through the full path:
+//   1. `render_fetched` — the post-fetch offload pipeline (markdown → defuse →
+//      wrap → dispatch → persist → cache), driven with synthetic bodies.
+//   2. `fetch_url` — the HTTP boundary, driven against a wiremock server.
+// Together they cover the design's §10 integration list without fighting TLS.
+// ===========================================================================
+
+mod integ {
+    use super::super::FetchOutcome;
+    use super::super::FetchedBody;
+    use super::super::RenderInputs;
+    use super::super::content_addressed_key;
+    use super::super::fetch_url;
+    use super::super::render_fetched;
+    use super::super::web_fetch_cache_key;
+    use coco_config::WebFetchExtraction;
+    use coco_tool_runtime::InlineBudget;
+    use coco_tool_runtime::ToolOutputStore;
+    use coco_tool_runtime::ToolUseContext;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use wiremock::MockServer;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path as wm_path;
+    use wiremock::{Mock, ResponseTemplate};
+
+    /// WebFetchTool's declared Level-1 threshold (pinned by
+    /// `webfetch_declares_high_bound_for_preapproved_verbatim`).
+    const WF_THRESHOLD: i64 = 102_000;
+
+    /// A `SideQuery` double that records call count and returns a canned answer.
+    #[derive(Clone)]
+    struct RecordingSideQuery {
+        calls: Arc<AtomicUsize>,
+        answer: String,
+    }
+
+    #[async_trait::async_trait]
+    impl coco_tool_runtime::side_query::SideQuery for RecordingSideQuery {
+        async fn query(
+            &self,
+            _request: coco_tool_runtime::SideQueryRequest,
+        ) -> Result<coco_tool_runtime::SideQueryResponse, coco_error::BoxedError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(coco_tool_runtime::SideQueryResponse {
+                text: Some(self.answer.clone()),
+                tool_uses: Vec::new(),
+                stop_reason: coco_types::SideQueryStopReason::EndTurn,
+                usage: coco_types::SideQueryUsage::default(),
+                model_used: "stub".into(),
+            })
+        }
+        fn model_id(&self) -> &str {
+            "stub"
+        }
+    }
+
+    /// Build a ToolUseContext with a recording side-query, a store rooted at
+    /// `store_dir`, and the given extraction mode. Returns `(ctx, call_count)`.
+    fn ctx_with(
+        store_dir: &Path,
+        extraction: WebFetchExtraction,
+    ) -> (ToolUseContext, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut ctx = ToolUseContext::test_default();
+        ctx.web_fetch_config = coco_config::WebFetchConfig {
+            extraction,
+            ..Default::default()
+        };
+        ctx.tool_output_store = Some(ToolOutputStore::new(store_dir));
+        ctx.side_query = Arc::new(RecordingSideQuery {
+            calls: calls.clone(),
+            answer: "canned extraction answer".into(),
+        });
+        (ctx, calls)
+    }
+
+    fn body(content_type: &str, text: impl Into<String>) -> FetchedBody {
+        FetchedBody {
+            body: text.into(),
+            content_type: content_type.into(),
+            binary: None,
+        }
+    }
+
+    /// Drive `render_fetched` with the tool's real declared threshold.
+    async fn render(
+        ctx: &ToolUseContext,
+        url: &str,
+        fetched: FetchedBody,
+        live_prompt: Option<&str>,
+        is_preapproved: bool,
+        budget: InlineBudget,
+        cache_key: &str,
+    ) -> serde_json::Value {
+        render_fetched(
+            ctx,
+            fetched,
+            RenderInputs {
+                url,
+                live_prompt,
+                is_preapproved,
+                requested_budget: budget,
+                threshold: WF_THRESHOLD,
+                cache_key,
+            },
+        )
+        .await
+    }
+
+    fn artifacts(dir: &Path) -> Vec<std::path::PathBuf> {
+        let tr = dir.join("tool-results");
+        match std::fs::read_dir(&tr) {
+            Ok(rd) => rd
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| {
+                    !p.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(".tmp-")
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    // ── render_fetched ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn small_page_is_verbatim_zero_sidequery_zero_persist() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (ctx, calls) = ctx_with(tmp.path(), WebFetchExtraction::Auto);
+        let text = "hello world\n".repeat(200); // ~2.4K < 15K default budget
+        let key = web_fetch_cache_key("s1", "https://ex.test/small", 15_000);
+        let data = render(
+            &ctx,
+            "https://ex.test/small",
+            body("text/plain", text.clone()),
+            None,
+            false,
+            InlineBudget::from_request(15_000),
+            &key,
+        )
+        .await;
+
+        assert_eq!(data["extraction_mode"], "verbatim");
+        assert_eq!(data["truncated"], false);
+        assert!(data["content"].as_str().unwrap().contains("hello world"));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "no side-query for verbatim"
+        );
+        assert!(artifacts(tmp.path()).is_empty(), "no artifact for verbatim");
+    }
+
+    #[tokio::test]
+    async fn large_page_windows_persists_and_footer_read_is_navigable() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (ctx, _calls) = ctx_with(tmp.path(), WebFetchExtraction::Auto);
+        // 40K of distinct lines → clean (text/plain) → windowed at 15K.
+        let text = (0..5_000)
+            .map(|i| format!("row {i} lorem ipsum dolor"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.len() > 30_000);
+        let key = web_fetch_cache_key("s2", "https://ex.test/big", 15_000);
+        let data = render(
+            &ctx,
+            "https://ex.test/big",
+            body("text/plain", text),
+            None,
+            false,
+            InlineBudget::from_request(15_000),
+            &key,
+        )
+        .await;
+
+        assert_eq!(data["extraction_mode"], "windowed");
+        assert_eq!(data["truncated"], true);
+        let content = data["content"].as_str().unwrap();
+        // Windowed layout: head first, footer at the end (pointer-bearing).
+        assert!(!content.starts_with("<persisted-output>"));
+        assert!(content.trim_end().ends_with("</persisted-output>"));
+        assert!(content.contains("limit=200"));
+
+        // Exactly one artifact written; it is the hard-wrapped full text.
+        let files = artifacts(tmp.path());
+        assert_eq!(files.len(), 1);
+        let stored = std::fs::read_to_string(&files[0]).unwrap();
+        assert!(stored.split('\n').all(|l| l.len() <= 400), "Read-navigable");
+
+        // The suggested Read call lands inside the artifact: parse the offset
+        // from the footer and confirm it is a valid 1-based line in the file.
+        let offset_tok = content.split("offset=").nth(1).unwrap();
+        let offset: usize = offset_tok
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let total_lines = stored.split('\n').count();
+        assert!(
+            offset >= 1 && offset <= total_lines,
+            "offset {offset} in 1..={total_lines}"
+        );
+    }
+
+    #[tokio::test]
+    async fn changed_body_gets_new_artifact_old_untouched() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (ctx, _c) = ctx_with(tmp.path(), WebFetchExtraction::Windowed);
+        let url = "https://ex.test/page";
+        let big = |tag: &str| {
+            (0..4_000)
+                .map(|i| format!("{tag} line {i} filler text"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let key1 = web_fetch_cache_key("v1sess", url, 15_000);
+        render(
+            &ctx,
+            url,
+            body("text/plain", big("v1")),
+            None,
+            false,
+            InlineBudget::from_request(15_000),
+            &key1,
+        )
+        .await;
+        let after_first = artifacts(tmp.path());
+        assert_eq!(after_first.len(), 1);
+        let first_path = after_first[0].clone();
+        let first_bytes = std::fs::read(&first_path).unwrap();
+
+        // Same URL, DIFFERENT body → content-addressed name differs → new file.
+        let key2 = web_fetch_cache_key("v2sess", url, 15_000);
+        render(
+            &ctx,
+            url,
+            body("text/plain", big("v2")),
+            None,
+            false,
+            InlineBudget::from_request(15_000),
+            &key2,
+        )
+        .await;
+        let after_second = artifacts(tmp.path());
+        assert_eq!(after_second.len(), 2, "changed content ⟹ new artifact");
+        // The first artifact is byte-for-byte untouched.
+        assert_eq!(std::fs::read(&first_path).unwrap(), first_bytes);
+        assert_ne!(
+            content_addressed_key(url, "v1 line 0 filler text"),
+            content_addressed_key(url, "v2 line 0 filler text"),
+        );
+    }
+
+    #[tokio::test]
+    async fn data_uri_images_are_defused() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (ctx, _c) = ctx_with(tmp.path(), WebFetchExtraction::Auto);
+        let blob = "A".repeat(40_000);
+        let md = format!("intro text\n\n![a cat](data:image/png;base64,{blob})\n\nmore text\n");
+        let key = web_fetch_cache_key("d", "https://ex.test/img", 15_000);
+        let data = render(
+            &ctx,
+            "https://ex.test/img",
+            body("text/plain", md),
+            None,
+            false,
+            InlineBudget::from_request(15_000),
+            &key,
+        )
+        .await;
+        // Verbatim (defused text is tiny), base64 blob gone, alt preserved.
+        assert_eq!(data["extraction_mode"], "verbatim");
+        let content = data["content"].as_str().unwrap();
+        assert!(content.contains("[IMAGE: a cat]"));
+        assert!(!content.contains(&blob));
+    }
+
+    #[tokio::test]
+    async fn single_line_minified_json_wraps_to_read_navigable_artifact() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (ctx, _c) = ctx_with(tmp.path(), WebFetchExtraction::Auto);
+        // 300KB single-line JSON → non-HTML → windowed; must be Read-navigable.
+        let one_line = format!("{{\"data\":\"{}\"}}", "x".repeat(300_000));
+        let key = web_fetch_cache_key("j", "https://ex.test/api.json", 15_000);
+        let data = render(
+            &ctx,
+            "https://ex.test/api.json",
+            body("application/json", one_line),
+            None,
+            false,
+            InlineBudget::from_request(15_000),
+            &key,
+        )
+        .await;
+        assert_eq!(data["extraction_mode"], "windowed");
+        let files = artifacts(tmp.path());
+        assert_eq!(files.len(), 1);
+        let stored = std::fs::read_to_string(&files[0]).unwrap();
+        assert!(
+            stored.split('\n').all(|l| l.len() <= 400),
+            "single line wrapped"
+        );
+        assert!(stored.split('\n').count() > 1);
+    }
+
+    #[tokio::test]
+    async fn preapproved_markdown_under_budget_is_verbatim() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (ctx, _c) = ctx_with(tmp.path(), WebFetchExtraction::Auto);
+        // A real preapproved host + text/markdown + 60K ≤ 100K preapproved budget.
+        let url = "https://developer.mozilla.org/en-US/docs/Web/JavaScript";
+        assert!(
+            super::super::is_preapproved_url(url),
+            "fixture must be preapproved"
+        );
+        let md = (0..4_000)
+            .map(|i| format!("- doc line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(md.len() > 30_000 && md.len() < 100_000);
+        let key = web_fetch_cache_key("pa", url, 15_000);
+        let data = render(
+            &ctx,
+            url,
+            body("text/markdown", md.clone()),
+            None,
+            true, // is_preapproved
+            InlineBudget::from_request(15_000),
+            &key,
+        )
+        .await;
+        // 80K > 15K default, but preapproved budget (100K) keeps it verbatim.
+        assert_eq!(data["extraction_mode"], "preapproved_verbatim");
+        assert_eq!(data["truncated"], false);
+        assert!(artifacts(tmp.path()).is_empty(), "verbatim ⟹ no artifact");
+    }
+
+    #[tokio::test]
+    async fn model_inline_bytes_widens_the_verbatim_window() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (ctx, _c) = ctx_with(tmp.path(), WebFetchExtraction::Auto);
+        // 60K page: over the 15K default, but a model inline_bytes=500_000 →
+        // clamped to 500K → capped_to(102K threshold) = 101K → verbatim, and
+        // the emitted content stays under the tool's Level-1 threshold.
+        let text = "z".repeat(60_000);
+        let requested = InlineBudget::from_request(500_000).capped_to(WF_THRESHOLD);
+        let key = web_fetch_cache_key("ib", "https://ex.test/wide", requested.get());
+        let data = render(
+            &ctx,
+            "https://ex.test/wide",
+            body("text/plain", text),
+            None,
+            false,
+            requested,
+            &key,
+        )
+        .await;
+        assert_eq!(data["extraction_mode"], "verbatim");
+        assert!(artifacts(tmp.path()).is_empty());
+        assert!(
+            (data["content"].as_str().unwrap().len() as i64) < WF_THRESHOLD,
+            "verbatim output stays under Level-1 threshold (no re-persist)"
+        );
+    }
+
+    #[tokio::test]
+    async fn llm_arm_runs_extraction_and_caches_source_not_answer() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (ctx, calls) = ctx_with(tmp.path(), WebFetchExtraction::Llm);
+        let html = format!("<html><body>{}</body></html>", "content ".repeat(4_000));
+        let key = web_fetch_cache_key("llm", "https://ex.test/html", 15_000);
+        let data = render(
+            &ctx,
+            "https://ex.test/html",
+            body("text/html", html),
+            Some("what is this page about?"),
+            false,
+            InlineBudget::from_request(15_000),
+            &key,
+        )
+        .await;
+        assert_eq!(data["extraction_mode"], "llm");
+        assert_eq!(data["extracted"], "canned extraction answer");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "side model called once");
+
+        // The cache stored the SOURCE, not the answer: a second call with a
+        // DIFFERENT prompt re-runs extraction (fresh answer), not a stale hit.
+        assert!(
+            super::super::web_fetch_cache_get_rendered(&key).is_none(),
+            "llm result must not be cached as a rendered answer"
+        );
+    }
+
+    #[tokio::test]
+    async fn llm_arm_falls_back_to_windowed_when_side_model_unavailable() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut ctx = ToolUseContext::test_default();
+        ctx.web_fetch_config = coco_config::WebFetchConfig {
+            extraction: WebFetchExtraction::Llm,
+            ..Default::default()
+        };
+        ctx.tool_output_store = Some(ToolOutputStore::new(tmp.path()));
+        // NoOpSideQuery errors → fallback to a windowed render of the full text.
+        let html = format!("<html><body>{}</body></html>", "content ".repeat(4_000));
+        let key = web_fetch_cache_key("fb", "https://ex.test/htmlfb", 15_000);
+        let data = render(
+            &ctx,
+            "https://ex.test/htmlfb",
+            body("text/html", html),
+            Some("summary?"),
+            false,
+            InlineBudget::from_request(15_000),
+            &key,
+        )
+        .await;
+        assert_eq!(data["extraction_mode"], "windowed_fallback");
+        assert!(
+            data["content"]
+                .as_str()
+                .unwrap()
+                .trim_end()
+                .ends_with("</persisted-output>")
+        );
+        assert_eq!(
+            artifacts(tmp.path()).len(),
+            1,
+            "fallback persists the artifact"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_absent_degrades_to_pointerless_window() {
+        let mut ctx = ToolUseContext::test_default();
+        ctx.web_fetch_config = coco_config::WebFetchConfig {
+            extraction: WebFetchExtraction::Windowed,
+            ..Default::default()
+        };
+        ctx.tool_output_store = None; // no store
+        let text = (0..4_000)
+            .map(|i| format!("line {i} text"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let key = web_fetch_cache_key("ns", "https://ex.test/nostore", 15_000);
+        let data = render(
+            &ctx,
+            "https://ex.test/nostore",
+            body("text/plain", text),
+            None,
+            false,
+            InlineBudget::from_request(15_000),
+            &key,
+        )
+        .await;
+        assert_eq!(data["extraction_mode"], "windowed");
+        let content = data["content"].as_str().unwrap();
+        assert!(
+            content.contains("Full text not saved"),
+            "pointerless footer"
+        );
+        assert!(content.trim_end().ends_with("</persisted-output>"));
+    }
+
+    // ── fetch_url (HTTP boundary, wiremock) ─────────────────────────────
+
+    fn fetch_config(server: &MockServer) -> coco_config::WebFetchConfig {
+        // Fast timeout so the timeout test doesn't linger; user_agent + caps
+        // are the defaults. The URL passed to fetch_url is the raw http server
+        // URL (execute's http→https upgrade is NOT applied at this layer).
+        let _ = server;
+        coco_config::WebFetchConfig {
+            timeout_secs: 2,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_url_returns_html_body_and_content_type() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wm_path("/page"))
+            .respond_with(
+                // `set_body_raw` sets the content-type explicitly (unlike
+                // `set_body_string`, which forces text/plain).
+                ResponseTemplate::new(200).set_body_raw(
+                    "<html><body>hi</body></html>".as_bytes().to_vec(),
+                    "text/html; charset=utf-8",
+                ),
+            )
+            .mount(&server)
+            .await;
+
+        let out = fetch_url(&format!("{}/page", server.uri()), &fetch_config(&server))
+            .await
+            .unwrap();
+        match out {
+            FetchOutcome::Body {
+                body,
+                content_type,
+                binary,
+            } => {
+                assert!(content_type.contains("text/html"));
+                assert!(body.contains("<body>hi</body>"));
+                assert!(binary.is_none());
+            }
+            other => panic!("expected Body, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_url_json_passthrough() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wm_path("/api"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(r#"{"ok":true}"#.as_bytes().to_vec(), "application/json"),
+            )
+            .mount(&server)
+            .await;
+        let out = fetch_url(&format!("{}/api", server.uri()), &fetch_config(&server))
+            .await
+            .unwrap();
+        let FetchOutcome::Body {
+            body,
+            content_type,
+            binary,
+        } = out
+        else {
+            panic!("expected Body");
+        };
+        assert!(content_type.contains("application/json"));
+        assert_eq!(body, r#"{"ok":true}"#);
+        assert!(binary.is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_url_detects_binary_bytes() {
+        let server = MockServer::start().await;
+        let png = b"\x89PNG\r\n\x1a\n\x00\x01\x02rawbytes".to_vec();
+        Mock::given(method("GET"))
+            .and(wm_path("/img.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(png.clone(), "image/png"))
+            .mount(&server)
+            .await;
+        let out = fetch_url(&format!("{}/img.png", server.uri()), &fetch_config(&server))
+            .await
+            .unwrap();
+        let FetchOutcome::Body {
+            binary,
+            content_type,
+            ..
+        } = out
+        else {
+            panic!("expected Body");
+        };
+        assert!(content_type.contains("image/png"));
+        assert_eq!(binary.expect("binary bytes captured"), png);
+    }
+
+    #[tokio::test]
+    async fn fetch_url_follows_same_origin_redirect() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wm_path("/start"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/final"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(wm_path("/final"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("arrived"))
+            .mount(&server)
+            .await;
+        let out = fetch_url(&format!("{}/start", server.uri()), &fetch_config(&server))
+            .await
+            .unwrap();
+        let FetchOutcome::Body { body, .. } = out else {
+            panic!("expected Body");
+        };
+        assert_eq!(body, "arrived");
+    }
+
+    #[tokio::test]
+    async fn fetch_url_blocks_cross_origin_redirect() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wm_path("/leave"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", "https://evil.example.com/steal"),
+            )
+            .mount(&server)
+            .await;
+        let out = fetch_url(&format!("{}/leave", server.uri()), &fetch_config(&server))
+            .await
+            .unwrap();
+        match out {
+            FetchOutcome::CrossOriginRedirect { new_url } => {
+                assert_eq!(new_url, "https://evil.example.com/steal");
+            }
+            other => panic!("expected CrossOriginRedirect, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_url_errors_on_non_2xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wm_path("/missing"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let err = fetch_url(&format!("{}/missing", server.uri()), &fetch_config(&server))
+            .await
+            .unwrap_err();
+        assert!(err.contains("404"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn fetch_url_times_out() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(wm_path("/slow"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(std::time::Duration::from_secs(5))
+                    .set_body_string("late"),
+            )
+            .mount(&server)
+            .await;
+        let err = fetch_url(&format!("{}/slow", server.uri()), &fetch_config(&server))
+            .await
+            .unwrap_err();
+        assert!(err.contains("[TIMEOUT]"), "got: {err}");
+    }
 }

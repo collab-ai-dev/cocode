@@ -9,7 +9,7 @@ decisions. Emits `coco_types::CoreEvent` directly (no intermediate event enum).
 | Type | Purpose |
 |------|---------|
 | `QueryEngine` | Orchestrator: owns tool/command registries, model runtime registry, state |
-| `QueryEngineConfig` | max_turns, total_token_budget (session cap), permission_mode, context_window, streaming_tool_execution, bypass_permissions_available, fallback_model, plan_mode_settings. Per-call `max_output_tokens` lives on `ModelInfo`, not here. |
+| `QueryEngineConfig` | max_turns, total_token_budget (session cap), permission_mode, streaming_tool_execution, bypass_permissions_available, fallback_model, plan_mode_settings. Per-call `max_output_tokens` lives on `ModelInfo`, not here. |
 | `QueryResult`, `ContinueReason` | Loop control: `NextTurn`, `ReactiveCompactRetry`, `MaxOutputTokensEscalate`, `MaxOutputTokensRecovery`, `StopHookBlocking`, `TokenBudgetContinuation`, `CollapseDrainRetry` |
 | `SessionBootstrap` | Initial system prompt, messages, cost tracker |
 | `BudgetTracker`, `BudgetDecision` | Token budget; 3-continuation cap, 90% threshold, diminishing-returns stop |

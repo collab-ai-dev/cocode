@@ -205,3 +205,58 @@ fn test_auto_state_failure_breaker_is_independent_from_rapid_refill() {
         }
     );
 }
+
+#[test]
+fn test_api_microcompact_preserves_recovery_pointers() {
+    use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
+
+    fn tool_result(id: &str, text: &str) -> Message {
+        Message::ToolResult(coco_messages::ToolResultMessage {
+            uuid: uuid::Uuid::new_v4(),
+            source_assistant_uuid: None,
+            display_data: None,
+            message: coco_messages::LlmMessage::Tool {
+                content: vec![coco_messages::ToolContent::ToolResult(
+                    coco_messages::ToolResultContent {
+                        tool_call_id: id.to_string(),
+                        tool_name: String::new(),
+                        output: coco_llm_types::ToolResultContent::text(text.to_string()),
+                        is_error: false,
+                        provider_metadata: None,
+                    },
+                )],
+                provider_options: None,
+            },
+            tool_use_id: id.to_string(),
+            tool_id: coco_types::ToolId::Builtin(coco_types::ToolName::Bash),
+            is_error: false,
+        })
+    }
+
+    let big_body = "x".repeat(2_000);
+    let windowed = format!(
+        "{big_body}\n\n[... middle omitted ...]\n\ntail\n\n<persisted-output>\nFull text saved to: /s/w.txt\n</persisted-output>"
+    );
+    let mut messages = vec![
+        tool_result("plain", &"p".repeat(2_000)),
+        tool_result("windowed", &windowed),
+        tool_result(
+            "reference",
+            "<persisted-output>\nFull output saved to: /s/r.txt\n</persisted-output>",
+        ),
+    ];
+
+    api_microcompact(&mut messages, i64::MAX);
+
+    // Plain → bare placeholder.
+    assert!(format!("{:?}", messages[0]).contains(CLEARED_TOOL_RESULT_MESSAGE));
+    // Windowed → reduced, pointer retained, body freed — even under PTL pressure.
+    let w = format!("{:?}", messages[1]);
+    assert!(w.contains(CLEARED_TOOL_RESULT_MESSAGE));
+    assert!(w.contains("/s/w.txt"));
+    assert!(!w.contains(&big_body));
+    // Minimal reference → untouched.
+    let r = format!("{:?}", messages[2]);
+    assert!(!r.contains(CLEARED_TOOL_RESULT_MESSAGE));
+    assert!(r.contains("/s/r.txt"));
+}

@@ -187,8 +187,8 @@ fn tool_result_budget_default_is_enabled_by_policy() {
     // budget ON by default as a context-window safety guard. Users can opt out
     // with `compact.tool_result_budget.enabled = false`.
     assert!(cfg.tool_result_budget.enabled);
-    // TS `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS` in `constants/toolLimits.ts`.
-    assert_eq!(cfg.tool_result_budget.per_message_chars, 200_000);
+    // Default cap is `None` = scale by the model window at runtime.
+    assert_eq!(cfg.tool_result_budget.per_message_bytes, None);
     assert!(cfg.tool_result_budget.persist_records);
 }
 
@@ -196,11 +196,11 @@ fn tool_result_budget_default_is_enabled_by_policy() {
 fn tool_result_budget_settings_overrides_apply() {
     let mut settings = Settings::default();
     settings.compact.tool_result_budget.enabled = Some(false);
-    settings.compact.tool_result_budget.per_message_chars = Some(150_000);
+    settings.compact.tool_result_budget.per_message_bytes = Some(150_000);
     settings.compact.tool_result_budget.persist_records = Some(false);
     let cfg = CompactConfig::resolve(&settings, &empty_env());
     assert!(!cfg.tool_result_budget.enabled);
-    assert_eq!(cfg.tool_result_budget.per_message_chars, 150_000);
+    assert_eq!(cfg.tool_result_budget.per_message_bytes, Some(150_000));
     assert!(!cfg.tool_result_budget.persist_records);
 }
 
@@ -208,28 +208,23 @@ fn tool_result_budget_settings_overrides_apply() {
 fn tool_result_budget_env_overrides_apply() {
     let env = EnvSnapshot::from_pairs([
         (EnvKey::CocoCompactToolResultBudgetEnable, "1"),
-        (EnvKey::CocoCompactToolResultBudgetPerMessageChars, "100000"),
+        (EnvKey::CocoCompactToolResultBudgetPerMessageBytes, "100000"),
     ]);
     let cfg = CompactConfig::resolve(&Settings::default(), &env);
     assert!(cfg.tool_result_budget.enabled);
-    assert_eq!(cfg.tool_result_budget.per_message_chars, 100_000);
+    assert_eq!(cfg.tool_result_budget.per_message_bytes, Some(100_000));
     assert!(cfg.tool_result_budget.persist_records);
 }
 
 #[test]
-fn tool_result_budget_invalid_per_message_chars_ignored() {
+fn tool_result_budget_invalid_per_message_bytes_ignored() {
     let mut settings = Settings::default();
-    settings.compact.tool_result_budget.per_message_chars = Some(0);
+    settings.compact.tool_result_budget.per_message_bytes = Some(0);
     let cfg = CompactConfig::resolve(&settings, &empty_env());
-    assert_eq!(
-        cfg.tool_result_budget.per_message_chars,
-        DEFAULT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS
-    );
+    // Invalid ⇒ keep the default (scale by window).
+    assert_eq!(cfg.tool_result_budget.per_message_bytes, None);
 
-    settings.compact.tool_result_budget.per_message_chars = Some(-1);
+    settings.compact.tool_result_budget.per_message_bytes = Some(-1);
     let cfg = CompactConfig::resolve(&settings, &empty_env());
-    assert_eq!(
-        cfg.tool_result_budget.per_message_chars,
-        DEFAULT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS
-    );
+    assert_eq!(cfg.tool_result_budget.per_message_bytes, None);
 }

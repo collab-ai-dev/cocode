@@ -111,8 +111,10 @@ impl Tool for StructuredOutputTool {
         true
     }
 
+    /// Declarations are authoritative (no hidden clamp): the confirmation echo
+    /// of model-produced JSON keeps the pre-offload effective threshold.
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
-        coco_tool_runtime::ResultSizeBound::Chars(100_000)
+        coco_tool_runtime::ResultSizeBound::Bytes(50_000)
     }
 
     fn is_open_world(&self, _input: &Value) -> bool {

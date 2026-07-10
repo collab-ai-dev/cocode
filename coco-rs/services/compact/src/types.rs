@@ -87,6 +87,92 @@ pub const CLEARED_TOOL_RESULT_MESSAGE: &str = "[Old tool result content cleared]
 /// Synthetic user message prepended on prompt-too-long retry.
 pub const PTL_RETRY_MARKER: &str = "[earlier conversation truncated for compaction retry]";
 
+/// What a tool-result clearing pass should do with `content`. Shared by ALL
+/// in-place clearing paths (micro, budget-aware micro, reactive PTL) so no
+/// path can destroy a `<persisted-output>` recovery pointer:
+///
+/// - already cleared / minimal reference → [`ClearDecision::Skip`] (clearing
+///   frees almost nothing and would burn the only pointer);
+/// - windowed inline output (suffix footer) → reduce to
+///   `CLEARED_TOOL_RESULT_MESSAGE + footer` — the bulk is freed, the recovery
+///   pointer survives;
+/// - everything else → the bare placeholder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClearDecision {
+    Skip,
+    Replace(String),
+}
+
+/// Decide how to clear one tool-result text. See [`ClearDecision`].
+pub fn clearing_decision(content: &str) -> ClearDecision {
+    // Already cleared (bare or footer-retained form) — idempotency guard.
+    if content.starts_with(CLEARED_TOOL_RESULT_MESSAGE) {
+        return ClearDecision::Skip;
+    }
+    // A minimal persisted reference (prefix form) IS the pointer.
+    if coco_types::persisted_output::is_content_already_persisted(content) {
+        return ClearDecision::Skip;
+    }
+    match coco_types::persisted_output::pointer_footer(content) {
+        Some(footer) => {
+            ClearDecision::Replace(format!("{CLEARED_TOOL_RESULT_MESSAGE}\n\n{footer}"))
+        }
+        None => ClearDecision::Replace(CLEARED_TOOL_RESULT_MESSAGE.to_string()),
+    }
+}
+
+/// Clear a tool-result message in place per [`clearing_decision`], preserving
+/// any recovery footers. Returns the estimated tokens freed, or `None` when
+/// the message was skipped (already cleared / minimal reference).
+pub(crate) fn clear_tool_result_preserving_pointers(
+    tr: &mut coco_messages::ToolResultMessage,
+) -> Option<i64> {
+    let coco_messages::LlmMessage::Tool { content, .. } = &tr.message else {
+        return None;
+    };
+    // Decide over the text parts (windowed / persisted outputs are always
+    // single Text parts; multipart media results fall through to a bare clear,
+    // matching the pre-existing behavior).
+    let mut footers: Vec<&str> = Vec::new();
+    for part in content {
+        let coco_messages::ToolContent::ToolResult(p) = part else {
+            continue;
+        };
+        let coco_llm_types::ToolResultContent::Text { value, .. } = &p.output else {
+            continue;
+        };
+        match clearing_decision(value) {
+            ClearDecision::Skip => return None,
+            ClearDecision::Replace(_) => {
+                if let Some(footer) = coco_types::persisted_output::pointer_footer(value) {
+                    footers.push(footer);
+                }
+            }
+        }
+    }
+    let replacement = if footers.is_empty() {
+        CLEARED_TOOL_RESULT_MESSAGE.to_string()
+    } else {
+        format!("{CLEARED_TOOL_RESULT_MESSAGE}\n\n{}", footers.join("\n\n"))
+    };
+
+    let est_before = coco_messages::estimate_tool_result_message_tokens(tr);
+    tr.message = coco_messages::LlmMessage::Tool {
+        content: vec![coco_messages::ToolContent::ToolResult(
+            coco_messages::ToolResultContent {
+                tool_call_id: tr.tool_use_id.clone(),
+                tool_name: String::new(),
+                output: coco_llm_types::ToolResultContent::text(replacement),
+                is_error: false,
+                provider_metadata: None,
+            },
+        )],
+        provider_options: None,
+    };
+    let est_after = coco_messages::estimate_tool_result_message_tokens(tr);
+    Some((est_before - est_after).max(0))
+}
+
 // ── Result types ────────────────────────────────────────────────────
 
 /// Which compaction flow is asking for a summary.

@@ -150,14 +150,15 @@ fn tool_result_parts(message: &Message) -> &[ToolResultContentPart] {
 }
 
 #[tokio::test]
-async fn text_only_multipart_output_uses_level1_persistence() {
+async fn text_only_multipart_output_uses_level1_windowed_persistence() {
     let tmp = tempfile::TempDir::new().unwrap();
     let first = "a".repeat(30_000);
     let second = "b".repeat(30_000);
     let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
         parts: vec![text_part(first.clone()), text_part(second.clone())],
         is_mcp: false,
-        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+        // Declared bounds are authoritative: 50K threshold < 60K content.
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Bytes(50_000),
     });
 
     let outcome = build_outcome_from_execution(RunOneTail {
@@ -180,21 +181,27 @@ async fn text_only_multipart_output_uses_level1_persistence() {
 
     let (text, is_error) = tool_result_text(&outcome.ordered_messages[0]);
     assert!(!is_error);
-    assert!(text.starts_with("<persisted-output>"), "got: {text}");
-    let persisted = tmp.path().join("session-1/tool-results/call-1.txt");
-    assert_eq!(
-        std::fs::read_to_string(persisted).unwrap(),
-        format!("{first}\n\n{second}")
+    // Windowed output: head first, `<persisted-output>` footer at the END.
+    assert!(!text.starts_with("<persisted-output>"), "got: {text}");
+    assert!(
+        text.trim_end().ends_with("</persisted-output>"),
+        "got: {text}"
     );
+    assert!(text.contains("Full text saved to"), "got: {text}");
+    // The persisted artifact is the hard-wrapped complete output; stripping the
+    // inserted newlines recovers every original byte.
+    let persisted = tmp.path().join("session-1/tool-results/call-1.txt");
+    let stored = std::fs::read_to_string(persisted).unwrap();
+    assert_eq!(stored.replace('\n', ""), format!("{first}{second}"));
 }
 
 #[tokio::test]
-async fn oversized_output_without_store_fails_closed() {
-    let huge = "x".repeat(128);
+async fn oversized_output_without_store_degrades_to_pointerless_window() {
+    let huge = "x".repeat(10_000);
     let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
         parts: vec![text_part(huge.clone())],
         is_mcp: false,
-        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(8),
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Bytes(5_000),
     });
 
     let outcome = build_outcome_from_execution(RunOneTail {
@@ -213,21 +220,22 @@ async fn oversized_output_without_store_fails_closed() {
     })
     .await;
 
-    assert_eq!(
-        outcome.error_kind,
-        Some(coco_tool_runtime::ToolCallErrorKind::ExecutionFailed)
-    );
+    // A missing store is NEVER a tool error — it degrades to a pointerless window.
+    assert_eq!(outcome.error_kind, None);
     let (text, is_error) = tool_result_text(&outcome.ordered_messages[0]);
-    assert!(is_error);
-    assert!(text.contains("no output store is configured"));
-    assert!(!text.contains(&huge));
+    assert!(!is_error);
+    assert!(text.contains("Full text not saved"), "got: {text}");
+    assert!(
+        text.trim_end().ends_with("</persisted-output>"),
+        "got: {text}"
+    );
 }
 
 #[tokio::test]
-async fn mixed_output_uses_aggregate_text_persistence_and_preserves_media() {
+async fn mixed_output_uses_aggregate_windowed_persistence_and_preserves_media() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let first = "a".repeat(80);
-    let second = "b".repeat(80);
+    let first = "a".repeat(3_000);
+    let second = "b".repeat(3_000);
     let image = ToolResultContentPart::file_data("aGVsbG8=", "image/png");
     let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
         parts: vec![
@@ -236,7 +244,7 @@ async fn mixed_output_uses_aggregate_text_persistence_and_preserves_media() {
             text_part(second.clone()),
         ],
         is_mcp: false,
-        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100),
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Bytes(4_000),
     });
 
     let outcome = build_outcome_from_execution(RunOneTail {
@@ -261,7 +269,10 @@ async fn mixed_output_uses_aggregate_text_persistence_and_preserves_media() {
     assert_eq!(parts.len(), 2);
     match &parts[0] {
         ToolResultContentPart::Text { text, .. } => {
-            assert!(text.starts_with("<persisted-output>"), "got: {text}");
+            assert!(
+                text.trim_end().ends_with("</persisted-output>"),
+                "got: {text}"
+            );
         }
         other => panic!("expected replacement text, got {other:?}"),
     }
@@ -270,10 +281,8 @@ async fn mixed_output_uses_aggregate_text_persistence_and_preserves_media() {
     let persisted = tmp
         .path()
         .join("session-1/tool-results/call-mixed-parts-text.txt");
-    assert_eq!(
-        std::fs::read_to_string(persisted).unwrap(),
-        format!("{first}\n\n{second}")
-    );
+    let stored = std::fs::read_to_string(persisted).unwrap();
+    assert_eq!(stored.replace('\n', ""), format!("{first}{second}"));
 }
 
 #[tokio::test]
@@ -281,7 +290,7 @@ async fn mcp_error_envelope_creates_error_tool_result() {
     let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
         parts: vec![text_part("server failed")],
         is_mcp: true,
-        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Bytes(100_000),
     });
 
     let outcome = build_outcome_from_execution(RunOneTail {
@@ -313,7 +322,7 @@ async fn structured_output_uses_tool_result_side_channel_only() {
     let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
         parts: vec![text_part("visible result")],
         is_mcp: false,
-        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Bytes(100_000),
     });
     let structured = serde_json::json!({"answer": 42});
 
@@ -353,7 +362,7 @@ async fn structured_output_ignores_model_visible_data_lookalike() {
     let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
         parts: vec![text_part("visible result")],
         is_mcp: false,
-        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Bytes(100_000),
     });
 
     let outcome = build_outcome_from_execution(RunOneTail {
@@ -385,7 +394,7 @@ async fn success_copies_tool_result_display_data() {
     let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
         parts: vec![text_part("visible result")],
         is_mcp: false,
-        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Bytes(100_000),
     });
     let display_data = ToolDisplayData::ApplyPatchPreview(ApplyPatchPreview {
         rows: vec![ApplyPatchPreviewRow::Omitted { rows: 5 }],
@@ -420,7 +429,7 @@ async fn error_copies_execution_failed_display_data() {
     let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
         parts: vec![text_part("unused")],
         is_mcp: false,
-        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Bytes(100_000),
     });
     let display_data = ToolDisplayData::ApplyPatchPreview(ApplyPatchPreview {
         rows: vec![ApplyPatchPreviewRow::Omitted { rows: 9 }],
@@ -457,7 +466,7 @@ async fn plain_tool_error_has_no_display_data() {
     let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(RenderOnlyTool {
         parts: vec![text_part("unused")],
         is_mcp: false,
-        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Bytes(100_000),
     });
 
     let outcome = build_outcome_from_execution(RunOneTail {
@@ -517,4 +526,28 @@ fn build_early_outcome_pre_execution_cancelled_skips_failure_hooks() {
         coco_tool_runtime::ToolCallErrorKind::ExecutionCancelled.runs_post_tool_use_failure(),
         "mid-execution cancel still fires PostToolUseFailure"
     );
+}
+
+#[test]
+fn cap_value_strings_bounds_only_oversized_strings() {
+    use super::cap_value_strings;
+    // Under cap → None (zero-copy path).
+    let small = serde_json::json!({"stdout": "ok", "exitCode": 0});
+    assert!(cap_value_strings(&small, 100).is_none());
+
+    // Over cap → truncated with a marker; sibling fields untouched.
+    let big = serde_json::json!({
+        "stdout": "x".repeat(300),
+        "stderr": "fine",
+        "exitCode": 0,
+        "nested": {"inner": "y".repeat(300)},
+    });
+    let capped = cap_value_strings(&big, 100).expect("capped copy");
+    let stdout = capped["stdout"].as_str().unwrap();
+    assert!(stdout.starts_with(&"x".repeat(100)));
+    assert!(stdout.contains("truncated 200 bytes for hook payload"));
+    assert_eq!(capped["stderr"], "fine");
+    assert_eq!(capped["exitCode"], 0);
+    let inner = capped["nested"]["inner"].as_str().unwrap();
+    assert!(inner.contains("truncated 200 bytes for hook payload"));
 }

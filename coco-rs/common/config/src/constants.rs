@@ -60,9 +60,9 @@ pub const DEFAULT_AUTO_COMPACT_PCT: i32 = 90;
 // Tool result limits
 // ---------------------------------------------------------------------------
 
-/// Default maximum size in characters for tool results before persisting to
+/// Default maximum size in UTF-8 bytes for tool results before persisting to
 /// disk.
-pub const DEFAULT_MAX_RESULT_SIZE_CHARS: i64 = 50_000;
+pub const DEFAULT_MAX_RESULT_SIZE_BYTES: i64 = 50_000;
 
 /// Maximum size for tool results in tokens.
 pub const MAX_TOOL_RESULT_TOKENS: i64 = 100_000;
@@ -73,8 +73,8 @@ pub const BYTES_PER_TOKEN: i64 = 4;
 /// Maximum size for tool results in bytes (derived from token limit).
 pub const MAX_TOOL_RESULT_BYTES: i64 = MAX_TOOL_RESULT_TOKENS * BYTES_PER_TOKEN;
 
-/// Maximum aggregate tool result characters per single user message.
-pub const MAX_TOOL_RESULTS_PER_MESSAGE_CHARS: i64 = 200_000;
+/// Maximum aggregate tool result bytes per single user message.
+pub const MAX_TOOL_RESULTS_PER_MESSAGE_BYTES: i64 = 200_000;
 
 /// Maximum character length for tool summary strings in compact views.
 pub const TOOL_SUMMARY_MAX_LENGTH: i64 = 50;

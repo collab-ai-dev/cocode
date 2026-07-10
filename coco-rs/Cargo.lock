@@ -2496,6 +2496,7 @@ dependencies = [
  "coco-messages",
  "coco-stack-trace-macro",
  "coco-types",
+ "coco-utils-string",
  "futures",
  "pretty_assertions",
  "regex-lite",
@@ -2660,6 +2661,7 @@ dependencies = [
  "coco-utils-absolute-path",
  "coco-utils-common",
  "coco-utils-image",
+ "coco-utils-string",
  "coco-workflow",
  "coco-workflow-runtime",
  "futures",
@@ -2691,6 +2693,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "walkdir",
+ "wiremock",
 ]
 
 [[package]]

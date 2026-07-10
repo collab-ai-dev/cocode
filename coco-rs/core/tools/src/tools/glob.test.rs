@@ -417,7 +417,7 @@ async fn test_glob_read_ignore_patterns_exclude() {
 async fn test_glob_max_result_size_bound() {
     assert_eq!(
         <GlobTool as DynTool>::max_result_size_bound(&GlobTool,),
-        coco_tool_runtime::ResultSizeBound::Chars(100_000),
+        coco_tool_runtime::ResultSizeBound::Bytes(100_000),
     );
 }
 
