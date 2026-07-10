@@ -97,7 +97,11 @@ async fn explicit_roots_write_local_and_republish_project_settings() {
     let project_settings = crate::global_config::project_settings_path(&project_root);
     fs::create_dir_all(project_settings.parent().unwrap()).unwrap();
     fs::create_dir_all(&local_root).unwrap();
-    fs::write(&project_settings, r#"{ "language": "zh" }"#).unwrap();
+    fs::write(
+        &project_settings,
+        r#"{ "language": "zh", "models": { "main": "anthropic/claude-sonnet-4-6" } }"#,
+    )
+    .unwrap();
 
     let initial = crate::RuntimeConfigBuilder::new(&local_root, EnvSnapshot::default())
         .with_settings_roots(&project_root, &local_root)

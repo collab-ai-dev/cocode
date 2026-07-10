@@ -429,6 +429,52 @@ pub fn build_system_prompt_for_model(
     )
 }
 
+/// Compose the session's system prompt, honoring `--system-prompt`
+/// (full override), `--append-system-prompt` (text appended after the
+/// default), and `--append-system-prompt-file` (file contents appended).
+pub(crate) fn compose_system_prompt(
+    cli: &Cli,
+    cwd: &Path,
+    runtime_config: &coco_config::RuntimeConfig,
+    provider: &str,
+    model_id: &str,
+    output_style: Option<&coco_output_styles::OutputStyleConfig>,
+) -> Result<String> {
+    // 1. Base layer: `--system-prompt` wholly replaces the default
+    // identity + CLAUDE.md discovery. Otherwise build the default.
+    let additional_dirs = resolve_additional_dirs_display(cli, cwd);
+    let mut prompt = if let Some(custom) = cli.system_prompt.as_deref() {
+        custom.to_string()
+    } else {
+        build_system_prompt_for_model(
+            cwd,
+            runtime_config,
+            provider,
+            model_id,
+            output_style,
+            &additional_dirs,
+        )
+    };
+    // 2. Append from `--append-system-prompt` (verbatim).
+    if let Some(append) = cli.append_system_prompt.as_deref() {
+        if !prompt.ends_with('\n') {
+            prompt.push('\n');
+        }
+        prompt.push_str(append);
+    }
+    // 3. Append from `--append-system-prompt-file` (read once, fail
+    // fast if the file's missing rather than silently dropping).
+    if let Some(path) = cli.append_system_prompt_file.as_deref() {
+        let body = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("--append-system-prompt-file {path:?}: {e}"))?;
+        if !prompt.ends_with('\n') {
+            prompt.push('\n');
+        }
+        prompt.push_str(&body);
+    }
+    Ok(prompt)
+}
+
 // ─── Permission resolution ───────────────────────────────────────────
 
 /// Resolved startup permission state.
