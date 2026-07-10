@@ -516,6 +516,9 @@ async fn async_main() -> Result<()> {
     }
     coco_cli::startup_profile::init();
 
+    // CLI startup boundary: capture the initial process cwd once (§6.5/D-37);
+    // every session threads its own cwd thereafter.
+    #[allow(clippy::disallowed_methods)]
     let startup_cwd = std::env::current_dir()?;
 
     // Bind the handle for the lifetime of `main` so the non-blocking
@@ -1220,10 +1223,21 @@ async fn run_sdk_mode(
         app_server_turn_drain_timeout,
     )?;
     let connection = adapter.connect();
-    let dispatch_result = server
-        .run_app_server_connection(connection)
-        .await
-        .map(|_| ());
+    // §7.7: an OS signal initiates the drain rather than aborting the process.
+    // Racing the dispatch loop against the signal also installs the SIGINT/
+    // SIGTERM handler for the whole loop duration, so a `kill <pid>` during an
+    // active turn drains cleanly instead of taking the default terminate
+    // action. A second signal is caught by the bounded drain below (§7.7).
+    let dispatch_result = tokio::select! {
+        result = server.run_app_server_connection(connection) => result.map(|_| ()),
+        () = coco_cli::shutdown::os_interrupt_signal() => {
+            tracing::info!(
+                target: "coco_cli::sdk",
+                "received OS shutdown signal; draining SDK AppServer sessions"
+            );
+            Ok(())
+        }
+    };
 
     let app_server_shutdown_timeout =
         Duration::from_secs(runtime_config.server.shutdown_timeout_secs as u64);

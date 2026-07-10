@@ -1,3 +1,7 @@
+// Reads the process cwd, legitimate outside session-owned code; opts out of
+// the workspace-wide `std::env::current_dir` gate (clippy.toml, §6.5/D-37).
+#![allow(clippy::disallowed_methods)]
+
 //! `harness = false` test target that runs a real `SdkServer` on stdio.
 //!
 //! This is the lightweight bootstrap the Python coco-sdk e2e suite

@@ -215,6 +215,9 @@ impl PsuedoCon {
     }
 }
 
+// Windows child-process spawn fallback: resolve a relative cmd cwd against the
+// process cwd (§6.5/D-37).
+#[allow(clippy::disallowed_methods)]
 fn resolve_current_directory(cmd: &CommandBuilder) -> Option<Vec<u16>> {
     let home = cmd
         .get_env("USERPROFILE")

@@ -12,7 +12,11 @@ use serde_json::json;
 async fn main() -> Result<(), coco_file_search::FileSearchError> {
     let mut cli = Cli::parse();
     if cli.cwd.is_none() {
-        cli.cwd = Some(std::env::current_dir()?);
+        // Standalone binary CLI boundary: fill the search root from the process
+        // cwd when the caller didn't pass one (§6.5/D-37).
+        #[allow(clippy::disallowed_methods)]
+        let cwd = std::env::current_dir()?;
+        cli.cwd = Some(cwd);
     }
     let reporter = StdioReporter {
         write_output_as_json: cli.json,

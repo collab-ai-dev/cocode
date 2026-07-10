@@ -1115,12 +1115,14 @@ version = "0.1.1"
 dependencies = [
  "coco-commands",
  "coco-config",
+ "coco-config-reload",
  "coco-error",
  "coco-git",
  "coco-hooks",
  "coco-lsp",
  "coco-mcp",
  "coco-output-styles",
+ "coco-paths",
  "coco-plugins",
  "coco-skills",
  "coco-subagent",
@@ -1128,6 +1130,7 @@ dependencies = [
  "coco-utils-common",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]

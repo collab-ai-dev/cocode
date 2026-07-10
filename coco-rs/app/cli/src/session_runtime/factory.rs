@@ -3,24 +3,24 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use coco_commands::CommandRegistry;
-use coco_config::RuntimeConfig;
 use coco_session::SessionManager;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tool_runtime::ToolRegistry;
 use coco_types::ModelSpec;
-use coco_types::PermissionMode;
 use coco_types::PermissionModeAvailability;
 use coco_types::SessionId;
-use tokio::sync::RwLock;
 
 use super::SessionHandle;
 use super::SessionRuntimeBuildOpts;
 use crate::Cli;
 use crate::headless::build_runtime_config_with_reloader_roots;
 use crate::session_bootstrap::build_engine_resources;
+use coco_app_runtime::BootstrapError;
+use coco_app_runtime::BootstrapSource;
 use coco_app_runtime::ProcessRuntime;
-use coco_app_runtime::ProjectServices;
+use coco_app_runtime::SessionRuntimeBootstrap;
+use coco_app_runtime::SessionRuntimeBootstrapBuild;
+use coco_app_runtime::StartupSnapshotSource;
 
 /// Owned construction inputs for one family of session runtimes.
 ///
@@ -32,111 +32,88 @@ pub struct SessionRuntimeFactory {
     opts: Arc<SessionRuntimeFactoryOpts>,
 }
 
-pub struct SessionRuntimeBootstrap {
-    pub runtime_config: Arc<RuntimeConfig>,
-    pub model_id: String,
-    pub system_prompt: String,
-    pub permission_mode_availability: PermissionModeAvailability,
-    pub permission_mode: PermissionMode,
-    pub command_registry: Arc<RwLock<Arc<CommandRegistry>>>,
-    pub skill_manager: Arc<coco_skills::SkillManager>,
-    pub project_services: Arc<ProjectServices>,
-    pub agent_search_paths: coco_subagent::definition_store::AgentSearchPaths,
+/// The production per-session config fold: rebuilds `RuntimeConfig` and all
+/// config-derived engine resources for each target cwd. Cli-coupled, so it
+/// stays in `coco-cli` and implements the `coco-app-runtime` `BootstrapSource`
+/// trait, converting its `anyhow` failures to the Tier-3 `BootstrapError` at
+/// the crate boundary.
+struct PerSessionFoldSource {
+    cli: Arc<Cli>,
+    process_runtime: Arc<ProcessRuntime>,
 }
 
+impl BootstrapSource for PerSessionFoldSource {
+    fn bootstrap_for_session(
+        &self,
+        cwd: &Path,
+        _session_id_override: Option<&SessionId>,
+    ) -> Result<SessionRuntimeBootstrapBuild, BootstrapError> {
+        let session_workspace = coco_app_runtime::SessionWorkspace::resolve(cwd.to_path_buf());
+        let (config_reloader, runtime_config) = build_runtime_config_with_reloader_roots(
+            &self.cli,
+            &session_workspace.project_root,
+            &session_workspace.cwd,
+        )
+        .map_err(|e| BootstrapError::fold(format!("{e:#}")))?;
+        let runtime_config = Arc::new(runtime_config);
+        let resources =
+            build_engine_resources(&self.process_runtime, &self.cli, &runtime_config, cwd)
+                .map_err(|e| BootstrapError::fold(format!("{e:#}")))?;
+        let config_home = coco_config::global_config::config_home();
+        let bootstrap = SessionRuntimeBootstrap {
+            runtime_config,
+            model_id: resources.model_id,
+            system_prompt: resources.system_prompt,
+            permission_mode_availability: PermissionModeAvailability::new(
+                resources.startup.bypass_available,
+                resources.startup.auto_available,
+            ),
+            permission_mode: resources.startup.mode,
+            command_registry: resources.command_registry,
+            skill_manager: resources.skill_manager,
+            agent_search_paths: resources
+                .project_services
+                .agent_search_paths(&config_home, cwd),
+            project_services: resources.project_services,
+        };
+        Ok(SessionRuntimeBootstrapBuild {
+            bootstrap: Arc::new(bootstrap),
+            config_reloader,
+        })
+    }
+}
+
+/// Cheap, cloneable handle to a [`BootstrapSource`] implementation.
 #[derive(Clone)]
 pub struct SessionRuntimeBootstrapSource {
-    kind: SessionRuntimeBootstrapSourceKind,
-}
-
-#[derive(Clone)]
-enum SessionRuntimeBootstrapSourceKind {
-    StartupSnapshot(Arc<SessionRuntimeBootstrap>),
-    PerSessionFold {
-        cli: Arc<Cli>,
-        process_runtime: Arc<ProcessRuntime>,
-    },
-}
-
-struct SessionRuntimeBootstrapBuild {
-    bootstrap: Arc<SessionRuntimeBootstrap>,
-    config_reloader: Option<coco_config_reload::RuntimeReloader>,
+    source: Arc<dyn BootstrapSource>,
 }
 
 impl SessionRuntimeBootstrapSource {
-    /// Compatibility source for the current process-bootstrap session
-    /// bootstrap fold.
-    ///
-    /// New session construction routes through this type so the future
-    /// per-session fold can replace this method without touching every runtime
-    /// builder call site.
+    /// Source backed by a pre-built bundle (tests / legacy startup snapshot).
     pub fn startup_snapshot(bootstrap: SessionRuntimeBootstrap) -> Self {
         Self {
-            kind: SessionRuntimeBootstrapSourceKind::StartupSnapshot(Arc::new(bootstrap)),
+            source: Arc::new(StartupSnapshotSource::new(bootstrap)),
         }
     }
 
-    /// Build a fresh config/resource bundle for every target session cwd.
-    ///
-    /// This is the migration seam for the final per-session config fold:
-    /// `RuntimeConfig` and all config-derived engine resources are rebuilt as
-    /// one coherent bundle for the session being constructed.
+    /// Source that runs the production per-session config fold for each target
+    /// cwd, rebuilding `RuntimeConfig` and all config-derived engine resources.
     pub fn per_session_fold(cli: Arc<Cli>, process_runtime: Arc<ProcessRuntime>) -> Self {
         Self {
-            kind: SessionRuntimeBootstrapSourceKind::PerSessionFold {
+            source: Arc::new(PerSessionFoldSource {
                 cli,
                 process_runtime,
-            },
+            }),
         }
     }
 
     fn bootstrap_for_session(
         &self,
         cwd: &Path,
-        _session_id_override: Option<&SessionId>,
-    ) -> Result<SessionRuntimeBootstrapBuild> {
-        match &self.kind {
-            SessionRuntimeBootstrapSourceKind::StartupSnapshot(snapshot) => {
-                Ok(SessionRuntimeBootstrapBuild {
-                    bootstrap: Arc::clone(snapshot),
-                    config_reloader: None,
-                })
-            }
-            SessionRuntimeBootstrapSourceKind::PerSessionFold {
-                cli,
-                process_runtime,
-            } => {
-                let session_workspace = crate::paths::SessionWorkspace::resolve(cwd.to_path_buf());
-                let (config_reloader, runtime_config) = build_runtime_config_with_reloader_roots(
-                    cli,
-                    &session_workspace.project_root,
-                    &session_workspace.cwd,
-                )?;
-                let runtime_config = Arc::new(runtime_config);
-                let resources = build_engine_resources(process_runtime, cli, &runtime_config, cwd)?;
-                let config_home = coco_config::global_config::config_home();
-                let bootstrap = SessionRuntimeBootstrap {
-                    runtime_config,
-                    model_id: resources.model_id,
-                    system_prompt: resources.system_prompt,
-                    permission_mode_availability: PermissionModeAvailability::new(
-                        resources.startup.bypass_available,
-                        resources.startup.auto_available,
-                    ),
-                    permission_mode: resources.startup.mode,
-                    command_registry: resources.command_registry,
-                    skill_manager: resources.skill_manager,
-                    agent_search_paths: resources
-                        .project_services
-                        .agent_search_paths(&config_home, cwd),
-                    project_services: resources.project_services,
-                };
-                Ok(SessionRuntimeBootstrapBuild {
-                    bootstrap: Arc::new(bootstrap),
-                    config_reloader,
-                })
-            }
-        }
+        session_id_override: Option<&SessionId>,
+    ) -> Result<SessionRuntimeBootstrapBuild, BootstrapError> {
+        self.source.bootstrap_for_session(cwd, session_id_override)
     }
 }
 

@@ -88,6 +88,8 @@ pub async fn run_tui(
 /// Note: This creates a display-only TUI without a service.
 /// Use `run_tui()` with a service parameter for full functionality.
 pub async fn run_tui_default() -> crate::Result<()> {
+    // Standalone retrieval TUI binary boundary (§6.5/D-37).
+    #[allow(clippy::disallowed_methods)]
     let workdir = std::env::current_dir()?;
     let coco_home = crate::find_coco_home();
     let config = RetrievalConfig::load(&workdir, &coco_home)?;

@@ -63,6 +63,9 @@ impl AbsolutePathBuf {
         Ok(Self(absolutize::absolutize_from(&expanded, Path::new("/"))))
     }
 
+    /// Deliberately-named process-cwd boundary (§6.5/D-37): session code must
+    /// use [`Self::resolve_path_against_base`] with an explicit base instead.
+    #[allow(clippy::disallowed_methods)]
     pub fn current_dir() -> std::io::Result<Self> {
         let current_dir = std::env::current_dir()?;
         Ok(Self(absolutize::absolutize_from(
@@ -72,7 +75,9 @@ impl AbsolutePathBuf {
     }
 
     /// Construct an absolute path from `path`, resolving relative paths against
-    /// the process current working directory.
+    /// the process current working directory. Deliberately-named process-cwd
+    /// boundary (§6.5/D-37).
+    #[allow(clippy::disallowed_methods)]
     pub fn relative_to_current_dir<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         Ok(Self::resolve_path_against_base(
             path,

@@ -6,6 +6,7 @@ disallowed-methods = [
     { path = "ratatui::style::Stylize::white", reason = "Avoid hardcoding white; prefer default fg or dim/bold. Exception: Disable this rule if rendering over a hardcoded ANSI background." },
     { path = "ratatui::style::Stylize::black", reason = "Avoid hardcoding black; prefer default fg or dim/bold. Exception: Disable this rule if rendering over a hardcoded ANSI background." },
     { path = "ratatui::style::Stylize::yellow", reason = "Avoid yellow; prefer other colors in `tui/styles.md`." },
+    { path = "std::env::current_dir", reason = "Session-owned code must resolve paths against the per-session cwd (SessionWorkspace / ToolUseContext / QueryEngineConfig::workspace_cwd), never the process cwd (§6.5, D-37). Standalone binaries, path-boundary helpers, and tests that legitimately need the process cwd opt out with an explicit #[allow(clippy::disallowed_methods)]." },
 ]
 
 # Increase the size threshold for result_large_err to accommodate

@@ -136,6 +136,8 @@ fn resolve_bin_from_env(key: &str, value: OsString) -> Result<PathBuf, CargoBinE
     }
 }
 
+// Test-harness path helper; the process cwd is the intended base here (§6.5/D-37).
+#[allow(clippy::disallowed_methods)]
 fn absolutize_from_buck_or_cwd(path: PathBuf) -> Result<PathBuf, CargoBinError> {
     if path.is_absolute() {
         return Ok(path);
