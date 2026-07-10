@@ -31,6 +31,121 @@ fn test_agent_teams_config_defaults_to_main_model_role() {
 }
 
 #[test]
+fn test_search_format_config_defaults() {
+    let config = ToolConfig::resolve(&Settings::default(), &EnvSnapshot::default());
+    assert_eq!(config.search.grep_per_file_limit, 25);
+    assert_eq!(config.search.glob_max_results, 100);
+    assert_eq!(config.search.glob_group_min_paths, 25);
+    assert_eq!(config.search.glob_group_min_dirs, 3);
+}
+
+#[test]
+fn test_search_format_config_resolves_from_settings_and_env() {
+    let settings = Settings {
+        tool: PartialToolSettings {
+            search: Some(PartialSearchSettings {
+                grep_per_file_limit: Some(10),
+                glob_max_results: Some(42),
+                glob_group_min_paths: Some(50),
+                glob_group_min_dirs: None,
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoGlobGroupMinDirs, "5")]);
+    let config = ToolConfig::resolve(&settings, &env);
+    assert_eq!(config.search.grep_per_file_limit, 10);
+    assert_eq!(config.search.glob_max_results, 42);
+    assert_eq!(config.search.glob_group_min_paths, 50);
+    // env override wins for min_dirs (settings left it None).
+    assert_eq!(config.search.glob_group_min_dirs, 5);
+}
+
+#[test]
+fn test_search_format_config_finalize_clamps() {
+    let settings = Settings {
+        tool: PartialToolSettings {
+            search: Some(PartialSearchSettings {
+                grep_per_file_limit: Some(-1), // clamps to 0 (= unlimited)
+                glob_max_results: Some(0),     // clamps to 1
+                glob_group_min_paths: Some(0), // clamps to 1
+                glob_group_min_dirs: Some(0),  // clamps to 1
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let config = ToolConfig::resolve(&settings, &EnvSnapshot::default());
+    assert_eq!(config.search.grep_per_file_limit, 0);
+    assert_eq!(config.search.glob_max_results, 1);
+    assert_eq!(config.search.glob_group_min_paths, 1);
+    assert_eq!(config.search.glob_group_min_dirs, 1);
+}
+
+fn output_rewrite_settings(rtk: PartialRtkSettings) -> Settings {
+    Settings {
+        output_rewrite: PartialOutputRewriteSettings { engine: None, rtk },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_output_rewrite_config_defaults() {
+    let config = OutputRewriteConfig::resolve(&Settings::default(), &EnvSnapshot::default());
+    assert_eq!(config.engine, OutputRewriteEngine::Rtk);
+    assert_eq!(config.rtk.mode, RtkMode::BuiltinFirst);
+    assert_eq!(config.rtk.binary_path, None);
+    assert!(config.rtk.exclude_commands.is_empty());
+    assert_eq!(
+        config.rtk.rewrite_timeout_ms,
+        RTK_DEFAULT_REWRITE_TIMEOUT_MS
+    );
+}
+
+#[test]
+fn test_rtk_config_resolves_from_settings() {
+    let settings = output_rewrite_settings(PartialRtkSettings {
+        mode: Some(RtkMode::ExternalFirst),
+        binary_path: Some("/opt/rtk".to_string()),
+        exclude_commands: vec!["docker".to_string()],
+        rewrite_timeout_ms: Some(250),
+    });
+
+    let config = RtkConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.mode, RtkMode::ExternalFirst);
+    assert_eq!(config.binary_path.as_deref(), Some("/opt/rtk"));
+    assert_eq!(config.exclude_commands, vec!["docker".to_string()]);
+    assert_eq!(config.rewrite_timeout_ms, 250);
+}
+
+#[test]
+fn test_rtk_config_env_overrides_binary_path() {
+    let settings = output_rewrite_settings(PartialRtkSettings {
+        binary_path: Some("/opt/rtk".to_string()),
+        ..Default::default()
+    });
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoRtkPath, "/usr/local/bin/rr-rtk")]);
+
+    let config = RtkConfig::resolve(&settings, &env);
+
+    assert_eq!(config.binary_path.as_deref(), Some("/usr/local/bin/rr-rtk"));
+}
+
+#[test]
+fn test_rtk_config_non_positive_timeout_falls_back_to_default() {
+    let settings = output_rewrite_settings(PartialRtkSettings {
+        rewrite_timeout_ms: Some(0),
+        ..Default::default()
+    });
+
+    let config = RtkConfig::resolve(&settings, &EnvSnapshot::default());
+
+    assert_eq!(config.rewrite_timeout_ms, RTK_DEFAULT_REWRITE_TIMEOUT_MS);
+}
+
+#[test]
 fn test_server_config_resolves_unix_socket_path_from_settings() {
     let settings = Settings {
         server: PartialServerSettings {

@@ -112,6 +112,15 @@ pub enum EnvKey {
     CocoFileReadIgnorePatterns,
     CocoFoundryResource,
     CocoGlobTimeoutSeconds,
+    /// Grep content-mode default per-file match cap (§2.3). Overrides
+    /// `tool.search.grep_per_file_limit`. 0 = unlimited.
+    CocoGrepPerFileLimit,
+    /// Glob result cap before truncation. Overrides `tool.search.glob_max_results`.
+    CocoGlobMaxResults,
+    /// Glob directory-grouping thresholds (§2.4). Override
+    /// `tool.search.glob_group_min_{paths,dirs}`.
+    CocoGlobGroupMinPaths,
+    CocoGlobGroupMinDirs,
     CocoLang,
     /// Tracing-filter directive (full `EnvFilter` syntax, e.g.
     /// `coco=debug,coco_inference::stream=trace,info`). Read by
@@ -221,6 +230,11 @@ pub enum EnvKey {
     /// Remote STT model id override (e.g. `gpt-4o-mini-transcribe`).
     CocoVoiceModel,
     CocoShell,
+    /// Override the rtk binary path used by the Bash output compressor
+    /// (`Feature::OutputRewrite`). Ranked below the settings `rtk.binary_path` value —
+    /// env wins so a one-off run can point at a different binary. `None` ⇒
+    /// probe `$PATH` for `rtk` then `rr-rtk`.
+    CocoRtkPath,
     /// Prefix string injected before every hook command. Consumed by
     /// `coco_hooks::execute_hook` for Command-type hooks; NOT wired
     /// into `ShellConfig` / `ShellExecutor` (bash-tool uses its own
@@ -418,6 +432,10 @@ impl EnvKey {
             Self::CocoFileReadIgnorePatterns => "COCO_FILE_READ_IGNORE_PATTERNS",
             Self::CocoFoundryResource => "COCO_FOUNDRY_RESOURCE",
             Self::CocoGlobTimeoutSeconds => "COCO_GLOB_TIMEOUT_SECONDS",
+            Self::CocoGrepPerFileLimit => "COCO_GREP_PER_FILE_LIMIT",
+            Self::CocoGlobMaxResults => "COCO_GLOB_MAX_RESULTS",
+            Self::CocoGlobGroupMinPaths => "COCO_GLOB_GROUP_MIN_PATHS",
+            Self::CocoGlobGroupMinDirs => "COCO_GLOB_GROUP_MIN_DIRS",
             Self::CocoLang => "COCO_LANG",
             Self::CocoLog => "COCO_LOG",
             Self::CocoLogFile => "COCO_LOG_FILE",
@@ -455,6 +473,7 @@ impl EnvKey {
             Self::CocoSandboxMode => "COCO_SANDBOX_MODE",
             Self::CocoSessionEndHooksTimeoutMs => "COCO_SESSIONEND_HOOKS_TIMEOUT_MS",
             Self::CocoShell => "COCO_SHELL",
+            Self::CocoRtkPath => "COCO_RTK_PATH",
             Self::CocoShellPrefix => "COCO_SHELL_PREFIX",
             Self::CocoVoiceBackend => "COCO_VOICE_BACKEND",
             Self::CocoVoiceLanguage => "COCO_VOICE_LANGUAGE",

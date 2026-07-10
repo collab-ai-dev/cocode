@@ -98,6 +98,16 @@ pub enum Feature {
     /// non-blocking startup task. The bundled snapshot remains the
     /// fallback if fetch or parsing fails.
     DynamicModelCard,
+    /// Compress Bash dev-tool output (git / cargo / test runners / linters /
+    /// docker …) before it reaches the model — 60–90 % smaller tool results.
+    /// The coarse capability gate; the concrete backend is selected by
+    /// `OutputRewriteConfig.engine` (rtk today, `output_rewrite.rtk.*`). rtk has
+    /// two tiers (external binary / embedded core) arbitrated by `RtkMode`
+    /// (design §3.5). Permission rules, read-only classification and the sandbox
+    /// decision always evaluate the ORIGINAL command. With no backend available
+    /// the feature silently no-ops. Sub-toggles live in `OutputRewriteConfig`,
+    /// never as extra Feature variants.
+    OutputRewrite,
 
     // Behavior / safety gate (Stable, default=false for risk-conservative).
     /// Run shell commands inside a sandbox.
@@ -354,6 +364,15 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DynamicModelCard,
         key: "dynamic_model_card",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    // Bash output compression. Default-on: the downside is bounded to zero
+    // (never-worse guard + per-filter catch_unwind degrade to raw output), so
+    // metrics are post-hoc validation, not a promotion gate.
+    FeatureSpec {
+        id: Feature::OutputRewrite,
+        key: "output_rewrite",
         stage: Stage::Stable,
         default_enabled: true,
     },

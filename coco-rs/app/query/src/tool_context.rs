@@ -489,6 +489,7 @@ impl ToolContextFactory {
             shell_config: self.config.shell_config.clone(),
             active_shell_tool: self.config.active_shell_tool,
             shell_provider: self.config.shell_provider.clone(),
+            output_rewriter: self.config.output_rewriter.clone(),
             original_cwd: self.config.original_cwd.clone(),
             session_cwd: self.config.session_cwd.clone(),
             web_fetch_config: self.config.web_fetch_config.clone(),
@@ -575,7 +576,6 @@ impl ToolContextFactory {
             // the runtime registry snapshot.
             parent_runtime_snapshot: self.parent_runtime_snapshot.clone(),
             file_reading_limits: Default::default(),
-            glob_limits: Default::default(),
             nested_memory_attachment_triggers: Arc::new(RwLock::new(Default::default())),
             loaded_nested_memory_paths: Default::default(),
             dynamic_skill_dir_triggers: Arc::new(RwLock::new(Default::default())),

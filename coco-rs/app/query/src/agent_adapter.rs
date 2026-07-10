@@ -233,6 +233,12 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // points at the right directory; running without snapshot is
             // an acceptable tradeoff for an isolated transient session.
             shell_provider: None,
+            // Subagents don't inherit the parent's output rewriter in phase 1
+            // (mirrors `shell_provider: None`); their Bash description omits the
+            // compression note accordingly (gated on `output_rewriter_active`).
+            // Threading the parent rewriter through `AgentQueryConfig` is a clean
+            // follow-up so subagent Bash output compresses too.
+            output_rewriter: None,
             // No session-level CWD persistence for subagents — their cwd
             // is fenced via `cwd_override` and they don't share state
             // with the parent session.

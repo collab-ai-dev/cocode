@@ -307,6 +307,12 @@ pub struct QueryEngineConfig {
     /// paths that haven't yet wired the provider — Bash falls back to
     /// per-call executor construction without snapshot caching.
     pub shell_provider: Option<Arc<dyn coco_shell::ShellProvider>>,
+    /// Session-scoped Bash output rewriter (compresses dev-tool output before
+    /// it reaches the model). `Some` only when the capability is enabled — built
+    /// once at session bootstrap and threaded onto every
+    /// [`coco_tool_runtime::ToolUseContext`]. `None` ⇒ off. The only impl today
+    /// is rtk (`coco_shell::RtkRewriter`).
+    pub output_rewriter: Option<Arc<dyn coco_shell::BashOutputRewriter>>,
     /// Frozen anchor — captured at session start. BashTool's
     /// `reset_cwd_if_outside_project` uses it to snap back when the
     /// live cwd drifts out of the allowed working set.
@@ -460,6 +466,7 @@ impl Default for QueryEngineConfig {
             // default to Disabled until a parent explicitly threads a value.
             active_shell_tool: ActiveShellTool::Bash,
             shell_provider: None,
+            output_rewriter: None,
             original_cwd: None,
             session_cwd: None,
             web_fetch_config: WebFetchConfig::default(),

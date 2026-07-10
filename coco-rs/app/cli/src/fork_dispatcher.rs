@@ -114,6 +114,12 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
                 != coco_types::ActiveShellTool::Disabled)
                 .then(|| parent_engine_config.shell_provider.clone())
                 .flatten(),
+            // Inherit the parent's session-scoped output rewriter so forked
+            // side-queries compress Bash output too (mirrors `shell_provider`).
+            output_rewriter: (agent_config.active_shell_tool
+                != coco_types::ActiveShellTool::Disabled)
+                .then(|| parent_engine_config.output_rewriter.clone())
+                .flatten(),
             web_fetch_config: runtime_config.web_fetch.clone(),
             web_search_config: runtime_config.web_search.clone(),
             lsp_config: runtime_config.lsp.clone(),

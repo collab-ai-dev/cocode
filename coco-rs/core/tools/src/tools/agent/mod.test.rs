@@ -499,6 +499,7 @@ async fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() 
         fork_mode_active: false,
         features: None,
         apply_patch_tool_type: None,
+        output_rewriter_active: false,
     };
     let session_schema = agent_model_params(&ctx).await;
     let session_props = session_schema["properties"]
@@ -515,6 +516,7 @@ async fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() 
         fork_mode_active: true,
         features: None,
         apply_patch_tool_type: None,
+        output_rewriter_active: false,
     };
     let session_schema_fork = agent_model_params(&ctx_fork).await;
     let session_props_fork = session_schema_fork["properties"]

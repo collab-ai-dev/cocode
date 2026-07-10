@@ -98,7 +98,13 @@ async fn test_grep_content_mode() {
 
     let t = text(&result);
     assert!(t.contains("fn hello()"), "should contain match: {t}");
-    assert!(t.contains(":2:"), "should have line number 2: {t}");
+    // Grouped `--heading` format: a `test.rs` header, then a `2:content` row
+    // (the path is no longer repeated on the match line).
+    assert!(t.contains("test.rs"), "should have file header: {t}");
+    assert!(
+        t.contains("2:fn hello()"),
+        "grouped match row `line:content`: {t}"
+    );
 }
 
 #[tokio::test]
@@ -1148,15 +1154,17 @@ async fn test_grep_line_numbers_suppressed() {
     .unwrap();
 
     let t = text(&result);
-    assert!(t.contains("MATCH"), "should contain match: {t}");
-    // Line number segment must NOT be present. Without `-n`, lines are
-    // formatted as `path:content` — not `path:2:content`.
+    assert!(t.contains("f.txt"), "should have file header: {t}");
+    // With `-n: false`, grouped rows are bare content — no `2:` line-number
+    // prefix, and the match line is emitted verbatim under the header.
     assert!(
-        !t.contains(":2:"),
+        !t.contains("2:MATCH"),
         "line number segment must be suppressed: {t}"
     );
-    // The path separator should still be present.
-    assert!(t.contains(":MATCH"), "path:content format expected: {t}");
+    assert!(
+        t.lines().any(|l| l == "MATCH"),
+        "bare content row expected: {t}"
+    );
 }
 
 /// Default is `-n: true` — line numbers appear when omitted.
@@ -1180,8 +1188,8 @@ async fn test_grep_line_numbers_default_on() {
 
     let t = text(&result);
     assert!(
-        t.contains(":2:"),
-        "line number segment expected by default: {t}"
+        t.contains("2:MATCH"),
+        "grouped `line:content` row expected by default: {t}"
     );
 }
 
@@ -1244,4 +1252,159 @@ fn render_for_model_no_matches_branch() {
         panic!("expected Text part");
     };
     assert_eq!(text, "No matches found");
+}
+
+// -----------------------------------------------------------------------
+// Pure formatter unit tests — grouped content, per-file cap, inline counts
+// (§2.3/§2.4). Operate directly on the private formatters, no temp dirs.
+// -----------------------------------------------------------------------
+
+use std::sync::Arc;
+
+fn gm(path: &str, line: u64, content: &str) -> super::GrepMatchLine {
+    super::GrepMatchLine {
+        file_path: Arc::from(path),
+        line_number: line,
+        line_content: content.to_string(),
+        is_context: false,
+        is_break: false,
+    }
+}
+fn gm_ctx(path: &str, line: u64, content: &str) -> super::GrepMatchLine {
+    super::GrepMatchLine {
+        is_context: true,
+        ..gm(path, line, content)
+    }
+}
+fn gm_break() -> super::GrepMatchLine {
+    super::GrepMatchLine {
+        file_path: Arc::from(""),
+        line_number: 0,
+        line_content: String::new(),
+        is_context: false,
+        is_break: true,
+    }
+}
+const OPTS: super::ContentFormatOptions = super::ContentFormatOptions {
+    show_line_numbers: true,
+    per_file_limit: 25,
+};
+
+#[test]
+fn format_content_groups_by_file_with_headers() {
+    let matches = vec![
+        gm("src/a.rs", 10, "let x = 1;"),
+        gm("src/a.rs", 12, "let y = 2;"),
+        gm("src/b.rs", 3, "fn main() {}"),
+    ];
+    let out = super::format_content(&matches, 0, 250, OPTS);
+    assert_eq!(
+        out,
+        "src/a.rs\n10:let x = 1;\n12:let y = 2;\n\nsrc/b.rs\n3:fn main() {}"
+    );
+}
+
+#[test]
+fn format_content_per_file_cap_emits_marker() {
+    let matches: Vec<_> = (1..=30).map(|i| gm("hot.rs", i, "hit")).collect();
+    let opts = super::ContentFormatOptions {
+        show_line_numbers: true,
+        per_file_limit: 25,
+    };
+    let out = super::format_content(&matches, 0, 250, opts);
+    assert!(out.contains("+5 more in hot.rs"), "{out}");
+    let shown = out.lines().filter(|l| l.ends_with(":hit")).count();
+    assert_eq!(shown, 25, "per-file cap should show exactly 25 rows: {out}");
+}
+
+#[test]
+fn format_content_head_limit_hides_files() {
+    let matches: Vec<_> = (0..5).map(|i| gm(&format!("f{i}.rs"), 1, "x")).collect();
+    let out = super::format_content(&matches, 0, 2, OPTS);
+    assert!(
+        out.contains("[Showing results with pagination = limit: 2]"),
+        "{out}"
+    );
+    assert!(out.contains("+3 more files"), "{out}");
+}
+
+#[test]
+fn format_content_no_line_numbers_is_bare() {
+    let matches = vec![gm("f.rs", 7, "bare content")];
+    let opts = super::ContentFormatOptions {
+        show_line_numbers: false,
+        per_file_limit: 25,
+    };
+    assert_eq!(
+        super::format_content(&matches, 0, 250, opts),
+        "f.rs\nbare content"
+    );
+}
+
+#[test]
+fn format_content_context_and_breaks() {
+    let matches = vec![
+        gm("f.rs", 5, "MATCH1"),
+        gm_ctx("f.rs", 6, "after1"),
+        gm_break(),
+        gm("f.rs", 20, "MATCH2"),
+    ];
+    assert_eq!(
+        super::format_content(&matches, 0, 250, OPTS),
+        "f.rs\n5:MATCH1\n6-after1\n--\n20:MATCH2"
+    );
+}
+
+#[test]
+fn format_content_offset_inside_file_no_false_marker() {
+    // 30 matches, per-file cap 25, offset 28 → render matches 29 & 30 only.
+    // The 28 offset-skipped matches are behind the page, NOT hidden by the cap,
+    // so there must be NO `+N more in <file>` marker (regression: the old
+    // `match_count - capped_visible` formula printed a bogus `+5 more`).
+    let matches: Vec<_> = (1..=30).map(|i| gm("hot.rs", i, "hit")).collect();
+    let opts = super::ContentFormatOptions {
+        show_line_numbers: true,
+        per_file_limit: 25,
+    };
+    let out = super::format_content(&matches, 28, 250, opts);
+    assert!(
+        !out.contains("more in hot.rs"),
+        "offset-skipped matches must not count as cap-hidden: {out}"
+    );
+    assert_eq!(out.lines().filter(|l| l.ends_with(":hit")).count(), 2);
+}
+
+#[test]
+fn format_content_per_file_unlimited_when_zero() {
+    let matches: Vec<_> = (1..=30).map(|i| gm("hot.rs", i, "hit")).collect();
+    let opts = super::ContentFormatOptions {
+        show_line_numbers: true,
+        per_file_limit: usize::MAX,
+    };
+    let out = super::format_content(&matches, 0, 250, opts);
+    assert!(!out.contains("more in hot.rs"), "no per-file marker: {out}");
+    assert_eq!(out.lines().filter(|l| l.ends_with(":hit")).count(), 30);
+}
+
+#[test]
+fn format_files_with_matches_inline_counts() {
+    let result = super::GrepSearchResult {
+        matches: vec![gm("a.rs", 1, "x"), gm("a.rs", 2, "x"), gm("b.rs", 1, "x")],
+        file_mtimes: std::collections::HashMap::new(),
+    };
+    let out = super::format_files_with_matches(&result, 0, 250);
+    assert!(out.starts_with("Found 2 files"), "{out}");
+    assert!(out.contains("a.rs (2)"), "{out}");
+    assert!(out.contains("b.rs (1)"), "{out}");
+}
+
+#[test]
+fn format_files_with_matches_overflow_marker() {
+    let matches: Vec<_> = (0..5).map(|i| gm(&format!("f{i}.rs"), 1, "x")).collect();
+    let result = super::GrepSearchResult {
+        matches,
+        file_mtimes: std::collections::HashMap::new(),
+    };
+    let out = super::format_files_with_matches(&result, 0, 2);
+    assert!(out.contains("+3 more files"), "{out}");
 }

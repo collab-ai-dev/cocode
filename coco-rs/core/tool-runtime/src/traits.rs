@@ -39,6 +39,13 @@ pub struct SchemaContext {
     /// `tool_spec` match arm emitting a different wire shape (the exhaustive
     /// match guarantees it can't be silently defaulted).
     pub apply_patch_tool_type: Option<coco_types::ApplyPatchToolType>,
+    /// True when a session-scoped Bash output rewriter is actually wired for
+    /// this engine (`QueryEngineConfig.output_rewriter.is_some()`).
+    /// `BashTool::tool_spec` gates the compression escape-hatch description line
+    /// on THIS, not on `Feature::OutputRewrite`, so the line appears only when compression
+    /// will really run — a subagent that inherits the feature flag but no
+    /// rewriter must not advertise it.
+    pub output_rewriter_active: bool,
 }
 
 /// Info about whether a tool use is a search or read operation for UI collapse.

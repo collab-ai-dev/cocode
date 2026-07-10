@@ -40,6 +40,28 @@ fn tool_search_key_maps_via_apply_map() {
 }
 
 #[test]
+fn output_rewrite_defaults_on_and_is_stable_opt_out() {
+    let mut f = Features::with_defaults();
+    assert!(
+        f.enabled(Feature::OutputRewrite),
+        "OutputRewrite must default on — Stable, downside bounded to zero"
+    );
+    let info = all_features()
+        .find(|s| s.id == Feature::OutputRewrite)
+        .unwrap();
+    assert_eq!(info.key, "output_rewrite");
+    assert!(matches!(info.stage, Stage::Stable));
+
+    let mut m = BTreeMap::new();
+    m.insert("output_rewrite".to_string(), false);
+    f.apply_map(&m);
+    assert!(
+        !f.enabled(Feature::OutputRewrite),
+        "explicit `output_rewrite: false` must turn Bash output compression off"
+    );
+}
+
+#[test]
 fn defaults_for_safety_gate() {
     let f = Features::with_defaults();
     assert!(!f.enabled(Feature::Sandbox), "Sandbox must default off");

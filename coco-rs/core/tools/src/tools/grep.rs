@@ -59,7 +59,6 @@ use grep_searcher::SinkMatch;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -210,21 +209,16 @@ struct GrepSearchParams {
 }
 
 /// Content-mode format options. Parsed from input at call time and
-/// passed through to `format_content()` so the formatter can honor
-/// `-n: false` (when `show_line_numbers` is false, the `-n` flag is
-/// omitted and output lines are emitted without the line-number segment).
+/// passed through to `format_content()`.
+///
+/// - `show_line_numbers`: honors `-n: false` (line-number segment dropped).
+/// - `per_file_limit`: max match rows rendered per file before a
+///   `+N more in <file>` marker (`usize::MAX` = unlimited). The default comes
+///   from `tool.search.grep_per_file_limit` (config/env), not a constant.
 #[derive(Debug, Clone, Copy)]
 struct ContentFormatOptions {
     show_line_numbers: bool,
-}
-
-impl Default for ContentFormatOptions {
-    fn default() -> Self {
-        Self {
-            // Default is `true`.
-            show_line_numbers: true,
-        }
-    }
+    per_file_limit: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -282,7 +276,7 @@ pub struct GrepInput {
     /// File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types.
     #[serde(default, rename = "type")]
     pub file_type: Option<String>,
-    /// Limit output to first N lines/entries, equivalent to "| head -N". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly — large result sets waste context).
+    /// Limit output to first N entries, equivalent to "| head -N". Works across all output modes: content (limits MATCHING lines — `-A`/`-B`/`-C` context lines are shown in addition, not counted), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly — large result sets waste context).
     #[serde(default)]
     pub head_limit: Option<i64>,
     /// Skip first N lines/entries before applying head_limit,
@@ -290,6 +284,12 @@ pub struct GrepInput {
     /// output modes. Defaults to 0.
     #[serde(default)]
     pub offset: Option<i64>,
+    /// Max matching lines shown per file in "content" mode before a
+    /// "+N more in <file>" marker. Keeps one hot file from consuming the whole
+    /// head_limit budget, improving cross-file coverage. Defaults to 25. Pass 0
+    /// for unlimited per file. Ignored in other output modes.
+    #[serde(default)]
+    pub per_file_limit: Option<i64>,
     /// Enable multiline mode where . matches newlines and patterns
     /// can span lines (rg -U --multiline-dotall). Default: false.
     #[serde(default)]
@@ -491,7 +491,20 @@ impl Tool for GrepTool {
         // `-n` defaults to `true`. Passing `-n: false` suppresses line numbers
         // in content-mode output.
         let show_line_numbers = input.show_line_numbers.unwrap_or(true);
-        let content_opts = ContentFormatOptions { show_line_numbers };
+        // per_file_limit: input override wins; else the config default
+        // (`tool.search.grep_per_file_limit`). 0 (either source) = unlimited.
+        let per_file_limit = match input.per_file_limit {
+            Some(0) => usize::MAX,
+            Some(n) if n > 0 => n as usize,
+            _ => match ctx.tool_config.search.grep_per_file_limit {
+                d if d > 0 => d as usize,
+                _ => usize::MAX,
+            },
+        };
+        let content_opts = ContentFormatOptions {
+            show_line_numbers,
+            per_file_limit,
+        };
 
         let glob_filter = input.glob.clone();
         let type_filter = input.file_type.clone();
@@ -788,11 +801,13 @@ fn split_glob_pattern(pattern: &str) -> Vec<String> {
 // Output formatting
 //
 // Output format per mode:
-//   • files_with_matches: "Found N file(s){limit_info}\npath1\npath2..." /
-//                         "No files found" when empty
-//   • content:            bare ripgrep lines (path:lineno:content) joined by \n,
-//                         optional trailing "\n\n[Showing results with
-//                         pagination = limit: X, offset: Y]" block
+//   • files_with_matches: "Found N file(s){limit_info}\npath1 (c1)\npath2 (c2)…"
+//                         (per-file match counts) / "No files found" when empty
+//   • content:            ripgrep `--heading` grouped blocks — one path header
+//                         per file, then "line:content" match rows /
+//                         "line-content" context rows / "--" breaks; per-file
+//                         "+N more in <file>" + optional pagination footer +
+//                         "+N more files" overflow marker
 //   • count:              path:count lines + "\n\nFound N total
 //                         occurrence(s) across M file(s).{ with pagination = …}"
 // ---------------------------------------------------------------------------
@@ -841,17 +856,24 @@ fn format_files_with_matches(
     offset: usize,
     effective_limit: usize,
 ) -> String {
-    // Collect unique matched files in discovery order, skipping context/break lines.
-    let mut seen: HashSet<&str> = HashSet::new();
+    // Collect unique matched files in discovery order + per-file match counts
+    // (already available on the match list — rendered inline as `path (N)` to
+    // steer the model to the hottest file, design §2.4). One hash probe per
+    // match: the count map doubles as the dedup set (first-seen ⇒ push).
     let mut unique_paths: Vec<&str> = Vec::new();
+    let mut counts: HashMap<&str, usize> = HashMap::new();
     for m in result
         .matches
         .iter()
         .filter(|m| !m.is_context && !m.is_break)
     {
         let path: &str = &m.file_path;
-        if seen.insert(path) {
-            unique_paths.push(path);
+        match counts.entry(path) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(1);
+                unique_paths.push(path);
+            }
+            std::collections::hash_map::Entry::Occupied(mut e) => *e.get_mut() += 1,
         }
     }
 
@@ -865,7 +887,8 @@ fn format_files_with_matches(
     });
 
     let after_offset: Vec<&str> = unique_paths.into_iter().skip(offset).collect();
-    let was_truncated = after_offset.len() > effective_limit;
+    let hidden = after_offset.len().saturating_sub(effective_limit);
+    let was_truncated = hidden > 0;
     let display: Vec<&str> = after_offset.into_iter().take(effective_limit).collect();
 
     if display.is_empty() {
@@ -882,54 +905,205 @@ fn format_files_with_matches(
     } else {
         format!("Found {count} {file_word} {limit_info}")
     };
-    format!("{header}\n{}", display.join("\n"))
+    let body = display
+        .iter()
+        .map(|p| format!("{p} ({})", counts.get(p).copied().unwrap_or(0)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut out = format!("{header}\n{body}");
+    if hidden > 0 {
+        out.push_str(&format!("\n+{hidden} more files"));
+    }
+    out
 }
 
+/// One file's contiguous run of match / context / break entries.
+struct ContentBlock<'a> {
+    path: &'a str,
+    /// Match, context and `--` break entries, in discovery order.
+    entries: Vec<&'a GrepMatchLine>,
+    /// Real match lines in this block (excludes context / break sentinels).
+    match_count: usize,
+}
+
+/// Group the flat match list into contiguous per-file blocks. A file's matches
+/// are collected contiguously by the search, so a file-path change starts a new
+/// block; `--` break sentinels carry an empty path and attach to the current
+/// block.
+fn group_content_blocks(matches: &[GrepMatchLine]) -> Vec<ContentBlock<'_>> {
+    let mut blocks: Vec<ContentBlock> = Vec::new();
+    for m in matches {
+        if m.is_break {
+            if let Some(b) = blocks.last_mut() {
+                b.entries.push(m);
+            }
+            continue;
+        }
+        let path: &str = &m.file_path;
+        let is_match = !m.is_context;
+        match blocks.last_mut() {
+            Some(b) if b.path == path => {
+                b.entries.push(m);
+                b.match_count += usize::from(is_match);
+            }
+            _ => blocks.push(ContentBlock {
+                path,
+                entries: vec![m],
+                match_count: usize::from(is_match),
+            }),
+        }
+    }
+    blocks
+}
+
+/// Render one entry as a grouped-content row (no path prefix — the file header
+/// carries the path). With line numbers: `line:content` for a match,
+/// `line-content` for a context line (mirrors ripgrep's `--heading` style).
+/// Without line numbers: bare content.
+fn render_content_row(m: &GrepMatchLine, show_line_numbers: bool) -> String {
+    if show_line_numbers {
+        let sep = if m.is_context { '-' } else { ':' };
+        format!("{}{sep}{}", m.line_number, m.line_content)
+    } else {
+        m.line_content.clone()
+    }
+}
+
+/// Format content-mode output in the ripgrep `--heading` grouped style: one
+/// path header per file, then `line:content` match rows / `line-content`
+/// context rows / `--` breaks. The path is printed once per file instead of on
+/// every line — the token win (design §2.3). Layered constraints:
+///
+/// - **per-file cap** (`opts.per_file_limit`): at most N match rows per file;
+///   the rest become a `+N more in <file>` marker. Applied before the global
+///   head_limit so one hot file can't consume the whole budget (coverage).
+/// - **offset / head_limit**: count match rows globally; context / break rows
+///   ride along with any match shown in the window.
+/// - **overflow markers**: `+N more files` when head_limit hid whole files,
+///   alongside the existing pagination footer.
 fn format_content(
     matches: &[GrepMatchLine],
     offset: usize,
     effective_limit: usize,
     opts: ContentFormatOptions,
 ) -> String {
-    // Build output lines. When `-n: true` (default) the format is
-    // `path:linenum:content` / `path-linenum-content`. When `-n: false` the
-    // line number segment is dropped entirely, yielding `path:content` /
-    // `path-content`. Context breaks are `--` in both cases.
-    let mut lines: Vec<String> = Vec::with_capacity(matches.len());
-    for m in matches {
-        if m.is_break {
-            lines.push("--".to_string());
-        } else {
-            let sep = if m.is_context { '-' } else { ':' };
-            if opts.show_line_numbers {
-                lines.push(format!(
-                    "{}{sep}{}{sep}{}",
-                    m.file_path, m.line_number, m.line_content
-                ));
-            } else {
-                lines.push(format!("{}{sep}{}", m.file_path, m.line_content));
+    let blocks = group_content_blocks(matches);
+
+    let mut out: Vec<String> = Vec::new();
+    let mut skipped = 0usize; // match rows skipped by `offset`
+    let mut shown = 0usize; // match rows emitted in the window
+    let mut total_capped_shown = 0usize; // Σ min(match_count, per_file_limit)
+    let mut hidden_files = 0usize; // capped-visible files past the head_limit window
+    let mut stopped = false; // head_limit exhausted
+
+    for block in &blocks {
+        let capped_visible = block.match_count.min(opts.per_file_limit);
+        total_capped_shown += capped_visible;
+
+        if stopped {
+            // Window already full; keep scanning only to tally overflow.
+            if capped_visible > 0 {
+                hidden_files += 1;
             }
+            continue;
+        }
+
+        // Emit this block's rows within the offset/head_limit window and under
+        // the per-file cap.
+        let mut rows: Vec<String> = Vec::new();
+        let mut file_shown = 0usize; // match rows rendered from this file
+        let mut file_cap_hidden = 0usize; // match rows this file dropped to the cap
+        for e in &block.entries {
+            if e.is_break {
+                // Keep a `--` only between two shown rows; a trailing one is
+                // dropped by the post-loop trim.
+                if !rows.is_empty() {
+                    rows.push("--".to_string());
+                }
+                continue;
+            }
+            if !e.is_context {
+                // Match row.
+                if file_shown >= opts.per_file_limit {
+                    // Dropped by the per-file cap (NOT by offset) — this is what
+                    // the `+N more in <file>` marker counts.
+                    file_cap_hidden += 1;
+                    continue;
+                }
+                if skipped < offset {
+                    skipped += 1;
+                    continue; // still skipping under `offset`
+                }
+                if shown >= effective_limit {
+                    stopped = true;
+                    break;
+                }
+                rows.push(render_content_row(e, opts.show_line_numbers));
+                shown += 1;
+                file_shown += 1;
+            } else if skipped >= offset
+                && file_shown < opts.per_file_limit
+                && shown < effective_limit
+            {
+                // Context row — shown once we're past the offset region and
+                // still under both the per-file cap and the global head_limit.
+                // (Before-context precedes its match, so this must NOT gate on
+                // `file_shown > 0`.)
+                rows.push(render_content_row(e, opts.show_line_numbers));
+            }
+        }
+
+        // Drop a dangling trailing break.
+        while rows.last().is_some_and(|r| r == "--") {
+            rows.pop();
+        }
+
+        if file_shown == 0 {
+            // No match from this file landed in the window (all skipped by
+            // offset, or the head_limit was hit at this file's head). Any
+            // buffered before-context is dropped with the block.
+            if stopped && capped_visible > 0 {
+                hidden_files += 1;
+            }
+            continue;
+        }
+
+        if !out.is_empty() {
+            out.push(String::new()); // blank line between file groups
+        }
+        out.push(block.path.to_string());
+        out.extend(rows);
+        // Marker counts matches hidden BY THE CAP only. Offset-skipped matches
+        // are not "more in this file" — they're behind the current page, so
+        // deriving from match_count - capped_visible would overcount when the
+        // offset lands inside this file.
+        if file_cap_hidden > 0 {
+            out.push(format!("+{file_cap_hidden} more in {}", block.path));
         }
     }
 
-    let after_offset: Vec<String> = lines.into_iter().skip(offset).collect();
-    let was_truncated = after_offset.len() > effective_limit;
-    let display: Vec<String> = after_offset.into_iter().take(effective_limit).collect();
-
-    let applied_limit = was_truncated.then_some(effective_limit);
-    let limit_info = format_limit_info(applied_limit, offset);
-
-    let body = if display.is_empty() {
+    // Empty window still carries the pagination footer when an offset was
+    // applied (a model paging past the end must see the offset echoed back).
+    let mut body = if out.is_empty() {
         "No matches found".to_string()
     } else {
-        display.join("\n")
+        out.join("\n")
     };
-
-    if limit_info.is_empty() {
-        body
-    } else {
-        format!("{body}\n\n[Showing results with pagination = {limit_info}]")
+    // Pagination footer (kept for continuity): fires when capped-visible matches
+    // exist beyond the window, or an offset was applied.
+    let was_truncated = offset + shown < total_capped_shown;
+    let applied_limit = was_truncated.then_some(effective_limit);
+    let limit_info = format_limit_info(applied_limit, offset);
+    if !limit_info.is_empty() {
+        body.push_str(&format!(
+            "\n\n[Showing results with pagination = {limit_info}]"
+        ));
     }
+    if hidden_files > 0 {
+        let file_word = if hidden_files == 1 { "file" } else { "files" };
+        body.push_str(&format!("\n+{hidden_files} more {file_word}"));
+    }
+    body
 }
 
 fn format_count(matches: &[GrepMatchLine], offset: usize, effective_limit: usize) -> String {

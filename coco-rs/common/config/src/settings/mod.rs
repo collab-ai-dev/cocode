@@ -28,6 +28,7 @@ use crate::sections::PartialLoopSettings;
 use crate::sections::PartialLspSettings;
 use crate::sections::PartialMcpRuntimeSettings;
 use crate::sections::PartialMemorySettings;
+use crate::sections::PartialOutputRewriteSettings;
 use crate::sections::PartialPathSettings;
 use crate::sections::PartialServerSettings;
 use crate::sections::PartialShellSettings;
@@ -117,6 +118,10 @@ pub struct Settings {
     pub tool: PartialToolSettings,
     #[serde(default)]
     pub shell: PartialShellSettings,
+    /// Bash output-compression knobs (`Feature::OutputRewrite`). Resolved into
+    /// `RuntimeConfig.output_rewrite` (`OutputRewriteConfig`).
+    #[serde(default)]
+    pub output_rewrite: PartialOutputRewriteSettings,
     #[serde(default)]
     pub sandbox: SandboxSettings,
     #[serde(default)]

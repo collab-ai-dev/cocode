@@ -484,6 +484,21 @@ impl SessionRuntime {
             coco_types::ActiveShellTool::Disabled => (None, None),
         };
 
+        // Session-scoped Bash output rewriter — built once here (rtk's binary is
+        // probed lazily on first use, then cached), gated at this subsystem entry
+        // point on `Feature::OutputRewrite`. `None` when off ⇒ BashTool behaves
+        // exactly as before. The engine selects the concrete `BashOutputRewriter`
+        // impl; rtk is the only backend today.
+        let output_rewriter: Option<Arc<dyn coco_shell::BashOutputRewriter>> = runtime_config
+            .features
+            .enabled(coco_types::Feature::OutputRewrite)
+            .then(|| match runtime_config.output_rewrite.engine {
+                coco_config::OutputRewriteEngine::Rtk => Arc::new(coco_shell::RtkRewriter::new(
+                    runtime_config.output_rewrite.rtk.clone(),
+                ))
+                    as Arc<dyn coco_shell::BashOutputRewriter>,
+            });
+
         // Seed --add-dir + settings additionalDirectories into the session
         // working-dir allowlist. Computed before the engine config since the
         // rules + dirs now live ONLY on the live `ToolAppState.permissions`
@@ -537,6 +552,7 @@ impl SessionRuntime {
             shell_config: runtime_config.shell.clone(),
             active_shell_tool,
             shell_provider,
+            output_rewriter,
             original_cwd: Some(session_original_cwd.clone()),
             session_cwd: Some(session_current_cwd.clone()),
             web_fetch_config: runtime_config.web_fetch.clone(),

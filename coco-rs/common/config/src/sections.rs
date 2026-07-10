@@ -30,6 +30,17 @@ const DEFAULT_BASH_MAX_OUTPUT_BYTES: i64 = 2_000_000;
 /// down at `finalize()` time.
 pub(crate) const BASH_MAX_OUTPUT_BYTES_UPPER: i64 = 10_000_000;
 const DEFAULT_GLOB_TIMEOUT_SECONDS: i32 = 10;
+/// Grep content-mode default per-file match cap before a `+N more in <file>`
+/// marker (0 = unlimited). Overridable per call via the Grep `per_file_limit`
+/// input; this is the fallback default.
+const DEFAULT_GREP_PER_FILE_LIMIT: i32 = 25;
+/// Default cap on paths a single Glob call returns before truncation.
+const DEFAULT_GLOB_MAX_RESULTS: i32 = 100;
+/// Glob output is directory-grouped only when it returns at least this many
+/// paths spanning at least [`DEFAULT_GLOB_GROUP_MIN_DIRS`] directories; below
+/// either threshold, flat output is more compact.
+const DEFAULT_GLOB_GROUP_MIN_PATHS: i32 = 25;
+const DEFAULT_GLOB_GROUP_MIN_DIRS: i32 = 3;
 // DEFAULT_MAX_RETRIES = 10, base delay 500ms.
 const DEFAULT_MAX_RETRIES: i32 = 10;
 const MAX_RETRIES_CAP: i32 = 15;
@@ -291,6 +302,18 @@ pub struct PartialToolSettings {
     pub glob_timeout_seconds: Option<i32>,
     pub file_read_ignore_patterns: Option<Vec<String>>,
     pub bash: Option<PartialBashSettings>,
+    pub search: Option<PartialSearchSettings>,
+}
+
+/// settings.json `tool.search` section — Grep/Glob output-formatting knobs
+/// (native rtk absorptions, design §2.3/§2.4). Independent of `Feature::OutputRewrite`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialSearchSettings {
+    pub grep_per_file_limit: Option<i32>,
+    pub glob_max_results: Option<i32>,
+    pub glob_group_min_paths: Option<i32>,
+    pub glob_group_min_dirs: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -311,6 +334,8 @@ pub struct ToolConfig {
     pub glob_timeout_seconds: i32,
     pub file_read_ignore_patterns: Vec<String>,
     pub bash: BashConfig,
+    /// Grep/Glob output-formatting knobs (§2.3/§2.4).
+    pub search: SearchFormatConfig,
 }
 
 impl Default for ToolConfig {
@@ -323,6 +348,7 @@ impl Default for ToolConfig {
             glob_timeout_seconds: DEFAULT_GLOB_TIMEOUT_SECONDS,
             file_read_ignore_patterns: Vec::new(),
             bash: BashConfig::default(),
+            search: SearchFormatConfig::default(),
         }
     }
 }
@@ -353,12 +379,27 @@ impl ToolConfig {
         if let Some(bash) = &tool.bash {
             config.bash.apply_settings(bash);
         }
+        if let Some(search) = &tool.search {
+            config.search.apply_settings(search);
+        }
 
         if let Some(v) = env.get_i32(EnvKey::CocoMaxToolUseConcurrency) {
             config.max_tool_concurrency = v;
         }
         if let Some(v) = env.get_i32(EnvKey::CocoGlobTimeoutSeconds) {
             config.glob_timeout_seconds = v;
+        }
+        if let Some(v) = env.get_i32(EnvKey::CocoGrepPerFileLimit) {
+            config.search.grep_per_file_limit = v;
+        }
+        if let Some(v) = env.get_i32(EnvKey::CocoGlobMaxResults) {
+            config.search.glob_max_results = v;
+        }
+        if let Some(v) = env.get_i32(EnvKey::CocoGlobGroupMinPaths) {
+            config.search.glob_group_min_paths = v;
+        }
+        if let Some(v) = env.get_i32(EnvKey::CocoGlobGroupMinDirs) {
+            config.search.glob_group_min_dirs = v;
         }
         if let Some(raw) = env.get(EnvKey::CocoFileReadIgnorePatterns) {
             config.file_read_ignore_patterns = raw
@@ -384,6 +425,61 @@ impl ToolConfig {
         self.result_preview_size = self.result_preview_size.max(0);
         self.glob_timeout_seconds = self.glob_timeout_seconds.max(1);
         self.bash.finalize();
+        self.search.finalize();
+    }
+}
+
+/// Grep/Glob output-formatting policy (native rtk absorptions, §2.3/§2.4).
+/// These are display thresholds, not physics — resolved from settings/env so
+/// they can be tuned without a rebuild. Independent of `Feature::OutputRewrite`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchFormatConfig {
+    /// Default per-file match-line cap in Grep content mode before a
+    /// `+N more in <file>` marker (0 = unlimited). The Grep `per_file_limit`
+    /// input overrides this per call.
+    pub grep_per_file_limit: i32,
+    /// Max paths a Glob call returns before truncation (`+N more files`).
+    pub glob_max_results: i32,
+    /// Group Glob output by directory only when it returns ≥ this many paths…
+    pub glob_group_min_paths: i32,
+    /// …spanning ≥ this many distinct directories. Below either, flat wins.
+    pub glob_group_min_dirs: i32,
+}
+
+impl Default for SearchFormatConfig {
+    fn default() -> Self {
+        Self {
+            grep_per_file_limit: DEFAULT_GREP_PER_FILE_LIMIT,
+            glob_max_results: DEFAULT_GLOB_MAX_RESULTS,
+            glob_group_min_paths: DEFAULT_GLOB_GROUP_MIN_PATHS,
+            glob_group_min_dirs: DEFAULT_GLOB_GROUP_MIN_DIRS,
+        }
+    }
+}
+
+impl SearchFormatConfig {
+    fn apply_settings(&mut self, settings: &PartialSearchSettings) {
+        if let Some(v) = settings.grep_per_file_limit {
+            self.grep_per_file_limit = v;
+        }
+        if let Some(v) = settings.glob_max_results {
+            self.glob_max_results = v;
+        }
+        if let Some(v) = settings.glob_group_min_paths {
+            self.glob_group_min_paths = v;
+        }
+        if let Some(v) = settings.glob_group_min_dirs {
+            self.glob_group_min_dirs = v;
+        }
+    }
+
+    fn finalize(&mut self) {
+        // 0 is meaningful for the per-file cap (= unlimited); clamp negatives.
+        self.grep_per_file_limit = self.grep_per_file_limit.max(0);
+        // Result cap + grouping thresholds must be ≥ 1 to be meaningful.
+        self.glob_max_results = self.glob_max_results.max(1);
+        self.glob_group_min_paths = self.glob_group_min_paths.max(1);
+        self.glob_group_min_dirs = self.glob_group_min_dirs.max(1);
     }
 }
 
@@ -701,6 +797,137 @@ impl ShellConfig {
         }
         if env.is_truthy(EnvKey::CocoBashMaintainProjectWorkingDir) {
             config.maintain_project_working_dir = true;
+        }
+        config
+    }
+}
+
+/// Which output-rewriter engine backs Bash output compression — selects the
+/// concrete `BashOutputRewriter` implementation built at bootstrap. rtk is the
+/// only engine today; this enum is the extension point for a second backend
+/// (per-engine settings nest under their own key, e.g. `output_rewrite.rtk`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputRewriteEngine {
+    /// Rust Token Killer — the external `rtk` binary (and, in phase 2, its
+    /// embedded filter core). Configured under `output_rewrite.rtk`.
+    #[default]
+    Rtk,
+}
+
+/// rtk tier-selection policy (design §3.5) — which rtk lifecycle point acts:
+/// external is a **pre-spawn rewrite**, builtin is a **post-exec filter**. This
+/// is an rtk-engine-internal knob (`output_rewrite.rtk.mode`), distinct from
+/// [`OutputRewriteEngine`] which selects the backend.
+///
+/// **Phase 1 note:** the embedded tier does not exist yet, so this is *accepted
+/// but not yet read* — every value currently behaves as [`RtkMode::ExternalOnly`].
+/// The per-variant descriptions are the phase-2 target semantics (e.g.
+/// `BuiltinOnly`'s "never spawn the binary" only takes effect once the embedded
+/// core lands).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RtkMode {
+    /// Default. Embedded core filters post-exec; the external binary is
+    /// consulted only for commands the core cannot handle at full fidelity.
+    #[default]
+    BuiltinFirst,
+    /// Binary rewrite when available; embedded core as the fallback.
+    ExternalFirst,
+    /// Never spawn the binary (deterministic CI / air-gapped).
+    BuiltinOnly,
+    /// Never use the embedded core (parity debugging; `rtk gain` ledger).
+    ExternalOnly,
+}
+
+/// Default kill-time for the `rtk rewrite` probe. A hung rewriter must never
+/// delay the real command.
+pub const RTK_DEFAULT_REWRITE_TIMEOUT_MS: i64 = 500;
+
+/// settings.json `output_rewrite` section — the generic Bash output-compression
+/// capability config. `engine` selects the backend; per-engine settings nest
+/// under their own key. Every field optional.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialOutputRewriteSettings {
+    pub engine: Option<OutputRewriteEngine>,
+    pub rtk: PartialRtkSettings,
+}
+
+/// settings.json `output_rewrite.rtk` section — rtk-engine-specific knobs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialRtkSettings {
+    pub mode: Option<RtkMode>,
+    pub binary_path: Option<String>,
+    pub exclude_commands: Vec<String>,
+    pub rewrite_timeout_ms: Option<i64>,
+}
+
+/// Resolved Bash output-compression config. On/off is
+/// [`coco_types::Feature::OutputRewrite`]; this carries the engine selection
+/// plus each engine's settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputRewriteConfig {
+    /// Which rewriter backend to build at bootstrap.
+    pub engine: OutputRewriteEngine,
+    /// rtk-engine settings (used when `engine == Rtk`).
+    pub rtk: RtkConfig,
+}
+
+impl OutputRewriteConfig {
+    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
+        Self {
+            engine: settings.output_rewrite.engine.unwrap_or_default(),
+            rtk: RtkConfig::resolve(settings, env),
+        }
+    }
+}
+
+/// Resolved rtk-engine configuration. Filter tuning, tee mode, transparent
+/// prefixes and analytics stay in rtk's own `~/.config/rtk/config.toml`, owned
+/// by rtk — never mirrored here (design §5.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RtkConfig {
+    /// rtk tier-selection policy (§3.5).
+    pub mode: RtkMode,
+    /// Explicit rtk binary; `None` → probe `$PATH` once per session.
+    pub binary_path: Option<String>,
+    /// coco-side skip list, matched on the first command word before the
+    /// probe spawns. rtk's own `[hooks] exclude_commands` still applies
+    /// inside the engine — union of vetoes (§3.4), NOT a mirror.
+    pub exclude_commands: Vec<String>,
+    /// Kill the `rtk rewrite` probe after this and fall back.
+    pub rewrite_timeout_ms: i64,
+}
+
+impl Default for RtkConfig {
+    fn default() -> Self {
+        Self {
+            mode: RtkMode::default(),
+            binary_path: None,
+            exclude_commands: Vec::new(),
+            rewrite_timeout_ms: RTK_DEFAULT_REWRITE_TIMEOUT_MS,
+        }
+    }
+}
+
+impl RtkConfig {
+    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
+        let rtk = &settings.output_rewrite.rtk;
+        let mut config = Self {
+            mode: rtk.mode.unwrap_or_default(),
+            binary_path: rtk.binary_path.clone(),
+            exclude_commands: rtk.exclude_commands.clone(),
+            rewrite_timeout_ms: rtk
+                .rewrite_timeout_ms
+                .filter(|&ms| ms > 0)
+                .unwrap_or(RTK_DEFAULT_REWRITE_TIMEOUT_MS),
+        };
+        // `COCO_RTK_PATH` overrides the settings binary path (env wins so a
+        // one-off run can point at a different binary without editing files).
+        if let Some(path) = env.get_string(EnvKey::CocoRtkPath) {
+            config.binary_path = Some(path);
         }
         config
     }

@@ -289,6 +289,9 @@ fn run_turn_with_session(
             shell_config: runtime_config.shell.clone(),
             active_shell_tool: current_engine_config.active_shell_tool,
             shell_provider: current_engine_config.shell_provider.clone(),
+            // Preserve the session-scoped output rewriter (probed once) across
+            // SDK turn config rebuilds.
+            output_rewriter: current_engine_config.output_rewriter.clone(),
             web_fetch_config: runtime_config.web_fetch.clone(),
             web_search_config: runtime_config.web_search.clone(),
             compact: runtime_config.compact.clone(),
