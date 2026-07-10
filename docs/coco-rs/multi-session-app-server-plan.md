@@ -559,12 +559,16 @@ per-session cwd is the single source of truth for every consumer:
   session-scoped paths (§2) are deleted; `absolutize` gains an
   explicit-base variant for session paths.
 - Steady-state enforcement is a lint, not a convention: `clippy.toml`
-  adds `std::env::current_dir` to `disallowed-methods`, with a narrowly
-  scoped `#[allow(clippy::disallowed_methods)]` at the CLI entrypoint
-  (initial cwd capture) and nowhere else. Until the remaining standalone
-  tools and path utilities can be allow-listed or split cleanly, the
-  checked-in `check-session-cwd-discipline.sh` guard enforces the same
-  rule on session-owned production code.
+  now lists `std::env::current_dir` in `disallowed-methods`, so every
+  workspace crate is checked. The legitimate process-cwd readers —
+  the CLI startup boundary (`main.rs`), the deliberately-named
+  `AbsolutePathBuf::{current_dir, relative_to_current_dir}` helpers,
+  standalone binaries (`coco-file-search`, retrieval TUI), the Windows
+  PTY spawn fallback, the cargo-bin test harness, and test modules —
+  opt out with an explicit `#[allow(clippy::disallowed_methods)]`. The
+  checked-in `check-session-cwd-discipline.sh` guard is retained as the
+  precise, path-scoped complement that keeps *session-owned* production
+  code clean without relying on per-site allow discipline.
 
 ### 6.6 Layering over coco-coordinator
 
@@ -1521,9 +1525,11 @@ No dual-stack, no compatibility shims, no transitional protocol variants.
    boot to `session/start` (§6.5).
 8. cwd discipline (§6.5): session-owned production crates no longer read
    `std::env::current_dir()` outside the `main.rs` startup boundary and are
-   covered by `check-session-cwd-discipline.sh`; the steady-state
-   full-workspace `clippy.toml` `disallowed-methods` entry remains after
-   standalone tools are split or allow-listed.
+   covered by `check-session-cwd-discipline.sh`. The steady-state
+   full-workspace `clippy.toml` `disallowed-methods` entry for
+   `std::env::current_dir` is now in place; standalone binaries,
+   path-boundary helpers, and test modules opt out with explicit
+   `#[allow(clippy::disallowed_methods)]`.
 
 Implementation progress as of 2026-07-07:
 
@@ -2023,8 +2029,18 @@ Implementation progress as of 2026-07-07:
   SDK stdio now convert local AppServer shutdown drain and Event Hub connector
   flush failures or timeouts into a nonzero process result after ordinary
   cleanup has run; both bounded waits also observe an OS interrupt signal and
-  stop waiting instead of consuming the full timeout. Full top-level process
-  signal orchestration remains higher-layer work.
+  stop waiting instead of consuming the full timeout. The shared
+  `shutdown::os_interrupt_signal` now observes SIGTERM as well as SIGINT on
+  Unix, so a `kill <pid>` (the default init-system / container-runtime signal)
+  triggers the §7.7 drain instead of the default terminate action; on other
+  platforms it still observes Ctrl+C only, and a handler-registration failure
+  degrades to "no signal-initiated shutdown" rather than a spurious immediate
+  interrupt. SDK server mode now races its AppServer dispatch loop against that
+  signal, so an OS signal arriving mid-dispatch initiates the graceful drain
+  (installing the handler for the whole loop) instead of aborting the process;
+  a second signal during the bounded drain still aborts it and yields a nonzero
+  exit. Full top-level process signal orchestration for interactive TUI /
+  print-mode turn interruption remains higher-layer work.
   Local TUI/headless bridges and SDK stdio AppServer startup now also consume
   `server.event_retention_per_session` / `COCO_SERVER_EVENT_RETENTION_PER_SESSION`
   and `server.outbound_queue_frames` / `COCO_SERVER_OUTBOUND_QUEUE_FRAMES` for
@@ -2199,11 +2215,15 @@ Implementation progress as of 2026-07-07:
   longer reaches into the fused runtime for that sequence. Startup
   `spawn_load` runtime construction now routes through bridge-owned
   `SessionRuntimeFactory` helpers instead of entrypoint-local load futures.
-  Full process signal orchestration around shutdown, full immutable-runtime
-  shutdown beyond the bridge-owned close cascade, broader
-  remaining concrete persisted session-store I/O, and deleting the fused
-  `SessionRuntime` container once its remaining shared process resources have
-  owners. Transport
+  Process signal orchestration around shutdown now covers SIGINT/SIGTERM:
+  `shutdown::os_interrupt_signal` observes both on Unix and SDK server mode
+  races the dispatch loop against it so a signal initiates the §7.7 drain.
+  Remaining after this: full immutable-runtime shutdown beyond the
+  bridge-owned close cascade, broader concrete persisted session-store I/O,
+  signal-initiated interruption of interactive TUI / print-mode turns, and
+  deleting the fused `SessionRuntime` container once its remaining shared
+  process resources have owners (the A3 extraction into `coco-app-runtime`).
+  Transport
   owner loops now apply bounded
   outbound write/send timeouts and disconnect slow consumers before returning
   the timeout error.
@@ -2347,14 +2367,47 @@ Implementation progress as of 2026-07-07:
 - `scripts/check-session-cwd-discipline.sh` is wired into `just check-seam`
   to reject new process-cwd reads in session-owned production crates, and now
   also rejects process-cwd reads in `utils/absolute-path/src/absolutize.rs`.
-  It allow-lists only the CLI startup boundary; full-workspace `clippy.toml`
-  enforcement remains the steady-state target after standalone utilities are
-  split or allow-listed.
+  It allow-lists only the CLI startup boundary. The full-workspace
+  `clippy.toml` `disallowed-methods` entry for `std::env::current_dir` is
+  now also in place as the additive steady-state gate, with explicit
+  `#[allow(clippy::disallowed_methods)]` on the legitimate standalone /
+  path-boundary / test readers.
 - `coco-file-search` no longer reads process cwd from its reusable
   `run_main` library entrypoint; the standalone binary now fills the cwd at
   its CLI boundary before delegating.
-- `app/cli` now resolves a `SessionWorkspace` snapshot at runtime build time,
-  separating the session cwd, the future `ProjectServices` cache key
+- `SessionWorkspace` and the project-root/paths resolution
+  (`resolve_project_root`, `settings_roots_for_cwd`, `runtime_paths`,
+  `project_paths`, `git_root_for`) now live in `coco-app-runtime`
+  (`workspace` module) — their derived project root is the `ProjectServices`
+  cache key, so they belong beside the registry that keys on it; this also
+  removes the byte-identical `git_root_for` that was duplicated in
+  `project_services.rs`. `app/cli::paths` re-exports them so existing callers
+  are unchanged, and `SessionRuntime` construction (`factory.rs` / `build.rs`)
+  now depends on `coco_app_runtime::SessionWorkspace` directly rather than
+  `crate::paths`. This is the first landed slice of the §5.1 A3 extraction (the
+  cleanly-separable, cross-cutting path helpers); the remaining A3 work — moving
+  `SessionRuntime`/`SessionHandle`/`SessionRuntimeFactory` themselves — is
+  advanced by moving the whole session-construction *bootstrap* machinery into
+  `coco-app-runtime`'s `bootstrap` module: the `SessionRuntimeBootstrap` bundle,
+  `SessionRuntimeBootstrapBuild`, the `BootstrapSource` trait,
+  `StartupSnapshotSource`, and a Tier-3 `BootstrapError` (thiserror +
+  `StackError`/`ErrorExt`). `SessionRuntimeBootstrapSource` is now a cloneable
+  facade over `Arc<dyn coco_app_runtime::BootstrapSource>`; only the Cli-coupled
+  `PerSessionFoldSource` (`crate::Cli` +
+  `headless::build_runtime_config_with_reloader_roots` +
+  `session_bootstrap::build_engine_resources`) stays in `coco-cli`, implementing
+  the trait and converting its `anyhow` failures to `BootstrapError` at the
+  crate boundary. What still remains: moving the factory + `SessionHandle::build`
+  off `anyhow` to a Tier-3 error, and trait-inverting the three held
+  late-bound app/cli handles (`task_runtime::TaskRuntime` — shared with SDK
+  handlers calling concrete `kill_task`/`list_tasks`/`manager`/
+  `read_terminal_outputs`, a connected-component move;
+  `file_changed_watcher::FileChangedHookWatcher` and
+  `command_queue_sink::CommandQueueNotificationSink` — session-runtime-only).
+  Session-runtime-only helpers (e.g. `side_query_impl`) move with
+  `SessionRuntime`, not separately.
+  `app/cli` resolves a `SessionWorkspace` snapshot at runtime build time,
+  separating the session cwd, the `ProjectServices` cache key
   (`project_root` = git worktree root, else cwd), and the existing transcript /
   memory `ProjectPaths` storage anchor. `SessionRuntime` stores the project
   root and reuses the single storage-path snapshot instead of recomputing it
@@ -3055,8 +3108,10 @@ Projects and cwd:
 - Lint seam: session-owned production code rejects new
   `std::env::current_dir` reads via `check-session-cwd-discipline.sh`;
   the CLI startup boundary and documented headless embedder fallback stay
-  on the allow-list. Full-workspace `clippy.toml` enforcement is the
-  steady-state follow-up once standalone tools are split or allow-listed.
+  on the allow-list. Full-workspace `clippy.toml` `disallowed-methods`
+  enforcement for `std::env::current_dir` is now in place as the additive
+  steady-state gate; legitimate standalone / path-boundary / test readers
+  carry explicit `#[allow(clippy::disallowed_methods)]`.
 
 Surfaces and clients:
 
@@ -3165,7 +3220,7 @@ Carried forward from v5 unless marked; new and reversed entries noted.
 | D-34 | Worktree governed solely by `Feature::Worktree` as resolved in the session's config fold; no separate `session/start` parameter |
 | D-35 | Three ownership scopes: Process / Project / Session. `ProjectServices` cached per project root (git worktree root, else cwd) with single-flight load and idle eviction — the opencode `LocationServiceMap` shape. Evidence: all five reference products host multiple working directories per process; none binds one process to one project root |
 | D-36 | **Amends v5 #17**: only policy/user/flag/env settings layers are process-global. Project + local layers fold per session at `session/start`; project settings resolve against the session's resolved project root, local settings resolve against the session cwd (codex layer-stack position: file layers below per-session `SessionFlags`-style overrides); `RuntimeConfig` and `Features` are per-session snapshots; resume re-folds |
-| D-37 | cwd is per-session state threaded explicitly (`ToolUseContext` → spawn `current_dir`); no process-cwd fallbacks on session paths; currently enforced on session-owned production crates via `check-session-cwd-discipline.sh`, with full-workspace `clippy.toml` `disallowed-methods` as the steady-state target once standalone tools are split or allow-listed |
+| D-37 | cwd is per-session state threaded explicitly (`ToolUseContext` → spawn `current_dir`); no process-cwd fallbacks on session paths; enforced on session-owned production crates via `check-session-cwd-discipline.sh` AND workspace-wide via the `clippy.toml` `disallowed-methods` entry for `std::env::current_dir` (now in place), with explicit `#[allow(clippy::disallowed_methods)]` on the legitimate standalone / path-boundary / test readers |
 | D-38 | Event taxonomy: durable (Protocol + boundary events — sequenced, ring-retained, hub-shipped) vs ephemeral (Stream deltas + Tui — `session_seq: None`, live-only, never replayed); decided at the stamping seam |
 | D-39 | `session_seq` survives restarts: high-water mark persisted in transcript metadata (periodic flush + close cascade step 5), counter restored on resume; hub cursors stay valid across process restarts |
 | D-40 | The driver never runs a turn inline: turns are spawned tasks; every mailbox command is fast; `Interrupt`/`ReadState`/`Steer` are served during `TurnActive`. The session root `CancellationToken` is private to runtime + registry close path — not on the handle |

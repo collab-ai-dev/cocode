@@ -124,14 +124,14 @@ impl SessionRuntime {
         };
         // Session workspace anchors — one snapshot shared by every subsystem
         // that needs cwd, storage paths, or the future ProjectServices key.
-        let session_workspace = crate::paths::SessionWorkspace::resolve(cwd.clone());
+        let session_workspace = coco_app_runtime::SessionWorkspace::resolve(cwd.clone());
         let project_root = project_services.project_root().to_path_buf();
         let project_paths = session_workspace.storage_paths.clone();
 
         // Per-project filesystem layout — one `Arc<ProjectPaths>` shared
         // by the memory runtime, the transcript enumerator, and any
         // future subsystem that needs the same canonical slug. Built
-        // once via `crate::paths::project_paths` (canonical-git-root
+        // once via `coco_app_runtime::project_paths` (canonical-git-root
         // + slug).
         // Main-session transcript store, selected by `session.backend`.
         // Constructed once so the per-turn message append, usage accounting,

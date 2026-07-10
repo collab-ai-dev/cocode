@@ -14,17 +14,20 @@ workspace = true
 [dependencies]
 coco-commands.workspace = true
 coco-config.workspace = true
+coco-config-reload.workspace = true
 coco-error.workspace = true
 coco-git.workspace = true
 coco-hooks.workspace = true
 coco-lsp.workspace = true
 coco-mcp.workspace = true
 coco-output-styles.workspace = true
+coco-paths.workspace = true
 coco-plugins.workspace = true
 coco-skills.workspace = true
 coco-subagent.workspace = true
 coco-types.workspace = true
 coco-utils-common.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing.workspace = true
 

@@ -17,6 +17,8 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 
+use crate::workspace::git_root_for;
+
 const PROJECT_SERVICES_IDLE_TTL: Duration = Duration::from_secs(60 * 60);
 const PROJECT_SERVICES_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
@@ -523,17 +525,5 @@ pub fn standard_agent_search_paths_with_plugins(
             )
             .collect(),
         ..coco_subagent::definition_store::AgentSearchPaths::empty()
-    }
-}
-
-fn git_root_for(cwd: &Path) -> Option<PathBuf> {
-    let mut current = cwd.to_path_buf();
-    loop {
-        if current.join(".git").exists() {
-            return Some(current);
-        }
-        if !current.pop() {
-            return None;
-        }
     }
 }

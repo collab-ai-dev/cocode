@@ -906,6 +906,7 @@ fn notification_sender(inner: &Inner) -> Option<RpcNotificationSender> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Test fixtures use the process cwd (§6.5/D-37).
 mod tests {
     use super::*;
     use coco_utils_path_uri::PathUri;

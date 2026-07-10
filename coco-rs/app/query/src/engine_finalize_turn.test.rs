@@ -1,3 +1,7 @@
+// Reads the process cwd, legitimate outside session-owned code; opts out of
+// the workspace-wide `std::env::current_dir` gate (clippy.toml, §6.5/D-37).
+#![allow(clippy::disallowed_methods)]
+
 // Tests for `render_teammate_message_wrapper` lived here. The helper
 // was deleted alongside the engine-side `Inbox`: teammate messages now
 // flow through `CommandQueue` with `QueueOrigin::Coordinator` /

@@ -1,3 +1,7 @@
+// Reads the process cwd, legitimate outside session-owned code; opts out of
+// the workspace-wide `std::env::current_dir` gate (clippy.toml, §6.5/D-37).
+#![allow(clippy::disallowed_methods)]
+
 //! R6-T20: file_read_ignore_matcher_from_patterns + permission helpers.
 //!
 //! Tests construct a matcher directly from pattern strings so they

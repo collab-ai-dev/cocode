@@ -53,7 +53,40 @@ where
     }
 }
 
+/// Resolves when the process receives an OS shutdown/interrupt signal, which
+/// initiates the §7.7 graceful drain.
+///
+/// On Unix this observes both SIGINT (Ctrl+C) and SIGTERM — the latter is the
+/// default `kill` signal and what init systems and container runtimes send, so
+/// a plain `kill <pid>` drains cleanly instead of aborting mid-turn. On other
+/// platforms only Ctrl+C is observed. If a handler fails to register the future
+/// never resolves, so a registration error degrades to "no signal-initiated
+/// shutdown" rather than a spurious immediate interrupt.
 pub async fn os_interrupt_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        match signal(SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    () = ctrl_c_or_pending() => {}
+                    _ = sigterm.recv() => {}
+                }
+            }
+            Err(_) => ctrl_c_or_pending().await,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        ctrl_c_or_pending().await;
+    }
+}
+
+/// Waits for Ctrl+C, or never resolves if the handler cannot be installed —
+/// preserving the pre-existing "registration failure is not a shutdown"
+/// contract.
+async fn ctrl_c_or_pending() {
     if tokio::signal::ctrl_c().await.is_err() {
         std::future::pending::<()>().await;
     }

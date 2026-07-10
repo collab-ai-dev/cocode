@@ -1,3 +1,7 @@
+// Reads the process cwd, legitimate outside session-owned code; opts out of
+// the workspace-wide `std::env::current_dir` gate (clippy.toml, §6.5/D-37).
+#![allow(clippy::disallowed_methods)]
+
 //! Live tests for the **`coco -p`** headless entry point.
 //!
 //! Drives `coco_cli::headless::run_chat_with_options` in-process — the

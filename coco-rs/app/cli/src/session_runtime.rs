@@ -52,7 +52,7 @@ mod sandbox;
 mod session_handle;
 mod state;
 
-pub use factory::SessionRuntimeBootstrap;
+pub use coco_app_runtime::SessionRuntimeBootstrap;
 pub use factory::SessionRuntimeBootstrapSource;
 pub use factory::SessionRuntimeFactory;
 pub use factory::SessionRuntimeFactoryOpts;

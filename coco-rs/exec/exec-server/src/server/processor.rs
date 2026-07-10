@@ -222,6 +222,7 @@ async fn run_connection(
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // Test fixtures use the process cwd (§6.5/D-37).
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
