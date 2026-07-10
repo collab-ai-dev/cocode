@@ -44,6 +44,7 @@ use coco_types::ToolId;
 use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -51,9 +52,6 @@ use std::time::SystemTime;
 
 use super::blocking_fs::BlockingFsTask;
 use tokio_util::sync::CancellationToken;
-
-/// Default max results when glob_limits.max_results is None.
-const DEFAULT_MAX_RESULTS: usize = 100;
 
 /// Tool description shown to the model.
 const GLOB_DESCRIPTION: &str = "\
@@ -221,12 +219,9 @@ impl Tool for GlobTool {
             });
         }
 
-        // Read limit from ctx.glob_limits
-        let max_results = ctx
-            .glob_limits
-            .max_results
-            .map(|n| n as usize)
-            .unwrap_or(DEFAULT_MAX_RESULTS);
+        // Result cap (config/env via `tool.search.glob_max_results`); `.max(1)`
+        // guards test contexts that build `ToolConfig` without `finalize()`.
+        let max_results = ctx.tool_config.search.glob_max_results.max(1) as usize;
 
         let timeout_secs = ctx.tool_config.glob_timeout_seconds.max(1) as u64;
 
@@ -245,7 +240,7 @@ impl Tool for GlobTool {
             )
         });
 
-        let (paths, truncated) =
+        let (paths, hidden) =
             tokio::time::timeout(Duration::from_secs(timeout_secs), search_task.join())
                 .await
                 .map_err(|_| ToolError::Timeout {
@@ -257,17 +252,11 @@ impl Tool for GlobTool {
                     source: None,
                 })?;
 
-        let output = if paths.is_empty() {
-            "No files found".to_string()
-        } else {
-            let mut text = paths.join("\n");
-            if truncated {
-                text.push_str(
-                    "\n(Results are truncated. Consider using a more specific path or pattern.)",
-                );
-            }
-            text
-        };
+        // Directory-grouping thresholds (config/env via `tool.search`); `.max(1)`
+        // guards test contexts that build `ToolConfig` without `finalize()`.
+        let min_paths = ctx.tool_config.search.glob_group_min_paths.max(1) as usize;
+        let min_dirs = ctx.tool_config.search.glob_group_min_dirs.max(1) as usize;
+        let output = format_glob_output(&paths, hidden, min_paths, min_dirs);
 
         Ok(ToolResult {
             data: output,
@@ -283,6 +272,9 @@ impl Tool for GlobTool {
 // Core glob search (synchronous, runs inside spawn_blocking)
 // ---------------------------------------------------------------------------
 
+/// Returns `(paths, hidden)` where `paths` is at most `max_results` entries
+/// (mtime-ascending) and `hidden` is how many matches were dropped by the cap
+/// (0 = complete result). `hidden` drives the `+N more files` overflow marker.
 fn run_glob_search(
     pattern: &str,
     search_path: &Path,
@@ -290,7 +282,7 @@ fn run_glob_search(
     max_results: usize,
     cancel: &CancellationToken,
     read_ignore_patterns: &[String],
-) -> Result<(Vec<String>, bool), String> {
+) -> Result<(Vec<String>, usize), String> {
     // The user pattern is compiled into an `ignore::overrides::Override` — the
     // exact matcher ripgrep's `--glob` uses — and applied as a per-file filter
     // (not as the walker's whitelist override). A slash-less pattern therefore
@@ -342,9 +334,10 @@ fn run_glob_search(
     // `rg --files --sort=modified`. Do not flip to newest-first.
     matches.sort_by(|a, b| a.1.cmp(&b.1));
 
-    // Check truncation before limiting
-    let truncated = matches.len() > max_results;
-    if truncated {
+    // Cap before conversion; remember how many were dropped for the overflow
+    // marker. The full set was collected, so the count is exact.
+    let hidden = matches.len().saturating_sub(max_results);
+    if hidden > 0 {
         matches.truncate(max_results);
     }
 
@@ -359,7 +352,121 @@ fn run_glob_search(
         })
         .collect();
 
-    Ok((paths, truncated))
+    Ok((paths, hidden))
+}
+
+// ---------------------------------------------------------------------------
+// Output formatting — flat below threshold, directory-grouped above it (§2.4).
+//
+//   src/
+//     a.rs
+//     b.rs
+//   src/util/
+//     c.rs
+//
+// The directory prints once per group; filenames are indented. Path
+// reconstruction is a mechanical `header + name` join. Grouping only kicks in
+// once repeated directory prefixes actually dominate the payload — the
+// thresholds come from `tool.search.glob_group_min_{paths,dirs}` (config/env).
+// ---------------------------------------------------------------------------
+
+/// One directory's files, plus the rank of its newest member (position in the
+/// mtime-ascending input) used to order groups so recency stays at the tail.
+struct GlobDirGroup<'a> {
+    /// Header text, e.g. `src/util/` or `./` for the root.
+    dir: String,
+    /// Basenames, in the input's mtime-ascending order.
+    files: Vec<&'a str>,
+    /// Highest input index among this group's files (newest member).
+    newest_rank: usize,
+}
+
+/// Render the glob result: directory-grouped when repeated prefixes dominate
+/// (≥ `min_paths` paths across ≥ `min_dirs` dirs), else flat. Appends a
+/// `+N more files` marker when `hidden > 0`.
+fn format_glob_output(
+    paths: &[String],
+    hidden: usize,
+    min_paths: usize,
+    min_dirs: usize,
+) -> String {
+    if paths.is_empty() {
+        return "No files found".to_string();
+    }
+    // Cheap scalar gate first — only build the dir grouping (a HashMap + a
+    // String per path) once the path count clears the threshold.
+    let body = if paths.len() >= min_paths {
+        let groups = group_glob_by_dir(paths);
+        if groups.len() >= min_dirs {
+            render_glob_grouped(&groups)
+        } else {
+            paths.join("\n")
+        }
+    } else {
+        paths.join("\n")
+    };
+    if hidden > 0 {
+        format!("{body}\n+{hidden} more files (use a more specific path or pattern)")
+    } else {
+        body
+    }
+}
+
+/// Split a relative path into its directory header (`src/util/`, or `./` for a
+/// root-level file) and basename.
+fn split_glob_path(full: &str) -> (String, &str) {
+    let path = Path::new(full);
+    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or(full);
+    let dir_header = match path.parent().and_then(|d| d.to_str()) {
+        Some("") | None => "./".to_string(),
+        // Filesystem root: `parent()` is already `/`; don't append a second
+        // separator (a `//` header would reconstruct to `//foo`).
+        Some("/") => "/".to_string(),
+        Some(d) => format!("{d}/"),
+    };
+    (dir_header, file_name)
+}
+
+/// Group the mtime-ascending path list by directory, then order the groups by
+/// their newest member (ascending) so the globally-newest files sit in the last
+/// group — recency stays local to the tail, preserving the mtime-ascending
+/// contract at the group level.
+fn group_glob_by_dir(paths: &[String]) -> Vec<GlobDirGroup<'_>> {
+    let mut groups: Vec<GlobDirGroup> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for (rank, full) in paths.iter().enumerate() {
+        let (dir_header, file_name) = split_glob_path(full);
+        // Clone the header only on the miss path (one alloc per directory), not
+        // for every file landing in an already-seen directory.
+        let gi = match index.get(&dir_header) {
+            Some(&gi) => gi,
+            None => {
+                let gi = groups.len();
+                index.insert(dir_header.clone(), gi);
+                groups.push(GlobDirGroup {
+                    dir: dir_header,
+                    files: Vec::new(),
+                    newest_rank: rank,
+                });
+                gi
+            }
+        };
+        groups[gi].files.push(file_name);
+        groups[gi].newest_rank = rank; // ascending input ⇒ last seen is newest
+    }
+    groups.sort_by_key(|g| g.newest_rank);
+    groups
+}
+
+fn render_glob_grouped(groups: &[GlobDirGroup]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for g in groups {
+        out.push(g.dir.clone());
+        for f in &g.files {
+            out.push(format!("  {f}"));
+        }
+    }
+    out.join("\n")
 }
 
 #[cfg(test)]

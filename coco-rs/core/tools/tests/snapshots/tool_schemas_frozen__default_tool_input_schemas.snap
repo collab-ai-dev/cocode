@@ -140,6 +140,7 @@ expression: map
       "output_mode",
       "path",
       "pattern",
+      "per_file_limit",
       "type"
     ],
     "required": [

@@ -575,6 +575,9 @@ impl QueryEngine {
                 .as_ref()
                 .and_then(|s| s.model_info.as_ref())
                 .and_then(|i| i.apply_patch_tool_type),
+            // Advertise output compression only when a rewriter is actually
+            // wired (subagents inherit the feature flag but not the rewriter).
+            output_rewriter_active: self.config.output_rewriter.is_some(),
         };
 
         // Cache breakpoint at the built-in/MCP boundary. When MCP/dynamic tools

@@ -1,6 +1,7 @@
 # RTK Integration — Bash Output Compression via Rust Token Killer
 
-Status: **design** (no code yet) · Branch: `feat/rtkdesign` · 2026-07-07
+Status: **phase 1 implemented** (subprocess tier — Appendix B checklist landed;
+phase 2 embedded core still pending) · Branch: `feat/rtk` · 2026-07-07
 
 Upstream: [rtk-ai/rtk](https://github.com/rtk-ai/rtk) v0.42.4 (analyzed from a
 local checkout). rtk ("Rust Token Killer") is a CLI proxy that executes a

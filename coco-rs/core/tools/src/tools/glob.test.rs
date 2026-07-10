@@ -240,7 +240,7 @@ async fn test_glob_truncation_message() {
     }
 
     let mut ctx = ToolUseContext::test_default();
-    ctx.glob_limits.max_results = Some(3);
+    ctx.tool_config.search.glob_max_results = 3;
 
     let result = <GlobTool as DynTool>::execute(
         &GlobTool,
@@ -254,9 +254,10 @@ async fn test_glob_truncation_message() {
     .unwrap();
 
     let t = text(&result);
+    // 5 files, cap 3 → 2 hidden, surfaced as the overflow marker.
     assert!(
-        t.contains("Results are truncated"),
-        "should have TS truncation message: {t}"
+        t.contains("+2 more files"),
+        "should have overflow marker: {t}"
     );
 }
 
@@ -422,11 +423,11 @@ async fn test_glob_max_result_size_bound() {
 }
 
 // -----------------------------------------------------------------------
-// Reads glob_limits from context
+// Reads glob max_results from tool config
 // -----------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_glob_reads_glob_limits() {
+async fn test_glob_reads_max_results_from_config() {
     let dir = tempfile::tempdir().unwrap();
     for i in 0..10 {
         std::fs::write(
@@ -437,7 +438,7 @@ async fn test_glob_reads_glob_limits() {
     }
 
     let mut ctx = ToolUseContext::test_default();
-    ctx.glob_limits.max_results = Some(5);
+    ctx.tool_config.search.glob_max_results = 5;
 
     let result = <GlobTool as DynTool>::execute(
         &GlobTool,
@@ -453,10 +454,8 @@ async fn test_glob_reads_glob_limits() {
     let t = text(&result);
     let file_count = t.lines().filter(|l| l.ends_with(".rs")).count();
     assert_eq!(file_count, 5, "should limit to 5 results: {t}");
-    assert!(
-        t.contains("Results are truncated"),
-        "should be truncated: {t}"
-    );
+    // 10 files, cap 5 → 5 hidden.
+    assert!(t.contains("+5 more files"), "should be truncated: {t}");
 }
 
 // -----------------------------------------------------------------------
@@ -568,4 +567,85 @@ fn render_for_model_no_files_branch() {
         panic!("expected Text part");
     };
     assert_eq!(text, "No files found");
+}
+
+// -----------------------------------------------------------------------
+// Pure formatter unit tests — directory grouping + overflow marker (§2.4).
+// -----------------------------------------------------------------------
+
+#[test]
+fn glob_flat_below_threshold() {
+    // 10 paths but a single directory → below 25/3 → flat.
+    let paths: Vec<String> = (0..10).map(|i| format!("a/f{i}.rs")).collect();
+    assert_eq!(
+        super::format_glob_output(&paths, 0, 25, 3),
+        paths.join("\n")
+    );
+}
+
+#[test]
+fn glob_grouped_above_threshold() {
+    let paths = vec![
+        "src/a.rs".to_string(),
+        "src/b.rs".to_string(),
+        "src/util/c.rs".to_string(),
+        "tests/d.rs".to_string(),
+    ];
+    // min_paths=3, min_dirs=3 → grouped; dir headers + indented basenames.
+    assert_eq!(
+        super::format_glob_output(&paths, 0, 3, 3),
+        "src/\n  a.rs\n  b.rs\nsrc/util/\n  c.rs\ntests/\n  d.rs"
+    );
+}
+
+#[test]
+fn glob_group_order_follows_newest_member() {
+    // Input is mtime-ascending; groups sort by their newest member, not
+    // lexicographically — so `a/` does NOT jump ahead of `z/`.
+    let paths = vec![
+        "z/old.rs".to_string(),
+        "a/mid.rs".to_string(),
+        "m/new.rs".to_string(),
+    ];
+    assert_eq!(
+        super::format_glob_output(&paths, 0, 3, 3),
+        "z/\n  old.rs\na/\n  mid.rs\nm/\n  new.rs"
+    );
+}
+
+#[test]
+fn glob_overflow_marker_appended() {
+    let paths = vec!["a/f.rs".to_string()];
+    let out = super::format_glob_output(&paths, 7, 25, 3);
+    assert!(
+        out.ends_with("+7 more files (use a more specific path or pattern)"),
+        "{out}"
+    );
+}
+
+#[test]
+fn glob_split_path_root_and_nested() {
+    assert_eq!(
+        super::split_glob_path("README.md"),
+        ("./".to_string(), "README.md")
+    );
+    assert_eq!(
+        super::split_glob_path("src/util/mod.rs"),
+        ("src/util/".to_string(), "mod.rs")
+    );
+    // Filesystem-root file: header is `/`, not `//` (absolute paths survive
+    // when a match lies outside the base dir).
+    assert_eq!(
+        super::split_glob_path("/foo.rs"),
+        ("/".to_string(), "foo.rs")
+    );
+    assert_eq!(
+        super::split_glob_path("/etc/hosts"),
+        ("/etc/".to_string(), "hosts")
+    );
+}
+
+#[test]
+fn glob_empty_is_no_files_found() {
+    assert_eq!(super::format_glob_output(&[], 0, 25, 3), "No files found");
 }

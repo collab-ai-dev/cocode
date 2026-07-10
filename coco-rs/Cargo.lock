@@ -2304,6 +2304,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "coco-config",
+ "coco-otel",
  "coco-sandbox",
  "coco-shell-parser",
  "coco-types",

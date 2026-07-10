@@ -143,6 +143,14 @@ pub struct ToolUseContext {
     /// `BashTool` falls back to constructing a fresh per-call executor
     /// (no snapshot benefit but still functional).
     pub shell_provider: Option<std::sync::Arc<dyn coco_shell::ShellProvider>>,
+    /// Session-scoped Bash output rewriter — compresses dev-tool output before
+    /// it reaches the model. `Some` only when the capability is enabled;
+    /// constructed once at session bootstrap and cloned onto every tool
+    /// invocation. `BashTool` consults it through the `BashOutputRewriter` seam
+    /// (the only impl today is rtk, `RtkRewriter`); `None` ⇒ Bash behaves
+    /// exactly as before. Gated at construction per the "subsystem entry point"
+    /// rule.
+    pub output_rewriter: Option<std::sync::Arc<dyn coco_shell::BashOutputRewriter>>,
     /// Frozen anchor — captured at session start. BashTool's
     /// `reset_cwd_if_outside_project` uses it to snap back when the
     /// live cwd drifts out of the allowed working set. `None` for
@@ -277,8 +285,6 @@ pub struct ToolUseContext {
     // ── File Tracking ──
     /// File reading limits.
     pub file_reading_limits: FileReadingLimits,
-    /// Glob search limits.
-    pub glob_limits: GlobLimits,
 
     // ── Tracking Sets (session-scoped dedup) ──
     /// Paths that triggered nested memory loading.
@@ -584,13 +590,6 @@ pub struct FileReadingLimits {
     pub max_size_bytes: Option<i64>,
 }
 
-/// Glob search limits.
-#[derive(Debug, Clone, Default)]
-pub struct GlobLimits {
-    /// Maximum number of glob results.
-    pub max_results: Option<i32>,
-}
-
 /// A tool execution decision record.
 #[derive(Debug, Clone)]
 pub struct ToolDecision {
@@ -658,6 +657,7 @@ impl ToolUseContext {
             shell_config: self.shell_config.clone(),
             active_shell_tool: self.active_shell_tool,
             shell_provider: self.shell_provider.clone(),
+            output_rewriter: self.output_rewriter.clone(),
             original_cwd: self.original_cwd.clone(),
             session_cwd: self.session_cwd.clone(),
             web_fetch_config: self.web_fetch_config.clone(),
@@ -684,7 +684,6 @@ impl ToolUseContext {
             agent_catalog: self.agent_catalog.clone(),
             parent_runtime_snapshot: self.parent_runtime_snapshot.clone(),
             file_reading_limits: self.file_reading_limits.clone(),
-            glob_limits: self.glob_limits.clone(),
             // Share both trigger sets across concurrent siblings so all
             // pushes from the batch land in one place for app/query to
             // drain. See field docs on the struct.
@@ -918,6 +917,7 @@ impl ToolUseContext {
             shell_config: coco_config::ShellConfig::default(),
             active_shell_tool: ActiveShellTool::default(),
             shell_provider: None,
+            output_rewriter: None,
             original_cwd: None,
             session_cwd: None,
             web_fetch_config: coco_config::WebFetchConfig::default(),
@@ -955,7 +955,6 @@ impl ToolUseContext {
             agent_catalog: None,
             parent_runtime_snapshot: None,
             file_reading_limits: FileReadingLimits::default(),
-            glob_limits: GlobLimits::default(),
             nested_memory_attachment_triggers: Arc::new(RwLock::new(HashSet::new())),
             loaded_nested_memory_paths: HashSet::new(),
             dynamic_skill_dir_triggers: Arc::new(RwLock::new(HashSet::new())),

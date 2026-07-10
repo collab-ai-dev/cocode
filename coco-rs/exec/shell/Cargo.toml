@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 coco-config.workspace = true
+coco-otel.workspace = true
 coco-sandbox.workspace = true
 coco-shell-parser.workspace = true
 coco-types.workspace = true

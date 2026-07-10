@@ -43,6 +43,7 @@ use crate::sections::McpRuntimeConfig;
 use crate::sections::MemoryActivation;
 use crate::sections::MemoryConfig;
 use crate::sections::MemoryDisabledReason;
+use crate::sections::OutputRewriteConfig;
 use crate::sections::PathConfig;
 use crate::sections::ServerConfig;
 use crate::sections::ShellConfig;
@@ -77,6 +78,9 @@ pub struct RuntimeConfig {
     pub loop_config: LoopConfig,
     pub tool: ToolConfig,
     pub shell: ShellConfig,
+    /// Bash output-compression config (`Feature::OutputRewrite`). Consumed at
+    /// session bootstrap to build the session-scoped output rewriter.
+    pub output_rewrite: OutputRewriteConfig,
     pub sandbox: SandboxSettings,
     pub memory: MemoryConfig,
     pub memory_activation: MemoryActivation,
@@ -384,6 +388,7 @@ pub fn build_runtime_config_with(
         loop_config: LoopConfig::resolve(merged, &overrides, &env),
         tool: ToolConfig::resolve(merged, &env),
         shell: ShellConfig::resolve(merged, &env),
+        output_rewrite: OutputRewriteConfig::resolve(merged, &env),
         sandbox: SandboxSettings::resolve(merged, &env),
         memory,
         memory_activation,

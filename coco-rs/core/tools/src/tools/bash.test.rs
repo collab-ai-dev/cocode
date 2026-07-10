@@ -86,6 +86,73 @@ async fn test_bash_schema_explains_background_output_file_read_path() {
     assert!(desc.contains("Use Read"), "got: {desc}");
 }
 
+// ── RTK (Feature::OutputRewrite) Bash-output compression ──
+
+// The RTK description line gates on `SchemaContext.output_rewriter_active` (a rewriter is
+// wired), NOT on `Feature::OutputRewrite` — a subagent inherits the flag but not the
+// rewriter and must not advertise compression that won't run. `ResolvedCommand`
+// + `resolve_rtk_command` are unit-tested in `bash_rtk.test.rs`.
+
+#[tokio::test]
+async fn test_bash_schema_omits_rtk_line_when_rtk_inactive() {
+    // `SchemaContext::default()` has `output_rewriter_active = false` → no escape-hatch line.
+    let spec = <BashTool as DynTool>::tool_spec(
+        &BashTool,
+        &coco_tool_runtime::SchemaContext::default(),
+        &PromptOptions::default(),
+    )
+    .await;
+    let coco_tool_runtime::ToolSpec::Function(spec) = spec else {
+        panic!("BashTool must be a Function tool");
+    };
+    assert!(
+        !spec.description.contains("RTK_DISABLED=1"),
+        "got:\n{}",
+        spec.description
+    );
+}
+
+#[tokio::test]
+async fn test_bash_schema_omits_rtk_line_when_feature_on_but_no_rewriter() {
+    // Feature flag on but no rewriter wired (subagent shape) → still no line.
+    let mut features = coco_types::Features::with_defaults();
+    features.enable(coco_types::Feature::OutputRewrite);
+    let schema_ctx = coco_tool_runtime::SchemaContext {
+        features: Some(std::sync::Arc::new(features)),
+        output_rewriter_active: false,
+        ..coco_tool_runtime::SchemaContext::default()
+    };
+    let spec =
+        <BashTool as DynTool>::tool_spec(&BashTool, &schema_ctx, &PromptOptions::default()).await;
+    let coco_tool_runtime::ToolSpec::Function(spec) = spec else {
+        panic!("BashTool must be a Function tool");
+    };
+    assert!(
+        !spec.description.contains("RTK_DISABLED=1"),
+        "feature flag alone must NOT advertise compression, got tail:\n{}",
+        &spec.description[spec.description.len().saturating_sub(200)..]
+    );
+}
+
+#[tokio::test]
+async fn test_bash_schema_appends_rtk_line_when_output_rewriter_active() {
+    let schema_ctx = coco_tool_runtime::SchemaContext {
+        output_rewriter_active: true,
+        ..coco_tool_runtime::SchemaContext::default()
+    };
+    let spec =
+        <BashTool as DynTool>::tool_spec(&BashTool, &schema_ctx, &PromptOptions::default()).await;
+    let coco_tool_runtime::ToolSpec::Function(spec) = spec else {
+        panic!("BashTool must be a Function tool");
+    };
+    assert!(
+        spec.description.contains("compressed by rtk"),
+        "a wired rewriter should append the compression note, got tail:\n{}",
+        &spec.description[spec.description.len().saturating_sub(200)..]
+    );
+    assert!(spec.description.contains("RTK_DISABLED=1"));
+}
+
 #[test]
 fn test_bash_description_is_short_label() {
     // `command` is required (no `#[serde(default)]`), so the no-description

@@ -109,6 +109,9 @@ fn bash_input_is_read_only_in_cwd(input: &BashInput, cwd: &str) -> bool {
 /// multi-command parallelism guidance, git safety bullets,
 /// timeout/run_in_background notes, sleep-avoidance guidance, and the
 /// commit safety/PR creation instructions.
+///
+/// The RTK compression note is appended at `tool_spec` time from
+/// [`super::bash_rtk::RTK_TOOL_DESCRIPTION_SUFFIX`] when a rewriter is wired.
 const BASH_TOOL_DESCRIPTION: &str = "Executes a given bash command and returns its output.
 
 The working directory persists between commands, but shell state does not. The shell environment is initialized from the user's profile (bash or zsh).
@@ -350,9 +353,18 @@ impl Tool for BashTool {
         } else {
             &["_simulatedSedEdit"]
         };
+        let mut description = self.prompt(prompt_opts).await;
+        // Give the model a documented per-command escape hatch only when a
+        // rewriter is actually wired (`output_rewriter_active`), NOT merely when
+        // the feature flag is on — a subagent inherits the flag but not the
+        // rewriter, so gating on the flag would advertise compression that
+        // never runs.
+        if ctx.output_rewriter_active {
+            description.push_str(super::bash_rtk::RTK_TOOL_DESCRIPTION_SUFFIX);
+        }
         coco_tool_runtime::ToolSpec::Function(coco_tool_runtime::FunctionToolSpec {
             name: self.name().to_string(),
-            description: self.prompt(prompt_opts).await,
+            description,
             parameters: coco_tool_runtime::schema_omit_properties(
                 self.runtime_validation_schema().as_value(),
                 omit,
@@ -835,6 +847,7 @@ impl Tool for BashTool {
         // bypass flag.
         let sandbox_state = active_sandbox_state(ctx);
         let sandbox_bypass = SandboxBypass::from_flag(input.dangerously_disable_sandbox);
+        // Diagnostic: whether the sandbox will wrap THIS command as written.
         if let Some(state) = &sandbox_state {
             let snapshot = state.command_snapshot(command, sandbox_bypass);
             if snapshot.should_wrap {
@@ -845,6 +858,14 @@ impl Tool for BashTool {
                 );
             }
         }
+        // rtk skip decision (§4.3). NOT `should_wrap` on the original: the
+        // executor re-derives the wrap on the string it is handed, so an
+        // rtk-rewritten `rtk git status` can be wrapped even when the original
+        // `git status` is sandbox-excluded — and rtk's SQLite history write
+        // fails wrapped. So skip rtk for the entire non-bypassed sandbox
+        // session; a rewrite can only ever add wrapping, never remove it.
+        let sandbox_active_for_rtk =
+            sandbox_state.is_some() && matches!(sandbox_bypass, SandboxBypass::No);
 
         // Permission pipeline.
         // Stage 1 — read-only fast path. Already handled by `is_read_only()`
@@ -895,6 +916,19 @@ impl Tool for BashTool {
             .map(String::from)
             .unwrap_or_else(|| command.to_string());
 
+        // RTK output compression (Feature::OutputRewrite). Runs AFTER permission /
+        // security / read-only / sandbox judgment — all of which evaluated the
+        // ORIGINAL command above — and rewrites the string that is actually
+        // spawned (external tier, phase 1). Passthrough / feature-off leaves
+        // the command untouched.
+        let resolved = super::bash_rtk::resolve_rtk_command(
+            command,
+            run_in_background,
+            sandbox_active_for_rtk,
+            ctx,
+        )
+        .await;
+
         // W3: unified fg/bg execution via TaskRuntime when available.
         // - Always spawn through `spawn_shell_task`.
         // - `run_in_background: true` → return `{backgroundTaskId, outputPath}`.
@@ -907,7 +941,7 @@ impl Tool for BashTool {
         // threaded into `ShellTaskRequest`).
         if ctx.task_handle.is_some() {
             return execute_via_task_runtime(
-                command,
+                &resolved,
                 &resolved_description,
                 timeout_ms,
                 run_in_background,
@@ -928,9 +962,11 @@ impl Tool for BashTool {
                 source: None,
             });
         }
-        execute_foreground(command, timeout_ms, ctx, sandbox_state, sandbox_bypass).await
+        execute_foreground(&resolved, timeout_ms, ctx, sandbox_state, sandbox_bypass).await
     }
 }
+
+use super::bash_rtk::ResolvedCommand;
 
 /// W3: unified fg/bg execution path via TaskRuntime.
 /// Always spawns through `spawn_shell_task` (the same primitive bg
@@ -958,7 +994,7 @@ impl Tool for BashTool {
 /// child keeps running, the fg awaiter just stops blocking.
 #[allow(clippy::too_many_arguments)]
 async fn execute_via_task_runtime(
-    command: &str,
+    cmd: &ResolvedCommand,
     description: &str,
     timeout_ms: u64,
     run_in_background: bool,
@@ -985,10 +1021,16 @@ async fn execute_via_task_runtime(
     // a bg-shape result and the child KEEPS RUNNING (the driver does not kill
     // it). Subagents and bg-spawned commands don't auto-detach (no fg awaiter
     // to release).
+    //
+    // An rtk-rewritten command is NOT eligible: rtk buffers-then-prints, so a
+    // detached `rtk …` would stall incremental TaskOutput streaming — the same
+    // reason `RewriteSite.background` vetoes rewriting up front (design §4.3).
+    // Eligibility is keyed on the model-issued command, not the rtk wrapper.
     let auto_background = !run_in_background
         && ctx.agent_id.is_none()
         && ctx.tool_config.bash.auto_background_on_timeout
-        && super::bash_advanced::is_autobackgrounding_allowed(command);
+        && !cmd.was_rewritten()
+        && super::bash_advanced::is_autobackgrounding_allowed(cmd.original());
     let auto_detach_ms = if auto_background {
         Some(timeout_ms)
     } else {
@@ -1009,7 +1051,7 @@ async fn execute_via_task_runtime(
     };
 
     let req = ShellTaskRequest {
-        command: command.to_string(),
+        command: cmd.exec().to_string(),
         shell_kind: coco_tool_runtime::ShellTaskKind::DefaultPlatformShell,
         start_mode: if run_in_background {
             ShellTaskStartMode::Background
@@ -1118,18 +1160,21 @@ async fn execute_via_task_runtime(
             let stdout = decode_capped(outputs.stdout.as_bytes(), max_bytes);
             let stderr = decode_capped(outputs.stderr.as_bytes(), max_bytes);
             // Strip + record Claude Code hints so the model never sees the tag.
-            let stdout = maybe_strip_and_record_hints(stdout, command);
+            let stdout = maybe_strip_and_record_hints(stdout, cmd.original());
             let mut result_obj = serde_json::json!({
                 "stdout": stdout,
                 "stderr": stderr,
                 "exitCode": outputs.exit_code,
                 "interrupted": outputs.interrupted,
-                // Carried so `render_for_model` can interpret the exit code with
-                // command-aware semantics. This is the PRODUCTION path (a
-                // TaskRuntime is wired); without it the interpreter saw an empty
-                // command and labelled every non-zero exit a generic error.
-                "command": command,
+                // The ORIGINAL command (rtk-rewrites execute `cmd.exec` but the
+                // envelope keeps the model-issued string) so `render_for_model`
+                // interprets the exit code with command-aware semantics. This is
+                // the PRODUCTION path (a TaskRuntime is wired); without it the
+                // interpreter saw an empty command and labelled every non-zero
+                // exit a generic error.
+                "command": cmd.original(),
             });
+            cmd.annotate_envelope(&mut result_obj);
             // Image detection on bytes from disk. The unified path
             // reads the file via `read_terminal_outputs` which returns
             // a `String` (UTF-8 lossy) — magic-byte detection still
@@ -1189,12 +1234,15 @@ enum BashOutcome {
 
 /// Execute a command in the foreground with continuous progress reporting.
 async fn execute_foreground(
-    command: &str,
+    cmd: &ResolvedCommand,
     timeout_ms: u64,
     ctx: &ToolUseContext,
     sandbox_state: Option<std::sync::Arc<SandboxState>>,
     sandbox_bypass: SandboxBypass,
 ) -> Result<ToolResult<Value>, ToolError> {
+    // `cmd.exec()` is spawned (rtk-rewritten or original); `cmd.original()` is
+    // the model-issued string kept for progress display + the result envelope.
+    let command = cmd.exec();
     // 4-tier cwd resolution. Spawn at the live session cwd; the
     // out-of-project guard runs AFTER exec so the offending command runs
     // in /tmp / the drifted dir and the annotation lands on its stderr.
@@ -1239,7 +1287,7 @@ async fn execute_foreground(
             data: serde_json::json!({
                 "type": "bash_progress",
                 "status": "running",
-                "command": command,
+                "command": cmd.original(),
             }),
         });
 
@@ -1335,7 +1383,7 @@ async fn execute_foreground(
     // the tag — a zero-token side channel. Stripping runs unconditionally
     // (subagent output must stay clean too); recording is best-effort and
     // never affects the tool result.
-    let stdout = maybe_strip_and_record_hints(stdout, command);
+    let stdout = maybe_strip_and_record_hints(stdout, cmd.original());
     let stderr = decode_capped(cmd_result.stderr.as_bytes(), max_bytes);
     let exit_code = cmd_result.exit_code;
     // R7-T18: image detection inspects the executor's raw stdout bytes
@@ -1386,10 +1434,12 @@ async fn execute_foreground(
         "stderr": stderr,
         "exitCode": exit_code,
         "interrupted": interrupted,
-        // Carried so `render_for_model` can interpret the exit code with
-        // command-aware semantics (grep no-match vs genuine error).
-        "command": command,
+        // The ORIGINAL command (rtk executes `cmd.exec`, but the envelope keeps
+        // the model-issued string) so `render_for_model` interprets the exit
+        // code with command-aware semantics (grep no-match vs genuine error).
+        "command": cmd.original(),
     });
+    cmd.annotate_envelope(&mut result_obj);
     if is_image {
         result_obj["isImage"] = serde_json::Value::Bool(true);
     }

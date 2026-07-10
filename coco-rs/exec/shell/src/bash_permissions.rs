@@ -48,6 +48,11 @@ static SAFE_ENV_VARS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
         "LINES",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
+        // rtk per-command opt-out (design §6). The Bash tool description tells
+        // the model to prefix `RTK_DISABLED=1` for raw output; it must be
+        // strippable here so permission rules still match the underlying command
+        // (e.g. `RTK_DISABLED=1 git status` matches `Bash(git status:*)`).
+        "RTK_DISABLED",
     ]
     .into_iter()
     .collect()
