@@ -22,8 +22,8 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use crate::process_runtime::ProcessRuntime;
-use crate::project_services::ProjectServices;
+use coco_app_runtime::ProcessRuntime;
+use coco_app_runtime::ProjectServices;
 
 /// Adapter that wraps a shared `Arc<LspServerManager>` and implements
 /// [`LspHandle`].

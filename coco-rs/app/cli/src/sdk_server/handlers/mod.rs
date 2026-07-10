@@ -1251,7 +1251,7 @@ impl SessionStats {
 #[derive(Clone)]
 pub struct RuntimeReplacementContext {
     pub runtime_factory: crate::session_runtime::SessionRuntimeFactory,
-    pub process_runtime: Arc<crate::process_runtime::ProcessRuntime>,
+    pub process_runtime: Arc<coco_app_runtime::ProcessRuntime>,
     pub cwd: PathBuf,
     pub requires_structured_output: bool,
 }

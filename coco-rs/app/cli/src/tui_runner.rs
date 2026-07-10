@@ -47,8 +47,8 @@ use coco_types::SlashCommandStatusKind;
 use coco_types::TuiOnlyEvent;
 use tokio_util::sync::CancellationToken;
 
+use coco_app_runtime::ProcessRuntime;
 use coco_cli::goal_command;
-use coco_cli::process_runtime::ProcessRuntime;
 use coco_cli::resume_resolver::ResumePlan;
 use coco_cli::session_bootstrap::build_engine_resources;
 use coco_cli::session_bootstrap::install_session_late_binds;
@@ -7468,8 +7468,10 @@ async fn handle_write_skill_overrides(
     let result = match runtime_publisher {
         Some(publisher) => {
             let catalogs = coco_config::CatalogPaths::default();
-            let write_result = coco_config::write_local_settings(
-                cwd.to_path_buf(),
+            let roots =
+                coco_config::SettingsRoots::new(runtime.project_root().clone(), cwd.to_path_buf());
+            let write_result = coco_config::write_local_settings_with_roots(
+                roots,
                 flag_settings.map(std::path::Path::to_path_buf),
                 catalogs,
                 Arc::clone(publisher),

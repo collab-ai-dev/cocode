@@ -152,8 +152,8 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
             coco_commands::CommandRegistry::new(),
         ))),
         skill_manager: Arc::new(coco_skills::SkillManager::new()),
-        process_runtime: crate::process_runtime::ProcessRuntime::global(),
-        project_services: Arc::new(crate::project_services::ProjectServices::load(
+        process_runtime: coco_app_runtime::ProcessRuntime::global(),
+        project_services: Arc::new(coco_app_runtime::ProjectServices::load(
             home.path(),
             home.path(),
         )),

@@ -1,8 +1,7 @@
 //! Process-scoped runtime owner.
 //!
-//! This is the narrow app/cli precursor to the planned `coco-app-runtime`
-//! `ProcessRuntime`: it owns process-lifetime managers and hands cheap
-//! project/session handles to startup paths.
+//! Owns process-lifetime managers and hands cheap project/session handles to
+//! startup paths.
 
 use std::path::Path;
 use std::path::PathBuf;

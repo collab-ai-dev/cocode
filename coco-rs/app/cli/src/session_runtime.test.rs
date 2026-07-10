@@ -80,7 +80,7 @@ async fn try_build_runtime_with_main(
                     coco_commands::CommandRegistry::new(),
                 ))),
                 skill_manager: Arc::new(coco_skills::SkillManager::new()),
-                project_services: Arc::new(crate::project_services::ProjectServices::load(
+                project_services: Arc::new(coco_app_runtime::ProjectServices::load(
                     home.path(),
                     home.path(),
                 )),
@@ -95,7 +95,7 @@ async fn try_build_runtime_with_main(
         )),
         fast_model_spec: None,
         permission_bridge: None,
-        process_runtime: crate::process_runtime::ProcessRuntime::global(),
+        process_runtime: coco_app_runtime::ProcessRuntime::global(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         is_non_interactive: false,
     });

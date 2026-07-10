@@ -523,7 +523,7 @@ async fn async_main() -> Result<()> {
     // returns `None` and never installs a global subscriber.
     let _tracing_handle = tracing_init::install(&cli, &startup_cwd)?;
     coco_cli::startup_profile::mark("subscriber_installed");
-    let process_runtime = coco_cli::process_runtime::ProcessRuntime::global();
+    let process_runtime = coco_app_runtime::ProcessRuntime::global();
 
     tracing::info!(
         target: "coco_cli::startup",
@@ -848,7 +848,7 @@ async fn run_chat(
     cli: &Cli,
     prompt: Option<&str>,
     cwd: PathBuf,
-    process_runtime: Arc<coco_cli::process_runtime::ProcessRuntime>,
+    process_runtime: Arc<coco_app_runtime::ProcessRuntime>,
 ) -> Result<()> {
     // Resolve `--resume` / `--continue` / `--fork-session` once at
     // the boot edge so headless and TUI share identical semantics.
@@ -916,7 +916,7 @@ async fn run_chat(
 async fn run_sdk_mode(
     cli: &Cli,
     cwd: PathBuf,
-    process_runtime: Arc<coco_cli::process_runtime::ProcessRuntime>,
+    process_runtime: Arc<coco_app_runtime::ProcessRuntime>,
 ) -> Result<()> {
     tracing::info!(
         target: "coco_cli::sdk",
@@ -1075,12 +1075,7 @@ async fn run_sdk_mode(
     )
     .await
     .map_err(|error| anyhow::anyhow!("{}", error.message))?;
-    let session_handle = loaded_handle.runtime().cloned().ok_or_else(|| {
-        anyhow::anyhow!(
-            "SDK startup AppServer session {} loaded without a runtime handle",
-            loaded_handle.session_id()
-        )
-    })?;
+    let session_handle = loaded_handle.require_runtime_anyhow("loaded")?;
     let mcp_manager = Arc::new(tokio::sync::Mutex::new(
         coco_mcp::McpConnectionManager::new_with_runtime_config(
             global_config::config_home(),

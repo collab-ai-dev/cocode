@@ -20,6 +20,7 @@ use coco_cli::Cli;
 use coco_cli::headless;
 use coco_cli::sdk_server::CliInitializeBootstrap;
 use coco_cli::sdk_server::InMemoryTransport;
+use coco_cli::sdk_server::LocalAppSessionHandle;
 use coco_cli::sdk_server::QueryEngineRunner;
 use coco_cli::sdk_server::SdkServer;
 use coco_cli::sdk_server::SdkTransport;
@@ -106,12 +107,11 @@ impl LiveSdkServer {
 
     async fn history_snapshot_now(&self) -> Vec<coco_messages::Message> {
         let state = self.server.state();
-        let guard = state.session.read().await;
-        let Some(handle) = guard.as_ref() else {
+        let Some(handle) = state.session_runtime_snapshot().await else {
             return Vec::new();
         };
         handle
-            .history
+            .history()
             .lock()
             .await
             .iter()
@@ -264,12 +264,13 @@ pub async fn build_live_server_with_options(
         .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
         .join("skills")]);
     let skill_manager = Arc::new(skill_manager);
-    let process_runtime = coco_cli::process_runtime::ProcessRuntime::global();
+    let process_runtime = coco_app_runtime::ProcessRuntime::global();
     let project_services = process_runtime.project_services(&cwd, cwd.clone());
 
     let session_handle = SessionHandle::build(SessionRuntimeBuildOpts {
         cli: &cli,
         runtime_config: Arc::new(runtime_config),
+        config_reloader: None,
         cwd: cwd.clone(),
         model_id: model_id.clone(),
         system_prompt: system_prompt.clone(),
@@ -314,7 +315,7 @@ pub async fn build_live_server_with_options(
     // BEFORE building the runner. Without `with_session_handle`, the
     // server's per-turn engine path can't reach the runtime's wired
     // subsystems.
-    let file_history_for_server = session_handle.file_history.clone().unwrap_or_else(|| {
+    let file_history_for_server = session_handle.file_history().cloned().unwrap_or_else(|| {
         Arc::new(tokio::sync::RwLock::new(
             coco_context::FileHistoryState::new(),
         ))
@@ -338,7 +339,7 @@ pub async fn build_live_server_with_options(
     let server_arc = Arc::new(server);
     let server_for_task = server_arc.clone();
     let server_task = tokio::spawn(async move {
-        let app_server = Arc::new(coco_app_server::AppServer::<()>::new(
+        let app_server = Arc::new(coco_app_server::AppServer::<LocalAppSessionHandle>::new(
             /*max_sessions*/ 1, /*channel_capacity*/ 64,
         ));
         let adapter = coco_app_server::JsonRpcAdapter::with_channel_capacity(app_server, 64);

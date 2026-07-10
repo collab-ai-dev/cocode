@@ -6,8 +6,8 @@ use coco_types::ModelSpec;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-use crate::process_runtime::ProcessRuntime;
-use crate::project_services::ProjectServices;
+use coco_app_runtime::ProcessRuntime;
+use coco_app_runtime::ProjectServices;
 
 /// Project/process service resources used by a session.
 ///

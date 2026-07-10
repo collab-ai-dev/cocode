@@ -9,10 +9,11 @@ use coco_config::EnvSnapshot;
 use coco_config::RuntimeConfig;
 use coco_config::RuntimeOverrides;
 use coco_config::RuntimePublisher;
+use coco_config::SettingsRoots;
 use coco_config::SettingsWatcher;
 use coco_config::WatchedKind;
 use coco_config::build_runtime_config_with;
-use coco_config::load_settings_with;
+use coco_config::load_settings_with_roots;
 use coco_file_watch::Event as FsEvent;
 use coco_file_watch::FileWatcher;
 use coco_file_watch::FileWatcherBuilder;
@@ -66,7 +67,7 @@ pub struct ConfigReloadError {
 
 /// Builder for [`RuntimeReloader::spawn`].
 pub struct ReloadOptions {
-    cwd: PathBuf,
+    settings_roots: SettingsRoots,
     flag_settings: Option<PathBuf>,
     overrides: RuntimeOverrides,
     catalogs: CatalogPaths,
@@ -84,7 +85,7 @@ impl ReloadOptions {
     /// `RuntimeOverrides::default`.
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         Self {
-            cwd: cwd.into(),
+            settings_roots: SettingsRoots::from_cwd(cwd),
             flag_settings: None,
             overrides: RuntimeOverrides::default(),
             catalogs: CatalogPaths::default(),
@@ -113,6 +114,17 @@ impl ReloadOptions {
 
     pub fn with_catalog_paths(mut self, catalogs: CatalogPaths) -> Self {
         self.catalogs = catalogs;
+        self
+    }
+
+    /// Resolve shared project settings from `project_root` and local
+    /// settings from `local_root`. Single-cwd callers keep the default.
+    pub fn with_settings_roots(
+        mut self,
+        project_root: impl Into<PathBuf>,
+        local_root: impl Into<PathBuf>,
+    ) -> Self {
+        self.settings_roots = SettingsRoots::new(project_root, local_root);
         self
     }
 
@@ -174,7 +186,7 @@ impl RuntimeReloader {
         })?;
 
         let ReloadOptions {
-            cwd,
+            settings_roots,
             flag_settings,
             overrides,
             catalogs,
@@ -189,7 +201,7 @@ impl RuntimeReloader {
         // Install the watcher FIRST so any filesystem change between
         // the initial build and watch-install is captured by the
         // broadcast channel and replayed by the spawned task.
-        let settings_watcher = SettingsWatcher::with_catalogs(&cwd, &catalogs);
+        let settings_watcher = SettingsWatcher::with_roots(&settings_roots, &catalogs);
         let mut watch_set: Vec<(PathBuf, RecursiveMode)> = Vec::new();
         let mut tracked_files: Vec<PathBuf> = Vec::new();
         let mut tracked_kinds: Vec<TrackedKind> = Vec::new();
@@ -258,7 +270,7 @@ impl RuntimeReloader {
         // window is buffered in the broadcast channel and surfaced by
         // the spawned task's first `rx.recv().await`.
         let initial = build_with(
-            &cwd,
+            &settings_roots,
             flag_settings.as_deref(),
             &env_factory(),
             &overrides,
@@ -279,7 +291,7 @@ impl RuntimeReloader {
                     "config-watch event"
                 );
                 match build_with(
-                    &cwd,
+                    &settings_roots,
                     flag_settings.as_deref(),
                     &env_factory(),
                     &overrides,
@@ -380,7 +392,7 @@ impl Drop for RuntimeReloader {
 }
 
 fn build_with(
-    cwd: &std::path::Path,
+    settings_roots: &SettingsRoots,
     flag_settings: Option<&std::path::Path>,
     env: &EnvSnapshot,
     overrides: &RuntimeOverrides,
@@ -393,8 +405,8 @@ fn build_with(
             coco_error::StatusCode::InvalidConfig,
         ))
     };
-    let settings = load_settings_with(
-        cwd,
+    let settings = load_settings_with_roots(
+        settings_roots,
         flag_settings,
         &catalogs.user_settings,
         &catalogs.managed_settings,

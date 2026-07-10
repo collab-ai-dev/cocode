@@ -1110,6 +1110,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-app-runtime"
+version = "0.1.1"
+dependencies = [
+ "coco-commands",
+ "coco-config",
+ "coco-error",
+ "coco-git",
+ "coco-hooks",
+ "coco-lsp",
+ "coco-mcp",
+ "coco-output-styles",
+ "coco-plugins",
+ "coco-skills",
+ "coco-subagent",
+ "coco-types",
+ "coco-utils-common",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "coco-app-server"
 version = "0.1.1"
 dependencies = [
@@ -1236,6 +1259,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "coco-app-runtime",
  "coco-app-server",
  "coco-app-server-client",
  "coco-app-server-transport",
@@ -2529,6 +2553,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "coco-app-runtime",
  "coco-app-server",
  "coco-cli",
  "coco-commands",

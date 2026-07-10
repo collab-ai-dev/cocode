@@ -41,6 +41,15 @@ impl SessionWorkspace {
     }
 }
 
+/// Resolve settings-layer roots for a session cwd.
+///
+/// Project settings follow the resolved project root; local settings remain
+/// scoped to the session cwd.
+pub fn settings_roots_for_cwd(cwd: &Path) -> coco_config::SettingsRoots {
+    let workspace = SessionWorkspace::resolve(cwd.to_path_buf());
+    coco_config::SettingsRoots::new(workspace.project_root, workspace.cwd)
+}
+
 /// Resolve the project root used by project-scoped services.
 ///
 /// This intentionally returns the worktree root, not the canonical shared git
@@ -157,62 +166,7 @@ pub fn standard_agent_search_paths_with_plugins(
     cwd: &Path,
     plugins: &[coco_plugins::loader::LoadedPluginV2],
 ) -> coco_subagent::definition_store::AgentSearchPaths {
-    let mut project_dirs = vec![
-        cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
-            .join("agents"),
-    ];
-
-    // Push the canonical-repo fallback when applicable. Errors / no-git
-    // states are treated as "no fallback needed" — the loader degrades
-    // gracefully on missing dirs.
-    if let Some(canonical_root) = coco_git::find_canonical_git_root(cwd) {
-        let worktree_agents_dir = cwd
-            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
-            .join("agents");
-        let worktree_root = git_root_for(cwd);
-        let worktree_has_agents = std::fs::metadata(&worktree_agents_dir)
-            .map(|m| m.is_dir())
-            .unwrap_or(false);
-        let canonical_agents_dir = canonical_root
-            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
-            .join("agents");
-        // Only add the canonical-root copy when:
-        // 1. cwd is inside a worktree distinct from the canonical root, AND
-        // 2. the worktree's own project config dir/agents/ is missing or empty.
-        // Same-root cases (cwd == canonical_root, or worktree already
-        // has agent files) keep the original single-entry shape.
-        if worktree_root.as_deref() != Some(canonical_root.as_path())
-            && !worktree_has_agents
-            && canonical_agents_dir.is_dir()
-            && !project_dirs.iter().any(|p| p == &canonical_agents_dir)
-        {
-            project_dirs.push(canonical_agents_dir);
-        }
-    }
-
-    coco_subagent::definition_store::AgentSearchPaths {
-        user_dir: Some(config_home.join("agents")),
-        project_dirs,
-        plugin_dirs: plugin_agent_dirs(plugins),
-        ..coco_subagent::definition_store::AgentSearchPaths::empty()
-    }
-}
-
-/// Resolve the session's enabled plugins to namespaced agent directories.
-/// The discovery (which dirs) lives in `coco_plugins::plugin_agent_dirs`; this
-/// wraps each `(name, dir)` in the subagent loader's `PluginAgentDir`.
-fn plugin_agent_dirs(
-    plugins: &[coco_plugins::loader::LoadedPluginV2],
-) -> Vec<coco_subagent::definition_store::PluginAgentDir> {
-    coco_plugins::plugin_agent_dirs(plugins)
-        .into_iter()
-        .map(
-            |(plugin_name, dir)| coco_subagent::definition_store::PluginAgentDir {
-                plugin_name,
-                dir,
-            },
-        )
-        .collect()
+    coco_app_runtime::standard_agent_search_paths_with_plugins(config_home, cwd, plugins)
 }
 
 /// Resolve the worktree's own git root (the directory containing the

@@ -87,3 +87,39 @@ fn apply_patch_round_trip_with_deletion() {
     let body: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(body, json!({ "skill_overrides": { "beta": "name-only" } }));
 }
+
+#[tokio::test]
+async fn explicit_roots_write_local_and_republish_project_settings() {
+    let dir = TempDir::new().unwrap();
+    let project_root = dir.path().join("project");
+    let local_root = project_root.join("nested");
+    let catalogs = CatalogPaths::empty_in(dir.path().join("home"));
+    let project_settings = crate::global_config::project_settings_path(&project_root);
+    fs::create_dir_all(project_settings.parent().unwrap()).unwrap();
+    fs::create_dir_all(&local_root).unwrap();
+    fs::write(&project_settings, r#"{ "language": "zh" }"#).unwrap();
+
+    let initial = crate::RuntimeConfigBuilder::new(&local_root, EnvSnapshot::default())
+        .with_settings_roots(&project_root, &local_root)
+        .with_catalog_paths(catalogs.clone())
+        .build()
+        .unwrap();
+    let publisher = Arc::new(RuntimePublisher::new(Arc::new(initial)));
+
+    write_local_settings_with_roots(
+        SettingsRoots::new(&project_root, &local_root),
+        None,
+        catalogs,
+        Arc::clone(&publisher),
+        json!({ "show_thinking": true }),
+    )
+    .await
+    .unwrap();
+
+    let local_settings = crate::global_config::local_settings_path(&local_root);
+    assert!(local_settings.exists());
+    assert!(!crate::global_config::local_settings_path(&project_root).exists());
+    let current = publisher.current();
+    assert_eq!(current.settings.merged.language.as_deref(), Some("zh"));
+    assert!(current.settings.merged.show_thinking);
+}

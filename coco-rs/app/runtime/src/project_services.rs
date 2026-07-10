@@ -1,7 +1,7 @@
 //! Project-scoped service/catalog preparation.
 //!
-//! This is the project-service slice of the future Process/Project/Session
-//! split: a per-project plugin catalog snapshot, project-rooted command,
+//! This is the project-service slice of the Process/Project/Session split: a
+//! per-project plugin catalog snapshot, project-rooted command,
 //! skill, hook, MCP, LSP, output-style, and agent discovery, and the registry
 //! that shares them across sessions in the same process.
 
@@ -15,6 +15,7 @@ use std::sync::RwLockReadGuard;
 use std::sync::RwLockWriteGuard;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
 
 const PROJECT_SERVICES_IDLE_TTL: Duration = Duration::from_secs(60 * 60);
 const PROJECT_SERVICES_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -130,17 +131,23 @@ impl ProjectRegistry {
     ) -> Arc<ProjectServices> {
         let key = ProjectRegistryKey::new(config_home, project_root);
         if let Some(project) = self.read_projects().get(&key) {
+            project.services.refresh_project_config_if_changed();
             return project.services.clone();
         }
 
         let mut projects = self.write_projects();
         Self::evict_idle_locked(&mut projects, PROJECT_SERVICES_IDLE_TTL, Instant::now());
-        let entry = projects.entry(key.clone()).or_insert_with(|| {
-            ProjectRegistryEntry::new(Arc::new(ProjectServices::load(
-                &key.config_home,
-                key.project_root.clone(),
-            )))
-        });
+        let entry = projects
+            .entry(key.clone())
+            .and_modify(|entry| {
+                entry.services.refresh_project_config_if_changed();
+            })
+            .or_insert_with(|| {
+                ProjectRegistryEntry::new(Arc::new(ProjectServices::load(
+                    &key.config_home,
+                    key.project_root.clone(),
+                )))
+            });
         entry.idle_since = None;
         entry.services.clone()
     }
@@ -230,20 +237,43 @@ impl ProjectRegistryEntry {
 }
 
 /// Project-scoped services for one resolved project root.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ProjectServices {
+    config_snapshot: RwLock<ProjectConfigSnapshot>,
     catalog: ProjectCatalogSnapshot,
 }
 
 impl ProjectServices {
     pub fn load(config_home: &Path, project_root: impl Into<PathBuf>) -> Self {
+        let project_root = project_root.into();
         Self {
+            config_snapshot: RwLock::new(ProjectConfigSnapshot::load(project_root.clone())),
             catalog: ProjectCatalogSnapshot::load(config_home, project_root),
         }
     }
 
     pub fn project_root(&self) -> &Path {
         self.catalog.project_root()
+    }
+
+    pub fn project_config_snapshot(&self) -> ProjectConfigSnapshot {
+        match self.config_snapshot.read() {
+            Ok(snapshot) => snapshot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    fn refresh_project_config_if_changed(&self) -> bool {
+        let mut snapshot = match self.config_snapshot.write() {
+            Ok(snapshot) => snapshot,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if !snapshot.has_changed() {
+            return false;
+        }
+
+        *snapshot = ProjectConfigSnapshot::load(self.project_root().to_path_buf());
+        true
     }
 
     pub fn output_style_sources(&self) -> Vec<coco_output_styles::PluginOutputStyleSource> {
@@ -328,6 +358,54 @@ impl ProjectServices {
 #[path = "project_services.test.rs"]
 mod tests;
 
+/// Project-rooted config files tracked by the project-service cache.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ProjectConfigSnapshot {
+    settings_path: PathBuf,
+    settings_fingerprint: FileFingerprint,
+}
+
+impl ProjectConfigSnapshot {
+    fn load(project_root: impl Into<PathBuf>) -> Self {
+        let project_root = project_root.into();
+        let settings_path = coco_config::global_config::project_settings_path(&project_root);
+        let settings_fingerprint = FileFingerprint::for_path(&settings_path);
+        Self {
+            settings_path,
+            settings_fingerprint,
+        }
+    }
+
+    pub fn settings_path(&self) -> &Path {
+        &self.settings_path
+    }
+
+    pub fn has_changed(&self) -> bool {
+        FileFingerprint::for_path(&self.settings_path) != self.settings_fingerprint
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum FileFingerprint {
+    Missing,
+    Present {
+        len: u64,
+        modified: Option<SystemTime>,
+    },
+}
+
+impl FileFingerprint {
+    fn for_path(path: &Path) -> Self {
+        match std::fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => Self::Present {
+                len: metadata.len(),
+                modified: metadata.modified().ok(),
+            },
+            _ => Self::Missing,
+        }
+    }
+}
+
 /// Project-scoped plugin catalog loaded against a resolved project root.
 #[derive(Debug, Clone)]
 struct ProjectCatalogSnapshot {
@@ -365,7 +443,7 @@ impl ProjectCatalogSnapshot {
         config_home: &Path,
         cwd: &Path,
     ) -> coco_subagent::definition_store::AgentSearchPaths {
-        crate::paths::standard_agent_search_paths_with_plugins(config_home, cwd, &self.plugins)
+        standard_agent_search_paths_with_plugins(config_home, cwd, &self.plugins)
     }
 
     pub fn plugin_mcp_servers(&self) -> Vec<coco_mcp::ScopedMcpServerConfig> {
@@ -398,5 +476,64 @@ impl ProjectCatalogSnapshot {
         let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = self.plugins.iter().collect();
         coco_plugins::hook_bridge::register_plugin_hooks_v2(registry, &plugin_refs);
         plugin_refs.len()
+    }
+}
+
+/// Standard agent search paths with project plugin contributions.
+pub fn standard_agent_search_paths_with_plugins(
+    config_home: &Path,
+    cwd: &Path,
+    plugins: &[coco_plugins::loader::LoadedPluginV2],
+) -> coco_subagent::definition_store::AgentSearchPaths {
+    let mut project_dirs = vec![
+        cwd.join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("agents"),
+    ];
+
+    if let Some(canonical_root) = coco_git::find_canonical_git_root(cwd) {
+        let worktree_agents_dir = cwd
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("agents");
+        let worktree_root = git_root_for(cwd);
+        let worktree_has_agents = worktree_agents_dir.is_dir();
+        let canonical_agents_dir = canonical_root
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("agents");
+        if worktree_root.as_deref() != Some(canonical_root.as_path())
+            && !worktree_has_agents
+            && canonical_agents_dir.is_dir()
+            && !project_dirs
+                .iter()
+                .any(|path| path == &canonical_agents_dir)
+        {
+            project_dirs.push(canonical_agents_dir);
+        }
+    }
+
+    coco_subagent::definition_store::AgentSearchPaths {
+        user_dir: Some(config_home.join("agents")),
+        project_dirs,
+        plugin_dirs: coco_plugins::plugin_agent_dirs(plugins)
+            .into_iter()
+            .map(
+                |(plugin_name, dir)| coco_subagent::definition_store::PluginAgentDir {
+                    plugin_name,
+                    dir,
+                },
+            )
+            .collect(),
+        ..coco_subagent::definition_store::AgentSearchPaths::empty()
+    }
+}
+
+fn git_root_for(cwd: &Path) -> Option<PathBuf> {
+    let mut current = cwd.to_path_buf();
+    loop {
+        if current.join(".git").exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
     }
 }

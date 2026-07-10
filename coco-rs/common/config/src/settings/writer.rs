@@ -39,7 +39,8 @@ use crate::overrides::RuntimeOverrides;
 use crate::runtime::CatalogPaths;
 use crate::runtime::RuntimePublisher;
 use crate::runtime::build_runtime_config_with;
-use crate::settings::load_settings_with;
+use crate::settings::SettingsRoots;
+use crate::settings::load_settings_with_roots;
 
 /// Settings-write side errors. Boundary crate (`coco-config`) uses
 /// `thiserror` per the error policy; main-trunk callers wrap via
@@ -86,11 +87,29 @@ pub async fn write_local_settings(
     publisher: Arc<RuntimePublisher>,
     patch: Value,
 ) -> Result<(), SettingsWriteError> {
-    let cwd: PathBuf = cwd.into();
-    let path = crate::global_config::local_settings_path(&cwd);
+    write_local_settings_with_roots(
+        SettingsRoots::from_cwd(cwd),
+        flag_settings,
+        catalogs,
+        publisher,
+        patch,
+    )
+    .await
+}
+
+/// Like [`write_local_settings`], but reloads project and local settings from
+/// explicit roots after writing the local file.
+pub async fn write_local_settings_with_roots(
+    roots: SettingsRoots,
+    flag_settings: Option<PathBuf>,
+    catalogs: CatalogPaths,
+    publisher: Arc<RuntimePublisher>,
+    patch: Value,
+) -> Result<(), SettingsWriteError> {
+    let path = crate::global_config::local_settings_path(roots.local_root());
     tokio::task::spawn_blocking(move || {
         apply_patch(&path, &patch)?;
-        republish_runtime(&cwd, flag_settings.as_deref(), &catalogs, &publisher)
+        republish_runtime(&roots, flag_settings.as_deref(), &catalogs, &publisher)
     })
     .await
     .map_err(|e| SettingsWriteError::Io {
@@ -247,7 +266,7 @@ fn atomic_write(path: &Path, value: &Value) -> Result<(), SettingsWriteError> {
 /// save handler can rely on the new state being visible before its
 /// `AvailableCommandsRefreshed` push fires.
 fn republish_runtime(
-    cwd: &Path,
+    roots: &SettingsRoots,
     flag: Option<&Path>,
     catalogs: &CatalogPaths,
     publisher: &RuntimePublisher,
@@ -257,8 +276,8 @@ fn republish_runtime(
     // rebuild so a settings write doesn't silently re-enable a layer the
     // operator disabled.
     let enabled = publisher.current().enabled_setting_sources.clone();
-    let settings = load_settings_with(
-        cwd,
+    let settings = load_settings_with_roots(
+        roots,
         flag,
         &catalogs.user_settings,
         &catalogs.managed_settings,

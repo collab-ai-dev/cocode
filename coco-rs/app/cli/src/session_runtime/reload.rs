@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::project_services::ProjectServices;
+use coco_app_runtime::ProjectServices;
 
 use super::SessionRuntime;
 

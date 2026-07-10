@@ -50,6 +50,7 @@ use crate::sections::ToolConfig;
 use crate::sections::VoiceConfig;
 use crate::sections::WebFetchConfig;
 use crate::sections::WebSearchConfig;
+use crate::settings::SettingsRoots;
 use crate::settings::SettingsWithSource;
 use crate::skill_overrides::SkillOverrideTiers;
 
@@ -188,7 +189,7 @@ impl CatalogPaths {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfigBuilder {
-    cwd: PathBuf,
+    settings_roots: crate::settings::SettingsRoots,
     flag_settings: Option<PathBuf>,
     env: EnvSnapshot,
     overrides: RuntimeOverrides,
@@ -200,7 +201,7 @@ pub struct RuntimeConfigBuilder {
 impl RuntimeConfigBuilder {
     pub fn from_process(cwd: impl Into<PathBuf>) -> Self {
         Self {
-            cwd: cwd.into(),
+            settings_roots: SettingsRoots::from_cwd(cwd),
             flag_settings: None,
             env: EnvSnapshot::from_current_process(),
             overrides: RuntimeOverrides::default(),
@@ -211,7 +212,7 @@ impl RuntimeConfigBuilder {
 
     pub fn new(cwd: impl Into<PathBuf>, env: EnvSnapshot) -> Self {
         Self {
-            cwd: cwd.into(),
+            settings_roots: SettingsRoots::from_cwd(cwd),
             flag_settings: None,
             env,
             overrides: RuntimeOverrides::default(),
@@ -237,6 +238,17 @@ impl RuntimeConfigBuilder {
         self
     }
 
+    /// Resolve shared project settings from `project_root` and local
+    /// settings from `local_root`. Single-cwd callers keep the default.
+    pub fn with_settings_roots(
+        mut self,
+        project_root: impl Into<PathBuf>,
+        local_root: impl Into<PathBuf>,
+    ) -> Self {
+        self.settings_roots = SettingsRoots::new(project_root, local_root);
+        self
+    }
+
     /// Restrict which setting sources participate via the `--setting-sources`
     /// CSV (`user`/`project`/`local`/`flag`/`policy`). `None` (the default) ⇒
     /// all five. `Policy` + `Flag` are always force-added downstream.
@@ -247,8 +259,8 @@ impl RuntimeConfigBuilder {
 
     pub fn build(self) -> crate::Result<RuntimeConfig> {
         let enabled = parse_enabled_setting_sources(self.setting_sources.as_deref());
-        let settings = crate::settings::load_settings_with(
-            &self.cwd,
+        let settings = crate::settings::load_settings_with_roots(
+            &self.settings_roots,
             self.flag_settings.as_deref(),
             &self.catalogs.user_settings,
             &self.catalogs.managed_settings,

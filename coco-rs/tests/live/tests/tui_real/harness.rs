@@ -284,7 +284,7 @@ impl RealTuiHarness {
         // Stage 1: layered runtime config (settings.json + env + flags).
         let runtime_config = build_runtime_config_for_cli(&cli, &cwd)
             .with_context(|| "build_runtime_config_for_cli")?;
-        let process_runtime = coco_cli::process_runtime::ProcessRuntime::global();
+        let process_runtime = coco_app_runtime::ProcessRuntime::global();
 
         // Stage 2: shared engine resources (full ToolRegistry, system
         // prompt with CLAUDE.md, command registry, startup permission
@@ -332,6 +332,7 @@ impl RealTuiHarness {
         let runtime = SessionHandle::build(SessionRuntimeBuildOpts {
             cli: &cli,
             runtime_config: Arc::new(runtime_config),
+            config_reloader: None,
             cwd: cwd.clone(),
             model_id: model_id.clone(),
             system_prompt,
@@ -750,7 +751,7 @@ impl RealTuiHarness {
     /// not surfaced via the wire-protocol notification stream.
     pub async fn history_snapshot(&self) -> Vec<coco_messages::Message> {
         self.runtime
-            .history
+            .history()
             .lock()
             .await
             .iter()
@@ -878,7 +879,7 @@ async fn run_real_agent_driver(
                     // `process_submit_turn`.
                     let new_msgs = build_user_turn_messages(user_uuid, &content);
                     let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
-                        let mut h = runtime_t.history.lock().await;
+                        let mut h = runtime_t.history().lock().await;
                         for m in new_msgs.iter().cloned() {
                             h.push(m);
                         }
@@ -902,7 +903,7 @@ async fn run_real_agent_driver(
                         .await
                     {
                         Ok(result) => {
-                            let mut h = runtime_t.history.lock().await;
+                            let mut h = runtime_t.history().lock().await;
                             h.clear();
                             for arc in result.final_messages {
                                 h.push_arc(arc);

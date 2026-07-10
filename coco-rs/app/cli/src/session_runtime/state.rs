@@ -243,11 +243,11 @@ impl SessionRuntime {
         self.config_resources.runtime_config()
     }
 
-    pub fn process_runtime(&self) -> &Arc<crate::process_runtime::ProcessRuntime> {
+    pub fn process_runtime(&self) -> &Arc<coco_app_runtime::ProcessRuntime> {
         self.project_resources.process_runtime()
     }
 
-    pub fn project_services(&self) -> &Arc<crate::project_services::ProjectServices> {
+    pub fn project_services(&self) -> &Arc<coco_app_runtime::ProjectServices> {
         self.project_resources.project_services()
     }
 

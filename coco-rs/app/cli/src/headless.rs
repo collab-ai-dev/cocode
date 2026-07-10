@@ -37,8 +37,8 @@ use coco_types::TokenUsage;
 use tokio_util::sync::CancellationToken;
 
 use crate::Cli;
-use crate::process_runtime::ProcessRuntime;
 use crate::shutdown::ShutdownDrainOutcome;
+use coco_app_runtime::ProcessRuntime;
 
 /// Fallback base instructions used when a resolved `ModelInfo`
 /// declares no `base_instructions` (e.g. Claude built-ins and any
@@ -191,8 +191,20 @@ pub fn cli_runtime_overrides(cli: &Cli) -> Result<coco_config::RuntimeOverrides>
 
 /// Build a `RuntimeConfig` honoring CLI-level overrides.
 pub fn build_runtime_config_for_cli(cli: &Cli, cwd: &Path) -> Result<coco_config::RuntimeConfig> {
-    let mut builder = coco_config::RuntimeConfigBuilder::from_process(cwd)
+    let roots = crate::paths::settings_roots_for_cwd(cwd);
+    build_runtime_config_for_cli_with_roots(cli, roots.project_root(), roots.local_root())
+}
+
+/// Build a `RuntimeConfig` honoring CLI-level overrides with split
+/// project/local settings roots.
+pub fn build_runtime_config_for_cli_with_roots(
+    cli: &Cli,
+    project_root: &Path,
+    local_root: &Path,
+) -> Result<coco_config::RuntimeConfig> {
+    let mut builder = coco_config::RuntimeConfigBuilder::from_process(local_root)
         .with_overrides(cli_runtime_overrides(cli)?)
+        .with_settings_roots(project_root, local_root)
         .with_setting_sources(cli.setting_sources.clone());
     if let Some(path) = cli.settings.as_deref() {
         builder = builder.with_flag_settings(path);
@@ -213,7 +225,22 @@ pub fn build_runtime_config_with_reloader(
     Option<coco_config_reload::RuntimeReloader>,
     coco_config::RuntimeConfig,
 )> {
-    let reload_opts = coco_config_reload::ReloadOptions::new(cwd.to_path_buf())
+    let roots = crate::paths::settings_roots_for_cwd(cwd);
+    build_runtime_config_with_reloader_roots(cli, roots.project_root(), roots.local_root())
+}
+
+/// Build a `RuntimeConfig` with hot-reload and split project/local settings
+/// roots.
+pub fn build_runtime_config_with_reloader_roots(
+    cli: &Cli,
+    project_root: &Path,
+    local_root: &Path,
+) -> Result<(
+    Option<coco_config_reload::RuntimeReloader>,
+    coco_config::RuntimeConfig,
+)> {
+    let reload_opts = coco_config_reload::ReloadOptions::new(local_root.to_path_buf())
+        .with_settings_roots(project_root, local_root)
         .with_overrides(cli_runtime_overrides(cli)?)
         .with_setting_sources(cli.setting_sources.clone());
     let reload_opts = if let Some(path) = cli.settings.as_deref() {
@@ -228,7 +255,10 @@ pub fn build_runtime_config_with_reloader(
         }
         Err(e) => {
             tracing::warn!(error = %e, "config hot-reload disabled; using one-shot build");
-            Ok((None, build_runtime_config_for_cli(cli, cwd)?))
+            Ok((
+                None,
+                build_runtime_config_for_cli_with_roots(cli, project_root, local_root)?,
+            ))
         }
     }
 }
@@ -283,7 +313,7 @@ pub fn resolve_main_model(runtime_config: &coco_config::RuntimeConfig) -> Resolv
 /// Headless and SDK paths share this helper so a future addition (e.g.,
 /// project-tree ancestor walk) lands in one place. `plugin_sources` are the
 /// plugin-contributed output-style directories (see
-/// [`crate::project_services::ProjectServices::output_style_sources`]).
+/// [`coco_app_runtime::ProjectServices::output_style_sources`]).
 pub fn build_output_style_manager(
     runtime_config: &coco_config::RuntimeConfig,
     cwd: &Path,
