@@ -35,9 +35,9 @@ use crate::headless::resolve_additional_dirs;
 use crate::headless::resolve_additional_dirs_display;
 use crate::headless::resolve_main_model;
 use crate::headless::resolve_startup_permission_state;
-use crate::process_runtime::ProcessRuntime;
-use crate::project_services::ProjectServices;
 use crate::session_runtime::SessionHandle;
+use coco_app_runtime::ProcessRuntime;
+use coco_app_runtime::ProjectServices;
 
 /// Resources produced by [`build_engine_resources`]. Caller threads
 /// these through into [`crate::session_runtime::SessionRuntimeBuildOpts`].

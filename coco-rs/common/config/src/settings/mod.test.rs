@@ -565,6 +565,65 @@ fn test_load_settings_with_accepts_jsonc_layers() {
 }
 
 #[test]
+fn test_load_settings_with_roots_splits_project_and_local_layers() {
+    let tmp = TempDir::new().expect("tempdir");
+    let project_root = tmp.path().join("project");
+    let local_root = project_root.join("nested/session");
+    std::fs::create_dir_all(project_root.join(coco_utils_common::COCO_CONFIG_DIR_NAME))
+        .expect("project settings dir");
+    std::fs::create_dir_all(local_root.join(coco_utils_common::COCO_CONFIG_DIR_NAME))
+        .expect("local settings dir");
+
+    let user_path = tmp.path().join("settings.json");
+    let managed_path = tmp.path().join("managed-settings.json");
+
+    std::fs::write(
+        project_root
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("settings.json"),
+        r#"{"output_style": "project"}"#,
+    )
+    .expect("write project settings");
+    std::fs::write(
+        local_root
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("settings.local.json"),
+        r#"{"output_style": "local"}"#,
+    )
+    .expect("write local settings");
+
+    let roots = SettingsRoots::new(&project_root, &local_root);
+    let settings = load_settings_with_roots(
+        &roots,
+        None,
+        &user_path,
+        &managed_path,
+        &all_setting_sources(),
+    )
+    .expect("load settings");
+
+    assert_eq!(settings.merged.output_style.as_deref(), Some("local"));
+    assert_eq!(
+        settings
+            .source_paths
+            .get(&SettingSource::Project)
+            .expect("project source path"),
+        &project_root
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("settings.json")
+    );
+    assert_eq!(
+        settings
+            .source_paths
+            .get(&SettingSource::Local)
+            .expect("local source path"),
+        &local_root
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("settings.local.json")
+    );
+}
+
+#[test]
 fn test_load_settings_with_merges_managed_dropin_directory() {
     let tmp = TempDir::new().expect("tempdir");
     let cwd = tmp.path().join("project");

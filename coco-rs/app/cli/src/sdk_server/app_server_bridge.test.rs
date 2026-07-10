@@ -212,7 +212,7 @@ fn test_runtime_factory(
                             coco_commands::CommandRegistry::default(),
                         ))),
                         skill_manager: Arc::new(coco_skills::SkillManager::new()),
-                        project_services: Arc::new(crate::project_services::ProjectServices::load(
+                        project_services: Arc::new(coco_app_runtime::ProjectServices::load(
                             home, home,
                         )),
                         agent_search_paths:
@@ -225,7 +225,7 @@ fn test_runtime_factory(
             session_manager,
             fast_model_spec: None,
             permission_bridge: None,
-            process_runtime: crate::process_runtime::ProcessRuntime::global(),
+            process_runtime: coco_app_runtime::ProcessRuntime::global(),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             is_non_interactive: true,
         },
@@ -376,7 +376,7 @@ async fn app_server_sdk_session_start_uses_runtime_replacement_context() {
     state
         .install_runtime_replacement(RuntimeReplacementContext {
             runtime_factory: factory,
-            process_runtime: crate::process_runtime::ProcessRuntime::global(),
+            process_runtime: coco_app_runtime::ProcessRuntime::global(),
             cwd: home.path().to_path_buf(),
             requires_structured_output: false,
         })
@@ -479,7 +479,7 @@ async fn app_server_sdk_session_resume_uses_scoped_runtime_replacement_state() {
     state
         .install_runtime_replacement(RuntimeReplacementContext {
             runtime_factory: factory,
-            process_runtime: crate::process_runtime::ProcessRuntime::global(),
+            process_runtime: coco_app_runtime::ProcessRuntime::global(),
             cwd: home.path().to_path_buf(),
             requires_structured_output: false,
         })

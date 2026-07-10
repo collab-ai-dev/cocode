@@ -574,8 +574,8 @@ async fn build_runtime_with_registry_and_settings(
         permission_bridge: None,
         command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(registry))),
         skill_manager: Arc::new(coco_skills::SkillManager::new()),
-        process_runtime: coco_cli::process_runtime::ProcessRuntime::global(),
-        project_services: Arc::new(coco_cli::project_services::ProjectServices::load(
+        process_runtime: coco_app_runtime::ProcessRuntime::global(),
+        project_services: Arc::new(coco_app_runtime::ProjectServices::load(
             home.path(),
             home.path(),
         )),
@@ -593,7 +593,7 @@ async fn test_resume_context(
 ) -> (
     super::SharedSessionHandle,
     crate::session_runtime::SessionRuntimeFactory,
-    Arc<coco_cli::process_runtime::ProcessRuntime>,
+    Arc<coco_app_runtime::ProcessRuntime>,
     std::path::PathBuf,
 ) {
     let rt = runtime.runtime();

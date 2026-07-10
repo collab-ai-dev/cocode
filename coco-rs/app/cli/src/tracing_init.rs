@@ -154,7 +154,8 @@ fn subscriber_opts_from_cli_with_sources(
 
 fn load_settings_for_logging(cli: &Cli, cwd: &Path) -> Result<Settings> {
     let flag_settings = cli.settings.as_deref().map(Path::new);
-    Ok(coco_config::settings::load_settings(cwd, flag_settings)?.merged)
+    let roots = crate::paths::settings_roots_for_cwd(cwd);
+    Ok(coco_config::settings::load_settings_for_roots(&roots, flag_settings)?.merged)
 }
 
 #[derive(Debug, Default)]

@@ -34,8 +34,8 @@ use coco_types::PermissionMode;
 use coco_types::SessionId;
 
 use crate::Cli;
-use crate::process_runtime::ProcessRuntime;
-use crate::project_services::ProjectServices;
+use coco_app_runtime::ProcessRuntime;
+use coco_app_runtime::ProjectServices;
 
 mod agent_catalog;
 mod build;

@@ -75,7 +75,11 @@ pub fn instance_name(provider: Option<&str>) -> String {
 /// to builtins when a full build needs a Main model that isn't set yet (e.g. a
 /// brand-new machine running `coco login` before configuring anything).
 fn provider_auth_for(provider_name: &str, cwd: &Path) -> Result<ProviderAuth> {
-    if let Ok(rc) = coco_config::RuntimeConfigBuilder::from_process(cwd).build() {
+    let roots = crate::paths::settings_roots_for_cwd(cwd);
+    if let Ok(rc) = coco_config::RuntimeConfigBuilder::from_process(roots.local_root())
+        .with_settings_roots(roots.project_root(), roots.local_root())
+        .build()
+    {
         return rc
             .providers
             .get(provider_name)

@@ -4,8 +4,8 @@ use coco_lsp::LspServersConfig;
 use coco_tool_runtime::LspHandle;
 use std::sync::Arc;
 
-fn test_process_runtime() -> Arc<crate::process_runtime::ProcessRuntime> {
-    crate::process_runtime::ProcessRuntime::global()
+fn test_process_runtime() -> Arc<coco_app_runtime::ProcessRuntime> {
+    coco_app_runtime::ProcessRuntime::global()
 }
 
 #[tokio::test]

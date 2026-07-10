@@ -12,7 +12,7 @@ use coco_query::QueryEngineConfig;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-use crate::project_services::ProjectServices;
+use coco_app_runtime::ProjectServices;
 
 #[derive(Clone)]
 pub(super) struct FileWatchRegistrationContext {

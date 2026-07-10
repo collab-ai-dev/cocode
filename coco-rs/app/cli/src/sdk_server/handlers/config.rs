@@ -1,8 +1,8 @@
 //! `config/read` + `config/value/write` handlers.
 //!
-//! Both walk the coco settings layers rooted at the active session's
-//! cwd (or the installed runtime's cwd when no session is active) and
-//! read/write JSON settings files via the blocking thread pool.
+//! Both walk the coco settings layers for the active session's cwd (or the
+//! installed runtime's cwd when no session is active) and read/write JSON
+//! settings files via the blocking thread pool.
 
 use tracing::info;
 
@@ -12,14 +12,13 @@ use super::HandlerResult;
 /// `config/read` — return the merged effective configuration plus a
 /// per-source breakdown keyed by source name.
 ///
-/// Delegates to [`coco_config::settings::load_settings`] with the
-/// session's cwd (if a session is active) or the runtime cwd as the
-/// project root. Returns the JSON-serialized merged view and a
-/// per-source map suitable for clients that want to display or
-/// override specific layers.
+/// Delegates to [`coco_config::settings::load_settings_for_roots`] with the
+/// session's resolved project root and cwd (if a session is active) or the
+/// runtime cwd fallback. Returns the JSON-serialized merged view and a
+/// per-source map suitable for clients that want to display or override
+/// specific layers.
 pub(super) async fn handle_config_read(ctx: &HandlerContext) -> HandlerResult {
-    // Project/local settings live under cwd, so this matters for clients
-    // that have multiple repos open.
+    // Project/local roots matter for clients that have multiple repos open.
     let cwd = match ctx.workspace_cwd().await {
         Ok(cwd) => cwd,
         Err(err) => return err,
@@ -28,9 +27,9 @@ pub(super) async fn handle_config_read(ctx: &HandlerContext) -> HandlerResult {
     // `load_settings` reads up to 6 layered JSON files synchronously; run
     // it on the blocking pool so frequent `config/read` polls don't stall
     // the tokio worker.
-    let cwd_for_load = cwd.clone();
+    let roots = crate::paths::settings_roots_for_cwd(&cwd);
     let load_result = tokio::task::spawn_blocking(move || {
-        coco_config::settings::load_settings(&cwd_for_load, None)
+        coco_config::settings::load_settings_for_roots(&roots, None)
     })
     .await;
     let loaded = match load_result {

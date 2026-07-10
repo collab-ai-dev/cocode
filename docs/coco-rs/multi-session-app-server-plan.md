@@ -2375,12 +2375,12 @@ Implementation progress as of 2026-07-07:
   the resolved project root. Plugin-contributed commands, skills, hooks, output
   styles, LSP servers, and MCP servers therefore follow the project catalog
   boundary, while disk skill discovery still uses the session cwd walk so nested
-  `.coco/skills` behavior is preserved until the project/local settings split
-  is implemented. Plugin-contributed agent directories and the session hook
-  registry's plugin layer now use the same project-root plugin catalog, and
-  plugin reload refreshes the runtime's agent search paths before the agent
-  catalog is rebuilt; direct disk agent discovery still starts from the
-  session cwd. The project plugin catalog is now represented internally by
+  `.coco/skills` behavior is preserved until the remaining project/local
+  customization extraction is implemented. Plugin-contributed agent directories
+  and the session hook registry's plugin layer now use the same project-root
+  plugin catalog, and plugin reload refreshes the runtime's agent search paths
+  before the agent catalog is rebuilt; direct disk agent discovery still starts
+  from the session cwd. The project plugin catalog is now represented internally by
   `ProjectCatalogSnapshot` and exposed through a thin `ProjectServices`
   wrapper. `EngineResources`,
   `SessionRuntimeBuildOpts`, and `SessionRuntime` now carry
@@ -2400,19 +2400,29 @@ Implementation progress as of 2026-07-07:
   the opportunistic miss-path sweep: cached entries whose only remaining `Arc`
   owner is the registry are marked idle and evicted after the configured grace
   period, while attached sessions' strong references keep their project
-  services alive. The full project/local settings split is still pending.
-  `ProjectServices` now also
-  exposes the combined MCP server list for a session cwd, so session MCP
-  bootstrap consumes project-rooted config/plugin MCP contributions through the
-  project-service boundary instead of assembling them in `session_bootstrap`.
+  services alive. `ProjectServices` now also carries a project-settings
+  fingerprint snapshot, and `ProjectRegistry::get_or_load` refreshes the
+  cached entry on the next lookup after that project-rooted settings file
+  changes; session-local settings remain outside the project-root cache. The
+  runtime config fold now carries explicit project/local settings roots:
+  `RuntimeConfigBuilder`, `RuntimeReloader`, and `SettingsWatcher` resolve the
+  project layer from the resolved project root and the local layer from the
+  session cwd. The CLI runtime-config helper and the per-session bootstrap path
+  both use that split, so TUI/headless sessions and resumed or created
+  AppServer sessions under the same worktree share project settings while
+  keeping `.cocode/settings.local.json` session-cwd scoped.
+  The `ProjectServices` wrapper also exposes the combined MCP server list for a
+  session cwd, so session MCP bootstrap consumes project-rooted config/plugin
+  MCP contributions through the project-service boundary instead of assembling
+  them in `session_bootstrap`.
   Plugin-contributed LSP server discovery is also behind `ProjectServices`, so
   LSP startup/reload no longer reassembles plugin server config at the
   bootstrap/adapter call sites. Session skill bootstrap/reload now asks
   `ProjectServices` to build the complete session `SkillManager`, keeping
   project plugin skills and builtin plugin skills behind the same boundary
-  while disk skill discovery still uses the session cwd until the full
-  project/local split lands. Plugin hook registration at bootstrap and
-  `/hooks reload` also goes through `ProjectServices`, leaving settings-hook
+  while disk skill discovery still uses the session cwd until the remaining
+  project/local customization extraction lands. Plugin hook registration at
+  bootstrap and `/hooks reload` also goes through `ProjectServices`, leaving settings-hook
   layering in the runtime-config path while project plugin hook discovery stays
   on the project catalog boundary. Slash-command registry construction now
   also asks `ProjectServices` to supply project plugin command contributions,
@@ -2566,8 +2576,10 @@ Implementation progress as of 2026-07-07:
   through the swappable handle directly. SDK turn/runtime/session handlers now
   use installed `SessionHandle`s directly for memory shortcuts, goal state,
   manual compact, model/permission/color updates, tag toggling, and resume
-  hydration; remaining production `.runtime()` calls are local AppServer
-  registry snapshot extraction points (`LocalAppSessionHandle`) or tests.
+  hydration. Local AppServer registry snapshot extraction now goes through
+  explicit `LocalAppSessionHandle::require_runtime*` bridge methods, leaving
+  only the close-cascade stale-snapshot check to inspect the optional runtime
+  payload internally.
   Production `app/cli` call sites no longer expose raw
   `Arc<SessionRuntime>` in helper signatures; raw runtime `Arc` ownership
   remains contained in `SessionHandle` itself, test fixtures, and documented
@@ -3152,7 +3164,7 @@ Carried forward from v5 unless marked; new and reversed entries noted.
 | D-33 | Cross-session filesystem isolation documented as a non-goal |
 | D-34 | Worktree governed solely by `Feature::Worktree` as resolved in the session's config fold; no separate `session/start` parameter |
 | D-35 | Three ownership scopes: Process / Project / Session. `ProjectServices` cached per project root (git worktree root, else cwd) with single-flight load and idle eviction — the opencode `LocationServiceMap` shape. Evidence: all five reference products host multiple working directories per process; none binds one process to one project root |
-| D-36 | **Amends v5 #17**: only policy/user/flag/env settings layers are process-global. Project + local layers fold per session at `session/start` against the session's cwd (codex layer-stack position: file layers below per-session `SessionFlags`-style overrides); `RuntimeConfig` and `Features` are per-session snapshots; resume re-folds |
+| D-36 | **Amends v5 #17**: only policy/user/flag/env settings layers are process-global. Project + local layers fold per session at `session/start`; project settings resolve against the session's resolved project root, local settings resolve against the session cwd (codex layer-stack position: file layers below per-session `SessionFlags`-style overrides); `RuntimeConfig` and `Features` are per-session snapshots; resume re-folds |
 | D-37 | cwd is per-session state threaded explicitly (`ToolUseContext` → spawn `current_dir`); no process-cwd fallbacks on session paths; currently enforced on session-owned production crates via `check-session-cwd-discipline.sh`, with full-workspace `clippy.toml` `disallowed-methods` as the steady-state target once standalone tools are split or allow-listed |
 | D-38 | Event taxonomy: durable (Protocol + boundary events — sequenced, ring-retained, hub-shipped) vs ephemeral (Stream deltas + Tui — `session_seq: None`, live-only, never replayed); decided at the stamping seam |
 | D-39 | `session_seq` survives restarts: high-water mark persisted in transcript metadata (periodic flush + close cascade step 5), counter restored on resume; hub cursors stay valid across process restarts |

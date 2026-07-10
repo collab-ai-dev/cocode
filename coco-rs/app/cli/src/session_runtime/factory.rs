@@ -17,10 +17,10 @@ use tokio::sync::RwLock;
 use super::SessionHandle;
 use super::SessionRuntimeBuildOpts;
 use crate::Cli;
-use crate::headless::build_runtime_config_with_reloader;
-use crate::process_runtime::ProcessRuntime;
-use crate::project_services::ProjectServices;
+use crate::headless::build_runtime_config_with_reloader_roots;
 use crate::session_bootstrap::build_engine_resources;
+use coco_app_runtime::ProcessRuntime;
+use coco_app_runtime::ProjectServices;
 
 /// Owned construction inputs for one family of session runtimes.
 ///
@@ -106,8 +106,12 @@ impl SessionRuntimeBootstrapSource {
                 cli,
                 process_runtime,
             } => {
-                let (config_reloader, runtime_config) =
-                    build_runtime_config_with_reloader(cli, cwd)?;
+                let session_workspace = crate::paths::SessionWorkspace::resolve(cwd.to_path_buf());
+                let (config_reloader, runtime_config) = build_runtime_config_with_reloader_roots(
+                    cli,
+                    &session_workspace.project_root,
+                    &session_workspace.cwd,
+                )?;
                 let runtime_config = Arc::new(runtime_config);
                 let resources = build_engine_resources(process_runtime, cli, &runtime_config, cwd)?;
                 let config_home = coco_config::global_config::config_home();

@@ -742,6 +742,45 @@ pub struct SettingsWithSource {
     pub source_paths: HashMap<SettingSource, std::path::PathBuf>,
 }
 
+/// Filesystem roots used for project and local settings layers.
+///
+/// Existing single-cwd callers use [`Self::from_cwd`]. Multi-session runtimes
+/// can resolve project settings against a project root while keeping local
+/// settings scoped to the session cwd.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsRoots {
+    project_root: std::path::PathBuf,
+    local_root: std::path::PathBuf,
+}
+
+impl SettingsRoots {
+    pub fn from_cwd(cwd: impl Into<std::path::PathBuf>) -> Self {
+        let cwd = cwd.into();
+        Self {
+            project_root: cwd.clone(),
+            local_root: cwd,
+        }
+    }
+
+    pub fn new(
+        project_root: impl Into<std::path::PathBuf>,
+        local_root: impl Into<std::path::PathBuf>,
+    ) -> Self {
+        Self {
+            project_root: project_root.into(),
+            local_root: local_root.into(),
+        }
+    }
+
+    pub fn project_root(&self) -> &std::path::Path {
+        &self.project_root
+    }
+
+    pub fn local_root(&self) -> &std::path::Path {
+        &self.local_root
+    }
+}
+
 impl SettingsWithSource {
     /// Whether any settings source enables the stricter auto-mode shell gate.
     ///
@@ -850,8 +889,17 @@ pub fn load_settings(
     cwd: &std::path::Path,
     flag_settings: Option<&std::path::Path>,
 ) -> crate::Result<SettingsWithSource> {
-    load_settings_with(
-        cwd,
+    load_settings_for_roots(&SettingsRoots::from_cwd(cwd), flag_settings)
+}
+
+/// Load settings using the default user / managed paths with explicit roots
+/// for the Project and Local layers.
+pub fn load_settings_for_roots(
+    roots: &SettingsRoots,
+    flag_settings: Option<&std::path::Path>,
+) -> crate::Result<SettingsWithSource> {
+    load_settings_with_roots(
+        roots,
         flag_settings,
         &crate::global_config::user_settings_path(),
         &crate::global_config::managed_settings_path(),
@@ -892,6 +940,23 @@ pub fn load_settings_with(
     managed_path: &std::path::Path,
     enabled: &HashSet<SettingSource>,
 ) -> crate::Result<SettingsWithSource> {
+    load_settings_with_roots(
+        &SettingsRoots::from_cwd(cwd),
+        flag_settings,
+        user_path,
+        managed_path,
+        enabled,
+    )
+}
+
+/// Load and merge settings with explicit roots for Project and Local layers.
+pub fn load_settings_with_roots(
+    roots: &SettingsRoots,
+    flag_settings: Option<&std::path::Path>,
+    user_path: &std::path::Path,
+    managed_path: &std::path::Path,
+    enabled: &HashSet<SettingSource>,
+) -> crate::Result<SettingsWithSource> {
     use crate::ResultExt;
     use crate::global_config;
 
@@ -904,11 +969,11 @@ pub fn load_settings_with(
         (SettingSource::User, user_pathbuf),
         (
             SettingSource::Project,
-            global_config::project_settings_path(cwd),
+            global_config::project_settings_path(roots.project_root()),
         ),
         (
             SettingSource::Local,
-            global_config::local_settings_path(cwd),
+            global_config::local_settings_path(roots.local_root()),
         ),
     ];
 

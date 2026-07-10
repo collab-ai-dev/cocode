@@ -46,6 +46,7 @@ coco-coordinator.workspace = true
 # including system-prompt assembly, fallback chain, permission resolution,
 # CLAUDE.md discovery — the user's actual entry point.
 coco-cli.workspace = true
+coco-app-runtime.workspace = true
 coco-app-server.workspace = true
 # Needed by both SDK and TUI harnesses to construct
 # `SessionRuntimeBuildOpts.agent_search_paths` /

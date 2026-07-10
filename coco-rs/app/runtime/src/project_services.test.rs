@@ -1,3 +1,5 @@
+//! Project service cache and discovery tests.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,6 +59,47 @@ fn registry_reload_replaces_cached_entry() {
     assert!(!Arc::ptr_eq(&first, &second));
     assert!(Arc::ptr_eq(&second, &third));
     assert_eq!(registry.len(), 1);
+}
+
+#[test]
+fn project_services_tracks_project_settings_path() {
+    let temp = tempdir().unwrap();
+    let config_home = temp.path().join("home");
+    let project_root = temp.path().join("repo");
+    std::fs::create_dir_all(&config_home).unwrap();
+    std::fs::create_dir_all(&project_root).unwrap();
+
+    let services = ProjectServices::load(&config_home, project_root.clone());
+
+    assert_eq!(
+        services.project_config_snapshot().settings_path(),
+        coco_config::global_config::project_settings_path(&project_root).as_path()
+    );
+}
+
+#[test]
+fn registry_refreshes_entry_when_project_settings_change() {
+    let temp = tempdir().unwrap();
+    let config_home = temp.path().join("home");
+    let project_root = temp.path().join("repo");
+    let settings_dir = project_root.join(coco_utils_common::COCO_CONFIG_DIR_NAME);
+    let settings_path = settings_dir.join("settings.json");
+    std::fs::create_dir_all(&config_home).unwrap();
+    std::fs::create_dir_all(&settings_dir).unwrap();
+    let registry = ProjectRegistry::new();
+
+    let first = registry.get_or_load(&config_home, project_root.clone());
+    assert!(!first.project_config_snapshot().has_changed());
+
+    std::fs::write(&settings_path, "{}").unwrap();
+    assert!(first.project_config_snapshot().has_changed());
+
+    let second = registry.get_or_load(&config_home, project_root.clone());
+    let third = registry.get_or_load(&config_home, project_root);
+
+    assert!(Arc::ptr_eq(&first, &second));
+    assert!(Arc::ptr_eq(&second, &third));
+    assert!(!second.project_config_snapshot().has_changed());
 }
 
 #[test]

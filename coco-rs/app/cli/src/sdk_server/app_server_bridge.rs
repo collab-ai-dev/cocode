@@ -147,8 +147,42 @@ impl LocalAppSessionHandle {
         &self.session_id
     }
 
-    pub fn runtime(&self) -> Option<&crate::session_runtime::SessionHandle> {
+    fn runtime(&self) -> Option<&crate::session_runtime::SessionHandle> {
         self.runtime.as_ref()
+    }
+
+    fn has_runtime(&self) -> bool {
+        self.runtime.is_some()
+    }
+
+    fn into_runtime(self) -> Option<crate::session_runtime::SessionHandle> {
+        self.runtime
+    }
+
+    fn require_runtime(
+        self,
+        action: &str,
+    ) -> Result<crate::session_runtime::SessionHandle, JsonRpcDispatchError> {
+        let session_id = self.session_id.clone();
+        self.into_runtime().ok_or_else(|| JsonRpcDispatchError {
+            code: coco_types::error_codes::INTERNAL_ERROR,
+            message: format!(
+                "local AppServer session {session_id} {action} without a runtime handle"
+            ),
+            data: None,
+        })
+    }
+
+    pub fn require_runtime_anyhow(
+        self,
+        action: &str,
+    ) -> anyhow::Result<crate::session_runtime::SessionHandle> {
+        let session_id = self.session_id.clone();
+        self.into_runtime().ok_or_else(|| {
+            anyhow::anyhow!(
+                "local AppServer session {session_id} {action} without a runtime handle"
+            )
+        })
     }
 
     pub(crate) async fn live_summary_and_history(
@@ -745,16 +779,7 @@ async fn start_sdk_session_with_runtime_replacement(
             .await?
         }
     };
-    let Some(runtime) = handle.runtime().cloned() else {
-        return Err(JsonRpcDispatchError {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: format!(
-                "local AppServer session {} started without a runtime handle",
-                handle.session_id()
-            ),
-            data: None,
-        });
-    };
+    let runtime = handle.require_runtime("started")?;
 
     install_sdk_session_runtime_state(Arc::clone(&state), runtime.clone()).await;
     session::install_scoped_started_session_state(
@@ -900,16 +925,7 @@ async fn resume_sdk_session_with_runtime_replacement(
             .await?
         }
     };
-    let Some(runtime) = handle.runtime().cloned() else {
-        return Err(JsonRpcDispatchError {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: format!(
-                "local AppServer session {} resumed without a runtime handle",
-                handle.session_id()
-            ),
-            data: None,
-        });
-    };
+    let runtime = handle.require_runtime("resumed")?;
     install_sdk_session_runtime_state(Arc::clone(&state), runtime.clone()).await;
     install_runtime_backed_resumed_sdk_session_state(
         &state,
@@ -1614,7 +1630,7 @@ async fn register_local_app_server_session(
                 .map_err(|error| local_lifecycle_error("register session", error))
         }
         AppLoadStart::Live(_) => {
-            if handle.runtime().is_some() {
+            if handle.has_runtime() {
                 let refresh_session_id = handle.session_id.clone();
                 app_server
                     .registry()
@@ -1712,19 +1728,18 @@ async fn close_local_session_handle_with_reason(
     reason: coco_hooks::orchestration::ExitReason,
 ) {
     let has_runtime = handle.runtime.is_some();
-    if let Some(runtime) = handle.runtime() {
-        if let Some(current_session_id) = runtime
+    if let Some(runtime) = handle.runtime()
+        && let Some(current_session_id) = runtime
             .close_if_current_session(handle.session_id(), reason)
             .await
-        {
-            debug!(
-                target: "coco::app_server_local",
-                registry_session_id = %handle.session_id(),
-                current_session_id = %current_session_id,
-                "skipping local AppServer close cascade for stale registry snapshot"
-            );
-            return;
-        }
+    {
+        debug!(
+            target: "coco::app_server_local",
+            registry_session_id = %handle.session_id(),
+            current_session_id = %current_session_id,
+            "skipping local AppServer close cascade for stale registry snapshot"
+        );
+        return;
     }
     debug!(
         target: "coco::app_server_local",
@@ -2013,9 +2028,7 @@ impl AppServerLocalBridge {
         )
         .await
         .map_err(|error| anyhow::anyhow!("{}", error.message))?;
-        handle.runtime().cloned().ok_or_else(|| {
-            anyhow::anyhow!("local AppServer session {session_id} loaded without a runtime handle")
-        })
+        handle.require_runtime_anyhow("loaded")
     }
 
     pub async fn load_session_runtime_from_factory(
@@ -2027,12 +2040,7 @@ impl AppServerLocalBridge {
             load_local_app_server_session_runtime(&self.app_server, session_id, runtime_factory)
                 .await
                 .map_err(|error| anyhow::anyhow!("{}", error.message))?;
-        handle.runtime().cloned().ok_or_else(|| {
-            anyhow::anyhow!(
-                "local AppServer session {} loaded without a runtime handle",
-                handle.session_id()
-            )
-        })
+        handle.require_runtime_anyhow("loaded")
     }
 
     pub async fn load_session_runtime_from_factory_with_cwd(
@@ -2049,12 +2057,7 @@ impl AppServerLocalBridge {
         )
         .await
         .map_err(|error| anyhow::anyhow!("{}", error.message))?;
-        handle.runtime().cloned().ok_or_else(|| {
-            anyhow::anyhow!(
-                "local AppServer session {} loaded without a runtime handle",
-                handle.session_id()
-            )
-        })
+        handle.require_runtime_anyhow("loaded")
     }
 
     pub async fn replace_session_runtime<F>(
@@ -2088,17 +2091,8 @@ impl AppServerLocalBridge {
             replacement
                 .map(|(handle, surface_id)| {
                     handle
-                        .runtime()
-                        .cloned()
+                        .require_runtime("replaced")
                         .map(|runtime| (runtime, surface_id))
-                        .ok_or_else(|| JsonRpcDispatchError {
-                            code: coco_types::error_codes::INTERNAL_ERROR,
-                            message: format!(
-                                "local AppServer session {} replaced without a runtime handle",
-                                handle.session_id()
-                            ),
-                            data: None,
-                        })
                 })
                 .transpose()
         })
@@ -2132,19 +2126,7 @@ impl AppServerLocalBridge {
             self.handler.turn_drain_timeout,
         )
         .await
-        .and_then(|handle| {
-            handle
-                .runtime()
-                .cloned()
-                .ok_or_else(|| JsonRpcDispatchError {
-                    code: coco_types::error_codes::INTERNAL_ERROR,
-                    message: format!(
-                        "local AppServer session {} replaced without a runtime handle",
-                        handle.session_id()
-                    ),
-                    data: None,
-                })
-        })
+        .and_then(|handle| handle.require_runtime("replaced"))
         .map_err(|error| anyhow::anyhow!("{}", error.message))
     }
 
@@ -2320,10 +2302,7 @@ impl AppServerLocalBridge {
 
         match replacement {
             Some((handle, surface_id)) => {
-                let runtime = handle
-                    .runtime()
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("replacement handle did not include runtime"))?;
+                let runtime = handle.require_runtime_anyhow("replaced")?;
                 Ok(Some((runtime, surface_id)))
             }
             None => Ok(None),

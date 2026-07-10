@@ -191,7 +191,7 @@ async fn build_sdk_test_runtime_with_session_id(
                             coco_commands::CommandRegistry::default(),
                         ))),
                         skill_manager: Arc::new(coco_skills::SkillManager::new()),
-                        project_services: Arc::new(crate::project_services::ProjectServices::load(
+                        project_services: Arc::new(coco_app_runtime::ProjectServices::load(
                             home, home,
                         )),
                         agent_search_paths:
@@ -206,7 +206,7 @@ async fn build_sdk_test_runtime_with_session_id(
             session_manager: Arc::new(coco_session::SessionManager::new(home.join("sessions"))),
             fast_model_spec: None,
             permission_bridge: None,
-            process_runtime: crate::process_runtime::ProcessRuntime::global(),
+            process_runtime: coco_app_runtime::ProcessRuntime::global(),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             is_non_interactive: false,
         },

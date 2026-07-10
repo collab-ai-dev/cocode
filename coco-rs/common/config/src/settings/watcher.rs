@@ -10,6 +10,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use super::SettingsRoots;
 use super::source::SettingSource;
 
 /// Marks a watched path as either a settings layer (with its source)
@@ -39,6 +40,11 @@ impl SettingsWatcher {
     /// list reflects the isolated filesystem state, not the
     /// developer's real `config home/`.
     pub fn with_catalogs(cwd: &Path, catalogs: &crate::runtime::CatalogPaths) -> Self {
+        Self::with_roots(&SettingsRoots::from_cwd(cwd), catalogs)
+    }
+
+    /// Create a watcher with explicit roots for project and local settings.
+    pub fn with_roots(roots: &SettingsRoots, catalogs: &crate::runtime::CatalogPaths) -> Self {
         let watched_paths = vec![
             (
                 WatchedKind::Settings(SettingSource::User),
@@ -46,11 +52,11 @@ impl SettingsWatcher {
             ),
             (
                 WatchedKind::Settings(SettingSource::Project),
-                crate::global_config::project_settings_path(cwd),
+                crate::global_config::project_settings_path(roots.project_root()),
             ),
             (
                 WatchedKind::Settings(SettingSource::Local),
-                crate::global_config::local_settings_path(cwd),
+                crate::global_config::local_settings_path(roots.local_root()),
             ),
             (
                 WatchedKind::Settings(SettingSource::Policy),
@@ -83,5 +89,46 @@ impl SettingsWatcher {
             WatchedKind::Settings(source) => Some(source),
             _ => None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn with_roots_watches_project_and_local_settings_from_distinct_roots() {
+        let tmp = TempDir::new().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let local_root = project_root.join("nested/session");
+        let catalogs = crate::runtime::CatalogPaths::rooted(tmp.path().join("home"));
+        let roots = SettingsRoots::new(&project_root, &local_root);
+        let expected_project = project_root
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("settings.json");
+        let expected_local = local_root
+            .join(coco_utils_common::COCO_CONFIG_DIR_NAME)
+            .join("settings.local.json");
+
+        let watcher = SettingsWatcher::with_roots(&roots, &catalogs);
+
+        assert_eq!(
+            watcher
+                .watched_paths()
+                .iter()
+                .find(|(kind, _)| *kind == WatchedKind::Settings(SettingSource::Project))
+                .map(|(_, path)| path),
+            Some(&expected_project)
+        );
+        assert_eq!(
+            watcher
+                .watched_paths()
+                .iter()
+                .find(|(kind, _)| *kind == WatchedKind::Settings(SettingSource::Local))
+                .map(|(_, path)| path),
+            Some(&expected_local)
+        );
     }
 }
