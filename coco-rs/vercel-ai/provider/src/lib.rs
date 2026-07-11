@@ -196,11 +196,16 @@ pub use speech_model::SpeechModelV4Response;
 pub use speech_model::SpeechModelV4Result;
 
 // New model types - Transcription
+pub use transcription_model::AudioChunkStream;
+pub use transcription_model::TranscriptionInputAudioFormat;
 pub use transcription_model::TranscriptionModelV4;
 pub use transcription_model::TranscriptionModelV4CallOptions;
 pub use transcription_model::TranscriptionModelV4Request;
 pub use transcription_model::TranscriptionModelV4Response;
 pub use transcription_model::TranscriptionModelV4Result;
+pub use transcription_model::TranscriptionModelV4StreamOptions;
+pub use transcription_model::TranscriptionModelV4StreamPart;
+pub use transcription_model::TranscriptionModelV4StreamResult;
 pub use transcription_model::TranscriptionSegmentV4;
 
 // New model types - Reranking

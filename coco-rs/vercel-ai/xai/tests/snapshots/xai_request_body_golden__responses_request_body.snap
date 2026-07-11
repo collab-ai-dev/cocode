@@ -1,0 +1,74 @@
+---
+source: vercel-ai/xai/tests/xai_request_body_golden.rs
+assertion_line: 144
+expression: body
+---
+{
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "input": [
+    {
+      "content": "Be brief.",
+      "role": "system"
+    },
+    {
+      "content": [
+        {
+          "text": "what is xAI?",
+          "type": "input_text"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "logprobs": true,
+  "max_output_tokens": 512,
+  "model": "grok-4.5",
+  "previous_response_id": "resp_123",
+  "reasoning": {
+    "effort": "low",
+    "summary": "auto"
+  },
+  "seed": 7,
+  "store": false,
+  "temperature": 0.20000000298023224,
+  "text": {
+    "format": {
+      "description": "A short report",
+      "name": "report",
+      "schema": {
+        "properties": {
+          "summary": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "strict": true,
+      "type": "json_schema"
+    }
+  },
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "description": "Get weather",
+      "name": "get_weather",
+      "parameters": {
+        "properties": {
+          "city": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "strict": true,
+      "type": "function"
+    },
+    {
+      "type": "web_search"
+    }
+  ],
+  "top_logprobs": 2,
+  "top_p": 0.800000011920929
+}

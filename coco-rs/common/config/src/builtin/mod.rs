@@ -13,7 +13,7 @@
 //! adding a new vendor is a single-file change.
 //!
 //! Aggregation order: `anthropic`, `openai`, `google`, `volcengine`,
-//! `zai`, `deepseek`. The provider builder preserves this order so
+//! `zai`, `deepseek`, `xai`, `groq`. The provider builder preserves this order so
 //! `builtin_providers()` zips byte-stably against
 //! `builtin_provider_partials()` (the identity invariant test in
 //! `mod.test.rs` relies on the pairing).
@@ -21,8 +21,10 @@
 mod anthropic;
 mod deepseek;
 mod google;
+mod groq;
 mod openai;
 mod volcengine;
+mod xai;
 mod zai;
 
 /// Canonical name of the builtin OpenAI ChatGPT-subscription (OAuth) provider
@@ -33,6 +35,15 @@ mod zai;
 pub const OPENAI_CHATGPT_PROVIDER: &str = "openai-chatgpt";
 /// Canonical name of the builtin Gemini Code Assist (OAuth) provider instance.
 pub const GEMINI_CODE_ASSIST_PROVIDER: &str = "gemini-code-assist";
+/// Canonical name of the builtin Groq provider instance. Shared by the builtin
+/// registry entry (`builtin/groq.rs`) and the model-factory dispatch so the
+/// name that selects the dedicated `vercel-ai-groq` crate cannot drift.
+pub use groq::GROQ_PROVIDER;
+/// Canonical name of the builtin xAI (Grok) provider instance. Shared by the
+/// builtin registry entry (`builtin/xai.rs`) and the model-factory dispatch
+/// (`services/inference::model_factory::build_language_model_from_runtime`) so
+/// the name that selects the dedicated `vercel-ai-xai` crate cannot drift.
+pub use xai::XAI_PROVIDER;
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -114,6 +125,8 @@ fn vendor_models() -> Vec<(&'static str, PartialModelInfo)> {
     out.extend(volcengine::models());
     out.extend(zai::models());
     out.extend(deepseek::models());
+    out.extend(xai::models());
+    out.extend(groq::models());
     out
 }
 
@@ -125,6 +138,8 @@ fn vendor_providers() -> Vec<(&'static str, PartialProviderConfig)> {
     out.extend(volcengine::providers());
     out.extend(zai::providers());
     out.extend(deepseek::providers());
+    out.extend(xai::providers());
+    out.extend(groq::providers());
     out
 }
 

@@ -1,0 +1,65 @@
+---
+source: vercel-ai/xai/tests/xai_request_body_golden.rs
+assertion_line: 90
+expression: body
+---
+{
+  "logprobs": true,
+  "max_completion_tokens": 256,
+  "messages": [
+    {
+      "content": "Be brief.",
+      "role": "system"
+    },
+    {
+      "content": "weather in SF?",
+      "role": "user"
+    }
+  ],
+  "model": "grok-4.5",
+  "parallel_function_calling": false,
+  "reasoning_effort": "high",
+  "response_format": {
+    "json_schema": {
+      "name": "weather_report",
+      "schema": {
+        "properties": {
+          "answer": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "strict": true
+    },
+    "type": "json_schema"
+  },
+  "seed": 42,
+  "temperature": 0.5,
+  "tool_choice": {
+    "function": {
+      "name": "get_weather"
+    },
+    "type": "function"
+  },
+  "tools": [
+    {
+      "function": {
+        "description": "Get weather",
+        "name": "get_weather",
+        "parameters": {
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "strict": true
+      },
+      "type": "function"
+    }
+  ],
+  "top_logprobs": 3,
+  "top_p": 0.8999999761581421
+}
