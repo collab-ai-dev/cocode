@@ -20,7 +20,7 @@ Thinking / Token / ID / Sandbox: `ThinkingLevel { effort, budget_tokens, options
 
 Event envelope (owned here — see `event-system-design.md`): `CoreEvent` (3-layer), `ServerNotification` (59 variants — Turn lifecycle is `TurnStarted` + `TurnEnded(TurnEndedParams)` with discriminated `TurnOutcome`: Completed/Failed/Interrupted/MaxTurnsReached/BudgetExhausted) + `NotificationMethod` (typed wire-method enum), `AgentStreamEvent`, `TuiOnlyEvent`, `ThreadItem`, plus 50+ event param structs.
 
-Wire protocol: `ClientRequest` + `ClientRequestMethod` (45 variants), `ServerRequest` + `ServerRequestMethod` (5 variants), `JsonRpcMessage` family, `RequestId`, `error_codes`.
+Wire protocol: `ClientRequest` + `ClientRequestMethod` (43 variants), `ServerRequest` + `ServerRequestMethod` (5 variants), `JsonRpcMessage` family, `RequestId`, `error_codes`.
 `TurnStartParams` is the shared SDK/TUI local-AppServer turn DTO: it carries
 the prompt plus optional paste images, slash metadata attachment text,
 turn-scoped model selection, permission mode, and thinking override.

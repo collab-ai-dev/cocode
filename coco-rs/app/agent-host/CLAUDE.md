@@ -30,6 +30,22 @@ it expose typed errors and SDK handlers translate failures to protocol results.
 | `project_services::ProjectServices` | Project-rooted plugin catalog plus command, skill, hook, MCP, and LSP discovery shared by sessions with the same project root |
 | `session_runtime::SessionRuntimeFactory` | Owned construction seam for building `SessionHandle`s from cloneable startup inputs and a target session id. |
 
+## Known Multi-Session Boundary
+
+The shared AppServer registry/routing infrastructure is multi-slot, but the SDK
+execution path is not yet safe to describe as fully multi-session. Several
+session-scoped requests lack an explicit `(session_id, surface_id)` target;
+`StateQueryEngineRunner`, MCP, file-history, and reload paths still consult or
+replace process-singleton SDK slots. Initialize-derived inputs and connection
+writer/correlation state also lack a complete per-connection owner. The
+breaking target removes implicit
+sole-surface inference and resolves one `SessionHandle` from the AppServer
+registry for every session operation. Those slots must not be deleted
+literally: migrate all consumers to session-owned capabilities first, prove
+behavior parity and A/B isolation, then remove only the duplicate process
+owners. See `docs/coco-rs/multi-session-app-server/README.md`; the exhaustive
+request and connection contract is in `protocol-scope.md` in that directory.
+
 ## Startup Flow
 
 1. `coco-cli` maps parsed arguments into `AgentHostOptions`.

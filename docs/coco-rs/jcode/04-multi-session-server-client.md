@@ -216,19 +216,19 @@ returns `NotSupported("local session json store is read-only")`
 `app/`+`core/`+`services/` returns **zero non-test hits**. So the hub today =
 browse-your-own-finished-transcripts, not a live multi-client server.
 
-### (2) SDK server — single-session, stdio NDJSON (implemented)
+### (2) SDK AppServer — multi-slot routing, partial execution isolation
 
-`app/cli/src/sdk_server/` is an NDJSON-over-stdio control loop. Its state is
-explicitly single-session: `SdkServerState { session: RwLock<Option<SessionHandle>>, … }`
-with the comment "Only one concurrent session per server — mirrors TS where
-`structuredIO.ts` holds a single `currentSession` slot"
-(`sdk_server/handlers/mod.rs:236-242`). There is no `HashMap<ConnId, ConnState>`,
-no per-request routing, one MCP manager
-(`mcp_manager: RwLock<Option<…>>`, `:306`); `session/archive` →
-`session/start` recycles the one slot. The concurrent-app-server plan further
-notes `QueryEngine` is currently rebuilt **per turn**
-(`concurrent-app-server-plan.md:391`), looser than codex/jcode per-session
-ownership.
+SDK mode now runs stdio NDJSON plus optional Unix/named-pipe/WebSocket
+connections through a shared `AppServer`. `LiveSessionRegistry` and
+`RoutingState` support multiple live slots, multiple surfaces per connection,
+passive subscribers, replay, and interactive-owner validation.
+
+The remaining gap is above routing: several session requests still lack an
+explicit target, and SDK host state retains process-singleton runtime, MCP,
+file-history, and reload slots. The production turn runner can therefore use
+the last installed runtime even when request handoff state was resolved for a
+different session. See `docs/coco-rs/multi-session-app-server/review.md` for the
+verified call paths.
 
 ### (3) `coco-remote` — client to Anthropic cloud CCR (designed)
 
@@ -238,21 +238,16 @@ reconnect / heartbeat (`:144-160`), plus an upstream TCP-CONNECT→WebSocket pro
 (`:83-137`). This is the **opposite direction** from jcode: coco-rs is the
 client connecting *out* to a cloud worker, not a server hosting local peers.
 
-### (4) The true multi-client concurrent server — design doc only, NOT implemented
+### (4) Multi-client completion work
 
-`docs/coco-rs/concurrent-app-server-plan.md` is a 1053-line plan to add five
-crates (`app/server-transport`, `app/server-protocol`, `app/server`,
-`app/server-client`, `app/thread`). It specifies a two-task `MessageProcessor`
-(`HashMap<ConnectionId, ConnectionState>` + outbound router), a `ThreadManager`
-keyed by `ThreadId`, a `RequestSerializationQueue` with scoped access, per-thread
-MCP isolation, three transports (WS / WS-over-UDS / stdio NDJSON), and a
-two-level identity model. But `ls app/` shows only `cli, query, session, state,
-tui` — **none of `app/server`, `app/thread`, `app/server-transport` exist**, and
-the `coco daemon` subcommand is a non-functional stub: `Commands::Daemon` prints
-"Daemon mode is not yet fully implemented" (`app/cli/src/main.rs:155-158`). PRs
-1-13 are unstarted. This is the coco-rs equivalent of what jcode already ships.
+The original `concurrent-app-server-plan.md` and its `ThreadId` model are
+superseded. The shipped crate boundaries are now `coco-app-server`,
+`coco-app-server-transport`, `coco-app-server-client`, `coco-app-runtime`, and
+`coco-agent-host`, with `SessionId` remaining the only root conversation id.
 
-Notably, the plan starts from the *right* boundaries:
+The remaining work is not a new server rewrite. It is the explicit-target and
+single-runtime-owner remediation in
+`docs/coco-rs/multi-session-app-server/remediation-plan.md`.
 
 - **Bounded channels everywhere** — `transport_event_tx: mpsc(128)` with a
   JSON-RPC `-32001` "Server overloaded" rejection on overflow (`:657`),

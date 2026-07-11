@@ -229,7 +229,7 @@ pub enum MetadataEntry {
         #[serde(default)]
         model_usage: std::collections::HashMap<String, ModelCostEntry>,
     },
-    /// Durable `session_seq` high-water mark (multi-session plan D-39/D-47).
+    /// Durable `session_seq` high-water mark for cross-restart replay safety.
     /// Appended at bounded intervals from the seq allocator's persist hook and
     /// at session close; resume restores the counter with skip-ahead so a
     /// restarted process never re-issues a seq at or below any emitted one.

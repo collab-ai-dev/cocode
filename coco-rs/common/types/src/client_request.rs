@@ -40,7 +40,7 @@ Bidirectional control protocol — client-initiated requests.\n\n\
 Each variant carries a unique `method` string used on the wire. \
 The method is the discriminator; params are the variant-specific payload.\n\n\
 See `event-system-design.md` §5.1 for the base variants and §5.4 for \
-gap additions. 45 total.",
+gap additions. 43 total.",
     variants = {
         // === Session lifecycle (11) ===
         "initialize" => Initialize(InitializeParams),

@@ -80,10 +80,12 @@ non-goals.
 **What coco-rs should NOT copy (and why):**
 
 - **The persistent shared server / thin client itself** (M01, M04). It is the
-  root cause of jcode's 14ms TTFF and ~10MB/session — but it *is* coco-rs's
-  separate, larger deferred **concurrent-app-server** initiative
-  (`docs/coco-rs/concurrent-app-server-plan.md`), not a drop-in. Do not frame any
-  startup optimization as "mimic jcode's thin-client paint."
+  root cause of jcode's 14ms TTFF and ~10MB/session. coco-rs now has the
+  registry/routing foundation, but its remaining execution-isolation work is a
+  separate initiative documented in
+  `docs/coco-rs/multi-session-app-server/`; it is not a drop-in startup
+  optimization. Do not frame any startup optimization as "mimic jcode's
+  thin-client paint."
 - **Self-dev (the agent rebuilding/reloading its own binary)** (M11). Out of
   scope, not merely unimplemented — it is fundamentally incompatible with
   coco-rs's faithful-port identity, single-fixed-binary posture, and no-`unsafe`

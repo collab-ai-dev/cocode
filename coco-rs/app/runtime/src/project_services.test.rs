@@ -47,7 +47,7 @@ fn registry_separates_project_roots() {
 fn different_project_roots_resolve_independent_mcp_servers() {
     // Two sessions in different projects must see only their own project's MCP
     // servers — project config is per-project, never cross-contaminated
-    // (multi-session plan §6.2 / §16.1).
+    // (multi-session project-scope invariant).
     let temp = tempdir().unwrap();
     let config_home = temp.path().join("home");
     let project_a = temp.path().join("repo-a");

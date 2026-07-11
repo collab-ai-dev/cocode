@@ -91,7 +91,7 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     /// Durable `session_seq` high-water mark recovered from transcript
-    /// metadata, used to skip-ahead the seq counter on resume (plan D-47).
+    /// metadata, used to skip-ahead the seq counter on resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_seq_watermark: Option<i64>,
 }
@@ -298,8 +298,8 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Append a durable `session_seq` high-water mark to the transcript
-    /// (multi-session plan D-47). Called at bounded intervals from the seq
+    /// Append a durable `session_seq` high-water mark to the transcript.
+    /// Called at bounded intervals from the seq
     /// allocator's persist hook and once at session close, so a restarted
     /// process can skip-ahead its seq counter above anything the prior epoch
     /// emitted. Best-effort: a missing transcript is not an error here (a

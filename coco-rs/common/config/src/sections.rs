@@ -141,11 +141,11 @@ pub struct ServerConfig {
     pub turn_drain_timeout_secs: i64,
     pub shutdown_timeout_secs: i64,
     /// Evict a cached `ProjectServices` entry with zero attached sessions after
-    /// this many seconds (multi-session plan §6.2 / §17).
+    /// this many seconds (multi-session project-scope design).
     pub project_services_idle_ttl_secs: i64,
     /// Optional auto-archive of a session with zero surfaces AND no active or
     /// queued turn after this many seconds. `None` = off (the default);
-    /// unattended background work is legitimate (plan §7.6 / §17).
+    /// unattended background work is legitimate.
     pub idle_session_timeout_secs: Option<i64>,
 }
 

@@ -4,8 +4,8 @@
 //! Owned here (rather than in `coco-cli`) because this is the output of the
 //! per-session config fold and the input to session-runtime construction —
 //! both of which are moving behind this crate boundary. The producer of the
-//! bundle (the per-session fold, still Cli-coupled) stays in `coco-cli` for
-//! now; see the A3 migration notes in `multi-session-app-server-plan.md`.
+//! bundle is host-coupled and lives in `coco-agent-host`; see
+//! `docs/coco-rs/multi-session-app-server/current-architecture.md`.
 
 use std::path::Path;
 use std::sync::Arc;

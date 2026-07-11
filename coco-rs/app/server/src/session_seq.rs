@@ -1,7 +1,7 @@
 //! Process-wide durable `session_seq` allocation.
 //!
-//! One allocator per process is the multi-session plan's "single stamping
-//! seam": every durable-envelope producer draws from the same
+//! One allocator per process provides the multi-session single stamping seam:
+//! every durable-envelope producer draws from the same
 //! per-session counters, so the union of all forwarder paths stays strictly
 //! monotonic per session. Restart continuity comes from two
 //! halves owned here:
